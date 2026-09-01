@@ -14,6 +14,10 @@ import {
 import {
   CORE_FOUND_ACCOUNT_COUNT_V3,
   CORE_FOUND_ACCOUNT_ROLES_V3,
+  CORE_FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+  CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3,
+  CORE_FOUND_PRICE_GATE_RAW_INDEX_V3,
+  CORE_FOUND_PRICE_GATE_STAGING_INDEX_V3,
   CORE_REQUEST_BYTES,
   CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
 } from './generated/coreFound';
@@ -197,6 +201,53 @@ describe('Core Found37 browser kernel', () => {
     // A signer can never live in a lookup table, so the payer stays static.
     expect(message.staticAccountKeys[0].toBase58()).toBe(accounts[0]);
     expect(message.addressTableLookups.map((lookup) => lookup.accountKey.toBase58())).toEqual([id(200) && new PublicKey(id(200)).toBase58()]);
+  });
+
+  it('compiles the generated 39-account curved Found frame without inventing a gate projection', () => {
+    expect(CORE_FOUND_PRICE_GATE_RAW_INDEX_V3).toBe(CORE_FOUND_ACCOUNT_COUNT_V3);
+    expect(CORE_FOUND_PRICE_GATE_STAGING_INDEX_V3).toBe(CORE_FOUND_ACCOUNT_COUNT_V3 + 1);
+    expect(CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3.slice(0, CORE_FOUND_ACCOUNT_COUNT_V3)).toEqual(CORE_FOUND_ACCOUNT_ROLES_V3);
+    expect(CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3.slice(CORE_FOUND_ACCOUNT_COUNT_V3)).toEqual([
+      { signer: false, writable: false },
+      { signer: false, writable: false },
+    ]);
+
+    const accounts = Object.freeze(Array.from({ length: CORE_FOUND_PRICE_GATE_ACCOUNT_COUNT_V3 }, (_, index) => new PublicKey(id(index + 1)).toBase58()));
+    const instruction = new TransactionInstruction({
+      programId: new PublicKey(accounts[25]),
+      keys: accounts.map((address, index) => ({
+        pubkey: new PublicKey(address),
+        isSigner: CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3[index].signer,
+        isWritable: CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3[index].writable,
+      })),
+      data: Buffer.alloc(0),
+    });
+    const routable = routableAddressesV1([instruction], accounts[0]);
+    const table = new AddressLookupTableAccount({
+      key: new PublicKey(id(200)),
+      state: {
+        deactivationSlot: 2n ** 64n - 1n,
+        lastExtendedSlot: 1,
+        lastExtendedSlotStartIndex: 0,
+        authority: new PublicKey(accounts[0]),
+        addresses: canonicalLookupAddressesV1(routable).map((address) => new PublicKey(address)),
+      },
+    });
+    const compiled = compileCoreFoundTransactionV2({
+      payer: accounts[0],
+      market: accounts[1],
+      coreProgram: accounts[25],
+      generation: 77n,
+      recentBlockhash: new PublicKey(id(99)).toBase58(),
+      accountAddresses: accounts,
+      lookupTable: table,
+    });
+    expect(compiled.transaction.message.compiledInstructions[1].accountKeyIndexes).toHaveLength(CORE_FOUND_PRICE_GATE_ACCOUNT_COUNT_V3);
+    expect(compiled.wireBytes.length).toBeLessThanOrEqual(1_232);
+    expect(() => compileCoreFoundTransactionV2({
+      payer: accounts[0], market: accounts[1], coreProgram: accounts[25], generation: 77n,
+      recentBlockhash: new PublicKey(id(99)).toBase58(), accountAddresses: accounts.slice(0, -1), lookupTable: table,
+    })).toThrow(/exactly 37 or 39/);
   });
 
   it('derives a Market-generation lifecycle credit and binds its sole refund wallet and release set', () => {

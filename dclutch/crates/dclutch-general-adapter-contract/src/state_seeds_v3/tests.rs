@@ -14,11 +14,16 @@ fn id(value: u8) -> [u8; 32] {
     [value; 32]
 }
 
-/// The three recipes and nothing else. A fourth would be a visible edit here.
-const EVERY_RECIPE: [GeneralStateRecipeV3; 3] = [
+/// The eight recipes and nothing else. A ninth would be a visible edit here.
+const EVERY_RECIPE: [GeneralStateRecipeV3; 8] = [
     GeneralStateRecipeV3::Selection,
     GeneralStateRecipeV3::Settlement,
     GeneralStateRecipeV3::Terminal,
+    GeneralStateRecipeV3::Batch,
+    GeneralStateRecipeV3::Order,
+    GeneralStateRecipeV3::Candidate,
+    GeneralStateRecipeV3::Verifier,
+    GeneralStateRecipeV3::VerifiedCandidate,
 ];
 
 #[test]
@@ -28,6 +33,11 @@ fn every_seed_is_short_enough_and_long_enough_to_actually_derive() {
         GENERAL_SELECTION_STATE_SEED_V3,
         GENERAL_SETTLEMENT_STATE_SEED_V3,
         GENERAL_TERMINAL_STATE_SEED_V3,
+        GENERAL_BATCH_STATE_SEED_V3,
+        GENERAL_ORDER_STATE_SEED_V3,
+        GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+        GENERAL_VERIFIER_PDA_DOMAIN_V1,
+        GENERAL_VERIFIED_CANDIDATE_PDA_DOMAIN_V1,
     ] {
         assert!(
             !seed.is_empty() && seed.len() <= MAX_PDA_SEED_BYTES,
@@ -48,6 +58,20 @@ fn the_seed_domains_are_the_exact_spellings_the_accelerator_executed() {
     assert_eq!(GENERAL_SELECTION_STATE_SEED_V3, b"selection");
     assert_eq!(GENERAL_SETTLEMENT_STATE_SEED_V3, b"settlement");
     assert_eq!(GENERAL_TERMINAL_STATE_SEED_V3, b"terminal");
+    assert_eq!(GENERAL_BATCH_STATE_SEED_V3, b"batch");
+    assert_eq!(GENERAL_ORDER_STATE_SEED_V3, b"order");
+    assert_eq!(
+        GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+        b"dclutch:general-candidate:v1"
+    );
+    assert_eq!(
+        GENERAL_VERIFIER_PDA_DOMAIN_V1,
+        b"dclutch-general-verifier-v1"
+    );
+    assert_eq!(
+        GENERAL_VERIFIED_CANDIDATE_PDA_DOMAIN_V1,
+        b"dclutch-general-verified-v1"
+    );
 }
 
 /// The recipe's declared geometry is READ OFF its seed table, never beside it.
@@ -79,6 +103,11 @@ fn the_declared_geometry_is_the_table_and_not_a_number_beside_it() {
     assert_eq!(GeneralStateRecipeV3::Selection.seed_count(), 4);
     assert_eq!(GeneralStateRecipeV3::Settlement.seed_count(), 5);
     assert_eq!(GeneralStateRecipeV3::Terminal.seed_count(), 6);
+    assert_eq!(GeneralStateRecipeV3::Batch.seed_count(), 5);
+    assert_eq!(GeneralStateRecipeV3::Order.seed_count(), 5);
+    assert_eq!(GeneralStateRecipeV3::Candidate.seed_count(), 4);
+    assert_eq!(GeneralStateRecipeV3::Verifier.seed_count(), 4);
+    assert_eq!(GeneralStateRecipeV3::VerifiedCandidate.seed_count(), 4);
 }
 
 /// THE CONTROL THE LANE EXISTS FOR.
@@ -157,6 +186,143 @@ fn the_selection_and_terminal_orders_are_the_ones_the_campaign_executed() {
     );
 }
 
+#[test]
+fn the_candidate_recipe_reuses_the_canonical_candidate_domain_and_refuses_hostiles() {
+    let root = id(3);
+    let candidate = id(4);
+    let seeds = GeneralStateAddressSeedsV3::candidate(root, candidate).expect("candidate");
+    assert_eq!(seeds.recipe(), GeneralStateRecipeV3::Candidate);
+    assert_eq!(
+        seeds.as_slices().expect("candidate slices").as_slice(),
+        &[
+            GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+            root.as_slice(),
+            candidate.as_slice(),
+        ],
+    );
+    assert_eq!(
+        GeneralStateAddressSeedsV3::candidate([0; 32], candidate),
+        Err(GeneralStateSeedErrorV3::ZeroIdentity),
+    );
+    assert_eq!(
+        GeneralStateAddressSeedsV3::candidate(root, [0; 32]),
+        Err(GeneralStateSeedErrorV3::ZeroIdentity),
+    );
+    assert_eq!(
+        GeneralStateAddressSeedsV3::candidate(root, root),
+        Err(GeneralStateSeedErrorV3::AccountAlias),
+    );
+}
+
+#[test]
+fn verify_uses_three_distinct_root_candidate_recipes_and_refuses_substitution() {
+    let root = id(3);
+    let candidate = id(4);
+    let substituted = id(5);
+    let candidate_state =
+        GeneralStateAddressSeedsV3::candidate(root, candidate).expect("candidate");
+    let verifier = GeneralStateAddressSeedsV3::verifier(root, candidate).expect("verifier");
+    let result = GeneralStateAddressSeedsV3::verified_candidate(root, candidate).expect("result");
+
+    assert_eq!(
+        candidate_state
+            .as_slices()
+            .expect("candidate seeds")
+            .as_slice(),
+        &[
+            GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+            root.as_slice(),
+            candidate.as_slice(),
+        ]
+    );
+    assert_eq!(
+        verifier.as_slices().expect("verifier seeds").as_slice(),
+        &[
+            GENERAL_VERIFIER_PDA_DOMAIN_V1,
+            root.as_slice(),
+            candidate.as_slice(),
+        ]
+    );
+    assert_eq!(
+        result.as_slices().expect("result seeds").as_slice(),
+        &[
+            GENERAL_VERIFIED_CANDIDATE_PDA_DOMAIN_V1,
+            root.as_slice(),
+            candidate.as_slice(),
+        ]
+    );
+    assert_ne!(
+        verifier.as_slices().expect("verifier").as_slice(),
+        GeneralStateAddressSeedsV3::verifier(root, substituted)
+            .expect("substituted verifier")
+            .as_slices()
+            .expect("substituted seeds")
+            .as_slice()
+    );
+    assert_eq!(
+        verifier.authenticate_address(id(9), id(8)),
+        Err(GeneralStateSeedErrorV3::AddressMismatch)
+    );
+    assert_eq!(
+        result.authenticate_address(candidate, candidate),
+        Err(GeneralStateSeedErrorV3::AccountAlias)
+    );
+    for constructor in [
+        GeneralStateAddressSeedsV3::verifier,
+        GeneralStateAddressSeedsV3::verified_candidate,
+    ] {
+        assert_eq!(
+            constructor([0; 32], candidate),
+            Err(GeneralStateSeedErrorV3::ZeroIdentity)
+        );
+        assert_eq!(
+            constructor(root, [0; 32]),
+            Err(GeneralStateSeedErrorV3::ZeroIdentity)
+        );
+        assert_eq!(
+            constructor(root, root),
+            Err(GeneralStateSeedErrorV3::AccountAlias)
+        );
+    }
+}
+
+#[test]
+fn verify_seed_table_is_the_three_canonical_recipes_with_independent_bumps() {
+    assert_eq!(
+        usize::from(GENERAL_VERIFY_VERIFIER_SEED_START_V3),
+        GENERAL_CANDIDATE_STATE_RECIPE_V3.len()
+    );
+    assert_eq!(
+        usize::from(GENERAL_VERIFY_RESULT_SEED_START_V3),
+        GENERAL_CANDIDATE_STATE_RECIPE_V3.len() + GENERAL_VERIFIER_STATE_RECIPE_V3.len()
+    );
+    assert_eq!(
+        &GENERAL_VERIFY_STATE_SEED_TABLE_V3[..usize::from(GENERAL_VERIFY_VERIFIER_SEED_START_V3)],
+        GENERAL_CANDIDATE_STATE_RECIPE_V3.as_slice()
+    );
+    assert_eq!(
+        &GENERAL_VERIFY_STATE_SEED_TABLE_V3[usize::from(GENERAL_VERIFY_VERIFIER_SEED_START_V3)
+            ..usize::from(GENERAL_VERIFY_RESULT_SEED_START_V3)],
+        GENERAL_VERIFIER_STATE_RECIPE_V3.as_slice()
+    );
+    assert_eq!(
+        &GENERAL_VERIFY_STATE_SEED_TABLE_V3[usize::from(GENERAL_VERIFY_RESULT_SEED_START_V3)..],
+        GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3.as_slice()
+    );
+    assert!(matches!(
+        GENERAL_VERIFY_STATE_SEED_TABLE_V3[usize::from(GENERAL_VERIFY_VERIFIER_SEED_START_V3) - 1],
+        LifecycleSeedInputV3::CanonicalBump
+    ));
+    assert!(matches!(
+        GENERAL_VERIFY_STATE_SEED_TABLE_V3[usize::from(GENERAL_VERIFY_RESULT_SEED_START_V3) - 1],
+        LifecycleSeedInputV3::CanonicalBump
+    ));
+    assert!(matches!(
+        GENERAL_VERIFY_STATE_SEED_TABLE_V3[GENERAL_VERIFY_STATE_SEED_TABLE_V3.len() - 1],
+        LifecycleSeedInputV3::CanonicalBump
+    ));
+}
+
 /// Two states that must never collide, and the coordinates that separate them.
 #[test]
 fn distinct_coordinates_never_project_onto_one_address() {
@@ -193,6 +359,14 @@ fn the_action_to_phase_mapping_is_published_rather_than_restated() {
             GeneralStateRecipeV3::Selection
         );
     }
+    assert_eq!(
+        GeneralStateRecipeV3::primary_for_action(Action::SubmitCandidate),
+        GeneralStateRecipeV3::Candidate,
+    );
+    assert_eq!(
+        GeneralStateRecipeV3::primary_for_action(Action::VerifyCandidateRow),
+        GeneralStateRecipeV3::Candidate,
+    );
     for action in [
         Action::InitializeSettlement,
         Action::Collect,

@@ -6,6 +6,7 @@ import {
   denominationUnitV1,
   formatClaimPriceV1,
   formatQuantityV1,
+  parseClaimPriceV1,
   parseQuantityV1,
   unreadDenominationV1,
   type DenominationV1,
@@ -151,6 +152,21 @@ describe('the price scale, explained exactly once', () => {
 
   it('refuses a price scale that is not a positive share of anything', () => {
     expect(() => formatClaimPriceV1(1n, 0n)).toThrow(/positive price scale/);
+  });
+
+  it('reads typed cents into the immutable exact price scale without rounding', () => {
+    expect(parseClaimPriceV1('35', 1_000_000n)).toBe(350_000n);
+    expect(parseClaimPriceV1('33.3333', 1_000_000n)).toBe(333_333n);
+    expect(parseClaimPriceV1('0.0001', 1_000_000n)).toBe(1n);
+    expect(parseClaimPriceV1('100', 1_000_000n)).toBe(1_000_000n);
+  });
+
+  it('refuses inexact ticks and values outside the proven price interval', () => {
+    expect(() => parseClaimPriceV1('33.33333', 1_000_000n)).toThrow(/not exactly representable/);
+    expect(() => parseClaimPriceV1('0', 1_000_000n)).toThrow(/more than 0/);
+    expect(() => parseClaimPriceV1('100.0001', 1_000_000n)).toThrow(/no more than 100/);
+    expect(() => parseClaimPriceV1('-1', 1_000_000n)).toThrow(/positive decimal/);
+    expect(() => parseClaimPriceV1('35', 0n)).toThrow(/positive u64 price scale/);
   });
 
   // Cents on the unit and the market's implied percentage are the same figure;

@@ -151,26 +151,20 @@ Found31 was never submitted for months and no report anywhere said so.
 The honest number will be ugly. That is the point. An ugly number that is true
 is worth more than 2,300 green tests that agreed with themselves.
 
-## Principle 5 — One command, arbitrarily resumable
+## Principle 5 — One supported top-level command
 
-`tools/gauntlet/run.sh` drives build → deploy (transaction-only, local
-validator) → campaign → census report.
+`tools/gauntlet/run.sh --mode census` is the supported top-level operation: it
+enumerates the static route/refusal surface and renders the accumulated report.
+It needs no validator or port.
 
-- **Resumable at any stage.** Each stage writes a stamp under the work root
-  keyed by its exact inputs (source revision, ELF digests, spec digest). A
-  re-run skips a stage whose stamp matches and re-runs everything downstream of
-  the first stage that does not. `--from <stage>` forces a restart at a stage.
-- **Nothing lands in the repo.** The work root defaults to
-  `/private/tmp/dclutch-gauntlet`; `CARGO_TARGET_DIR` lives there too. The
-  shared checkout's `target/` is never used, because parallel lanes share this
-  working tree.
-- **Builds from a pinned commit**, via `git archive`, following
-  `tools/release/checked-release-candidate.sh`. A dirty shared tree cannot
-  silently change what was tested.
-- **hbox-safe.** Every build runs through `swarm-build` when it is on PATH.
-  hbox is co-tenant with codex; the memory cap is structural, not polite.
-- **Never an unfiltered `-p <crate>` suite.** The gauntlet runs the campaign and
-  the census. It does not run the unit suite.
+The default, `--mode full`, intentionally exits 1 before resolving a revision,
+creating `--work`, or starting a build. Its former tier-1 producer is parked at
+the retired `demo-market` boundary; the remaining planners need acknowledged
+inputs the localhost runner does not own. A family campaign is run by its named
+family runner under `tools/gauntlet/`, then `--mode census` renders the shared
+report. Do not treat `--from`, `--keep-runs`, `--rpc-port`, or
+`--record-publication` as a way to re-enable `full`: they are parked full-mode
+options.
 
 ## What the gauntlet does not claim
 

@@ -41,7 +41,7 @@ use dclutch_market_core_codec::{
     open_series_market,
 };
 use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2, authenticate_product_basis_v3,
+    FinalizedRecordFrameV2, authenticate_founding_product_basis_v3,
 };
 use dclutch_release_set_contract::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
@@ -69,8 +69,9 @@ use crate::{
 };
 
 pub use dclutch_market_core_codec::{
-    GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
-    GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
+    GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
+    GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2,
+    GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
 };
 
 const _: () =
@@ -101,6 +102,7 @@ struct GenericFoundSuffix<'accounts, 'info> {
     position: &'accounts AccountInfo<'info>,
     admission: &'accounts AccountInfo<'info>,
     founder: &'accounts AccountInfo<'info>,
+    price_gate: Option<FinalizedRecordFrameV2<'accounts, 'info>>,
 }
 
 impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
@@ -109,11 +111,17 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
         accounts: &'accounts [AccountInfo<'info>],
         funding_count: usize,
     ) -> Result<Self, CoreSbfError> {
-        let expected = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+        let bare = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
             .checked_add(funding_count)
             .and_then(|value| value.checked_add(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1))
             .ok_or(CoreSbfError::Arithmetic)?;
-        if accounts.len() != expected
+        let gated = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+            .checked_add(funding_count)
+            .and_then(|value| {
+                value.checked_add(GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2)
+            })
+            .ok_or(CoreSbfError::Arithmetic)?;
+        if (accounts.len() != bare && accounts.len() != gated)
             || funding_count == 0
             || funding_count > GENERIC_FOUNDING_MAX_FUNDING_STATES_V1
         {
@@ -161,7 +169,8 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
 
 impl<'accounts, 'info> GenericFoundSuffix<'accounts, 'info> {
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
-        if accounts.len() != GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 {
+        let gated = accounts.len() == GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2;
+        if accounts.len() != GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 && !gated {
             return Err(CoreSbfError::AccountFrame);
         }
         let value = Self {
@@ -180,6 +189,14 @@ impl<'accounts, 'info> GenericFoundSuffix<'accounts, 'info> {
             position: account(accounts, 12)?,
             admission: account(accounts, 13)?,
             founder: account(accounts, 14)?,
+            price_gate: if gated {
+                Some(FinalizedRecordFrameV2 {
+                    raw: account(accounts, 15)?,
+                    staging: account(accounts, 16)?,
+                })
+            } else {
+                None
+            },
         };
         if value.permit.is_signer
             || !value.permit.is_writable
@@ -209,6 +226,13 @@ impl<'accounts, 'info> GenericFoundSuffix<'accounts, 'info> {
         ] {
             if readonly.is_signer || readonly.is_writable || readonly.executable {
                 return Err(CoreSbfError::AccountFrame);
+            }
+        }
+        if let Some(price_gate) = value.price_gate {
+            for readonly in [price_gate.raw, price_gate.staging] {
+                if readonly.is_signer || readonly.is_writable || readonly.executable {
+                    return Err(CoreSbfError::AccountFrame);
+                }
             }
         }
         Ok(value)
@@ -1040,7 +1064,7 @@ fn authenticate_generic_product(
     prepared: &PreparedFound,
     rent: &Rent,
 ) -> Result<GenericProductFacts, CoreSbfError> {
-    let product = authenticate_product_basis_v3(
+    let product = authenticate_founding_product_basis_v3(
         frame.found.registry_program.key,
         rent,
         *prepared.runtime,
@@ -1048,9 +1072,7 @@ fn authenticate_generic_product(
             raw: frame.suffix.linked_basis_raw,
             staging: frame.suffix.linked_basis_staging,
         },
-        // The generic route reads its basis from its own suffix, which has no
-        // certificate slot; a curved basis refuses by name.
-        None,
+        frame.suffix.price_gate,
     )
     .map_err(|_| CoreSbfError::Reference)?;
     if product.runtime.product_record.content_digest.to_bytes() != prepared.product_record_id
@@ -2087,7 +2109,7 @@ fn identity(bytes: [u8; 32]) -> Result<dclutch_market_core_codec::Identity, Core
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
+    use alloc::{boxed::Box, vec::Vec};
 
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
@@ -2098,6 +2120,28 @@ mod tests {
 
     fn id(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    fn suffix_accounts(count: usize) -> Vec<AccountInfo<'static>> {
+        (0..count)
+            .map(|index| {
+                let key = Box::leak(Box::new(Pubkey::new_from_array(
+                    [u8::try_from(index + 1).expect("bounded test index"); 32],
+                )));
+                let owner = Box::leak(Box::new(Pubkey::new_from_array([0xa1; 32])));
+                let lamports = Box::leak(Box::new(1_u64));
+                let data = Box::leak(Vec::<u8>::new().into_boxed_slice());
+                AccountInfo::new(
+                    key,
+                    false,
+                    index == 0,
+                    lamports,
+                    data,
+                    owner,
+                    index == 7 || index == 9,
+                )
+            })
+            .collect()
     }
 
     fn input() -> GenericFoundingPermitInputV1 {
@@ -2244,6 +2288,25 @@ mod tests {
         assert_eq!(
             build_permit_plan(hostile).err(),
             Some(CoreSbfError::Reference)
+        );
+    }
+
+    #[test]
+    fn generic_found_suffix_admits_only_bare_or_complete_appended_gate_pair() {
+        let bare = suffix_accounts(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1);
+        let bare = GenericFoundSuffix::parse(&bare).expect("legacy categorical suffix");
+        assert!(bare.price_gate.is_none());
+
+        let gated = suffix_accounts(GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2);
+        let parsed = GenericFoundSuffix::parse(&gated).expect("complete gated suffix");
+        let gate = parsed.price_gate.expect("gate pair");
+        assert_eq!(gate.raw.key, gated[15].key);
+        assert_eq!(gate.staging.key, gated[16].key);
+
+        let partial = suffix_accounts(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 + 1);
+        assert_eq!(
+            GenericFoundSuffix::parse(&partial).err(),
+            Some(CoreSbfError::AccountFrame)
         );
     }
 }

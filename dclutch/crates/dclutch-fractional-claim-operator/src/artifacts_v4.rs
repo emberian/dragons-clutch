@@ -65,7 +65,8 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_EXPOSURE_REQUEST_TERMS_OFFSET_V2,
     FRACTIONAL_EXPOSURE_REQUEST_TOKEN_BEHAVIOR_OFFSET_V2, FRACTIONAL_ROOT_BYTES_V1,
     FRACTIONAL_ROOT_MARKET_OFFSET_V1, FRACTIONAL_ROOT_REVISION_OFFSET_V1,
-    FRACTIONAL_ROOT_SCHEMA_ID_V1, FRACTIONAL_ROOT_TERMS_OFFSET_V1,
+    FRACTIONAL_ROOT_SCHEMA_ID_V1, FRACTIONAL_ROOT_SCHEMA_ID_V2,
+    FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2, FRACTIONAL_ROOT_TERMS_OFFSET_V1,
     FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3, FractionalExposureActionV2,
 };
 use dclutch_fractional_claim_kernel::FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1;
@@ -193,9 +194,49 @@ pub enum FractionalSelectedArtifactErrorV4 {
     Validation,
 }
 
+#[derive(Clone, Copy)]
+enum RootSchemaFlavorV1 {
+    HistoricalV1,
+    CurrentV2,
+}
+
+impl RootSchemaFlavorV1 {
+    const fn schema(self) -> [u8; 32] {
+        match self {
+            Self::HistoricalV1 => FRACTIONAL_ROOT_SCHEMA_ID_V1,
+            Self::CurrentV2 => FRACTIONAL_ROOT_SCHEMA_ID_V2,
+        }
+    }
+
+    const fn root_identity_offset(self) -> usize {
+        match self {
+            Self::HistoricalV1 => FRACTIONAL_ROOT_TERMS_OFFSET_V1,
+            Self::CurrentV2 => FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2,
+        }
+    }
+}
+
 /// Emit and hostile-validate one action-specialized executable Fractional bundle.
 pub fn build_fractional_selected_bundle_v4(
     input: FractionalSelectedBundleInputV4<'_>,
+) -> Result<FractionalSelectedBundleV4, FractionalSelectedArtifactErrorV4> {
+    build_fractional_selected_bundle_for_root_v4(input, RootSchemaFlavorV1::HistoricalV1)
+}
+
+/// Emit the current V2-root action bundle.
+///
+/// This is append-only beside [`build_fractional_selected_bundle_v4`]: current
+/// artifacts project the root's market-free selection config and no longer
+/// assert that execution terms are the manifest config.
+pub fn build_fractional_current_selected_bundle_v4(
+    input: FractionalSelectedBundleInputV4<'_>,
+) -> Result<FractionalSelectedBundleV4, FractionalSelectedArtifactErrorV4> {
+    build_fractional_selected_bundle_for_root_v4(input, RootSchemaFlavorV1::CurrentV2)
+}
+
+fn build_fractional_selected_bundle_for_root_v4(
+    input: FractionalSelectedBundleInputV4<'_>,
+    flavor: RootSchemaFlavorV1,
 ) -> Result<FractionalSelectedBundleV4, FractionalSelectedArtifactErrorV4> {
     let (claims_accounts, root_coordinate) = action_geometry(input.action)?;
     if input.capacity_profile == [0; 32]
@@ -217,10 +258,10 @@ pub fn build_fractional_selected_bundle_v4(
     if !root_rule.signer || !root_rule.writable || root_rule.executable {
         return Err(FractionalSelectedArtifactErrorV4::InvalidInput);
     }
-    let account_profile = encode_account_profile(input, root_coordinate)?;
+    let account_profile = encode_account_profile(input, root_coordinate, flavor)?;
     let lifecycle_policy = encode_empty_lifecycle()?;
     let request_profile = encode_request_profile(input.action)?;
-    let transition = encode_transition()?;
+    let transition = encode_transition(flavor)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
         content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
@@ -240,7 +281,7 @@ pub fn build_fractional_selected_bundle_v4(
         content(FRACTIONAL_CAPABILITY_KIND_ID_V1)?,
         content(FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1)?,
         content(FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_ID_V2)?,
-        content(FRACTIONAL_ROOT_SCHEMA_ID_V1)?,
+        content(flavor.schema())?,
         content(lifecycle_id)?,
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
@@ -274,7 +315,12 @@ pub fn build_fractional_selected_bundle_v4(
         effect,
         descriptor: descriptor_value.encode(),
     };
-    validate_fractional_selected_bundle_v4(&bundle, input.capacity_profile, claims_accounts)?;
+    validate_fractional_selected_bundle_for_root_v4(
+        &bundle,
+        input.capacity_profile,
+        claims_accounts,
+        flavor,
+    )?;
     Ok(bundle)
 }
 
@@ -283,6 +329,34 @@ pub fn validate_fractional_selected_bundle_v4(
     bundle: &FractionalSelectedBundleV4,
     capacity_profile: [u8; 32],
     claims_accounts: u16,
+) -> Result<(), FractionalSelectedArtifactErrorV4> {
+    validate_fractional_selected_bundle_for_root_v4(
+        bundle,
+        capacity_profile,
+        claims_accounts,
+        RootSchemaFlavorV1::HistoricalV1,
+    )
+}
+
+/// Hostile-decode and rejoin one current V2-root action bundle.
+pub fn validate_fractional_current_selected_bundle_v4(
+    bundle: &FractionalSelectedBundleV4,
+    capacity_profile: [u8; 32],
+    claims_accounts: u16,
+) -> Result<(), FractionalSelectedArtifactErrorV4> {
+    validate_fractional_selected_bundle_for_root_v4(
+        bundle,
+        capacity_profile,
+        claims_accounts,
+        RootSchemaFlavorV1::CurrentV2,
+    )
+}
+
+fn validate_fractional_selected_bundle_for_root_v4(
+    bundle: &FractionalSelectedBundleV4,
+    capacity_profile: [u8; 32],
+    claims_accounts: u16,
+    flavor: RootSchemaFlavorV1,
 ) -> Result<(), FractionalSelectedArtifactErrorV4> {
     let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
         .map_err(|_| FractionalSelectedArtifactErrorV4::Descriptor)?;
@@ -317,7 +391,7 @@ pub fn validate_fractional_selected_bundle_v4(
     if descriptor.kind().to_bytes() != FRACTIONAL_CAPABILITY_KIND_ID_V1
         || descriptor.config_schema().to_bytes() != FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1
         || descriptor.request_schema().to_bytes() != FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_ID_V2
-        || descriptor.root_schema().to_bytes() != FRACTIONAL_ROOT_SCHEMA_ID_V1
+        || descriptor.root_schema().to_bytes() != flavor.schema()
         || descriptor.capacity_profile().to_bytes() != capacity_profile
         || descriptor.root_state_bytes()
             != u32::try_from(FRACTIONAL_ROOT_BYTES_V1)
@@ -386,6 +460,7 @@ pub fn validate_fractional_selected_bundle_v4(
 fn encode_account_profile(
     input: FractionalSelectedBundleInputV4<'_>,
     root_coordinate: u16,
+    flavor: RootSchemaFlavorV1,
 ) -> Result<Vec<u8>, FractionalSelectedArtifactErrorV4> {
     let none = AccountEffectPermissionsV2::new(false, false, false);
     let mut rules = Vec::with_capacity(
@@ -494,7 +569,7 @@ fn encode_account_profile(
             account: AccountCoordinateV2::fixed(ROOT),
             destination: IdentityCoordinateV2::common(I_ROOT_TERMS),
             data_offset: state
-                .checked_add(narrow_u32(FRACTIONAL_ROOT_TERMS_OFFSET_V1)?)
+                .checked_add(narrow_u32(flavor.root_identity_offset())?)
                 .ok_or(FractionalSelectedArtifactErrorV4::InvalidInput)?,
         },
         AccountOperationInputV2::ProjectDataIdentity {
@@ -684,21 +759,38 @@ fn encode_request_profile(
     Ok(output)
 }
 
-fn encode_transition() -> Result<Vec<u8>, FractionalSelectedArtifactErrorV4> {
+fn encode_transition(
+    flavor: RootSchemaFlavorV1,
+) -> Result<Vec<u8>, FractionalSelectedArtifactErrorV4> {
     let scalar = ScalarRegisterV3::common;
     let identity = IdentityRegisterV3::common;
-    let instructions = [
+    let mut instructions = vec![
         InstructionV3::scalar_eq(scalar(S_EXPECTED_REVISION), scalar(S_ROOT_REVISION)),
         InstructionV3::increment_into(scalar(S_ROOT_REVISION), scalar(S_POST_REVISION)),
-        InstructionV3::identity_eq(identity(I_TERMS), identity(I_ROOT_TERMS)),
-        InstructionV3::identity_eq(identity(I_MARKET), identity(I_ROOT_MARKET)),
-        InstructionV3::identity_eq(identity(I_TERMS), identity(I_SELECTED_CONFIG)),
-        InstructionV3::identity_eq(
-            identity(I_PRODUCT_RECORD),
-            identity(I_AUTHENTICATED_PRODUCT),
-        ),
-        InstructionV3::nonzero(scalar(S_QUANTITY)),
     ];
+    if matches!(flavor, RootSchemaFlavorV1::HistoricalV1) {
+        // Preserved byte-for-byte for the V1 terms-root constructor.
+        instructions.push(InstructionV3::identity_eq(
+            identity(I_TERMS),
+            identity(I_ROOT_TERMS),
+        ));
+    }
+    instructions.push(InstructionV3::identity_eq(
+        identity(I_MARKET),
+        identity(I_ROOT_MARKET),
+    ));
+    instructions.push(InstructionV3::identity_eq(
+        match flavor {
+            RootSchemaFlavorV1::HistoricalV1 => identity(I_TERMS),
+            RootSchemaFlavorV1::CurrentV2 => identity(I_ROOT_TERMS),
+        },
+        identity(I_SELECTED_CONFIG),
+    ));
+    instructions.push(InstructionV3::identity_eq(
+        identity(I_PRODUCT_RECORD),
+        identity(I_AUTHENTICATED_PRODUCT),
+    ));
+    instructions.push(InstructionV3::nonzero(scalar(S_QUANTITY)));
     let bytes = TRANSITION_HEADER_BYTES
         .checked_add(
             instructions

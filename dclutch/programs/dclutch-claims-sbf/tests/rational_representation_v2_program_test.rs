@@ -51,10 +51,18 @@ use dclutch_market_core_codec::{
     Readiness, Request, StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::{
+    price_gate_v1::{
+        PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
+        PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
+        PRICE_GATE_MASS_OFFSET_V1, PRICE_GATE_NUMERATORS_OFFSET_V1, PRICE_GATE_PRICES_OFFSET_V1,
+        PRICE_GATE_PROFILE_OFFSET_V1, PRICE_GATE_PROFILE_V1, PRICE_GATE_REQUEST_BYTES_V1,
+        PRICE_GATE_SCALE_OFFSET_V1, PRICE_GATE_SCHEMA_VERSION_V1, PRICE_GATE_VERSION_OFFSET_V1,
+        PRICE_GATE_WEIGHTS_OFFSET_V1, PRICE_GATE_WIDTH_OFFSET_V1, verify_price_gate_v1,
+    },
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
-        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
-        compile_basis_v3, semantic_basis_preimage_v3,
+        BasisInputV3, BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
 use dclutch_product_runtime_v2::{
@@ -252,6 +260,14 @@ const RECEIPT_DECIMALS: u8 = 19;
 const CUSTODY_EXPECTED_REVISION: u64 = 1;
 const INITIAL_RECIPIENT_ATOMS: u64 = 5;
 const INITIAL_HOARD_ATOMS: u64 = 9;
+/// Degree-two campaign payout scale.
+///
+/// At the authenticated coordinate `3/2`, the clamped quadratic Bernstein
+/// basis over `[0,0,0,3,3,3]` has exact weights `[1/4,1/2,1/4]`.
+/// Cumulative-floor at scale seven pays `[1,4,2]`.
+const CURVED_PAYOUT_SCALE: u64 = 7;
+const CURVED_RESULT_NUMERATOR: i128 = 3;
+const CURVED_RESULT_DENOMINATOR: u64 = 2;
 const PACKET_LIMIT: usize = 1_232;
 const TOKEN_2022_V11_PROVENANCE: &str = include_str!("../fixtures/token-2022-v11.provenance");
 
@@ -449,6 +465,14 @@ struct TerminalFixture {
 
 struct Fixture {
     actor: Keypair,
+    basis_profile: ProductBasisProfileV1,
+    /// The terminal interpretation authenticated by this fixture's
+    /// certificate. Builders consume this fact rather than reconstructing it
+    /// from a profile name.
+    terminal_scenario: TerminalScenarioV3,
+    /// Exact Hoard principal required by this terminal partition and the
+    /// aggregate's outstanding supplies.
+    initial_hoard_atoms: u64,
     /// The coordinate this fixture's terminal committed to.
     ///
     /// [`WINNER`] under a provider-backed resolution, [`FAILURE_SELECTOR`] when
@@ -939,40 +963,136 @@ struct ProductClaimsFixture {
     result_domain_staging: Pubkey,
     portfolio_record: Pubkey,
     portfolio_staging: Pubkey,
+    payout_scale: u64,
 }
 
 fn runtime_id(value: [u8; 32]) -> RuntimeContentId {
     RuntimeContentId::new(value).expect("runtime identity")
 }
 
-fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
+fn add_product_claims(
+    test: &mut ProgramTest,
+    profile: ProductBasisProfileV1,
+) -> ProductClaimsFixture {
     let stable_product = [0x61; 32];
     let product_id = runtime_id(stable_product);
     let coordinate_domain_id = runtime_id([0x62; 32]);
     let result_unit_id = runtime_id([0x63; 32]);
+    let kind = profile.kind();
+    let knots = profile.knots();
+    let failure_payouts = profile.failure_payouts();
+    let record_bytes = basis_record_bytes_v3(kind, OUTCOME_COUNT as usize, knots.len(), 0)
+        .expect("ProductBasisV3 width");
+
+    // A spline basis must name a DCLTPGT1 certificate digest before it can be
+    // compiled. Build the certificate from a probe whose only provisional fact
+    // is that digest: the evaluator does not read the digest, and the final pass
+    // below binds the hash of the exact verified certificate bytes.
+    let price_gate_certificate_digest = match profile {
+        ProductBasisProfileV1::Categorical => [0_u8; 32],
+        ProductBasisProfileV1::CurvedDegreeTwo => {
+            let degree = profile.spline_degree().expect("curved degree");
+            let mut probe = vec![0_u8; record_bytes];
+            compile_basis_v3(
+                BasisInputV3 {
+                    kind,
+                    product_id: product_id.to_bytes(),
+                    result_domain_id: [0x67; 32],
+                    coordinate_domain_id: coordinate_domain_id.to_bytes(),
+                    result_unit_id: result_unit_id.to_bytes(),
+                    evaluator_release_id: [0x68; 32],
+                    basis_width: OUTCOME_COUNT,
+                    payout_scale: profile.payout_scale(),
+                    knot_denominator: profile.knot_denominator(),
+                    knots: &knots,
+                    terms: &[],
+                    failure_payouts: &failure_payouts,
+                    price_gate_certificate_digest: [1_u8; 32],
+                },
+                &mut probe,
+            )
+            .expect("curved probe basis");
+            let basis = ProductBasisV3::decode(&probe).expect("curved probe decodes");
+            let mut payouts = [0_u64; K];
+            basis
+                .evaluate_rational(
+                    CURVED_RESULT_NUMERATOR,
+                    CURVED_RESULT_DENOMINATOR,
+                    &mut payouts,
+                )
+                .expect("curved terminal coordinate evaluates");
+            assert_eq!(
+                payouts,
+                profile.expected_curve_payouts(),
+                "cumulative-floor is observable"
+            );
+
+            let mut certificate = [0_u8; PRICE_GATE_REQUEST_BYTES_V1];
+            certificate[PRICE_GATE_MAGIC_OFFSET_V1..PRICE_GATE_MAGIC_OFFSET_V1 + 8]
+                .copy_from_slice(&PRICE_GATE_MAGIC_V1);
+            certificate[PRICE_GATE_VERSION_OFFSET_V1..PRICE_GATE_VERSION_OFFSET_V1 + 2]
+                .copy_from_slice(&PRICE_GATE_SCHEMA_VERSION_V1.to_le_bytes());
+            certificate[PRICE_GATE_PROFILE_OFFSET_V1..PRICE_GATE_PROFILE_OFFSET_V1 + 2]
+                .copy_from_slice(&PRICE_GATE_PROFILE_V1.to_le_bytes());
+            certificate[PRICE_GATE_SCALE_OFFSET_V1..PRICE_GATE_SCALE_OFFSET_V1 + 4]
+                .copy_from_slice(
+                    &u32::try_from(profile.payout_scale())
+                        .expect("price-gate scale")
+                        .to_le_bytes(),
+                );
+            certificate[PRICE_GATE_MASS_OFFSET_V1..PRICE_GATE_MASS_OFFSET_V1 + 8]
+                .copy_from_slice(&1_u64.to_le_bytes());
+            certificate[PRICE_GATE_DEGREE_OFFSET_V1] = degree;
+            certificate[PRICE_GATE_WIDTH_OFFSET_V1] =
+                u8::try_from(OUTCOME_COUNT).expect("price-gate width");
+            certificate[PRICE_GATE_ATOM_COUNT_OFFSET_V1] = 1;
+            for (claim, payout) in payouts.iter().enumerate() {
+                let offset = PRICE_GATE_PRICES_OFFSET_V1 + claim * 8;
+                certificate[offset..offset + 8].copy_from_slice(&payout.to_le_bytes());
+            }
+            certificate[PRICE_GATE_WEIGHTS_OFFSET_V1..PRICE_GATE_WEIGHTS_OFFSET_V1 + 8]
+                .copy_from_slice(&1_u64.to_le_bytes());
+            certificate[PRICE_GATE_NUMERATORS_OFFSET_V1..PRICE_GATE_NUMERATORS_OFFSET_V1 + 8]
+                .copy_from_slice(
+                    &i64::try_from(CURVED_RESULT_NUMERATOR)
+                        .expect("price-gate atom numerator")
+                        .to_le_bytes(),
+                );
+            certificate[PRICE_GATE_DENOMINATORS_OFFSET_V1..PRICE_GATE_DENOMINATORS_OFFSET_V1 + 4]
+                .copy_from_slice(
+                    &u32::try_from(CURVED_RESULT_DENOMINATOR)
+                        .expect("price-gate atom denominator")
+                        .to_le_bytes(),
+                );
+            let verified = verify_price_gate_v1(
+                &basis,
+                basis.knot_denominator(),
+                basis.payout_scale(),
+                degree,
+                basis.basis_width(),
+                &certificate,
+            )
+            .expect("one-atom price-gate certificate verifies");
+            assert_eq!(verified.active_prices(), payouts.as_slice());
+            hash(&certificate).to_bytes()
+        }
+    };
     let provisional_input = BasisInputV3 {
-        kind: BasisKindV3::CategoricalQ1,
+        kind,
         product_id: product_id.to_bytes(),
         result_domain_id: [0x67; 32],
         coordinate_domain_id: coordinate_domain_id.to_bytes(),
         result_unit_id: result_unit_id.to_bytes(),
         evaluator_release_id: [0x68; 32],
         basis_width: OUTCOME_COUNT,
-        payout_scale: 1,
-        knot_denominator: 1,
-        knots: &[],
+        payout_scale: profile.payout_scale(),
+        knot_denominator: profile.knot_denominator(),
+        knots: &knots,
         terms: &[],
-        failure_payouts: &[],
-        // Exempt by proof: degree 0 and 1 need no price gate,
-        // and a digest offered alongside one is refused.
-        price_gate_certificate_digest: [0_u8; 32],
+        failure_payouts: &failure_payouts,
+        price_gate_certificate_digest,
     };
-    let mut provisional =
-        vec![
-            0_u8;
-            basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
-                .expect("ProductBasisV3 width")
-        ];
+    let mut provisional = vec![0_u8; record_bytes];
     compile_basis_v3(provisional_input, &mut provisional).expect("provisional ProductBasisV3");
     let semantic =
         semantic_basis_preimage_v3(&provisional).expect("ProductBasisV3 semantic preimage");
@@ -1034,12 +1154,7 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
     .expect("Product root");
     let (product_record, product_staging, product_digest) =
         add_finalized_record(test, PRODUCT_RECORD_SCHEMA_ID_V2, &product);
-    let mut linked =
-        vec![
-            0_u8;
-            basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
-                .expect("ProductBasisV3 width")
-        ];
+    let mut linked = vec![0_u8; record_bytes];
     compile_basis_v3(
         BasisInputV3 {
             result_domain_id: domain_digest,
@@ -1065,6 +1180,7 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
         result_domain_staging,
         portfolio_record,
         portfolio_staging,
+        payout_scale: profile.payout_scale(),
     }
 }
 
@@ -1403,6 +1519,7 @@ fn terminal_custody(
     collateral_mint: Pubkey,
     recipient: Pubkey,
     candidate_digest: [u8; 32],
+    amount: u64,
 ) -> (CustodyRequestV1, Pubkey, Pubkey, Pubkey, Pubkey) {
     let mut request = CustodyRequestV1 {
         operation: OperationV1::Transfer,
@@ -1440,7 +1557,7 @@ fn terminal_custody(
         rent_refund: [0; 32],
         expected_revision: CUSTODY_EXPECTED_REVISION,
         resulting_revision: CUSTODY_EXPECTED_REVISION + 1,
-        amount: 1,
+        amount,
         rent_lamports: 0,
     };
     let custody_authority = Pubkey::find_program_address(
@@ -1487,6 +1604,8 @@ fn terminal_candidate_digest(
     graph_digest: [u8; 32],
     product: &ProductClaimsFixture,
     selected: AssetFixture,
+    terminal: TerminalScenarioV3,
+    hoard_before: u64,
 ) -> [u8; 32] {
     let admission = admit_product_representation_v3(ProductRepresentationInputV3 {
         product_basis_bytes: &product.linked_basis_bytes,
@@ -1499,7 +1618,7 @@ fn terminal_candidate_digest(
             linked_basis_record_digest: product.linked_basis_digest,
             evaluator_release_id: [0x68; 32],
             basis_width: OUTCOME_COUNT,
-            payout_scale: 1,
+            payout_scale: product.payout_scale,
         },
         descriptor_bytes,
         descriptor_admission: DescriptorAdmissionV2 {
@@ -1581,13 +1700,13 @@ fn terminal_candidate_digest(
             owner: selected.custody_owner.to_bytes(),
             request_id: hash(request_bytes).to_bytes(),
             caller_role: CallerRole::Trading,
-            terminal: TerminalScenarioV3::Categorical(WINNER),
+            terminal,
             claim_index: WINNER,
             quantity: 1,
             expected_generation: GENERATION,
             expected_market_revision: 0,
             expected_position_revision: 0,
-            hoard_before: INITIAL_HOARD_ATOMS,
+            hoard_before,
         },
         &mut payouts,
         &mut translation_scratch,
@@ -1596,7 +1715,7 @@ fn terminal_candidate_digest(
         &mut packet,
     )
     .expect("terminal ProductBasis plan");
-    assert_eq!(payout, 1);
+    assert!(payout > 0, "the staged representation redemption must pay");
     hashv(&[
         TERMINAL_CANDIDATE_DOMAIN_V3,
         &hash(&packet).to_bytes(),
@@ -1689,6 +1808,108 @@ enum TerminalV1 {
     },
 }
 
+/// The ProductBasisV3 family one fixture actually places behind the finalized
+/// Registry account.
+///
+/// Existing representation tests keep their categorical profile. The curved
+/// degree-two profile drives the curved evaluator through the complete
+/// Structured/Rational route. Degree three needs four control points and is
+/// exercised by the Fractional campaign, without pretending this child wire's
+/// K=3 ceiling can carry it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProductBasisProfileV1 {
+    Categorical,
+    CurvedDegreeTwo,
+}
+
+impl ProductBasisProfileV1 {
+    const fn kind(self) -> BasisKindV3 {
+        match self {
+            Self::Categorical => BasisKindV3::CategoricalQ1,
+            Self::CurvedDegreeTwo => BasisKindV3::SplineDegree2To3 {
+                degree: 2,
+                interior_multiplicity: false,
+            },
+        }
+    }
+
+    const fn spline_degree(self) -> Option<u8> {
+        match self {
+            Self::Categorical => None,
+            Self::CurvedDegreeTwo => Some(2),
+        }
+    }
+
+    fn knots(self) -> Vec<i128> {
+        match self {
+            Self::Categorical => Vec::new(),
+            // One clamped quadratic Bernstein span over [0,3].
+            Self::CurvedDegreeTwo => vec![0, 0, 0, 3, 3, 3],
+        }
+    }
+
+    fn failure_payouts(self) -> Vec<u64> {
+        match self {
+            Self::Categorical => Vec::new(),
+            Self::CurvedDegreeTwo => vec![0, 0, self.payout_scale()],
+        }
+    }
+
+    const fn knot_denominator(self) -> u64 {
+        match self {
+            Self::Categorical | Self::CurvedDegreeTwo => 1,
+        }
+    }
+
+    const fn expected_curve_payouts(self) -> [u64; K] {
+        match self {
+            Self::CurvedDegreeTwo => [1, 4, 2],
+            Self::Categorical => [0; K],
+        }
+    }
+
+    const fn payout_scale(self) -> u64 {
+        match self {
+            Self::Categorical => 1,
+            Self::CurvedDegreeTwo => CURVED_PAYOUT_SCALE,
+        }
+    }
+
+    fn terminal_scenario(self, terminal: TerminalV1) -> TerminalScenarioV3 {
+        match (self, terminal.certificate_kind()) {
+            (Self::Categorical, _) => TerminalScenarioV3::Categorical(terminal.winner()),
+            (Self::CurvedDegreeTwo, ResolutionCertificateKindV2::ResolutionSuccess) => {
+                TerminalScenarioV3::Rational {
+                    numerator: CURVED_RESULT_NUMERATOR,
+                    denominator: CURVED_RESULT_DENOMINATOR,
+                }
+            }
+            (Self::CurvedDegreeTwo, ResolutionCertificateKindV2::ResolutionFailure) => {
+                TerminalScenarioV3::Failure
+            }
+            // These are not terminal certificates. Refuse to invent a Product
+            // interpretation if a future fixture tries to place one here.
+            (
+                Self::CurvedDegreeTwo,
+                ResolutionCertificateKindV2::RecoveryAdvanced
+                | ResolutionCertificateKindV2::Exhausted,
+            ) => panic!("a non-terminal certificate has no payoff coordinate"),
+        }
+    }
+
+    const fn certificate_result(self, terminal: TerminalV1) -> (i128, u64) {
+        match terminal.certificate_kind() {
+            ResolutionCertificateKindV2::ResolutionFailure => (0, 0),
+            ResolutionCertificateKindV2::ResolutionSuccess => match self {
+                Self::Categorical => (1, 1),
+                Self::CurvedDegreeTwo => (CURVED_RESULT_NUMERATOR, CURVED_RESULT_DENOMINATOR),
+            },
+            ResolutionCertificateKindV2::RecoveryAdvanced
+            | ResolutionCertificateKindV2::Exhausted => (0, 0),
+        }
+    }
+}
+
 impl TerminalV1 {
     /// Whether the Market carries a terminal receipt at all.
     const fn resolved(self) -> bool {
@@ -1730,6 +1951,14 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
 }
 
 fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (ProgramTest, Fixture) {
+    fixture_with_basis(terminal, receipt_roles, ProductBasisProfileV1::Categorical)
+}
+
+fn fixture_with_basis(
+    terminal: TerminalV1,
+    receipt_roles: ReceiptMintRoles,
+    basis_profile: ProductBasisProfileV1,
+) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1824,7 +2053,41 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
     let (realm_raw, realm_staging, realm_id) =
         add_finalized_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, &realm_bytes);
 
-    let product_claims = add_product_claims(&mut test);
+    let product_claims = add_product_claims(&mut test, basis_profile);
+    let terminal_scenario = basis_profile.terminal_scenario(terminal);
+    let mut terminal_payouts = [0_u64; K];
+    if terminal.resolved() {
+        let basis = ProductBasisV3::decode(&product_claims.linked_basis_bytes)
+            .expect("fixture ProductBasisV3");
+        match terminal_scenario {
+            TerminalScenarioV3::Categorical(selector) => basis
+                .evaluate_categorical(selector, &mut terminal_payouts)
+                .expect("categorical terminal partition"),
+            TerminalScenarioV3::Rational {
+                numerator,
+                denominator,
+            } => basis
+                .evaluate_rational(numerator, denominator, &mut terminal_payouts)
+                .expect("rational terminal partition"),
+            TerminalScenarioV3::Failure => basis
+                .evaluate_failure(&mut terminal_payouts)
+                .expect("failure terminal partition"),
+        }
+    }
+    let initial_hoard_atoms = if terminal.resolved() {
+        aggregate_claims()
+            .iter()
+            .zip(terminal_payouts)
+            .try_fold(0_u64, |total, (supply, payout)| {
+                total.checked_add(supply.checked_mul(payout)?)
+            })
+            .expect("terminal liability fits u64")
+    } else {
+        INITIAL_HOARD_ATOMS
+    };
+    if basis_profile == ProductBasisProfileV1::Categorical && terminal.resolved() {
+        assert_eq!(initial_hoard_atoms, INITIAL_HOARD_ATOMS);
+    }
     let terminal_certificate = terminal
         .resolved()
         .then(|| Pubkey::new_from_array([0x86; 32]));
@@ -1855,6 +2118,7 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
             terminal.certificate_kind(),
             ResolutionCertificateKindV2::ResolutionFailure
         );
+        let (result_numerator, result_denominator) = basis_profile.certificate_result(terminal);
         let bytes = ResolutionCertificateV2 {
             kind: terminal.certificate_kind(),
             market: market.to_bytes(),
@@ -1874,8 +2138,8 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
                 0
             },
             funding_remaining: 0,
-            result_numerator: i128::from(!failed),
-            result_denominator: u64::from(!failed),
+            result_numerator,
+            result_denominator,
             observed_at: u64::from(!failed),
         }
         .to_bytes()
@@ -2159,6 +2423,9 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
     );
     let fixture_stub = Fixture {
         actor,
+        basis_profile,
+        terminal_scenario,
+        initial_hoard_atoms,
         release_set,
         realm_id,
         parent_context,
@@ -2238,6 +2505,39 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
             // unused by a wallet payout, which derives its whole frame itself.
             WINNER,
         );
+        // The representation route is only precomputed to derive its shared
+        // Custody namespace. A failure fixture does not execute that route and
+        // keeps the historical winning-coordinate control so the request has a
+        // nonzero transfer; the wallet path below independently derives the
+        // actual failure-coordinate payout from the certificate.
+        let (representation_terminal, representation_payout) = match basis_profile {
+            // This precomputation belongs to the independent Structured
+            // representation route, whose historical control exits the
+            // ordinary winning coordinate. A certificate-mismatch fixture
+            // must not silently retarget that unrelated route.
+            ProductBasisProfileV1::Categorical => (TerminalScenarioV3::Categorical(WINNER), 1),
+            ProductBasisProfileV1::CurvedDegreeTwo => (
+                terminal_scenario,
+                *terminal_payouts.get(WINNERS).expect("winner payout"),
+            ),
+        };
+        let representation_candidate = terminal_candidate_digest(
+            &terminal_request,
+            fixture.market,
+            aggregate,
+            fixture.release_set,
+            fixture.realm_id,
+            fixture.receipt_mint,
+            fixture.representation_authority,
+            fixture.descriptor_id,
+            &descriptor,
+            &graph,
+            graph_digest,
+            &product_claims,
+            fixture.assets[1],
+            representation_terminal,
+            initial_hoard_atoms,
+        );
         let (custody_request, custody_caller, custody_replay, hoard, custody_authority) =
             terminal_custody(
                 &terminal_request,
@@ -2248,21 +2548,8 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
                 fixture.actor.pubkey(),
                 collateral_mint,
                 recipient,
-                terminal_candidate_digest(
-                    &terminal_request,
-                    fixture.market,
-                    aggregate,
-                    fixture.release_set,
-                    fixture.realm_id,
-                    fixture.receipt_mint,
-                    fixture.representation_authority,
-                    fixture.descriptor_id,
-                    &descriptor,
-                    &graph,
-                    graph_digest,
-                    &product_claims,
-                    fixture.assets[1],
-                ),
+                representation_candidate,
+                representation_payout,
             );
         // The Hoard this fixture funds is the one a founding leaves, and it is
         // NOT the one a market-address namespace would name. Pinned here so a
@@ -2302,7 +2589,7 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
             TOKEN_PROGRAM_ID,
             mint_data(
                 COption::None,
-                INITIAL_RECIPIENT_ATOMS + INITIAL_HOARD_ATOMS,
+                INITIAL_RECIPIENT_ATOMS + initial_hoard_atoms,
                 6,
             ),
         );
@@ -2310,7 +2597,7 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
             &mut test,
             hoard,
             TOKEN_PROGRAM_ID,
-            token_account_data(collateral_mint, custody_authority, INITIAL_HOARD_ATOMS),
+            token_account_data(collateral_mint, custody_authority, initial_hoard_atoms),
         );
         add_account(
             &mut test,
@@ -4940,7 +5227,7 @@ fn wallet_payout_plan(
         input.release_set,
         [0x68; 32],
         OUTCOME_COUNT,
-        1,
+        fixture.basis_profile.payout_scale(),
     )
     .expect("terminal admission projection");
     let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral delta");
@@ -4968,7 +5255,7 @@ fn wallet_payout_plan(
             owner: input.owner,
             request_id: hash(request_bytes).to_bytes(),
             caller_role: input.caller_role,
-            terminal: TerminalScenarioV3::Categorical(fixture.terminal_winner),
+            terminal: fixture.terminal_scenario,
             claim_index: input.claim_index,
             quantity: input.quantity,
             expected_generation: input.generation,
@@ -5365,6 +5652,115 @@ fn assert_refused_with(result: &Submission, code: u32, label: &str) {
         "{label} must refuse with {code:#x}: {:#?}",
         result.logs
     );
+}
+
+/// A degree-two ProductBasisV3 pays its exact cumulative-floor partition
+/// through the real Claims, Custody, Core, Registry, Resolution and Token-2022
+/// ELFs.
+///
+/// The knot vector is the clamped quadratic basis `[0,0,0,3,3,3]`. At the
+/// Resolution-owned coordinate `3/2`, its exact weights are `[1/4,1/2,1/4]`;
+/// at scale seven the one named rounding boundary yields `[1,4,2]`. Redeeming
+/// the wallet's two middle-coordinate claims must therefore move eight
+/// collateral atoms. A categorical fixture would move two,
+/// so this is an executable discriminator for the evaluator family.
+#[tokio::test]
+async fn a_degree_two_curve_pays_the_cumulative_floor_partition_on_real_elfs() {
+    let (test, fixture) = fixture_with_basis(
+        TerminalV1::Provider,
+        ReceiptMintRoles::Both,
+        ProductBasisProfileV1::CurvedDegreeTwo,
+    );
+    let basis = ProductBasisV3::decode(&fixture.linked_basis_bytes)
+        .expect("finalized curved ProductBasisV3");
+    let mut payouts = [0_u64; K];
+    basis
+        .evaluate_rational(
+            CURVED_RESULT_NUMERATOR,
+            CURVED_RESULT_DENOMINATOR,
+            &mut payouts,
+        )
+        .expect("curved terminal payout");
+    assert_eq!(
+        payouts,
+        ProductBasisProfileV1::CurvedDegreeTwo.expected_curve_payouts()
+    );
+    assert_eq!(fixture.initial_hoard_atoms, 59);
+
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: curved wallet payout",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+    let quantity = ACTOR_CLAIMS[WINNERS];
+    let paid = quantity
+        .checked_mul(payouts[WINNERS])
+        .expect("curved payout fits");
+    assert_eq!(paid, 8);
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims rational-representation-v2: degree-two cumulative-floor payout",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("curved payout refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(result.accepted, "the curved payout must commit");
+    assert!(result.wire_bytes <= PACKET_LIMIT);
+
+    let after = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard")),
+        fixture.initial_hoard_atoms - paid
+    );
+    assert_eq!(
+        token_amount(after.recipient.as_ref().expect("recipient")),
+        INITIAL_RECIPIENT_ATOMS + paid
+    );
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard"))
+            + token_amount(after.recipient.as_ref().expect("recipient")),
+        fixture.initial_hoard_atoms + INITIAL_RECIPIENT_ATOMS,
+        "collateral is conserved independently of the rounded partition"
+    );
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, WINNER),
+        0
+    );
+    assert_eq!(
+        lbv2_market_supply(&after.aggregate.data, WINNER),
+        aggregate_claims()[WINNERS] - quantity
+    );
+    for index in 0..K {
+        if index == WINNERS {
+            continue;
+        }
+        let outcome = u32::try_from(index).expect("outcome index");
+        assert_eq!(
+            lbv2_market_supply(&after.aggregate.data, outcome),
+            lbv2_market_supply(&before.aggregate.data, outcome),
+            "the payout debits only the selected native claim"
+        );
+    }
+    for index in 0..K {
+        assert_account_content_eq(
+            after.positions.get(index).expect("custody Position"),
+            before.positions.get(index).expect("pre custody Position"),
+        );
+        assert_account_content_eq(
+            after.shard_mints.get(index).expect("shard Mint"),
+            before.shard_mints.get(index).expect("pre shard Mint"),
+        );
+    }
 }
 
 /// STEP TWO OF THE REDEMPTION: a plain wallet's Position gets paid.

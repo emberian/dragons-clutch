@@ -29,6 +29,9 @@ use dclutch_claims_svm::{
         PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionV2,
         ProtocolPositionCloseReceiptV2, ProtocolPositionRequestV2,
     },
+    series_founding_transport_v1::{
+        SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1, SeriesClaimsFoundingTransportV1,
+    },
     signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3, SignedDeltaReceiptV3},
     sparse_native_transfer_v1::{
         SPARSE_NATIVE_TRANSFER_MAGIC_V1, SparseNativeTransferPoststateSlicesV1,
@@ -39,7 +42,7 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::FixedRole,
-    v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
+    v3::{ResolvedInvocationV3, RouteKindV3},
 };
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_ATOMIC_ROOT_V3,
@@ -125,12 +128,11 @@ pub(crate) enum SparsePostResourceVerificationV3 {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_claims_route_v3<'info>(
     program_id: &Pubkey,
-    effect: ProgramV3<'_>,
+    successor_account_count: usize,
     composition: ClaimsCompositionV3<'_>,
     route_index: u16,
     invocation_index: u32,
     invocation: ResolvedInvocationV3,
-    tail_count: u32,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
@@ -144,10 +146,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
     // it; `Some` reproduces and refuses at the coordinate-0 equality below.
     hint: PreflightedCallerBumpV4,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
-    if effect
-        .account_count(tail_count)
-        .map_err(|_| TradingSbfError::Content)?
-        != effect_accounts.len()
+    if successor_account_count != effect_accounts.len()
         || !claims_program.executable
         || claims_program.is_writable
         || claims_program.is_signer
@@ -260,7 +259,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
                 PostResourceEvidenceV3::DeferredDirect
             }
         },
-        ReceiptKindV3::Founding => {
+        ReceiptKindV3::Founding | ReceiptKindV3::SeriesFounding => {
             PostResourceEvidenceV3::Founding(founding_post_resource_digests(&buffers.accounts)?)
         }
         ReceiptKindV3::FractionalAtomic => PostResourceEvidenceV3::FractionalRoot(
@@ -380,6 +379,7 @@ enum ReceiptKindV3 {
     SignedDelta,
     SparseNativeTransfer,
     Founding,
+    SeriesFounding,
     RationalLifecycle,
     RationalRepresentation,
     FractionalAtomic,
@@ -411,7 +411,8 @@ impl ReceiptKindV3 {
             | Self::SparseNativeTransfer
             // `founding_v5::decode_instruction` requires the lock receipt and
             // the projected receipt at an exact total width.
-            | Self::Founding => ReceiptDeliveryV3::ExactSuffix,
+            | Self::Founding
+            | Self::SeriesFounding => ReceiptDeliveryV3::ExactSuffix,
             Self::Admit
             | Self::Affine
             | Self::SignedDelta
@@ -606,6 +607,21 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::SparseNativeTransfer))
+    } else if request.get(..8) == Some(SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let transport = SeriesClaimsFoundingTransportV1::decode(request)
+            .map_err(|_| TradingSbfError::Content)?;
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(transport.release_set()).map_err(|_| TradingSbfError::Content)?,
+            transport.market(),
+            ExecutionRoleV1::Trading,
+            transport.permit(),
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, ReceiptKindV3::SeriesFounding))
     } else if request.get(..8) == Some(CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice()) {
         if kind != RouteKindV3::Once {
             return Err(TradingSbfError::Content.into());
@@ -791,6 +807,16 @@ fn verify_route_receipt(
             request,
             receipt,
             request_digest,
+            claims_program,
+            trading_program,
+            match expected_post_resources {
+                PostResourceEvidenceV3::Founding(value) => Some(value),
+                _ => None,
+            },
+        ),
+        ReceiptKindV3::SeriesFounding => verify_series_founding_receipt(
+            request,
+            receipt,
             claims_program,
             trading_program,
             match expected_post_resources {
@@ -1118,9 +1144,15 @@ fn fractional_root_signer(
     let composite =
         decode_fractional_capability_root_v4(&root_data).ok_or(TradingSbfError::Content)?;
     let header = composite.header();
-    let input = composite.state().input();
+    let state = composite.state();
     let seeds = header.seeds();
     let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    let selected_config = header.selection().config().to_bytes();
+    let state_binding_matches = match (state.terms_v1(), state.selection_config_v2()) {
+        (Some(historical_terms), None) => historical_terms == terms && selected_config == terms,
+        (None, Some(current_config)) => current_config == selected_config,
+        _ => false,
+    };
     if root_account.key != &expected
         || root_account.owner != program_id
         || root_account.is_signer
@@ -1132,11 +1164,10 @@ fn fractional_root_signer(
         || root_account.executable
         || header.release_set().to_bytes() != release_set
         || header.market() != market
-        || header.selection().config().to_bytes() != terms
-        || input.bump != bump
-        || input.terms != terms
-        || input.market != market
-        || input.revision != expected_revision
+        || !state_binding_matches
+        || state.bump() != bump
+        || state.market() != market
+        || state.revision() != expected_revision
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -1217,6 +1248,80 @@ fn verify_founding_receipt(
         return Err(TradingSbfError::Transition.into());
     }
     Ok(ClaimsRouteReceiptV3::Founding(receipt))
+}
+
+#[inline(never)]
+fn verify_series_founding_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    claims_program: [u8; 32],
+    trading_program: [u8; 32],
+    expected: Option<FoundingPostResourceDigestsV5>,
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let permit = decode_series_founding_transport_permit(request)?;
+    let receipt = decode_series_founding_receipt_boxed(receipt)?;
+    verify_series_founding_receipt_self_hash(&receipt)?;
+    verify_series_founding_transport_normalization(request, permit, receipt.request_ref())?;
+    let expected = expected.ok_or(TradingSbfError::Transition)?;
+    if receipt.request_ref().claims_program() != claims_program
+        || receipt.request_ref().trading_program() != trading_program
+        || receipt.aggregate_digest() != expected.aggregate
+        || receipt.position_digest() != expected.position
+        || receipt.admission_digest() != expected.admission
+        || receipt.post_resource_digest() != expected.combined
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::Founding(receipt))
+}
+
+/// Decode the wide transient transport in its own bounded SBF frame and return
+/// only the compact authenticated coordinate needed by later phases.
+#[inline(never)]
+fn decode_series_founding_transport_permit(request: &[u8]) -> Result<[u8; 32], ProgramError> {
+    let transport =
+        SeriesClaimsFoundingTransportV1::decode(request).map_err(|_| TradingSbfError::Content)?;
+    Ok(transport.permit())
+}
+
+/// Decode the wide canonical receipt directly into its heap-owned immutable
+/// result so the caller never carries its fixed-layout body on the SBF stack.
+#[inline(never)]
+fn decode_series_founding_receipt_boxed(
+    receipt: &[u8],
+) -> Result<Box<ClaimsFoundingReceiptV5>, ProgramError> {
+    Ok(Box::new(
+        ClaimsFoundingReceiptV5::decode(receipt).map_err(|_| TradingSbfError::Transition)?,
+    ))
+}
+
+/// Verify the embedded canonical request's exact byte digest in a phase where
+/// its one 832-byte encoding is the only wide local value.
+#[inline(never)]
+fn verify_series_founding_receipt_self_hash(
+    receipt: &ClaimsFoundingReceiptV5,
+) -> Result<(), ProgramError> {
+    let canonical = receipt.request_ref();
+    let canonical_bytes = canonical.to_bytes();
+    receipt
+        .verify_for(canonical, hash(&canonical_bytes).to_bytes())
+        .map_err(|_| TradingSbfError::Transition.into())
+}
+
+/// Recreate the root-independent transport and compare every byte in a phase
+/// disjoint from receipt decode and canonical request hashing.
+#[inline(never)]
+fn verify_series_founding_transport_normalization(
+    request: &[u8],
+    permit: [u8; 32],
+    canonical: &ClaimsFoundingRequestV5,
+) -> Result<(), ProgramError> {
+    let normalized = SeriesClaimsFoundingTransportV1::from_canonical_v5(permit, *canonical)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if normalized.to_bytes().as_slice() != request {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -2134,6 +2239,8 @@ mod tests {
                 admission_digest: id(50),
                 claims_program: claims,
                 post_resource_digest: id(51),
+                position_lamports: close.observed_position_lamports,
+                admission_lamports: close.observed_admission_lamports,
                 rent_credit_before: 100,
                 rent_credit_after: 125,
             },
@@ -2801,6 +2908,39 @@ mod tests {
             route_authority(&request_bytes, RouteKindV3::Once).expect("founding authority");
         assert_eq!(kind, ReceiptKindV3::Founding);
         assert_eq!(seeds.context(), request.founding_intent_digest());
+        let permit = id(90);
+        let transport = SeriesClaimsFoundingTransportV1::from_canonical_v5(permit, request)
+            .expect("Series transport")
+            .to_bytes();
+        let (series_seeds, series_kind) =
+            route_authority(&transport, RouteKindV3::Once).expect("Series authority");
+        assert_eq!(series_kind, ReceiptKindV3::SeriesFounding);
+        assert_eq!(series_seeds.context(), permit);
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::SeriesFounding,
+                &transport,
+                &receipt,
+                claims,
+                trading,
+                PostResourceEvidenceV3::Founding(post),
+            ),
+            Ok(ClaimsRouteReceiptV3::Founding(_))
+        ));
+        let mut malformed_transport = transport;
+        malformed_transport[0] ^= 1;
+        assert!(route_authority(&malformed_transport, RouteKindV3::Once).is_err());
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::SeriesFounding,
+                &malformed_transport,
+                &receipt,
+                claims,
+                trading,
+                PostResourceEvidenceV3::Founding(post),
+            )
+            .is_err()
+        );
         assert!(route_authority(&request_bytes, RouteKindV3::AffineOnce).is_err());
         assert!(
             founding_post_resource_digests(accounts.get(..32).expect("frame holds 33 accounts"))

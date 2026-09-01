@@ -19,37 +19,34 @@
 
 use std::{env, vec::Vec};
 
-use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_MARKET_ACCOUNT_V3,
-    HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+    HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HOT_TRADING_PROGRAM_ACCOUNT_V3,
 };
+use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     encode_liability_basis_market_into_v2,
 };
-use dclutch_fractional_atomic_program_test::narrow_fixture::{
-    NarrowFixtureInputV2, NarrowFixtureV2, NarrowPositionV2, compile_narrow_fixture_v2,
-};
 use dclutch_claims_svm::signed_delta_v3::SignedDeltaPlanV3;
+use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
 use dclutch_dealer_accelerator_program_test::custody_delivery::{
-    DealerDeliveryInputV1, DealerDeliveryRealmV1, DealerDeliveryV1,
-    dealer_delivery_realm_v1, dealer_delivery_token_account_bytes, mint_total_supply,
-    stage_dealer_delivery_v1, token_account_amount,
+    DealerDeliveryInputV1, DealerDeliveryRealmV1, DealerDeliveryV1, dealer_delivery_realm_v1,
+    dealer_delivery_token_account_bytes, mint_total_supply, stage_dealer_delivery_v1,
+    token_account_amount,
 };
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
     scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1,
     scenario_custody_reservation_v1::{
-        DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
-        DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1, DealerScenarioActivationReceiptV1,
-        DealerScenarioReservationBatchStatusV1, DealerScenarioReservationBatchV1,
-        DealerScenarioReservationStateStatusV1, DealerScenarioReservationStateV1,
+        DealerScenarioActivationReceiptV1, DealerScenarioReservationBatchStatusV1,
+        DealerScenarioReservationBatchV1, DealerScenarioReservationStateStatusV1,
+        DealerScenarioReservationStateV1,
     },
     scenario_membership_manifest_v1::{
         DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
@@ -59,25 +56,26 @@ use dclutch_dealer_codec::{
         DealerScenarioReservationActionV1, DealerScenarioReservationReceiptV1,
     },
 };
+use dclutch_fractional_atomic_program_test::narrow_fixture::{
+    NarrowFixtureInputV2, NarrowFixtureV2, NarrowPositionV2, compile_narrow_fixture_v2,
+};
 use dclutch_operator::{
     dealer_scenario_checkpoint_v1::{
-        DealerScenarioCheckpointJournalV1, DealerScenarioCheckpointRouteV1,
         DealerAcceptedEvaluationAccountsV4, DealerAcceptedReservationAccountsV4,
-        DealerAcceptedTranscriptInputV4, DealerScenarioCommitAccountsV1,
+        DealerAcceptedTranscriptInputV4, DealerScenarioActivationAccountsV1,
+        DealerScenarioActivationEffectAccountsV1, DealerScenarioCheckpointJournalV1,
+        DealerScenarioCheckpointRouteV1, DealerScenarioCommitAccountsV1,
         DealerScenarioCommitEffectAccountsV1, DealerScenarioEvaluationBodiesV1,
-        DealerScenarioActivationAccountsV1, DealerScenarioActivationEffectAccountsV1,
         DealerScenarioReservationAccountsV1, DealerScenarioReservationBundlePacketV1,
         build_dealer_accepted_transcript_v4, build_dealer_scenario_activation_v1,
-        build_dealer_scenario_reservation_bundle_v1,
-        build_dealer_scenario_checkpoint_cleanup_v1,
-        encode_dealer_scenario_custody_effect_artifacts_v1,
-        build_dealer_scenario_checkpoint_create_v1, build_dealer_scenario_checkpoint_reserve_v1,
-        build_dealer_scenario_commit_v1,
+        build_dealer_scenario_checkpoint_cleanup_v1, build_dealer_scenario_checkpoint_create_v1,
         build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
-        dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
-        dealer_scenario_reservation_batch_address_v1,
+        build_dealer_scenario_checkpoint_reserve_v1, build_dealer_scenario_commit_v1,
+        build_dealer_scenario_reservation_bundle_v1, dealer_scenario_checkpoint_address_v1,
+        dealer_scenario_evaluation_receipt_address_v1,
         dealer_scenario_membership_manifest_address_v1,
-        derive_dealer_scenario_evaluation_receipt_v1,
+        dealer_scenario_reservation_batch_address_v1, derive_dealer_scenario_evaluation_receipt_v1,
+        encode_dealer_scenario_custody_effect_artifacts_v1,
         project_dealer_scenario_canonical_membership_pages_v1,
     },
     dealer_scenario_hot_v4::{
@@ -90,23 +88,18 @@ use dclutch_operator::{
 use dclutch_registry_activation_auth_v1::activation_cache_address_v1;
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    activate_execution_role_into_v1, initialize_activation_cache_v1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
 };
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
-use dclutch_core_contract::ContentId;
 use dclutch_trading_sbf::dealer::{
     v3_composer::{ScenarioCollateralFrameV3, ScenarioComposerContextV3, ScenarioCustodyEffectV3},
     v3_multi_lp::MultiLpCustodyRequestV3,
     v3_obligation::stage_scenario_obligation_replacement_v3,
-    v3_trade_profile::{
-        DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DEALER_SCENARIO_PROFILE_SPANS_V4,
-        DealerScenarioAccountProfileInputV4, encode_dealer_scenario_account_profile_v4_atomic,
-    },
     v3_obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
         DEALER_OBLIGATION_PDA_DOMAIN_V3, DEALER_OBLIGATION_VERSION_V3,
@@ -114,12 +107,25 @@ use dclutch_trading_sbf::dealer::{
     },
     v3_trade::{
         DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3,
-        DealerScenarioTradeRequestV3,
-        ScenarioTradeChainProjectionV3, ScenarioTradeDirectionV3, ScenarioTradeIntentV3,
-        build_scenario_trade_request_v3, scenario_trade_max_request_bytes_v3,
+        DealerScenarioTradeRequestV3, ScenarioTradeChainProjectionV3, ScenarioTradeDirectionV3,
+        ScenarioTradeIntentV3, build_scenario_trade_request_v3,
+        scenario_trade_max_request_bytes_v3,
+    },
+    v3_trade_profile::{
+        DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DEALER_SCENARIO_PROFILE_SPANS_V4,
+        DealerScenarioAccountProfileInputV4, encode_dealer_scenario_account_profile_v4_atomic,
     },
 };
+use dclutch_trading_sbf::{
+    TradingSbfError, dealer_scenario_checkpoint_v1::DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1,
+};
 use solana_account::{Account, AccountSharedData};
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table,
+};
+use solana_message::AddressLookupTableAccount;
+use solana_message::{VersionedMessage, v0};
+use solana_message_v3::AddressLookupTableAccount as OperatorLookupTable;
 use solana_program::{
     hash::{Hash, hash},
     instruction::{AccountMeta, Instruction},
@@ -128,14 +134,10 @@ use solana_program::{
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
-use solana_message::{VersionedMessage, v0};
-use solana_message_v3::AddressLookupTableAccount as OperatorLookupTable;
-use solana_message::AddressLookupTableAccount;
-use solana_transaction::versioned::VersionedTransaction;
 use solana_sdk::transaction::TransactionError;
-use solana_address_lookup_table_interface::instruction::{create_lookup_table, extend_lookup_table};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
+use solana_transaction::versioned::VersionedTransaction;
 
 /// Release-selected Trading program the campaign installs the real ELF at.
 const TRADING: Pubkey = Pubkey::new_from_array([0xd0; 32]);
@@ -184,8 +186,6 @@ const TRADING_RELEASE: u32 = 0x4001;
 const CUSTODY_REPLAY: u32 = 0x6005;
 /// Custody's refusal when a vault PDA, token state or authority policy refuses.
 const CUSTODY_TOKEN_STATE: u32 = 0x6006;
-/// The Claims SignedDelta route's refusal when the aggregate state does not join.
-const CLAIMS_SIGNED_DELTA_STATE: u32 = 0x5204;
 
 /// Runtime Product outcome width this scenario transitions.
 const WIDTH: u32 = 3;
@@ -271,20 +271,6 @@ struct ReleaseWaist {
     deployments: Vec<(&'static str, Pubkey, Vec<u8>)>,
 }
 
-/// The exact 36-byte Loader V3 Program account body.
-fn loader_program_body(programdata: Pubkey) -> Vec<u8> {
-    let mut output = vec![0_u8; 36];
-    output
-        .get_mut(..4)
-        .expect("variant")
-        .copy_from_slice(&2_u32.to_le_bytes());
-    output
-        .get_mut(4..36)
-        .expect("link")
-        .copy_from_slice(programdata.as_ref());
-    output
-}
-
 /// The exact 45-byte Loader V3 ProgramData metadata span, then the ELF.
 fn loader_programdata_body(slot: u64, authority: Option<[u8; 32]>, elf: &[u8]) -> Vec<u8> {
     let mut output = vec![0_u8; 45 + elf.len()];
@@ -332,8 +318,8 @@ fn artifact_release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleas
 
 /// Activation input for one release, observed exactly as staged.
 fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
-    let artifact = ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes())
-        .expect("artifact identity");
+    let artifact =
+        ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity");
     let observation = DeploymentObservationV1::new(
         release.program().to_bytes(),
         bpf_loader_upgradeable::ID.to_bytes(),
@@ -656,12 +642,19 @@ fn scenario() -> Scenario {
     let product = fixture.product_id;
     let basis = fixture.semantic_basis_id;
     let child = CHILD_ROOT.to_bytes();
-    let obligation_state = obligation_bytes(market, product, basis, dealer_owner, child, 7, &[
-        12, 20, 10,
-    ]);
+    let obligation_state = obligation_bytes(
+        market,
+        product,
+        basis,
+        dealer_owner,
+        child,
+        7,
+        &[12, 20, 10],
+    );
     let current_obligation =
         DealerObligationProjectionV3::decode(&obligation_state).expect("canonical obligation");
-    let obligation = Pubkey::find_program_address(&[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child], &TRADING).0;
+    let obligation =
+        Pubkey::find_program_address(&[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child], &TRADING).0;
     let chain = ScenarioTradeChainProjectionV3 {
         trading_program: TRADING.to_bytes(),
         release_set: waist.release_set_id,
@@ -700,10 +693,12 @@ fn scenario() -> Scenario {
     // this first executed commit trades at that coordinate. Dealer scenarios are
     // not restricted to one coordinate in general; the campaign is.
     let mut acquired = vec![0_u64; usize::try_from(WIDTH).expect("small width")];
-    let mut delivered = vec![0_u64; usize::try_from(WIDTH).expect("small width")];
+    let delivered = vec![0_u64; usize::try_from(WIDTH).expect("small width")];
     // Acquired and delivered must be disjoint per coordinate, and the graph
     // funds exactly one, so this trade moves value one way at that coordinate.
-    *acquired.get_mut(FUNDED_COORDINATE).expect("funded coordinate") = 10;
+    *acquired
+        .get_mut(FUNDED_COORDINATE)
+        .expect("funded coordinate") = 10;
     let intent = ScenarioTradeIntentV3 {
         direction: ScenarioTradeDirectionV3::CounterpartyPaysDealer,
         principal: 10,
@@ -758,8 +753,11 @@ fn scenario() -> Scenario {
         destination_before: DELIVERY_DESTINATION_BEFORE,
         replay_revision: DELIVERY_REPLAY_REVISION,
     });
-    let membership_manifest =
-        dealer_scenario_membership_manifest_address_v1(MANIFEST_PRODUCER, checkpoint, request_digest);
+    let membership_manifest = dealer_scenario_membership_manifest_address_v1(
+        MANIFEST_PRODUCER,
+        checkpoint,
+        request_digest,
+    );
 
     // The membership transcript is the complete physical Dealer frame for this
     // scenario after alias de-duplication. Its width is the reason the split
@@ -808,7 +806,11 @@ fn scenario() -> Scenario {
             counterparty_account: COUNTERPARTY_ACCOUNT.to_bytes(),
             counterparty_owner: COUNTERPARTY.to_bytes(),
             counterparty_external_delegate: Pubkey::find_program_address(
-                &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &market, &waist.release_set_id],
+                &[
+                    CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+                    &market,
+                    &waist.release_set_id,
+                ],
                 &waist.custody_program,
             )
             .0
@@ -819,8 +821,7 @@ fn scenario() -> Scenario {
     };
     let projected = project_dealer_scenario_hot_semantics_v4(semantic, &request_bytes)
         .expect("semantic projection");
-    let (mut fixed_accounts, suffix) =
-        physical_frame(WIDTH, projected.dynamic_span_counts);
+    let (mut fixed_accounts, suffix) = physical_frame(WIDTH, projected.dynamic_span_counts);
     let frame = dealer_hot_frame_projection_v4();
     fixed_accounts
         .get_mut(HOT_MARKET_ACCOUNT_V3)
@@ -837,7 +838,8 @@ fn scenario() -> Scenario {
         .expect("trading coordinate")
         .account
         .key = TRADING;
-    let mut strategy_accounts = (0..frame.admitted_evidence_count + projected.caller_authority_count)
+    let mut strategy_accounts = (0..frame.admitted_evidence_count
+        + projected.caller_authority_count)
         .map(|index| frame_meta(200 + index, 0, false, false, index == 6))
         .collect::<Vec<_>>();
     strategy_accounts
@@ -891,7 +893,11 @@ fn scenario() -> Scenario {
         request_digest,
     )
     .expect("canonical membership partition");
-    let manifest_bytes = canonical.manifest.encode().expect("manifest encode").to_vec();
+    let manifest_bytes = canonical
+        .manifest
+        .encode()
+        .expect("manifest encode")
+        .to_vec();
     Scenario {
         dealer,
         request_bytes,
@@ -926,8 +932,8 @@ struct LiveClaimsGraph {
 
 /// Re-encode the compiled graph at a live revision through supported encoders.
 fn live_claims_graph(fixture: &NarrowFixtureV2) -> LiveClaimsGraph {
-    let market_view =
-        LiabilityBasisMarketViewV2::decode(&fixture.claims_market_bytes).expect("aggregate decodes");
+    let market_view = LiabilityBasisMarketViewV2::decode(&fixture.claims_market_bytes)
+        .expect("aggregate decodes");
     let supplies = (0..fixture.outcome_count)
         .map(|claim| {
             market_view
@@ -986,7 +992,11 @@ impl Scenario {
         let fixture = &self.fixture;
         let claims = self.waist.claims_program;
         let mut accounts = vec![
-            (fixture.core_market, self.waist.core_program, fixture.core_state.clone()),
+            (
+                fixture.core_market,
+                self.waist.core_program,
+                fixture.core_state.clone(),
+            ),
             (fixture.claims_market, claims, self.live.market.clone()),
             (
                 fixture.actor_position.account,
@@ -1023,9 +1033,20 @@ impl Scenario {
 
 /// Install the whole scenario and the real Trading ELF.
 fn program_test(scenario: &Scenario) -> ProgramTest {
+    program_test_configured(scenario, true)
+}
+
+/// Install the same scenario while allowing transaction ComputeBudget requests.
+fn program_test_with_transaction_compute(scenario: &Scenario) -> ProgramTest {
+    program_test_configured(scenario, false)
+}
+
+fn program_test_configured(scenario: &Scenario, fixed_compute_override: bool) -> ProgramTest {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
-    test.set_compute_max_units(1_400_000);
+    if fixed_compute_override {
+        test.set_compute_max_units(1_400_000);
+    }
     test.add_account(
         REQUEST,
         data_account(TRADING, scenario.request_bytes.clone()),
@@ -1075,13 +1096,16 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         scenario.realm.raw,
         data_account(scenario.waist.registry, scenario.realm.bytes.clone()),
     );
-    test.add_account(scenario.realm.staging, Account {
-        lamports: 0,
-        data: Vec::new(),
-        owner: system_program::ID,
-        executable: false,
-        rent_epoch: 0,
-    });
+    test.add_account(
+        scenario.realm.staging,
+        Account {
+            lamports: 0,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
     test.add_account(
         delivery.mint,
         data_account(delivery.token_program, delivery.mint_bytes.clone()),
@@ -1095,7 +1119,10 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
     }
     test.add_account(
         delivery.replay,
-        data_account(scenario.waist.custody_program, delivery.replay_bytes.clone()),
+        data_account(
+            scenario.waist.custody_program,
+            delivery.replay_bytes.clone(),
+        ),
     );
     // Install the frame exactly as the projection observed it: same identities,
     // same owners, same widths. The pages carry these accounts, so what the
@@ -1140,13 +1167,16 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
     // The Claims aggregate graph, installed exactly as the fixture compiled it.
     for (key, owner, body) in scenario.claims_graph_accounts() {
         if body.is_empty() {
-            test.add_account(key, Account {
-                lamports: Rent::default().minimum_balance(0).max(1),
-                data: Vec::new(),
-                owner,
-                executable: false,
-                rent_epoch: 0,
-            });
+            test.add_account(
+                key,
+                Account {
+                    lamports: Rent::default().minimum_balance(0).max(1),
+                    data: Vec::new(),
+                    owner,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            );
         } else {
             test.add_account(key, data_account(owner, body));
         }
@@ -1155,13 +1185,16 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
 }
 
 fn add_executable(test: &mut ProgramTest, key: Pubkey) {
-    test.add_account(key, Account {
-        lamports: 1,
-        data: Vec::new(),
-        owner: solana_sdk_ids::bpf_loader_upgradeable::ID,
-        executable: true,
-        rent_epoch: 0,
-    });
+    test.add_account(
+        key,
+        Account {
+            lamports: 1,
+            data: Vec::new(),
+            owner: solana_sdk_ids::bpf_loader_upgradeable::ID,
+            executable: true,
+            rent_epoch: 0,
+        },
+    );
 }
 
 /// Sign and process one route.
@@ -1368,7 +1401,10 @@ async fn real_trading_elf_executes_the_accepted_transition_through_reservation()
     let read_back = checkpoint_body(&mut context, &scenario).await;
     let evidence = evaluation_evidence(&scenario, &read_back);
     for (key, body) in evidence.installed.iter() {
-        context.set_account(key, &AccountSharedData::from(data_account(TRADING, body.clone())));
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(TRADING, body.clone())),
+        );
     }
     let packet = build_dealer_scenario_checkpoint_evaluate_v1(
         TRADING,
@@ -1707,8 +1743,12 @@ async fn a_malformed_membership_manifest_refuses_every_page() {
     );
 
     let payer = context.payer.pubkey();
-    let (instruction, _) =
-        page_instruction(&scenario, payer, 0, scenario.pages.first().expect("page zero"));
+    let (instruction, _) = page_instruction(
+        &scenario,
+        payer,
+        0,
+        scenario.pages.first().expect("page zero"),
+    );
     let processed = submit(&mut context, instruction, &[])
         .await
         .expect("ProgramTest processing");
@@ -1776,7 +1816,10 @@ async fn a_substituted_candidate_body_cannot_seal_an_evaluation() {
     let read_back = checkpoint_body(&mut context, &scenario).await;
     let evidence = evaluation_evidence(&scenario, &read_back);
     for (key, body) in evidence.installed.iter() {
-        context.set_account(key, &AccountSharedData::from(data_account(TRADING, body.clone())));
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(TRADING, body.clone())),
+        );
     }
 
     // The receipt is the one the producer really derived. What changes is the
@@ -1869,7 +1912,10 @@ fn named(tag: u8) -> Pubkey {
 /// The transition does not fit the 1,232-byte packet ceiling as static
 /// addresses, which is a fact about the transition and not about this harness:
 /// the operator refuses to emit a transcript whose legs cannot be sent.
-fn lookup_table(scenario: &Scenario, commit: &DealerScenarioCommitAccountsV1) -> OperatorLookupTable {
+fn lookup_table(
+    scenario: &Scenario,
+    commit: &DealerScenarioCommitAccountsV1,
+) -> OperatorLookupTable {
     let mut addresses = scenario.membership.clone();
     addresses.extend(commit.claims_accounts.iter().map(|meta| meta.pubkey));
     addresses.extend([
@@ -2014,7 +2060,6 @@ async fn the_accepted_transcript_is_ordered_and_wholly_lock_bounded() {
     );
 }
 
-
 /// Drive creation, the whole membership transcript, and the sealed evaluation.
 ///
 /// This is the same route order the executed campaign pins; the cases below use
@@ -2065,7 +2110,10 @@ async fn prepare_through_evaluation_with_delta(
     let read_back = checkpoint_body(context, scenario).await;
     let evidence = evaluation_evidence_with_delta(scenario, &read_back, published_delta);
     for (key, body) in evidence.installed.iter() {
-        context.set_account(key, &AccountSharedData::from(data_account(TRADING, body.clone())));
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(TRADING, body.clone())),
+        );
     }
     let packet = build_dealer_scenario_checkpoint_evaluate_v1(
         TRADING,
@@ -2110,7 +2158,10 @@ async fn an_expired_uncommitted_checkpoint_closes_to_its_immutable_beneficiary()
         .expect("checkpoint query")
         .expect("checkpoint exists")
         .lamports;
-    assert!(rent_held > 0, "the checkpoint holds the rent it must return");
+    assert!(
+        rent_held > 0,
+        "the checkpoint holds the rent it must return"
+    );
     let beneficiary_before = context
         .banks_client
         .get_account(BENEFICIARY)
@@ -2247,7 +2298,6 @@ async fn an_expired_checkpoint_refuses_a_substituted_rent_beneficiary() {
     );
 }
 
-
 /// Custody-owned reservation evidence for one evaluated effect.
 struct ReservationEvidence {
     receipt_address: Pubkey,
@@ -2328,7 +2378,10 @@ fn reservation_evidence(
         &custody,
     )
     .0;
-    let receipt_body = receipt.encode().expect("reservation receipt encodes").to_vec();
+    let receipt_body = receipt
+        .encode()
+        .expect("reservation receipt encodes")
+        .to_vec();
     let batch_body = DealerScenarioReservationBatchV1 {
         status: DealerScenarioReservationBatchStatusV1::Reserved,
         effect_count: 1,
@@ -2479,13 +2532,16 @@ async fn reserve_through_custody(
             delivery.source_prereservation_bytes(),
         )),
     );
-    context.set_account(&delivery.escrow, &AccountSharedData::from(Account {
-        lamports: 0,
-        data: Vec::new(),
-        owner: system_program::ID,
-        executable: false,
-        rent_epoch: 0,
-    }));
+    context.set_account(
+        &delivery.escrow,
+        &AccountSharedData::from(Account {
+            lamports: 0,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        }),
+    );
 
     let receipt_address = reservation_receipt_address(scenario, 0);
     let batch = dealer_scenario_reservation_batch_address_v1(
@@ -2499,31 +2555,48 @@ async fn reserve_through_custody(
         bundle.lock_census.unique_account_lock_count
     );
 
-    // The two instructions are submitted as two transactions, NOT as the
-    // operator's atomic pair, and that is a defect being worked around rather
-    // than a preference. See
-    // `the_atomic_reservation_bundle_still_refuses_on_the_trading_side` below:
-    // the pair cannot be submitted at all, because Solana merges account
-    // privileges across a transaction's instructions and the two sides want
-    // opposite privileges on the same three accounts. Custody's half of that
-    // contradiction is fixed; Trading's half is not this lane's file.
-    //
-    // The operator's own contract says the split form is legitimate -- "either
-    // durable producer output also remains independently ingestible after an
-    // RPC-response loss" -- so this is the recovery shape, driven deliberately.
-    // What it costs is the atomicity: between these two transactions a
-    // reservation exists that Trading has not yet joined.
-    for (index, instruction) in bundle.instructions.iter().enumerate() {
-        let processed = submit(context, instruction.clone(), &[])
-            .await
-            .expect("ProgramTest processing");
-        assert!(
-            processed.result.is_ok(),
-            "reservation instruction {index} must commit: {:?} logs {:?}",
-            processed.result,
-            processed.metadata.as_ref().map(|value| &value.log_messages)
-        );
-    }
+    // Custody produces and Trading ingests in one transaction. If the second
+    // instruction refuses, SVM rolls the token movement and all three created
+    // reservation records back with it. The independently ingestible route
+    // remains the recovery shape for an RPC-response loss, not the honest
+    // campaign's substitute for atomicity.
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let signer = context.payer.insecure_clone();
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(Transaction::new_signed_with_payer(
+            &bundle.instructions,
+            Some(&payer),
+            &[&signer],
+            blockhash,
+        ))
+        .await
+        .expect("ProgramTest processing");
+    assert!(
+        processed.result.is_ok(),
+        "atomic Custody reservation plus Trading ingest must commit: {:?} logs {:?}",
+        processed.result,
+        processed.metadata.as_ref().map(|value| &value.log_messages)
+    );
+    let logs = processed
+        .metadata
+        .as_ref()
+        .map(|value| &value.log_messages)
+        .expect("accepted transaction metadata");
+    assert!(
+        logs.iter()
+            .any(|line| line == &format!("Program {} success", scenario.waist.custody_program)),
+        "the atomic pair must execute Custody: {logs:?}"
+    );
+    assert!(
+        logs.iter()
+            .any(|line| line == &format!("Program {TRADING} success")),
+        "the atomic pair must execute Trading ingest: {logs:?}"
+    );
 
     // What the reservation DID, asserted rather than assumed. The three bodies
     // this used to publish are now read back off the chain, and the two token
@@ -2623,32 +2696,16 @@ async fn reserve_through_custody(
     }
 }
 
-/// The supported atomic reservation shape still cannot be submitted, and the
-/// remaining half of why is in Trading.
+/// A late Trading refusal rolls the preceding Custody reservation back whole.
 ///
-/// `build_dealer_scenario_reservation_bundle_v1` is documented as one atomic
-/// transaction: Custody produces the reservation, and Trading immediately joins
-/// the receipt, so a producer whose receipt Trading refuses is rolled back
-/// whole. It has never had a consumer, and this is why. Solana merges account
-/// privileges across the instructions of ONE transaction, so the two halves are
-/// resolving the same accounts with opposite requirements:
-///
-/// * the checkpoint: Custody's frame pinned it readonly, Trading's ingest takes
-///   it writable. FIXED here -- Custody writes nothing to the checkpoint, so its
-///   writability was never Custody's to pin.
-/// * the reservation receipt and the reservation state: Custody must have both
-///   WRITABLE, because it creates them; Trading's ingest refuses unless both are
-///   READONLY (`dealer_scenario_checkpoint_v1.rs`, the reservation-receipt frame
-///   census). NOT fixed: that is Trading's file, and this lane does not edit it.
-///
-/// So the pair now gets past Custody and refuses in Trading, which is exactly
-/// one program further than it used to get. This test pins that boundary rather
-/// than describing it, and it is what makes the split submission above a
-/// documented workaround instead of an unexplained choice. When Trading's frame
-/// stops pinning those two slots readonly, this test is the one that fails, and
-/// the campaign should go back to the atomic pair.
+/// The honest atomic pair succeeds above. This hostile keeps the exact same
+/// Custody producer instruction, but asks Trading to ingest the resulting
+/// Reserve receipt as a Rollback receipt. Custody therefore runs to completion
+/// before Trading reaches the action join and refuses. The absent escrow,
+/// reservation records, and checkpoint mutation prove transaction-wide rollback
+/// at the seam this atomic shape exists to protect.
 #[tokio::test]
-async fn the_atomic_reservation_bundle_still_refuses_on_the_trading_side() {
+async fn a_late_trading_refusal_rolls_the_atomic_reservation_back_whole() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
     prepare_through_evaluation(&mut context, &scenario).await;
@@ -2661,14 +2718,28 @@ async fn the_atomic_reservation_bundle_still_refuses_on_the_trading_side() {
             delivery.source_prereservation_bytes(),
         )),
     );
-    context.set_account(&delivery.escrow, &AccountSharedData::from(Account {
-        lamports: 0,
-        data: Vec::new(),
-        owner: system_program::ID,
-        executable: false,
-        rent_epoch: 0,
-    }));
-    let bundle = reservation_bundle(&scenario, payer);
+    context.set_account(
+        &delivery.escrow,
+        &AccountSharedData::from(Account {
+            lamports: 0,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        }),
+    );
+    let mut bundle = reservation_bundle(&scenario, payer);
+    bundle
+        .instructions
+        .get_mut(1)
+        .expect("Trading ingest instruction")
+        .data = DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1.to_vec();
+    let checkpoint_before = checkpoint_body(&mut context, &scenario).await;
+    let receipt = reservation_receipt_address(&scenario, 0);
+    let batch = dealer_scenario_reservation_batch_address_v1(
+        scenario.waist.custody_program,
+        scenario.checkpoint,
+    );
 
     let blockhash = context
         .banks_client
@@ -2687,17 +2758,16 @@ async fn the_atomic_reservation_bundle_still_refuses_on_the_trading_side() {
         .await
         .expect("ProgramTest processing");
 
-    // Instruction ONE, not instruction zero: Custody's half of the frame
-    // contradiction is fixed, so the producer runs to completion and the pair
-    // now dies on the ingest. Asserting the index is the whole point -- it is
-    // what distinguishes "one program left to fix" from "still both".
+    // Instruction ONE, not instruction zero: Custody's producer accepted and
+    // Trading refused the contradictory action only after authenticating the
+    // Custody-owned receipt.
     assert_eq!(
         processed.result,
         Err(TransactionError::InstructionError(
             1,
-            solana_sdk::instruction::InstructionError::Custom(0x4003),
+            solana_sdk::instruction::InstructionError::Custom(TradingSbfError::Transition as u32),
         )),
-        "TradingSbfError::Content, at the ingest, not at the producer: {:?}",
+        "TradingSbfError::Transition, at the ingest, not the producer: {:?}",
         processed.metadata.as_ref().map(|value| &value.log_messages)
     );
     let logs = processed
@@ -2706,8 +2776,8 @@ async fn the_atomic_reservation_bundle_still_refuses_on_the_trading_side() {
         .map(|value| value.log_messages.clone())
         .unwrap_or_default();
     assert!(
-        logs.iter().any(|line| line
-            == &format!("Program {} success", scenario.waist.custody_program)),
+        logs.iter()
+            .any(|line| line == &format!("Program {} success", scenario.waist.custody_program)),
         "Custody must have produced the reservation before Trading refused it: {logs:?}"
     );
     // And the transaction rolled back whole, which is the property the atomic
@@ -2721,6 +2791,19 @@ async fn the_atomic_reservation_bundle_still_refuses_on_the_trading_side() {
             .await
             .is_none(),
         "a refused bundle leaves no reservation behind"
+    );
+    assert!(
+        account_body(&mut context, receipt).await.is_none(),
+        "a refused bundle leaves no reservation receipt behind"
+    );
+    assert!(
+        account_body(&mut context, batch).await.is_none(),
+        "a refused bundle leaves no reservation batch behind"
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        checkpoint_before,
+        "a refused ingest leaves the checkpoint byte-for-byte unchanged"
     );
 }
 
@@ -2762,7 +2845,11 @@ fn reserve_instruction(
 async fn evaluated_with_reservation_evidence(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
-) -> (ReservationEvidence, Vec<u8>, DealerScenarioCheckpointJournalV1) {
+) -> (
+    ReservationEvidence,
+    Vec<u8>,
+    DealerScenarioCheckpointJournalV1,
+) {
     evaluated_with_published_delta(context, scenario, None).await
 }
 
@@ -2771,8 +2858,12 @@ async fn evaluated_with_published_delta(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
     published_delta: Option<Vec<u8>>,
-) -> (ReservationEvidence, Vec<u8>, DealerScenarioCheckpointJournalV1) {
-    let mut journal =
+) -> (
+    ReservationEvidence,
+    Vec<u8>,
+    DealerScenarioCheckpointJournalV1,
+) {
+    let journal =
         prepare_through_evaluation_with_delta(context, scenario, published_delta.clone()).await;
     let after_evaluation = checkpoint_body(context, scenario).await;
     let evidence = evaluation_evidence_with_delta(scenario, &after_evaluation, published_delta);
@@ -2884,8 +2975,7 @@ async fn a_valid_activation_cache_for_another_release_set_refuses() {
 async fn locked_value_blocks_the_abandonment_path_until_it_is_rolled_back() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
-    let (reservation, _, _) =
-        evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let (reservation, _, _) = evaluated_with_reservation_evidence(&mut context, &scenario).await;
     let payer = context.payer.pubkey();
     let instruction = reserve_instruction(
         &scenario,
@@ -2934,7 +3024,6 @@ async fn locked_value_blocks_the_abandonment_path_until_it_is_rolled_back() {
     );
 }
 
-
 #[tokio::test]
 async fn a_commit_refuses_before_any_value_is_locked() {
     let scenario = scenario();
@@ -2972,7 +3061,6 @@ async fn a_commit_refuses_before_any_value_is_locked() {
         "a refused commit must not advance the checkpoint"
     );
 }
-
 
 /// Derive the request-scoped Trading caller authority the Claims frame requires.
 ///
@@ -3195,14 +3283,26 @@ async fn the_commit_lands_the_signed_delta_and_moves_the_claims_positions() {
     // coordinate, so exactly that much leaves the counterparty and arrives at
     // the dealer, every other coordinate is untouched, and the two sides net to
     // zero. A transaction that merely succeeded would tell us none of this.
-    let dealer_after = position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await;
-    let counterparty_after =
-        position_balances(&mut context, &scenario, scenario.fixture.reserve_position.account).await;
+    let dealer_after = position_balances(
+        &mut context,
+        &scenario,
+        scenario.fixture.actor_position.account,
+    )
+    .await;
+    let counterparty_after = position_balances(
+        &mut context,
+        &scenario,
+        scenario.fixture.reserve_position.account,
+    )
+    .await;
     let acquired = 10_u64;
     for claim in 0..usize::try_from(WIDTH).expect("small width") {
         let dealer_before = *scenario.live.dealer_balances.get(claim).expect("before");
-        let counterparty_before =
-            *scenario.live.counterparty_balances.get(claim).expect("before");
+        let counterparty_before = *scenario
+            .live
+            .counterparty_balances
+            .get(claim)
+            .expect("before");
         let dealer_now = *dealer_after.get(claim).expect("after");
         let counterparty_now = *counterparty_after.get(claim).expect("after");
         if claim == FUNDED_COORDINATE {
@@ -3217,7 +3317,10 @@ async fn the_commit_lands_the_signed_delta_and_moves_the_claims_positions() {
                 "the counterparty must part with exactly that much"
             );
         } else {
-            assert_eq!(dealer_now, dealer_before, "coordinate {claim} must not move");
+            assert_eq!(
+                dealer_now, dealer_before,
+                "coordinate {claim} must not move"
+            );
             assert_eq!(
                 counterparty_now, counterparty_before,
                 "coordinate {claim} must not move"
@@ -3250,7 +3353,6 @@ async fn the_commit_lands_the_signed_delta_and_moves_the_claims_positions() {
         .record_committed(hash(&committed).to_bytes())
         .expect("journal records the commit it observed");
 }
-
 
 /// Create a real on-chain address lookup table and activate its addresses.
 ///
@@ -3327,7 +3429,6 @@ async fn submit_v0(
         .await
 }
 
-
 /// Drive one scenario to a reserved checkpoint and return its commit inputs.
 async fn reserved_with_commit_inputs(
     context: &mut ProgramTestContext,
@@ -3389,7 +3490,11 @@ fn commit_table_addresses(bank: &DealerScenarioCommitAccountsV1, payer: Pubkey) 
         bank.custody_programdata,
         bank.batch,
     ]);
-    for proof in bank.effect_accounts.iter().take(usize::from(bank.effect_count)) {
+    for proof in bank
+        .effect_accounts
+        .iter()
+        .take(usize::from(bank.effect_count))
+    {
         addresses.extend([proof.reservation_receipt, proof.reservation_state]);
     }
     addresses.retain(|key| *key != payer && *key != TRADING);
@@ -3474,11 +3579,10 @@ async fn a_commit_refuses_a_locked_batch_that_names_another_receipt() {
         .await
         .expect("batch query")
         .expect("batch exists");
-    let mut batch = DealerScenarioReservationBatchV1::decode(&original.data)
-        .expect("canonical batch decodes");
-    batch.receipt_digests = core::array::from_fn(|index| {
-        if index == 0 { [0x7c; 32] } else { [0_u8; 32] }
-    });
+    let mut batch =
+        DealerScenarioReservationBatchV1::decode(&original.data).expect("canonical batch decodes");
+    batch.receipt_digests =
+        core::array::from_fn(|index| if index == 0 { [0x7c; 32] } else { [0_u8; 32] });
     let substituted = batch.encode().expect("substituted batch encodes").to_vec();
     assert_eq!(
         substituted.len(),
@@ -3505,7 +3609,6 @@ async fn a_commit_refuses_a_locked_batch_that_names_another_receipt() {
     );
 }
 
-
 /// Read one Claims Position's balance vector back off the chain.
 async fn position_balances(
     context: &mut ProgramTestContext,
@@ -3523,7 +3626,6 @@ async fn position_balances(
         .map(|claim| view.balance(&account.data, claim).expect("balance"))
         .collect()
 }
-
 
 /// Drive one scenario all the way to a committed checkpoint.
 ///
@@ -3623,7 +3725,12 @@ async fn a_committed_checkpoint_refuses_a_replayed_commit() {
     let mut context = program_test(&scenario).start_with_context().await;
     let (bank, table, addresses) = drive_to_committed(&mut context, &scenario).await;
     let committed = checkpoint_body(&mut context, &scenario).await;
-    let dealer_after = position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await;
+    let dealer_after = position_balances(
+        &mut context,
+        &scenario,
+        scenario.fixture.actor_position.account,
+    )
+    .await;
 
     // Byte-identical replay of the transaction that just landed. Nothing about
     // its frame has changed; the checkpoint has.
@@ -3651,12 +3758,16 @@ async fn a_committed_checkpoint_refuses_a_replayed_commit() {
         "a refused replay must leave the checkpoint intact"
     );
     assert_eq!(
-        position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await,
+        position_balances(
+            &mut context,
+            &scenario,
+            scenario.fixture.actor_position.account
+        )
+        .await,
         dealer_after,
         "a refused replay must not move the Claims Positions a second time"
     );
 }
-
 
 /// Reach a reserved checkpoint and hand back the bank a commit would use.
 async fn reserved_commit_bank(
@@ -3718,8 +3829,12 @@ async fn a_commit_refuses_a_claims_position_table_out_of_canonical_order() {
     let mut context = program_test(&scenario).start_with_context().await;
     let mut bank = reserved_commit_bank(&mut context, &scenario).await;
     let reserved = checkpoint_body(&mut context, &scenario).await;
-    let dealer_before =
-        position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await;
+    let dealer_before = position_balances(
+        &mut context,
+        &scenario,
+        scenario.fixture.actor_position.account,
+    )
+    .await;
 
     // Both Positions are the real ones this request names, with their real
     // bodies and privileges. Only the order changes. Claims recomputes the
@@ -3740,7 +3855,12 @@ async fn a_commit_refuses_a_claims_position_table_out_of_canonical_order() {
         "a refused commit must not advance the checkpoint"
     );
     assert_eq!(
-        position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await,
+        position_balances(
+            &mut context,
+            &scenario,
+            scenario.fixture.actor_position.account
+        )
+        .await,
         dealer_before,
         "a refused commit must not move the Claims Positions"
     );
@@ -3777,7 +3897,12 @@ async fn committed_with_delivery_inputs(
 ) -> ReservationEvidence {
     let (reservation, receipt_address, _reserved) =
         reserved_with_commit_inputs(context, scenario).await;
-    let bank = commit_bank(scenario, context.payer.pubkey(), receipt_address, &reservation);
+    let bank = commit_bank(
+        scenario,
+        context.payer.pubkey(),
+        receipt_address,
+        &reservation,
+    );
     let processed = submit_commit(context, scenario, bank).await;
     processed
         .result
@@ -3936,8 +4061,11 @@ async fn the_delivery_moves_the_locked_collateral_and_closes_its_escrow() {
     );
 
     let payer = context.payer.pubkey();
-    let processed = submit_activation(&mut context, activation_bank(&scenario, &reservation, payer))
-        .await;
+    let processed = submit_activation(
+        &mut context,
+        activation_bank(&scenario, &reservation, payer),
+    )
+    .await;
     processed
         .result
         .as_ref()
@@ -4049,10 +4177,13 @@ async fn a_replayed_delivery_refuses_and_the_collateral_does_not_move_twice() {
     let delivery = &scenario.delivery;
     let payer = context.payer.pubkey();
 
-    submit_activation(&mut context, activation_bank(&scenario, &reservation, payer))
-        .await
-        .result
-        .expect("the first delivery executes");
+    submit_activation(
+        &mut context,
+        activation_bank(&scenario, &reservation, payer),
+    )
+    .await
+    .result
+    .expect("the first delivery executes");
     let destination_once = account_body(&mut context, delivery.destination)
         .await
         .expect("the destination survives the first delivery");
@@ -4067,8 +4198,11 @@ async fn a_replayed_delivery_refuses_and_the_collateral_does_not_move_twice() {
     // which is the anti-replay gate for the whole route; behind it the batch is
     // already Activated and the cursor has already advanced, so the case would
     // refuse three times over. It reaches the first of them.
-    let processed =
-        submit_activation(&mut context, activation_bank(&scenario, &reservation, payer)).await;
+    let processed = submit_activation(
+        &mut context,
+        activation_bank(&scenario, &reservation, payer),
+    )
+    .await;
     assert!(
         processed.result.is_err(),
         "a replayed delivery must fail closed; observed {:?}",
@@ -4115,11 +4249,9 @@ fn resealed_batch(
     reservation: &ReservationEvidence,
     edit: impl FnOnce(&mut DealerScenarioReservationBatchV1),
 ) -> Vec<u8> {
-    let mut batch = DealerScenarioReservationBatchV1::decode(&staged_body(
-        reservation,
-        reservation.batch,
-    ))
-    .expect("canonical batch");
+    let mut batch =
+        DealerScenarioReservationBatchV1::decode(&staged_body(reservation, reservation.batch))
+            .expect("canonical batch");
     edit(&mut batch);
     batch.encode().expect("the batch re-encodes").to_vec()
 }
@@ -4172,8 +4304,11 @@ async fn a_replay_cursor_at_the_wrong_revision_refuses_inside_the_delivery() {
     // batch answers the case and the token program is never invoked. This is the
     // shallow version of this hostile, and it is worthless.
     let payer = context.payer.pubkey();
-    let unsealed =
-        submit_activation(&mut context, activation_bank(&scenario, &reservation, payer)).await;
+    let unsealed = submit_activation(
+        &mut context,
+        activation_bank(&scenario, &reservation, payer),
+    )
+    .await;
     assert!(unsealed.result.is_err(), "the unsealed lie also refuses");
     assert!(
         !invoked_programs(&unsealed).contains(&delivery.token_program),
@@ -4192,8 +4327,11 @@ async fn a_replay_cursor_at_the_wrong_revision_refuses_inside_the_delivery() {
     let destination_before = account_body(&mut context, delivery.destination)
         .await
         .expect("the destination exists");
-    let processed =
-        submit_activation(&mut context, activation_bank(&scenario, &reservation, payer)).await;
+    let processed = submit_activation(
+        &mut context,
+        activation_bank(&scenario, &reservation, payer),
+    )
+    .await;
     assert!(
         processed.result.is_err(),
         "a cursor at the wrong revision must fail closed; observed {:?}",
@@ -4324,4 +4462,1166 @@ fn invoked_programs(
                 .and_then(|key| key.parse::<Pubkey>().ok())
         })
         .collect()
+}
+
+/// Real-ELF selector-7/8 lifecycle evidence built from the sole mixed Dealer
+/// ProgramSet. Kept as a private campaign module so the older scenario
+/// transcript stays readable while both paths share the same waist and Product.
+mod lp_lifecycle {
+    use super::*;
+
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+        CompartmentFundingV1, ContentId as ManifestContentId, FundingAmountsV1, FundingQuoteV1,
+        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+    use dclutch_capability_program_contract::{
+        CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1,
+        CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+        hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+        set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
+        v3::{
+            CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3,
+            SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_V3,
+        },
+        v4::{
+            ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4,
+            CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_V4,
+        },
+    };
+    use dclutch_chain_bundle_builder::{
+        WaistFactsV1,
+        admitted::AdmittedAotInputV1,
+        artifacts::{ArtifactSetV1, DerivedRecordV1},
+        bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1, build_admitted_bundle},
+        frame::{BuiltAccountV1, data_account as built_data_account, program, vacant},
+    };
+    use dclutch_dealer_codec::{
+        Phase,
+        config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
+        root_tail::{ROOT_TAIL_BYTES, RootTail},
+    };
+    use dclutch_execution_strategy_contract::v2::{
+        ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+        EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+        EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
+        ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+    };
+    use dclutch_market_core_codec::{CoreState, Identity as CoreIdentity};
+    use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_release_set_contract::{ArtifactReleaseIdV1, CapabilityExecutionSelectionV1};
+    use dclutch_rent_contract::{
+        RefundAuthority,
+        lifecycle_v2::{
+            LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            LifecycleAccountIdV2, LifecycleRentCreditV2,
+        },
+    };
+    use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_V1;
+    use dclutch_trading_sbf::dealer::{
+        DEALER_KIND_PREIMAGE_V2, DEALER_ROOT_SCHEMA_PREIMAGE_V2,
+        v3_lp_artifacts::{
+            DEALER_LP_OBLIGATION_ACCOUNT_V3, DealerLpAccountProfileInputV3,
+            dealer_lp_account_count_v3, dealer_lp_transition_bytes_v3,
+            encode_dealer_lp_account_profile_v3, encode_dealer_lp_request_profile_v3,
+            encode_dealer_lp_transition_v3,
+        },
+        v3_multi_lp::{
+            DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpPositionV3,
+        },
+        v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3},
+        v3_operator::{MultiLpChainProjectionV3, MultiLpRequestActionV3},
+        v3_release::dealer_request_schema_v3,
+        v4_lp_operator::{build_close_lp_v4, build_open_lp_v4},
+        v4_lp_release::{
+            DEALER_LP_LIFECYCLE_BYTES_V5, DealerLpFinalizedArtifactsV4, dealer_lp_effect_bytes_v4,
+            encode_dealer_lp_effect_v4, encode_dealer_lp_lifecycle_v5,
+            finalize_dealer_lp_descriptor_v4,
+        },
+        v4_scenario_release::{
+            DEALER_GLOBAL_PROGRAM_SET_BYTES_V4, DealerDescriptorRecordV4,
+            encode_dealer_global_program_set_v4,
+        },
+    };
+    use solana_clock::Clock;
+
+    const ACCELERATOR: Pubkey = Pubkey::new_from_array([0xe8; 32]);
+
+    fn core_id(bytes: [u8; 32]) -> dclutch_core_contract::ContentId {
+        dclutch_core_contract::ContentId::new(bytes).expect("nonzero core identity")
+    }
+
+    fn manifest_id(bytes: [u8; 32]) -> ManifestContentId {
+        ManifestContentId::new(bytes).expect("nonzero manifest identity")
+    }
+
+    fn record_bumps(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (u8, u8) {
+        (
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).1,
+            Pubkey::find_program_address(
+                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+                &registry,
+            )
+            .1,
+        )
+    }
+
+    fn loader_program_body(programdata: Pubkey) -> Vec<u8> {
+        let mut bytes = vec![0_u8; dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES];
+        bytes[..4].copy_from_slice(&2_u32.to_le_bytes());
+        bytes[4..36].copy_from_slice(programdata.as_ref());
+        bytes
+    }
+
+    fn deployment_account(key: Pubkey, data: Vec<u8>, executable: bool) -> BuiltAccountV1 {
+        BuiltAccountV1 {
+            key,
+            account: Account {
+                lamports: Rent::default().minimum_balance(data.len()).max(1),
+                data,
+                owner: bpf_loader_upgradeable::ID,
+                executable,
+                rent_epoch: 0,
+            },
+            observed: None,
+        }
+    }
+
+    struct LpArtifacts {
+        descriptor: [u8; CAPABILITY_PROGRAM_V4_BYTES],
+        profile: Vec<u8>,
+        request_profile: Vec<u8>,
+        transition: Vec<u8>,
+        effect: Vec<u8>,
+        lifecycle: Vec<u8>,
+        strategy: Vec<u8>,
+        certificate: Vec<u8>,
+        admission: Vec<u8>,
+    }
+
+    impl LpArtifacts {
+        fn set<'a>(
+            &'a self,
+            program_set: &'a [u8],
+            manifest: &'a [u8],
+            config: &'a [u8],
+        ) -> ArtifactSetV1<'a> {
+            ArtifactSetV1 {
+                descriptor: &self.descriptor,
+                account_profile: &self.profile,
+                request_profile: &self.request_profile,
+                transition: &self.transition,
+                effect: &self.effect,
+                lifecycle: &self.lifecycle,
+                strategy: &self.strategy,
+                program_set,
+                manifest,
+                config,
+            }
+        }
+    }
+
+    fn lp_artifacts(
+        action: MultiLpRequestActionV3,
+        logical_lengths: &[u32],
+        release_id: ArtifactReleaseIdV1,
+    ) -> LpArtifacts {
+        let profile_input = DealerLpAccountProfileInputV3 {
+            action,
+            logical_data_lengths: logical_lengths,
+        };
+        let profile = encode_dealer_lp_account_profile_v3(profile_input).expect("LP profile");
+        let mut lifecycle_scratch = vec![0_u8; DEALER_LP_LIFECYCLE_BYTES_V5];
+        let mut lifecycle = vec![0_u8; DEALER_LP_LIFECYCLE_BYTES_V5];
+        encode_dealer_lp_lifecycle_v5(&mut lifecycle_scratch, &mut lifecycle)
+            .expect("LP lifecycle");
+        let mut request_scratch = vec![
+                0_u8;
+                dclutch_trading_sbf::dealer::v3_lp_artifacts::DEALER_LP_REQUEST_PROFILE_BYTES_V3
+            ];
+        let mut request_profile = vec![0_u8; request_scratch.len()];
+        encode_dealer_lp_request_profile_v3(action, &mut request_scratch, &mut request_profile)
+            .expect("LP request profile");
+        let transition_bytes = dealer_lp_transition_bytes_v3(action);
+        let mut transition_scratch = vec![0_u8; transition_bytes];
+        let mut transition = vec![0_u8; transition_bytes];
+        encode_dealer_lp_transition_v3(action, &mut transition_scratch, &mut transition)
+            .expect("LP transition");
+        let effect_bytes = dealer_lp_effect_bytes_v4(action);
+        let mut effect_scratch = vec![0_u8; effect_bytes];
+        let mut effect = vec![0_u8; effect_bytes];
+        encode_dealer_lp_effect_v4(action, &mut effect_scratch, &mut effect).expect("LP effect");
+        let certificate = ExecutionStrategyCertificateV2::new(
+            core_id(hash(&profile).to_bytes()),
+            core_id(REQUEST_PROFILE_SCHEMA_V1),
+            core_id(hash(&request_profile).to_bytes()),
+            core_id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+            core_id(hash(&transition).to_bytes()),
+            core_id(hash(&effect).to_bytes()),
+            release_id,
+            core_id([0xc1; 32]),
+            core_id([0xc2; 32]),
+            core_id([0xc3; 32]),
+        )
+        .to_bytes()
+        .to_vec();
+        let certificate_id = core_id(hash(&certificate).to_bytes());
+        let admission = ExecutionStrategyAdmissionV2::new(certificate_id)
+            .to_bytes()
+            .to_vec();
+        let strategy = ExecutionStrategyProgramV2::new(
+            StrategyDispositionV2::AdmittedAot,
+            core_id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+            core_id(hash(&transition).to_bytes()),
+            core_id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2),
+            Some(certificate_id),
+            core_id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2),
+            Some(core_id(hash(&admission).to_bytes())),
+            core_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2),
+            core_id(ACCELERATOR_ACK_SCHEMA_ID_V2),
+        )
+        .expect("admitted strategy")
+        .to_bytes()
+        .to_vec();
+        let descriptor = finalize_dealer_lp_descriptor_v4(DealerLpFinalizedArtifactsV4 {
+            account_profile_input: profile_input,
+            account_profile: &profile,
+            lifecycle_policy: &lifecycle,
+            capacity_profile: &[1],
+            effect: &effect,
+            request_profile: &request_profile,
+            execution_strategy: &strategy,
+            transition: &transition,
+        })
+        .expect("LP descriptor");
+        LpArtifacts {
+            descriptor,
+            profile,
+            request_profile,
+            transition,
+            effect,
+            lifecycle,
+            strategy,
+            certificate,
+            admission,
+        }
+    }
+
+    fn legacy_descriptor(selector: u16, tag: u8) -> [u8; CAPABILITY_PROGRAM_V3_BYTES] {
+        CapabilityProgramV3::new(
+            core_id(hash(DEALER_KIND_PREIMAGE_V2).to_bytes()),
+            core_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V4).to_bytes()),
+            dealer_request_schema_v3(selector).expect("request schema"),
+            core_id(hash(DEALER_ROOT_SCHEMA_PREIMAGE_V2).to_bytes()),
+            core_id([tag; 32]),
+            core_id([tag + 1; 32]),
+            core_id([tag + 2; 32]),
+            core_id([tag + 2; 32]),
+            core_id([tag + 3; 32]),
+            core_id([tag + 4; 32]),
+            core_id([tag + 5; 32]),
+            core_id([tag + 6; 32]),
+            u32::try_from(ROOT_TAIL_BYTES).expect("root tail width"),
+        )
+        .expect("legacy descriptor")
+        .encode()
+    }
+
+    fn selector_nine_descriptor() -> [u8; CAPABILITY_PROGRAM_V4_BYTES] {
+        CapabilityProgramV4::new(
+            core_id(hash(DEALER_KIND_PREIMAGE_V2).to_bytes()),
+            core_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V4).to_bytes()),
+            dealer_request_schema_v3(9).expect("request schema"),
+            core_id(hash(DEALER_ROOT_SCHEMA_PREIMAGE_V2).to_bytes()),
+            core_id(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1),
+            core_id([0xd1; 32]),
+            CapabilityArtifactsV4 {
+                account_profile: ArtifactReferenceV4::new(
+                    core_id(dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID),
+                    core_id([0xd2; 32]),
+                ),
+                request_profile: ArtifactReferenceV4::new(
+                    core_id(dclutch_request_profile_contract::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID),
+                    core_id([0xd3; 32]),
+                ),
+                lifecycle: ArtifactReferenceV4::new(
+                    core_id(dclutch_account_profile_contract::lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5),
+                    core_id([0xd4; 32]),
+                ),
+                strategy: ArtifactReferenceV4::new(
+                    core_id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
+                    core_id([0xd5; 32]),
+                ),
+                transition: ArtifactReferenceV4::new(
+                    core_id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+                    core_id([0xd6; 32]),
+                ),
+                effect: ArtifactReferenceV4::new(
+                    core_id(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4),
+                    core_id([0xd7; 32]),
+                ),
+            },
+            u32::try_from(ROOT_TAIL_BYTES).expect("root tail width"),
+        )
+        .expect("selector-nine descriptor")
+        .encode()
+    }
+
+    fn global_set(open: &LpArtifacts, close: &LpArtifacts) -> Vec<u8> {
+        let legacy = [
+            legacy_descriptor(1, 0x21),
+            legacy_descriptor(2, 0x31),
+            legacy_descriptor(3, 0x41),
+            legacy_descriptor(4, 0x51),
+            legacy_descriptor(5, 0x61),
+            legacy_descriptor(6, 0x71),
+        ];
+        let scenario = selector_nine_descriptor();
+        let records = [
+            DealerDescriptorRecordV4::new(1, CAPABILITY_PROGRAM_SCHEMA_V3, &legacy[0])
+                .expect("selector 1"),
+            DealerDescriptorRecordV4::new(2, CAPABILITY_PROGRAM_SCHEMA_V3, &legacy[1])
+                .expect("selector 2"),
+            DealerDescriptorRecordV4::new(3, CAPABILITY_PROGRAM_SCHEMA_V3, &legacy[2])
+                .expect("selector 3"),
+            DealerDescriptorRecordV4::new(4, CAPABILITY_PROGRAM_SCHEMA_V3, &legacy[3])
+                .expect("selector 4"),
+            DealerDescriptorRecordV4::new(5, CAPABILITY_PROGRAM_SCHEMA_V3, &legacy[4])
+                .expect("selector 5"),
+            DealerDescriptorRecordV4::new(6, CAPABILITY_PROGRAM_SCHEMA_V3, &legacy[5])
+                .expect("selector 6"),
+            DealerDescriptorRecordV4::new(7, CAPABILITY_PROGRAM_SCHEMA_V4, &open.descriptor)
+                .expect("selector 7"),
+            DealerDescriptorRecordV4::new(8, CAPABILITY_PROGRAM_SCHEMA_V4, &close.descriptor)
+                .expect("selector 8"),
+            DealerDescriptorRecordV4::new(9, CAPABILITY_PROGRAM_SCHEMA_V4, &scenario)
+                .expect("selector 9"),
+        ];
+        let mut output = vec![0_u8; DEALER_GLOBAL_PROGRAM_SET_BYTES_V4];
+        encode_dealer_global_program_set_v4(&records, &mut output).expect("global Dealer SetV2");
+        output
+    }
+
+    struct LpCampaign {
+        open: LpArtifacts,
+        close: LpArtifacts,
+        program_set: Vec<u8>,
+        manifest: Vec<u8>,
+        config: Vec<u8>,
+        root: Pubkey,
+        root_bytes: Vec<u8>,
+        market_bytes: Vec<u8>,
+        rent_credit: Pubkey,
+        obligation: Pubkey,
+        obligation_bytes: Vec<u8>,
+        artifact_release: Vec<u8>,
+        accelerator_program: BuiltAccountV1,
+        accelerator_programdata: BuiltAccountV1,
+    }
+
+    impl LpCampaign {
+        fn artifacts<'a>(&'a self, action: MultiLpRequestActionV3) -> ArtifactSetV1<'a> {
+            match action {
+                MultiLpRequestActionV3::Open => {
+                    self.open
+                        .set(&self.program_set, &self.manifest, &self.config)
+                }
+                MultiLpRequestActionV3::Close => {
+                    self.close
+                        .set(&self.program_set, &self.manifest, &self.config)
+                }
+            }
+        }
+
+        fn admitted(&self, action: MultiLpRequestActionV3) -> AdmittedAotInputV1<'_> {
+            let artifacts = match action {
+                MultiLpRequestActionV3::Open => &self.open,
+                MultiLpRequestActionV3::Close => &self.close,
+            };
+            AdmittedAotInputV1 {
+                certificate: Some(&artifacts.certificate),
+                admission: Some(&artifacts.admission),
+                artifact_release: Some(&self.artifact_release),
+                accelerator_program: Some(&self.accelerator_program),
+                accelerator_programdata: Some(&self.accelerator_programdata),
+            }
+        }
+    }
+
+    fn manifest_and_root(
+        scenario: &super::Scenario,
+        program_set: &[u8],
+        descriptor_bytes: &[u8],
+        config: &[u8],
+    ) -> (Vec<u8>, Pubkey, Vec<u8>) {
+        let descriptor = CapabilityProgramV4::decode(descriptor_bytes).expect("LP descriptor");
+        let program_set_digest = hash(program_set).to_bytes();
+        let config_digest = hash(config).to_bytes();
+        let amounts = FundingAmountsV1::new(
+            CompartmentFundingV1::native_lamports(1).expect("creation quote"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("funding amounts");
+        let entry = CapabilityEntryV1::new(
+            manifest_id(descriptor.kind().to_bytes()),
+            manifest_id(program_set_digest),
+            manifest_id(config_digest),
+            manifest_id(descriptor.capacity_profile().to_bytes()),
+            manifest_id(descriptor.root_schema().to_bytes()),
+            manifest_id(descriptor.derivation_policy().to_bytes()),
+            ActivationPolicy::PrepaidLazy,
+            10_000,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(amounts, None).expect("funding quote"),
+        )
+        .expect("capability entry");
+        let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&[entry], &mut manifest).expect("capability manifest");
+        let manifest_digest = hash(&manifest).to_bytes();
+        let program_set_bumps = record_bumps(
+            scenario.waist.registry,
+            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            program_set_digest,
+        );
+        let manifest_bumps = record_bumps(
+            scenario.waist.registry,
+            dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            manifest_digest,
+        );
+        let config_bumps = record_bumps(
+            scenario.waist.registry,
+            descriptor.config_schema().to_bytes(),
+            config_digest,
+        );
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            core_id(manifest_digest),
+            descriptor.kind(),
+            core_id(program_set_digest),
+            core_id(config_digest),
+        )
+        .expect("capability selection")
+        .with_capability_release_record_bumps(program_set_bumps.0, program_set_bumps.1);
+        let header = CapabilityRootHeaderV1::new(
+            core_id(scenario.waist.release_set_id),
+            scenario.fixture.core_market.to_bytes(),
+            SCENARIO_GENERATION,
+            selection,
+            SelectedRecordBumpsV1::new(
+                manifest_bumps.0,
+                manifest_bumps.1,
+                config_bumps.0,
+                config_bumps.1,
+            ),
+        )
+        .expect("Dealer root header");
+        let tail = RootTail {
+            phase: Phase::Open,
+            active_candidate_id: [0xca; 32],
+            pending_candidate_id: [0; 32],
+            active_revision: 1,
+            pending_revision: 0,
+            state_revision: 1,
+            buy_used: [0; dclutch_dealer_codec::MAX_OUTCOMES],
+            sell_used: [0; dclutch_dealer_codec::MAX_OUTCOMES],
+            fee_base: 0,
+            active_work_remaining: 0,
+            pending_work_funding: 0,
+        };
+        let mut root_bytes = Vec::with_capacity(CAPABILITY_ROOT_HEADER_BYTES_V1 + ROOT_TAIL_BYTES);
+        root_bytes.extend_from_slice(&header.to_bytes());
+        root_bytes.extend_from_slice(&tail.to_bytes().expect("Dealer root tail"));
+        let root = Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING).0;
+        (manifest, root, root_bytes)
+    }
+
+    fn campaign(scenario: &super::Scenario) -> LpCampaign {
+        let accelerator_elf = super::elf("dclutch_dealer_accelerator_sbf");
+        let release = super::artifact_release(ACCELERATOR, 0xef, &accelerator_elf);
+        let artifact_release = release.to_bytes().to_vec();
+        let release_id = ArtifactReleaseIdV1::new(hash(&artifact_release).to_bytes())
+            .expect("accelerator ArtifactRelease id");
+
+        // Core persists the RentCredit account address, while the credit body
+        // persists the wallet that ultimately receives returned principal.
+        // The older trade-only fixture names the wallet directly because it
+        // never executes lifecycle.  This lifecycle campaign installs the
+        // same Market at the same PDA with the canonical successor fact.
+        let generation = SCENARIO_GENERATION.to_le_bytes();
+        let rent_credit = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                scenario.fixture.core_market.as_ref(),
+                &generation,
+            ],
+            &scenario.waist.registry,
+        )
+        .0;
+        let mut market = CoreState::decode(&scenario.fixture.core_state).expect("Core Market");
+        market.rent_beneficiary =
+            CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit identity");
+        let market_bytes = market
+            .encode()
+            .expect("lifecycle-owned Core Market")
+            .to_vec();
+
+        let root_bytes = CAPABILITY_ROOT_HEADER_BYTES_V1 + ROOT_TAIL_BYTES;
+        let obligation_bytes = DEALER_OBLIGATION_HEADER_BYTES_V3
+            + usize::try_from(scenario.fixture.outcome_count).expect("outcome width") * 8;
+        let product_bytes = scenario.fixture.product.bytes.len();
+        let portfolio_bytes = scenario.fixture.portfolio.bytes.len();
+        let basis_bytes = scenario.fixture.linked_basis.bytes.len();
+        let credit_bytes = u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("credit width");
+        let common = [
+            u32::try_from(root_bytes).expect("root width"),
+            u32::try_from(dclutch_dealer_codec::config_v4::DEALER_CONFIG_BYTES_V4)
+                .expect("config width"),
+            u32::try_from(product_bytes).expect("product width"),
+            u32::try_from(portfolio_bytes).expect("portfolio width"),
+            u32::try_from(basis_bytes).expect("basis width"),
+            u32::try_from(obligation_bytes).expect("obligation width"),
+            u32::try_from(DEALER_LP_POSITION_BYTES_V3).expect("LP width"),
+        ];
+        let open_lengths = [
+            common[0],
+            common[1],
+            common[2],
+            common[3],
+            common[4],
+            common[5],
+            common[6],
+            0,
+            credit_bytes,
+            0,
+        ];
+        let close_lengths = [
+            common[0],
+            common[1],
+            common[2],
+            common[3],
+            common[4],
+            common[5],
+            common[6],
+            credit_bytes,
+            0,
+        ];
+        let open = lp_artifacts(MultiLpRequestActionV3::Open, &open_lengths, release_id);
+        let close = lp_artifacts(MultiLpRequestActionV3::Close, &close_lengths, release_id);
+        let program_set = global_set(&open, &close);
+        let config = DealerConfigV4::new(
+            scenario.waist.release_set_id,
+            scenario.realm.digest,
+            scenario.dealer.pubkey().to_bytes(),
+            0,
+        )
+        .expect("Dealer config")
+        .encode()
+        .to_vec();
+        let (manifest, root, root_bytes) =
+            manifest_and_root(scenario, &program_set, &open.descriptor, &config);
+        let obligation = Pubkey::find_program_address(
+            &[DEALER_OBLIGATION_PDA_DOMAIN_V3, root.as_ref()],
+            &TRADING,
+        )
+        .0;
+        let obligation_bytes = super::obligation_bytes(
+            scenario.fixture.core_market.to_bytes(),
+            scenario.fixture.product_id,
+            scenario.fixture.semantic_basis_id,
+            scenario.dealer.pubkey().to_bytes(),
+            root.to_bytes(),
+            7,
+            &[12, 20, 10],
+        );
+        let accelerator_programdata_key = super::programdata_address(ACCELERATOR);
+        let accelerator_program = deployment_account(
+            ACCELERATOR,
+            loader_program_body(accelerator_programdata_key),
+            true,
+        );
+        let accelerator_programdata = deployment_account(
+            accelerator_programdata_key,
+            super::loader_programdata_body(WAIST_SLOT, None, &accelerator_elf),
+            false,
+        );
+        LpCampaign {
+            open,
+            close,
+            program_set,
+            manifest,
+            config,
+            root,
+            root_bytes,
+            market_bytes,
+            rent_credit,
+            obligation,
+            obligation_bytes,
+            artifact_release,
+            accelerator_program,
+            accelerator_programdata,
+        }
+    }
+
+    fn derived_record(
+        record: &dclutch_fractional_atomic_program_test::narrow_fixture::NarrowRecordV2,
+    ) -> DerivedRecordV1 {
+        let derived = dclutch_chain_bundle_builder::artifacts::derive_record(
+            record.owner,
+            record.schema,
+            &record.bytes,
+        );
+        assert_eq!(derived.raw, record.raw, "raw record derivation");
+        assert_eq!(derived.staging, record.staging, "staging record derivation");
+        assert_eq!(derived.digest, record.digest, "record content derivation");
+        derived
+    }
+
+    fn fixed(scenario: &super::Scenario, campaign: &LpCampaign, rent: &Rent) -> FixedCorpusV1 {
+        FixedCorpusV1 {
+            market: built_data_account(
+                rent,
+                scenario.fixture.core_market,
+                scenario.waist.core_program,
+                campaign.market_bytes.clone(),
+            ),
+            root: built_data_account(rent, campaign.root, TRADING, campaign.root_bytes.clone()),
+            product: derived_record(&scenario.fixture.product),
+            result_domain: derived_record(&scenario.fixture.result_domain),
+            portfolio: derived_record(&scenario.fixture.portfolio),
+            linked_basis: derived_record(&scenario.fixture.linked_basis),
+            core_programdata: scenario.waist.core_programdata,
+            trading_programdata: scenario.waist.trading_programdata,
+        }
+    }
+
+    fn waist(scenario: &super::Scenario) -> WaistFactsV1 {
+        WaistFactsV1 {
+            registry_program: scenario.waist.registry,
+            trading_program: TRADING,
+            core_program: scenario.waist.core_program,
+            claims_program: scenario.waist.claims_program,
+            custody_program: scenario.waist.custody_program,
+            release_set: scenario.waist.release_set_id,
+            activation_cache: scenario.waist.activation_cache,
+            trading_semantic_release: [0xe6; 32],
+        }
+    }
+
+    fn lifecycle_credit(
+        scenario: &super::Scenario,
+        beneficiary: Pubkey,
+    ) -> (Pubkey, LifecycleRentCreditV2) {
+        let generation = SCENARIO_GENERATION.to_le_bytes();
+        let (key, bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                scenario.fixture.core_market.as_ref(),
+                &generation,
+            ],
+            &scenario.waist.registry,
+        );
+        let credit = LifecycleRentCreditV2::new(
+            RefundAuthority::new(beneficiary.to_bytes()).expect("refund authority"),
+            LifecycleAccountIdV2::new(scenario.fixture.core_market.to_bytes()).expect("market"),
+            LifecycleAccountIdV2::new(scenario.waist.release_set_id).expect("release set"),
+            SCENARIO_GENERATION,
+            bump,
+        )
+        .expect("lifecycle RentCredit");
+        (key, credit)
+    }
+
+    fn install_bundle(
+        context: &mut ProgramTestContext,
+        bundle: &dclutch_chain_bundle_builder::bundle::BuiltAdmittedBundleV1,
+    ) {
+        for account in &bundle.bundle.accounts {
+            if bundle
+                .bundle
+                .externally_installed_keys
+                .contains(&account.key)
+            {
+                continue;
+            }
+            context.set_account(
+                &account.key,
+                &AccountSharedData::from(account.account.clone()),
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn build_lifecycle_bundle(
+        context: &mut ProgramTestContext,
+        scenario: &super::Scenario,
+        campaign: &LpCampaign,
+        action: MultiLpRequestActionV3,
+        lp_owner: Pubkey,
+        obligation_bytes: &[u8],
+        position_account: Option<Account>,
+        credit: Pubkey,
+        credit_account: Account,
+    ) -> dclutch_chain_bundle_builder::bundle::BuiltAdmittedBundleV1 {
+        let rent = Rent::default();
+        let obligation = DealerObligationProjectionV3::decode(obligation_bytes)
+            .expect("canonical Dealer obligation");
+        let (position, _) = Pubkey::find_program_address(
+            &[
+                DEALER_LP_POSITION_PDA_DOMAIN_V3,
+                campaign.root.as_ref(),
+                lp_owner.as_ref(),
+            ],
+            &TRADING,
+        );
+        let decoded_position = position_account
+            .as_ref()
+            .map(|account| DealerLpPositionV3::decode(&account.data).expect("live LP Position"));
+        let clock = context
+            .banks_client
+            .get_sysvar::<Clock>()
+            .await
+            .expect("Clock sysvar");
+        let chain = MultiLpChainProjectionV3 {
+            trading_program: TRADING.to_bytes(),
+            release_set: scenario.waist.release_set_id,
+            market: scenario.fixture.core_market.to_bytes(),
+            child_root: campaign.root.to_bytes(),
+            lp_position_address: position.to_bytes(),
+            lp_position: decoded_position,
+            lp_position_bytes: position_account
+                .as_ref()
+                .map(|account| account.data.as_slice()),
+            obligation,
+            obligation_address: campaign.obligation.to_bytes(),
+            generation: SCENARIO_GENERATION,
+            now: clock.slot,
+            expires_at: clock.slot.saturating_add(100),
+            lp_position_rent_principal: rent.minimum_balance(DEALER_LP_POSITION_BYTES_V3),
+            terminal: false,
+        };
+        let set = CapabilityProgramSetV2::decode(&campaign.program_set).expect("Dealer SetV2");
+        let unsigned = match action {
+            MultiLpRequestActionV3::Open => {
+                build_open_lp_v4(chain, lp_owner.to_bytes(), set).expect("chain-derived LP Open")
+            }
+            MultiLpRequestActionV3::Close => {
+                build_close_lp_v4(chain, set).expect("chain-derived LP Close")
+            }
+        };
+        let selected = unsigned.selected_descriptor();
+        let selected_artifacts = match action {
+            MultiLpRequestActionV3::Open => &campaign.open,
+            MultiLpRequestActionV3::Close => &campaign.close,
+        };
+        assert_eq!(selected.schema().to_bytes(), CAPABILITY_PROGRAM_SCHEMA_V4);
+        assert_eq!(
+            selected.program().to_bytes(),
+            hash(&selected_artifacts.descriptor).to_bytes(),
+            "the operator and physical builder select the same descriptor"
+        );
+        let request = unsigned.as_bytes().to_vec();
+        let payer = context.payer.pubkey();
+        let payer_account = context
+            .banks_client
+            .get_account(lp_owner)
+            .await
+            .expect("read LP payer")
+            .expect("funded LP payer");
+        let system_account = context
+            .banks_client
+            .get_account(system_program::ID)
+            .await
+            .expect("read System Program")
+            .expect("System Program account");
+        let mut bindings = vec![
+            (
+                usize::from(DEALER_LP_OBLIGATION_ACCOUNT_V3),
+                built_data_account(
+                    &rent,
+                    campaign.obligation,
+                    TRADING,
+                    obligation_bytes.to_vec(),
+                ),
+            ),
+            (
+                match action {
+                    MultiLpRequestActionV3::Open => 8,
+                    MultiLpRequestActionV3::Close => 7,
+                },
+                BuiltAccountV1 {
+                    key: credit,
+                    account: credit_account,
+                    observed: None,
+                },
+            ),
+            (
+                match action {
+                    MultiLpRequestActionV3::Open => 9,
+                    MultiLpRequestActionV3::Close => 8,
+                },
+                program(system_program::ID).with_observed(system_account),
+            ),
+        ];
+        if action == MultiLpRequestActionV3::Open {
+            bindings.push((7, vacant(lp_owner).with_observed(payer_account)));
+        } else {
+            let position_account = position_account.expect("Close has a live LP Position");
+            bindings.push((
+                6,
+                BuiltAccountV1 {
+                    key: position,
+                    account: position_account,
+                    observed: None,
+                },
+            ));
+        }
+        assert_eq!(
+            bindings.len(),
+            match action {
+                MultiLpRequestActionV3::Open => 4,
+                MultiLpRequestActionV3::Close => 4,
+            }
+        );
+        assert_eq!(
+            dealer_lp_account_count_v3(action),
+            match action {
+                MultiLpRequestActionV3::Open => 10,
+                MultiLpRequestActionV3::Close => 9,
+            }
+        );
+        let externally_installed = [lp_owner];
+        let scenario_input = ScenarioV1 {
+            family_request: &request,
+            tail_count: scenario.fixture.outcome_count,
+            clock_slot: clock.slot,
+            generation: SCENARIO_GENERATION,
+            ed25519_evidence: None,
+            native_message_instruction_index: 0,
+            externally_installed_extra: &externally_installed,
+            payer,
+        };
+        build_admitted_bundle(
+            &BundleInputV1 {
+                set: campaign.artifacts(action),
+                waist: waist(scenario),
+                scenario: scenario_input,
+                fixed: fixed(scenario, campaign, &rent),
+                bindings: &bindings,
+                rent: &rent,
+            },
+            campaign.admitted(action),
+        )
+        .unwrap_or_else(|error| panic!("physical LP bundle refused at {error:?}"))
+    }
+
+    async fn chain_account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
+        context
+            .banks_client
+            .get_account(key)
+            .await
+            .expect("read chain account")
+            .expect("chain account exists")
+    }
+
+    async fn submit_lp_hot(
+        context: &mut ProgramTestContext,
+        instruction: Instruction,
+        extra_signers: &[&Keypair],
+    ) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
+        let blockhash = context.banks_client.get_latest_blockhash().await?;
+        let payer = context.payer.insecure_clone();
+        let mut signers: Vec<&Keypair> = vec![&payer];
+        signers.extend_from_slice(extra_signers);
+        let heap = solana_compute_budget_interface::ComputeBudgetInstruction::request_heap_frame(
+            DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+        );
+        let compute =
+            solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
+                1_400_000,
+            );
+        let transaction = Transaction::new_signed_with_payer(
+            &[compute, heap, instruction],
+            Some(&payer.pubkey()),
+            &signers,
+            blockhash,
+        );
+        context
+            .banks_client
+            .process_transaction_with_metadata(transaction)
+            .await
+    }
+
+    #[tokio::test]
+    async fn accepted_lp_open_close_uses_real_admitted_elf_and_rolls_back_late_refusal() {
+        let scenario = super::scenario();
+        let campaign = campaign(&scenario);
+        let mut test = super::program_test_with_transaction_compute(&scenario);
+        test.add_upgradeable_program_to_genesis("dclutch_dealer_accelerator_sbf", &ACCELERATOR);
+        test.add_account(
+            super::programdata_address(ACCELERATOR),
+            super::data_account(
+                bpf_loader_upgradeable::ID,
+                campaign.accelerator_programdata.account.data.clone(),
+            ),
+        );
+        let mut context = test.start_with_context().await;
+
+        // `program_test_with_transaction_compute` installs the shared
+        // trade-only fixture before this private LP campaign exists. Replace
+        // that one account with the lifecycle-canonical state the bundle also
+        // carries; all immutable Market/Product facts and the address stay
+        // byte-for-byte identical.
+        context.set_account(
+            &scenario.fixture.core_market,
+            &AccountSharedData::from(super::data_account(
+                scenario.waist.core_program,
+                campaign.market_bytes.clone(),
+            )),
+        );
+
+        let lp_owner = Keypair::new();
+        let lp_owner_before = 10_000_000_u64;
+        context.set_account(
+            &lp_owner.pubkey(),
+            &AccountSharedData::from(Account {
+                lamports: lp_owner_before,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            }),
+        );
+        let (credit, credit_state) = lifecycle_credit(&scenario, lp_owner.pubkey());
+        assert_eq!(
+            credit, campaign.rent_credit,
+            "Core and lifecycle select the same canonical RentCredit account",
+        );
+        assert_eq!(
+            CoreState::decode(
+                &chain_account(&mut context, scenario.fixture.core_market)
+                    .await
+                    .data,
+            )
+            .expect("installed Core Market")
+            .rent_beneficiary
+            .to_bytes(),
+            credit.to_bytes(),
+            "the executed Core state owns the exact RentCredit address",
+        );
+        let credit_account =
+            super::data_account(scenario.waist.registry, credit_state.to_bytes().to_vec());
+        let credit_before = credit_account.clone();
+        context.set_account(&credit, &AccountSharedData::from(credit_account.clone()));
+
+        let open = build_lifecycle_bundle(
+            &mut context,
+            &scenario,
+            &campaign,
+            MultiLpRequestActionV3::Open,
+            lp_owner.pubkey(),
+            &campaign.obligation_bytes,
+            None,
+            credit,
+            credit_account,
+        )
+        .await;
+        let position = open.bundle.logical.get(6).expect("LP state coordinate").key;
+        install_bundle(&mut context, &open);
+        let open_result = submit_lp_hot(
+            &mut context,
+            open.bundle.hot_instruction.clone(),
+            &[&lp_owner],
+        )
+        .await
+        .expect("submit LP Open");
+        assert!(
+            open_result.result.is_ok(),
+            "LP Open: {:?}",
+            open_result.result
+        );
+        assert!(
+            super::invoked_programs(&open_result).contains(&ACCELERATOR),
+            "the accepted Open must execute the real Dealer accelerator ELF"
+        );
+
+        let opened = chain_account(&mut context, position).await;
+        let rent_principal = Rent::default().minimum_balance(DEALER_LP_POSITION_BYTES_V3);
+        let (_, bump) = Pubkey::find_program_address(
+            &[
+                DEALER_LP_POSITION_PDA_DOMAIN_V3,
+                campaign.root.as_ref(),
+                lp_owner.pubkey().as_ref(),
+            ],
+            &TRADING,
+        );
+        let expected_position = DealerLpPositionV3 {
+            revision: 1,
+            release_set: scenario.waist.release_set_id,
+            market: scenario.fixture.core_market.to_bytes(),
+            child_root: campaign.root.to_bytes(),
+            lp_owner: lp_owner.pubkey().to_bytes(),
+            rent_refund: lp_owner.pubkey().to_bytes(),
+            obligation_account: campaign.obligation.to_bytes(),
+            equity_shares: 0,
+            generation: SCENARIO_GENERATION,
+            rent_principal,
+            pda_bump: u16::from(bump),
+        };
+        let mut expected_position_bytes = vec![0_u8; DEALER_LP_POSITION_BYTES_V3];
+        expected_position
+            .encode_into(&mut expected_position_bytes)
+            .expect("expected LP encoding");
+        assert_eq!(opened.owner, TRADING);
+        assert_eq!(opened.lamports, rent_principal);
+        assert_eq!(opened.data, expected_position_bytes);
+        assert_eq!(
+            chain_account(&mut context, lp_owner.pubkey())
+                .await
+                .lamports,
+            lp_owner_before - rent_principal,
+            "Open transfers exactly current Rent from the signer"
+        );
+        assert_eq!(chain_account(&mut context, credit).await, credit_before);
+        assert_eq!(
+            chain_account(&mut context, campaign.root).await.data,
+            campaign.root_bytes,
+            "LP lifecycle does not rewrite Dealer semantic state"
+        );
+        assert_eq!(
+            chain_account(&mut context, campaign.obligation).await.data,
+            campaign.obligation_bytes,
+            "zero-share Open does not rewrite obligations"
+        );
+
+        // This obligation is wire-valid, rooted under the same child and used
+        // to build the exact request/context, but its semantic Market differs.
+        // Common Hot therefore reaches the real accelerator; Dealer semantic
+        // authentication refuses there, after lifecycle planning, and the
+        // transaction must roll every writable account back byte-for-byte.
+        let hostile_obligation = super::obligation_bytes(
+            [0xf1; 32],
+            scenario.fixture.product_id,
+            scenario.fixture.semantic_basis_id,
+            scenario.dealer.pubkey().to_bytes(),
+            campaign.root.to_bytes(),
+            7,
+            &[12, 20, 10],
+        );
+        context.set_account(
+            &campaign.obligation,
+            &AccountSharedData::from(super::data_account(TRADING, hostile_obligation.clone())),
+        );
+        let hostile_credit = chain_account(&mut context, credit).await;
+        let hostile = build_lifecycle_bundle(
+            &mut context,
+            &scenario,
+            &campaign,
+            MultiLpRequestActionV3::Close,
+            lp_owner.pubkey(),
+            &hostile_obligation,
+            Some(opened.clone()),
+            credit,
+            hostile_credit,
+        )
+        .await;
+        install_bundle(&mut context, &hostile);
+        let rollback_keys = [campaign.root, campaign.obligation, position, credit];
+        let mut rollback_before = Vec::new();
+        for key in rollback_keys {
+            rollback_before.push((key, chain_account(&mut context, key).await));
+        }
+        let hostile_result =
+            submit_lp_hot(&mut context, hostile.bundle.hot_instruction.clone(), &[])
+                .await
+                .expect("submit hostile LP Close");
+        assert_eq!(
+            super::custom_code(&hostile_result.result),
+            Some(TradingSbfError::Transition as u32),
+            "a cross-Market obligation must produce the accelerator's refused acknowledgement: {:?}",
+            hostile_result.result,
+        );
+        assert!(
+            super::invoked_programs(&hostile_result).contains(&ACCELERATOR),
+            "the hostile case must reach the real accelerator, not a shallow gate"
+        );
+        for (key, before) in rollback_before {
+            assert_eq!(
+                chain_account(&mut context, key).await,
+                before,
+                "rollback {key}"
+            );
+        }
+
+        context.set_account(
+            &campaign.obligation,
+            &AccountSharedData::from(super::data_account(
+                TRADING,
+                campaign.obligation_bytes.clone(),
+            )),
+        );
+        let credit_before_close = chain_account(&mut context, credit).await;
+        let owner_before_close = chain_account(&mut context, lp_owner.pubkey()).await;
+        let close = build_lifecycle_bundle(
+            &mut context,
+            &scenario,
+            &campaign,
+            MultiLpRequestActionV3::Close,
+            lp_owner.pubkey(),
+            &campaign.obligation_bytes,
+            Some(opened.clone()),
+            credit,
+            credit_before_close.clone(),
+        )
+        .await;
+        install_bundle(&mut context, &close);
+        let close_result = submit_lp_hot(&mut context, close.bundle.hot_instruction.clone(), &[])
+            .await
+            .expect("submit LP Close");
+        assert!(
+            close_result.result.is_ok(),
+            "LP Close: {:?}",
+            close_result.result
+        );
+        assert!(super::invoked_programs(&close_result).contains(&ACCELERATOR));
+        let closed = context
+            .banks_client
+            .get_account(position)
+            .await
+            .expect("read closed LP Position");
+        assert!(
+            closed.is_none_or(|account| {
+                account.lamports == 0
+                    && account.data.is_empty()
+                    && account.owner == system_program::ID
+            }),
+            "Close retires the whole LP account"
+        );
+        let credit_after_close = chain_account(&mut context, credit).await;
+        assert_eq!(credit_after_close.data, credit_before_close.data);
+        assert_eq!(credit_after_close.owner, credit_before_close.owner);
+        assert_eq!(
+            credit_after_close.lamports,
+            credit_before_close.lamports + opened.lamports,
+            "Close returns every lamport, including any dust, to RentCredit"
+        );
+        assert_eq!(
+            chain_account(&mut context, lp_owner.pubkey()).await,
+            owner_before_close,
+            "Close is permissionless and pays only the immutable RentCredit"
+        );
+        assert_eq!(
+            chain_account(&mut context, campaign.root).await.data,
+            campaign.root_bytes
+        );
+        assert_eq!(
+            chain_account(&mut context, campaign.obligation).await.data,
+            campaign.obligation_bytes
+        );
+    }
 }

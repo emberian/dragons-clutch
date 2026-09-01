@@ -688,19 +688,12 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
         },
     )
     .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
+    // Core's founding permit authenticates the immutable basis digest and runs
+    // the price gate once. Claims re-authenticates that exact record and its
+    // Product joins here without repeating the founding-only conjunct.
     let product =
-        // Claims' founding frame carries no certificate slot, so a curved
-        // basis refuses here by name. Curvature is admitted on Core's Found
-        // route, which is the frame that was widened; widening this one is a
-        // frame change rather than a wire change and can follow.
-        authenticate_product_basis_v3(
-            registry.key,
-            rent,
-            runtime,
-            product_frame.linked_basis,
-            None,
-        )
-        .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
+        authenticate_product_basis_v3(registry.key, rent, runtime, product_frame.linked_basis)
+            .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     if product.runtime.product_record.content_digest.to_bytes() != expected_product_record_digest
         || product.runtime.product_id.to_bytes() != market.product_instance_id
         || product.runtime.liability_basis_id.to_bytes() != market.basis_id

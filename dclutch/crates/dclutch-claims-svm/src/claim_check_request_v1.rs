@@ -77,6 +77,8 @@ pub enum ClaimCheckActionV1 {
     /// collateral behind an entire coordinate's outstanding shard supply. A
     /// shared tag would make the width the only thing telling them apart.
     FractionalCompact = 5,
+    /// Burn one holder's whole fractional claims and pay exact collateral.
+    FractionalRedeem = 6,
 }
 
 impl ClaimCheckActionV1 {
@@ -90,6 +92,9 @@ impl ClaimCheckActionV1 {
             Self::FractionalCompact => {
                 crate::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
             }
+            Self::FractionalRedeem => {
+                crate::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
+            }
         }
     }
 
@@ -100,9 +105,7 @@ impl ClaimCheckActionV1 {
             3 => Ok(Self::Redeem),
             4 => Ok(Self::CloseEscrow),
             5 => Ok(Self::FractionalCompact),
-            // 6 is reserved for the fractional redemption, which has a magic
-            // (`DCLTFCR1`) and no route. Left unallocated rather than defined,
-            // so a tag never names an act nothing performs.
+            6 => Ok(Self::FractionalRedeem),
             _ => Err(ClaimCheckErrorV1::UnknownTag),
         }
     }
@@ -544,13 +547,11 @@ mod tests {
 
     #[test]
     fn an_unknown_action_or_version_is_refused() {
-        // 5 was in this list until the fractional compaction claimed it. It is
-        // now a defined act and moves to the join assertion below, which is a
-        // strictly stronger statement about it; 6 takes its place here, and is
-        // the tag the fractional REDEMPTION will claim when a route performs
-        // it. Renegotiated in the open rather than by widening what this
-        // accepts.
-        for tag in [0_u8, 6, 200, 255] {
+        // 5 and 6 were in this list until the fractional routes claimed them.
+        // They are now defined acts and move to the join assertions below,
+        // which are strictly stronger statements about their magic/action
+        // pairs.
+        for tag in [0_u8, 7, 200, 255] {
             let mut bytes = redeem().to_bytes().expect("bytes");
             write(&mut bytes, ACTION_OFFSET, &[tag]).expect("tag");
             assert_eq!(
@@ -565,6 +566,10 @@ mod tests {
         for (tag, magic) in [
             (
                 ClaimCheckActionV1::FractionalCompact,
+                CLAIM_CHECK_REDEEM_MAGIC_V1,
+            ),
+            (
+                ClaimCheckActionV1::FractionalRedeem,
                 CLAIM_CHECK_REDEEM_MAGIC_V1,
             ),
             (ClaimCheckActionV1::Compact, CLAIM_CHECK_REDEEM_MAGIC_V1),
@@ -582,6 +587,10 @@ mod tests {
         assert_eq!(
             ClaimCheckActionV1::FractionalCompact.magic(),
             crate::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+        );
+        assert_eq!(
+            ClaimCheckActionV1::FractionalRedeem.magic(),
+            crate::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
         );
         let mut versioned = open().to_bytes().expect("bytes");
         write(&mut versioned, VERSION_OFFSET, &2_u16.to_le_bytes()).expect("version");

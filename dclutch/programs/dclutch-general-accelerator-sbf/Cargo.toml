@@ -24,6 +24,7 @@ dclutch-general-adapter-contract = { path = "../../crates/dclutch-general-adapte
 dclutch-general-codec = { path = "../../crates/dclutch-general-codec" }
 dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract" }
 solana-instructions-sysvar = "=3.0.1"
+solana-compute-budget-interface = "=3.1.0"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 

@@ -105,12 +105,24 @@ class ActivityPropertiesTest(unittest.TestCase):
     def test_exact_whole_lifecycle_conservation_holds(self):
         report = properties.validate_many([fixture_dossier()])
         self.assertEqual(report["status"], "holds")
-        self.assertEqual(report["totals"]["transactionFeesLamports"], "45000")
-        self.assertEqual(report["totals"]["computeUnitsConsumed"], "900000")
+        self.assertEqual(report["totals"]["transactionFeesLamports"], "50000")
+        self.assertEqual(report["totals"]["computeUnitsConsumed"], "1000000")
         self.assertEqual(report["totals"]["protocolFeesAtoms"], "20")
         self.assertEqual(report["totals"]["hoardPrincipalPaidAtoms"], "50")
         self.assertEqual(report["totals"]["closedRentLamports"], "10000")
         self.assertEqual(report["totals"]["refundLamports"], "10000")
+        self.assertEqual(
+            report["livenessEconomics"]["directFeeCompletion"]["capitalizationClass"],
+            "debtor-collateral-obligation-not-future-revenue-or-hoard",
+        )
+        self.assertEqual(
+            report["livenessEconomics"]["retirementRefund"]["beneficiaryClass"],
+            "creation-fixed-refund-wallet",
+        )
+        self.assertEqual(
+            report["livenessEconomics"]["terminalHolderCharge"]["classification"],
+            "terminal-holder-is-not-transaction-fee-payer",
+        )
 
     def test_lamport_creation_or_leak_refuses(self):
         dossier = fixture_dossier()
@@ -122,6 +134,20 @@ class ActivityPropertiesTest(unittest.TestCase):
         event["lamportObservations"][0]["deltaLamports"] = "-4999"
         refresh(dossier)
         with self.assertRaisesRegex(properties.Refusal, "leaks or creates lamports"):
+            properties.validate_many([dossier])
+
+    def test_one_transaction_cannot_borrow_token_conservation_from_later_history(self):
+        dossier = fixture_dossier()
+        event = next(row for row in dossier["events"] if row["kind"] == "participant")
+        source_delta = next(row for row in event["tokenDeltas"] if row["account"] == "source_token")
+        source_observation = next(
+            row for row in event["tokenObservations"] if row["account"] == "source_token"
+        )
+        source_delta["atoms"] = "-99"
+        source_observation["afterAtoms"] = str(int(source_observation["beforeAtoms"]) - 99)
+        source_observation["deltaAtoms"] = "-99"
+        refresh(dossier)
+        with self.assertRaisesRegex(properties.Refusal, "each token mint independently"):
             properties.validate_many([dossier])
 
     def test_retirement_refund_substitution_refuses_even_when_fee_balances(self):
@@ -139,8 +165,44 @@ class ActivityPropertiesTest(unittest.TestCase):
         payer_observation["afterLamports"] = str(int(payer_observation["beforeLamports"]) - 4999)
         payer_observation["deltaLamports"] = "-4999"
         refresh(dossier)
-        with self.assertRaisesRegex(properties.Refusal, "rent removed.*differs"):
+        with self.assertRaisesRegex(properties.Refusal, "classified lamports differ"):
             properties.validate_many([dossier])
+
+    def test_retirement_beneficiary_capitalization_and_terminal_poststate_refuse(self):
+        mutations = [
+            (
+                lambda dossier, conservation: conservation.__setitem__(
+                    "payer", conservation["refundBeneficiary"]
+                ),
+                "distinct payer",
+            ),
+            (
+                lambda dossier, conservation: conservation.__setitem__(
+                    "capitalizationClass", "hoard-principal"
+                ),
+                "future-revenue or Hoard-principal",
+            ),
+            (
+                lambda dossier, conservation: next(
+                    row
+                    for row in dossier["finalAccounts"]
+                    if row["account"] == conservation["refundBeneficiary"]
+                ).__setitem__("lamports", "109999"),
+                "terminal poststate",
+            ),
+        ]
+        for mutate, message in mutations:
+            with self.subTest(message=message):
+                dossier = fixture_dossier()
+                conservation = next(
+                    event["retirement"]["conservation"]
+                    for event in dossier["events"]
+                    if "conservation" in event.get("retirement", {})
+                )
+                mutate(dossier, conservation)
+                refresh(dossier)
+                with self.assertRaisesRegex(properties.Refusal, message):
+                    properties.validate_many([dossier])
 
     def test_scaled_integer_direct_substitution_refuses(self):
         dossier = fixture_dossier()
@@ -150,12 +212,70 @@ class ActivityPropertiesTest(unittest.TestCase):
         with self.assertRaisesRegex(properties.Refusal, "grossAtoms differs"):
             properties.validate_many([dossier])
 
+    def test_permissionless_fee_completion_substitutions_refuse(self):
+        mutations = [
+            (
+                lambda dossier, event: event["feeSettlement"].__setitem__("feeAtoms", "19"),
+                "exact obligation",
+            ),
+            (
+                lambda dossier, event: event["feeSettlement"].__setitem__(
+                    "capitalizationClass", "future-fee-revenue"
+                ),
+                "future-revenue or Hoard capitalization",
+            ),
+            (
+                lambda dossier, event: next(
+                    row for row in dossier["accounts"] if row["ref"] == event["feePayer"]
+                ).__setitem__("address", event["feeSettlement"]["debtor"]),
+                "submitted by a stranger",
+            ),
+        ]
+        for mutate, message in mutations:
+            with self.subTest(message=message):
+                dossier = fixture_dossier()
+                settlement = next(
+                    event for event in dossier["events"] if "feeSettlement" in event
+                )
+                mutate(dossier, settlement)
+                refresh(dossier)
+                with self.assertRaisesRegex(properties.Refusal, message):
+                    properties.validate_many([dossier])
+
+        dossier = fixture_dossier()
+        settlement = next(event for event in dossier["events"] if "feeSettlement" in event)
+        settlement.pop("feeSettlement")
+        refresh(dossier)
+        with self.assertRaisesRegex(properties.Refusal, "one exact permissionless"):
+            properties.validate_many([dossier])
+
     def test_payout_principal_substitution_refuses(self):
         dossier = fixture_dossier()
         payout = next(event["payout"] for event in dossier["events"] if "payout" in event)
         payout["principalAtoms"] = "49"
         refresh(dossier)
         with self.assertRaisesRegex(properties.Refusal, "Hoard principal"):
+            properties.validate_many([dossier])
+
+    def test_payout_hoard_cannot_alias_a_direct_trading_token(self):
+        dossier = fixture_dossier()
+        direct = next(event["direct"] for event in dossier["events"] if "direct" in event)
+        payout = next(event["payout"] for event in dossier["events"] if "payout" in event)
+        payout["hoardToken"] = direct["feeRecipientToken"]
+        refresh(dossier)
+        with self.assertRaisesRegex(properties.Refusal, "Hoard token aliases a Direct"):
+            properties.validate_many([dossier])
+
+    def test_terminal_payout_cannot_charge_or_substitute_holder(self):
+        dossier = fixture_dossier()
+        payout_event = next(event for event in dossier["events"] if "payout" in event)
+        payout_event["payout"]["holder"] = next(
+            row["address"]
+            for row in dossier["accounts"]
+            if row["ref"] == payout_event["feePayer"]
+        )
+        refresh(dossier)
+        with self.assertRaisesRegex(properties.Refusal, "charged or substituted"):
             properties.validate_many([dossier])
 
     def test_missing_phase_refuses(self):
@@ -173,8 +293,8 @@ class ActivityPropertiesTest(unittest.TestCase):
         second = independent_clone(first)
         report = properties.validate_many([first, second])
         self.assertEqual(report["multiwallet"]["status"], "holds")
-        self.assertEqual(len(report["multiwallet"]["payerAddresses"]), 2)
-        self.assertEqual(report["totals"]["transactionFeesLamports"], "90000")
+        self.assertEqual(len(report["multiwallet"]["payerAddresses"]), 4)
+        self.assertEqual(report["totals"]["transactionFeesLamports"], "100000")
 
     def test_duplicate_direct_semantic_owner_refuses(self):
         first = fixture_dossier()

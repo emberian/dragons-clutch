@@ -242,7 +242,7 @@ export default function MarketTradePanel({
                 </div>
                 <details className="trade-v3-bytes">
                   <summary>Your accounts, exactly as the chain has them</summary>
-                  <JoinStanding readiness={participant} marketPhase={inspected.phase} walletAddress={wallets.address} />
+                  <JoinStanding readiness={participant} marketPhase={inspected.phase} walletAddress={wallets.address} endpoint={endpoint} />
                 </details>
               </>;
             })()
@@ -269,7 +269,14 @@ export default function MarketTradePanel({
 
       <FlowStep step={stepAt(3)}>
         <TicketBoard
+          endpoint={endpoint}
           marketAddress={marketAddress}
+          coreProgramId={coreProgramId}
+          registryProgramId={registryProgramId}
+          claimsProgramId={claimsProgramId}
+          tradingProgramId={tradingProgramId}
+          custodyProgramId={custodyProgramId}
+          rentProgramId={rentProgramId}
           outcome={outcome}
           outcomeLabel={outcomeLabel}
           screenContext={{
@@ -288,6 +295,7 @@ export default function MarketTradePanel({
           ticketState={ticketState}
           onTicketText={takeTicket}
           refusal={refusalFor(3)}
+          wallets={wallets}
         />
       </FlowStep>
 

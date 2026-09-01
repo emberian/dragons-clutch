@@ -10,8 +10,12 @@
 //! `fractional_root_signer` marks the root's meta a signer after authenticating
 //! the root's bytes against the same request. Nothing in this repository could
 //! produce that signature for the compaction frame, so the shipped handler had
-//! never executed. This program is that caller and nothing more: it owns no
-//! protocol state and publishes no production ABI.
+//! never executed. This program is that caller and owns no protocol state or
+//! production ABI. For the representative whole-life campaign it also
+//! delegates the sibling atomic wrapper byte-for-byte to that wrapper's
+//! existing implementation. One Trading identity can therefore wrap and later
+//! compact the same root without making this compaction branch invent a
+//! caller-authority account.
 //!
 //! The width is deliberately not named here. This caller reads
 //! `FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1` and the role coordinates from the
@@ -29,8 +33,9 @@
 //! role is now *declared and refused*. A caller that signed one anyway would be
 //! quietly re-supplying the ceremony the ruling removed, and the campaign built
 //! on it would prove the frame worked *with* an account the frame says is not
-//! there. So this program cannot sign a caller authority: there is no code here
-//! that derives one.
+//! there. So the compaction branch cannot sign a caller authority: there is no
+//! code in that branch that derives one. Atomic requests are a separate,
+//! width-disjoint dispatch into the existing two-signature atomic caller.
 //!
 //! That is what makes witness w7 an observation rather than an assertion. The
 //! route runs, end to end, with no caller-authority account anywhere in frame,
@@ -73,6 +78,12 @@ pub const FRACTIONAL_COMPACTION_TEST_CLAIMS_PROGRAM_COORDINATE: usize = 0;
 /// Exact instruction width: one action byte, then the request verbatim.
 pub const FRACTIONAL_COMPACTION_TEST_WRAPPER_BYTES: usize =
     1 + FRACTIONAL_COMPACT_TO_CLAIM_CHECK_BYTES_V1;
+
+const _: () = assert!(
+    FRACTIONAL_COMPACTION_TEST_WRAPPER_BYTES
+        != dclutch_fractional_atomic_test_caller_sbf::FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES,
+    "atomic and compaction wrappers must remain width-disjoint"
+);
 
 const REQUEST_OFFSET: usize = 1;
 
@@ -209,6 +220,15 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len()
+        == dclutch_fractional_atomic_test_caller_sbf::FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES
+    {
+        return dclutch_fractional_atomic_test_caller_sbf::process_instruction(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     if instruction_data.len() != FRACTIONAL_COMPACTION_TEST_WRAPPER_BYTES {
         return Err(FractionalCompactionTestCallerError::Instruction.into());
     }

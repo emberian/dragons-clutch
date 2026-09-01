@@ -1443,6 +1443,8 @@ fn sell_unwind_refunds_residual_then_closes_to_persisted_rent_credit() {
             admission_digest: hash(&admission_state).to_bytes(),
             claims_program: context.claims_program,
             post_resource_digest: id(94),
+            position_lamports: close.observed_position_lamports,
+            admission_lamports: close.observed_admission_lamports,
             rent_credit_before: 1_000,
             rent_credit_after: 1_162,
         },

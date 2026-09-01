@@ -17,6 +17,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_direct_codec::fee_settlement_v1::DirectFeeSettlementReceiptV1;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -32,6 +33,9 @@ use crate::{
     },
     campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1,
     cluster::{ClusterOriginV1, DEVNET_GENESIS_HASH, ExpectedClusterV1, MAINNET_BETA_GENESIS_HASH},
+    direct_trade::{
+        AuthenticatedDirectTradeEvidenceV1, authenticate_owned_loopback_terminal_evidence_v1,
+    },
     local_mutable::authenticate_checked_local_mutable_plan_v1,
     model::SuccessorPlan,
     rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
@@ -51,8 +55,11 @@ const MANIFEST_SCHEMA_V1: &str = "dclutch-owned-loopback-activity-reconcile-mani
 const CAPTURE_SCHEMA_V1: &str = "dclutch-owned-loopback-captured-finalized-rpc-v1";
 const JOURNAL_DESCRIPTORS_SCHEMA_V1: &str = "dclutch-owned-loopback-stage-journal-descriptors-v1";
 const LIFECYCLE_SESSION_SCHEMA_V1: &str = "dclutch-owned-loopback-private-lifecycle-session-v1";
+const DIRECT_OWNED_JOURNAL_SCHEMA_V1: &str = "dclutch-owned-loopback-direct-trade-journal-v1";
 const CAMPAIGN_SCHEMA_V1: &str = "dclutch-successor-campaign-report-v1";
 const PARTICIPANT_SCHEMA_V1: &str = "dclutch-owned-loopback-user-position-admission-execution-v1";
+const DIRECT_EVIDENCE_SCHEMA_V1: &str = "dclutch-owned-loopback-direct-trade-finalized-v1";
+const DIRECT_FEE_SETTLEMENT_SCHEMA_V1: &str = "dclutch-direct-fee-settlement-evidence-v1";
 const RESOLUTION_INPUT_FORMAT_V1: &str = "dclutch-owned-loopback-flagship-resolution-input-v1";
 const RESOLUTION_CHECKPOINT_FORMAT_V1: &str =
     "dclutch-owned-loopback-flagship-resolution-checkpoint-v3";
@@ -67,6 +74,16 @@ const MAX_ACCOUNTS: usize = 512;
 const STAGES: [&str; 6] = [
     "founding",
     "participant",
+    "direct",
+    "resolution",
+    "payout",
+    "retirement",
+];
+const LIFECYCLE_SESSION_STAGES: [&str; 8] = [
+    "founding",
+    "participant",
+    "alt",
+    "seal",
     "direct",
     "resolution",
     "payout",
@@ -203,6 +220,10 @@ struct EventV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     direct: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    positions: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fee_settlement: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     position: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     certificate: Option<Value>,
@@ -282,6 +303,15 @@ struct LifecycleSessionV1 {
 }
 
 #[derive(Clone, Debug)]
+struct AuthenticatedLifecycleDescriptorV1 {
+    descriptor: JournalDescriptorV1,
+    source_sha256: String,
+    completion_value: String,
+    mutation_kind: Option<String>,
+    stage_completion: Option<StageCompletionV1>,
+}
+
+#[derive(Clone, Debug)]
 struct RawSourceV1 {
     role: String,
     path: PathBuf,
@@ -306,10 +336,106 @@ struct PendingEventV1 {
     expected_compute: Option<u64>,
     source_path: String,
     source_sha256: String,
+    direct: Option<Value>,
+    positions: Option<Value>,
+    fee_settlement: Option<Value>,
+    forbidden_fee_payers: Vec<String>,
+    required_transaction_accounts: Vec<String>,
+    direct_fee_receipt: Option<DirectFeeReceiptExpectationV1>,
+    expected_return_data: Option<ExpectedReturnDataV1>,
+    expected_fee_payer: Option<String>,
     position: Option<Value>,
     certificate: Option<Value>,
     payout: Option<Value>,
     retirement: Option<Value>,
+}
+
+#[derive(Clone, Debug)]
+struct DirectFeeReceiptExpectationV1 {
+    producer: String,
+    market: String,
+    maker: String,
+    maker_replay: String,
+    fee_source: String,
+    fee_destination: String,
+    fee_recipient: String,
+    settled_amount: u64,
+    expected_revision: u64,
+    resulting_revision: u64,
+}
+
+#[derive(Clone, Debug)]
+struct ExpectedReturnDataV1 {
+    producer: String,
+    body: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DirectFeeSettlementEvidenceV1 {
+    schema: String,
+    cluster: String,
+    market: String,
+    generation: u64,
+    maker: String,
+    maker_replay: String,
+    fee_owed: u64,
+    fee_source: String,
+    fee_destination: String,
+    fee_destination_owner: String,
+    standing_allowance: u64,
+    caller_authority: String,
+    caller_authority_bump: u8,
+    custody_expected_revision: u64,
+    custody_resulting_revision: u64,
+    landed: Option<DirectFeeSettlementFinalizationV1>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DirectFeeSettlementFinalizationV1 {
+    signature: String,
+    slot: u64,
+    compute_units_consumed: Option<u64>,
+    fee_lamports: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PayoutObservedAccountV1 {
+    address: String,
+    owner: String,
+    lamports: u64,
+    executable: bool,
+    data_len: usize,
+    data_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PayoutEvidenceV1 {
+    schema: String,
+    cluster: String,
+    input_sha256: String,
+    payout_intent_sha256: String,
+    journal_state_sha256: String,
+    signature: String,
+    finalized_slot: u64,
+    fee_lamports: u64,
+    compute_units_consumed: u64,
+    fee_payer: String,
+    owner: String,
+    market: String,
+    recipient: String,
+    payout: String,
+    lookup_table: String,
+    lookup_addresses_sha256: String,
+    payout_instruction_sha256: String,
+    custody_request_sha256: Option<String>,
+    return_data_producer: String,
+    return_data_base64: String,
+    poststates: Vec<PayoutObservedAccountV1>,
+    evidence_sha256: String,
 }
 
 #[derive(Clone, Debug)]
@@ -460,7 +586,9 @@ fn reject_unknown_flags(values: &BTreeMap<String, String>, allowed: &[&str]) -> 
 }
 
 pub(crate) fn run_lifecycle_session(arguments: LifecycleSessionArgumentsV1) -> Result<Value> {
-    owned_loopback_origin(&arguments.rpc_url)?;
+    let origin = owned_loopback_origin(&arguments.rpc_url)?;
+    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let genesis = owned_genesis(&mut rpc)?;
     let root = canonical_directory(&arguments.evidence_root, "lifecycle evidence root")?;
     let descriptor_path = canonical_regular(
         &arguments.stage_journal_descriptors,
@@ -484,33 +612,282 @@ pub(crate) fn run_lifecycle_session(arguments: LifecycleSessionArgumentsV1) -> R
         ));
     }
     let mut paths = BTreeSet::new();
-    for descriptor in &descriptors.journals {
+    let mut roles = BTreeSet::new();
+    let mut authenticated = Vec::with_capacity(descriptors.journals.len());
+    for descriptor in descriptors.journals {
         if descriptor.semantic_role.is_empty()
             || descriptor.schema.is_empty()
             || !paths.insert(descriptor.path.clone())
+            || !roles.insert(descriptor.semantic_role.clone())
         {
             return Err(Error::new(
-                "lifecycle stage journal descriptors repeat a path or contain an empty identity",
+                "lifecycle stage journal descriptors repeat a path/role or contain an empty identity",
             ));
         }
         if descriptor.schema == STAGE_SCHEMA_V1 {
-            authenticate_normalized_stage_descriptor(descriptor)?;
+            authenticate_normalized_stage_descriptor(&descriptor)?;
         }
         let path = resolve_relative(&root, &descriptor.path, "lifecycle journal source")?;
-        let value = parse_json_without_duplicate_keys_v1(&bounded_read(
-            &path,
-            "lifecycle journal source",
-        )?)?;
-        json_pointer(
+        let bytes = bounded_read(&path, "lifecycle journal source")?;
+        let value = parse_json_without_duplicate_keys_v1(&bytes)?;
+        let completion_value = normalized_scalar(json_pointer(
             &value,
             &descriptor.completion_pointer,
             "lifecycle completion pointer",
-        )?;
+        )?)?;
+        if value.get("schema").and_then(Value::as_str) != Some(descriptor.schema.as_str())
+            || completion_value != "finalized"
+        {
+            return Err(Error::new(
+                "lifecycle journal source is another schema or not exactly finalized",
+            ));
+        }
+        let mutation_kind = value
+            .get("stage")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if matches!(descriptor.semantic_role.as_str(), "alt" | "seal") {
+            let expected_kind = if descriptor.semantic_role == "alt" {
+                "lookup-freeze"
+            } else {
+                "capability-seal"
+            };
+            if descriptor.schema != DIRECT_OWNED_JOURNAL_SCHEMA_V1
+                || descriptor.completion_pointer != "/phase"
+                || mutation_kind.as_deref() != Some(expected_kind)
+            {
+                return Err(Error::new(
+                    "lifecycle alt/seal descriptor is not its exact finalized Direct journal",
+                ));
+            }
+        }
+        let stage_completion = if descriptor.schema == STAGE_SCHEMA_V1 {
+            let completion: StageCompletionV1 = serde_json::from_value(value)?;
+            authenticate_stage_completion(
+                &mut rpc,
+                &root,
+                &descriptor.semantic_role,
+                &genesis,
+                &completion,
+            )?;
+            Some(completion)
+        } else {
+            None
+        };
+        authenticated.push(AuthenticatedLifecycleDescriptorV1 {
+            descriptor,
+            source_sha256: sha256(&bytes),
+            completion_value,
+            mutation_kind,
+            stage_completion,
+        });
     }
-    let _ = (&arguments.output, LIFECYCLE_SESSION_SCHEMA_V1);
-    Err(Error::new(
-        "owned-loopback lifecycle session is refused until the alt, seal, and Direct semantic-owner ABIs are frozen",
-    ))
+    let session = assemble_lifecycle_session(&genesis, &authenticated)?;
+    if owned_genesis(&mut rpc)? != genesis {
+        return Err(Error::new(
+            "owned-loopback genesis changed while the lifecycle session was authenticated",
+        ));
+    }
+    let value = serde_json::to_value(session)?;
+    write_new_json(&arguments.output, &value)?;
+    Ok(value)
+}
+
+fn assemble_lifecycle_session(
+    expected_genesis: &str,
+    descriptors: &[AuthenticatedLifecycleDescriptorV1],
+) -> Result<LifecycleSessionV1> {
+    parse_pubkey(expected_genesis, "lifecycle session genesis")?;
+    if expected_genesis == DEVNET_GENESIS_HASH || expected_genesis == MAINNET_BETA_GENESIS_HASH {
+        return Err(Error::new(
+            "lifecycle session cannot bind a public cluster genesis",
+        ));
+    }
+    let mut seen_paths = BTreeSet::new();
+    let mut seen_roles = BTreeSet::new();
+    let mut stage_rows = Vec::new();
+    let mut completions = Vec::new();
+    for row in descriptors {
+        canonical_relative(&row.descriptor.path, "lifecycle session descriptor path")?;
+        if row.descriptor.semantic_role.is_empty()
+            || row.descriptor.schema.is_empty()
+            || row.completion_value != "finalized"
+            || !seen_paths.insert(row.descriptor.path.as_str())
+            || !seen_roles.insert(row.descriptor.semantic_role.as_str())
+        {
+            return Err(Error::new(
+                "lifecycle session descriptors are duplicate, empty, or provisional",
+            ));
+        }
+        if row.source_sha256.len() != 64
+            || !row
+                .source_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || row
+                .source_sha256
+                .bytes()
+                .any(|byte| byte.is_ascii_uppercase())
+        {
+            return Err(Error::new(
+                "lifecycle session descriptor source digest is not lowercase SHA-256",
+            ));
+        }
+        let session_stage =
+            LIFECYCLE_SESSION_STAGES.contains(&row.descriptor.semantic_role.as_str());
+        match &row.stage_completion {
+            Some(completion) => {
+                authenticate_normalized_stage_descriptor(&row.descriptor)?;
+                if completion.schema != STAGE_SCHEMA_V1
+                    || completion.stage != row.descriptor.semantic_role
+                    || completion.status != "finalized"
+                    || completion.cluster != "owned-loopback"
+                    || completion.genesis_hash != expected_genesis
+                {
+                    return Err(Error::new(
+                        "lifecycle session stage wrapper changed stage, status, cluster, or genesis",
+                    ));
+                }
+                stage_rows.push(LifecycleSessionStageV1 {
+                    stage: row.descriptor.semantic_role.clone(),
+                    path: row.descriptor.path.clone(),
+                    sha256: row.source_sha256.clone(),
+                    schema: row.descriptor.schema.clone(),
+                    completion_pointer: row.descriptor.completion_pointer.clone(),
+                    completion_value: row.completion_value.clone(),
+                });
+                completions.push(completion);
+            }
+            None if row.descriptor.schema == STAGE_SCHEMA_V1 => {
+                return Err(Error::new(
+                    "lifecycle session stage descriptor omitted its authenticated wrapper",
+                ));
+            }
+            None if matches!(row.descriptor.semantic_role.as_str(), "alt" | "seal") => {
+                let expected_kind = if row.descriptor.semantic_role == "alt" {
+                    "lookup-freeze"
+                } else {
+                    "capability-seal"
+                };
+                if row.descriptor.schema != DIRECT_OWNED_JOURNAL_SCHEMA_V1
+                    || row.descriptor.completion_pointer != "/phase"
+                    || row.mutation_kind.as_deref() != Some(expected_kind)
+                {
+                    return Err(Error::new(
+                        "lifecycle session alt/seal stage changed its Direct journal identity",
+                    ));
+                }
+                stage_rows.push(LifecycleSessionStageV1 {
+                    stage: row.descriptor.semantic_role.clone(),
+                    path: row.descriptor.path.clone(),
+                    sha256: row.source_sha256.clone(),
+                    schema: row.descriptor.schema.clone(),
+                    completion_pointer: row.descriptor.completion_pointer.clone(),
+                    completion_value: row.completion_value.clone(),
+                });
+            }
+            None if session_stage => {
+                return Err(Error::new(
+                    "lifecycle session named stage omitted its authenticated semantic owner",
+                ));
+            }
+            None => {}
+        }
+    }
+    let stage_names = stage_rows
+        .iter()
+        .map(|row| row.stage.as_str())
+        .collect::<Vec<_>>();
+    if stage_names != LIFECYCLE_SESSION_STAGES {
+        return Err(Error::new(
+            "lifecycle session omits or reorders the exact eight-stage private projection",
+        ));
+    }
+    authenticate_lifecycle_event_order(&completions)?;
+    authenticate_lifecycle_source_lineage(&completions)?;
+    let stage_set_sha256 = sha256(&canonical_json(&serde_json::to_value(&stage_rows)?)?);
+    Ok(LifecycleSessionV1 {
+        schema: LIFECYCLE_SESSION_SCHEMA_V1.into(),
+        status: "finalized".into(),
+        cluster: "owned-loopback".into(),
+        genesis_hash: expected_genesis.into(),
+        stages: stage_rows,
+        completed_stages: LIFECYCLE_SESSION_STAGES
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        stage_set_sha256,
+    })
+}
+
+fn authenticate_lifecycle_source_lineage(completions: &[&StageCompletionV1]) -> Result<()> {
+    let direct = completions
+        .iter()
+        .find(|completion| completion.stage == "direct")
+        .ok_or_else(|| Error::new("lifecycle session omitted Direct completion"))?;
+    let payout = completions
+        .iter()
+        .find(|completion| completion.stage == "payout")
+        .ok_or_else(|| Error::new("lifecycle session omitted payout completion"))?;
+    let direct_source = direct
+        .sources
+        .iter()
+        .find(|source| source.role == "evidence")
+        .ok_or_else(|| Error::new("Direct completion omitted its evidence source"))?;
+    let payout_source = payout
+        .sources
+        .iter()
+        .find(|source| source.role == "direct-evidence")
+        .ok_or_else(|| Error::new("payout completion omitted its Direct evidence source"))?;
+    if direct_source.path != payout_source.path
+        || direct_source.sha256 != payout_source.sha256
+        || direct_source.schema != DIRECT_EVIDENCE_SCHEMA_V1
+        || payout_source.schema != DIRECT_EVIDENCE_SCHEMA_V1
+    {
+        return Err(Error::new(
+            "lifecycle payout did not consume the exact Direct evidence authenticated by its Direct stage",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_lifecycle_event_order(completions: &[&StageCompletionV1]) -> Result<()> {
+    if completions.len() != STAGES.len() {
+        return Err(Error::new(
+            "lifecycle session event closure omitted one of six stages",
+        ));
+    }
+    let mut signatures = BTreeSet::new();
+    let mut prior_slot = 0_u64;
+    for (completion, expected_stage) in completions.iter().zip(STAGES) {
+        if completion.stage != expected_stage || completion.events.is_empty() {
+            return Err(Error::new(
+                "lifecycle session event closure changed stage order or became empty",
+            ));
+        }
+        for (index, event) in completion.events.iter().enumerate() {
+            let expected_id = format!("{expected_stage}-{index:03}");
+            let expected_predecessor = index
+                .checked_sub(1)
+                .map(|prior| format!("{expected_stage}-{prior:03}"));
+            let slot = canonical_decimal(&event.slot, "lifecycle session event slot", true)?;
+            Signature::from_str(&event.signature).map_err(|error| {
+                Error::new(format!("lifecycle session event signature: {error}"))
+            })?;
+            if event.kind != expected_stage
+                || event.id != expected_id
+                || event.predecessor != expected_predecessor
+                || slot < prior_slot
+                || !signatures.insert(event.signature.as_str())
+            {
+                return Err(Error::new(
+                    "lifecycle session mutations are reordered, duplicated, or misowned",
+                ));
+            }
+            prior_slot = slot;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn run_stage(arguments: StageArgumentsV1) -> Result<Value> {
@@ -537,10 +914,7 @@ pub(crate) fn run_stage(arguments: StageArgumentsV1) -> Result<Value> {
 
 fn require_frozen_stage_adapter(stage: &str) -> Result<()> {
     match stage {
-        "founding" | "participant" | "resolution" | "payout" | "retirement" => Ok(()),
-        "direct" => Err(Error::new(
-            "owned-loopback Direct activity projection is refused until the Direct finalized ABI is frozen",
-        )),
+        "founding" | "participant" | "direct" | "resolution" | "payout" | "retirement" => Ok(()),
         _ => Err(Error::new(
             "activity stage is not one of the exact six public kinds",
         )),
@@ -557,8 +931,9 @@ fn derive_stage_completion(
     let (source_refs, pending, kind_overrides) = match stage {
         "founding" => adapt_founding(sources)?,
         "participant" => adapt_participant(sources, rpc)?,
+        "direct" => adapt_direct(sources, rpc)?,
         "resolution" => adapt_resolution(sources)?,
-        "payout" => adapt_payout(sources)?,
+        "payout" => adapt_payout(sources, rpc)?,
         "retirement" => adapt_retirement(sources)?,
         _ => unreachable!("stage adapter vocabulary was checked above"),
     };
@@ -648,6 +1023,11 @@ fn validate_source_roles(stage: &str, roles: &[&str]) -> Result<()> {
                 "participant source roles must be exact [admission]",
             ));
         }
+        "direct" if roles != ["campaign", "evidence", "fee-settlement"] => {
+            return Err(Error::new(
+                "Direct source roles must be exact [campaign, evidence, fee-settlement]",
+            ));
+        }
         "resolution" if roles != ["input", "checkpoint"] => {
             return Err(Error::new(
                 "resolution source roles must be exact [input, checkpoint]",
@@ -659,12 +1039,17 @@ fn validate_source_roles(stage: &str, roles: &[&str]) -> Result<()> {
             ));
         }
         "payout" => {
-            if roles.is_empty() || roles.len() % 2 != 0 || roles.len() > 64 {
+            if roles.len() < 3 || roles.len() > 65 || (roles.len() - 1) % 2 != 0 {
                 return Err(Error::new(
-                    "payout sources must be one through 32 canonical input/evidence pairs",
+                    "payout sources must be exact Direct evidence followed by one through 32 canonical input/evidence pairs",
                 ));
             }
-            for (index, pair) in roles.chunks_exact(2).enumerate() {
+            if roles.first() != Some(&"direct-evidence") {
+                return Err(Error::new(
+                    "payout first source role must be exact direct-evidence",
+                ));
+            }
+            for (index, pair) in roles[1..].chunks_exact(2).enumerate() {
                 if pair != [format!("input-{index:03}"), format!("evidence-{index:03}")] {
                     return Err(Error::new(
                         "payout source roles are not canonical input-NNN/evidence-NNN pairs",
@@ -672,12 +1057,7 @@ fn validate_source_roles(stage: &str, roles: &[&str]) -> Result<()> {
                 }
             }
         }
-        "direct" => {
-            return Err(Error::new(
-                "owned-loopback Direct activity projection is refused until the Direct finalized ABI is frozen",
-            ));
-        }
-        "founding" | "participant" | "resolution" | "retirement" => {}
+        "founding" | "participant" | "direct" | "resolution" | "retirement" => {}
         _ => {
             return Err(Error::new(
                 "activity stage is outside the six-stage vocabulary",
@@ -779,6 +1159,14 @@ fn adapt_founding(
             expected_compute: compute,
             source_path: source.relative.clone(),
             source_sha256: sha256(&source.bytes),
+            direct: None,
+            positions: None,
+            fee_settlement: None,
+            forbidden_fee_payers: Vec::new(),
+            required_transaction_accounts: Vec::new(),
+            direct_fee_receipt: None,
+            expected_return_data: None,
+            expected_fee_payer: None,
             position: None,
             certificate: None,
             payout: None,
@@ -876,6 +1264,14 @@ fn adapt_participant(
             expected_compute: optional_u64_field(row, "computeUnitsConsumed", operation)?,
             source_path: source.relative.clone(),
             source_sha256: sha256(&source.bytes),
+            direct: None,
+            positions: None,
+            fee_settlement: None,
+            forbidden_fee_payers: Vec::new(),
+            required_transaction_accounts: Vec::new(),
+            direct_fee_receipt: None,
+            expected_return_data: None,
+            expected_fee_payer: None,
             position: None,
             certificate: None,
             payout: None,
@@ -909,6 +1305,378 @@ fn adapt_participant(
         ],
         kinds,
     ))
+}
+
+fn adapt_direct(
+    sources: &[RawSourceV1],
+    rpc: &mut Rpc,
+) -> Result<(
+    Vec<SourceRefV1>,
+    Vec<PendingEventV1>,
+    BTreeMap<String, (String, String)>,
+)> {
+    let campaign_source = one_source(sources, "campaign")?;
+    let evidence_source = one_source(sources, "evidence")?;
+    let fee_source = one_source(sources, "fee-settlement")?;
+    let campaign_ref = source_ref(
+        campaign_source,
+        CAMPAIGN_SCHEMA_V1,
+        "schema",
+        "/execution/completed",
+        &Value::Bool(true),
+    )?;
+    let evidence_ref = source_ref(
+        evidence_source,
+        DIRECT_EVIDENCE_SCHEMA_V1,
+        "schema",
+        "/status",
+        &Value::String("finalized".into()),
+    )?;
+    let fee_evidence: DirectFeeSettlementEvidenceV1 =
+        exact_deserialize(&fee_source.bytes, "Direct fee-settlement evidence")?;
+    let fee_finalization = fee_evidence
+        .landed
+        .as_ref()
+        .ok_or_else(|| Error::new("Direct fee-settlement evidence is preflight-only"))?;
+    let fee_ref = source_ref(
+        fee_source,
+        DIRECT_FEE_SETTLEMENT_SCHEMA_V1,
+        "schema",
+        "/landed/signature",
+        &Value::String(fee_finalization.signature.clone()),
+    )?;
+    let campaign = parse_campaign_terminal_evidence_with_expected_cluster_v1(
+        &campaign_source.bytes,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    let market = campaign
+        .accounts
+        .get("market")
+        .ok_or_else(|| Error::new("Direct activity campaign omitted its Market account"))?
+        .address
+        .parse::<Pubkey>()
+        .map_err(|error| Error::new(format!("Direct activity Market: {error}")))?;
+    let authenticated = authenticate_owned_loopback_terminal_evidence_v1(
+        rpc,
+        &evidence_source.path,
+        market,
+        &campaign.plan_sha256,
+        &campaign.market_sha256,
+    )?;
+    let authenticated = &authenticated.direct;
+    let direct_evidence_object = object(Some(&evidence_source.value), "Direct evidence")?;
+    let (direct_generation, trading_program) =
+        embedded_direct_generation_and_program(direct_evidence_object)?;
+    let (mut pending, mut kinds) = project_authenticated_direct_activity(
+        authenticated,
+        direct_evidence_object,
+        &evidence_source.relative,
+        &sha256(&evidence_source.bytes),
+    )?;
+    let fee_pending = project_authenticated_direct_fee_settlement(
+        authenticated,
+        direct_evidence_object,
+        &fee_evidence,
+        direct_generation,
+        &trading_program,
+        &fee_source.relative,
+        &sha256(&fee_source.bytes),
+    )?;
+    kinds.insert(
+        fee_evidence.maker_replay.clone(),
+        ("protocol".into(), "direct-buyer-maker-replay".into()),
+    );
+    kinds.insert(
+        fee_evidence.caller_authority.clone(),
+        ("protocol".into(), "direct-fee-caller-authority".into()),
+    );
+    pending.push(fee_pending);
+    Ok((vec![campaign_ref, evidence_ref, fee_ref], pending, kinds))
+}
+
+fn embedded_direct_generation_and_program(
+    direct_evidence: &Map<String, Value>,
+) -> Result<(u64, String)> {
+    let encoded = string_field(direct_evidence, "publicManifestBase64", "Direct evidence")?;
+    let bytes = BASE64
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("Direct public manifest base64: {error}")))?;
+    if BASE64.encode(&bytes) != encoded {
+        return Err(Error::new("Direct public manifest base64 is noncanonical"));
+    }
+    let manifest = parse_json_without_duplicate_keys_v1(&bytes)?;
+    let manifest = object(Some(&manifest), "Direct public manifest")?;
+    let context = object(manifest.get("context"), "Direct public manifest context")?;
+    let route = object(manifest.get("route"), "Direct public manifest route")?;
+    let fixed = object(route.get("fixed"), "Direct public manifest fixed route")?;
+    let generation = u64_field(context, "generation", "Direct public manifest context")?;
+    let trading_program = pubkey_field(fixed, "tradingProgram", "Direct public manifest route")?;
+    Ok((generation, trading_program))
+}
+
+/// Project only facts that the Direct semantic owner has already authenticated
+/// from its embedded signed intents, finalized journals, chain history, and ten
+/// live poststates. Setup/ALT/seal rows remain ordinary Direct events; the sole
+/// Hot row owns the economic and Position transition facts.
+fn project_authenticated_direct_activity(
+    authenticated: &AuthenticatedDirectTradeEvidenceV1,
+    evidence: &Map<String, Value>,
+    source_path: &str,
+    source_sha256: &str,
+) -> Result<(Vec<PendingEventV1>, BTreeMap<String, (String, String)>)> {
+    let fill_atoms = u64_field(evidence, "fillAtoms", "Direct evidence")?;
+    let execution_price = u64_field(evidence, "executionPrice", "Direct evidence")?;
+    let price_scale = u64_field(evidence, "priceScale", "Direct evidence")?;
+    let fee_basis_points = u64_field(evidence, "feeBasisPointsPerSide", "Direct evidence")?;
+    if fill_atoms == 0 || price_scale != 1_000_000 || fee_basis_points != 50 {
+        return Err(Error::new(
+            "authenticated Direct evidence changed its exact fill, scale, or 50-bps-per-side policy",
+        ));
+    }
+    let positions = serde_json::to_value(&authenticated.positions)?;
+    let direct = json!({
+        "fillAtoms": fill_atoms.to_string(),
+        "executionPrice": execution_price.to_string(),
+        "priceScale": price_scale.to_string(),
+        "feeBasisPointsPerSide": fee_basis_points.to_string(),
+        "sellerToken": authenticated.seller_collateral_destination.to_string(),
+        "buyerToken": authenticated.buyer_collateral_source.to_string(),
+        "feeRecipientToken": authenticated.fee_token_account.to_string(),
+        "mint": authenticated.mint.to_string(),
+    });
+    let mut pending = Vec::with_capacity(authenticated.mutations.len());
+    for row in &authenticated.mutations {
+        let hot = row.kind == "hot";
+        pending.push(PendingEventV1 {
+            operation: format!("direct-{}", row.kind),
+            signature: row.signature.clone(),
+            expected_slot: row.slot,
+            expected_fee: row.fee_lamports,
+            expected_compute: Some(row.compute_units_consumed),
+            source_path: source_path.into(),
+            source_sha256: source_sha256.into(),
+            direct: hot.then(|| direct.clone()),
+            positions: hot.then(|| positions.clone()),
+            fee_settlement: None,
+            forbidden_fee_payers: Vec::new(),
+            required_transaction_accounts: Vec::new(),
+            direct_fee_receipt: None,
+            expected_return_data: None,
+            expected_fee_payer: None,
+            position: None,
+            certificate: None,
+            payout: None,
+            retirement: None,
+        });
+    }
+    if pending.is_empty()
+        || pending
+            .iter()
+            .filter(|row| row.direct.is_some() || row.positions.is_some())
+            .count()
+            != 1
+        || pending
+            .last()
+            .is_none_or(|row| row.direct.is_none() || row.positions.is_none())
+    {
+        return Err(Error::new(
+            "authenticated Direct history did not project exactly one terminal Hot owner",
+        ));
+    }
+    let kinds = BTreeMap::from([
+        (
+            authenticated.market.to_string(),
+            ("protocol".into(), "direct-market".into()),
+        ),
+        (
+            authenticated.seller_owner.to_string(),
+            ("wallet".into(), "direct-seller-owner".into()),
+        ),
+        (
+            authenticated.seller_position.to_string(),
+            ("position".into(), "direct-seller-position".into()),
+        ),
+        (
+            authenticated.buyer_owner.to_string(),
+            ("wallet".into(), "direct-buyer-owner".into()),
+        ),
+        (
+            authenticated.buyer_position.to_string(),
+            ("position".into(), "direct-buyer-position".into()),
+        ),
+        (
+            authenticated.buyer_collateral_source.to_string(),
+            ("token".into(), "direct-buyer-collateral".into()),
+        ),
+        (
+            authenticated.seller_collateral_destination.to_string(),
+            ("token".into(), "direct-seller-collateral".into()),
+        ),
+        (
+            authenticated.fee_token_account.to_string(),
+            ("token".into(), "direct-fee-collateral".into()),
+        ),
+        (
+            authenticated.fee_recipient.to_string(),
+            ("wallet".into(), "direct-fee-recipient".into()),
+        ),
+    ]);
+    Ok((pending, kinds))
+}
+
+fn project_authenticated_direct_fee_settlement(
+    authenticated: &AuthenticatedDirectTradeEvidenceV1,
+    direct_evidence: &Map<String, Value>,
+    settlement: &DirectFeeSettlementEvidenceV1,
+    direct_generation: u64,
+    trading_program: &str,
+    source_path: &str,
+    source_sha256: &str,
+) -> Result<PendingEventV1> {
+    let fill_atoms = u128::from(u64_field(direct_evidence, "fillAtoms", "Direct evidence")?);
+    let execution_price = u128::from(u64_field(
+        direct_evidence,
+        "executionPrice",
+        "Direct evidence",
+    )?);
+    let price_scale = u128::from(u64_field(direct_evidence, "priceScale", "Direct evidence")?);
+    let fee_basis_points = u128::from(u64_field(
+        direct_evidence,
+        "feeBasisPointsPerSide",
+        "Direct evidence",
+    )?);
+    let product = fill_atoms
+        .checked_mul(execution_price)
+        .ok_or_else(|| Error::new("Direct fee-settlement gross overflowed"))?;
+    if price_scale == 0 || product % price_scale != 0 {
+        return Err(Error::new(
+            "Direct fee settlement crosses an unnamed gross rounding boundary",
+        ));
+    }
+    let gross = product / price_scale;
+    let one_side = gross
+        .checked_mul(fee_basis_points)
+        .ok_or_else(|| Error::new("Direct fee-settlement side fee overflowed"))?
+        / 10_000;
+    let expected_fee = one_side
+        .checked_mul(2)
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| Error::new("Direct fee-settlement combined fee overflowed"))?;
+    let finalization = settlement
+        .landed
+        .as_ref()
+        .ok_or_else(|| Error::new("Direct fee-settlement evidence is preflight-only"))?;
+    let expected_buyer_replay = authenticated
+        .final_accounts
+        .get(2)
+        .ok_or_else(|| Error::new("authenticated Direct evidence omitted buyer maker replay"))?
+        .address
+        .as_str();
+    for (value, label) in [
+        (&settlement.market, "fee-settlement Market"),
+        (&settlement.maker, "fee-settlement maker"),
+        (&settlement.maker_replay, "fee-settlement maker replay"),
+        (&settlement.fee_source, "fee-settlement source"),
+        (&settlement.fee_destination, "fee-settlement destination"),
+        (
+            &settlement.fee_destination_owner,
+            "fee-settlement destination owner",
+        ),
+        (
+            &settlement.caller_authority,
+            "fee-settlement caller authority",
+        ),
+    ] {
+        parse_pubkey(value, label)?;
+    }
+    Signature::from_str(&finalization.signature)
+        .map_err(|error| Error::new(format!("Direct fee-settlement signature: {error}")))?;
+    let compute = finalization
+        .compute_units_consumed
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Error::new("Direct fee settlement omitted positive compute units"))?;
+    let fee_lamports = finalization
+        .fee_lamports
+        .ok_or_else(|| Error::new("Direct fee settlement omitted its finalized fee"))?;
+    ExpectedClusterV1::OwnedLoopback
+        .authenticate_finalized_fee(fee_lamports, "Direct fee settlement")?;
+    if settlement.schema != DIRECT_FEE_SETTLEMENT_SCHEMA_V1
+        || settlement.cluster != "owned-loopback"
+        || settlement.market != authenticated.market.to_string()
+        || settlement.generation != direct_generation
+        || settlement.maker != authenticated.buyer_owner.to_string()
+        || settlement.maker_replay != expected_buyer_replay
+        || settlement.fee_owed != expected_fee
+        || settlement.fee_source != authenticated.buyer_collateral_source.to_string()
+        || settlement.fee_destination != authenticated.fee_token_account.to_string()
+        || settlement.fee_destination_owner != authenticated.fee_recipient.to_string()
+        || settlement.standing_allowance < expected_fee
+        || settlement.custody_expected_revision.checked_add(1)
+            != Some(settlement.custody_resulting_revision)
+        || finalization.slot < authenticated.finalized_slot
+    {
+        return Err(Error::new(
+            "Direct fee settlement changed its debtor, exact obligation, state-derived route, or finalized order",
+        ));
+    }
+    Ok(PendingEventV1 {
+        operation: "direct-fee-settlement".into(),
+        signature: finalization.signature.clone(),
+        expected_slot: finalization.slot,
+        expected_fee: fee_lamports,
+        expected_compute: Some(compute),
+        source_path: source_path.into(),
+        source_sha256: source_sha256.into(),
+        direct: None,
+        positions: None,
+        fee_settlement: Some(json!({
+            "generation": settlement.generation.to_string(),
+            "debtor": settlement.maker,
+            "makerReplay": settlement.maker_replay,
+            "feeAtoms": settlement.fee_owed.to_string(),
+            "sourceToken": settlement.fee_source,
+            "destinationToken": settlement.fee_destination,
+            "destinationOwner": settlement.fee_destination_owner,
+            "callerAuthority": settlement.caller_authority,
+            "callerAuthorityBump": settlement.caller_authority_bump.to_string(),
+            "standingAllowanceAtoms": settlement.standing_allowance.to_string(),
+            "custodyExpectedRevision": settlement.custody_expected_revision.to_string(),
+            "custodyResultingRevision": settlement.custody_resulting_revision.to_string(),
+            "submissionClass": "permissionless-state-derived-stranger",
+            "capitalizationClass": "debtor-collateral-obligation-not-future-revenue-or-hoard",
+        })),
+        forbidden_fee_payers: vec![
+            authenticated.seller_owner.to_string(),
+            authenticated.buyer_owner.to_string(),
+            authenticated.fee_recipient.to_string(),
+        ],
+        required_transaction_accounts: vec![
+            settlement.market.clone(),
+            settlement.maker_replay.clone(),
+            settlement.fee_source.clone(),
+            settlement.fee_destination.clone(),
+            settlement.caller_authority.clone(),
+            trading_program.into(),
+        ],
+        direct_fee_receipt: Some(DirectFeeReceiptExpectationV1 {
+            producer: trading_program.into(),
+            market: settlement.market.clone(),
+            maker: settlement.maker.clone(),
+            maker_replay: settlement.maker_replay.clone(),
+            fee_source: settlement.fee_source.clone(),
+            fee_destination: settlement.fee_destination.clone(),
+            fee_recipient: settlement.fee_destination_owner.clone(),
+            settled_amount: settlement.fee_owed,
+            expected_revision: settlement.custody_expected_revision,
+            resulting_revision: settlement.custody_resulting_revision,
+        }),
+        expected_return_data: None,
+        expected_fee_payer: None,
+        position: None,
+        certificate: None,
+        payout: None,
+        retirement: None,
+    })
 }
 
 fn adapt_resolution(
@@ -991,6 +1759,14 @@ fn adapt_resolution(
             )?),
             source_path: checkpoint.relative.clone(),
             source_sha256: sha256(&checkpoint.bytes),
+            direct: None,
+            positions: None,
+            fee_settlement: None,
+            forbidden_fee_payers: Vec::new(),
+            required_transaction_accounts: Vec::new(),
+            direct_fee_receipt: None,
+            expected_return_data: None,
+            expected_fee_payer: None,
             position: None,
             certificate: (index == 1).then(|| {
                 json!({
@@ -1018,15 +1794,70 @@ fn adapt_resolution(
 
 fn adapt_payout(
     sources: &[RawSourceV1],
+    rpc: &mut Rpc,
 ) -> Result<(
     Vec<SourceRefV1>,
     Vec<PendingEventV1>,
     BTreeMap<String, (String, String)>,
 )> {
+    let direct_source = sources
+        .first()
+        .filter(|source| source.role == "direct-evidence")
+        .ok_or_else(|| Error::new("payout omitted its exact leading Direct evidence"))?;
+    let direct_ref = source_ref(
+        direct_source,
+        DIRECT_EVIDENCE_SCHEMA_V1,
+        "schema",
+        "/status",
+        &Value::String("finalized".into()),
+    )?;
+    let first_input = sources
+        .get(1)
+        .ok_or_else(|| Error::new("payout omitted its first input"))?;
+    let first_input_value: PlanInputV1 = exact_deserialize(&first_input.bytes, "payout input")?;
+    let first_selected =
+        SelectedInputV1::parse(&first_input_value, LookupTableRequirementV1::Present)?;
+    let direct_object = object(Some(&direct_source.value), "payout Direct evidence")?;
+    let (manifest_market, plan_sha256, market_input_sha256) =
+        embedded_direct_manifest_binding(direct_object)?;
+    if manifest_market != first_selected.market {
+        return Err(Error::new(
+            "payout Direct evidence and first input name different Markets",
+        ));
+    }
+    let terminal = authenticate_owned_loopback_terminal_evidence_v1(
+        rpc,
+        &direct_source.path,
+        manifest_market,
+        &plan_sha256,
+        &market_input_sha256,
+    )?;
+    let authenticated = terminal.direct;
+    let mut position_states = BTreeMap::new();
+    for transition in &authenticated.positions {
+        let account = parse_pubkey(&transition.account, "Direct payout Position")?;
+        let owner = parse_pubkey(&transition.owner, "Direct payout Position owner")?;
+        let post = decode_canonical_base64(
+            &transition.post_data_base64,
+            "Direct payout Position poststate",
+        )?;
+        if position_states.insert(account, (owner, post)).is_some() {
+            return Err(Error::new(
+                "Direct evidence repeats a payout Position transition",
+            ));
+        }
+    }
+    if position_states.len() != 2 {
+        return Err(Error::new(
+            "Direct evidence did not own the exact seller and buyer Position poststates",
+        ));
+    }
+
     let mut refs = Vec::with_capacity(sources.len());
-    let mut pending = Vec::with_capacity(sources.len() / 2);
+    refs.push(direct_ref);
+    let mut pending = Vec::with_capacity((sources.len() - 1) / 2);
     let mut kinds = BTreeMap::new();
-    for (index, pair) in sources.chunks_exact(2).enumerate() {
+    for (index, pair) in sources[1..].chunks_exact(2).enumerate() {
         let input = &pair[0];
         let evidence = &pair[1];
         let input_ref = source_ref(
@@ -1036,8 +1867,17 @@ fn adapt_payout(
             "/format",
             &Value::String(PAYOUT_INPUT_FORMAT_V1.into()),
         )?;
-        let evidence_object = object(Some(&evidence.value), "payout evidence")?;
-        let signature = signature_field(evidence_object, "signature", "payout evidence")?;
+        let payout_evidence: PayoutEvidenceV1 =
+            exact_deserialize(&evidence.bytes, "payout evidence")?;
+        if payout_evidence.schema != PAYOUT_EVIDENCE_SCHEMA_V1
+            || payout_evidence.cluster != "owned-loopback"
+            || payout_evidence.evidence_sha256 != payout_evidence_digest(&payout_evidence)?
+        {
+            return Err(Error::new(
+                "payout evidence schema, cluster, or self-digest changed",
+            ));
+        }
+        let signature = payout_evidence.signature.clone();
         let evidence_ref = source_ref(
             evidence,
             PAYOUT_EVIDENCE_SCHEMA_V1,
@@ -1047,50 +1887,104 @@ fn adapt_payout(
         )?;
         let input_value: PlanInputV1 = exact_deserialize(&input.bytes, "payout input")?;
         let selected = SelectedInputV1::parse(&input_value, LookupTableRequirementV1::Present)?;
-        if sha256(&input.bytes) != string_field(evidence_object, "inputSha256", "payout evidence")?
-            || selected.market.to_string()
-                != pubkey_field(evidence_object, "market", "payout evidence")?
-            || selected.owner.to_string()
-                != pubkey_field(evidence_object, "owner", "payout evidence")?
-            || selected.recipient.to_string()
-                != pubkey_field(evidence_object, "recipient", "payout evidence")?
+        if selected.market != manifest_market
+            || sha256(&input.bytes) != payout_evidence.input_sha256
+            || selected.market.to_string() != payout_evidence.market
+            || selected.owner.to_string() != payout_evidence.owner
+            || selected.recipient.to_string() != payout_evidence.recipient
         {
             return Err(Error::new(
                 "payout input/evidence pair differs in bytes, Market, owner, or recipient",
             ));
         }
         let quantity = canonical_decimal(&input_value.quantity, "payout quantity", true)?;
-        let principal = canonical_decimal(
-            string_field(evidence_object, "payout", "payout evidence")?,
-            "payout principal",
-            false,
+        let principal = canonical_decimal(&payout_evidence.payout, "payout principal", false)?;
+        let position_key = selected.position;
+        let expected_holder = if position_key == authenticated.seller_position {
+            authenticated.seller_owner
+        } else if position_key == authenticated.buyer_position {
+            authenticated.buyer_owner
+        } else {
+            return Err(Error::new(
+                "payout input selected no Position authenticated by Direct history",
+            ));
+        };
+        if selected.owner != expected_holder {
+            return Err(Error::new(
+                "payout input substituted the authenticated Direct Position owner",
+            ));
+        }
+        let (position_owner, pre) = position_states
+            .get(&position_key)
+            .cloned()
+            .ok_or_else(|| Error::new("payout repeats or omits a Direct Position state"))?;
+        let (post, burns) = apply_position_payout(
+            &pre,
+            usize::try_from(input_value.claim_index)
+                .map_err(|_| Error::new("payout claim index exceeds usize"))?,
+            quantity,
         )?;
-        let position = selected.position.to_string();
+        authenticate_payout_position_poststate(
+            &payout_evidence,
+            position_key,
+            position_owner,
+            &post,
+        )?;
+        position_states.insert(position_key, (position_owner, post.clone()));
+        let return_body = decode_canonical_base64(
+            &payout_evidence.return_data_base64,
+            "payout evidence return data",
+        )?;
+        parse_pubkey(
+            &payout_evidence.return_data_producer,
+            "payout return-data producer",
+        )?;
+        parse_pubkey(&payout_evidence.fee_payer, "payout fee payer")?;
+        let position = position_key.to_string();
         let hoard = selected.hoard.to_string();
         let recipient = selected.recipient.to_string();
         let mint = input_value.collateral_mint.clone();
+        let holder = selected.owner.to_string();
         pending.push(PendingEventV1 {
             operation: format!("wallet-terminal-payout-{index:03}"),
             signature,
-            expected_slot: u64_field(evidence_object, "finalizedSlot", "payout evidence")?,
-            expected_fee: u64_field(evidence_object, "feeLamports", "payout evidence")?,
-            expected_compute: Some(u64_field(
-                evidence_object,
-                "computeUnitsConsumed",
-                "payout evidence",
-            )?),
+            expected_slot: payout_evidence.finalized_slot,
+            expected_fee: payout_evidence.fee_lamports,
+            expected_compute: Some(payout_evidence.compute_units_consumed),
             source_path: evidence.relative.clone(),
             source_sha256: sha256(&evidence.bytes),
+            direct: None,
+            positions: None,
+            fee_settlement: None,
+            forbidden_fee_payers: vec![holder.clone()],
+            required_transaction_accounts: vec![
+                selected.aggregate.to_string(),
+                position.clone(),
+                hoard.clone(),
+                recipient.clone(),
+            ],
+            direct_fee_receipt: None,
+            expected_return_data: Some(ExpectedReturnDataV1 {
+                producer: payout_evidence.return_data_producer,
+                body: return_body,
+            }),
+            expected_fee_payer: Some(payout_evidence.fee_payer),
             position: None,
             certificate: None,
             payout: Some(json!({
                 "_positionAddress": position,
                 "_claimIndex": input_value.claim_index,
                 "_quantity": quantity.to_string(),
+                "_preDataBase64": BASE64.encode(&pre),
+                "_postDataBase64": BASE64.encode(&post),
+                "_positionOwner": position_owner.to_string(),
                 "hoardToken": hoard,
                 "recipientToken": recipient,
                 "principalAtoms": principal.to_string(),
                 "mint": mint,
+                "holder": holder,
+                "holderChargeClass": "terminal-holder-is-not-transaction-fee-payer",
+                "_claimsBurnedAtoms": burns,
             })),
             retirement: None,
         });
@@ -1112,6 +2006,94 @@ fn adapt_payout(
     Ok((refs, pending, kinds))
 }
 
+fn embedded_direct_manifest_binding(
+    direct_evidence: &Map<String, Value>,
+) -> Result<(Pubkey, String, String)> {
+    let encoded = string_field(
+        direct_evidence,
+        "publicManifestBase64",
+        "payout Direct evidence",
+    )?;
+    let bytes = decode_canonical_base64(encoded, "payout Direct public manifest")?;
+    let manifest = parse_json_without_duplicate_keys_v1(&bytes)?;
+    let manifest = object(Some(&manifest), "payout Direct public manifest")?;
+    let market = parse_pubkey(
+        string_field(manifest, "market", "payout Direct public manifest")?,
+        "payout Direct public manifest Market",
+    )?;
+    let plan = exact_sha256_field(manifest, "planSha256", "payout Direct public manifest")?;
+    let market_input = exact_sha256_field(
+        manifest,
+        "marketInputSha256",
+        "payout Direct public manifest",
+    )?;
+    Ok((market, plan, market_input))
+}
+
+fn exact_sha256_field(value: &Map<String, Value>, key: &str, label: &str) -> Result<String> {
+    let digest = string_field(value, key, label)?;
+    if digest.len() != 64
+        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || digest.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(Error::new(format!(
+            "{label} {key} is not lowercase SHA-256"
+        )));
+    }
+    Ok(digest.to_owned())
+}
+
+fn decode_canonical_base64(encoded: &str, label: &str) -> Result<Vec<u8>> {
+    let bytes = BASE64
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("{label} base64: {error}")))?;
+    if BASE64.encode(&bytes) != encoded {
+        return Err(Error::new(format!("{label} base64 is noncanonical")));
+    }
+    Ok(bytes)
+}
+
+fn payout_evidence_digest(evidence: &PayoutEvidenceV1) -> Result<String> {
+    let mut projected = evidence.clone();
+    projected.evidence_sha256.clear();
+    Ok(sha256(&serde_json::to_vec(&projected)?))
+}
+
+fn authenticate_payout_position_poststate(
+    evidence: &PayoutEvidenceV1,
+    position: Pubkey,
+    owner: Pubkey,
+    post: &[u8],
+) -> Result<()> {
+    if evidence.poststates.len() != 5 {
+        return Err(Error::new("payout evidence poststate width changed"));
+    }
+    let mut addresses = BTreeSet::new();
+    for row in &evidence.poststates {
+        parse_pubkey(&row.address, "payout evidence poststate")?;
+        parse_pubkey(&row.owner, "payout evidence poststate owner")?;
+        if !addresses.insert(row.address.as_str()) {
+            return Err(Error::new("payout evidence repeats a poststate account"));
+        }
+    }
+    let row = evidence
+        .poststates
+        .iter()
+        .find(|row| row.address == position.to_string())
+        .ok_or_else(|| Error::new("payout evidence omitted its Direct Position poststate"))?;
+    if row.owner != owner.to_string()
+        || row.executable
+        || row.lamports == 0
+        || row.data_len != post.len()
+        || row.data_sha256 != sha256(post)
+    {
+        return Err(Error::new(
+            "payout evidence substituted its authenticated Position owner or postdata",
+        ));
+    }
+    Ok(())
+}
+
 fn adapt_retirement(
     sources: &[RawSourceV1],
 ) -> Result<(
@@ -1130,6 +2112,11 @@ fn adapt_retirement(
     let completion: AggregateRetirementConservationReceiptV1 =
         exact_deserialize(&source.bytes, "aggregate retirement completion")?;
     authenticate_aggregate_retirement_conservation_receipt_v1(&completion)?;
+    if completion.payer == completion.refund_wallet {
+        return Err(Error::new(
+            "complete-life retirement requires a fee payer distinct from the creation-fixed refund beneficiary",
+        ));
+    }
     let (pending, kinds) = project_aggregate_retirement_completion(
         &completion,
         &source.relative,
@@ -1187,13 +2174,46 @@ fn project_aggregate_retirement_completion(
             expected_compute: Some(journal.compute_units_consumed),
             source_path: source_path.into(),
             source_sha256: source_sha256.into(),
+            direct: None,
+            positions: None,
+            fee_settlement: None,
+            forbidden_fee_payers: Vec::new(),
+            required_transaction_accounts: Vec::new(),
+            direct_fee_receipt: None,
+            expected_return_data: None,
+            expected_fee_payer: None,
             position: None,
             certificate: None,
             payout: None,
-            retirement: Some(json!({
-                "stage": journal.operation.completion_name(),
-                "_deriveFinalizedLamports": true,
-            })),
+            retirement: Some({
+                let mut value = json!({
+                    "stage": journal.operation.completion_name(),
+                    "_deriveFinalizedLamports": true,
+                });
+                if journal.operation == AggregateRetirementOperationV1::Finish {
+                    value.as_object_mut().expect("retirement object").insert(
+                        "_conservation".into(),
+                        json!({
+                            "refundBeneficiary": completion.refund_wallet,
+                            "payer": completion.payer,
+                            "classifiedLamports": {
+                                "market": completion.classified_lamports.market.to_string(),
+                                "rentCredit": completion.classified_lamports.rent_credit.to_string(),
+                                "claimsRefund": completion.classified_lamports.claims_refund.to_string(),
+                                "custodyReplay": completion.classified_lamports.custody_replay.to_string(),
+                                "hoardVaultRent": completion.classified_lamports.hoard_vault.to_string(),
+                                "expectedRefundDelta": completion.classified_lamports.expected_refund_delta.to_string(),
+                                "refundWalletBefore": completion.classified_lamports.refund_wallet_before.to_string(),
+                            },
+                            "totalTransactionFeesLamports": completion.total_transaction_fees_lamports.to_string(),
+                            "terminalRefundWalletLamports": completion.terminal_refund_wallet_lamports.to_string(),
+                            "beneficiaryClass": "creation-fixed-refund-wallet",
+                            "capitalizationClass": "historical-account-lamports-not-future-revenue-or-hoard-principal",
+                        }),
+                    );
+                }
+                value
+            }),
         })
         .collect();
     Ok((pending, kinds))
@@ -1254,6 +2274,44 @@ fn reopen_event(rpc: &mut Rpc, stage: &str, pending: PendingEventV1) -> Result<R
         ));
     }
     let keys = transaction_account_keys(transaction, meta)?;
+    if pending.required_transaction_accounts.len()
+        != pending
+            .required_transaction_accounts
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+        || pending
+            .required_transaction_accounts
+            .iter()
+            .any(|address| !keys.contains(address))
+    {
+        return Err(Error::new(
+            "finalized Direct fee completion omitted or aliased an authenticated route account",
+        ));
+    }
+    if let Some(expected) = pending.direct_fee_receipt.as_ref() {
+        authenticate_direct_fee_return_data(meta, expected)?;
+    }
+    if let Some(expected) = pending.expected_return_data.as_ref() {
+        authenticate_expected_return_data(meta, expected)?;
+    }
+    if pending.direct_fee_receipt.is_some() {
+        let message = object(
+            transaction.get("message"),
+            "permissionless transaction message",
+        )?;
+        let header = object(message.get("header"), "permissionless transaction header")?;
+        let required_signatures = u64_field(
+            header,
+            "numRequiredSignatures",
+            "permissionless transaction header",
+        )?;
+        if required_signatures != 1 || signatures.len() != 1 {
+            return Err(Error::new(
+                "permissionless Direct fee completion carried a protocol-party signer",
+            ));
+        }
+    }
     let pre = u64_array(meta.get("preBalances"), "preBalances")?;
     let post = u64_array(meta.get("postBalances"), "postBalances")?;
     if pre.len() != keys.len() || post.len() != keys.len() {
@@ -1312,6 +2370,24 @@ fn reopen_event(rpc: &mut Rpc, stage: &str, pending: PendingEventV1) -> Result<R
         .first()
         .cloned()
         .ok_or_else(|| Error::new("finalized transaction has no fee payer"))?;
+    if pending
+        .expected_fee_payer
+        .as_deref()
+        .is_some_and(|expected| expected != fee_payer)
+    {
+        return Err(Error::new(
+            "activity transaction fee payer differs from its semantic owner",
+        ));
+    }
+    if pending
+        .forbidden_fee_payers
+        .iter()
+        .any(|address| address == &fee_payer)
+    {
+        return Err(Error::new(
+            "activity transaction charged a forbidden protocol party or holder",
+        ));
+    }
     changed.insert(fee_payer.clone());
     Ok(RpcEventV1 {
         event: EventV1 {
@@ -1328,7 +2404,9 @@ fn reopen_event(rpc: &mut Rpc, stage: &str, pending: PendingEventV1) -> Result<R
             token_deltas,
             source_path: pending.source_path,
             source_sha256: pending.source_sha256,
-            direct: None,
+            direct: pending.direct,
+            positions: pending.positions,
+            fee_settlement: pending.fee_settlement,
             position: pending.position,
             certificate: pending.certificate,
             payout: pending.payout,
@@ -1338,6 +2416,98 @@ fn reopen_event(rpc: &mut Rpc, stage: &str, pending: PendingEventV1) -> Result<R
         token_identities,
         changed_addresses: changed,
     })
+}
+
+fn authenticate_direct_fee_return_data(
+    meta: &Map<String, Value>,
+    expected: &DirectFeeReceiptExpectationV1,
+) -> Result<()> {
+    let return_data = object(
+        meta.get("returnData").filter(|value| !value.is_null()),
+        "Direct fee-settlement returnData",
+    )?;
+    let producer = pubkey_field(return_data, "programId", "Direct fee-settlement returnData")?;
+    let tuple = array(
+        return_data.get("data"),
+        "Direct fee-settlement returnData body",
+    )?;
+    if tuple.len() != 2 || tuple.get(1).and_then(Value::as_str) != Some("base64") {
+        return Err(Error::new(
+            "Direct fee-settlement returnData body was not exact [body, base64]",
+        ));
+    }
+    let encoded = tuple
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("Direct fee-settlement returnData omitted its body"))?;
+    let body = BASE64
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("Direct fee-settlement returnData base64: {error}")))?;
+    if BASE64.encode(&body) != encoded {
+        return Err(Error::new(
+            "Direct fee-settlement returnData base64 was noncanonical",
+        ));
+    }
+    let receipt = DirectFeeSettlementReceiptV1::decode(&body)
+        .map_err(|error| Error::new(format!("Direct fee-settlement return receipt: {error:?}")))?;
+    let expected_pubkey = |value: &str, label: &str| -> Result<[u8; 32]> {
+        Ok(Pubkey::from_str(value)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?
+            .to_bytes())
+    };
+    if producer != expected.producer
+        || receipt.market != expected_pubkey(&expected.market, "fee receipt Market")?
+        || receipt.maker != expected_pubkey(&expected.maker, "fee receipt maker")?
+        || receipt.maker_root
+            != expected_pubkey(&expected.maker_replay, "fee receipt maker replay")?
+        || receipt.fee_source != expected_pubkey(&expected.fee_source, "fee receipt source")?
+        || receipt.fee_destination
+            != expected_pubkey(&expected.fee_destination, "fee receipt destination")?
+        || receipt.fee_recipient
+            != expected_pubkey(&expected.fee_recipient, "fee receipt recipient")?
+        || receipt.settled_amount != expected.settled_amount
+        || receipt.expected_revision != expected.expected_revision
+        || receipt.resulting_revision != expected.resulting_revision
+    {
+        return Err(Error::new(
+            "finalized Direct fee receipt differs from its exact authenticated obligation",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_expected_return_data(
+    meta: &Map<String, Value>,
+    expected: &ExpectedReturnDataV1,
+) -> Result<()> {
+    let return_data = object(
+        meta.get("returnData").filter(|value| !value.is_null()),
+        "activity transaction returnData",
+    )?;
+    let producer = pubkey_field(return_data, "programId", "activity transaction returnData")?;
+    let tuple = array(
+        return_data.get("data"),
+        "activity transaction returnData body",
+    )?;
+    if producer != expected.producer
+        || tuple.len() != 2
+        || tuple.get(1).and_then(Value::as_str) != Some("base64")
+    {
+        return Err(Error::new(
+            "activity transaction returnData changed producer or encoding",
+        ));
+    }
+    let encoded = tuple
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("activity transaction returnData omitted its body"))?;
+    let body = decode_canonical_base64(encoded, "activity transaction returnData")?;
+    if body != expected.body {
+        return Err(Error::new(
+            "activity transaction returnData differs from its semantic owner",
+        ));
+    }
+    Ok(())
 }
 
 fn transaction_account_keys(
@@ -1457,6 +2627,9 @@ fn project_accounts(
     for event in &mut rpc_events {
         finalize_semantic_facts(&mut event.event, &current)?;
     }
+    if stage == "payout" {
+        authenticate_payout_terminal_positions(&rpc_events, &current)?;
+    }
     let retirement_closed = if stage == "retirement" {
         exact_retirement_closed_accounts(&rpc_events, &current)?
     } else {
@@ -1522,7 +2695,12 @@ fn project_accounts(
         .collect::<BTreeMap<_, _>>();
     let final_owners = match stage {
         "founding" | "participant" => BTreeSet::new(),
-        "retirement" => retirement_closed,
+        "retirement" => retirement_closed
+            .into_iter()
+            .chain(kind_overrides.iter().filter_map(|(address, (_, role))| {
+                (role == "retirement-refund-wallet").then(|| address.clone())
+            }))
+            .collect(),
         "resolution" => critical
             .iter()
             .filter(|address| {
@@ -1586,6 +2764,47 @@ fn project_accounts(
         final_accounts,
         rpc_events.into_iter().map(|row| row.event).collect(),
     ))
+}
+
+fn authenticate_payout_terminal_positions(
+    events: &[RpcEventV1],
+    current: &BTreeMap<String, Option<Value>>,
+) -> Result<()> {
+    let mut terminal = BTreeMap::new();
+    for event in events {
+        let position = object(event.event.position.as_ref(), "payout Position transition")?;
+        let address = pubkey_field(position, "account", "payout Position transition")?;
+        let owner = pubkey_field(position, "owner", "payout Position transition")?;
+        let post = decode_canonical_base64(
+            string_field(position, "postDataBase64", "payout Position transition")?,
+            "payout Position transition poststate",
+        )?;
+        terminal.insert(address, (owner, post));
+    }
+    if terminal.is_empty() {
+        return Err(Error::new("payout stage omitted its Position transitions"));
+    }
+    for (address, (owner, expected)) in terminal {
+        match current.get(&address) {
+            Some(Some(value)) => {
+                let row = rpc_account(value, "terminal payout Position")?;
+                if pubkey_field(row, "owner", "terminal payout Position")? != owner
+                    || account_data(row, "terminal payout Position")? != expected
+                {
+                    return Err(Error::new(
+                        "live payout Position differs from the history-replayed terminal poststate",
+                    ));
+                }
+            }
+            Some(None) => {}
+            None => {
+                return Err(Error::new(
+                    "payout Position closure is outside the finalized account set",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn exact_retirement_closed_accounts(
@@ -1682,16 +2901,24 @@ fn finalize_semantic_facts(
             "payout principal",
             true,
         )?;
-        let account = current
-            .get(&position)
-            .and_then(|value| value.as_ref())
-            .ok_or_else(|| Error::new("payout Position is absent after finalized mutation"))?;
-        let row = rpc_account(account, "payout Position")?;
-        let post = account_data(row, "payout Position")?;
-        let (pre, burns) = reconstruct_position_prestate(&post, claim_index, quantity)?;
+        let pre = decode_canonical_base64(
+            string_field(value, "_preDataBase64", "pending payout")?,
+            "pending payout Position prestate",
+        )?;
+        let post = decode_canonical_base64(
+            string_field(value, "_postDataBase64", "pending payout")?,
+            "pending payout Position poststate",
+        )?;
+        let (expected_post, burns) = apply_position_payout(&pre, claim_index, quantity)?;
+        if expected_post != post {
+            return Err(Error::new(
+                "payout Position history did not replay to its evidence-owned poststate",
+            ));
+        }
         event.position = Some(json!({
             "account": position,
-            "preDataBase64": BASE64.encode(pre),
+            "owner": pubkey_field(value, "_positionOwner", "pending payout")?,
+            "preDataBase64": BASE64.encode(&pre),
             "postDataBase64": BASE64.encode(&post),
         }));
         event.payout = Some(json!({
@@ -1701,6 +2928,8 @@ fn finalize_semantic_facts(
             "principalAtoms": principal.to_string(),
             "claimsBurnedAtoms": burns,
             "mint": pubkey_field(value, "mint", "pending payout")?,
+            "holder": pubkey_field(value, "holder", "pending payout")?,
+            "holderChargeClass": string_field(value, "holderChargeClass", "pending payout")?,
         }));
     }
     if let Some(raw) = event.retirement.take() {
@@ -1729,13 +2958,59 @@ fn finalize_semantic_facts(
                 }));
             }
         }
-        event.retirement = Some(json!({
+        let mut retirement = json!({
             "stage": string_field(value, "stage", "pending retirement")?,
             "closedAccounts": closed,
             "refundLamports": refunds,
-        }));
+        });
+        if let Some(conservation) = value.get("_conservation") {
+            retirement
+                .as_object_mut()
+                .expect("retirement projection")
+                .insert("conservation".into(), conservation.clone());
+        }
+        event.retirement = Some(retirement);
     }
     Ok(())
+}
+
+fn apply_position_payout(
+    pre: &[u8],
+    claim_index: usize,
+    quantity: u64,
+) -> Result<(Vec<u8>, Vec<String>)> {
+    if quantity == 0 || pre.len() < 128 || pre.get(0..8) != Some(b"DCLLBP02") {
+        return Err(Error::new(
+            "payout Position is not exact LiabilityBasisPositionV2 or quantity is zero",
+        ));
+    }
+    let count = usize::try_from(u32::from_le_bytes(
+        pre.get(12..16)
+            .ok_or_else(|| Error::new("Position omitted claim count"))?
+            .try_into()
+            .map_err(|_| Error::new("Position claim count width"))?,
+    ))
+    .map_err(|_| Error::new("Position claim count exceeds usize"))?;
+    if count < 2 || claim_index >= count || pre.len() != 128 + 8 * count {
+        return Err(Error::new(
+            "payout Position geometry or claim index is invalid",
+        ));
+    }
+    let mut post = pre.to_vec();
+    let revision = u64::from_le_bytes(post[16..24].try_into().unwrap());
+    let next_revision = revision
+        .checked_add(1)
+        .ok_or_else(|| Error::new("payout Position revision overflows"))?;
+    post[16..24].copy_from_slice(&next_revision.to_le_bytes());
+    let offset = 128 + 8 * claim_index;
+    let pre_amount = u64::from_le_bytes(post[offset..offset + 8].try_into().unwrap());
+    let post_amount = pre_amount
+        .checked_sub(quantity)
+        .ok_or_else(|| Error::new("payout Position claim balance is insufficient"))?;
+    post[offset..offset + 8].copy_from_slice(&post_amount.to_le_bytes());
+    let mut burns = vec!["0".to_owned(); count];
+    burns[claim_index] = quantity.to_string();
+    Ok((post, burns))
 }
 
 fn reconstruct_position_prestate(
@@ -2750,6 +4025,10 @@ fn write_new_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::direct_trade::{
+        DirectFinalizedMutationEvidenceV1, DirectPositionTransitionEvidenceV1,
+        DirectTradeExpectedPoststateV1,
+    };
 
     fn account(address: &str, role: &str) -> AccountV1 {
         AccountV1 {
@@ -2793,6 +4072,8 @@ mod tests {
             source_path: "source.json".into(),
             source_sha256: "11".repeat(32),
             direct: None,
+            positions: None,
+            fee_settlement: None,
             position: None,
             certificate: None,
             payout: None,
@@ -2853,19 +4134,558 @@ mod tests {
         );
     }
 
+    fn lifecycle_descriptors(genesis: &str) -> Vec<AuthenticatedLifecycleDescriptorV1> {
+        let mut descriptors = STAGES
+            .into_iter()
+            .enumerate()
+            .map(|(index, stage)| {
+                let mut completion = completion();
+                completion.stage = stage.into();
+                completion.genesis_hash = genesis.into();
+                completion.events[0].id = format!("{stage}-000");
+                completion.events[0].kind = stage.into();
+                completion.events[0].operation = format!("{stage}-mutation");
+                completion.events[0].predecessor = None;
+                completion.events[0].signature = Signature::new_unique().to_string();
+                completion.events[0].slot = (index + 1).to_string();
+                if stage == "direct" {
+                    completion.sources.push(SourceRefV1 {
+                        role: "evidence".into(),
+                        path: "direct/finalized.json".into(),
+                        sha256: "55".repeat(32),
+                        schema: DIRECT_EVIDENCE_SCHEMA_V1.into(),
+                        completion_pointer: "/status".into(),
+                        completion_value: "finalized".into(),
+                    });
+                } else if stage == "payout" {
+                    completion.sources = vec![SourceRefV1 {
+                        role: "direct-evidence".into(),
+                        path: "direct/finalized.json".into(),
+                        sha256: "55".repeat(32),
+                        schema: DIRECT_EVIDENCE_SCHEMA_V1.into(),
+                        completion_pointer: "/status".into(),
+                        completion_value: "finalized".into(),
+                    }];
+                }
+                refresh_projection_digest(&mut completion);
+                AuthenticatedLifecycleDescriptorV1 {
+                    descriptor: JournalDescriptorV1 {
+                        semantic_role: stage.into(),
+                        path: format!("stages/{index:02}-{stage}.json"),
+                        schema: STAGE_SCHEMA_V1.into(),
+                        completion_pointer: "/status".into(),
+                    },
+                    source_sha256: format!("{index:064x}"),
+                    completion_value: "finalized".into(),
+                    mutation_kind: None,
+                    stage_completion: Some(completion),
+                }
+            })
+            .collect::<Vec<_>>();
+        for (index, (role, kind)) in [("alt", "lookup-freeze"), ("seal", "capability-seal")]
+            .into_iter()
+            .enumerate()
+        {
+            descriptors.insert(
+                2 + index,
+                AuthenticatedLifecycleDescriptorV1 {
+                    descriptor: JournalDescriptorV1 {
+                        semantic_role: role.into(),
+                        path: format!("journals/{kind}.json"),
+                        schema: DIRECT_OWNED_JOURNAL_SCHEMA_V1.into(),
+                        completion_pointer: "/phase".into(),
+                    },
+                    source_sha256: format!("{:064x}", 32 + index),
+                    completion_value: "finalized".into(),
+                    mutation_kind: Some(kind.into()),
+                    stage_completion: None,
+                },
+            );
+        }
+        descriptors.push(AuthenticatedLifecycleDescriptorV1 {
+            descriptor: JournalDescriptorV1 {
+                semantic_role: "direct-hot-journal".into(),
+                path: "journals/direct-hot.json".into(),
+                schema: "dclutch-test-direct-hot-journal-v1".into(),
+                completion_pointer: "/phase".into(),
+            },
+            source_sha256: "aa".repeat(32),
+            completion_value: "finalized".into(),
+            mutation_kind: None,
+            stage_completion: None,
+        });
+        descriptors
+    }
+
     #[test]
-    fn source_roles_refuse_duplicate_unknown_and_unfrozen_direct() {
+    fn lifecycle_session_is_exact_eight_stage_order_with_terminal_digest() {
+        let genesis = Pubkey::new_unique().to_string();
+        let rows = lifecycle_descriptors(&genesis);
+        let session = assemble_lifecycle_session(&genesis, &rows).expect("exact session");
+        assert_eq!(session.schema, LIFECYCLE_SESSION_SCHEMA_V1);
+        assert_eq!(session.status, "finalized");
+        assert_eq!(session.cluster, "owned-loopback");
+        assert_eq!(session.genesis_hash, genesis);
+        assert_eq!(session.completed_stages, LIFECYCLE_SESSION_STAGES);
+        assert_eq!(
+            session.stage_set_sha256,
+            sha256(
+                &canonical_json(&serde_json::to_value(&session.stages).expect("stage rows"))
+                    .expect("canonical stage rows")
+            )
+        );
+    }
+
+    #[test]
+    fn lifecycle_session_refuses_missing_reordered_and_duplicate_stage_closures() {
+        let genesis = Pubkey::new_unique().to_string();
+        let rows = lifecycle_descriptors(&genesis);
+
+        let mut missing = rows.clone();
+        missing.remove(5);
+        assert!(assemble_lifecycle_session(&genesis, &missing).is_err());
+
+        let mut reordered = rows.clone();
+        reordered.swap(1, 2);
+        assert!(assemble_lifecycle_session(&genesis, &reordered).is_err());
+
+        let mut duplicate = rows.clone();
+        duplicate[1].descriptor.path = duplicate[0].descriptor.path.clone();
+        assert!(assemble_lifecycle_session(&genesis, &duplicate).is_err());
+
+        let mut repeated_mutation = rows;
+        let repeated_signature = repeated_mutation[0]
+            .stage_completion
+            .as_ref()
+            .unwrap()
+            .events[0]
+            .signature
+            .clone();
+        repeated_mutation[1]
+            .stage_completion
+            .as_mut()
+            .unwrap()
+            .events[0]
+            .signature = repeated_signature;
+        assert!(assemble_lifecycle_session(&genesis, &repeated_mutation).is_err());
+
+        let mut substituted_source = lifecycle_descriptors(&genesis);
+        substituted_source[6]
+            .stage_completion
+            .as_mut()
+            .unwrap()
+            .sources[0]
+            .sha256 = "66".repeat(32);
+        assert!(assemble_lifecycle_session(&genesis, &substituted_source).is_err());
+    }
+
+    #[test]
+    fn lifecycle_session_refuses_foreign_genesis_and_false_completion() {
+        let genesis = Pubkey::new_unique().to_string();
+        let rows = lifecycle_descriptors(&genesis);
+
+        let mut foreign = rows.clone();
+        foreign[5].stage_completion.as_mut().unwrap().genesis_hash =
+            Pubkey::new_unique().to_string();
+        assert!(assemble_lifecycle_session(&genesis, &foreign).is_err());
+
+        let mut provisional = rows;
+        provisional.last_mut().unwrap().completion_value = "false".into();
+        assert!(assemble_lifecycle_session(&genesis, &provisional).is_err());
+
+        assert!(assemble_lifecycle_session(DEVNET_GENESIS_HASH, &[]).is_err());
+        assert!(assemble_lifecycle_session(MAINNET_BETA_GENESIS_HASH, &[]).is_err());
+    }
+
+    fn direct_mutation(kind: &str, slot: u64) -> DirectFinalizedMutationEvidenceV1 {
+        DirectFinalizedMutationEvidenceV1 {
+            kind: kind.into(),
+            prefix_len: None,
+            path: format!("direct/{kind}.json"),
+            sha256: "22".repeat(32),
+            intent_sha256: "33".repeat(32),
+            schema: format!("dclutch-owned-loopback-direct-{kind}-v1"),
+            completion_pointer: "/phase".into(),
+            completion_value: "finalized".into(),
+            signature: Signature::new_unique().to_string(),
+            slot,
+            fee_payer: Pubkey::new_unique().to_string(),
+            fee_lamports: 5_000,
+            compute_units_consumed: 100_000,
+        }
+    }
+
+    fn authenticated_direct() -> AuthenticatedDirectTradeEvidenceV1 {
+        let seller_owner = Pubkey::new_unique();
+        let buyer_owner = Pubkey::new_unique();
+        let seller_position = Pubkey::new_unique();
+        let buyer_position = Pubkey::new_unique();
+        let buyer_maker_replay = Pubkey::new_unique();
+        let poststate = |address: Pubkey| DirectTradeExpectedPoststateV1 {
+            address: address.to_string(),
+            owner: Pubkey::new_unique().to_string(),
+            lamports: 1,
+            executable: false,
+            data_base64: BASE64.encode([1_u8]),
+            data_sha256: "11".repeat(32),
+        };
+        AuthenticatedDirectTradeEvidenceV1 {
+            market: Pubkey::new_unique(),
+            seller_owner,
+            seller_position,
+            seller_collateral_destination: Pubkey::new_unique(),
+            buyer_owner,
+            buyer_position,
+            buyer_collateral_source: Pubkey::new_unique(),
+            fee_recipient: Pubkey::new_unique(),
+            fee_token_account: Pubkey::new_unique(),
+            mint: Pubkey::new_unique(),
+            outcome_index: 1,
+            outcome_count: 2,
+            mutations: vec![
+                direct_mutation("replay-setup", 40),
+                direct_mutation("hot", 41),
+            ],
+            positions: [
+                DirectPositionTransitionEvidenceV1 {
+                    account: seller_position.to_string(),
+                    owner: seller_owner.to_string(),
+                    pre_data_base64: BASE64.encode([1_u8]),
+                    post_data_base64: BASE64.encode([2_u8]),
+                },
+                DirectPositionTransitionEvidenceV1 {
+                    account: buyer_position.to_string(),
+                    owner: buyer_owner.to_string(),
+                    pre_data_base64: BASE64.encode([3_u8]),
+                    post_data_base64: BASE64.encode([4_u8]),
+                },
+            ],
+            claim_balances: Vec::new(),
+            final_accounts: vec![
+                poststate(Pubkey::new_unique()),
+                poststate(Pubkey::new_unique()),
+                poststate(buyer_maker_replay),
+            ],
+            finalized_slot: 41,
+            evidence_sha256: "44".repeat(32),
+        }
+    }
+
+    fn direct_scalar_facts(fill: u64, scale: u64, bps: u64) -> Value {
+        json!({
+            "fillAtoms": fill,
+            "executionPrice": 250_000,
+            "priceScale": scale,
+            "feeBasisPointsPerSide": bps,
+        })
+    }
+
+    fn direct_fee_settlement(
+        authenticated: &AuthenticatedDirectTradeEvidenceV1,
+    ) -> DirectFeeSettlementEvidenceV1 {
+        DirectFeeSettlementEvidenceV1 {
+            schema: DIRECT_FEE_SETTLEMENT_SCHEMA_V1.into(),
+            cluster: "owned-loopback".into(),
+            market: authenticated.market.to_string(),
+            generation: 0,
+            maker: authenticated.buyer_owner.to_string(),
+            maker_replay: authenticated.final_accounts[2].address.clone(),
+            fee_owed: 20,
+            fee_source: authenticated.buyer_collateral_source.to_string(),
+            fee_destination: authenticated.fee_token_account.to_string(),
+            fee_destination_owner: authenticated.fee_recipient.to_string(),
+            standing_allowance: 20,
+            caller_authority: Pubkey::new_unique().to_string(),
+            caller_authority_bump: 1,
+            custody_expected_revision: 5,
+            custody_resulting_revision: 6,
+            landed: Some(DirectFeeSettlementFinalizationV1 {
+                signature: Signature::new_unique().to_string(),
+                slot: 42,
+                compute_units_consumed: Some(100_000),
+                fee_lamports: Some(5_000),
+            }),
+        }
+    }
+
+    #[test]
+    fn source_roles_refuse_duplicate_unknown_and_noncanonical_direct() {
         assert!(validate_source_roles("founding", &["campaign", "campaign"]).is_err());
         assert!(validate_source_roles("participant", &["unknown"]).is_err());
         assert!(validate_source_roles("unknown", &["campaign"]).is_err());
         assert!(validate_source_roles("direct", &[]).is_err());
-        assert!(require_frozen_stage_adapter("direct").is_err());
+        assert!(
+            validate_source_roles("direct", &["evidence", "campaign", "fee-settlement"]).is_err()
+        );
+        assert!(validate_source_roles("direct", &["campaign", "evidence"]).is_err());
+        assert!(
+            validate_source_roles("direct", &["campaign", "evidence", "fee-settlement"]).is_ok()
+        );
+        assert!(require_frozen_stage_adapter("direct").is_ok());
+    }
+
+    #[test]
+    fn direct_projection_keeps_setup_rows_observational_and_hot_semantic() {
+        let authenticated = authenticated_direct();
+        let facts = direct_scalar_facts(8_000, 1_000_000, 50);
+        let (events, kinds) = project_authenticated_direct_activity(
+            &authenticated,
+            object(Some(&facts), "Direct test evidence").unwrap(),
+            "direct/evidence.json",
+            &"55".repeat(32),
+        )
+        .unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].operation, "direct-replay-setup");
+        assert!(events[0].direct.is_none());
+        assert!(events[0].positions.is_none());
+        assert_eq!(events[1].operation, "direct-hot");
+        assert_eq!(events[1].expected_slot, authenticated.finalized_slot);
+        assert_eq!(events[1].source_path, "direct/evidence.json");
+        let direct = events[1].direct.as_ref().unwrap();
+        assert_eq!(direct["fillAtoms"], "8000");
+        assert_eq!(direct["executionPrice"], "250000");
+        assert_eq!(direct["priceScale"], "1000000");
+        assert_eq!(direct["feeBasisPointsPerSide"], "50");
+        assert_eq!(
+            direct["sellerToken"],
+            authenticated.seller_collateral_destination.to_string()
+        );
+        let positions = events[1].positions.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(positions.len(), 2);
+        assert_eq!(
+            positions[0]["account"],
+            authenticated.seller_position.to_string()
+        );
+        assert_eq!(
+            positions[1]["account"],
+            authenticated.buyer_position.to_string()
+        );
+        assert_eq!(
+            kinds[&authenticated.seller_position.to_string()].0,
+            "position"
+        );
+        assert_eq!(
+            kinds[&authenticated.fee_token_account.to_string()].0,
+            "token"
+        );
+    }
+
+    #[test]
+    fn direct_projection_refuses_noncanonical_economics_and_hot_ownership() {
+        for facts in [
+            direct_scalar_facts(0, 1_000_000, 50),
+            direct_scalar_facts(8_000, 100, 50),
+            direct_scalar_facts(8_000, 1_000_000, 49),
+        ] {
+            assert!(
+                project_authenticated_direct_activity(
+                    &authenticated_direct(),
+                    object(Some(&facts), "Direct test evidence").unwrap(),
+                    "direct/evidence.json",
+                    &"55".repeat(32),
+                )
+                .is_err()
+            );
+        }
+
+        let facts = direct_scalar_facts(8_000, 1_000_000, 50);
+        let mut no_hot = authenticated_direct();
+        no_hot.mutations[1].kind = "capability-seal".into();
+        assert!(
+            project_authenticated_direct_activity(
+                &no_hot,
+                object(Some(&facts), "Direct test evidence").unwrap(),
+                "direct/evidence.json",
+                &"55".repeat(32),
+            )
+            .is_err()
+        );
+
+        let mut two_hot = authenticated_direct();
+        two_hot.mutations[0].kind = "hot".into();
+        assert!(
+            project_authenticated_direct_activity(
+                &two_hot,
+                object(Some(&facts), "Direct test evidence").unwrap(),
+                "direct/evidence.json",
+                &"55".repeat(32),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn direct_fee_completion_projects_exact_permissionless_obligation() {
+        let authenticated = authenticated_direct();
+        let facts = direct_scalar_facts(8_000, 1_000_000, 50);
+        let settlement = direct_fee_settlement(&authenticated);
+        let trading_program = Pubkey::new_unique().to_string();
+        let pending = project_authenticated_direct_fee_settlement(
+            &authenticated,
+            object(Some(&facts), "Direct test evidence").unwrap(),
+            &settlement,
+            0,
+            &trading_program,
+            "direct/fee-settlement.json",
+            &"66".repeat(32),
+        )
+        .unwrap();
+
+        assert_eq!(pending.operation, "direct-fee-settlement");
+        assert!(pending.direct.is_none());
+        assert!(pending.positions.is_none());
+        assert_eq!(pending.forbidden_fee_payers.len(), 3);
+        let projected = pending.fee_settlement.unwrap();
+        assert_eq!(projected["feeAtoms"], "20");
+        assert_eq!(
+            projected["sourceToken"],
+            authenticated.buyer_collateral_source.to_string()
+        );
+        assert_eq!(
+            projected["destinationToken"],
+            authenticated.fee_token_account.to_string()
+        );
+        assert_eq!(
+            projected["submissionClass"],
+            "permissionless-state-derived-stranger"
+        );
+        assert_eq!(
+            projected["capitalizationClass"],
+            "debtor-collateral-obligation-not-future-revenue-or-hoard"
+        );
+    }
+
+    #[test]
+    fn direct_fee_completion_refuses_substitution_shortfall_and_preflight() {
+        let authenticated = authenticated_direct();
+        let facts = direct_scalar_facts(8_000, 1_000_000, 50);
+        let trading_program = Pubkey::new_unique().to_string();
+        let refuses = |settlement: &DirectFeeSettlementEvidenceV1| {
+            project_authenticated_direct_fee_settlement(
+                &authenticated,
+                object(Some(&facts), "Direct test evidence").unwrap(),
+                settlement,
+                0,
+                &trading_program,
+                "direct/fee-settlement.json",
+                &"66".repeat(32),
+            )
+            .is_err()
+        };
+
+        let mut wrong_fee = direct_fee_settlement(&authenticated);
+        wrong_fee.fee_owed = 19;
+        assert!(refuses(&wrong_fee));
+
+        let mut wrong_source = direct_fee_settlement(&authenticated);
+        wrong_source.fee_source = authenticated.seller_collateral_destination.to_string();
+        assert!(refuses(&wrong_source));
+
+        let mut short_allowance = direct_fee_settlement(&authenticated);
+        short_allowance.standing_allowance = 19;
+        assert!(refuses(&short_allowance));
+
+        let mut stale_revision = direct_fee_settlement(&authenticated);
+        stale_revision.custody_resulting_revision = 7;
+        assert!(refuses(&stale_revision));
+
+        let mut preflight = direct_fee_settlement(&authenticated);
+        preflight.landed = None;
+        assert!(refuses(&preflight));
+
+        let mut wrong_generation = direct_fee_settlement(&authenticated);
+        wrong_generation.generation = 1;
+        assert!(refuses(&wrong_generation));
+    }
+
+    #[test]
+    fn finalized_direct_fee_return_receipt_is_the_economic_authority() {
+        let producer = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let maker = Pubkey::new_unique();
+        let maker_replay = Pubkey::new_unique();
+        let source = Pubkey::new_unique();
+        let destination = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let expected = DirectFeeReceiptExpectationV1 {
+            producer: producer.to_string(),
+            market: market.to_string(),
+            maker: maker.to_string(),
+            maker_replay: maker_replay.to_string(),
+            fee_source: source.to_string(),
+            fee_destination: destination.to_string(),
+            fee_recipient: recipient.to_string(),
+            settled_amount: 20,
+            expected_revision: 5,
+            resulting_revision: 6,
+        };
+        let receipt = DirectFeeSettlementReceiptV1 {
+            request_digest: [1; 32],
+            market: market.to_bytes(),
+            maker: maker.to_bytes(),
+            maker_root: maker_replay.to_bytes(),
+            custody_replay: Pubkey::new_unique().to_bytes(),
+            fee_source: source.to_bytes(),
+            fee_destination: destination.to_bytes(),
+            fee_recipient: recipient.to_bytes(),
+            custody_request_digest: [2; 32],
+            custody_poststate: [3; 32],
+            settled_amount: 20,
+            expected_revision: 5,
+            resulting_revision: 6,
+        };
+        let meta = json!({
+            "returnData": {
+                "programId": producer.to_string(),
+                "data": [BASE64.encode(receipt.to_bytes().unwrap()), "base64"],
+            }
+        });
+        assert!(
+            authenticate_direct_fee_return_data(
+                object(Some(&meta), "fee receipt test").unwrap(),
+                &expected,
+            )
+            .is_ok()
+        );
+
+        let mut substituted = expected.clone();
+        substituted.settled_amount = 19;
+        assert!(
+            authenticate_direct_fee_return_data(
+                object(Some(&meta), "fee receipt test").unwrap(),
+                &substituted,
+            )
+            .is_err()
+        );
+        let malformed = json!({
+            "returnData": {
+                "programId": producer.to_string(),
+                "data": [BASE64.encode([0_u8; 360]), "base64"],
+            }
+        });
+        assert!(
+            authenticate_direct_fee_return_data(
+                object(Some(&malformed), "fee receipt test").unwrap(),
+                &expected,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn payout_roles_refuse_zero_gap_and_reorder() {
         assert!(validate_source_roles("payout", &[]).is_err());
         assert!(validate_source_roles("payout", &["input-000", "evidence-001"]).is_err());
+        assert!(
+            validate_source_roles("payout", &["direct-evidence", "input-000", "evidence-000"])
+                .is_ok()
+        );
+        assert!(
+            validate_source_roles("payout", &["direct-evidence", "evidence-000", "input-000"])
+                .is_err()
+        );
         assert!(
             validate_source_roles(
                 "payout",
@@ -3251,6 +5071,81 @@ mod tests {
         assert_eq!(burns, ["0", "3"]);
         assert!(reconstruct_position_prestate(&post, 2, 3).is_err());
         assert!(reconstruct_position_prestate(&post[..143], 1, 3).is_err());
+    }
+
+    #[test]
+    fn position_payout_replays_forward_and_refuses_substitution() {
+        let mut pre = vec![0_u8; 144];
+        pre[..8].copy_from_slice(b"DCLLBP02");
+        pre[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        pre[16..24].copy_from_slice(&4_u64.to_le_bytes());
+        pre[136..144].copy_from_slice(&10_u64.to_le_bytes());
+        let (post, burns) = apply_position_payout(&pre, 1, 3).unwrap();
+        assert_eq!(u64::from_le_bytes(post[16..24].try_into().unwrap()), 5);
+        assert_eq!(u64::from_le_bytes(post[136..144].try_into().unwrap()), 7);
+        assert_eq!(burns, ["0", "3"]);
+        assert_eq!(reconstruct_position_prestate(&post, 1, 3).unwrap().0, pre);
+        assert!(apply_position_payout(&pre, 2, 3).is_err());
+        assert!(apply_position_payout(&pre, 1, 11).is_err());
+        assert!(apply_position_payout(&pre, 1, 0).is_err());
+    }
+
+    #[test]
+    fn payout_terminal_position_accepts_exact_live_or_closed_and_refuses_foreign_bytes() {
+        let address = Pubkey::new_unique().to_string();
+        let owner = Pubkey::new_unique().to_string();
+        let post = vec![7_u8; 144];
+        let mut event = event(None);
+        event.position = Some(json!({
+            "account": address,
+            "owner": owner,
+            "preDataBase64": BASE64.encode([6_u8; 144]),
+            "postDataBase64": BASE64.encode(&post),
+        }));
+        let events = vec![RpcEventV1 {
+            event,
+            transaction: Value::Null,
+            token_identities: BTreeMap::new(),
+            changed_addresses: BTreeSet::new(),
+        }];
+        let live = json!({
+            "lamports": 1,
+            "owner": owner,
+            "data": [BASE64.encode(&post), "base64"],
+            "executable": false,
+            "rentEpoch": 0,
+            "space": post.len(),
+        });
+        assert!(
+            authenticate_payout_terminal_positions(
+                &events,
+                &BTreeMap::from([(address.clone(), Some(live))]),
+            )
+            .is_ok()
+        );
+        assert!(
+            authenticate_payout_terminal_positions(
+                &events,
+                &BTreeMap::from([(address.clone(), None)]),
+            )
+            .is_ok()
+        );
+        let substituted = json!({
+            "lamports": 1,
+            "owner": Pubkey::new_unique().to_string(),
+            "data": [BASE64.encode([8_u8; 144]), "base64"],
+            "executable": false,
+            "rentEpoch": 0,
+            "space": 144,
+        });
+        assert!(
+            authenticate_payout_terminal_positions(
+                &events,
+                &BTreeMap::from([(address, Some(substituted))]),
+            )
+            .is_err()
+        );
+        assert!(authenticate_payout_terminal_positions(&events, &BTreeMap::new()).is_err());
     }
 
     #[test]

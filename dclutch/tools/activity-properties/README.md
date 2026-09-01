@@ -16,13 +16,22 @@ For every dossier it checks:
 - exact transaction lamport conservation: all observed changes sum to the
   negative finalized transaction fee, including account creation rent;
 - exact retirement closure rent and refund equality, with each closed account
-  observed moving from a positive balance to zero;
-- exact per-mint scaled-integer asset conservation after founding;
+  observed moving from a positive balance to zero; the terminal receipt must
+  pay the creation-fixed refund beneficiary from classified historical account
+  lamports, with one distinct fee payer and no future-revenue or Hoard-principal
+  capitalization;
+- exact per-mint scaled-integer asset conservation in every finalized
+  non-founding transaction and across the whole post-founding history;
 - Direct gross arithmetic, the one named divisibility boundary, independent
-  50-bps side floors, token movements, and seller/buyer Position fill
-  conservation;
-- payout Hoard-principal classification, token conservation, claim burns, and
-  Position revision continuity.
+  50-bps side floors, seller-net-only Hot token movements, and seller/buyer
+  Position fill conservation; a distinct later transaction must settle the
+  combined seller and buyer fee from the buyer's actual collateral account to
+  the fee recipient, under the exact standing allowance and custody revision,
+  with a finalized stranger fee payer;
+- payout Hoard-principal classification, disjointness from every Direct
+  trading-token role, token conservation, claim burns, and Position revision
+  continuity; the terminal recipient token must belong to the named holder,
+  while the finalized transaction fee payer must be someone else.
 
 With multiple dossiers it additionally requires one cluster/genesis, distinct
 activity IDs, dossier digests, disposable fee-payer wallets, transaction
@@ -45,6 +54,10 @@ python3 tools/activity-properties/activity_properties.py \
   --dossier /absolute/path/activity-b.json
 ```
 
-The canonical JSON report on stdout is an unsigned property verdict binding the
-input dossier digests. It is local/devnet execution evidence, not a proof of the
-Solana runtime, RPC capture, protocol adapter, or mainnet behavior.
+The canonical JSON report on stdout uses
+`dclutch-activity-lifecycle-property-report-v2`. Its `livenessEconomics`
+section binds the observed permissionless fee-completion payer, fixed retirement
+beneficiary, retirement payer, and the accepted non-capitalization classes.
+It is an unsigned property verdict binding the input dossier digests and is
+local-validator execution evidence, not a proof of the Solana runtime, RPC
+capture, protocol adapter, or mainnet behavior.

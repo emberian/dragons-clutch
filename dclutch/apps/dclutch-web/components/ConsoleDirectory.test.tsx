@@ -6,30 +6,32 @@ import ConsoleDirectory from './ConsoleDirectory';
 describe('the console index', () => {
   const html = renderToStaticMarkup(<ConsoleDirectory />);
 
-  it('lists every operator console exactly once, each as a link', () => {
-    for (const href of ['/workbench', '/found', '/product-v2', '/trade', '/liquidity', '/redeem', '/resolution', '/general', '/release', '/operate', '/local']) {
+  it('groups each current operator workspace once by lifecycle job', () => {
+    for (const heading of ['Author and open', 'Trade and resolve', 'Run the deployment', 'Verify the record']) {
+      expect((html.match(new RegExp(`>${heading}<`, 'g')) ?? []).length).toBe(1);
+    }
+    for (const href of ['/product-v2#spline-product', '/found#current-founding', '/liquidity', '/general', '/resolution', '/release', '/operate', '/workbench', '/local']) {
       expect((html.match(new RegExp(`href="${href}"`, 'g')) ?? []).length).toBe(1);
     }
+    for (const productJourney of ['/campaign', '/population', '/redeem', '/trade']) expect(html).not.toContain(`href="${productJourney}"`);
   });
 
-  it('states readiness boundaries and names the provenance answer key', () => {
-    expect(html).toContain('does not update programs');
-    expect(html).toContain('does not mean a page can send a transaction');
-    expect(html).toContain('For market authors');
-    expect(html).toContain('Wallet redemption');
-    // The blurb used to offer redemption as something a reader could do today.
-    expect(html).toContain('Wallet redemption (not open yet)');
-    expect(html).toContain('Paying out winning claims is not available yet');
-    // Names the provenance answer key and its standard.
+  it('derives outcomes and authority contracts from executable capability truth', () => {
+    expect(html).toContain('Activate checked multiprogram release');
+    expect(html).toContain('Compile an admitted degree-2/3 Product graph');
+    expect(html).toContain('Consider candidate / freeze selection');
+    expect(html).toContain('Submit real provider evidence / reclaim');
+    expect(html).toContain('Browser produces checked unsigned transaction bytes');
+    expect(html).toContain('Rust operator tooling produces the checked unsigned transaction');
+    expect(html).not.toContain('awaiting production');
+    expect(html).not.toContain('not open yet');
+    expect(html).not.toContain('unavailable');
+  });
+
+  it('names the provenance answer key and keeps product journeys on the product', () => {
     expect(html).toContain('The artifacts, and where they come from');
-    // Renegotiated 2026-08-31: "if a console ever asks for something and you
-    // cannot tell where it comes from, that is a bug in the console" is a
-    // promise about us. Deleted; the pointer to the answer key survives.
-    expect(html).toContain('names the tool that');
-  });
-
-  it('sends readers who are not operators back to the product', () => {
-    expect(html).toContain('start at');
+    expect(html).toContain('Artifact inputs name their producer');
+    expect(html).toContain('Market-participant acts stay on the selected');
     expect(html).toContain('href="/markets"');
   });
 });

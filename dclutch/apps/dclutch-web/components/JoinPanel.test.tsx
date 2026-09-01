@@ -1,10 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import JoinPanel, { JoinStanding, joiningClosedForPhaseV1 } from '@/components/JoinPanel';
+import JoinPanel, { JoinStanding, joiningClosedForPhaseV1, joinRunbookV1 } from '@/components/JoinPanel';
 import { type DirectParticipantReadinessV1 } from '@/lib/directParticipant';
 
 const WALLET = '5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf';
+const LOOPBACK = 'http://127.0.0.1:20890/';
+const DEVNET = 'https://api.devnet.solana.com';
 
 const COORDINATES = Object.freeze({
   aggregate: 'GcE6LWbduoATDgK8jsGyj2i8ywV37fcAYABKCmKgttDz',
@@ -65,7 +67,7 @@ describe('the join surface', () => {
   });
 
   it('shows a participant their real accounts and balances in atoms', () => {
-    const html = renderToStaticMarkup(<JoinStanding readiness={READY} marketPhase="Open" walletAddress={WALLET} />);
+    const html = renderToStaticMarkup(<JoinStanding readiness={READY} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} />);
     expect(html).toContain('You are a participant on this market.');
     expect(html).toContain('finalized slot 4242');
     expect(html).toContain(COORDINATES.position);
@@ -75,26 +77,32 @@ describe('the join surface', () => {
     expect(html).toContain('The trade panel below trades against exactly these accounts.');
   });
 
-  it('tells a non-participant exactly what joining creates and how, without a fake button', () => {
-    const html = renderToStaticMarkup(<JoinStanding readiness={INCOMPLETE} marketPhase="Open" walletAddress={WALLET} />);
+  it('tells a non-participant exactly what joining creates and how, without a fake admission button', () => {
+    const html = renderToStaticMarkup(<JoinStanding readiness={INCOMPLETE} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} />);
     expect(html).toContain('This wallet is not a participant here yet.');
     expect(html).toContain('Position and admission');
     expect(html).toContain('collateral account');
     expect(html).toContain(COORDINATES.position);
-    expect(html).toContain('dclutch join');
+    expect(html).toContain('dclutch --rpc');
+    expect(html).toContain(`--rpc &#x27;${DEVNET}&#x27;`);
+    expect(html).toContain('--bootstrap-bin &quot;$SUCCESSOR&quot;');
+    expect(html).toContain('--i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(html).toContain('--execute');
     expect(html).toContain(WALLET);
+    expect(html).toContain('must derive this exact connected address');
     // The wall is named as a gap, never dressed up as a virtue.
     expect(html).toContain('cannot yet build the admission transaction itself');
     // Renegotiated 2026-08-31: "that is a gap we intend to close, not a
     // policy" is us managing the reader's opinion of us. Deleted. The gap is
     // still named in the sentence above, which is the part that matters.
     expect(html).not.toContain('not a policy');
-    expect(html).not.toContain('<button');
+    expect(html).toContain('Copy commands');
+    expect(html).not.toContain('>Join now<');
+    expect(html).not.toContain('>Sign and join<');
   });
 
   it('refuses joining a terminal market in reader language instead of offering it', () => {
-    const html = renderToStaticMarkup(<JoinStanding readiness={INCOMPLETE} marketPhase="Terminal" walletAddress={WALLET} />);
+    const html = renderToStaticMarkup(<JoinStanding readiness={INCOMPLETE} marketPhase="Terminal" walletAddress={WALLET} endpoint={DEVNET} />);
     expect(html).toContain('This market has already resolved');
     expect(html).not.toContain('How to join');
     expect(html).not.toContain('dclutch join');
@@ -102,7 +110,7 @@ describe('the join surface', () => {
 
   it('passes a refusal through verbatim', () => {
     const refused: DirectParticipantReadinessV1 = Object.freeze({ status: 'refused' as const, reason: 'the Market root is not CoreState v2' });
-    const html = renderToStaticMarkup(<JoinStanding readiness={refused} marketPhase="Open" walletAddress={WALLET} />);
+    const html = renderToStaticMarkup(<JoinStanding readiness={refused} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} />);
     expect(html).toContain('Refused: the Market root is not CoreState v2');
   });
 
@@ -111,5 +119,19 @@ describe('the join surface', () => {
     expect(joiningClosedForPhaseV1('Retiring')).toBe(true);
     expect(joiningClosedForPhaseV1('Open')).toBe(false);
     expect(joiningClosedForPhaseV1('Founding')).toBe(false);
+  });
+
+  it('renders the owned-loopback command without a devnet acknowledgment', () => {
+    const runbook = joinRunbookV1(LOOPBACK);
+    expect(runbook).toMatchObject({ kind: 'ready', cluster: 'owned-loopback' });
+    expect(runbook.kind === 'ready' && runbook.command).toContain(`--rpc '${LOOPBACK}'`);
+    expect(runbook.kind === 'ready' && runbook.command).not.toContain('--i-mean-devnet');
+  });
+
+  it('refuses a misleading loopback spelling instead of emitting a public-cluster command', () => {
+    expect(joinRunbookV1('http://localhost:20890/')).toMatchObject({
+      kind: 'refused',
+      reason: expect.stringContaining('http://127.0.0.1:PORT/'),
+    });
   });
 });

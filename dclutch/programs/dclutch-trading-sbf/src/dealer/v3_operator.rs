@@ -277,6 +277,25 @@ fn build(
     action: MultiLpRequestActionV3,
     set: CapabilityProgramSetV1<'_>,
 ) -> Result<UnsignedMultiLpRequestV3, MultiLpOperatorErrorV3> {
+    let bytes = build_multi_lp_request_bytes_v3(chain, lp_owner, action)?;
+    let selected_program = set
+        .select(&bytes)
+        .map_err(|_| MultiLpOperatorErrorV3::ProgramSelection)?;
+    Ok(UnsignedMultiLpRequestV3 {
+        bytes,
+        selected_program,
+    })
+}
+
+/// Encode and authenticate the sole LP request body before release selection.
+///
+/// V1 and V2 ProgramSet adapters share this semantic owner so migration cannot
+/// create two request encoders with different optimistic-state rules.
+pub(super) fn build_multi_lp_request_bytes_v3(
+    chain: MultiLpChainProjectionV3<'_>,
+    lp_owner: [u8; 32],
+    action: MultiLpRequestActionV3,
+) -> Result<[u8; DEALER_MULTI_LP_REQUEST_BYTES_V3], MultiLpOperatorErrorV3> {
     validate_projection(chain, lp_owner)?;
     let (lp_revision, lp_digest) = match chain.lp_position_bytes {
         Some(bytes) => (
@@ -318,15 +337,9 @@ fn build(
     ] {
         write_bytes(&mut bytes, offset, &value.to_le_bytes())?;
     }
-    let selected_program = set
-        .select(&bytes)
-        .map_err(|_| MultiLpOperatorErrorV3::ProgramSelection)?;
     let request = DealerMultiLpRequestV3::decode(&bytes)?;
     authenticate_multi_lp_request_v3(request, chain)?;
-    Ok(UnsignedMultiLpRequestV3 {
-        bytes,
-        selected_program,
-    })
+    Ok(bytes)
 }
 
 fn validate_projection(

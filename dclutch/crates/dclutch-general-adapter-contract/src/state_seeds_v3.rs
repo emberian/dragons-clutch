@@ -49,6 +49,7 @@ use dclutch_general_codec::Action;
 
 use crate::{
     MAX_PDA_SEED_BYTES,
+    candidate_v1::{GENERAL_CANDIDATE_PDA_DOMAIN_V1, GENERAL_VERIFIER_PDA_DOMAIN_V1},
     hot_candidate_v3::{identity, scalar},
 };
 
@@ -73,6 +74,12 @@ pub const GENERAL_TERMINAL_STATE_SEED_V3: &[u8] = b"terminal";
 pub const GENERAL_BATCH_STATE_SEED_V3: &[u8] = b"batch";
 /// Order-record state discriminator.
 pub const GENERAL_ORDER_STATE_SEED_V3: &[u8] = b"order";
+/// Raw terminal verified-candidate result domain.
+///
+/// The result is deliberately not a `GeneralLocalStateV3` envelope, so its PDA
+/// needs a domain that names the immutable certificate itself rather than
+/// borrowing the candidate or verifier domains.
+pub const GENERAL_VERIFIED_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch-general-verified-v1";
 
 // A seed longer than 32 bytes makes `find_program_address` refuse every bump,
 // so the state it names would have no derivable address at all -- the module
@@ -108,6 +115,11 @@ const _: () = assert!(
 const _: () = assert!(
     !GENERAL_ORDER_STATE_SEED_V3.is_empty()
         && GENERAL_ORDER_STATE_SEED_V3.len() <= MAX_PDA_SEED_BYTES,
+    "a PDA seed must be nonempty and at most 32 bytes to derive an address"
+);
+const _: () = assert!(
+    !GENERAL_VERIFIED_CANDIDATE_PDA_DOMAIN_V1.is_empty()
+        && GENERAL_VERIFIED_CANDIDATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES,
     "a PDA seed must be nonempty and at most 32 bytes to derive an address"
 );
 
@@ -257,6 +269,37 @@ pub const GENERAL_ORDER_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 5] = [
     LifecycleSeedInputV3::CanonicalBump,
 ];
 
+/// Sole seed order for one candidate submission record.
+///
+/// The existing candidate domain is the protocol's semantic owner; using it
+/// here makes lifecycle admission and every candidate consumer derive the same
+/// address without introducing a second General-local spelling.
+pub const GENERAL_CANDIDATE_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 4] = [
+    LifecycleSeedInputV3::Literal(GENERAL_CANDIDATE_PDA_DOMAIN_V1),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_CANDIDATE_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CanonicalBump,
+];
+
+/// Sole seed order for one streamed candidate-verifier cursor.
+///
+/// The domain is owned by `candidate_v1`; consuming it here joins the lifecycle
+/// policy to the exact address that the verifier runtime names.
+pub const GENERAL_VERIFIER_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 4] = [
+    LifecycleSeedInputV3::Literal(GENERAL_VERIFIER_PDA_DOMAIN_V1),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_CANDIDATE_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CanonicalBump,
+];
+
+/// Sole seed order for the raw terminal `VerifiedCandidateV2` certificate.
+pub const GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 4] = [
+    LifecycleSeedInputV3::Literal(GENERAL_VERIFIED_CANDIDATE_PDA_DOMAIN_V1),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_CANDIDATE_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CanonicalBump,
+];
+
 /// Locate the sole canonical bump in one recipe, refusing every other shape.
 ///
 /// The lifecycle adapter derives the bump itself and appends it last. A recipe
@@ -293,6 +336,9 @@ const _: () = {
     canonical_bump_offset(&GENERAL_TERMINAL_STATE_RECIPE_V3);
     canonical_bump_offset(&GENERAL_BATCH_STATE_RECIPE_V3);
     canonical_bump_offset(&GENERAL_ORDER_STATE_RECIPE_V3);
+    canonical_bump_offset(&GENERAL_CANDIDATE_STATE_RECIPE_V3);
+    canonical_bump_offset(&GENERAL_VERIFIER_STATE_RECIPE_V3);
+    canonical_bump_offset(&GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3);
 };
 
 // Every recipe's non-bump seed count must fit the buffer the address projection
@@ -302,7 +348,10 @@ const _: () = assert!(
         && GENERAL_SETTLEMENT_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
         && GENERAL_TERMINAL_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
         && GENERAL_BATCH_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
-        && GENERAL_ORDER_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3,
+        && GENERAL_ORDER_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
+        && GENERAL_CANDIDATE_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
+        && GENERAL_VERIFIER_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
+        && GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3,
     "a General recipe declares more seeds than the address projection can hold"
 );
 
@@ -313,7 +362,10 @@ const _: () = assert!(
         && GENERAL_SETTLEMENT_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
         && GENERAL_TERMINAL_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
         && GENERAL_BATCH_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
-        && GENERAL_ORDER_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize,
+        && GENERAL_ORDER_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
+        && GENERAL_CANDIDATE_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
+        && GENERAL_VERIFIER_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
+        && GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize,
     "a General recipe declares more seeds than a program-derived address admits"
 );
 
@@ -389,7 +441,48 @@ const fn cancel_seed_table() -> [LifecycleSeedInputV3<'static>; GENERAL_CANCEL_S
 pub const GENERAL_CANCEL_STATE_SEED_TABLE_V3: [LifecycleSeedInputV3<'static>;
     GENERAL_CANCEL_SEED_COUNT_V3] = cancel_seed_table();
 
-/// One of the five General state derivations, and there are only five.
+/// Exact combined seed count for Candidate, Verifier, and terminal Result.
+pub const GENERAL_VERIFY_SEED_COUNT_V3: usize = GENERAL_CANDIDATE_STATE_RECIPE_V3.len()
+    + GENERAL_VERIFIER_STATE_RECIPE_V3.len()
+    + GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3.len();
+
+/// Seed-table offset where the Verify verifier-cursor recipe begins.
+pub const GENERAL_VERIFY_VERIFIER_SEED_START_V3: u16 =
+    narrow_seed_start(GENERAL_CANDIDATE_STATE_RECIPE_V3.len());
+
+/// Seed-table offset where the Verify raw result recipe begins.
+pub const GENERAL_VERIFY_RESULT_SEED_START_V3: u16 = narrow_seed_start(
+    GENERAL_CANDIDATE_STATE_RECIPE_V3.len() + GENERAL_VERIFIER_STATE_RECIPE_V3.len(),
+);
+
+const fn verify_seed_table() -> [LifecycleSeedInputV3<'static>; GENERAL_VERIFY_SEED_COUNT_V3] {
+    let mut table = [LifecycleSeedInputV3::CanonicalBump; GENERAL_VERIFY_SEED_COUNT_V3];
+    let mut index = 0;
+    while index < GENERAL_CANDIDATE_STATE_RECIPE_V3.len() {
+        table[index] = GENERAL_CANDIDATE_STATE_RECIPE_V3[index];
+        index += 1;
+    }
+    let mut offset = 0;
+    while offset < GENERAL_VERIFIER_STATE_RECIPE_V3.len() {
+        table[GENERAL_CANDIDATE_STATE_RECIPE_V3.len() + offset] =
+            GENERAL_VERIFIER_STATE_RECIPE_V3[offset];
+        offset += 1;
+    }
+    offset = 0;
+    while offset < GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3.len() {
+        table[GENERAL_CANDIDATE_STATE_RECIPE_V3.len()
+            + GENERAL_VERIFIER_STATE_RECIPE_V3.len()
+            + offset] = GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3[offset];
+        offset += 1;
+    }
+    table
+}
+
+/// Sole Verify seed table: Candidate, Verifier, then raw terminal Result.
+pub const GENERAL_VERIFY_STATE_SEED_TABLE_V3: [LifecycleSeedInputV3<'static>;
+    GENERAL_VERIFY_SEED_COUNT_V3] = verify_seed_table();
+
+/// One of the eight General state derivations, and there are only eight.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralStateRecipeV3 {
     /// Selection cursor, one per General root.
@@ -402,6 +495,12 @@ pub enum GeneralStateRecipeV3 {
     Batch,
     /// Order-record state, one per (root, order identity).
     Order,
+    /// Candidate submission, one per (root, candidate identity).
+    Candidate,
+    /// Streamed verifier cursor, one per (root, candidate identity).
+    Verifier,
+    /// Raw immutable verified-candidate result, one per (root, candidate identity).
+    VerifiedCandidate,
 }
 
 impl GeneralStateRecipeV3 {
@@ -414,6 +513,9 @@ impl GeneralStateRecipeV3 {
             Self::Terminal => &GENERAL_TERMINAL_STATE_RECIPE_V3,
             Self::Batch => &GENERAL_BATCH_STATE_RECIPE_V3,
             Self::Order => &GENERAL_ORDER_STATE_RECIPE_V3,
+            Self::Candidate => &GENERAL_CANDIDATE_STATE_RECIPE_V3,
+            Self::Verifier => &GENERAL_VERIFIER_STATE_RECIPE_V3,
+            Self::VerifiedCandidate => &GENERAL_VERIFIED_CANDIDATE_STATE_RECIPE_V3,
         }
     }
 
@@ -446,6 +548,9 @@ impl GeneralStateRecipeV3 {
     #[must_use]
     pub const fn primary_for_action(action: Action) -> Self {
         match action {
+            Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => {
+                Self::Candidate
+            }
             Action::Consider | Action::Freeze => Self::Selection,
             // The batch four share the Batch envelope: `PlaceOrder` and
             // `CancelOrder` authenticate the window as their primary state and
@@ -571,6 +676,60 @@ impl GeneralStateAddressSeedsV3 {
             recipe: GeneralStateRecipeV3::Order,
             general_root,
             candidate: Some(order),
+            terminal_coordinate: None,
+        })
+    }
+
+    /// Coordinates for the candidate submission state of one (root, candidate).
+    pub fn candidate(
+        general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+        candidate: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+    ) -> Result<Self> {
+        let general_root = require_nonzero(general_root)?;
+        let candidate = require_nonzero(candidate)?;
+        if general_root == candidate {
+            return Err(GeneralStateSeedErrorV3::AccountAlias);
+        }
+        Ok(Self {
+            recipe: GeneralStateRecipeV3::Candidate,
+            general_root,
+            candidate: Some(candidate),
+            terminal_coordinate: None,
+        })
+    }
+
+    /// Coordinates for the streamed verifier cursor of one (root, candidate).
+    pub fn verifier(
+        general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+        candidate: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+    ) -> Result<Self> {
+        let general_root = require_nonzero(general_root)?;
+        let candidate = require_nonzero(candidate)?;
+        if general_root == candidate {
+            return Err(GeneralStateSeedErrorV3::AccountAlias);
+        }
+        Ok(Self {
+            recipe: GeneralStateRecipeV3::Verifier,
+            general_root,
+            candidate: Some(candidate),
+            terminal_coordinate: None,
+        })
+    }
+
+    /// Coordinates for the raw terminal certificate of one (root, candidate).
+    pub fn verified_candidate(
+        general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+        candidate: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+    ) -> Result<Self> {
+        let general_root = require_nonzero(general_root)?;
+        let candidate = require_nonzero(candidate)?;
+        if general_root == candidate {
+            return Err(GeneralStateSeedErrorV3::AccountAlias);
+        }
+        Ok(Self {
+            recipe: GeneralStateRecipeV3::VerifiedCandidate,
+            general_root,
+            candidate: Some(candidate),
             terminal_coordinate: None,
         })
     }

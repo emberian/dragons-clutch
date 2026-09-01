@@ -561,6 +561,7 @@ pub(crate) fn relayed_market_input(
         direct_capability: None,
         selected_capability: None,
         linked_basis_hex: hex(&linked_basis),
+        price_gate_hex: String::new(),
     };
     attach_direct_market_capability_v1(&mut input, direct)?;
     crate::market::validate_market_input(&input)?;

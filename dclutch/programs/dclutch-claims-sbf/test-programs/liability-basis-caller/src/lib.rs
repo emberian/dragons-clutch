@@ -203,7 +203,7 @@ pub fn process_instruction(
         let root = decode_fractional_capability_root_v4(&root_data)
             .ok_or(LiabilityBasisTestCallerError::AccountFrame)?;
         let root_seeds = root.header().seeds();
-        let root_bump = [root.state().input().bump];
+        let root_bump = [root.state().bump()];
         let [
             root_domain,
             root_market,

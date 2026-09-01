@@ -6,26 +6,22 @@
 //! the common EffectProgram. The Product-owned tail is folded at runtime; no
 //! outcome width is compiled into an artifact.
 //!
-//! **These seven programs are now Lean-authored.**
+//! **All fourteen programs are Lean-authored.**
 //! `formal/dclutch-semantics/DClutchSemantics/GeneralTransitionV3.lean` states
 //! every conjunct; `EmitGeneralTransitionV3Rust.lean` emits
 //! `generated_transition_programs_v3.rs`; and
 //! `every_authored_program_is_byte_identical_to_the_lean_authored_one` below
 //! requires the builder in this module to reproduce those bytes exactly, for
-//! all seven actions.
+//! all fourteen actions.
 //!
 //! Until this landed the General family had no Lean counterpart for its
 //! transition artifacts at all -- the same gap `73f0793` closed for Direct --
 //! and the imperative builder below was the sole authority for what a General
-//! release admits. Nothing changed shape: the gate is byte-identity with what
-//! the builder already produced, so no artifact digest moved.
+//! release admits. The pre-existing thirteen retain byte identity; Verify adds
+//! the fourteenth program without changing any existing artifact digest.
 //!
-//! The seven collection and candidate actions have no program in either place.
-//! Authoring theirs in Lean, and deleting the builder in favour of the emitted
-//! arrays, is the remaining work; the byte gate is what makes the second step
-//! safe to take one action at a time.
-
-use crate::effect_artifacts_v3::unauthored_actions;
+//! Deleting the imperative builder in favour of the emitted arrays is remaining
+//! cleanup; the byte gate makes that change safe to take one action at a time.
 use dclutch_claims_svm::affine_batch_v2::DeltaDirectionV2;
 use dclutch_custody_contract::OperationV1;
 use dclutch_general_codec::Action;
@@ -36,6 +32,7 @@ use dclutch_transition_vm::v3::{
 };
 
 use crate::{
+    candidate_v1::{GeneralCandidateLayoutV1, GeneralCandidateStatusV1},
     collection_v1::{
         BatchStatusV1, GeneralBatchLayoutV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1,
     },
@@ -56,8 +53,6 @@ pub enum GeneralTransitionArtifactErrorV3 {
     Geometry,
     /// The canonical TransitionVM encoder refused the complete program.
     Transition(dclutch_transition_vm::v3::Error),
-    /// The action is a declared protocol selector with no authored artifacts.
-    UnauthoredAction,
 }
 
 /// Result alias for General transition artifacts.
@@ -72,18 +67,17 @@ pub use generated::*;
 
 /// Borrow the exact Lean-authored TransitionVM program for one General action.
 ///
-/// The empty slice is not a usable program: `ProgramV3::decode` refuses it, so
-/// an unauthored action cannot be admitted with any program at all. It is the
-/// same fail-closed shape `general_request_profile_bytes_v1` uses.
 #[must_use]
 pub const fn general_transition_program_bytes_lean_v3(action: Action) -> &'static [u8] {
     match action {
-        unauthored_actions!() => &[],
+        Action::SubmitCandidate => &GENERAL_SUBMIT_CANDIDATE_TRANSITION_V3,
+        Action::VerifyCandidateRow => &GENERAL_VERIFY_CANDIDATE_ROW_TRANSITION_V3,
         Action::OpenBatch => &GENERAL_OPEN_BATCH_TRANSITION_V3,
         Action::CloseBatch => &GENERAL_CLOSE_BATCH_TRANSITION_V3,
         Action::PlaceOrder => &GENERAL_PLACE_ORDER_TRANSITION_V3,
         Action::CancelOrder => &GENERAL_CANCEL_ORDER_TRANSITION_V3,
         Action::ReleaseOrder => &GENERAL_RELEASE_ORDER_TRANSITION_V3,
+        Action::CloseCandidate => &GENERAL_CLOSE_CANDIDATE_TRANSITION_V3,
         Action::Consider => &GENERAL_CONSIDER_TRANSITION_V3,
         Action::Freeze => &GENERAL_FREEZE_TRANSITION_V3,
         Action::InitializeSettlement => &GENERAL_INITIALIZE_TRANSITION_V3,
@@ -101,16 +95,18 @@ pub const GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3: InstructionV3 =
 /// Return exact `(prelude, item, epilogue)` instruction counts.
 ///
 /// Every prelude carries the two-instruction root-lifecycle conjunct added by
-/// [`append_common`], so all seven counts moved together when it landed.
+/// [`append_common`], so every authored count moved together when it landed.
 #[must_use]
 pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, usize, usize) {
     match action {
-        unauthored_actions!() => (0, 0, 0),
+        Action::SubmitCandidate => (45, 1, 0),
+        Action::VerifyCandidateRow => (23, 1, 0),
         Action::OpenBatch => (26, 1, 0),
         Action::CloseBatch => (27, 1, 0),
         Action::PlaceOrder => (45, 4, 0),
         Action::CancelOrder => (49, 4, 0),
         Action::ReleaseOrder => (42, 4, 0),
+        Action::CloseCandidate => (34, 1, 0),
         Action::Consider => (15, 1, 0),
         Action::Freeze => (17, 1, 0),
         Action::InitializeSettlement => (21, 2, 0),
@@ -126,9 +122,6 @@ pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, 
 
 /// Exact finalized program byte width for one action.
 pub fn general_transition_program_bytes_v3(action: Action) -> Result<usize> {
-    if !crate::effect_artifacts_v3::general_action_artifacts_authored_v3(action) {
-        return Err(GeneralTransitionArtifactErrorV3::UnauthoredAction);
-    }
     let (prelude, item, epilogue) = general_transition_instruction_count_v3(action);
     prelude
         .checked_add(item)
@@ -202,7 +195,9 @@ fn append_common(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
         Action::OpenBatch | Action::CancelOrder | Action::CloseBatch => {
             GeneralLocalStateKindV3::Batch
         }
-        Action::SubmitCandidate | Action::VerifyCandidateRow => GeneralLocalStateKindV3::Candidate,
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => {
+            GeneralLocalStateKindV3::Candidate
+        }
         Action::PlaceOrder | Action::ReleaseOrder => GeneralLocalStateKindV3::Order,
         _ => GeneralLocalStateKindV3::Settlement,
     };
@@ -244,8 +239,268 @@ fn append_common(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
 
 fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usize) -> Result<()> {
     match action {
-        unauthored_actions!() => {
-            return Err(GeneralTransitionArtifactErrorV3::UnauthoredAction);
+        Action::SubmitCandidate => {
+            for instruction in [
+                InstructionV3::load_const(s(scalar::ONE)?, 1),
+                InstructionV3::nonzero(s(scalar::PRIMARY_CREATED)?),
+                InstructionV3::identity_eq(i(identity::PRIMARY_BENEFICIARY)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(
+                    i(identity::CANDIDATE)?,
+                    i(identity::BEST_VERIFIED_DIGEST)?,
+                ),
+                InstructionV3::identity_eq(
+                    i(identity::SELECTION_POLICY)?,
+                    i(identity::SELECTION_BATCH)?,
+                ),
+                InstructionV3::identity_eq(i(identity::ORDER)?, i(identity::SELECTION_PRODUCT)?),
+                InstructionV3::scalar_eq(
+                    s(scalar::SELECTION_PRICE_SCALE)?,
+                    s(scalar::ORDER_MAX_LOTS)?,
+                ),
+                InstructionV3::scalar_eq(s(scalar::ZERO)?, s(scalar::OUTCOME_COUNT)?),
+                InstructionV3::scalar_eq(
+                    s(scalar::BATCH_POST_ORDER_COUNT)?,
+                    s(scalar::OUTCOME_COUNT)?,
+                ),
+                InstructionV3::identity_eq(
+                    i(identity::RESULT_BENEFICIARY_OBSERVATION)?,
+                    i(identity::CANDIDATE)?,
+                ),
+                InstructionV3::identity_eq(
+                    i(identity::BENEFICIARY)?,
+                    i(identity::SELECTION_BATCH)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::VERIFY_POST_ORDER_COUNT)?,
+                    s(scalar::OUTCOME_COUNT)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::VERIFY_POST_PAGE)?,
+                    s(scalar::CANDIDATE_PAGE_COUNT)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CANDIDATE_POST_STATUS)?,
+                    u64::from(GeneralCandidateStatusV1::Submitted.tag()),
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::CANDIDATE_STATUS_OBSERVATION)?,
+                    s(scalar::CANDIDATE_POST_STATUS)?,
+                ),
+                InstructionV3::nonzero(s(scalar::SELECTION_BEST_CANDIDATE_COORDINATE)?),
+                InstructionV3::nonzero(s(scalar::CANDIDATE_PAGE_REVISION)?),
+                InstructionV3::nonzero(s(scalar::CANDIDATE_ROW_COUNT)?),
+                InstructionV3::nonzero(s(scalar::CANDIDATE_REWARD_RATE)?),
+                InstructionV3::scalar_le(
+                    s(scalar::CANDIDATE_PAGE_COUNT)?,
+                    s(scalar::CANDIDATE_ROW_COUNT)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_A)?,
+                    u64::from(BatchStatusV1::Closed.tag()),
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::BATCH_STATUS_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::scalar_le(
+                    s(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+                    s(scalar::CURRENT_SLOT)?,
+                ),
+                InstructionV3::scalar_lt(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::CANDIDATE_SUBMITTED_SLOT)?,
+                    s(scalar::CURRENT_SLOT)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CANDIDATE_ROW_COUNT)?,
+                    s(scalar::CANDIDATE_POST_VERIFICATION_REMAINING)?,
+                ),
+                InstructionV3::checked_mul_into(
+                    s(scalar::CANDIDATE_POST_VERIFICATION_REMAINING)?,
+                    s(scalar::CANDIDATE_REWARD_RATE)?,
+                    s(scalar::CANDIDATE_POST_VERIFICATION_REMAINING)?,
+                ),
+                InstructionV3::copy_scalar(
+                    s(scalar::CANDIDATE_REWARD_RATE)?,
+                    s(scalar::CANDIDATE_POST_CLEANUP_REMAINING)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION)?,
+                    s(scalar::CANDIDATE_POST_VERIFICATION_REMAINING)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
+                    s(scalar::CANDIDATE_POST_CLEANUP_REMAINING)?,
+                ),
+                InstructionV3::checked_add_into(
+                    s(scalar::CANDIDATE_POST_VERIFICATION_REMAINING)?,
+                    s(scalar::CANDIDATE_POST_CLEANUP_REMAINING)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::checked_add_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::PRIMARY_RENT_PRINCIPAL)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::VERIFY_REVISION_OBSERVATION)?,
+                    u64::from_le_bytes(GeneralCandidateLayoutV1::MAGIC),
+                ),
+                InstructionV3::load_const(
+                    s(scalar::VERIFY_POST_REVISION)?,
+                    u64::from(GeneralCandidateLayoutV1::PHASE),
+                ),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
+        Action::VerifyCandidateRow => {
+            for instruction in [
+                // Candidate is an authenticated existing envelope and only its
+                // Submitted phase admits one verifier row.
+                InstructionV3::load_const(s(scalar::ONE)?, 1),
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_A)?,
+                    u64::from(GeneralCandidateStatusV1::Submitted.tag()),
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::CANDIDATE_STATUS_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                // The request subject and optimistic coordinates are exact
+                // joins to authenticated Candidate/verifier evidence. The
+                // request profile maps expected_revision to scalar 94 because
+                // scalar zero is overwritten with ACTION before this fold.
+                InstructionV3::identity_eq(
+                    i(identity::PARENT_REQUEST_DIGEST)?,
+                    i(identity::CANDIDATE)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::ROOT_EXPECTED_REVISION)?,
+                    s(scalar::VERIFY_REVISION_OBSERVATION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::VERIFY_REVISION_OBSERVATION)?,
+                    s(scalar::VERIFY_POST_REVISION)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::COMPLETE_SET_MOVE)?,
+                    s(scalar::VERIFY_PAGE_OBSERVATION)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::CLAIMS_AFFINE_ACTIVE)?,
+                    s(scalar::VERIFY_ROW_OBSERVATION)?,
+                ),
+                // A row may continue the current globally grouped order or
+                // begin exactly one new order; it may neither erase nor skip.
+                InstructionV3::scalar_le(
+                    s(scalar::VERIFY_ORDER_COUNT_OBSERVATION)?,
+                    s(scalar::VERIFY_POST_ORDER_COUNT)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::VERIFY_ORDER_COUNT_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::scalar_le(
+                    s(scalar::VERIFY_POST_ORDER_COUNT)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                // Lifecycle V5 alone consumes this boolean as its raw
+                // certificate Create guard; no manifest or economics are
+                // written by this transition.
+                InstructionV3::scalar_le(s(scalar::VERIFY_TERMINAL)?, s(scalar::ONE)?),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
+        Action::CloseCandidate => {
+            for instruction in [
+                InstructionV3::load_const(s(scalar::ONE)?, 1),
+                InstructionV3::identity_eq(
+                    i(identity::PARENT_REQUEST_DIGEST)?,
+                    i(identity::CANDIDATE)?,
+                ),
+                InstructionV3::identity_eq(i(identity::PRIMARY_BENEFICIARY)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::RENT_CREDIT)?, i(identity::OWNER)?),
+                InstructionV3::nonzero(s(scalar::CANDIDATE_REWARD_RATE)?),
+                InstructionV3::scalar_eq(
+                    s(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
+                    s(scalar::CANDIDATE_REWARD_RATE)?,
+                ),
+                InstructionV3::checked_add_into(
+                    s(scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION)?,
+                    s(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::checked_add_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::PRIMARY_RENT_PRINCIPAL)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::OBSERVED_POSITION_LAMPORTS)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_A)?,
+                    u64::from(GeneralCandidateStatusV1::Considered.tag()),
+                ),
+                InstructionV3::nonzero(s(scalar::CANDIDATE_STATUS_OBSERVATION)?),
+                InstructionV3::scalar_le(
+                    s(scalar::CANDIDATE_STATUS_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::min_into(
+                    s(scalar::CANDIDATE_STATUS_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::sub_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::SCRATCH_B)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::min_into(
+                    s(scalar::SCRATCH_B)?,
+                    s(scalar::ONE)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::min_into(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::sub_into(
+                    s(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::min_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::ONE)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::checked_mul_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::SCRATCH_B)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::load_const(s(scalar::SCRATCH_B)?, 0),
+                InstructionV3::scalar_eq(s(scalar::SCRATCH_A)?, s(scalar::SCRATCH_B)?),
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_A)?,
+                    u64::from(BatchStatusV1::Closed.tag()),
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::BATCH_STATUS_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+            ] {
+                push(output, cursor, instruction)?;
+            }
         }
         Action::Consider => {
             for instruction in [
@@ -814,9 +1069,10 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 ),
                 // The window gate, from the order alone: PlaceOrder pins the
                 // signed valid_until_slot to the batch's settlement close
-                // EXACTLY, so strictly-after-valid is strictly-after-the-window
-                // and no batch account enters the frame.
-                InstructionV3::scalar_lt(
+                // EXACTLY. Batch release admits the pinned close slot itself,
+                // so the order gate uses the same inclusive boundary without
+                // bringing a batch account into the frame.
+                InstructionV3::scalar_le(
                     s(scalar::ORDER_VALID_UNTIL_SLOT)?,
                     s(scalar::CURRENT_SLOT)?,
                 ),
@@ -1021,9 +1277,7 @@ fn append_item(action: Action, output: &mut [InstructionV3], cursor: &mut usize)
         InstructionV3::scalar_lt(is(item_scalar::OUTCOME)?, s(scalar::OUTCOME_COUNT)?),
     )?;
     match action {
-        unauthored_actions!() => {
-            return Err(GeneralTransitionArtifactErrorV3::UnauthoredAction);
-        }
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => {}
         Action::Consider | Action::Freeze | Action::Materialize => {}
         // The batch record has no per-outcome tail; the bound check alone.
         Action::OpenBatch | Action::CloseBatch => {}
@@ -1119,13 +1373,13 @@ mod tests {
     extern crate std;
 
     use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
-    use std::vec;
+    use std::{format, vec};
 
     use super::*;
 
     const ACTIVE_LIFECYCLE: u64 = GeneralLifecycleV2::Active.tag() as u64;
 
-    const ACTIONS: [Action; 12] = [
+    const ACTIONS: [Action; 15] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -1137,7 +1391,10 @@ mod tests {
         Action::PlaceOrder,
         Action::CancelOrder,
         Action::CloseBatch,
+        Action::SubmitCandidate,
+        Action::VerifyCandidateRow,
         Action::ReleaseOrder,
+        Action::CloseCandidate,
     ];
 
     fn artifact(action: Action) -> std::vec::Vec<u8> {
@@ -1289,6 +1546,24 @@ mod tests {
                 GENERAL_CANCEL_ORDER_TRANSITION_BYTES_V3,
             ),
             (
+                Action::SubmitCandidate,
+                (
+                    GENERAL_SUBMIT_CANDIDATE_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_SUBMIT_CANDIDATE_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_SUBMIT_CANDIDATE_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_SUBMIT_CANDIDATE_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::VerifyCandidateRow,
+                (
+                    GENERAL_VERIFY_CANDIDATE_ROW_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_VERIFY_CANDIDATE_ROW_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_VERIFY_CANDIDATE_ROW_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_VERIFY_CANDIDATE_ROW_TRANSITION_BYTES_V3,
+            ),
+            (
                 Action::ReleaseOrder,
                 (
                     GENERAL_RELEASE_ORDER_PRELUDE_INSTRUCTIONS_V3,
@@ -1346,24 +1621,13 @@ mod tests {
         // The two highest coordinates each bank names must be inside the width
         // the emitted programs were encoded against, or an instruction that
         // addresses one is decodable and out of range at fold time.
-        assert!(scalar::ROOT_LIFECYCLE_ACTIVE < GENERAL_TRANSITION_COMMON_SCALARS_V3);
+        assert!(scalar::RESULT_RENT_PRINCIPAL < GENERAL_TRANSITION_COMMON_SCALARS_V3);
         assert!(item_scalar::CURSOR_INVENTORY < GENERAL_TRANSITION_ITEM_SCALAR_STRIDE_V3);
-        assert!(identity::TERMINAL_OWNER < GENERAL_TRANSITION_COMMON_IDENTITIES_V3);
-    }
-
-    /// An unauthored action borrows no program, and the empty slice is refused
-    /// by the decoder rather than treated as a permissive one.
-    #[test]
-    fn an_unauthored_action_borrows_no_lean_authored_program() {
-        for action in [Action::SubmitCandidate, Action::VerifyCandidateRow] {
-            let bytes = general_transition_program_bytes_lean_v3(action);
-            assert!(bytes.is_empty(), "{action:?} borrowed a program");
-            assert!(ProgramV3::decode(bytes).is_err());
-        }
+        assert!(identity::RESULT_OWNER < GENERAL_TRANSITION_COMMON_IDENTITIES_V3);
     }
 
     #[test]
-    fn all_seven_actions_emit_distinct_nontrivial_runtime_tail_programs() {
+    fn all_authored_actions_emit_distinct_nontrivial_runtime_tail_programs() {
         let mut prior: Option<std::vec::Vec<u8>> = None;
         for action in ACTIONS {
             let bytes = artifact(action);
@@ -1450,6 +1714,338 @@ mod tests {
         )
         .map_err(GeneralTransitionArtifactErrorV3::Transition)?;
         Ok(scalar_output)
+    }
+
+    /// Exact AccountProfile projection image accepted by SubmitCandidate.
+    ///
+    /// The two runtime widths exercise both the singleton boundary and the
+    /// first three-byte outcome index. Every value below has one semantic
+    /// owner in the candidate/batch/submission records or lifecycle result;
+    /// the transition merely joins them and derives the two escrow tranches.
+    fn submit_candidate_input_bank(count: u32) -> (std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>) {
+        let scalar_count = usize::try_from(
+            GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+        )
+        .expect("scalar width");
+        let mut scalars = vec![0_u64; scalar_count];
+        let mut put = |coordinate: u32, value: u64| {
+            scalars[usize::try_from(coordinate).expect("common scalar")] = value;
+        };
+        let row_count = u64::from(count);
+        let page_count = row_count;
+        let reward_rate = 7_u64;
+        let verification = (row_count + 1) * reward_rate;
+        put(scalar::OUTCOME_COUNT, u64::from(count));
+        put(scalar::ZERO, u64::from(count));
+        put(scalar::STATE_BUMP, 42);
+        put(scalar::PRIMARY_CANONICAL_BUMP, 42);
+        put(scalar::PRIMARY_RENT_PRINCIPAL, 1_000);
+        put(scalar::ROOT_LIFECYCLE_OBSERVATION, ACTIVE_LIFECYCLE);
+        put(scalar::PRIMARY_CREATED, 1);
+        put(scalar::SELECTION_PRICE_SCALE, 1_000);
+        put(scalar::ORDER_MAX_LOTS, 1_000);
+        put(scalar::BATCH_POST_ORDER_COUNT, u64::from(count));
+        put(scalar::VERIFY_POST_ORDER_COUNT, u64::from(count));
+        put(scalar::VERIFY_POST_PAGE, page_count);
+        put(scalar::CANDIDATE_PAGE_COUNT, page_count);
+        put(scalar::CANDIDATE_STATUS_OBSERVATION, 1);
+        put(scalar::SELECTION_BEST_CANDIDATE_COORDINATE, 1);
+        put(scalar::CANDIDATE_PAGE_REVISION, 9);
+        put(scalar::CANDIDATE_ROW_COUNT, row_count);
+        put(scalar::CANDIDATE_REWARD_RATE, reward_rate);
+        put(
+            scalar::BATCH_STATUS_OBSERVATION,
+            u64::from(BatchStatusV1::Closed.tag()),
+        );
+        put(scalar::BATCH_COLLECTION_CLOSE_SLOT, 99);
+        put(scalar::CURRENT_SLOT, 100);
+        put(scalar::BATCH_SETTLEMENT_CLOSE_SLOT, 101);
+        put(scalar::CANDIDATE_SUBMITTED_SLOT, 100);
+        put(
+            scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION,
+            verification,
+        );
+        put(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION, reward_rate);
+        for item in 0..count {
+            let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            scalars[usize::try_from(base + item_scalar::OUTCOME).expect("item outcome")] =
+                u64::from(item);
+        }
+
+        let mut identities = vec![
+            [0_u8; 32];
+            usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .expect("identity width")
+        ];
+        let mut put_id = |coordinate: u32, value: [u8; 32]| {
+            identities[usize::try_from(coordinate).expect("common identity")] = value;
+        };
+        let trading = [0x11; 32];
+        let solver = [0x22; 32];
+        let candidate = [0x33; 32];
+        let batch = [0x44; 32];
+        let product = [0x55; 32];
+        put_id(identity::PRIMARY_OWNER, trading);
+        put_id(identity::TRADING_PROGRAM, trading);
+        put_id(identity::PRIMARY_BENEFICIARY, solver);
+        put_id(identity::OWNER, solver);
+        put_id(identity::CANDIDATE, candidate);
+        put_id(identity::BEST_VERIFIED_DIGEST, candidate);
+        put_id(identity::RESULT_BENEFICIARY_OBSERVATION, candidate);
+        put_id(identity::SELECTION_POLICY, batch);
+        put_id(identity::SELECTION_BATCH, batch);
+        put_id(identity::BENEFICIARY, batch);
+        put_id(identity::ORDER, product);
+        put_id(identity::SELECTION_PRODUCT, product);
+        (scalars, identities)
+    }
+
+    #[test]
+    fn submit_candidate_executes_at_one_and_258_outcomes() {
+        let bytes = artifact(Action::SubmitCandidate);
+        let program = ProgramV3::decode(&bytes).expect("SubmitCandidate program");
+        for count in [1_u32, 258] {
+            let (scalars, identities) = submit_candidate_input_bank(count);
+            let output =
+                fold(program, count, &scalars, &identities).expect("valid submitted candidate");
+            assert_eq!(
+                output[usize::try_from(scalar::ACTION).expect("action")],
+                u64::from(Action::SubmitCandidate as u8),
+            );
+            assert_eq!(
+                output[usize::try_from(scalar::CANDIDATE_POST_VERIFICATION_REMAINING)
+                    .expect("verification escrow")],
+                (u64::from(count) + 1) * 7,
+            );
+            assert_eq!(
+                output[usize::try_from(scalar::CANDIDATE_POST_CLEANUP_REMAINING)
+                    .expect("cleanup escrow")],
+                7,
+            );
+        }
+    }
+
+    #[test]
+    fn submit_candidate_refuses_each_authority_or_economic_join_when_substituted() {
+        let bytes = artifact(Action::SubmitCandidate);
+        let program = ProgramV3::decode(&bytes).expect("SubmitCandidate program");
+        for count in [1_u32, 258] {
+            let (accepted_scalars, accepted_identities) = submit_candidate_input_bank(count);
+            for (coordinate, hostile) in [
+                (scalar::BATCH_STATUS_OBSERVATION, 0),
+                (scalar::BATCH_COLLECTION_CLOSE_SLOT, 101),
+                (scalar::BATCH_SETTLEMENT_CLOSE_SLOT, 100),
+                (scalar::CANDIDATE_SUBMITTED_SLOT, 99),
+                (scalar::CANDIDATE_PAGE_COUNT, u64::from(count) + 1),
+                (scalar::CANDIDATE_PAGE_REVISION, 0),
+                (scalar::CANDIDATE_REWARD_RATE, 0),
+                (
+                    scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION,
+                    (u64::from(count) + 1) * 7 - 1,
+                ),
+                (scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION, 6),
+            ] {
+                let mut scalars = accepted_scalars.clone();
+                scalars[usize::try_from(coordinate).expect("hostile scalar")] = hostile;
+                assert!(
+                    fold(program, count, &scalars, &accepted_identities).is_err(),
+                    "width {count} accepted hostile scalar {coordinate}",
+                );
+            }
+            for coordinate in [
+                identity::PRIMARY_BENEFICIARY,
+                identity::BEST_VERIFIED_DIGEST,
+                identity::SELECTION_POLICY,
+                identity::ORDER,
+                identity::RESULT_BENEFICIARY_OBSERVATION,
+                identity::BENEFICIARY,
+            ] {
+                let mut identities = accepted_identities.clone();
+                identities[usize::try_from(coordinate).expect("hostile identity")] = [0xee; 32];
+                assert!(
+                    fold(program, count, &accepted_scalars, &identities).is_err(),
+                    "width {count} accepted hostile identity {coordinate}",
+                );
+            }
+        }
+    }
+
+    /// Exact authenticated bank accepted by VerifyCandidateRow.
+    ///
+    /// The request-profile inputs are `ROOT_EXPECTED_REVISION` (scalar 94),
+    /// `COMPLETE_SET_MOVE` (1), `CLAIMS_AFFINE_ACTIVE` (2), and
+    /// `PARENT_REQUEST_DIGEST` (identity 0). The observation/post coordinates
+    /// are independently projected from authenticated state and the sole
+    /// candidate verifier.
+    fn verify_candidate_row_input_bank(
+        count: u32,
+        terminal: u64,
+        post_order_count: u64,
+    ) -> (std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>) {
+        let (mut scalars, mut identities) = consider_input_bank(count, ACTIVE_LIFECYCLE);
+        let mut put = |coordinate: u32, value: u64| {
+            scalars[usize::try_from(coordinate).expect("Verify common scalar")] = value;
+        };
+        put(
+            scalar::CANDIDATE_STATUS_OBSERVATION,
+            u64::from(GeneralCandidateStatusV1::Submitted.tag()),
+        );
+        put(scalar::ROOT_EXPECTED_REVISION, 5);
+        put(scalar::VERIFY_REVISION_OBSERVATION, 5);
+        put(scalar::VERIFY_POST_REVISION, 6);
+        put(scalar::COMPLETE_SET_MOVE, 2);
+        put(scalar::VERIFY_PAGE_OBSERVATION, 2);
+        put(scalar::CLAIMS_AFFINE_ACTIVE, 3);
+        put(scalar::VERIFY_ROW_OBSERVATION, 3);
+        put(scalar::VERIFY_ORDER_COUNT_OBSERVATION, 4);
+        put(scalar::VERIFY_POST_ORDER_COUNT, post_order_count);
+        put(scalar::VERIFY_TERMINAL, terminal);
+        let candidate = [0x33; 32];
+        identities[usize::try_from(identity::PARENT_REQUEST_DIGEST).expect("request subject")] =
+            candidate;
+        identities[usize::try_from(identity::CANDIDATE).expect("candidate identity")] = candidate;
+        (scalars, identities)
+    }
+
+    fn assert_verify_check_failed(
+        program: ProgramV3<'_>,
+        count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+        context: &str,
+    ) {
+        assert_eq!(
+            fold(program, count, scalars, identities),
+            Err(GeneralTransitionArtifactErrorV3::Transition(
+                dclutch_transition_vm::v3::Error::CheckFailed,
+            )),
+            "{context}",
+        );
+    }
+
+    #[test]
+    fn verify_candidate_row_executes_at_one_and_258_outcomes() {
+        let bytes = artifact(Action::VerifyCandidateRow);
+        assert_eq!(bytes.len(), 608);
+        let program = ProgramV3::decode(&bytes).expect("VerifyCandidateRow program");
+        for count in [1_u32, 258] {
+            for (terminal, post_order_count) in [(0_u64, 4_u64), (1, 5)] {
+                let (scalars, identities) =
+                    verify_candidate_row_input_bank(count, terminal, post_order_count);
+                let output = fold(program, count, &scalars, &identities)
+                    .expect("exact authenticated verifier row");
+                assert_eq!(
+                    output[usize::try_from(scalar::ACTION).expect("action")],
+                    u64::from(Action::VerifyCandidateRow as u8),
+                );
+                assert_eq!(
+                    output[usize::try_from(scalar::VERIFY_POST_REVISION).expect("post revision")],
+                    6,
+                );
+                assert_eq!(
+                    output[usize::try_from(scalar::VERIFY_POST_ORDER_COUNT)
+                        .expect("post order count")],
+                    post_order_count,
+                );
+                assert_eq!(
+                    output[usize::try_from(scalar::VERIFY_TERMINAL).expect("terminal")],
+                    terminal,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn verify_candidate_row_refuses_substituted_revision_page_row_or_terminal() {
+        let bytes = artifact(Action::VerifyCandidateRow);
+        let program = ProgramV3::decode(&bytes).expect("VerifyCandidateRow program");
+        for count in [1_u32, 258] {
+            let (accepted_scalars, accepted_identities) =
+                verify_candidate_row_input_bank(count, 1, 5);
+            for (coordinate, hostile, label) in [
+                (scalar::ROOT_EXPECTED_REVISION, 4, "request revision"),
+                (scalar::COMPLETE_SET_MOVE, 1, "request page"),
+                (scalar::CLAIMS_AFFINE_ACTIVE, 2, "request row"),
+                (scalar::VERIFY_TERMINAL, 2, "terminal"),
+                (scalar::CANDIDATE_STATUS_OBSERVATION, 2, "candidate status"),
+                (scalar::VERIFY_POST_ORDER_COUNT, 3, "decreasing order count"),
+                (scalar::VERIFY_POST_ORDER_COUNT, 6, "skipped order count"),
+            ] {
+                let mut scalars = accepted_scalars.clone();
+                scalars[usize::try_from(coordinate).expect("hostile scalar")] = hostile;
+                assert_verify_check_failed(
+                    program,
+                    count,
+                    &scalars,
+                    &accepted_identities,
+                    &format!("width {count} accepted substituted {label}"),
+                );
+            }
+            let mut identities = accepted_identities.clone();
+            identities[usize::try_from(identity::PARENT_REQUEST_DIGEST).expect("subject")] =
+                [0xee; 32];
+            assert_verify_check_failed(
+                program,
+                count,
+                &accepted_scalars,
+                &identities,
+                &format!("width {count} accepted a substituted Candidate subject"),
+            );
+        }
+    }
+
+    fn release_order_input_bank(
+        count: u32,
+        current_slot: u64,
+    ) -> (std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>) {
+        let (mut scalars, mut identities) = consider_input_bank(count, ACTIVE_LIFECYCLE);
+        scalars[usize::try_from(scalar::ORDER_PHASE_OBSERVATION).expect("phase")] =
+            u64::from(GeneralOrderPhaseV1::Placed.tag());
+        scalars[usize::try_from(scalar::ORDER_VALID_UNTIL_SLOT).expect("valid until")] = 500;
+        scalars[usize::try_from(scalar::CURRENT_SLOT).expect("current slot")] = current_slot;
+        scalars[usize::try_from(scalar::ORDER_ADMITTED_SLOT_OBSERVATION).expect("admitted")] = 10;
+        scalars[usize::try_from(scalar::ORDER_MAX_LOTS).expect("lots")] = 6;
+        scalars[usize::try_from(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT).expect("quote cap")] = 7;
+        scalars[usize::try_from(scalar::ESCROW_BALANCE_OBSERVATION).expect("residual")] = 40;
+        scalars[usize::try_from(scalar::CUSTODY_EXPECTED_REVISION).expect("custody revision")] = 5;
+        scalars[usize::try_from(scalar::CLAIMS_MARKET_REVISION).expect("market revision")] = 11;
+        scalars[usize::try_from(scalar::POSITION_ZERO_REVISION).expect("position revision")] = 3;
+        let order = [0x33; 32];
+        let maker = [0x44; 32];
+        for coordinate in [
+            identity::ORDER,
+            identity::SOURCE_VAULT_CONTEXT,
+            identity::POSITION_ZERO_OWNER,
+            identity::SETTLEMENT_POSITION_OWNER,
+        ] {
+            identities[usize::try_from(coordinate).expect("order identity")] = order;
+        }
+        for coordinate in [
+            identity::OWNER,
+            identity::CUSTODY_DESTINATION_OWNER,
+            identity::POSITION_ONE_OWNER,
+            identity::RENT_CREDIT,
+            identity::RENT_REFUND,
+        ] {
+            identities[usize::try_from(coordinate).expect("maker identity")] = maker;
+        }
+        (scalars, identities)
+    }
+
+    #[test]
+    fn release_order_accepts_the_pinned_close_slot_and_refuses_one_slot_early() {
+        let bytes = artifact(Action::ReleaseOrder);
+        let program = ProgramV3::decode(&bytes).expect("ReleaseOrder program");
+        for count in [1_u32, 258] {
+            let (at_close, identities) = release_order_input_bank(count, 500);
+            fold(program, count, &at_close, &identities)
+                .expect("the pinned settlement close is the release boundary");
+            let (one_slot_early, identities) = release_order_input_bank(count, 499);
+            assert!(
+                fold(program, count, &one_slot_early, &identities).is_err(),
+                "width {count} released one slot before the pinned close",
+            );
+        }
     }
 
     #[test]

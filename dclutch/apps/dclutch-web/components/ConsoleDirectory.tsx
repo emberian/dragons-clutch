@@ -1,100 +1,134 @@
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import { Card, CardContent } from '@/components/ui/card';
+import {
+  CAPABILITY_ACTIONS_V1,
+  capabilityActContractV1,
+  type CapabilityActionV1,
+} from '@/lib/capabilityModel';
 import { docsHrefV1 } from '@/lib/flags';
 
 /**
- * `/console` — the directory of the operator consoles.
+ * `/console` — one directory generated from the executable capability truth.
  *
- * The product pages (Markets, Create, Portfolio, Explorer) are for anyone.
- * Everything listed here is an operator surface for someone operating or
- * building on the protocol. Some entries are read-only readiness views; a
- * route may construct bytes only when its own preflight says so. This page exists so those
- * tools stop masquerading as product pages — one entry per console, one plain
- * sentence per entry saying who it is for and what it does.
+ * A linked workspace may still perform its own chain-specific preflight, but
+ * this directory never keeps a second description of what the workspace can
+ * do. Capability labels and act contracts come directly from the catalogue
+ * used by `/operate`; only lifecycle grouping and two evidence-only support
+ * tools are local presentation facts.
  */
 
-type ConsoleEntry = Readonly<{ href: string; name: string; blurb: string }>;
+type ActionConsoleDefinitionV1 = Readonly<{
+  workspace: string;
+  href: string;
+  name: string;
+}>;
 
-const ENTRIES: readonly ConsoleEntry[] = [
-  {
-    href: '/workbench',
-    name: 'Lifecycle workbench',
-    blurb:
-      'Read a market lifecycle readiness map against the chain you choose. It does not create, trade, resolve, or redeem.',
-  },
-  {
-    href: '/found',
-    name: 'Founding',
-    blurb:
-      'Inspect the older partial founding packet pair. It cannot open a current devnet market.',
-  },
-  {
-    href: '/product-v2',
-    name: 'Product studio',
-    blurb:
-      'For market authors: write a payoff curve as exact fractions and read back precisely what each outcome would pay.',
-  },
-  {
-    href: '/trade',
-    name: 'Direct trade',
-    blurb:
-      'Inspect one Direct route and preview its exact integer arithmetic. Browser signing and submission are unavailable.',
-  },
-  {
-    href: '/liquidity',
-    name: 'Liquidity',
-    blurb:
-      'For dealers: build and download an unsigned transaction for adding or withdrawing dealer equity, checked against the chain first. You sign and send it yourself, elsewhere.',
-  },
-  {
-    href: '/redeem',
-    name: 'Wallet redemption (not open yet)',
-    blurb:
-      'Connect your wallet and see the claims it holds across the deployment. Paying out winning claims is not available yet; this is where it will happen, and the page tells you so rather than offering a button that cannot work.',
-  },
-  {
-    href: '/resolution',
-    name: 'Resolution',
-    blurb:
-      'A read-only view of what a market still needs before its oracle answer can be accepted, and how far along the one you point it at has got. Resolution is not open yet.',
-  },
-  {
-    href: '/general',
-    name: 'General clearing',
-    blurb:
-      'For operators: paste a clearing plan produced by the operator program, have the browser re-check every field against the chain, and download the unsigned transaction. Nothing is sent from here.',
-  },
-  {
-    href: '/release',
-    name: 'Release activation',
-    blurb:
-      'Activate already-installed checked artifacts against a Registry. This does not update programs and is not the current devnet Upgrade workflow.',
-  },
-  {
-    href: '/operate',
-    name: 'Operations',
-    blurb:
-      'For operators of a running deployment: see every action the deployed programs accept right now, and export unsigned bytes for the ones a browser can build.',
-  },
-  {
-    href: '/local',
-    name: 'Local successor',
-    blurb:
-      'For developers: read the checkpointed local validator and confirm its finalized state matches the published evidence, byte for byte.',
-  },
-  {
-    href: '/campaign',
-    name: 'Campaign record',
-    blurb:
-      'One market founded, resolved and retired on a private rehearsal validator, drawn from the campaign’s own transcript: per-outcome odds, the vault, the work each stage cost, and the terminal answer.',
-  },
-  {
-    href: '/population',
-    name: 'Population record',
-    blurb:
-      'A whole world of markets drawn from one seed and driven on a private validator: every market’s odds path on a shared clock, the run’s own event timeline, and the strip saying what executed against what the chain refused, never attempted, or blocked.',
-  },
-];
+type SupportConsoleV1 = Readonly<{
+  href: string;
+  name: string;
+  outcome: string;
+  contract: string;
+}>;
+
+type ConsoleEntryV1 = Readonly<{
+  href: string;
+  name: string;
+  actions: ReadonlyArray<CapabilityActionV1>;
+  support: SupportConsoleV1 | null;
+}>;
+
+type ConsoleBandV1 = Readonly<{
+  title: string;
+  deck: string;
+  actionConsoles?: ReadonlyArray<ActionConsoleDefinitionV1>;
+  supportConsoles?: ReadonlyArray<SupportConsoleV1>;
+}>;
+
+const BANDS_V1: ReadonlyArray<ConsoleBandV1> = Object.freeze([
+  Object.freeze({
+    title: 'Author and open',
+    deck: 'Compile the product, then open the market from authenticated inputs.',
+    actionConsoles: Object.freeze([
+      Object.freeze({ workspace: '/product-v2', href: '/product-v2#spline-product', name: 'Product compiler' }),
+      Object.freeze({ workspace: '/found', href: '/found#current-founding', name: 'Founding' }),
+    ]),
+  }),
+  Object.freeze({
+    title: 'Trade and resolve',
+    deck: 'Construct the market’s live trading, clearing, and resolution acts.',
+    actionConsoles: Object.freeze([
+      Object.freeze({ workspace: '/liquidity', href: '/liquidity', name: 'Dealer liquidity' }),
+      Object.freeze({ workspace: '/general', href: '/general', name: 'General clearing' }),
+      Object.freeze({ workspace: '/resolution', href: '/resolution', name: 'Resolution' }),
+    ]),
+  }),
+  Object.freeze({
+    title: 'Run the deployment',
+    deck: 'Activate checked releases and produce current operator artifacts.',
+    actionConsoles: Object.freeze([
+      Object.freeze({ workspace: '/release', href: '/release', name: 'Release activation' }),
+      Object.freeze({ workspace: '/operate', href: '/operate', name: 'Operations' }),
+    ]),
+  }),
+  Object.freeze({
+    title: 'Verify the record',
+    deck: 'Reacquire lifecycle readiness and compare durable evidence with finalized state.',
+    supportConsoles: Object.freeze([
+      Object.freeze({
+        href: '/workbench',
+        name: 'Lifecycle workbench',
+        outcome: 'Read the remaining lifecycle work for one authenticated Market.',
+        contract: 'Finalized reads only. Produces a readiness map; no transaction.',
+      }),
+      Object.freeze({
+        href: '/local',
+        name: 'Local successor',
+        outcome: 'Rejoin a checkpointed local validator to its published evidence.',
+        contract: 'Local files and finalized reads only. Produces a byte-for-byte comparison.',
+      }),
+    ]),
+  }),
+]);
+
+function workspacePathV1(workspace: CapabilityActionV1['workspace']): string | null {
+  if (workspace === null || workspace === 'market-detail') return null;
+  return workspace.split('#', 1)[0] ?? null;
+}
+
+const EXECUTABLE_ACTIONS_V1 = Object.freeze(CAPABILITY_ACTIONS_V1.filter(
+  (candidate) => candidate.implementation !== 'awaiting-production',
+));
+
+function entriesForBandV1(band: ConsoleBandV1): ReadonlyArray<ConsoleEntryV1> {
+  const actionEntries = (band.actionConsoles ?? []).map((definition) => Object.freeze({
+    href: definition.href,
+    name: definition.name,
+    actions: Object.freeze(EXECUTABLE_ACTIONS_V1.filter(
+      (candidate) => workspacePathV1(candidate.workspace) === definition.workspace,
+    )),
+    support: null,
+  })).filter((entry) => entry.actions.length > 0);
+  const supportEntries = (band.supportConsoles ?? []).map((support) => Object.freeze({
+    href: support.href,
+    name: support.name,
+    actions: Object.freeze([]) as ReadonlyArray<CapabilityActionV1>,
+    support,
+  }));
+  return Object.freeze([...actionEntries, ...supportEntries]);
+}
+
+function contractsForActionsV1(actions: ReadonlyArray<CapabilityActionV1>): ReadonlyArray<string> {
+  return Object.freeze(Array.from(new Set(actions.map((candidate) => {
+    const contract = capabilityActContractV1(candidate);
+    return `${contract.result} ${contract.authority}`;
+  }))));
+}
+
+const DIRECTORY_ACTION_COUNT_V1 = BANDS_V1.reduce(
+  (total, band) => total + entriesForBandV1(band).reduce((subtotal, entry) => subtotal + entry.actions.length, 0),
+  0,
+);
 
 export default function ConsoleDirectory() {
   return <main className="product-shell trade-v3-shell">
@@ -103,27 +137,42 @@ export default function ConsoleDirectory() {
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">Tools for running and building on dClutch</p>
-        <h1>Operator<br /><em>consoles.</em></h1>
-        <p>If you came here to look around or to trade, start at{' '}
-        <Anchor href="/markets">Markets</Anchor> instead. These are working
-        tools, not product pages.</p>
-        <p>Being listed here does not mean a page can send a transaction —
-        several deliberately cannot.</p>
-        <p>Where a console asks you to paste a file, it names the tool that
-        produces it, right on the input. The full list is in the README&apos;s
-        table <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts,
+        <h1>Choose the<br /><em>outcome.</em></h1>
+        <p>{DIRECTORY_ACTION_COUNT_V1} executable protocol acts are routed below. Each
+        entry says what works, what it produces, and whose authority it asks for.
+        Market-participant acts stay on the selected <Anchor href="/markets">Market</Anchor>.</p>
+        <p>These claims come from the same capability catalogue used for chain
+        preflight. Artifact inputs name their producer; the complete provenance
+        table is <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts,
         and where they come from”</a>.</p>
       </div>
     </section>
 
-    <section className="console-index" aria-label="Operator consoles">
-      {ENTRIES.map((entry) => (
-        <Anchor key={entry.href} className="console-entry" href={entry.href}>
-          <strong>{entry.name}</strong>
-          <span>{entry.blurb}</span>
-          <em aria-hidden="true">→</em>
-        </Anchor>
-      ))}
+    <section aria-label="Operator consoles">
+      {BANDS_V1.map((band, index) => {
+        const entries = entriesForBandV1(band);
+        return <Card className="trade-v3-card" key={band.title}>
+          <header><span>{String(index + 1).padStart(2, '0')}</span><div><h2>{band.title}</h2><p>{band.deck}</p></div></header>
+          <CardContent className="console-index p-0">
+            {entries.map((entry) => {
+              const outcomes = entry.support === null
+                ? entry.actions.map((candidate) => candidate.action)
+                : [entry.support.outcome];
+              const contracts = entry.support === null
+                ? contractsForActionsV1(entry.actions)
+                : [entry.support.contract];
+              return <Anchor key={entry.href} className="console-entry" href={entry.href}>
+                <strong>{entry.name}</strong>
+                <span className="console-entry-copy">
+                  <b>{outcomes.join(' · ')}</b>
+                  {contracts.map((contract) => <small key={contract}>{contract}</small>)}
+                </span>
+                <em aria-hidden="true">→</em>
+              </Anchor>;
+            })}
+          </CardContent>
+        </Card>;
+      })}
     </section>
   </main>;
 }

@@ -32,25 +32,34 @@ receipt tests prove the parser, not a completed protocol lifecycle.
   owner, and either the collateral or claim asset class; every Direct and
   payout role bound to the one Realm collateral mint (claim mints may
   correctly differ);
-- every Direct fill's gross quote with no unnamed rounding, then an independent floor of
-  `gross * 50 / 10_000` on each side;
+- every Direct fill's gross quote with no unnamed rounding, then an independent
+  floor of `gross * 50 / 10_000` on each side;
 - exact `LiabilityBasisPositionV2` identity, geometry, revision, and balances;
 - for owned-loopback Hot evidence, exact ordered seller and buyer Position
   pre/post states, distinct accounts and owners, and one conserved outcome
-  transfer equal to the fill; the public-devnet manifest does not admit this
-  private-only field;
+  transfer equal to the fill; Hot transfers only the seller net, and a distinct
+  later finalized transaction must debit the buyer and credit the fee recipient
+  by the combined fee, advance the exact standing-allowance custody revision,
+  and have a sole fee payer unrelated to the seller, buyer, or recipient; the
+  public-devnet manifest does not admit these private-only fields;
 - exact hostile decoding and market binding of `ResolutionCertificateV2`;
 - the exact V7 terminal Resolution history: submit, provider execute, Core
   terminal accept, then reclaim, each with its own signature, strictly ordered
   slot, fee, and compute-unit fact; the certificate belongs only to provider
   execute, and payout cannot follow a partial execute without Core accept;
 - every payout's claim burns and equal Hoard-principal debit / recipient credit;
-- retirement closure observations and exact positive refund deltas;
+  owned-loopback evidence additionally binds the recipient token to the terminal
+  holder and proves that holder did not pay the transaction fee;
+- retirement closure observations, exact positive refund deltas, and one
+  terminal conservation receipt proving a creation-fixed refund beneficiary,
+  a distinct transaction fee payer, exact classified historical-account
+  lamports, and refusal of future-revenue or Hoard-principal capitalization;
 - current finalized raw account bytes, owner, lamports, Token-2022 base fields,
   or vacancy, at a slot no earlier than the activity.
 
-Hoard principal, protocol fees, transaction fees, and aggregate compute units
-are reported as distinct quantities. The dossier has `signatureScheme: "none"`; its public
+Hoard principal, actually settled protocol fees, transaction fees, and aggregate
+compute units are reported as distinct quantities. An unpaid fee obligation is
+not counted as protocol revenue. The dossier has `signatureScheme: "none"`; its public
 transaction signatures are evidence identifiers, not a signature over the
 dossier. `evidence.rpc.mode` distinguishes a reproducible captured-RPC replay
 from a live finalized RPC observation. The former binds the exact capture-file
@@ -139,10 +148,12 @@ refuse.
 
 Each journal row names an exact RFC6901 `completionPointer` and requires the
 pointed value to be `"finalized"`. This admits Direct's nested Hot journal
-without pretending its aggregate evidence owns a top-level phase. The activity
-completion stage projection is exactly founding, participant, ALT, seal,
-Direct, resolution, payout, and retirement; the separately typed chaos session
-may retain its own Hot/retire vocabulary.
+without pretending its aggregate evidence owns a top-level phase. The Direct
+activity adapter requires the exact source roles `campaign`, `evidence`, and
+`fee-settlement`; the last role owns the independently finalized permissionless
+completion transaction. The activity completion stage projection is exactly
+founding, participant, ALT, seal, Direct, resolution, payout, and retirement;
+the separately typed chaos session may retain its own Hot/retire vocabulary.
 
 All eighteen Program/ProgramData accounts must be present in the finalized
 capture. The consumer hostile-decodes each Loader-v3 Program link and

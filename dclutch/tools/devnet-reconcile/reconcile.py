@@ -185,7 +185,9 @@ def digest(value: Any, label: str) -> str:
 
 
 def b64(value: Any, label: str) -> bytes:
-    encoded = text(value, label)
+    if not isinstance(value, str):
+        refuse(f"{label} must be base64 text")
+    encoded = value
     try:
         decoded = base64.b64decode(encoded, validate=True)
     except ValueError:
@@ -552,7 +554,7 @@ def validate_manifest_for(
     prior_slot = -1
     optional_event_fields = {"direct", "position", "certificate", "payout", "retirement"}
     if cluster_kind == "owned-loopback":
-        optional_event_fields.add("positions")
+        optional_event_fields.update({"positions", "feeSettlement"})
     for index, event in enumerate(events):
         event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "computeUnitsConsumed", "lamportDeltas", "tokenDeltas", "sourcePath", "sourceSha256"}, optional_event_fields, f"events[{index}]")
         event_id = text(event["id"], "event id")
@@ -604,6 +606,8 @@ def validate_manifest_for(
         "direct": ("direct", 1, None), "certificate": ("resolution", 1, 1),
         "payout": ("payout", 1, None),
     }
+    if cluster_kind == "owned-loopback":
+        semantic_fields["feeSettlement"] = ("direct", 1, 1)
     for field, (owner_kind, minimum, maximum) in semantic_fields.items():
         owners = [event for event in events if field in event]
         if len(owners) < minimum or (maximum is not None and len(owners) > maximum) or any(event["kind"] != owner_kind for event in owners):
@@ -614,12 +618,22 @@ def validate_manifest_for(
     if cluster_kind == "owned-loopback":
         hot = [event for event in events if "direct" in event]
         position_sets = [event for event in events if "positions" in event]
+        settlements = [event for event in events if "feeSettlement" in event]
         if len(hot) != 1 or position_sets != hot or "position" in hot[0]:
             refuse("owned-loopback Direct must have one Hot owner of its exact two-Position facts")
+        if (
+            len(settlements) != 1
+            or settlements[0]["operation"] != "direct-fee-settlement"
+            or events.index(settlements[0]) <= events.index(hot[0])
+        ):
+            refuse("owned-loopback Direct must have one post-Hot fee-settlement owner")
         if any("position" in event and event["kind"] != "payout" for event in events):
             refuse("owned-loopback singular Position facts belong only to payout")
     for event in events:
-        if event["kind"] in ("direct", "payout") and event["tokenDeltas"] and event["kind"] not in event:
+        has_economics = event["kind"] in event or (
+            event["kind"] == "direct" and "feeSettlement" in event
+        )
+        if event["kind"] in ("direct", "payout") and event["tokenDeltas"] and not has_economics:
             refuse(f"token-moving {event['kind']} event {event['id']} omitted its exact economic facts")
     if any(("retirement" in event) != (event["kind"] == "retirement") for event in events):
         refuse("every retirement transaction, and no other kind, must own retirement facts")
@@ -840,22 +854,74 @@ def reconcile_event(
         mint = pubkey(direct["mint"], "Direct mint")
         if mint != collateral_mint:
             refuse("Direct mint differs from the lifecycle collateral mint")
-        if any(token_mints.get(ref) != mint for ref in refs):
-            refuse("Direct finalized transaction has mixed or missing collateral mints")
+        if any(accounts[ref]["mint"] != mint for ref in refs):
+            refuse("Direct finalized transaction has mixed collateral mints")
         product = fill * price
         if product % scale:
             refuse("Direct gross quote crosses an unnamed rounding boundary")
         gross = product // scale
         seller_fee = gross * bps // 10_000
         buyer_fee = gross * bps // 10_000
-        required = {refs[0]: gross - seller_fee, refs[1]: -(gross + buyer_fee), refs[2]: seller_fee + buyer_fee}
-        if {ref: expected_tokens.get(ref) for ref in refs} != required:
-            refuse("Direct gross, independent side-floor fees, or token transfers disagree")
+        seller_net = gross - seller_fee
+        required = (
+            {refs[0]: seller_net, refs[1]: -seller_net}
+            if cluster_kind == "owned-loopback"
+            else {refs[0]: seller_net, refs[1]: -(gross + buyer_fee), refs[2]: seller_fee + buyer_fee}
+        )
+        if expected_tokens != required:
+            refuse(
+                "Direct Hot seller-net movement differs from its exact first-transaction arithmetic"
+                if cluster_kind == "owned-loopback"
+                else "Direct gross, independent side-floor fees, or token transfers disagree"
+            )
         projection["direct"] = {
             **{key: direct[key] for key in ("fillAtoms", "executionPrice", "priceScale", "feeBasisPointsPerSide", "sellerToken", "buyerToken", "feeRecipientToken", "mint")},
             "grossAtoms": str(gross), "sellerFeeAtoms": str(seller_fee), "buyerFeeAtoms": str(buyer_fee),
             "feeRecipientAtoms": str(seller_fee + buyer_fee),
         }
+    if "feeSettlement" in event:
+        settlement = exact_keys(
+            event["feeSettlement"],
+            {
+                "generation", "debtor", "makerReplay", "feeAtoms", "sourceToken",
+                "destinationToken", "destinationOwner", "callerAuthority",
+                "callerAuthorityBump", "standingAllowanceAtoms",
+                "custodyExpectedRevision", "custodyResultingRevision", "submissionClass",
+                "capitalizationClass",
+            },
+            set(),
+            "Direct fee-settlement facts",
+        )
+        for field in (
+            "generation", "feeAtoms", "callerAuthorityBump", "standingAllowanceAtoms",
+            "custodyExpectedRevision", "custodyResultingRevision",
+        ):
+            decimal(settlement[field], f"Direct fee settlement {field}")
+        for field in ("debtor", "makerReplay", "destinationOwner", "callerAuthority"):
+            pubkey(settlement[field], f"Direct fee settlement {field}")
+        fee_atoms = decimal(settlement["feeAtoms"], "Direct fee settlement feeAtoms")
+        allowance = decimal(settlement["standingAllowanceAtoms"], "Direct fee settlement standingAllowanceAtoms")
+        expected_revision = decimal(settlement["custodyExpectedRevision"], "Direct fee settlement custodyExpectedRevision")
+        resulting_revision = decimal(settlement["custodyResultingRevision"], "Direct fee settlement custodyResultingRevision")
+        source = settlement["sourceToken"]
+        destination = settlement["destinationToken"]
+        if (
+            fee_atoms == 0
+            or decimal(settlement["callerAuthorityBump"], "Direct fee settlement caller authority bump") > 255
+            or allowance < fee_atoms
+            or resulting_revision != expected_revision + 1
+            or source == destination
+            or any(ref not in accounts or accounts[ref]["kind"] != "token" for ref in (source, destination))
+            or accounts[source]["mint"] != collateral_mint
+            or accounts[destination]["mint"] != collateral_mint
+            or expected_tokens != {source: -fee_atoms, destination: fee_atoms}
+        ):
+            refuse("Direct fee settlement changed its exact debt, revision, mint, or token movement")
+        if settlement["submissionClass"] != "permissionless-state-derived-stranger":
+            refuse("Direct fee settlement lost its permissionless stranger classification")
+        if settlement["capitalizationClass"] != "debtor-collateral-obligation-not-future-revenue-or-hoard":
+            refuse("Direct fee settlement claims future-revenue or Hoard capitalization")
+        projection["feeSettlement"] = settlement
     if "position" in event:
         position = exact_keys(event["position"], {"account", "preDataBase64", "postDataBase64"}, set(), "position facts")
         ref = position["account"]
@@ -918,7 +984,13 @@ def reconcile_event(
             refuse("ResolutionCertificateV2 substitutes its market")
         projection["certificate"] = {"account": ref, "owner": certificate["owner"], "dataSha256": sha256_bytes(b64(certificate["dataBase64"], "certificate data")), **decoded}
     if "payout" in event:
-        payout = exact_keys(event.get("payout"), {"hoardToken", "recipientToken", "position", "principalAtoms", "claimsBurnedAtoms", "mint"}, set(), "payout facts")
+        payout_fields = {
+            "hoardToken", "recipientToken", "position", "principalAtoms",
+            "claimsBurnedAtoms", "mint",
+        }
+        if cluster_kind == "owned-loopback":
+            payout_fields |= {"holder", "holderChargeClass"}
+        payout = exact_keys(event.get("payout"), payout_fields, set(), "payout facts")
         principal = decimal(payout["principalAtoms"], "payout principal")
         hoard = payout["hoardToken"]; recipient = payout["recipientToken"]
         if hoard == recipient or any(ref not in accounts or accounts[ref]["kind"] != "token" or accounts[ref]["assetClass"] != "collateral" for ref in (hoard, recipient)):
@@ -928,6 +1000,15 @@ def reconcile_event(
             refuse("payout crosses or omits its immutable collateral mint")
         if expected_tokens.get(hoard) != -principal or expected_tokens.get(recipient) != principal:
             refuse("payout does not conserve exact Hoard principal")
+        if cluster_kind == "owned-loopback":
+            holder = pubkey(payout["holder"], "payout holder")
+            if (
+                accounts[recipient]["authority"] != holder
+                or accounts[event["feePayer"]]["address"] == holder
+                or payout["holderChargeClass"]
+                != "terminal-holder-is-not-transaction-fee-payer"
+            ):
+                refuse("terminal payout charged or substituted its holder")
         burns = payout["claimsBurnedAtoms"]
         if not isinstance(burns, list) or not burns:
             refuse("payout omitted the exact claim burn vector")
@@ -941,7 +1022,12 @@ def reconcile_event(
             refuse("payout claim burn vector differs from its Position debit")
         projection["payout"] = {**payout, "principalClass": "hoard-principal-not-fee"}
     if event["kind"] == "retirement":
-        retirement = exact_keys(event.get("retirement"), {"stage", "closedAccounts", "refundLamports"}, set(), "retirement facts")
+        retirement = exact_keys(
+            event.get("retirement"),
+            {"stage", "closedAccounts", "refundLamports"},
+            {"conservation"},
+            "retirement facts",
+        )
         text(retirement["stage"], "retirement stage")
         closed = retirement["closedAccounts"]
         if not isinstance(closed, list) or len(closed) != len(set(closed)) or any(ref not in accounts for ref in closed):
@@ -949,7 +1035,69 @@ def reconcile_event(
         refunds = parse_delta_list(retirement["refundLamports"], "lamportDeltas", accounts)
         if any(amount <= 0 or expected_lamports.get(ref) != amount for ref, amount in refunds.items()):
             refuse("retirement refund facts differ from finalized lamport deltas")
-        projection["retirement"] = {"stage": retirement["stage"], "closedAccounts": closed, "refundLamports": retirement["refundLamports"]}
+        projected_retirement = {
+            "stage": retirement["stage"],
+            "closedAccounts": closed,
+            "refundLamports": retirement["refundLamports"],
+        }
+        if "conservation" in retirement:
+            conservation = exact_keys(
+                retirement["conservation"],
+                {
+                    "refundBeneficiary", "payer", "classifiedLamports",
+                    "totalTransactionFeesLamports", "terminalRefundWalletLamports",
+                    "beneficiaryClass", "capitalizationClass",
+                },
+                set(),
+                "retirement conservation",
+            )
+            beneficiary = conservation["refundBeneficiary"]
+            payer = conservation["payer"]
+            if (
+                beneficiary not in accounts
+                or accounts[beneficiary]["kind"] != "wallet"
+                or payer not in accounts
+                or accounts[payer]["kind"] != "wallet"
+                or payer == beneficiary
+            ):
+                refuse("retirement conservation changed its distinct payer or fixed beneficiary")
+            classified = exact_keys(
+                conservation["classifiedLamports"],
+                {
+                    "market", "rentCredit", "claimsRefund", "custodyReplay",
+                    "hoardVaultRent", "expectedRefundDelta", "refundWalletBefore",
+                },
+                set(),
+                "retirement classified lamports",
+            )
+            values = {
+                field: decimal(value, f"retirement classified {field}")
+                for field, value in classified.items()
+            }
+            expected_refund = values["expectedRefundDelta"]
+            classified_sum = sum(
+                values[field]
+                for field in ("market", "rentCredit", "claimsRefund", "custodyReplay", "hoardVaultRent")
+            )
+            terminal = decimal(
+                conservation["terminalRefundWalletLamports"],
+                "retirement terminal refund wallet",
+            )
+            decimal(
+                conservation["totalTransactionFeesLamports"],
+                "retirement total transaction fees",
+            )
+            if (
+                classified_sum != expected_refund
+                or refunds != {beneficiary: expected_refund}
+                or terminal != values["refundWalletBefore"] + expected_refund
+                or conservation["beneficiaryClass"] != "creation-fixed-refund-wallet"
+            ):
+                refuse("retirement classified lamports differ from the exact beneficiary refund")
+            if conservation["capitalizationClass"] != "historical-account-lamports-not-future-revenue-or-hoard-principal":
+                refuse("retirement conservation claims future-revenue or Hoard-principal capitalization")
+            projected_retirement["conservation"] = conservation
+        projection["retirement"] = projected_retirement
     return projection
 
 
@@ -1053,6 +1201,29 @@ def reconcile_for(
                 refuse(f"activity Position history for {ref} is discontinuous")
             last_positions[ref] = position["post"]
     final = reconcile_final_accounts(manifest, accounts, rpc, max(int(event["slot"]) for event in events))
+    retirement_conservation = [
+        event["retirement"]["conservation"]
+        for event in projections
+        if "conservation" in event.get("retirement", {})
+    ]
+    if cluster_kind == "owned-loopback":
+        if len(retirement_conservation) != 1:
+            refuse("owned-loopback retirement omitted one terminal conservation owner")
+        conservation = retirement_conservation[0]
+        payer = conservation["payer"]
+        beneficiary = conservation["refundBeneficiary"]
+        retirement_events = [event for event in projections if event["kind"] == "retirement"]
+        if any(event["feePayer"] != payer for event in retirement_events):
+            refuse("retirement transaction fee payer differs from its conservation receipt")
+        final_beneficiary = next(
+            (row for row in final if row["account"] == beneficiary), None
+        )
+        if (
+            final_beneficiary is None
+            or final_beneficiary["closed"]
+            or final_beneficiary["lamports"] != conservation["terminalRefundWalletLamports"]
+        ):
+            refuse("creation-fixed retirement beneficiary differs from its terminal poststate")
     for observed in final:
         ref = observed["account"]
         if observed["closed"]:
@@ -1064,6 +1235,18 @@ def reconcile_for(
     transaction_fees = sum(int(event["feeLamports"]) for event in events)
     compute_units = sum(int(event["computeUnitsConsumed"]) for event in events)
     directs = [item["direct"] for item in projections if "direct" in item]
+    settlements = [item["feeSettlement"] for item in projections if "feeSettlement" in item]
+    if cluster_kind == "owned-loopback":
+        if len(directs) != 1 or len(settlements) != 1:
+            refuse("owned-loopback activity omitted the exact Direct Hot/fee-settlement pair")
+        direct = directs[0]
+        settlement = settlements[0]
+        if (
+            settlement["sourceToken"] != direct["buyerToken"]
+            or settlement["destinationToken"] != direct["feeRecipientToken"]
+            or int(settlement["feeAtoms"]) != int(direct["feeRecipientAtoms"])
+        ):
+            refuse("Direct fee settlement differs from the Hot transaction's exact obligation")
     payouts = [item["payout"] for item in projections if "payout" in item]
     source_digests = [{"event": event["id"], "sha256": event["sourceSha256"]} for event in events]
     evidence_core = {
@@ -1080,7 +1263,11 @@ def reconcile_for(
         "totals": {
             "transactionFeesLamports": str(transaction_fees),
             "computeUnitsConsumed": str(compute_units),
-            "protocolFeesAtoms": str(sum(int(direct["feeRecipientAtoms"]) for direct in directs)),
+            "protocolFeesAtoms": str(
+                sum(int(row["feeAtoms"]) for row in settlements)
+                if cluster_kind == "owned-loopback"
+                else sum(int(row["feeRecipientAtoms"]) for row in directs)
+            ),
             "hoardPrincipalPaidAtoms": str(sum(int(payout["principalAtoms"]) for payout in payouts)),
             "hoardPrincipalClassification": "collateral-principal-not-fee-bounty-rent-reserve-or-treasury",
         },

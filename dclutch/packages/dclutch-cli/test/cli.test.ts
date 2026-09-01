@@ -1,10 +1,19 @@
-import { PublicKey } from '@solana/web3.js';
+import { decodeDirectIntentTicketV1 } from '@dclutch/sdk/directTicket';
+import { encodeCompactIntentSigningMessageV2 } from '@dclutch/sdk/directInlineV3';
+import { inspectDirectMakerNonceV1 } from '@dclutch/sdk/directMakerReplay';
+import { Keypair, PublicKey } from '@solana/web3.js';
+import nacl from 'tweetnacl';
 import { describe, expect, it } from 'vitest';
 
 import { decodeSession } from '../src/context';
 import { nameRefusals } from '../src/output';
 import { decodeWalkBook, FAILURE_WALK_MUTATION_REFUSAL_V1 } from '../src/commands/walk';
-import { DIRECT_TRADE_MUTATION_REFUSAL_V1, tradeCommand } from '../src/commands/trade';
+import {
+  DIRECT_TRADE_MUTATION_REFUSAL_V1,
+  offerCommand,
+  parseOfferLifecycleV1,
+  tradeCommand,
+} from '../src/commands/trade';
 import { run } from '../src/main';
 
 function key(byte: number): string {
@@ -125,9 +134,113 @@ describe('public Direct mutation boundary', () => {
     expect(code).toBe(0);
     expect(out).toHaveLength(1);
     expect(out[0]).toContain('buy                              disabled: refuses before context, keys, signing, or RPC access');
-    expect(out[0]).toContain('intent sell|buy                  authenticate a route and sign one off-chain Direct intent (--out; never submits)');
+    expect(out[0]).toContain('offer sell                       derive seller state + nonce and sign one portable sell ticket (--out; never submits)');
+    expect(out[0]).toContain('intent sell|buy                  low-level: sign one fully explicit portable Direct intent (--out; never submits)');
+    expect(out[0]).toContain('route release-set|direct         produce pinned checked release/Direct route evidence (read-only devnet; no keys)');
     expect(out[0]).toContain('walk                             preview the funded failure walk (--dry-run required; submission disabled)');
     expect(out[0]).not.toContain('cross a sell intent');
     expect(out[0]).not.toContain('cross a buy intent');
+  });
+
+  it('names both offer lifecycle choices and refuses a guessed default', () => {
+    expect(parseOfferLifecycleV1('fok')).toBe(0);
+    expect(parseOfferLifecycleV1('ioc')).toBe(1);
+    expect(() => parseOfferLifecycleV1(undefined)).toThrow(/pass --lifecycle fok\|ioc/);
+    expect(() => parseOfferLifecycleV1('1')).toThrow(/fok\|ioc/);
+  });
+
+  it('authenticates the route before it can read the explicitly named maker key', async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const route = '/this/offer-route-must-be-read-first.json';
+    const keypair = '/this/offer-keypair-must-not-be-read-yet.json';
+    const code = await run([
+      '--route', route, '--keypair', keypair, '--maker', key(1), '--out', '/this/no-ticket.json',
+      '--outcome', '0', '--fill', '1', '--price', '1', '--duration-slots', '1', '--lifecycle', 'ioc',
+      'offer', 'sell',
+    ], {}, { out: (line) => out.push(line), err: (line) => err.push(line) });
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err.join('\n')).toContain(route);
+    expect(err.join('\n')).not.toContain(keypair);
+  });
+
+  it('derives, signs, and emits the same canonical ticket consumed by the SDK', async () => {
+    const signer = Keypair.fromSeed(new Uint8Array(32).fill(17));
+    const maker = signer.publicKey.toBase58();
+    const trading = key(21);
+    const market = key(22);
+    const collateral = key(23);
+    const replay = await inspectDirectMakerNonceV1({
+      finalizedSlot: async () => '80',
+      accountInfo: async () => Object.freeze({ slot: '80', account: null }),
+    }, { tradingProgram: trading, market, generation: 9n, maker });
+    const events: string[] = [];
+    let writtenPath = '';
+    let writtenText = '';
+    const context = Object.freeze({
+      rpcUrl: 'http://127.0.0.1:1/',
+      session: Object.freeze({ rpcUrl: null, programs: Object.freeze({}), markets: Object.freeze([]) }),
+      json: false,
+      flags: Object.freeze({
+        maker,
+        out: '/captured/portable-ticket.json',
+        outcome: '1',
+        fill: '400',
+        price: '350000',
+        'duration-slots': '25',
+        lifecycle: 'ioc',
+      }),
+    });
+    const code = await offerCommand(context, { out: () => undefined, err: () => undefined }, 'sell', {}, {
+      observe: async (_context, observedMaker) => {
+        events.push('observe');
+        expect(observedMaker).toBe(maker);
+        return Object.freeze({
+          route: Object.freeze({
+            market, generation: 9n, outcomeCount: 2, priceScale: 1_000_000n,
+            feeBasisPoints: 25, tradingProgram: trading,
+          }),
+          seller: Object.freeze({
+            status: 'ready' as const, observedSlot: '79', market, generation: 9n, owner: maker,
+            coordinates: Object.freeze({
+              aggregate: key(24), position: key(25), collateral, custodyAuthority: key(26),
+            }),
+            collateralMint: key(27), tokenProgram: key(28), positionRevision: 3n,
+            positionBalances: Object.freeze([500n, 900n]), collateralPrestate: 'initialized' as const,
+            reason: 'ready',
+          }),
+          replay,
+        });
+      },
+      loadMaker: () => {
+        events.push('load-key');
+        expect(events).toEqual(['observe', 'load-key']);
+        return signer;
+      },
+      writeTicket: (path, text) => {
+        events.push('write');
+        writtenPath = path;
+        writtenText = text;
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(events).toEqual(['observe', 'load-key', 'write']);
+    expect(writtenPath).toBe('/captured/portable-ticket.json');
+    const ticket = decodeDirectIntentTicketV1(writtenText);
+    expect(ticket).toMatchObject({
+      maker,
+      intent: {
+        side: 0, lifecycle: 1, outcome: 1, market, generation: 9n, nonce: 0n,
+        validFrom: 80n, validThrough: 105n, maximumFill: 400n, limitPrice: 350_000n,
+        feeBasisPoints: 25, collateralAccount: collateral,
+      },
+    });
+    expect(nacl.sign.detached.verify(
+      encodeCompactIntentSigningMessageV2(ticket.intent),
+      ticket.signature,
+      signer.publicKey.toBytes(),
+    )).toBe(true);
   });
 });

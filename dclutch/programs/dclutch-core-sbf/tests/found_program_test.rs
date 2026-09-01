@@ -33,7 +33,7 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
-    SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
+    SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
@@ -93,7 +93,7 @@ use dclutch_series_v3_kernel::{
         SERIES_TICKET_REFUND_OWNER_OFFSET_V3, SERIES_TICKET_TEMPLATE_OFFSET_V3,
     },
     occurrence_content_id,
-    replay::{SeriesStateV3, TicketStateSeedsV3, TicketStateV3},
+    replay::{SeriesStateV3, TicketPhaseV3, TicketStateSeedsV3, TicketStateV3},
     series_core_consume_request, template_content_id, ticket_content_id,
 };
 use dclutch_source_contract::{
@@ -110,6 +110,7 @@ use solana_address_lookup_table_interface::{
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
+    clock::Clock,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -117,8 +118,12 @@ use solana_program::{
 };
 use solana_program_option::COption;
 use solana_program_pack::Pack;
-use solana_program_test::ProgramTest;
-use solana_sdk::signature::{Keypair, Signer};
+use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
+use solana_sdk::{
+    instruction::InstructionError,
+    signature::{Keypair, Signer},
+    transaction::TransactionError,
+};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::versioned::VersionedTransaction;
 use spl_token_interface::state::{Account as SplAccount, AccountState as SplAccountState};
@@ -129,6 +134,7 @@ const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc3; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc4; 32]);
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc6; 32]);
+const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc7; 32]);
 const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID);
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xb2; 32]);
 const LOOKUP_TABLE: Pubkey = Pubkey::new_from_array([0xb8; 32]);
@@ -154,6 +160,8 @@ const ROLE_HOARD_VAULT: &[u8] = b"hoard-vault";
 const ROLE_FUNDING_SOURCE_VAULT: &[u8] = b"funding-source-vault";
 const ROLE_FUNDING_SOURCE_REPLAY_VAULT: &[u8] = b"funding-source-replay-vault";
 const ROLE_SUBSTITUTED_CLAIMS_PROGRAMDATA: &[u8] = b"substituted-claims-programdata";
+/// A profile account whose contents are canonical V2 bytes at the wrong PDA.
+const ROLE_WRONG_INFRASTRUCTURE_PROFILE: &[u8] = b"wrong-infrastructure-profile";
 
 /// Deterministic 32 bytes for one fixture role.
 ///
@@ -218,8 +226,11 @@ fn fixture_pubkey(role: &[u8]) -> Pubkey {
 
 struct Artifacts {
     core: Vec<u8>,
+    claims: Vec<u8>,
+    custody: Vec<u8>,
     registry: Vec<u8>,
     rent: Vec<u8>,
+    resolution: Vec<u8>,
     trading: Vec<u8>,
 }
 
@@ -256,9 +267,12 @@ struct Fixture {
     trading_programdata: Pubkey,
     claims_programdata: Pubkey,
     custody_programdata: Pubkey,
+    resolution_programdata: Pubkey,
     registry_programdata: Pubkey,
     rent_programdata: Pubkey,
     profile: Pubkey,
+    /// Canonical V2 profile bytes, retained so a hostile can move only the PDA.
+    profile_data: Vec<u8>,
     registry_artifact: Record,
     rent_artifact: Record,
     /// The Registry record an operator would publish AFTER the upgrade -- the
@@ -318,8 +332,12 @@ fn artifacts() -> Artifacts {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
     Artifacts {
         core: fs::read(directory.join("dclutch_core_sbf.so")).expect("Core ELF"),
+        claims: fs::read(directory.join("dclutch_claims_sbf.so")).expect("Claims ELF"),
+        custody: fs::read(directory.join("dclutch_custody_sbf.so")).expect("Custody ELF"),
         registry: fs::read(directory.join("dclutch_registry_sbf.so")).expect("Registry ELF"),
         rent: fs::read(directory.join("dclutch_rent_sbf.so")).expect("Rent ELF"),
+        resolution: fs::read(directory.join("dclutch_resolution_proof_sbf.so"))
+            .expect("Resolution ELF"),
         trading: fs::read(directory.join("dclutch_series_consume_caller_sbf.so"))
             .expect("Trading caller ELF"),
     }
@@ -1536,17 +1554,25 @@ fn fixture_with(
     );
     add_program(
         &mut test,
-        "dclutch_core_sbf",
+        "dclutch_claims_sbf",
         CLAIMS_PROGRAM_ID,
-        &artifacts.core,
+        &artifacts.claims,
         None,
         GENESIS_DEPLOYMENT_SLOT,
     );
     add_program(
         &mut test,
-        "dclutch_core_sbf",
+        "dclutch_custody_sbf",
         CUSTODY_PROGRAM_ID,
-        &artifacts.core,
+        &artifacts.custody,
+        None,
+        GENESIS_DEPLOYMENT_SLOT,
+    );
+    add_program(
+        &mut test,
+        "dclutch_resolution_proof_sbf",
+        RESOLUTION_PROGRAM_ID,
+        &artifacts.resolution,
         None,
         GENESIS_DEPLOYMENT_SLOT,
     );
@@ -1573,14 +1599,15 @@ fn fixture_with(
     );
     let rent_release = release(RENT_PROGRAM_ID, &artifacts.rent, 0xa2, None);
     let trading_release = release(TRADING_PROGRAM_ID, &artifacts.trading, 0xa3, None);
-    let claims_release = release(CLAIMS_PROGRAM_ID, &artifacts.core, 0xa4, None);
-    let custody_release = release(CUSTODY_PROGRAM_ID, &artifacts.core, 0xa5, None);
+    let claims_release = release(CLAIMS_PROGRAM_ID, &artifacts.claims, 0xa4, None);
+    let custody_release = release(CUSTODY_PROGRAM_ID, &artifacts.custody, 0xa5, None);
+    let resolution_release = release(RESOLUTION_PROGRAM_ID, &artifacts.resolution, 0xa6, None);
     let core_binding = binding(core_release);
     let release_set_value = ExecutionReleaseSetV1::new(
         core_binding,
         binding(claims_release),
         binding(trading_release),
-        core_binding,
+        binding(resolution_release),
         binding(custody_release),
     )
     .expect("release set");
@@ -1592,7 +1619,7 @@ fn fixture_with(
         (ExecutionRoleV1::Core, core_release),
         (ExecutionRoleV1::Claims, claims_release),
         (ExecutionRoleV1::Trading, trading_release),
-        (ExecutionRoleV1::Resolution, core_release),
+        (ExecutionRoleV1::Resolution, resolution_release),
         (ExecutionRoleV1::Custody, custody_release),
     ] {
         activate_execution_role_into_v1(
@@ -1856,13 +1883,13 @@ fn fixture_with(
         &CORE_PROGRAM_ID,
     )
     .0;
+    let profile_data = profile_value.to_bytes().to_vec();
     if succession == SuccessionStateV1::Succeeded {
-        let profile_data = profile_value.to_bytes().to_vec();
         test.add_account(
             profile,
             Account {
                 lamports: Rent::default().minimum_balance(profile_data.len()),
-                data: profile_data,
+                data: profile_data.clone(),
                 owner: CORE_PROGRAM_ID,
                 executable: false,
                 rent_epoch: 0,
@@ -1892,9 +1919,11 @@ fn fixture_with(
         trading_programdata: programdata_address(TRADING_PROGRAM_ID),
         claims_programdata: programdata_address(CLAIMS_PROGRAM_ID),
         custody_programdata: programdata_address(CUSTODY_PROGRAM_ID),
+        resolution_programdata: programdata_address(RESOLUTION_PROGRAM_ID),
         registry_programdata: programdata_address(REGISTRY_PROGRAM_ID),
         rent_programdata: programdata_address(RENT_PROGRAM_ID),
         profile,
+        profile_data,
         registry_artifact,
         rent_artifact,
         republished_registry_artifact,
@@ -2251,6 +2280,367 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
         accounts,
         data,
     }
+}
+
+/// Which infrastructure account the permit-expiry frame presents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExpiryProfileV1 {
+    /// The post-ceremony V2 profile at the V2 PDA.
+    Successor,
+    /// Canonical V2 bytes, Core-owned and rent-exempt, but at another address.
+    WrongAddress,
+    /// The still-present, still-decodable V1 predecessor profile.
+    SealedPredecessor,
+}
+
+impl ExpiryProfileV1 {
+    fn address(self, fixture: &SeriesFixture) -> Pubkey {
+        match self {
+            Self::Successor => fixture.base.profile,
+            Self::WrongAddress => fixture_pubkey(ROLE_WRONG_INFRASTRUCTURE_PROFILE),
+            Self::SealedPredecessor => fixture.base.predecessor_profile,
+        }
+    }
+}
+
+/// Put the deterministic Series fixture in exactly the replay state expiry reads.
+///
+/// The immutable records and the permit candidate are unchanged. Only the two
+/// Trading-owned mutable replay accounts advance through their public kernels:
+/// the root settles occurrence zero, and the ticket settles as Expired. This is
+/// the state the real Series expiry path leaves before Core reclaims an
+/// unallocated permit.
+fn series_expiry_fixture(
+    permit: SeriesFoundingPermitV1,
+    profile: ExpiryProfileV1,
+) -> SeriesFixture {
+    let mut fixture = series_fixture(SeriesFault::None);
+    let admitted = admit_occurrence_bytes(&fixture.template.data, &fixture.occurrence.data, &[])
+        .expect("expiry occurrence");
+    let admitted_ticket = admit_ticket(&fixture.ticket.data).expect("expiry Ticket");
+    let retry_through = admitted
+        .template()
+        .retry_through(admitted.occurrence().occurrence())
+        .expect("retry deadline");
+    let intent = permit.intent();
+    assert_eq!(
+        intent.trading_program().to_bytes(),
+        TRADING_PROGRAM_ID.to_bytes()
+    );
+    assert_eq!(intent.parent_root().to_bytes(), fixture.root.to_bytes());
+    assert_eq!(
+        intent.release_set().to_bytes(),
+        admitted.template().release_set().to_bytes(),
+        "permit/template release set"
+    );
+    assert_eq!(
+        intent.market().to_bytes(),
+        admitted.occurrence().market().to_bytes(),
+        "permit/occurrence market"
+    );
+    assert_eq!(
+        intent.product_record().to_bytes(),
+        admitted.occurrence().product_record().to_bytes(),
+        "permit/occurrence Product"
+    );
+    assert_eq!(
+        intent.founder().to_bytes(),
+        admitted_ticket.ticket().founder().to_bytes(),
+        "permit/Ticket founder"
+    );
+    assert_eq!(
+        intent.ticket_context().to_bytes(),
+        admitted_ticket.content_id().to_bytes(),
+        "permit/Ticket identity"
+    );
+    assert_eq!(
+        intent.generation(),
+        u64::from(admitted.occurrence().occurrence()) + 1,
+        "permit occurrence generation"
+    );
+    assert_eq!(intent.expiry_slot(), retry_through, "permit retry deadline");
+    assert_eq!(
+        intent.rent_credit().to_bytes(),
+        fixture.base.rent_credit.to_bytes(),
+        "permit RentCredit"
+    );
+    let test = fixture.base.test.as_mut().expect("ProgramTest");
+    let rent = Rent::default();
+
+    let prepared_series = SeriesStateV3::decode(
+        fixture
+            .root_data
+            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .expect("Series root tail"),
+        1,
+    )
+    .expect("prepared Series state");
+    let terminal_series = prepared_series
+        .settle_current(prepared_series.revision(), 1)
+        .expect("terminal Series state")
+        .encode(1)
+        .expect("terminal Series bytes");
+    fixture
+        .root_data
+        .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .expect("Series root tail")
+        .copy_from_slice(&terminal_series);
+    test.add_account(
+        fixture.root,
+        Account {
+            lamports: rent.minimum_balance(fixture.root_data.len()),
+            data: fixture.root_data.clone(),
+            owner: TRADING_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let prepared_ticket =
+        TicketStateV3::decode(&fixture.ticket_state_data).expect("prepared Ticket state");
+    fixture.ticket_state_data = prepared_ticket
+        .settle(prepared_ticket.revision(), TicketPhaseV3::Expired)
+        .expect("expired Ticket state")
+        .encode()
+        .to_vec();
+    let header = CapabilityRootHeaderV1::decode(
+        fixture
+            .root_data
+            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .expect("root header"),
+    )
+    .expect("root header");
+    assert_eq!(
+        Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID).0,
+        fixture.root,
+        "Series root PDA"
+    );
+    assert_eq!(
+        header.release_set().to_bytes(),
+        admitted.template().release_set().to_bytes(),
+        "root/template release set"
+    );
+    assert_eq!(
+        header.selection().config().to_bytes(),
+        admitted.template_id().to_bytes(),
+        "root/template selector"
+    );
+    let terminal_series = SeriesStateV3::decode(
+        fixture
+            .root_data
+            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .expect("terminal Series tail"),
+        1,
+    )
+    .expect("terminal Series state");
+    assert_eq!(terminal_series.next_occurrence(), 1);
+    assert!(!terminal_series.current_ticket_prepared());
+    let expired_ticket =
+        TicketStateV3::decode(&fixture.ticket_state_data).expect("expired Ticket state");
+    let ticket_seeds =
+        TicketStateSeedsV3::new(fixture.root.to_bytes(), admitted_ticket.content_id());
+    assert_eq!(
+        Pubkey::find_program_address(&ticket_seeds.as_slices(), &TRADING_PROGRAM_ID).0,
+        fixture.ticket_state,
+        "Ticket-state PDA"
+    );
+    assert_eq!(
+        expired_ticket.ticket_record_id(),
+        admitted_ticket.content_id(),
+        "Ticket-state record identity"
+    );
+    assert_eq!(expired_ticket.phase(), TicketPhaseV3::Expired);
+    test.add_account(
+        fixture.ticket_state,
+        Account {
+            lamports: rent.minimum_balance(fixture.ticket_state_data.len()),
+            data: fixture.ticket_state_data.clone(),
+            owner: TRADING_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let expiry_slot = permit.intent().expiry_slot();
+    let bank_slot = expiry_slot
+        .checked_add(1)
+        .expect("slot after permit expiry");
+    fixture.base.bank_slot = Some(bank_slot);
+    test.add_sysvar_account(
+        sysvar::clock::ID,
+        &Clock {
+            slot: bank_slot,
+            ..Clock::default()
+        },
+    );
+
+    if profile == ExpiryProfileV1::WrongAddress {
+        // Keep every account fact except the address identical to the accepting
+        // V2 profile. A refusal here therefore owns the PDA/domain conjunct,
+        // not a malformed body, owner, width, or rent balance.
+        test.add_account(
+            fixture_pubkey(ROLE_WRONG_INFRASTRUCTURE_PROFILE),
+            Account {
+                lamports: rent.minimum_balance(fixture.base.profile_data.len()),
+                data: fixture.base.profile_data.clone(),
+                owner: CORE_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
+
+    fixture
+}
+
+/// Compose the shipped 25-account permit-expiry frame in its exact order.
+fn series_expiry_instruction(
+    fixture: &SeriesFixture,
+    permit: SeriesFoundingPermitV1,
+    profile: ExpiryProfileV1,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(fixture.permit, false),
+        AccountMeta::new(fixture.base.rent_credit, false),
+        AccountMeta::new_readonly(RENT_PROGRAM_ID, false),
+        AccountMeta::new_readonly(profile.address(fixture), false),
+        AccountMeta::new_readonly(fixture.base.registry_artifact.raw, false),
+        AccountMeta::new_readonly(fixture.base.registry_artifact.staging, false),
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.base.registry_programdata, false),
+        AccountMeta::new_readonly(fixture.base.rent_artifact.raw, false),
+        AccountMeta::new_readonly(fixture.base.rent_artifact.staging, false),
+        AccountMeta::new_readonly(fixture.base.rent_programdata, false),
+        AccountMeta::new_readonly(fixture.base.cache, false),
+        AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.base.trading_programdata, false),
+        AccountMeta::new_readonly(fixture.root, false),
+        AccountMeta::new_readonly(fixture.ticket_state, false),
+        AccountMeta::new_readonly(fixture.template.raw, false),
+        AccountMeta::new_readonly(fixture.template.staging, false),
+        AccountMeta::new_readonly(fixture.occurrence.raw, false),
+        AccountMeta::new_readonly(fixture.occurrence.staging, false),
+        AccountMeta::new_readonly(fixture.ticket.raw, false),
+        AccountMeta::new_readonly(fixture.ticket.staging, false),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    assert_eq!(
+        accounts.len(),
+        dclutch_core_sbf::SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1,
+        "the driver must cover the complete expiry frame"
+    );
+    for (left_index, left) in accounts.iter().enumerate() {
+        for (right_index, right) in accounts.iter().enumerate().skip(left_index + 1) {
+            assert_ne!(
+                left.pubkey, right.pubkey,
+                "Series expiry frame alias at {left_index}/{right_index}"
+            );
+        }
+    }
+    Instruction {
+        program_id: CORE_PROGRAM_ID,
+        accounts,
+        data: SeriesPermitExpiryRequestV1::new(permit)
+            .encode()
+            .expect("Series permit expiry request")
+            .to_vec(),
+    }
+}
+
+/// Ask the compiled Core to author the exact permit the expiry campaign uses.
+///
+/// This deliberately does not duplicate `build_permit_plan`'s construction in
+/// the fixture. The positive Consume route owns those 608 bytes; the expiry
+/// route receives what that owner actually persisted.
+async fn issued_series_permit() -> SeriesFoundingPermitV1 {
+    let fixture = series_fixture(SeriesFault::None);
+    let permit_address = fixture.permit;
+    let (fixture, context, failure) = execute_series(
+        fixture,
+        "Series Consume authors the permit-expiry campaign input",
+    )
+    .await;
+    assert_eq!(failure, None, "the permit author must complete");
+    let account = context
+        .banks_client
+        .get_account(permit_address)
+        .await
+        .expect("permit query")
+        .expect("Core-authored permit");
+    assert_eq!(account.owner, CORE_PROGRAM_ID);
+    let permit = SeriesFoundingPermitV1::decode(&account.data).expect("Core-authored permit bytes");
+    drop(context);
+    drop(fixture);
+    permit
+}
+
+/// Submit one expiry frame and retain the two accounts whose conservation and
+/// rollback the campaign asserts.
+async fn execute_series_expiry(
+    mut fixture: SeriesFixture,
+    permit: SeriesFoundingPermitV1,
+    profile: ExpiryProfileV1,
+) -> (
+    SeriesFixture,
+    ProgramTestContext,
+    Result<(), TransactionError>,
+    Account,
+    Account,
+) {
+    let instruction = series_expiry_instruction(&fixture, permit, profile);
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+    let mut context = test.start_with_context().await;
+    warp_to_deployment_generation(&mut context, &fixture.base);
+    let permit_before = context
+        .banks_client
+        .get_account(fixture.permit)
+        .await
+        .expect("permit query")
+        .expect("prefunded permit");
+    let credit_before = context
+        .banks_client
+        .get_account(fixture.base.rent_credit)
+        .await
+        .expect("RentCredit query")
+        .expect("RentCredit");
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
+        &[instruction],
+        &lookup,
+        blockhash,
+        &[&context.payer],
+    );
+    let result = context
+        .banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|error| match error {
+            BanksClientError::TransactionError(error) => error,
+            BanksClientError::SimulationError { err, .. } => err,
+            other => panic!("unexpected banks error: {other:?}"),
+        });
+    (fixture, context, result, permit_before, credit_before)
+}
+
+/// Assert the compiled expiry entry refused at the named Core discriminant.
+#[track_caller]
+fn assert_expiry_refused(
+    result: Result<(), TransactionError>,
+    expected: dclutch_core_sbf::CoreSbfError,
+) {
+    assert_eq!(
+        result.expect_err("this expiry frame must refuse"),
+        TransactionError::InstructionError(0, InstructionError::Custom(expected as u32),),
+        "expected {expected:?}"
+    );
 }
 
 /// Submit one Series occurrence and, if the gauntlet asked, record it.
@@ -2883,6 +3273,109 @@ async fn assert_series_found_rollback(
     assert!(caller.data.is_empty());
 }
 
+/// Ruling §8.3's permit-refund arm, through the compiled Core entrypoint.
+///
+/// The positive world presents the post-ceremony V2 profile and drains the
+/// unallocated permit into its creation-fixed RentCredit. The two hostile
+/// worlds hold every later Series fact constant and perturb only the profile
+/// selection: first an exact copy of the V2 bytes at the wrong PDA, then the
+/// sealed V1 predecessor. Both must refuse as `Infrastructure`, and both must
+/// leave the permit and RentCredit byte-for-byte unchanged.
+#[tokio::test]
+async fn series_permit_expiry_uses_only_the_authenticated_successor_profile() {
+    let permit = issued_series_permit().await;
+
+    let fixture = series_expiry_fixture(permit, ExpiryProfileV1::Successor);
+    let (fixture, context, accepted, permit_before, credit_before) =
+        execute_series_expiry(fixture, permit, ExpiryProfileV1::Successor).await;
+    assert_eq!(accepted, Ok(()), "the V2-authenticated refund must land");
+    assert_eq!(permit_before.owner, system_program::ID);
+    assert!(permit_before.data.is_empty());
+    assert_eq!(permit_before.lamports, fixture.permit_lamports);
+    let permit_after = context
+        .banks_client
+        .get_account(fixture.permit)
+        .await
+        .expect("permit query");
+    if let Some(account) = permit_after {
+        assert_eq!(account.owner, system_program::ID);
+        assert!(account.data.is_empty());
+        assert_eq!(account.lamports, 0, "the accepted refund closes the permit");
+    }
+    let credit_after = context
+        .banks_client
+        .get_account(fixture.base.rent_credit)
+        .await
+        .expect("RentCredit query")
+        .expect("RentCredit");
+    assert_eq!(credit_after.owner, credit_before.owner);
+    assert_eq!(credit_after.data, credit_before.data);
+    assert_eq!(
+        credit_after.lamports,
+        credit_before
+            .lamports
+            .checked_add(permit_before.lamports)
+            .expect("refund balance"),
+        "the unfunded 25-account arm returns every permit lamport"
+    );
+    drop(context);
+    drop(fixture);
+
+    for profile in [
+        ExpiryProfileV1::WrongAddress,
+        ExpiryProfileV1::SealedPredecessor,
+    ] {
+        let fixture = series_expiry_fixture(permit, profile);
+        let (fixture, context, refused, permit_before, credit_before) =
+            execute_series_expiry(fixture, permit, profile).await;
+        assert_expiry_refused(refused, dclutch_core_sbf::CoreSbfError::Infrastructure);
+
+        let permit_after = context
+            .banks_client
+            .get_account(fixture.permit)
+            .await
+            .expect("permit query")
+            .expect("refused permit");
+        let credit_after = context
+            .banks_client
+            .get_account(fixture.base.rent_credit)
+            .await
+            .expect("RentCredit query")
+            .expect("RentCredit");
+        assert_eq!(permit_after, permit_before, "{profile:?} permit rollback");
+        assert_eq!(credit_after, credit_before, "{profile:?} credit rollback");
+
+        let presented = context
+            .banks_client
+            .get_account(profile.address(&fixture))
+            .await
+            .expect("profile query")
+            .expect("presented profile");
+        assert_eq!(presented.owner, CORE_PROGRAM_ID);
+        match profile {
+            ExpiryProfileV1::WrongAddress => {
+                let canonical = context
+                    .banks_client
+                    .get_account(fixture.base.profile)
+                    .await
+                    .expect("canonical profile query")
+                    .expect("canonical V2 profile");
+                assert_eq!(presented, canonical, "only the profile address differs");
+                assert_ne!(profile.address(&fixture), fixture.base.profile);
+            }
+            ExpiryProfileV1::SealedPredecessor => {
+                assert_eq!(
+                    presented.data.len(),
+                    dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+                );
+                ProtocolInfrastructureProfileV1::decode(&presented.data)
+                    .expect("the sealed predecessor remains canonical V1");
+            }
+            ExpiryProfileV1::Successor => unreachable!("positive arm ran above"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
     let fixture = series_fixture(SeriesFault::None);
@@ -3062,14 +3555,11 @@ async fn series_consume_late_hoard_refusal_rolls_back_found_and_all_replay_state
 #[ignore = "emits a genesis and instruction bundle for a live local validator"]
 async fn emit_series_consume_validator_campaign() {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use std::collections::BTreeSet;
 
     let directory = PathBuf::from(
         env::var("DCLUTCH_SERIES_CAMPAIGN_DIR")
             .expect("DCLUTCH_SERIES_CAMPAIGN_DIR is required to emit the campaign"),
     );
-    let accounts_directory = directory.join("accounts");
-    fs::create_dir_all(&accounts_directory).expect("campaign account directory");
 
     let mut fixture = series_fixture(SeriesFault::None);
     let mut test = fixture.base.test.take().expect("ProgramTest");
@@ -3077,54 +3567,18 @@ async fn emit_series_consume_validator_campaign() {
     let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let context = test.start_with_context().await;
 
-    // Every key the transaction touches: the invoked program, every meta, the
-    // lookup table, and every address the table resolves. The table's addresses
-    // are a superset of the readonly metas, but taking their union rather than
-    // assuming that keeps this correct if the table's contents ever widen.
-    let mut keys: BTreeSet<Pubkey> = BTreeSet::new();
-    keys.insert(instruction.program_id);
-    keys.insert(lookup.key);
-    for meta in &instruction.accounts {
-        keys.insert(meta.pubkey);
-    }
-    for address in &lookup.addresses {
-        keys.insert(*address);
-    }
-
-    let mut written = 0_usize;
-    let mut absent = Vec::new();
-    for key in &keys {
-        let Some(account) = context
-            .banks_client
-            .get_account(*key)
-            .await
-            .expect("banks client")
-        else {
-            // A nonexistent readonly account is a real part of this frame:
-            // `funding_source` and `funding_source_replay` are passed as keys
-            // that were deliberately never created. Recording them keeps the
-            // emitted bundle honest about which accounts are absent BY DESIGN,
-            // rather than leaving a reader to wonder what went missing.
-            absent.push(key.to_string());
-            continue;
-        };
-        let body = serde_json::json!({
-            "pubkey": key.to_string(),
-            "account": {
-                "lamports": account.lamports,
-                "data": [BASE64.encode(&account.data), "base64"],
-                "owner": account.owner.to_string(),
-                "executable": account.executable,
-                "rentEpoch": account.rent_epoch,
-            }
-        });
-        fs::write(
-            accounts_directory.join(format!("{key}.json")),
-            serde_json::to_vec_pretty(&body).expect("account json"),
-        )
-        .expect("write genesis account");
-        written += 1;
-    }
+    let (written, absent) = emit_series_validator_genesis(
+        &context,
+        &instruction,
+        &lookup,
+        &[
+            fixture.base.core_programdata,
+            RESOLUTION_PROGRAM_ID,
+            fixture.base.resolution_programdata,
+        ],
+        &directory.join("accounts"),
+    )
+    .await;
 
     let manifest = serde_json::json!({
         "schema": "dclutch-series-consume-validator-campaign-v1",
@@ -3145,6 +3599,11 @@ async fn emit_series_consume_validator_campaign() {
         // validator gives 200,000, so the limit has to travel with the bundle.
         "computeUnitLimit": 900_000,
         "genesisAccountCount": written,
+        "genesisOnly": [
+            fixture.base.core_programdata.to_string(),
+            RESOLUTION_PROGRAM_ID.to_string(),
+            fixture.base.resolution_programdata.to_string(),
+        ],
         "absentByDesign": absent,
         // What a caller must check AFTER the transaction finalizes. These are
         // the same facts `series_consume_accepts_258_outcomes_and_commits_found_with_permit`
@@ -3156,13 +3615,11 @@ async fn emit_series_consume_validator_campaign() {
             "permit": fixture.permit.to_string(),
             "permitOwner": CORE_PROGRAM_ID.to_string(),
             "permitLamports": fixture.permit_lamports,
+            "resolutionProgram": RESOLUTION_PROGRAM_ID.to_string(),
+            "resolutionProgramdata": fixture.base.resolution_programdata.to_string(),
         }
     });
-    fs::write(
-        directory.join("campaign.json"),
-        serde_json::to_vec_pretty(&manifest).expect("manifest json"),
-    )
-    .expect("write campaign manifest");
+    write_series_emitted_json(&directory.join("campaign.json"), &manifest);
 
     assert!(written > 0, "the campaign emitted no genesis accounts");
     println!(
@@ -3174,6 +3631,188 @@ async fn emit_series_consume_validator_campaign() {
         lookup.key,
         directory.display()
     );
+}
+
+/// Emit the compiled 25-account Series permit-expiry route for a live validator.
+///
+/// This is the second physically executable Series transition exported from
+/// the fixture. It does not synthesize a permit: [`issued_series_permit`] first
+/// asks the real `series_consume` entrypoint to author the exact 608 bytes. The
+/// three output worlds then differ only in the infrastructure profile the
+/// expiry frame presents:
+///
+/// - `successor` carries the authenticated V2 profile and must move every
+///   unallocated permit lamport into its creation-fixed RentCredit;
+/// - `wrong-address` carries byte-identical V2 data at the wrong PDA;
+/// - `sealed-predecessor` carries the still-decodable V1 profile.
+///
+/// The latter two are transaction-level rollback campaigns, not simulations.
+/// Start each validator with `--warp-slot` set to the emitted
+/// `minimumExecutionSlot`; the retry deadline is a protocol fact and this
+/// emitter does not shorten it for the test.
+///
+/// ```sh
+/// SBF_OUT_DIR=... DCLUTCH_SERIES_EXPIRY_CAMPAIGN_DIR=/abs/dir \
+///   cargo test --manifest-path programs/dclutch-core-sbf/Cargo.toml \
+///   --test found_program_test -- --ignored emit_series_permit_expiry_validator_campaign
+/// ```
+#[tokio::test]
+#[ignore = "emits three genesis/instruction bundles for a live local validator"]
+async fn emit_series_permit_expiry_validator_campaign() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    let root = PathBuf::from(
+        env::var("DCLUTCH_SERIES_EXPIRY_CAMPAIGN_DIR")
+            .expect("DCLUTCH_SERIES_EXPIRY_CAMPAIGN_DIR is required to emit the campaign"),
+    );
+    let permit = issued_series_permit().await;
+
+    for (case, profile) in [
+        ("successor", ExpiryProfileV1::Successor),
+        ("wrong-address", ExpiryProfileV1::WrongAddress),
+        ("sealed-predecessor", ExpiryProfileV1::SealedPredecessor),
+    ] {
+        let directory = root.join(case);
+        let mut fixture = series_expiry_fixture(permit, profile);
+        let instruction = series_expiry_instruction(&fixture, permit, profile);
+        let mut test = fixture.base.test.take().expect("ProgramTest");
+        let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+        let mut context = test.start_with_context().await;
+        warp_to_deployment_generation(&mut context, &fixture.base);
+
+        let permit_before = context
+            .banks_client
+            .get_account(fixture.permit)
+            .await
+            .expect("permit query")
+            .expect("prefunded permit");
+        let credit_before = context
+            .banks_client
+            .get_account(fixture.base.rent_credit)
+            .await
+            .expect("RentCredit query")
+            .expect("RentCredit");
+        assert_eq!(permit_before.owner, system_program::ID);
+        assert!(permit_before.data.is_empty());
+        assert_eq!(permit_before.lamports, fixture.permit_lamports);
+
+        let (written, absent) = emit_series_validator_genesis(
+            &context,
+            &instruction,
+            &lookup,
+            &[fixture.base.core_programdata],
+            &directory.join("accounts"),
+        )
+        .await;
+        let expiry_slot = permit.intent().expiry_slot();
+        let minimum_execution_slot = expiry_slot.checked_add(1).expect("post-expiry slot");
+        let manifest = serde_json::json!({
+            "schema": "dclutch-series-permit-expiry-validator-campaign-v1",
+            "case": case,
+            "programId": instruction.program_id.to_string(),
+            "lookupTable": lookup.key.to_string(),
+            "dataBase64": BASE64.encode(&instruction.data),
+            "accounts": instruction
+                .accounts
+                .iter()
+                .map(|meta| serde_json::json!({
+                    "pubkey": meta.pubkey.to_string(),
+                    "isSigner": meta.is_signer,
+                    "isWritable": meta.is_writable,
+                }))
+                .collect::<Vec<_>>(),
+            "computeUnitLimit": 1_400_000_u32,
+            "genesisAccountCount": written,
+            "genesisOnly": [fixture.base.core_programdata.to_string()],
+            "absentByDesign": absent,
+            "expect": {
+                "expirySlot": expiry_slot,
+                "minimumExecutionSlot": minimum_execution_slot,
+                "permit": fixture.permit.to_string(),
+                "permitOwnerBefore": permit_before.owner.to_string(),
+                "permitLamportsBefore": permit_before.lamports,
+                "permitDataBase64Before": BASE64.encode(&permit_before.data),
+                "rentCredit": fixture.base.rent_credit.to_string(),
+                "rentCreditOwner": credit_before.owner.to_string(),
+                "rentCreditLamportsBefore": credit_before.lamports,
+                "rentCreditDataBase64Before": BASE64.encode(&credit_before.data),
+                "refundLamports": permit_before.lamports,
+            }
+        });
+        write_series_emitted_json(&directory.join("campaign.json"), &manifest);
+        println!(
+            "series permit-expiry {case}: {written} genesis accounts ({} absent by design), \
+             {} metas, lookup table {}, minimum slot {} -> {}",
+            absent.len(),
+            instruction.accounts.len(),
+            lookup.key,
+            minimum_execution_slot,
+            directory.display()
+        );
+    }
+}
+
+/// Export every physical account one validator frame can observe.
+///
+/// This is intentionally shared by the Consume and permit-expiry emitters so
+/// the account-dir representation has one author. Absent keys remain explicit
+/// manifest facts; they are never materialized as zero-valued accounts.
+async fn emit_series_validator_genesis(
+    context: &ProgramTestContext,
+    instruction: &Instruction,
+    lookup: &AddressLookupTableAccount,
+    extra_genesis_keys: &[Pubkey],
+    accounts_directory: &std::path::Path,
+) -> (usize, Vec<String>) {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use std::collections::BTreeSet;
+
+    fs::create_dir_all(accounts_directory).expect("campaign account directory");
+    let mut keys: BTreeSet<Pubkey> = BTreeSet::new();
+    keys.insert(instruction.program_id);
+    keys.insert(lookup.key);
+    keys.extend(instruction.accounts.iter().map(|meta| meta.pubkey));
+    keys.extend(lookup.addresses.iter().copied());
+    keys.extend(extra_genesis_keys.iter().copied());
+
+    let mut written = 0_usize;
+    let mut absent = Vec::new();
+    for key in keys {
+        let Some(account) = context
+            .banks_client
+            .get_account(key)
+            .await
+            .expect("banks client")
+        else {
+            absent.push(key.to_string());
+            continue;
+        };
+        let body = serde_json::json!({
+            "pubkey": key.to_string(),
+            "account": {
+                "lamports": account.lamports,
+                "data": [BASE64.encode(&account.data), "base64"],
+                "owner": account.owner.to_string(),
+                "executable": account.executable,
+                "rentEpoch": account.rent_epoch,
+            }
+        });
+        write_series_emitted_json(&accounts_directory.join(format!("{key}.json")), &body);
+        written = written.checked_add(1).expect("genesis account count");
+    }
+    (written, absent)
+}
+
+/// Atomically publish one emitter artifact.
+fn write_series_emitted_json(path: &std::path::Path, value: &serde_json::Value) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("emitter output directory");
+    }
+    let temporary = path.with_extension("json.partial");
+    let mut bytes = serde_json::to_vec_pretty(value).expect("emitted JSON");
+    bytes.push(b'\n');
+    fs::write(&temporary, bytes).expect("write temporary emitted JSON");
+    fs::rename(&temporary, path).expect("publish emitted JSON");
 }
 
 /// A STRANGER'S ONE LAMPORT NO LONGER STRANDS A SCHEDULED OCCURRENCE.

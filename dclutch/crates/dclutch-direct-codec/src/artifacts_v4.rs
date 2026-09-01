@@ -44,6 +44,7 @@ use crate::{
         DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
     },
     ordinary_v3::{IDENTITY_BUYER_NATIVE_SIGNER_V3, IDENTITY_SELLER_NATIVE_SIGNER_V3},
+    registered_identity_v4::REGISTERED_IDENTITY_NATIVE_SIGNER_V4,
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
         DirectExecutionConfigV1,
@@ -360,6 +361,9 @@ fn native_signature_destination_identity_register_v3(
     let register = match (action, participant) {
         (DirectExecutionActionV3::InlineOrdinary, 0) => IDENTITY_SELLER_NATIVE_SIGNER_V3,
         (DirectExecutionActionV3::InlineOrdinary, 1) => IDENTITY_BUYER_NATIVE_SIGNER_V3,
+        (DirectExecutionActionV3::RegisterSell | DirectExecutionActionV3::RegisterBuy, 0) => {
+            REGISTERED_IDENTITY_NATIVE_SIGNER_V4
+        }
         // Every signed action needs its own generated register contract before
         // its descriptor can become executable. Refusing unknown destinations
         // prevents a structurally valid signature profile from writing maker
@@ -521,10 +525,38 @@ mod tests {
         },
     };
     use dclutch_core_contract::ContentId;
+    use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
+    use dclutch_product_runtime_v2::{PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES};
+    use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_realm_contract::REALM_BYTES;
+    use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+    use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
+    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
     use std::{vec, vec::Vec};
 
     use super::*;
-    use crate::execution_v3::{DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, encode_header_v3};
+    use crate::{
+        execution_v3::{
+            DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, DIRECT_REGISTRATION_REQUEST_BYTES_V3,
+            DirectRegistrationRequestV3, DirectSignedParticipantV3, encode_header_v3,
+        },
+        intent_v2::CompactIntentV2,
+        program_set_v4::{
+            encode_direct_program_set_v2_atomic, encoded_direct_program_set_bytes_v4,
+            validate_direct_register_buy_capability_v4,
+            validate_direct_register_sell_capability_v4,
+        },
+        registered_account_artifacts_v4::{
+            DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4, DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4,
+            DirectRegisterBuyAccountProfileInputV4, DirectRegisteredCreationAccountProfileInputV4,
+        },
+        registered_bundle_v4::{
+            DirectRegisterBuyHotBundleInputV4, DirectRegisterSellHotBundleInputV4,
+            build_direct_register_buy_hot_bundle_v4, build_direct_register_sell_hot_bundle_v4,
+        },
+        registered_requests_v4::encode_direct_registration_request_v3_atomic,
+        registered_state_artifacts_v4::DirectRegisteredCreationChildRentWidthsV4,
+    };
 
     struct Fixture {
         set: Vec<u8>,
@@ -559,6 +591,220 @@ mod tests {
                 program_set: digest(&self.set),
                 config: digest(&self.config),
             }
+        }
+    }
+
+    struct RegisteredFixture {
+        set: Vec<u8>,
+        descriptor: Vec<u8>,
+        config: [u8; crate::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1],
+        account: Vec<u8>,
+        lifecycle_policy: Vec<u8>,
+        request_profile: Vec<u8>,
+        strategy: Vec<u8>,
+        transition: Vec<u8>,
+        effect: Vec<u8>,
+        request: [u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3],
+    }
+
+    impl RegisteredFixture {
+        fn artifacts(&self) -> DirectArtifactBytesV4<'_> {
+            DirectArtifactBytesV4 {
+                program_set: &self.set,
+                descriptor: &self.descriptor,
+                config: &self.config,
+                account_profile: &self.account,
+                lifecycle_policy: &self.lifecycle_policy,
+                request_profile: &self.request_profile,
+                strategy: &self.strategy,
+                transition: &self.transition,
+                effect: &self.effect,
+            }
+        }
+
+        fn selection(&self) -> DirectArtifactSelectionV4 {
+            DirectArtifactSelectionV4 {
+                program_set: digest(&self.set),
+                config: digest(&self.config),
+            }
+        }
+    }
+
+    fn registered_logical_lengths(sell: bool) -> Vec<u32> {
+        let mut output = vec![0_u32; usize::from(DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4)];
+        output[0] = u32::try_from(
+            dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + DIRECT_ROOT_STATE_BYTES_V1,
+        )
+        .expect("root width");
+        output[1] = u32::try_from(crate::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1)
+            .expect("config width");
+        output[2] = u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width");
+        output[3] = u32::try_from(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES)
+            .expect("portfolio width");
+        output[4] = u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis width");
+        output[5] =
+            u32::try_from(crate::successor::DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker width");
+        output[7] = u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit width");
+        output[8] = u32::try_from(crate::successor::DIRECT_REGISTERED_RECORD_BYTES_V2)
+            .expect("record width");
+        output[10] = u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Rent program width");
+        output[13] = u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core width");
+        output[14] =
+            u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation width");
+        output[15] = u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Registry width");
+        output[16] = u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Trading width");
+        output[17] = 1_024;
+        output[18] = u32::try_from(REALM_BYTES).expect("Realm width");
+        output[23] = 17;
+        output[34] = 82;
+        output[37] = 36;
+        output[51] = 165;
+        for (account, representative) in [
+            (22_usize, 11_usize),
+            (24, 7),
+            (26, 13),
+            (27, 14),
+            (28, 15),
+            (29, 16),
+            (30, 17),
+            (31, 18),
+            (32, 19),
+            (33, 20),
+            (39, 11),
+            (40, 23),
+            (42, 13),
+            (43, 14),
+            (44, 15),
+            (45, 16),
+            (46, 17),
+            (47, 18),
+            (48, 19),
+            (49, 20),
+            (50, 34),
+            (52, 35),
+            (53, 36),
+            (54, 37),
+        ] {
+            output[account] = output[representative];
+        }
+        if sell {
+            output.truncate(usize::from(DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4));
+            output.push(165);
+        }
+        output
+    }
+
+    fn registered_fixture(action: DirectExecutionActionV3) -> RegisteredFixture {
+        let capacity_profile = [0x44; 32];
+        let lengths = registered_logical_lengths(action == DirectExecutionActionV3::RegisterSell);
+        let (
+            entry,
+            descriptor,
+            account,
+            lifecycle_policy,
+            request_profile,
+            strategy,
+            transition,
+            effect,
+        ) = match action {
+            DirectExecutionActionV3::RegisterSell => {
+                let bundle =
+                    build_direct_register_sell_hot_bundle_v4(DirectRegisterSellHotBundleInputV4 {
+                        account_profile: DirectRegisteredCreationAccountProfileInputV4 {
+                            logical_data_lengths: &lengths,
+                        },
+                        capacity_profile,
+                    })
+                    .expect("registered Sell bundle");
+                (
+                    validate_direct_register_sell_capability_v4(&bundle, capacity_profile)
+                        .expect("registered Sell capability"),
+                    bundle.descriptor.to_vec(),
+                    bundle.account_profile.to_vec(),
+                    bundle.lifecycle_policy.to_vec(),
+                    bundle.request_profile.to_vec(),
+                    bundle.strategy.to_vec(),
+                    bundle.transition.to_vec(),
+                    bundle.effect.to_vec(),
+                )
+            }
+            DirectExecutionActionV3::RegisterBuy => {
+                let bundle =
+                    build_direct_register_buy_hot_bundle_v4(DirectRegisterBuyHotBundleInputV4 {
+                        account_profile: DirectRegisterBuyAccountProfileInputV4 {
+                            logical_data_lengths: &lengths,
+                        },
+                        child_rent_widths: DirectRegisteredCreationChildRentWidthsV4 {
+                            custody_vault: 165,
+                        },
+                        capacity_profile,
+                    })
+                    .expect("registered Buy bundle");
+                (
+                    validate_direct_register_buy_capability_v4(&bundle, capacity_profile)
+                        .expect("registered Buy capability"),
+                    bundle.descriptor.to_vec(),
+                    bundle.account_profile.to_vec(),
+                    bundle.lifecycle_policy.to_vec(),
+                    bundle.request_profile.to_vec(),
+                    bundle.strategy.to_vec(),
+                    bundle.transition.to_vec(),
+                    bundle.effect.to_vec(),
+                )
+            }
+            _ => panic!("registered creation action"),
+        };
+        let set_bytes = encoded_direct_program_set_bytes_v4(1).expect("set width");
+        let mut set_scratch = vec![0_u8; set_bytes];
+        let mut set = vec![0_u8; set_bytes];
+        encode_direct_program_set_v2_atomic(&[entry], &mut set_scratch, &mut set)
+            .expect("registered ProgramSet");
+        let config = DirectExecutionConfigV1::new(1_000_000, 25, [9; 32])
+            .expect("Direct config")
+            .encode();
+        let side = u8::from(action == DirectExecutionActionV3::RegisterBuy);
+        let participant = DirectSignedParticipantV3 {
+            maker: [11; 32],
+            intent: CompactIntentV2 {
+                side,
+                lifecycle: 2,
+                outcome: 1,
+                market: [7; 32],
+                generation: 9,
+                nonce: 3,
+                valid_from: 100,
+                valid_through: 200,
+                maximum_fill: 1_000,
+                limit_price: if side == 0 { 400_000 } else { 600_000 },
+                fee_basis_points: 25,
+                collateral_account: [21; 32],
+            },
+        };
+        let mut request = [0_u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3];
+        encode_direct_registration_request_v3_atomic(
+            action,
+            DirectRegistrationRequestV3 {
+                participant,
+                maker_rent_credit: [31; 32],
+                record_rent_credit: [32; 32],
+                maker_rent_principal: 10_000,
+                record_rent_principal: 20_000,
+            },
+            &mut request,
+        )
+        .expect("registered request");
+        RegisteredFixture {
+            set,
+            descriptor,
+            config,
+            account,
+            lifecycle_policy,
+            request_profile,
+            strategy,
+            transition,
+            effect,
+            request,
         }
     }
 
@@ -896,6 +1142,43 @@ mod tests {
     }
 
     #[test]
+    fn both_registered_creation_bundles_cross_the_generic_hot_authenticator() {
+        for action in [
+            DirectExecutionActionV3::RegisterSell,
+            DirectExecutionActionV3::RegisterBuy,
+        ] {
+            let fixture = registered_fixture(action);
+            let joined = authenticate_direct_artifacts_v4(
+                fixture.selection(),
+                fixture.artifacts(),
+                &fixture.request,
+                3,
+            )
+            .expect("canonical registered creation bundle must reach generic Hot");
+            assert_eq!(joined.action, action);
+            assert!(joined.request_profile.requires_native_signature());
+
+            let other = if action == DirectExecutionActionV3::RegisterSell {
+                DirectExecutionActionV3::RegisterBuy
+            } else {
+                DirectExecutionActionV3::RegisterSell
+            };
+            let mut substituted_action = fixture.request;
+            put(&mut substituted_action, 12, &(other as u32).to_le_bytes());
+            assert_eq!(
+                authenticate_direct_artifacts_v4(
+                    fixture.selection(),
+                    fixture.artifacts(),
+                    &substituted_action,
+                    3,
+                ),
+                Err(DirectArtifactErrorV4::Request),
+                "{action:?} artifacts cannot be selected by {other:?}"
+            );
+        }
+    }
+
+    #[test]
     fn program_set_descriptor_config_and_profile_substitution_refuse() {
         let fixture = fixture();
         let mut wrong_selection = fixture.selection();
@@ -1109,6 +1392,54 @@ mod tests {
                 DirectExecutionActionV3::InlineOrdinary,
                 0,
                 DirectRequestProfileV3::Signed(wrong_destination),
+            ),
+            Err(DirectArtifactErrorV4::NativeSignature)
+        );
+
+        let registered = signed_request_profile(&[(
+            192,
+            172,
+            u32::try_from(REGISTERED_IDENTITY_NATIVE_SIGNER_V4)
+                .expect("registered signer register"),
+        )]);
+        for action in [
+            DirectExecutionActionV3::RegisterSell,
+            DirectExecutionActionV3::RegisterBuy,
+        ] {
+            assert_eq!(
+                validate_native_signature_slices(
+                    action,
+                    3,
+                    DirectRequestProfileV3::Signed(
+                        RequestProfileV2::decode(&registered).expect("registered profile"),
+                    ),
+                ),
+                Ok(()),
+                "{action:?} must bind participant zero to its authored identity register"
+            );
+            assert_eq!(
+                native_signature_destination_identity_register_v3(action, 1),
+                Err(DirectArtifactErrorV4::NativeSignature),
+                "{action:?} must refuse a substituted second participant"
+            );
+        }
+        assert_eq!(
+            native_signature_destination_identity_register_v3(
+                DirectExecutionActionV3::CancelRegistered,
+                0,
+            ),
+            Err(DirectArtifactErrorV4::NativeSignature),
+            "an unbuilt terminal artifact family cannot borrow creation's register"
+        );
+        let wrong_registered_destination = signed_request_profile(&[(192, 172, 0)]);
+        assert_eq!(
+            validate_native_signature_slices(
+                DirectExecutionActionV3::RegisterSell,
+                3,
+                DirectRequestProfileV3::Signed(
+                    RequestProfileV2::decode(&wrong_registered_destination)
+                        .expect("structural registered profile"),
+                ),
             ),
             Err(DirectArtifactErrorV4::NativeSignature)
         );

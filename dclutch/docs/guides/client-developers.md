@@ -238,10 +238,11 @@ mean a devnet payout is currently available.
 Founding is driven by a run spec — a JSON file naming the programs, the
 market recipe, and where the evidence goes. The producer binary does the
 work; wrap it the way `dclutch found` does
-(`packages/dclutch-cli/src/commands/found.ts`), or start from
-`tools/gauntlet/run.sh`, which assembles a spec end to end. What you get
-back is a running local validator with an open market and an evidence file
-whose `accounts` map names everything the market is made of.
+(`packages/dclutch-cli/src/commands/found.ts`). Do not start from
+`tools/gauntlet/run.sh --mode full`: at HEAD it is intentionally unavailable
+and refuses before work or a build because no supported top-level planner is
+complete. A supported named family runner documents its own inputs and evidence
+boundary.
 
 ## When a transaction fails
 

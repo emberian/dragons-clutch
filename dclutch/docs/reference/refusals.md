@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **282** codes, with meanings taken
+The tables below carry all **296** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -162,27 +162,41 @@ from the source code's own documentation.
 | `0x5623` | `ClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit did not equal the record's entitlement. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:54` |
 | `0x5624` | `ClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:56` |
 | `0x5625` | `ClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while claim-checks were still live. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:58` |
-| `0x5640` | `FractionalClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:91` |
-| `0x5641` | `FractionalClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present, or a required one absent. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:97` |
-| `0x5642` | `FractionalClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:99` |
-| `0x5643` | `FractionalClaimCheckCompactionSbfErrorV1::Deadline` | The compaction deadline had not elapsed at the observed slot. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:101` |
-| `0x5644` | `FractionalClaimCheckCompactionSbfErrorV1::Phase` | The Core phase, or the absence of a terminal receipt, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:103` |
-| `0x5645` | `FractionalClaimCheckCompactionSbfErrorV1::AlreadyCompacted` | The fractional claim-check address was already occupied. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:105` |
-| `0x5646` | `FractionalClaimCheckCompactionSbfErrorV1::Conservation` | A plan's atoms, shards or lamports did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:107` |
-| `0x5647` | `FractionalClaimCheckCompactionSbfErrorV1::Economic` | The terminal payout derivation refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:109` |
-| `0x5648` | `FractionalClaimCheckCompactionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:111` |
-| `0x5649` | `FractionalClaimCheckCompactionSbfErrorV1::Escrow` | The escrow was absent, or its mint or token program did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:113` |
-| `0x564A` | `FractionalClaimCheckCompactionSbfErrorV1::Scope` | A position kind this route does not fractionally compact. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:115` |
-| `0x564B` | `FractionalClaimCheckCompactionSbfErrorV1::Terms` | The finalized exposure terms, or the coordinate they declare, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:117` |
-| `0x564C` | `FractionalClaimCheckCompactionSbfErrorV1::ShardMint` | The shard Mint's profile, supply, or burn-authority hand-off refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:119` |
-| `0x564D` | `FractionalClaimCheckCompactionSbfErrorV1::Rent` | The RentCredit was not the admission's, or did not derive under the Rent program. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:133` |
-| `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:261` |
-| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:266` |
-| `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:268` |
-| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:270` |
-| `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:272` |
-| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:279` |
-| `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:281` |
+| `0x5640` | `FractionalClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:93` |
+| `0x5641` | `FractionalClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present, or a required one absent. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:99` |
+| `0x5642` | `FractionalClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:101` |
+| `0x5643` | `FractionalClaimCheckCompactionSbfErrorV1::Deadline` | The compaction deadline had not elapsed at the observed slot. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:103` |
+| `0x5644` | `FractionalClaimCheckCompactionSbfErrorV1::Phase` | The Core phase, or the absence of a terminal receipt, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:105` |
+| `0x5645` | `FractionalClaimCheckCompactionSbfErrorV1::AlreadyCompacted` | The fractional claim-check address was already occupied. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:107` |
+| `0x5646` | `FractionalClaimCheckCompactionSbfErrorV1::Conservation` | A plan's atoms, shards or lamports did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:109` |
+| `0x5647` | `FractionalClaimCheckCompactionSbfErrorV1::Economic` | The inner terminal settlement refused payout or custody-request arithmetic. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:111` |
+| `0x5648` | `FractionalClaimCheckCompactionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:113` |
+| `0x5649` | `FractionalClaimCheckCompactionSbfErrorV1::Escrow` | The escrow was absent, or its mint or token program did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:115` |
+| `0x564A` | `FractionalClaimCheckCompactionSbfErrorV1::Scope` | A position kind this route does not fractionally compact. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:117` |
+| `0x564B` | `FractionalClaimCheckCompactionSbfErrorV1::Terms` | The finalized exposure terms, or the coordinate they declare, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:119` |
+| `0x564C` | `FractionalClaimCheckCompactionSbfErrorV1::ShardMint` | The shard Mint's profile, supply, or burn-authority hand-off refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:121` |
+| `0x564D` | `FractionalClaimCheckCompactionSbfErrorV1::Rent` | The RentCredit was not the admission's, or did not derive under the Rent program. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:135` |
+| `0x564E` | `FractionalClaimCheckCompactionSbfErrorV1::TerminalAccounts` | The inner terminal settlement refused its account frame, a borrow, or a Token-2022 account profile. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:138` |
+| `0x564F` | `FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity` | The inner terminal settlement refused a semantic identity join. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:140` |
+| `0x5650` | `FractionalClaimCheckCompactionSbfErrorV1::TerminalRelease` | The inner terminal settlement could not authenticate a current release. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:142` |
+| `0x5651` | `FractionalClaimCheckCompactionSbfErrorV1::TerminalReceipt` | The inner terminal settlement could not construct or verify its receipt. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:144` |
+| `0x5652` | `FractionalClaimCheckCompactionSbfErrorV1::TerminalReleaseSuperseded` | The inner terminal settlement found that a pinned deployment moved. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:146` |
+| `0x5653` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaInstruction` | The generated SignedDelta packet did not decode canonically. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:148` |
+| `0x5654` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaAccounts` | The inner SignedDelta frame, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:150` |
+| `0x5655` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaRelease` | SignedDelta current-release authentication or parent authority refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:152` |
+| `0x5656` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaProductBasis` | SignedDelta's Product graph, basis, semantic identity, or Core join refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:154` |
+| `0x5657` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaClaimsState` | SignedDelta's aggregate or Position identity, width, or revision refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:156` |
+| `0x5658` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaCandidate` | The exact SignedDelta overflowed or underflowed a resource. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:158` |
+| `0x5659` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaCommit` | SignedDelta candidate buffers could not all be committed last. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:160` |
+| `0x565A` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaReceipt` | The canonical SignedDelta success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:162` |
+| `0x565B` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaPrincipalCapacity` | A positive SignedDelta would exceed the Market's principal-capacity cap. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:164` |
+| `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:392` |
+| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:397` |
+| `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:399` |
+| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:401` |
+| `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:403` |
+| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:410` |
+| `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:412` |
 
 ## core
 

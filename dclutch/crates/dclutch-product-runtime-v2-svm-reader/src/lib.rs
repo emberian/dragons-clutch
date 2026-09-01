@@ -44,7 +44,6 @@ use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
         BasisKindV3, Error as BasisError, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-        semantic_basis_preimage_v3,
     },
 };
 use dclutch_product_runtime_v2::{ContentId, PortfolioV2, ResultDomainV2};
@@ -411,11 +410,10 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
             portfolio: frame.portfolio,
         },
     )?;
-    // The canonical continuation offers no certificate: a caller that reaches
-    // the basis through this wrapper has not been given a place to put one, so
-    // a curved basis refuses here by name rather than by silently skipping the
-    // gate.
-    authenticate_product_basis_v3(registry_program, rent, runtime, frame.linked_basis, None)
+    // This is a continuation over a basis Core already admitted when it
+    // committed the founding permit. Authentication remains per-use; the
+    // founding-only no-arbitrage conjunct does not.
+    authenticate_product_basis_v3(registry_program, rent, runtime, frame.linked_basis)
 }
 
 /// Authenticate only the finalized ProductBasisV3 selected by an already
@@ -426,56 +424,86 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
 /// or hash those runtime-width tails a second time. The fixed basis schema,
 /// content-addressed raw/staging coordinate, and every semantic Product join
 /// are still independently checked here.
-#[inline(never)]
+#[inline(always)]
 pub fn authenticate_product_basis_v3<'accounts, 'info>(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    runtime: AuthenticatedProductRuntimeV2,
+    linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
+) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
+    authenticate_product_basis_v3_with_admission(
+        registry_program,
+        rent,
+        runtime,
+        linked_basis,
+        PreviouslyAdmittedBasisV3,
+    )
+}
+
+/// Authenticate and admit the ProductBasisV3 selected by a founding Product.
+///
+/// This is the one-time no-arbitrage boundary for callers that can commit a
+/// founding permit. Unlike [`authenticate_product_basis_v3`], it runs the
+/// basis-selection cascade and authenticates the price-gate certificate named
+/// by a curved basis. Continuations must use the authentication-only function:
+/// the immutable basis digest in the founded Market is the evidence that this
+/// conjunct already ran.
+#[inline(always)]
+pub fn authenticate_founding_product_basis_v3<'accounts, 'info>(
     registry_program: &Pubkey,
     rent: &Rent,
     runtime: AuthenticatedProductRuntimeV2,
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
     price_gate: Option<FinalizedRecordFrameV2<'accounts, 'info>>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
-    require_basis_distinct(runtime, linked_basis)?;
-    let basis_data = linked_basis
-        .raw
-        .try_borrow_data()
-        .map_err(|_| Error::Borrow)?;
-    let basis_digest = content(hash(&basis_data).to_bytes())?;
-    drop(basis_data);
-    let linked_basis_record = authenticate_record(
+    authenticate_product_basis_v3_with_admission(
         registry_program,
         rent,
+        runtime,
         linked_basis,
-        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-        basis_digest,
-        Error::LinkedBasisRecord,
-    )?;
-    let basis_data = linked_basis
-        .raw
-        .try_borrow_data()
-        .map_err(|_| Error::Borrow)?;
-    let basis = ProductBasisV3::decode(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
-    // **The basis-admission gate, on the route founding actually takes.**
-    //
-    // `BASIS_ABI_UNIFICATION_V1` section 6.3 puts the degree->=2 price gate at
-    // founding, once, and never on the hot path -- and this is founding's join,
-    // the place Core reaches before it commits a founding permit. No trade ever
-    // verifies a certificate and the hot path gains exactly zero CU.
-    basis
-        .admit_selection_v3()
-        .map_err(|_| Error::LinkedBasisComposition)?;
-    // **The no-arbitrage conjunct.** At degree >= 2 the simplex condition stops
-    // being the no-arbitrage condition, so a curved basis without a valid
-    // certificate is an executable arbitrage. Degree <= 1 is exempt by proof,
-    // not by assumption.
-    //
-    // The digest is read from the AUTHENTICATED BASIS RECORD, never from the
-    // caller. The caller chooses which account to pass; the basis chooses which
-    // digest that account must hash to. A byte-identical certificate at a
-    // non-canonical address therefore still refuses, because the PDA the
-    // digest derives is the only address this will accept.
-    let certificate_digest = basis.price_gate_certificate_digest_v3();
-    if certificate_digest != [0_u8; 32] {
-        let frame = price_gate.ok_or(Error::PriceGateRequired)?;
+        FoundingBasisAdmissionV3 { price_gate },
+    )
+}
+
+struct PreviouslyAdmittedBasisV3;
+
+struct FoundingBasisAdmissionV3<'accounts, 'info> {
+    price_gate: Option<FinalizedRecordFrameV2<'accounts, 'info>>,
+}
+
+trait BasisAdmissionBoundaryV3 {
+    fn admit(self, registry_program: &Pubkey, rent: &Rent, basis: ProductBasisV3<'_>)
+    -> Result<()>;
+}
+
+impl BasisAdmissionBoundaryV3 for PreviouslyAdmittedBasisV3 {
+    #[inline(always)]
+    fn admit(
+        self,
+        _registry_program: &Pubkey,
+        _rent: &Rent,
+        _basis: ProductBasisV3<'_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl BasisAdmissionBoundaryV3 for FoundingBasisAdmissionV3<'_, '_> {
+    #[inline(always)]
+    fn admit(
+        self,
+        registry_program: &Pubkey,
+        rent: &Rent,
+        basis: ProductBasisV3<'_>,
+    ) -> Result<()> {
+        basis
+            .admit_selection_v3()
+            .map_err(|_| Error::LinkedBasisComposition)?;
+        let certificate_digest = basis.price_gate_certificate_digest_v3();
+        if certificate_digest == [0_u8; 32] {
+            return Ok(());
+        }
+        let frame = self.price_gate.ok_or(Error::PriceGateRequired)?;
         authenticate_record(
             registry_program,
             rent,
@@ -517,9 +545,45 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
             | BasisError::PriceGatePriceNotPartition => Error::PriceGateNonCanonical,
             _ => Error::PriceGateHullRefused,
         })?;
+        Ok(())
     }
-    let semantic =
-        semantic_basis_preimage_v3(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
+}
+
+#[inline(never)]
+fn authenticate_product_basis_v3_with_admission<'accounts, 'info, Admission>(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    runtime: AuthenticatedProductRuntimeV2,
+    linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
+    admission: Admission,
+) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>>
+where
+    Admission: BasisAdmissionBoundaryV3,
+{
+    require_basis_distinct(runtime, linked_basis)?;
+    let basis_data = linked_basis
+        .raw
+        .try_borrow_data()
+        .map_err(|_| Error::Borrow)?;
+    let basis_digest = content(hash(&basis_data).to_bytes())?;
+    drop(basis_data);
+    let linked_basis_record = authenticate_record(
+        registry_program,
+        rent,
+        linked_basis,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        basis_digest,
+        Error::LinkedBasisRecord,
+    )?;
+    let basis_data = linked_basis
+        .raw
+        .try_borrow_data()
+        .map_err(|_| Error::Borrow)?;
+    let basis = ProductBasisV3::decode(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
+    admission.admit(registry_program, rent, basis)?;
+    let semantic = basis
+        .semantic_preimage_v3()
+        .map_err(|_| Error::LinkedBasisComposition)?;
     let semantic_basis_id = content(
         hashv(&[
             SEMANTIC_BASIS_CONTENT_DOMAIN_V3,

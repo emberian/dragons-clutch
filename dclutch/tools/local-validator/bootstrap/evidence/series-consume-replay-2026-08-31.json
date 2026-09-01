@@ -1,0 +1,106 @@
+{
+  "schema": "dclutch-series-consume-physical-checkpoint-v1",
+  "cluster": "local-private-validator",
+  "source": {
+    "fixtureEmitterCommit": "fe49fa26",
+    "consumeEvidenceAndRecoveryCommit": "e722e7ca",
+    "distinctBlockhashCommit": "c0e649c3"
+  },
+  "validator": {
+    "version": "4.0.2",
+    "realElf": true
+  },
+  "elfSha256": {
+    "core": "bb441c6ca5572ad7a0ffbed66fdc6e6b1d263cc8f7fd8adab6f9631a338263be",
+    "registry": "884da85a8b657aa7d459db6b4d6e35a7465b61f19d6557b2f1705ad17f1735a9",
+    "rent": "18cec4abb1ea43ba21214c645b88966f2f89c90db3f0d2e957f86954e510fc20",
+    "seriesConsumeCaller": "6bcfd7cc447ae37381c88ebb6f94f8ecd483cce6afdd2fb6ba4c8f800a82c7f9"
+  },
+  "fixture": {
+    "campaignManifestSha256": "93eb64a2e73a4f4884620dcf0e598b00b05eae66157e243b09f81392bdd37abd",
+    "outcomeCount": 258,
+    "accountMetaCount": 62,
+    "genesisAccountCount": 61,
+    "routedWireBytes": 1037,
+    "market": "AwANYVdRWPqM7rWyfj2Q7QCWhkwYPhasXYzRB8VSdYFr",
+    "permit": "DgdaCXrCzqeyiyFwCnJfSAeUB2CvkSWWrvaDW3f3Zqhd",
+    "lookupTable": "DS5PLQgsosegff2PFy24Y51MvDi2vhKsp5djiwFEUJM5"
+  },
+  "accepted": {
+    "feePayer": "AeVfQ89d9th9f1tBsYkhtJNXtEbtXuBL1b22nXYuC6CN",
+    "recentBlockhash": "DzabnVFNKqAkq5QNGbpgq8RMUdZENowaTytu1Em5xpkB",
+    "signature": "2CQXiskFmDH9UMsekvA6xkaTi4XYLBk3cukiDYNgJiMmWqcTgR3B72qRTVv1FnKbNR8CfgKF9Ea7uJsoguDMF9ij",
+    "finalizedSlot": 36,
+    "computeUnitsConsumed": 423058,
+    "feeLamports": 75000,
+    "evidencePath": "/tmp/dclutch-series-consume-e722e7ca-run2/found-evidence.json",
+    "evidenceSha256": "51a1480ccd06a6ebaf8b5f95b7f2fe5159aca94875afe1a031fa5683d6eeeca8",
+    "journalPath": "/tmp/dclutch-series-consume-e722e7ca-run2/found-journal.json",
+    "journalSha256": "50211b3ad0c06ad06b47ba80bbfda0153a6ea3e4d2595cab01194e5079e75e21",
+    "writableLamportsBefore": 8574721,
+    "writableLamportsAfter": 8574721,
+    "writableLamportsConserved": true,
+    "writableLedger": [
+      {
+        "address": "7Foatpj91pE3dw7PKiRtArTQ6eexVkVr9A41aNQJeoBK",
+        "role": "callerAuthority",
+        "lamportsBefore": 1,
+        "lamportsAfter": 1,
+        "ownerBefore": "11111111111111111111111111111111",
+        "ownerAfter": "11111111111111111111111111111111",
+        "dataSha256Before": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "dataSha256After": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "address": "AwANYVdRWPqM7rWyfj2Q7QCWhkwYPhasXYzRB8VSdYFr",
+        "role": "market",
+        "lamportsBefore": 3452160,
+        "lamportsAfter": 3452160,
+        "ownerBefore": "11111111111111111111111111111111",
+        "ownerAfter": "E3M3d7sy8ZKivUGxBexL9wxE7ebqzGWFqkdeFMedCJFS",
+        "dataSha256Before": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "dataSha256After": "7bc72b0f51ae3638e54de4e0a4174ed1c7b25588f85f31b02bfd4a720fe53485"
+      },
+      {
+        "address": "DgdaCXrCzqeyiyFwCnJfSAeUB2CvkSWWrvaDW3f3Zqhd",
+        "role": "foundingPermit",
+        "lamportsBefore": 5122560,
+        "lamportsAfter": 5122560,
+        "ownerBefore": "11111111111111111111111111111111",
+        "ownerAfter": "E3M3d7sy8ZKivUGxBexL9wxE7ebqzGWFqkdeFMedCJFS",
+        "dataSha256Before": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "dataSha256After": "887d04014941f28303f8d174f4b3e897a959e086bbccf1f5f53454dafd2c6c83"
+      }
+    ]
+  },
+  "replay": {
+    "replayOfSignature": "2CQXiskFmDH9UMsekvA6xkaTi4XYLBk3cukiDYNgJiMmWqcTgR3B72qRTVv1FnKbNR8CfgKF9Ea7uJsoguDMF9ij",
+    "replayOfEvidenceSha256": "51a1480ccd06a6ebaf8b5f95b7f2fe5159aca94875afe1a031fa5683d6eeeca8",
+    "feePayer": "AeVfQ89d9th9f1tBsYkhtJNXtEbtXuBL1b22nXYuC6CN",
+    "recentBlockhash": "8Gfx1gosRHhgcRz9YBdniYjxtwRmCNKZLf7UycfnutLy",
+    "signature": "2AWV8y5caXjNhFkdLiZBawSDskuXcUfX7xqcqyP6bn8JsLqxqKSCKR36B9P2Vhxb6tpomzTEuve2DKSvZ6cytMan",
+    "distinctRecentBlockhash": true,
+    "distinctSignature": true,
+    "finalizedSlot": 77,
+    "computeUnitsConsumed": 317500,
+    "feeLamports": 75000,
+    "refusalCode": 12293,
+    "refusalHex": "0x3005",
+    "evidencePath": "/tmp/dclutch-series-consume-e722e7ca-run2/replay-evidence.json",
+    "evidenceSha256": "f81f5a095c8c268fca4960e33e0d3b511e4e020d5299112622437504f085feb2",
+    "journalPath": "/tmp/dclutch-series-consume-e722e7ca-run2/replay-journal.json",
+    "journalSha256": "a41aad9f0cdfa449e15d7f756469f47e728c3badf1a6fde27fda17c2cfee2bd4",
+    "writableLamportsBefore": 8574721,
+    "writableLamportsAfter": 8574721,
+    "writableLamportsConserved": true,
+    "rollbackByteExact": true,
+    "transactionFeeOnlyBalanceChange": true,
+    "poststateMatchesAccepted": true
+  },
+  "idempotentRerun": {
+    "acceptedSubmittedTransaction": false,
+    "replaySubmittedTransaction": false,
+    "acceptedEvidenceUnchanged": true,
+    "replayEvidenceUnchanged": true
+  }
+}

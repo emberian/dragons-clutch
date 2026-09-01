@@ -48,6 +48,7 @@ use dclutch_capability_program_contract::{
         ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2, ACTIVATION_ROOT_IDENTITY_V2,
         ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
     },
+    activation_registers_v3::ACTIVATION_ROOT_BUMP_SCALAR_V3,
     initialize_root_account_v1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
@@ -356,7 +357,8 @@ pub fn process_activation(
         ),
     )
     .map_err(|_| TradingSbfError::Root)?;
-    authenticate_vacant_root(program_id, framed.child_root(), root_header, root_bytes)?;
+    let root_bump =
+        authenticate_vacant_root(program_id, framed.child_root(), root_header, root_bytes)?;
 
     let trading_receipt = reauthenticate_roles(
         &suffix,
@@ -451,6 +453,7 @@ pub fn process_activation(
         request,
         descriptor,
         framed.child_root().key,
+        Some(root_bump),
     )?;
     let mut projected_scalars = input_scalars.clone();
     let mut projected_identities = input_identities.clone();
@@ -732,6 +735,7 @@ pub fn process_close(
         request,
         descriptor,
         framed.child_root().key,
+        None,
     )?;
     *input_identities
         .get_mut(usize::from(TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2))
@@ -1207,8 +1211,8 @@ fn authenticate_vacant_root(
     root: &AccountInfo<'_>,
     header: CapabilityRootHeaderV1,
     root_bytes: usize,
-) -> Result<(), ProgramError> {
-    let expected = Pubkey::find_program_address(&header.seeds().as_slices(), program_id).0;
+) -> Result<u8, ProgramError> {
+    let (expected, bump) = Pubkey::find_program_address(&header.seeds().as_slices(), program_id);
     if root.key != &expected
         || root.owner != &system_program::ID
         || root.data_len() != 0
@@ -1218,7 +1222,7 @@ fn authenticate_vacant_root(
     {
         return Err(TradingSbfError::Root.into());
     }
-    Ok(())
+    Ok(bump)
 }
 
 /// The canonical raw/staging bumps of one finalized record's coordinate.
@@ -2092,6 +2096,7 @@ fn seed_common_registers(
     request: TradingActivationRequestV2<'_>,
     descriptor: CapabilityProgramV1<'_>,
     root: &Pubkey,
+    root_bump: Option<u8>,
 ) -> Result<(), ProgramError> {
     if scalars.len() < ACTIVATION_COMMON_SCALARS_V2
         || identities.len() < ACTIVATION_COMMON_IDENTITIES_V2
@@ -2136,6 +2141,11 @@ fn seed_common_registers(
         *scalars
             .get_mut(usize::from(slot))
             .ok_or(TradingSbfError::Content)? = value;
+    }
+    if let Some(bump) = root_bump {
+        *scalars
+            .get_mut(usize::from(ACTIVATION_ROOT_BUMP_SCALAR_V3))
+            .ok_or(TradingSbfError::Content)? = u64::from(bump);
     }
     for (slot, value) in [
         (

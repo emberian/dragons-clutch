@@ -1,0 +1,22 @@
+{
+  "schema": "dclutch-series-permit-expiry-hot-wall-v1",
+  "realElf": {"program":"AsA9txzVLYN5NDX6gcd9UogNeBiPLHEiaaJoWVYU5e6D","sha256":"8ab1487dd9630084934965ee28f304f6032413510aa74a5fd75064604bc82509"},
+  "transaction": {"result":"refused","customCode":16387,"computeUnits":44617,"childCpiCount":0},
+  "requests": {"familyAction":"Expire","familyBytes":160,"familySha256":"62ed1290cbf6890a8f37fc113f235818a91b023c3cbc57d1964f04b1ca23cb4a","proofBytes":32,"childBytes":640,"childSha256":"80dd8cd58d779ffd5c8719207b7bd33ce7f0e1ff30af388db998a524f9ce2db6"},
+  "geometry": {"market":"GLEVXFEsGYZSFBrGyU7egkqHmGB8cnLw1P9deg6563fv","marketOwner":"11111111111111111111111111111111","marketDataLen":0,"hotRequiredMarketOwner":"Aw5T3GTVvqfJWJmc7ux4mgT8tLvb1LvY8yyTZsb4pyQv","hotRequiredMarketDataLen":368,"permit":"3aPUZ82VVXhZcoKDnAECa4YTrUCmjqZPaqH4SGWdxAhM","permitOwner":"11111111111111111111111111111111","permitDataLen":0,"permitFundedForBytes":608,"rentCredit":"D9YBouvXGGq1F4H6sthTUjBbh2BhpfcHC7Mz1AAEJYiJ","rentCreditOwner":"BCkdcUKYJ2rD4fmds7FjwBYBrymPhbfpNce5oPmTpJhk","rentCreditDataLen":128},
+  "poststates": [
+    {"key":"8UuLQUsUMwCPbBu66n42VsUmGDNkFES2P4h8Ycw8Gvtj","present":true,"owner":"AsA9txzVLYN5NDX6gcd9UogNeBiPLHEiaaJoWVYU5e6D","lamports":2672640,"dataLen":256,"dataSha256":"8ebc2568fed004e9854437ecaa4d0d17846a39aa052a28faf682da1a5536a565","unchanged":true},
+    {"key":"7fvAPwetksppLEym4UKKFis633DxjciJWxXk9D9o6DZk","present":false,"unchanged":true},
+    {"key":"D9YBouvXGGq1F4H6sthTUjBbh2BhpfcHC7Mz1AAEJYiJ","present":true,"owner":"BCkdcUKYJ2rD4fmds7FjwBYBrymPhbfpNce5oPmTpJhk","lamports":1781760,"dataLen":128,"dataSha256":"a9c31654b9b258196cf173c9154ef6bcd0cee4a04489d2c2c5b038494f236ee2","unchanged":true},
+    {"key":"DkuMXySuieg6XRRnYzyaL8m1WEiLYPBvcbBVUKSxjkhw","present":false,"unchanged":true},
+    {"key":"7jqywnxT4Thjjmd7kvN6ZSnMwP3kqHZRwQRFzZRho8J8","present":true,"owner":"AzzkBZvWX8xXeQ27ZDGz4ZDu8W8ngQcMhPe7dFdfaJjd","lamports":2839680,"dataLen":280,"dataSha256":"428e8abc86791226bd4fe638fbdd65618a6c090adce7a8e980c42e731453600e","unchanged":true},
+    {"key":"8MqZTyhwESK7fbnH9zjzEhHJ12EmGUfzrVCqQiRsdJC1","present":true,"owner":"AzzkBZvWX8xXeQ27ZDGz4ZDu8W8ngQcMhPe7dFdfaJjd","lamports":1948800,"dataLen":152,"dataSha256":"07cb17bf08836c3533dbf93a7b86312680cd9149ec370e7d3e0ee825ba4b657e","unchanged":true},
+    {"key":"UV5u1rymcH1kLziZdDj8YH5S6jwT7bGVrUhCFarLvQd","present":true,"owner":"AzzkBZvWX8xXeQ27ZDGz4ZDu8W8ngQcMhPe7dFdfaJjd","lamports":1948800,"dataLen":152,"dataSha256":"d0291caaf93eb0e675b31d3bb1cab42816420c4de0fe4af793417638143e5538","unchanged":true},
+    {"key":"gbE7LMGcfRpKWN9QxFG9q6NNo5ixGBPnwogR5GYSj9M","present":true,"owner":"B4v3KsPX7SFknVGczWbuMRzfNfLzMUJBFoJmgdgGKe4L","lamports":2895360,"dataLen":288,"dataSha256":"2c7d269e3dcf9aa1ca49fe40078f1b74349150a9e84cce9055511c5c594d38eb","unchanged":true},
+    {"key":"Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp","present":true,"owner":"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA","lamports":2039280,"dataLen":165,"dataSha256":"71e3c51b9dd9a8f8002959fcf220928043c4cb7d91d4f8d0227754716c46600a","unchanged":true},
+    {"key":"BwrtBnSeoK7hbfXDfPqr8p2aYj5c7JDqX6yJSaG42yFX","present":true,"owner":"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA","lamports":2039280,"dataLen":165,"dataSha256":"a6463417b34911f518ba1406ffcf2e12052fd7df7af3ac58f6d669892c39da8c","unchanged":true},
+    {"key":"C1nBL5ufPcQvjkmj6hAmRgoLntHonMuf5WdxVxJenJaE","present":true,"owner":"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA","lamports":2039280,"dataLen":165,"dataSha256":"039d2792a5fb1c10c9aa71034a7e11b97284c2942bf352297ef9aeb43c0f0cfe","unchanged":true},
+    {"key":"GLEVXFEsGYZSFBrGyU7egkqHmGB8cnLw1P9deg6563fv","present":true,"owner":"11111111111111111111111111111111","lamports":3452160,"dataLen":0,"dataSha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","unchanged":true},
+    {"key":"3aPUZ82VVXhZcoKDnAECa4YTrUCmjqZPaqH4SGWdxAhM","present":true,"owner":"11111111111111111111111111111111","lamports":5122560,"dataLen":0,"dataSha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","unchanged":true}
+  ]
+}

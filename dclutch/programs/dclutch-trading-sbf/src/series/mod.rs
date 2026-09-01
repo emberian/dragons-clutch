@@ -31,21 +31,42 @@ pub mod custody_v3;
 pub mod effect_v4;
 /// Exact Core-to-Custody call staging behind the common Hot V3 outer.
 pub mod execute_v3;
+/// Canonical current-source Expire ProfileV3/EffectV5 artifacts.
+pub mod expire_funding_artifacts_v5;
+/// Canonical AccountProfileV3/EffectV5 funding-owned action artifacts.
+pub mod funding_artifacts_v5;
 /// Exact sparse family request consumed by the canonical Trading hot outer.
 pub mod instruction;
 /// Content-to-Solana/Core conversion at the explicit adapter boundary.
 mod kernel_adapter;
 /// The Series `StateLifecyclePolicyV5`: root-only, derived, lamport-silent.
 pub mod lifecycle_policy_v5;
+/// Canonical fixed Prepare/Expire request, transition, and Effect artifacts.
+pub mod occurrence_artifacts_v4;
 /// Chain-derived unsigned hot-action request construction.
 pub mod operator;
+pub mod prepare_funding_artifacts_v5;
 /// Canonical projected-Hoard Custody request construction.
 pub mod projected_custody_v3;
 /// Exact content/replay projector behind the canonical Trading hot outer.
 pub mod projector;
 /// Chain-derived Shadow-AOT release selection and generic request construction.
 /// Self-consistent Series Consume capability release assembly.
+///
+/// This compiler emits immutable publication artifacts. The onchain runtime
+/// authenticates and executes those artifacts through `artifacts_v4` and
+/// `effect_v4`; it never recompiles a release inside the Trading ELF.
+#[cfg(not(target_os = "solana"))]
 pub mod release_v4;
+/// Host-only current release publication and operator reauthentication.
+///
+/// The selected artifacts it emits are authenticated by the common Hot
+/// runtime, but the allocator-heavy release compiler itself is not an onchain
+/// instruction path and must not be linked into the Trading ELF.
+#[cfg(not(target_os = "solana"))]
+pub mod release_v5;
+/// Canonical current-source Retire ProfileV3/EffectV5 artifacts.
+pub mod retire_funding_artifacts_v5;
 pub mod shadow_operator;
 /// Fixed-layout mutable replay state owned by the selected Trading program.
 pub mod state;

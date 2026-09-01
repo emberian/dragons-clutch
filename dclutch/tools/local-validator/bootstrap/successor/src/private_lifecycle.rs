@@ -12,13 +12,14 @@ use std::{
     io::Write as _,
     os::unix::fs::OpenOptionsExt as _,
     path::{Component, Path, PathBuf},
+    str::FromStr as _,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
-use solana_sdk::pubkey::Pubkey;
+use solana_sdk::{hash::Hash, pubkey::Pubkey, signature::Signature};
 
 use crate::{
     Error, Result,
@@ -41,7 +42,22 @@ const DIRECT_FINALIZED_SCHEMA_V1: &str = "dclutch-owned-loopback-direct-trade-fi
 const MANIFEST_SCHEMA_V1: &str = "dclutch-owned-loopback-activity-reconcile-manifest-v1";
 const DESCRIPTORS_SCHEMA_V1: &str = "dclutch-owned-loopback-stage-journal-descriptors-v1";
 const ACTIVITY_SESSION_SCHEMA_V1: &str = "dclutch-owned-loopback-private-lifecycle-session-v1";
-const CHAOS_SESSION_SCHEMA_V1: &str = "dclutch-owned-loopback-private-lifecycle-chaos-session-v1";
+const CHAOS_SESSION_SCHEMA_V2: &str = "dclutch-owned-loopback-private-lifecycle-chaos-session-v2";
+const CHAOS_CASE_SCHEMA_V1: &str = "dclutch-owned-loopback-private-lifecycle-chaos-case-v1";
+const CHAOS_BOUNDARIES: [&str; 2] = [
+    "dispatching-before-send",
+    "landed-before-finalization-fsync",
+];
+const CHAOS_TARGET_MUTATIONS: [&str; 8] = [
+    "dcltgmf3",
+    "position-admission",
+    "lookup-freeze",
+    "capability-seal",
+    "hot",
+    "core-terminal-accept",
+    "wallet-terminal-payout",
+    "aggregate-retirement-finish",
+];
 const PYTH_FACTS_SCHEMA_V1: &str = "dclutch-flagship-pyth-update-facts-v1";
 const PYTH_RECEIVER_PROGRAM_ID: &str = "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp";
 const PYTH_ROUTER_PROGRAM_ID: &str = "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL";
@@ -241,20 +257,83 @@ struct ActivitySession {
     stage_set_sha256: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ChaosSession {
     schema: String,
     status: String,
-    stages: Vec<ChaosStage>,
+    source_revision: String,
+    source_tree_sha256: String,
+    checked_release_gate_sha256: String,
+    matrix: ChaosMatrix,
+    cases: Vec<ChaosCase>,
+    session_sha256: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ChaosStage {
+struct ChaosMatrix {
+    case_count: u64,
+    stages: Vec<String>,
+    boundaries: Vec<String>,
+    target_mutations: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChaosCase {
+    schema: String,
+    case_id: String,
     stage: String,
+    boundary: String,
+    target_mutation: String,
     status: String,
+    named_seed: String,
+    genesis_hash: String,
+    session_identity_sha256: String,
+    source_revision: String,
+    checked_release_gate_sha256: String,
+    terminal_result_sha256: String,
+    completed_stages: Vec<String>,
+    target_intent_sha256: String,
+    target_packet_sha256: String,
+    target_signature: String,
+    target_signing_count: u64,
+    target_distinct_signature_count: u64,
+    target_send_count: u64,
+    fault: Option<ChaosFault>,
+    recovery: Option<ChaosRecovery>,
+    case_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChaosFault {
+    receipt_sha256: String,
+    journal_before_kill_sha256: String,
+    durable_phase: String,
+    exit_code: i64,
+    signal: u64,
+    send_count_before_kill: u64,
     intent_sha256: String,
+    packet_sha256: String,
+    signature: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChaosRecovery {
+    same_genesis: bool,
+    same_session_identity: bool,
+    journal_before_restart_sha256: String,
+    journal_after_finalization_sha256: String,
+    intent_sha256: String,
+    packet_sha256: String,
+    signature: String,
+    poll_count: u64,
+    send_count_after_restart: u64,
+    signing_count_after_restart: u64,
+    finalized_slot: u64,
 }
 
 pub(crate) fn usage() -> &'static str {
@@ -664,12 +743,16 @@ pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
             "the chaos-session descriptor does not name --chaos-session",
         ));
     }
-    let chaos = authenticate_chaos(&chaos_path)?;
+    let chaos = authenticate_chaos(
+        &chaos_path,
+        &arguments.source_commit,
+        &arguments.checked_release_gate_sha256,
+    )?;
     let chaos_journal = journals
         .iter()
         .find(|row| row.path == chaos_relative)
         .ok_or_else(|| Error::new("chaos-session journal was not projected"))?;
-    authenticate_session_journal_identity(chaos_journal, CHAOS_SESSION_SCHEMA_V1, "chaos session")?;
+    authenticate_session_journal_identity(chaos_journal, CHAOS_SESSION_SCHEMA_V2, "chaos session")?;
 
     let programs = authenticate_programs(&plan, &capture, retained_authority)?;
     let capture_relative = relative_evidence_path(&evidence_root, &capture_path, "capture")?;
@@ -1020,26 +1103,198 @@ fn authenticate_journals(
     Ok((journals, semantic_paths))
 }
 
-fn authenticate_chaos(path: &Path) -> Result<ChaosSession> {
+fn authenticate_chaos(
+    path: &Path,
+    expected_source_revision: &str,
+    expected_checked_release_gate_sha256: &str,
+) -> Result<ChaosSession> {
     let bytes = bounded_read(path, "chaos session")?;
     let chaos: ChaosSession = serde_json::from_value(exact_json(&bytes, "chaos session")?)?;
-    if chaos.schema != CHAOS_SESSION_SCHEMA_V1
+    if chaos.schema != CHAOS_SESSION_SCHEMA_V2
         || chaos.status != "finalized"
-        || chaos.stages.len() != CHAOS_STAGES.len()
+        || chaos.source_revision != expected_source_revision
+        || chaos.checked_release_gate_sha256 != expected_checked_release_gate_sha256
+        || chaos.matrix.case_count != 17
+        || chaos
+            .matrix
+            .stages
+            .iter()
+            .map(String::as_str)
+            .ne(CHAOS_STAGES)
+        || chaos
+            .matrix
+            .boundaries
+            .iter()
+            .map(String::as_str)
+            .ne(CHAOS_BOUNDARIES)
+        || chaos
+            .matrix
+            .target_mutations
+            .iter()
+            .map(String::as_str)
+            .ne(CHAOS_TARGET_MUTATIONS)
+        || chaos.cases.len() != 17
     {
         return Err(Error::new(
-            "chaos session is not one finalized bounded session",
+            "chaos session is not the exact source-bound finalized 1 + 8x2 matrix",
         ));
     }
-    for (row, expected) in chaos.stages.iter().zip(CHAOS_STAGES) {
-        exact_lower_hex(&row.intent_sha256, 64, "chaos intent SHA-256")?;
-        if row.stage != expected || row.status != "finalized" {
+    exact_lower_hex(&chaos.source_revision, 40, "chaos source revision")?;
+    exact_lower_hex(&chaos.source_tree_sha256, 64, "chaos source tree SHA-256")?;
+    exact_lower_hex(
+        &chaos.checked_release_gate_sha256,
+        64,
+        "chaos checked release gate SHA-256",
+    )?;
+    exact_lower_hex(&chaos.session_sha256, 64, "chaos session SHA-256")?;
+
+    for (index, row) in chaos.cases.iter().enumerate() {
+        let (stage, boundary, mutation) = if index == 0 {
+            ("control", "uninterrupted", "complete-life")
+        } else {
+            let stage_index = (index - 1) / CHAOS_BOUNDARIES.len();
+            let boundary_index = (index - 1) % CHAOS_BOUNDARIES.len();
+            (
+                CHAOS_STAGES[stage_index],
+                CHAOS_BOUNDARIES[boundary_index],
+                CHAOS_TARGET_MUTATIONS[stage_index],
+            )
+        };
+        let case_id = if index == 0 {
+            "control".to_owned()
+        } else {
+            format!("{stage}:{boundary}")
+        };
+        if row.schema != CHAOS_CASE_SCHEMA_V1
+            || row.case_id != case_id
+            || row.stage != stage
+            || row.boundary != boundary
+            || row.target_mutation != mutation
+            || row.status != "finalized"
+            || row.named_seed != format!("chaos-{:02}", index + 1)
+            || row.source_revision != chaos.source_revision
+            || row.checked_release_gate_sha256 != chaos.checked_release_gate_sha256
+            || row
+                .completed_stages
+                .iter()
+                .map(String::as_str)
+                .ne(CHAOS_STAGES)
+            || row.target_signing_count != 1
+            || row.target_distinct_signature_count != 1
+            || row.target_send_count != 1
+        {
             return Err(Error::new(
-                "chaos session is not the exact ordered eight-stage sequence",
+                "chaos case changed its canonical identity, terminal stage set, or one-send contract",
             ));
         }
+        Hash::from_str(&row.genesis_hash)
+            .map_err(|error| Error::new(format!("chaos genesis hash: {error}")))?;
+        for (value, label) in [
+            (
+                &row.session_identity_sha256,
+                "chaos session identity SHA-256",
+            ),
+            (&row.terminal_result_sha256, "chaos terminal result SHA-256"),
+            (&row.target_intent_sha256, "chaos target intent SHA-256"),
+            (&row.target_packet_sha256, "chaos target packet SHA-256"),
+            (&row.case_sha256, "chaos case SHA-256"),
+        ] {
+            exact_lower_hex(value, 64, label)?;
+        }
+        Signature::from_str(&row.target_signature)
+            .map_err(|error| Error::new(format!("chaos target signature: {error}")))?;
+
+        if index == 0 {
+            if row.fault.is_some() || row.recovery.is_some() {
+                return Err(Error::new(
+                    "the uninterrupted chaos control carried fault or recovery theater",
+                ));
+            }
+        } else {
+            let fault = row
+                .fault
+                .as_ref()
+                .ok_or_else(|| Error::new("an interrupted chaos case omitted its fault facts"))?;
+            let recovery = row.recovery.as_ref().ok_or_else(|| {
+                Error::new("an interrupted chaos case omitted its recovery facts")
+            })?;
+            let expected_before = u64::from(boundary == CHAOS_BOUNDARIES[1]);
+            let expected_after = u64::from(boundary == CHAOS_BOUNDARIES[0]);
+            if fault.durable_phase != "dispatching"
+                || fault.exit_code != -9
+                || fault.signal != 9
+                || fault.send_count_before_kill != expected_before
+                || recovery.send_count_after_restart != expected_after
+                || recovery.signing_count_after_restart != 0
+                || recovery.poll_count == 0
+                || recovery.finalized_slot == 0
+                || !recovery.same_genesis
+                || !recovery.same_session_identity
+                || fault.journal_before_kill_sha256 != recovery.journal_before_restart_sha256
+                || recovery.journal_after_finalization_sha256 == fault.journal_before_kill_sha256
+                || fault.intent_sha256 != row.target_intent_sha256
+                || recovery.intent_sha256 != row.target_intent_sha256
+                || fault.packet_sha256 != row.target_packet_sha256
+                || recovery.packet_sha256 != row.target_packet_sha256
+                || fault.signature != row.target_signature
+                || recovery.signature != row.target_signature
+            {
+                return Err(Error::new(
+                    "chaos case did not prove one exact SIGKILL/restart packet boundary",
+                ));
+            }
+            for (value, label) in [
+                (&fault.receipt_sha256, "chaos fault receipt SHA-256"),
+                (
+                    &fault.journal_before_kill_sha256,
+                    "chaos pre-kill journal SHA-256",
+                ),
+                (&fault.intent_sha256, "chaos fault intent SHA-256"),
+                (&fault.packet_sha256, "chaos fault packet SHA-256"),
+                (
+                    &recovery.journal_before_restart_sha256,
+                    "chaos pre-restart journal SHA-256",
+                ),
+                (
+                    &recovery.journal_after_finalization_sha256,
+                    "chaos finalized journal SHA-256",
+                ),
+                (&recovery.intent_sha256, "chaos recovery intent SHA-256"),
+                (&recovery.packet_sha256, "chaos recovery packet SHA-256"),
+            ] {
+                exact_lower_hex(value, 64, label)?;
+            }
+            Signature::from_str(&fault.signature)
+                .map_err(|error| Error::new(format!("chaos fault signature: {error}")))?;
+            Signature::from_str(&recovery.signature)
+                .map_err(|error| Error::new(format!("chaos recovery signature: {error}")))?;
+        }
+
+        if chaos_document_digest(row, "caseSha256")? != row.case_sha256 {
+            return Err(Error::new("chaos case digest changed"));
+        }
+    }
+    if chaos_document_digest(&chaos, "sessionSha256")? != chaos.session_sha256 {
+        return Err(Error::new("chaos session digest changed"));
     }
     Ok(chaos)
+}
+
+fn chaos_document_digest<T: Serialize>(document: &T, digest_field: &str) -> Result<String> {
+    let mut value = serde_json::to_value(document)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| Error::new("chaos digest owner is not an object"))?;
+    if object.remove(digest_field).is_none() {
+        return Err(Error::new("chaos digest owner omitted its digest field"));
+    }
+    let mut bytes = canonical_json_bytes(&value)?;
+    if bytes.pop() != Some(b'\n') {
+        return Err(Error::new(
+            "canonical chaos JSON omitted its terminal newline",
+        ));
+    }
+    Ok(sha256(&bytes))
 }
 
 fn authenticate_programs(
@@ -1677,47 +1932,126 @@ mod tests {
                 "dclutch-private-lifecycle-chaos-{}.json",
                 std::process::id()
             ));
+        let source = "aa".repeat(20);
+        let gate = "bb".repeat(32);
+        let mut cases = Vec::new();
+        for index in 0..17 {
+            let (stage, boundary, mutation) = if index == 0 {
+                ("control", "uninterrupted", "complete-life")
+            } else {
+                let stage_index = (index - 1) / CHAOS_BOUNDARIES.len();
+                let boundary_index = (index - 1) % CHAOS_BOUNDARIES.len();
+                (
+                    CHAOS_STAGES[stage_index],
+                    CHAOS_BOUNDARIES[boundary_index],
+                    CHAOS_TARGET_MUTATIONS[stage_index],
+                )
+            };
+            let case_id = if index == 0 {
+                "control".into()
+            } else {
+                format!("{stage}:{boundary}")
+            };
+            let signature = Signature::default().to_string();
+            let interrupted = index != 0;
+            let before_send = boundary == CHAOS_BOUNDARIES[0];
+            let mut row = json!({
+                "schema": CHAOS_CASE_SCHEMA_V1,
+                "caseId": case_id,
+                "stage": stage,
+                "boundary": boundary,
+                "targetMutation": mutation,
+                "status": "finalized",
+                "namedSeed": format!("chaos-{:02}", index + 1),
+                "genesisHash": Hash::new_unique().to_string(),
+                "sessionIdentitySha256": "11".repeat(32),
+                "sourceRevision": source,
+                "checkedReleaseGateSha256": gate,
+                "terminalResultSha256": "22".repeat(32),
+                "completedStages": CHAOS_STAGES,
+                "targetIntentSha256": "33".repeat(32),
+                "targetPacketSha256": "44".repeat(32),
+                "targetSignature": signature,
+                "targetSigningCount": 1,
+                "targetDistinctSignatureCount": 1,
+                "targetSendCount": 1,
+                "fault": interrupted.then(|| json!({
+                    "receiptSha256": "55".repeat(32),
+                    "journalBeforeKillSha256": "66".repeat(32),
+                    "durablePhase": "dispatching",
+                    "exitCode": -9,
+                    "signal": 9,
+                    "sendCountBeforeKill": u64::from(!before_send),
+                    "intentSha256": "33".repeat(32),
+                    "packetSha256": "44".repeat(32),
+                    "signature": signature,
+                })),
+                "recovery": interrupted.then(|| json!({
+                    "sameGenesis": true,
+                    "sameSessionIdentity": true,
+                    "journalBeforeRestartSha256": "66".repeat(32),
+                    "journalAfterFinalizationSha256": "77".repeat(32),
+                    "intentSha256": "33".repeat(32),
+                    "packetSha256": "44".repeat(32),
+                    "signature": signature,
+                    "pollCount": 1,
+                    "sendCountAfterRestart": u64::from(before_send),
+                    "signingCountAfterRestart": 0,
+                    "finalizedSlot": 1,
+                })),
+                "caseSha256": "00".repeat(32),
+            });
+            row["caseSha256"] =
+                Value::String(chaos_document_digest(&row, "caseSha256").expect("case digest"));
+            cases.push(row);
+        }
         let mut session = json!({
-            "schema": CHAOS_SESSION_SCHEMA_V1,
+            "schema": CHAOS_SESSION_SCHEMA_V2,
             "status": "finalized",
-            "stages": CHAOS_STAGES
-                .iter()
-                .map(|stage| json!({
-                    "stage": stage,
-                    "status": "finalized",
-                    "intentSha256": "11".repeat(32),
-                }))
-                .collect::<Vec<_>>(),
+            "sourceRevision": source,
+            "sourceTreeSha256": "cc".repeat(32),
+            "checkedReleaseGateSha256": gate,
+            "matrix": {
+                "caseCount": 17,
+                "stages": CHAOS_STAGES,
+                "boundaries": CHAOS_BOUNDARIES,
+                "targetMutations": CHAOS_TARGET_MUTATIONS,
+            },
+            "cases": cases,
+            "sessionSha256": "00".repeat(32),
         });
+        session["sessionSha256"] = Value::String(
+            chaos_document_digest(&session, "sessionSha256").expect("session digest"),
+        );
         fs::write(
             &path,
             serde_json::to_vec(&session).expect("chaos session JSON"),
         )
         .expect("write chaos session");
-        authenticate_chaos(&path).expect("exact chaos session");
+        authenticate_chaos(&path, &source, &gate).expect("exact chaos session");
         session["schema"] = Value::String("dclutch-lifecycle-chaos-summary-v1".into());
         fs::write(
             &path,
             serde_json::to_vec(&session).expect("substituted chaos JSON"),
         )
         .expect("write substituted chaos session");
-        assert!(authenticate_chaos(&path).is_err());
+        assert!(authenticate_chaos(&path, &source, &gate).is_err());
         fs::remove_file(path).expect("remove chaos session");
 
         let mut journal = JournalReceipt {
             path: "chaos.json".into(),
             sha256: "11".repeat(32),
-            schema: CHAOS_SESSION_SCHEMA_V1.into(),
+            schema: CHAOS_SESSION_SCHEMA_V2.into(),
             completion_pointer: "/status".into(),
             completion_value: "finalized".into(),
         };
-        authenticate_session_journal_identity(&journal, CHAOS_SESSION_SCHEMA_V1, "chaos session")
+        authenticate_session_journal_identity(&journal, CHAOS_SESSION_SCHEMA_V2, "chaos session")
             .expect("exact top-level status");
         journal.completion_pointer = "/stages/0/status".into();
         assert!(
             authenticate_session_journal_identity(
                 &journal,
-                CHAOS_SESSION_SCHEMA_V1,
+                CHAOS_SESSION_SCHEMA_V2,
                 "chaos session",
             )
             .is_err()

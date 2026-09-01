@@ -338,6 +338,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-fractional-atomic-test-caller-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-fractional-claim-contract",
+ "dclutch-refusal-registry",
+ "dclutch-release-set-contract",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-fractional-claim-contract"
 version = "0.1.0"
 dependencies = [
@@ -367,6 +378,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
+ "dclutch-fractional-atomic-test-caller-sbf",
  "dclutch-fractional-claim-contract",
  "dclutch-refusal-registry",
  "solana-program",

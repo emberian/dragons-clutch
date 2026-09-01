@@ -44,11 +44,14 @@ use dclutch_claims_svm::fractional_claim_check_compaction_receipt_v1::{
 use dclutch_claims_svm::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1;
 use dclutch_claims_svm::fractional_claim_check_conservation_v1::{
     FractionalClaimCheckCompactionObservationV1, FractionalClaimCheckCompactionPlanV1,
+    FractionalClaimCheckConservationErrorV1, FractionalClaimCheckRedemptionObservationV1,
+    FractionalClaimCheckRedemptionPlanV1, FractionalClaimCheckRedemptionPostV1,
 };
 use dclutch_claims_svm::fractional_claim_check_v1::{
-    FRACTIONAL_CLAIM_CHECK_BYTES_V1, FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1,
-    FRACTIONAL_COMPACT_TERMINAL_FRAME_V1, FractionalClaimCheckSeedsV1, FractionalClaimCheckV1,
-    FractionalCompactionRoleV1,
+    FRACTIONAL_CLAIM_CHECK_BYTES_V1, FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1,
+    FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, FRACTIONAL_COMPACT_TERMINAL_FRAME_V1,
+    FractionalClaimCheckRedemptionRoleV1, FractionalClaimCheckSeedsV1, FractionalClaimCheckV1,
+    FractionalCompactionRoleV1, FractionalPayDownV1, FractionalRedeemClaimCheckRequestV1,
 };
 use dclutch_claims_svm::protocol_position_v2::{
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
@@ -67,21 +70,26 @@ use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
     hash::hash,
-    program::{invoke, set_return_data},
+    program::{invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
     sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::system_program;
-use spl_token_2022_interface::instruction as token_instruction;
+use spl_token_2022_interface::{
+    extension::permissioned_burn::instruction as permissioned_burn_instruction,
+    instruction as token_instruction,
+};
 
+use crate::ClaimsSbfError;
 use crate::claim_check_compaction_v1::{
     COMPACT_TERMINAL_POSITION_ACCOUNT_V1, allocate_and_assign, close_and_split, observation,
     token_balance,
 };
 use crate::protocol_position_v2::{LifecycleRentCreditIdentityV2, authenticate_rent_credit};
 use crate::rational_representation_v2::authenticate_finalized_rational_record;
+use crate::signed_delta_v3::SignedDeltaSbfErrorV3;
 
 /// Stable fractional claim-check compaction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,7 +113,7 @@ pub enum FractionalClaimCheckCompactionSbfErrorV1 {
     AlreadyCompacted = 0x5645,
     /// A plan's atoms, shards or lamports did not balance.
     Conservation = 0x5646,
-    /// The terminal payout derivation refused.
+    /// The inner terminal settlement refused payout or custody-request arithmetic.
     Economic = 0x5647,
     /// Observed post-balances did not match the admitted plan.
     Receipt = 0x5648,
@@ -131,6 +139,35 @@ pub enum FractionalClaimCheckCompactionSbfErrorV1 {
     /// it. Folding the two would make the one refusal that says "your rent is
     /// going somewhere else" indistinguishable from a mistyped escrow.
     Rent = 0x564D,
+    /// The inner terminal settlement refused its account frame, a borrow, or a
+    /// Token-2022 account profile.
+    TerminalAccounts = 0x564E,
+    /// The inner terminal settlement refused a semantic identity join.
+    TerminalIdentity = 0x564F,
+    /// The inner terminal settlement could not authenticate a current release.
+    TerminalRelease = 0x5650,
+    /// The inner terminal settlement could not construct or verify its receipt.
+    TerminalReceipt = 0x5651,
+    /// The inner terminal settlement found that a pinned deployment moved.
+    TerminalReleaseSuperseded = 0x5652,
+    /// The generated SignedDelta packet did not decode canonically.
+    SignedDeltaInstruction = 0x5653,
+    /// The inner SignedDelta frame, privileges, owners, or aliases refused.
+    SignedDeltaAccounts = 0x5654,
+    /// SignedDelta current-release authentication or parent authority refused.
+    SignedDeltaRelease = 0x5655,
+    /// SignedDelta's Product graph, basis, semantic identity, or Core join refused.
+    SignedDeltaProductBasis = 0x5656,
+    /// SignedDelta's aggregate or Position identity, width, or revision refused.
+    SignedDeltaClaimsState = 0x5657,
+    /// The exact SignedDelta overflowed or underflowed a resource.
+    SignedDeltaCandidate = 0x5658,
+    /// SignedDelta candidate buffers could not all be committed last.
+    SignedDeltaCommit = 0x5659,
+    /// The canonical SignedDelta success receipt could not be constructed.
+    SignedDeltaReceipt = 0x565A,
+    /// A positive SignedDelta would exceed the Market's principal-capacity cap.
+    SignedDeltaPrincipalCapacity = 0x565B,
 }
 
 impl FractionalClaimCheckCompactionSbfErrorV1 {
@@ -140,7 +177,7 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
     /// [`FractionalClaimCheckCompactionSbfErrorV1::ordinal`], whose match is exhaustive: a variant
     /// added to the enum does not compile until its author writes an arm here, and the only arm
     /// that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 28] = [
         Self::Accounts,
         Self::Authority,
         Self::Identity,
@@ -155,11 +192,25 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
         Self::Terms,
         Self::ShardMint,
         Self::Rent,
+        Self::TerminalAccounts,
+        Self::TerminalIdentity,
+        Self::TerminalRelease,
+        Self::TerminalReceipt,
+        Self::TerminalReleaseSuperseded,
+        Self::SignedDeltaInstruction,
+        Self::SignedDeltaAccounts,
+        Self::SignedDeltaRelease,
+        Self::SignedDeltaProductBasis,
+        Self::SignedDeltaClaimsState,
+        Self::SignedDeltaCandidate,
+        Self::SignedDeltaCommit,
+        Self::SignedDeltaReceipt,
+        Self::SignedDeltaPrincipalCapacity,
     ];
 
     /// This refusal's position in [`FractionalClaimCheckCompactionSbfErrorV1::ALL`].
     ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: a fifteenth variant is
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a twenty-ninth variant is
     /// a COMPILE ERROR here rather than a discriminant no assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -177,6 +228,20 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
             Self::Terms => 11,
             Self::ShardMint => 12,
             Self::Rent => 13,
+            Self::TerminalAccounts => 14,
+            Self::TerminalIdentity => 15,
+            Self::TerminalRelease => 16,
+            Self::TerminalReceipt => 17,
+            Self::TerminalReleaseSuperseded => 18,
+            Self::SignedDeltaInstruction => 19,
+            Self::SignedDeltaAccounts => 20,
+            Self::SignedDeltaRelease => 21,
+            Self::SignedDeltaProductBasis => 22,
+            Self::SignedDeltaClaimsState => 23,
+            Self::SignedDeltaCandidate => 24,
+            Self::SignedDeltaCommit => 25,
+            Self::SignedDeltaReceipt => 26,
+            Self::SignedDeltaPrincipalCapacity => 27,
         }
     }
 }
@@ -247,6 +312,78 @@ const _: () = {
 impl From<FractionalClaimCheckCompactionSbfErrorV1> for ProgramError {
     fn from(value: FractionalClaimCheckCompactionSbfErrorV1) -> Self {
         Self::Custom(value as u32)
+    }
+}
+
+/// Lift every refusal the inner terminal route can currently return into this
+/// compaction family's own additive refusal surface.
+///
+/// `execute_claim_check_compaction` is typed as `ProgramError` because it also
+/// serves the native route. The fractional boundary therefore receives bare
+/// custom codes. Matching only the reachable union here is deliberate: an
+/// unknown runtime error keeps the historical `Economic` fallback rather than
+/// becoming an accidental success or a new openness rule. The exact known
+/// union is pinned by the adversarial table below.
+fn fractional_terminal_refusal(error: ProgramError) -> FractionalClaimCheckCompactionSbfErrorV1 {
+    const CLAIMS_ACCOUNTS: u32 = ClaimsSbfError::Accounts as u32;
+    const CLAIMS_IDENTITY: u32 = ClaimsSbfError::Identity as u32;
+    const CLAIMS_RELEASE: u32 = ClaimsSbfError::Release as u32;
+    const CLAIMS_RECEIPT: u32 = ClaimsSbfError::Receipt as u32;
+    const CLAIMS_RELEASE_SUPERSEDED: u32 = ClaimsSbfError::ReleaseSuperseded as u32;
+    const SIGNED_DELTA_INSTRUCTION: u32 = SignedDeltaSbfErrorV3::Instruction as u32;
+    const SIGNED_DELTA_ACCOUNTS: u32 = SignedDeltaSbfErrorV3::Accounts as u32;
+    const SIGNED_DELTA_RELEASE: u32 = SignedDeltaSbfErrorV3::Release as u32;
+    const SIGNED_DELTA_PRODUCT_BASIS: u32 = SignedDeltaSbfErrorV3::ProductBasis as u32;
+    const SIGNED_DELTA_CLAIMS_STATE: u32 = SignedDeltaSbfErrorV3::ClaimsState as u32;
+    const SIGNED_DELTA_CANDIDATE: u32 = SignedDeltaSbfErrorV3::Candidate as u32;
+    const SIGNED_DELTA_COMMIT: u32 = SignedDeltaSbfErrorV3::Commit as u32;
+    const SIGNED_DELTA_RECEIPT: u32 = SignedDeltaSbfErrorV3::Receipt as u32;
+    const SIGNED_DELTA_PRINCIPAL_CAPACITY: u32 = SignedDeltaSbfErrorV3::PrincipalCapacity as u32;
+
+    match error {
+        ProgramError::Custom(CLAIMS_ACCOUNTS) => {
+            FractionalClaimCheckCompactionSbfErrorV1::TerminalAccounts
+        }
+        ProgramError::Custom(CLAIMS_IDENTITY) => {
+            FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity
+        }
+        ProgramError::Custom(CLAIMS_RELEASE) => {
+            FractionalClaimCheckCompactionSbfErrorV1::TerminalRelease
+        }
+        ProgramError::Custom(CLAIMS_RECEIPT) => {
+            FractionalClaimCheckCompactionSbfErrorV1::TerminalReceipt
+        }
+        ProgramError::Custom(CLAIMS_RELEASE_SUPERSEDED) => {
+            FractionalClaimCheckCompactionSbfErrorV1::TerminalReleaseSuperseded
+        }
+        ProgramError::Custom(SIGNED_DELTA_INSTRUCTION) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaInstruction
+        }
+        ProgramError::Custom(SIGNED_DELTA_ACCOUNTS) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaAccounts
+        }
+        ProgramError::Custom(SIGNED_DELTA_RELEASE) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaRelease
+        }
+        ProgramError::Custom(SIGNED_DELTA_PRODUCT_BASIS) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaProductBasis
+        }
+        ProgramError::Custom(SIGNED_DELTA_CLAIMS_STATE) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaClaimsState
+        }
+        ProgramError::Custom(SIGNED_DELTA_CANDIDATE) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaCandidate
+        }
+        ProgramError::Custom(SIGNED_DELTA_COMMIT) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaCommit
+        }
+        ProgramError::Custom(SIGNED_DELTA_RECEIPT) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaReceipt
+        }
+        ProgramError::Custom(SIGNED_DELTA_PRINCIPAL_CAPACITY) => {
+            FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaPrincipalCapacity
+        }
+        _ => FractionalClaimCheckCompactionSbfErrorV1::Economic,
     }
 }
 
@@ -372,6 +509,365 @@ impl From<FractionalClaimCheckRedemptionSbfErrorV1> for ProgramError {
     fn from(value: FractionalClaimCheckRedemptionSbfErrorV1) -> Self {
         Self::Custom(value as u32)
     }
+}
+
+/// Burn one holder's whole fractional claims and pay their exact collateral.
+///
+/// This is the durable half of fractional compaction. Its only human authority
+/// is the holder signature, proven again by requiring both presented token
+/// accounts to name that signer as owner. The Claims escrow signs only as the
+/// vault owner and the Mint's permissioned-burn approver; it never chooses a
+/// holder or payout account. Partial burns rewrite the record in place. The
+/// burn that pays its final atom closes the record into the holder and lowers
+/// the escrow's outstanding count, enabling the existing permissionless escrow
+/// close once every record is gone.
+pub fn process_fractional_redemption(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 {
+        return Err(FractionalClaimCheckRedemptionSbfErrorV1::Accounts.into());
+    }
+    let request = FractionalRedeemClaimCheckRequestV1::decode(instruction_data)
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Identity)?;
+    let at = |index: usize| {
+        accounts
+            .get(index)
+            .ok_or(FractionalClaimCheckRedemptionSbfErrorV1::Accounts)
+    };
+    for (index, role) in FractionalClaimCheckRedemptionRoleV1::frame()
+        .iter()
+        .enumerate()
+    {
+        let account = at(index)?;
+        let (signer, writable) = role.privileges();
+        if account.is_signer != signer || account.is_writable != writable {
+            return Err(FractionalClaimCheckRedemptionSbfErrorV1::Accounts.into());
+        }
+    }
+
+    let holder = at(0)?;
+    let record_account = at(1)?;
+    let escrow_account = at(2)?;
+    let vault = at(3)?;
+    let holder_collateral = at(4)?;
+    let collateral_mint = at(5)?;
+    let shard_mint = at(6)?;
+    let holder_shards = at(7)?;
+    let token_program = at(8)?;
+
+    if record_account.owner != program_id
+        || escrow_account.owner != program_id
+        || vault.owner != token_program.key
+        || holder_collateral.owner != token_program.key
+        || collateral_mint.owner != token_program.key
+        || shard_mint.owner != token_program.key
+        || holder_shards.owner != token_program.key
+        || !token_program.executable
+        || token_program.key.to_bytes() != dclutch_token_svm::TOKEN_2022_PROGRAM_ID
+    {
+        return Err(FractionalClaimCheckRedemptionSbfErrorV1::Accounts.into());
+    }
+    if accounts.iter().enumerate().any(|(left_index, left)| {
+        accounts
+            .iter()
+            .skip(left_index.saturating_add(1))
+            .any(|right| left.key == right.key)
+    }) {
+        return Err(FractionalClaimCheckRedemptionSbfErrorV1::Accounts.into());
+    }
+
+    let record = FractionalClaimCheckV1::decode(
+        &record_account
+            .try_borrow_data()
+            .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?,
+    )
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Identity)?;
+    let escrow = ClaimCheckEscrowV1::decode(
+        &escrow_account
+            .try_borrow_data()
+            .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?,
+    )
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Identity)?;
+
+    let record_seeds = request
+        .seeds()
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Identity)?;
+    let (expected_record, record_bump) =
+        Pubkey::find_program_address(&record_seeds.as_slices(), program_id);
+    let escrow_seeds = ClaimCheckEscrowSeedsV1::new(request.aggregate)
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Identity)?;
+    let (expected_escrow, escrow_bump) =
+        Pubkey::find_program_address(&escrow_seeds.as_slices(), program_id);
+    if record_account.key != &expected_record
+        || record.bump != record_bump
+        || escrow_account.key != &expected_escrow
+        || escrow.bump != escrow_bump
+        || request.aggregate != record.aggregate
+        || request.shard_mint != record.shard_mint
+        || escrow.aggregate != record.aggregate
+        || escrow.market != record.market
+        || escrow.release_set != record.release_set
+        || escrow.vault != record.vault
+        || escrow.collateral_mint != record.collateral_mint
+        || escrow.generation != record.generation
+        || vault.key.to_bytes() != record.vault
+        || collateral_mint.key.to_bytes() != record.collateral_mint
+        || shard_mint.key.to_bytes() != record.shard_mint
+    {
+        return Err(FractionalClaimCheckRedemptionSbfErrorV1::Identity.into());
+    }
+
+    let holder_key = holder.key.to_bytes();
+    let token_program_key = token_program.key.to_bytes();
+    let holder_shard_balance = checked_token_account_balance(
+        holder_shards,
+        token_program_key,
+        record.shard_mint,
+        holder_key,
+    )?;
+    let holder_collateral_before = checked_token_account_balance(
+        holder_collateral,
+        token_program_key,
+        record.collateral_mint,
+        holder_key,
+    )?;
+    let vault_before = checked_token_account_balance(
+        vault,
+        token_program_key,
+        record.collateral_mint,
+        escrow_account.key.to_bytes(),
+    )?;
+    let (shard_supply_before, shard_decimals, shard_controller) =
+        compacted_shard_mint_facts(shard_mint, token_program, escrow_account)?;
+    let collateral_decimals = checked_mint_decimals(collateral_mint)?;
+
+    let plan =
+        FractionalClaimCheckRedemptionPlanV1::new(FractionalClaimCheckRedemptionObservationV1 {
+            record,
+            shard_atoms: request.requested_shard_atoms,
+            holder_shards_before: holder_shard_balance,
+            shard_supply_before,
+            vault_before,
+            holder_collateral_before,
+            record_lamports: record_account.lamports(),
+            holder_lamports_before: holder.lamports(),
+        })
+        .map_err(|error| match error {
+            FractionalClaimCheckConservationErrorV1::NoWholeClaim => {
+                FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim
+            }
+            _ => FractionalClaimCheckRedemptionSbfErrorV1::Conservation,
+        })?;
+    let next_record = record
+        .pay_down(plan.collateral_atoms())
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Conservation)?;
+
+    let signer = escrow
+        .signer_seeds()
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Identity)?;
+    let [domain, aggregate, bump] = signer.as_slices();
+    invoke_signed(
+        &permissioned_burn_instruction::burn_checked(
+            token_program.key,
+            holder_shards.key,
+            shard_mint.key,
+            escrow_account.key,
+            holder.key,
+            &[],
+            plan.consumed_shards(),
+            shard_decimals,
+        )
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Conservation)?,
+        &[
+            holder_shards.clone(),
+            shard_mint.clone(),
+            escrow_account.clone(),
+            holder.clone(),
+            token_program.clone(),
+        ],
+        &[&[domain, aggregate, bump]],
+    )
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Conservation)?;
+    invoke_signed(
+        &token_instruction::transfer_checked(
+            token_program.key,
+            vault.key,
+            collateral_mint.key,
+            holder_collateral.key,
+            escrow_account.key,
+            &[],
+            plan.collateral_atoms(),
+            collateral_decimals,
+        )
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Conservation)?,
+        &[
+            vault.clone(),
+            collateral_mint.clone(),
+            holder_collateral.clone(),
+            escrow_account.clone(),
+            token_program.clone(),
+        ],
+        &[&[domain, aggregate, bump]],
+    )
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Conservation)?;
+
+    match next_record {
+        FractionalPayDownV1::Remaining(next) => {
+            record_account
+                .try_borrow_mut_data()
+                .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?
+                .copy_from_slice(
+                    &next
+                        .to_bytes()
+                        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Conservation)?,
+                );
+        }
+        FractionalPayDownV1::Settled => {
+            close_fractional_record(record_account, holder)?;
+            let settled = escrow
+                .retire_claim_check()
+                .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Vault)?;
+            escrow_account
+                .try_borrow_mut_data()
+                .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?
+                .copy_from_slice(
+                    &settled
+                        .to_bytes()
+                        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Identity)?,
+                );
+        }
+    }
+
+    let post_record_escrowed = if plan.settles() {
+        0
+    } else {
+        FractionalClaimCheckV1::decode(
+            &record_account
+                .try_borrow_data()
+                .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?,
+        )
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Receipt)?
+        .escrowed_atoms
+    };
+    let (post_shard_supply, _, post_shard_controller) =
+        compacted_shard_mint_facts(shard_mint, token_program, escrow_account)?;
+    if post_shard_controller != shard_controller {
+        return Err(FractionalClaimCheckRedemptionSbfErrorV1::Receipt.into());
+    }
+    plan.validate_post(FractionalClaimCheckRedemptionPostV1 {
+        shard_supply: post_shard_supply,
+        holder_shards: checked_token_account_balance(
+            holder_shards,
+            token_program_key,
+            record.shard_mint,
+            holder_key,
+        )?,
+        vault_atoms: checked_token_account_balance(
+            vault,
+            token_program_key,
+            record.collateral_mint,
+            escrow_account.key.to_bytes(),
+        )?,
+        holder_collateral: checked_token_account_balance(
+            holder_collateral,
+            token_program_key,
+            record.collateral_mint,
+            holder_key,
+        )?,
+        record_escrowed_atoms: post_record_escrowed,
+        record_lamports: record_account.lamports(),
+        holder_lamports: holder.lamports(),
+    })
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Receipt)?;
+    Ok(())
+}
+
+fn checked_token_account_balance(
+    account: &AccountInfo<'_>,
+    token_program: [u8; 32],
+    mint: [u8; 32],
+    owner: [u8; 32],
+) -> Result<u64, ProgramError> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+    dclutch_token_svm::Token2022BehaviorProfileV2::check_account(
+        token_program,
+        &data,
+        mint,
+        owner,
+        0,
+    )
+    .map(|facts| facts.base_amount())
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Authority.into())
+}
+
+fn compacted_shard_mint_facts(
+    mint: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    escrow: &AccountInfo<'_>,
+) -> Result<(u64, u8, [u8; 32]), ProgramError> {
+    let data = mint
+        .try_borrow_data()
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+    let base = dclutch_token_svm::Mint::parse(
+        data.get(..dclutch_token_svm::MINT_BYTES)
+            .ok_or(FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?,
+    )
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+    let controller = match base.mint_authority {
+        dclutch_token_svm::COption::Some(controller) => controller,
+        dclutch_token_svm::COption::None => {
+            return Err(FractionalClaimCheckRedemptionSbfErrorV1::Authority.into());
+        }
+    };
+    let facts = dclutch_token_svm::Token2022BehaviorProfileV2::read_compacted_shard_mint(
+        token_program.key.to_bytes(),
+        mint.key.to_bytes(),
+        &data,
+        controller,
+        escrow.key.to_bytes(),
+    )
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Authority)?;
+    Ok((facts.base_supply(), facts.display_decimals(), controller))
+}
+
+fn checked_mint_decimals(mint: &AccountInfo<'_>) -> Result<u8, ProgramError> {
+    let data = mint
+        .try_borrow_data()
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+    let base = dclutch_token_svm::Mint::parse(
+        data.get(..dclutch_token_svm::MINT_BYTES)
+            .ok_or(FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?,
+    )
+    .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+    if !base.is_initialized {
+        return Err(FractionalClaimCheckRedemptionSbfErrorV1::Accounts.into());
+    }
+    Ok(base.decimals)
+}
+
+fn close_fractional_record(record: &AccountInfo<'_>, holder: &AccountInfo<'_>) -> ProgramResult {
+    let balance = record.lamports();
+    {
+        let mut record_lamports = record
+            .try_borrow_mut_lamports()
+            .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+        let mut holder_lamports = holder
+            .try_borrow_mut_lamports()
+            .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+        **record_lamports = 0;
+        **holder_lamports = holder_lamports
+            .checked_add(balance)
+            .ok_or(FractionalClaimCheckRedemptionSbfErrorV1::Conservation)?;
+    }
+    record
+        .resize(0)
+        .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
+    record.assign(&system_program::ID);
+    Ok(())
 }
 
 /// Which claim-check, if any, a Position's owner kind is entitled to.
@@ -583,7 +1079,7 @@ pub fn process_fractional_compaction(
         terminal,
         request.settlement(),
     )
-    .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Economic)?;
+    .map_err(fractional_terminal_refusal)?;
 
     commit_fractional_compaction(
         program_id,
@@ -1360,18 +1856,17 @@ mod tests {
                 assert!(base < next, "sub-band bases must ascend");
             }
         }
-        assert!(
-            (ClaimCheckCompactionSbfErrorV1::Scope as u32)
-                < ClaimCheckRedemptionSbfErrorV1::Accounts as u32
-        );
-        assert!(
-            (ClaimCheckRedemptionSbfErrorV1::Vault as u32)
-                < FractionalClaimCheckCompactionSbfErrorV1::Accounts as u32
-        );
-        assert!(
-            (FractionalClaimCheckCompactionSbfErrorV1::ShardMint as u32)
-                < FractionalClaimCheckRedemptionSbfErrorV1::Accounts as u32
-        );
+        let tops = [
+            ClaimCheckCompactionSbfErrorV1::ALL[ClaimCheckCompactionSbfErrorV1::ALL.len() - 1]
+                as u32,
+            ClaimCheckRedemptionSbfErrorV1::ALL[ClaimCheckRedemptionSbfErrorV1::ALL.len() - 1]
+                as u32,
+            FractionalClaimCheckCompactionSbfErrorV1::ALL
+                [FractionalClaimCheckCompactionSbfErrorV1::ALL.len() - 1] as u32,
+        ];
+        for (top, next) in tops.into_iter().zip(boundaries.into_iter().skip(1)) {
+            assert!(top < next, "one claim-check sub-band overlaps the next");
+        }
         // And every occupied Claims sub-band predating this lane still sits
         // below all four, so an addition to one of those that ran 0x100 wide
         // would be caught here.
@@ -1401,6 +1896,102 @@ mod tests {
         assert_eq!(
             ProgramError::from(FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim),
             ProgramError::Custom(0x5665)
+        );
+    }
+
+    /// Every refusal the inner terminal route can presently raise gets a
+    /// distinct, exact code in the fractional compaction family.
+    ///
+    /// These are error values, not mocked branches: before this widening the
+    /// route erased every one into `Economic`. The table is adversarial in both
+    /// directions -- each inner discriminant must select its own outer
+    /// discriminant, and no two selected outer discriminants may coincide.
+    #[test]
+    fn every_reachable_inner_refusal_maps_to_one_exact_additive_code() {
+        let cases: [(ProgramError, FractionalClaimCheckCompactionSbfErrorV1); 15] = [
+            (
+                ClaimsSbfError::Accounts.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::TerminalAccounts,
+            ),
+            (
+                ClaimsSbfError::Identity.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity,
+            ),
+            (
+                ClaimsSbfError::Release.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::TerminalRelease,
+            ),
+            (
+                ClaimsSbfError::Economic.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::Economic,
+            ),
+            (
+                ClaimsSbfError::Receipt.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::TerminalReceipt,
+            ),
+            (
+                ClaimsSbfError::ReleaseSuperseded.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::TerminalReleaseSuperseded,
+            ),
+            (
+                SignedDeltaSbfErrorV3::Instruction.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaInstruction,
+            ),
+            (
+                SignedDeltaSbfErrorV3::Accounts.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaAccounts,
+            ),
+            (
+                SignedDeltaSbfErrorV3::Release.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaRelease,
+            ),
+            (
+                SignedDeltaSbfErrorV3::ProductBasis.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaProductBasis,
+            ),
+            (
+                SignedDeltaSbfErrorV3::ClaimsState.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaClaimsState,
+            ),
+            (
+                SignedDeltaSbfErrorV3::Candidate.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaCandidate,
+            ),
+            (
+                SignedDeltaSbfErrorV3::Commit.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaCommit,
+            ),
+            (
+                SignedDeltaSbfErrorV3::Receipt.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaReceipt,
+            ),
+            (
+                SignedDeltaSbfErrorV3::PrincipalCapacity.into(),
+                FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaPrincipalCapacity,
+            ),
+        ];
+        for (index, (inner, expected)) in cases.iter().enumerate() {
+            assert_eq!(fractional_terminal_refusal(inner.clone()), *expected);
+            assert_eq!(
+                ProgramError::from(*expected),
+                ProgramError::Custom(*expected as u32),
+                "the mapped refusal must reach the runtime as its enum-derived exact code"
+            );
+            assert!(
+                !cases
+                    .iter()
+                    .skip(index + 1)
+                    .any(|(_, other)| other == expected),
+                "two inner refusal categories collapsed to one outer code"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_runtime_error_keeps_the_historical_economic_fallback() {
+        assert_eq!(
+            fractional_terminal_refusal(ProgramError::InvalidAccountData),
+            FractionalClaimCheckCompactionSbfErrorV1::Economic
         );
     }
 

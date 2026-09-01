@@ -243,7 +243,6 @@ fn authenticate_open_inputs(
     let composite_root =
         decode_fractional_capability_root_v4(&root_data).ok_or(ClaimsSbfError::Representation)?;
     let root = composite_root.state();
-    let root_input = root.input();
     let trading_program = account(accounts, TRADING_PROGRAM)?;
     let header = composite_root.header();
     let (expected_root, expected_bump) =
@@ -251,17 +250,23 @@ fn authenticate_open_inputs(
     // The config split, pinned on its own so the refusal names its own cause:
     // the Market selected a config, and these terms must be the terms that
     // config admits.
-    if header.selection().config().to_bytes() != fractional_selected_config_id_v1(terms)? {
+    let selected_config = fractional_selected_config_id_v1(terms)?;
+    if header.selection().config().to_bytes() != selected_config {
         return Err(ClaimsSbfError::SelectionConfig.into());
     }
+    let state_binding_matches = match (root.terms_v1(), root.selection_config_v2()) {
+        (Some(historical_terms), None) => historical_terms == request.input().terms,
+        (None, Some(current_config)) => current_config == selected_config,
+        _ => false,
+    };
     if root_account.key != &expected_root
         || root_account.owner != trading_program.key
         || header.release_set().to_bytes() != request.input().release_set
         || header.market() != request.input().market
-        || root_input.bump != expected_bump
-        || root_input.terms != request.input().terms
-        || root_input.market != request.input().market
-        || root_input.revision != request.input().expected_revision
+        || !state_binding_matches
+        || root.bump() != expected_bump
+        || root.market() != request.input().market
+        || root.revision() != request.input().expected_revision
     {
         return Err(ClaimsSbfError::Representation.into());
     }
@@ -721,7 +726,6 @@ fn process_terminal(
     let composite_root =
         decode_fractional_capability_root_v4(&root_data).ok_or(ClaimsSbfError::Representation)?;
     let root = composite_root.state();
-    let root_input = root.input();
     let trading_program = account(accounts, TRADING_PROGRAM)?;
     let header = composite_root.header();
     let (expected_root, expected_bump) =
@@ -729,17 +733,23 @@ fn process_terminal(
     // The config split, pinned on its own so the refusal names its own cause:
     // the Market selected a config, and these terms must be the terms that
     // config admits.
-    if header.selection().config().to_bytes() != fractional_selected_config_id_v1(terms)? {
+    let selected_config = fractional_selected_config_id_v1(terms)?;
+    if header.selection().config().to_bytes() != selected_config {
         return Err(ClaimsSbfError::SelectionConfig.into());
     }
+    let state_binding_matches = match (root.terms_v1(), root.selection_config_v2()) {
+        (Some(historical_terms), None) => historical_terms == request.input().terms,
+        (None, Some(current_config)) => current_config == selected_config,
+        _ => false,
+    };
     if root_account.key != &expected_root
         || root_account.owner != trading_program.key
         || header.release_set().to_bytes() != request.input().release_set
         || header.market() != request.input().market
-        || root_input.bump != expected_bump
-        || root_input.terms != request.input().terms
-        || root_input.market != request.input().market
-        || root_input.revision != request.input().expected_revision
+        || !state_binding_matches
+        || root.bump() != expected_bump
+        || root.market() != request.input().market
+        || root.revision() != request.input().expected_revision
     {
         return Err(ClaimsSbfError::Representation.into());
     }

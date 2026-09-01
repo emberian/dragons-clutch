@@ -592,8 +592,8 @@ mod tests {
 
     fn lp_profile(action: MultiLpRequestActionV3) -> Vec<u8> {
         let lengths = match action {
-            MultiLpRequestActionV3::Open => vec![0, 0, 0, 0, 0, 208, 256, 0, 48, 0],
-            MultiLpRequestActionV3::Close => vec![0, 0, 0, 0, 0, 208, 256, 48, 0],
+            MultiLpRequestActionV3::Open => vec![0, 0, 0, 0, 0, 208, 256, 0, 128, 0],
+            MultiLpRequestActionV3::Close => vec![0, 0, 0, 0, 0, 208, 256, 128, 0],
         };
         encode_dealer_lp_account_profile_v3(DealerLpAccountProfileInputV3 {
             action,

@@ -73,6 +73,7 @@ use solana_system_interface::instruction::create_account_with_seed;
 
 use crate::{
     Error, Result, campaign,
+    chaos_fault::{self, BoundaryV1},
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::{hex, pubkey},
@@ -83,6 +84,7 @@ const REPORT_SCHEMA_V1: &str = "dclutch-devnet-user-position-admission-execution
 const LOCAL_REPORT_SCHEMA_V1: &str = "dclutch-owned-loopback-user-position-admission-execution-v1";
 const FINALITY_WAIT: Duration = Duration::from_secs(300);
 const DIRECT_COLLATERAL_SEED_DOMAIN_V1: &[u8] = b"dclutch:direct-collateral:v1";
+const POSITION_ADMISSION_CHAOS_MUTATION_V1: &str = "position-admission";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ArgumentsV1 {
@@ -117,8 +119,62 @@ struct CollateralArgumentsV1 {
 enum PhaseV1 {
     Planned,
     SignedNotSubmitted,
+    Dispatching,
     Submitted,
     Finalized,
+}
+
+/// One observation of the durable admission packet's exact signature.
+///
+/// `Absent` is deliberately distinct from a present but not-yet-finalized
+/// signature: only the former can authorize resending the already-signed
+/// packet from `Dispatching`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdmissionSignatureStateV1 {
+    Absent,
+    Pending,
+    Finalized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdmissionRecoveryV1 {
+    SignOnce,
+    ResendIdenticalPacket,
+    PollOnly,
+    Finalize,
+    Complete,
+    RefuseHistoricAmbiguity,
+}
+
+fn admission_recovery_v1(
+    phase: PhaseV1,
+    signature: Option<AdmissionSignatureStateV1>,
+) -> Result<AdmissionRecoveryV1> {
+    let recovery = match (phase, signature) {
+        (PhaseV1::Planned, None) => AdmissionRecoveryV1::SignOnce,
+        (PhaseV1::Dispatching, Some(AdmissionSignatureStateV1::Absent)) => {
+            AdmissionRecoveryV1::ResendIdenticalPacket
+        }
+        (
+            PhaseV1::Dispatching | PhaseV1::Submitted | PhaseV1::SignedNotSubmitted,
+            Some(AdmissionSignatureStateV1::Pending),
+        ) => AdmissionRecoveryV1::PollOnly,
+        (
+            PhaseV1::Dispatching | PhaseV1::Submitted | PhaseV1::SignedNotSubmitted,
+            Some(AdmissionSignatureStateV1::Finalized),
+        ) => AdmissionRecoveryV1::Finalize,
+        (
+            PhaseV1::Submitted | PhaseV1::SignedNotSubmitted,
+            Some(AdmissionSignatureStateV1::Absent),
+        ) => AdmissionRecoveryV1::RefuseHistoricAmbiguity,
+        (PhaseV1::Finalized, None) => AdmissionRecoveryV1::Complete,
+        _ => {
+            return Err(Error::new(
+                "admission phase and exact signature observation are inconsistent",
+            ));
+        }
+    };
+    Ok(recovery)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -3578,26 +3634,36 @@ fn resume(
                 Ok(())
             }
         }
-        PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => {
+        PhaseV1::Dispatching | PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => {
             let signature = report.expected_signature.clone().ok_or_else(|| {
                 Error::new("signed/submitted evidence omitted its expected signature")
             })?;
-            match finalized_transaction(rpc, &signature)? {
-                Some(_) => {
-                    finalize_known_signature(rpc, report, &signature)?;
-                    journal.persist(report)
+            let signature_state = admission_signature_state_v1(rpc, &signature)?;
+            match admission_recovery_v1(report.phase, Some(signature_state))? {
+                AdmissionRecoveryV1::ResendIdenticalPacket => {
+                    resend_dispatching_packet_v1(rpc, arguments, report, journal, &signature)
                 }
-                None => {
+                AdmissionRecoveryV1::PollOnly => {
+                    wait_admission_signature_finalized_v1(rpc, &signature)?;
+                    finalize_admission_journal_v1(rpc, report, journal, &signature)
+                }
+                AdmissionRecoveryV1::Finalize => {
+                    finalize_admission_journal_v1(rpc, report, journal, &signature)
+                }
+                AdmissionRecoveryV1::RefuseHistoricAmbiguity => {
                     let state = if probe_expected_poststate(rpc, report, 0)? {
                         "the exact expected state exists but immutable finalized transaction history is absent"
                     } else {
                         "the expected state is absent"
                     };
                     Err(Error::new(format!(
-                        "REFUSED: transaction {signature} is not finalized and {state}. Its durable phase is {:?}; this is an ambiguous submitted state, so the executor will neither sign again nor replay the packet",
+                        "REFUSED: historic transaction {signature} is absent and {state}. Its durable phase is {:?}; only the new Dispatching phase authorizes an identical-packet resend",
                         report.phase
                     )))
                 }
+                other => Err(Error::new(format!(
+                    "admission recovery selected impossible signed-packet action {other:?}"
+                ))),
             }
         }
         PhaseV1::Finalized => Ok(()),
@@ -3690,11 +3756,80 @@ fn sign_and_submit(
     report.signed_packet_base64 = Some(BASE64.encode(&wire));
     report.signed_packet_sha256 = Some(sha256_hex(&wire));
     report.expected_signature = Some(signature.to_string());
-    report.phase = PhaseV1::Submitted;
+    report.phase = PhaseV1::Dispatching;
     journal.persist(report)?;
+
+    // Re-enter through the exact durable recovery surface even on the first
+    // invocation. It polls the fixed signature before it can authorize one
+    // send of the already-signed packet, so a process crash never re-opens a
+    // key or signing path.
+    let observed = admission_signature_state_v1(rpc, &signature.to_string())?;
+    if admission_recovery_v1(report.phase, Some(observed))?
+        != AdmissionRecoveryV1::ResendIdenticalPacket
+    {
+        return match observed {
+            AdmissionSignatureStateV1::Pending => {
+                wait_admission_signature_finalized_v1(rpc, &signature.to_string())?;
+                finalize_admission_journal_v1(rpc, report, journal, &signature.to_string())
+            }
+            AdmissionSignatureStateV1::Finalized => {
+                finalize_admission_journal_v1(rpc, report, journal, &signature.to_string())
+            }
+            AdmissionSignatureStateV1::Absent => Err(Error::new(
+                "fresh Dispatching admission did not authorize its exact first send",
+            )),
+        };
+    }
+    resend_dispatching_packet_v1(rpc, arguments, report, journal, &signature.to_string())
+}
+
+fn resend_dispatching_packet_v1(
+    rpc: &mut Rpc,
+    arguments: &ArgumentsV1,
+    report: &mut ReportV1,
+    journal: &mut ReportJournalV1,
+    signature: &str,
+) -> Result<()> {
+    if admission_recovery_v1(report.phase, Some(AdmissionSignatureStateV1::Absent))?
+        != AdmissionRecoveryV1::ResendIdenticalPacket
+    {
+        return Err(Error::new(
+            "admission send permission requires an absent signature in durable Dispatching",
+        ));
+    }
+    let transaction = authenticate_admission_packet(report)?;
+    let expected_signature = signature
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("Dispatching admission signature: {error}")))?;
+    if transaction.signatures.first() != Some(&expected_signature) {
+        return Err(Error::new(
+            "Dispatching admission packet did not carry its durable signature",
+        ));
+    }
+    let wire = bincode::serialize(&transaction)
+        .map_err(|error| Error::new(format!("serialize durable admission packet: {error}")))?;
+    let height = rpc
+        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+        .as_u64()
+        .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))?;
+    if height > report.intent.last_valid_block_height {
+        return Err(Error::new(
+            "Dispatching admission packet expired while absent; archive the journal rather than re-signing",
+        ));
+    }
 
     authenticate_genesis_again(rpc, &arguments.origin)?;
     require_prestate_unchanged(rpc, report)?;
+    let landed_fault_armed = chaos_fault::is_armed_for_v1(
+        POSITION_ADMISSION_CHAOS_MUTATION_V1,
+        BoundaryV1::LandedBeforeFinalizationFsync,
+    )?;
+    if landed_fault_armed && report.cluster != ExpectedClusterV1::OwnedLoopback.evidence_label() {
+        return Err(Error::new(
+            "position-admission chaos faults are admitted only on owned-loopback",
+        ));
+    }
+    park_position_admission_chaos_boundary_v1(report, journal, BoundaryV1::DispatchingBeforeSend)?;
     let returned = rpc
         .call_once(
             "sendTransaction",
@@ -3709,14 +3844,76 @@ fn sign_and_submit(
         .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
         .parse::<Signature>()
         .map_err(|error| Error::new(format!("sendTransaction signature: {error}")))?;
-    if returned != signature {
+    if returned != expected_signature {
         return Err(Error::new(
             "RPC returned a signature different from the locally signed packet",
         ));
     }
-    wait_finalized(rpc, &signature.to_string())?;
-    finalize_known_signature(rpc, report, &signature.to_string())?;
+    if landed_fault_armed {
+        wait_admission_signature_finalized_v1(rpc, signature)?;
+        park_position_admission_chaos_boundary_v1(
+            report,
+            journal,
+            BoundaryV1::LandedBeforeFinalizationFsync,
+        )?;
+    }
+    report.phase = PhaseV1::Submitted;
+    journal.persist(report)?;
+    wait_admission_signature_finalized_v1(rpc, signature)?;
+    finalize_admission_journal_v1(rpc, report, journal, signature)
+}
+
+fn finalize_admission_journal_v1(
+    rpc: &mut Rpc,
+    report: &mut ReportV1,
+    journal: &mut ReportJournalV1,
+    signature: &str,
+) -> Result<()> {
+    if report.phase == PhaseV1::Dispatching {
+        // A finalized packet recovered from Dispatching still passes through
+        // Submitted locally, preserving the adjacent durable grammar without
+        // another network send.
+        park_position_admission_chaos_boundary_v1(
+            report,
+            journal,
+            BoundaryV1::LandedBeforeFinalizationFsync,
+        )?;
+        report.phase = PhaseV1::Submitted;
+        journal.persist(report)?;
+    }
+    finalize_known_signature(rpc, report, signature)?;
     journal.persist(report)
+}
+
+fn park_position_admission_chaos_boundary_v1(
+    report: &ReportV1,
+    journal: &ReportJournalV1,
+    boundary: BoundaryV1,
+) -> Result<()> {
+    if !chaos_fault::is_armed_for_v1(POSITION_ADMISSION_CHAOS_MUTATION_V1, boundary)? {
+        return Ok(());
+    }
+    if report.phase != PhaseV1::Dispatching {
+        return Err(Error::new(
+            "position-admission chaos seam requires a durable Dispatching journal",
+        ));
+    }
+    authenticate_report_phase_envelopes(report)?;
+    chaos_fault::park_if_armed_v1(
+        &report.cluster,
+        POSITION_ADMISSION_CHAOS_MUTATION_V1,
+        boundary,
+        &journal.path,
+        &report.intent_sha256,
+        report
+            .signed_packet_sha256
+            .as_deref()
+            .ok_or_else(|| Error::new("admission chaos seam omitted packet digest"))?,
+        report
+            .expected_signature
+            .as_deref()
+            .ok_or_else(|| Error::new("admission chaos seam omitted signature"))?,
+    )
 }
 
 fn finalize_known_signature(rpc: &mut Rpc, report: &mut ReportV1, signature: &str) -> Result<()> {
@@ -4353,6 +4550,7 @@ fn report_schema_v1(expected_cluster: ExpectedClusterV1) -> &'static str {
 enum EnvelopePhaseV1 {
     Planned,
     SignedNotSubmitted,
+    Dispatching,
     Submitted,
     Finalized,
 }
@@ -4372,7 +4570,9 @@ fn validate_phase_fields(
                 && signature.is_none()
                 && finalized_signature.is_none()
         }
-        EnvelopePhaseV1::SignedNotSubmitted | EnvelopePhaseV1::Submitted => {
+        EnvelopePhaseV1::SignedNotSubmitted
+        | EnvelopePhaseV1::Dispatching
+        | EnvelopePhaseV1::Submitted => {
             packet.is_some()
                 && packet_digest.is_some()
                 && signature.is_some()
@@ -4398,6 +4598,7 @@ fn validate_report_phase_shape(report: &ReportV1) -> Result<()> {
     let phase = match report.phase {
         PhaseV1::Planned => EnvelopePhaseV1::Planned,
         PhaseV1::SignedNotSubmitted => EnvelopePhaseV1::SignedNotSubmitted,
+        PhaseV1::Dispatching => EnvelopePhaseV1::Dispatching,
         PhaseV1::Submitted => EnvelopePhaseV1::Submitted,
         PhaseV1::Finalized => EnvelopePhaseV1::Finalized,
     };
@@ -4519,6 +4720,75 @@ fn verify_persisted_admission_history(rpc: &mut Rpc, report: &ReportV1) -> Resul
     // projection is re-derived from immutable history above; a later live
     // Position is deliberately never consulted.
     authenticate_admission_poststate_map(&report.intent, &evidence.poststate)
+}
+
+fn admission_signature_state_v1(
+    rpc: &mut Rpc,
+    signature: &str,
+) -> Result<AdmissionSignatureStateV1> {
+    signature
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("durable admission signature: {error}")))?;
+    let response = rpc.call(
+        "getSignatureStatuses",
+        &json!([[signature], {"searchTransactionHistory":true}]),
+    )?;
+    let values = response
+        .get("value")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("admission signature status omitted value array"))?;
+    if values.len() != 1 {
+        return Err(Error::new(
+            "admission signature status did not return exactly one row",
+        ));
+    }
+    let status = &values[0];
+    if status.is_null() {
+        return Ok(AdmissionSignatureStateV1::Absent);
+    }
+    let error = status
+        .get("err")
+        .ok_or_else(|| Error::new("admission signature status omitted err"))?;
+    if !error.is_null() {
+        return Err(Error::new(format!(
+            "admission transaction {signature} failed before finalization: {error}"
+        )));
+    }
+    match status.get("confirmationStatus").and_then(Value::as_str) {
+        Some("processed" | "confirmed") => Ok(AdmissionSignatureStateV1::Pending),
+        Some("finalized") => {
+            let transaction = rpc.call(
+                "getTransaction",
+                &json!([signature, {
+                    "encoding":"json",
+                    "commitment":"finalized",
+                    "maxSupportedTransactionVersion":0
+                }]),
+            )?;
+            if transaction.is_null() {
+                return Err(Error::new(
+                    "finalized admission signature omitted finalized transaction history",
+                ));
+            }
+            Ok(AdmissionSignatureStateV1::Finalized)
+        }
+        _ => Err(Error::new(
+            "admission signature status had an unknown confirmation state",
+        )),
+    }
+}
+
+fn wait_admission_signature_finalized_v1(rpc: &mut Rpc, signature: &str) -> Result<()> {
+    let deadline = Instant::now() + FINALITY_WAIT;
+    while Instant::now() < deadline {
+        if admission_signature_state_v1(rpc, signature)? == AdmissionSignatureStateV1::Finalized {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Err(Error::new(format!(
+        "transaction {signature} did not reach finalized history within 300 seconds; durable packet retained for poll-only resume"
+    )))
 }
 
 fn finalized_transaction(rpc: &mut Rpc, signature: &str) -> Result<Option<Value>> {
@@ -5076,7 +5346,7 @@ pub(crate) fn usage() -> &'static str {
         "     [--collateral-source-owner PUBKEY \\\n",
         "      --collateral-source-owner-keypair ABSOLUTE_JSON \\\n",
         "      --collateral-source-account PUBKEY --collateral-quantity-atoms U64]\n\n",
-        "Default is finalized read-only planning. The complete canonical admission message, exact rent top-ups, exact getFeeForMessage fee, input fingerprints, and output path are fsynced before --execute reads a key file. When the complete collateral tuple is present, a finalized admission is followed by a separately journaled Token-2022 transfer into the chain-derived participant account and an exact Custody allowance; that second complete packet, raw-atom quantity, account rent, fee, and token pre/post bytes are also fsynced before its first key read. The command only admits Solana devnet, never accepts confirmed state, never retries an ambiguous submission, and resumes only by authenticating exact signatures and finalized history."
+        "Default is finalized read-only planning. The complete canonical admission message, exact rent top-ups, exact getFeeForMessage fee, input fingerprints, and output path are fsynced before --execute reads a key file. When the complete collateral tuple is present, a finalized admission is followed by a separately journaled Token-2022 transfer into the chain-derived participant account and an exact Custody allowance; that second complete packet, raw-atom quantity, account rent, fee, and token pre/post bytes are also fsynced before its first key read. The command only admits Solana devnet and never accepts confirmed state. It never re-signs a persisted admission: Dispatching recovery polls the exact signature first and may resend only the identical packet when the signature is absent; a present or Submitted packet is poll-only through finalized history."
     )
 }
 
@@ -5091,7 +5361,7 @@ pub(crate) fn local_usage() -> &'static str {
         "     [--collateral-source-owner PUBKEY \\\n",
         "      --collateral-source-owner-keypair ABSOLUTE_JSON \\\n",
         "      --collateral-source-account PUBKEY --collateral-quantity-atoms U64]\n\n",
-        "This command is exclusively for a supervisor-owned loopback validator. It invokes the same admission and collateral semantic owners as the public devnet command, but writes the distinct dclutch-owned-loopback-user-position-admission-execution-v1 report and refuses every external RPC origin."
+        "This command is exclusively for a supervisor-owned loopback validator. It invokes the same admission and collateral semantic owners as the public devnet command, but writes the distinct dclutch-owned-loopback-user-position-admission-execution-v1 report and refuses every external RPC origin. The report is also the supervisor's crash journal: its exact packet, signature, and Dispatching phase are fsynced before the position-admission pre-send fault seam."
     )
 }
 
@@ -7284,25 +7554,6 @@ mod tests {
         RefuseReplayWithoutSignature,
     }
 
-    fn fake_resume_decision(
-        phase: PhaseV1,
-        signature: Option<FakeSignatureState>,
-        exact_poststate: bool,
-    ) -> ResumeDecision {
-        if exact_poststate && signature.is_none() {
-            return ResumeDecision::RefuseReplayWithoutSignature;
-        }
-        match signature {
-            Some(FakeSignatureState::FinalizedOk) => ResumeDecision::VerifyFinalized,
-            Some(FakeSignatureState::FinalizedError) => ResumeDecision::RefuseFailed,
-            Some(FakeSignatureState::Missing | FakeSignatureState::Confirmed) => {
-                ResumeDecision::RefuseAmbiguous
-            }
-            None if phase == PhaseV1::Planned => ResumeDecision::Sign,
-            None => ResumeDecision::RefuseAmbiguous,
-        }
-    }
-
     fn fake_collateral_resume_decision(
         phase: CollateralPhaseV1,
         signature: Option<FakeSignatureState>,
@@ -7367,46 +7618,103 @@ mod tests {
     }
 
     #[test]
-    fn submitted_admission_recovery_is_poll_only_before_or_after_an_ambiguous_send() {
+    fn dispatching_admission_recovery_has_one_exact_resend_permission() {
         assert_eq!(
-            fake_resume_decision(PhaseV1::Planned, None, false),
-            ResumeDecision::Sign
+            admission_recovery_v1(PhaseV1::Planned, None).expect("unsigned plan"),
+            AdmissionRecoveryV1::SignOnce
         );
         assert_eq!(
-            fake_resume_decision(
-                PhaseV1::Submitted,
-                Some(FakeSignatureState::Confirmed),
-                false
-            ),
-            ResumeDecision::RefuseAmbiguous
+            admission_recovery_v1(
+                PhaseV1::Dispatching,
+                Some(AdmissionSignatureStateV1::Absent),
+            )
+            .expect("pre-send restart"),
+            AdmissionRecoveryV1::ResendIdenticalPacket
         );
         assert_eq!(
-            fake_resume_decision(
-                PhaseV1::SignedNotSubmitted,
-                Some(FakeSignatureState::Missing),
-                false
-            ),
-            ResumeDecision::RefuseAmbiguous
+            admission_recovery_v1(
+                PhaseV1::Dispatching,
+                Some(AdmissionSignatureStateV1::Pending),
+            )
+            .expect("pending restart"),
+            AdmissionRecoveryV1::PollOnly
         );
         assert_eq!(
-            fake_resume_decision(PhaseV1::Planned, None, true),
-            ResumeDecision::RefuseReplayWithoutSignature
+            admission_recovery_v1(
+                PhaseV1::Dispatching,
+                Some(AdmissionSignatureStateV1::Finalized),
+            )
+            .expect("landed restart"),
+            AdmissionRecoveryV1::Finalize
         );
-        assert_eq!(
-            fake_resume_decision(
-                PhaseV1::Submitted,
-                Some(FakeSignatureState::FinalizedError),
-                false
-            ),
-            ResumeDecision::RefuseFailed
-        );
-        assert_eq!(
-            fake_resume_decision(
-                PhaseV1::Submitted,
-                Some(FakeSignatureState::FinalizedOk),
-                true
-            ),
-            ResumeDecision::VerifyFinalized
-        );
+        for historic in [PhaseV1::SignedNotSubmitted, PhaseV1::Submitted] {
+            assert_eq!(
+                admission_recovery_v1(historic, Some(AdmissionSignatureStateV1::Absent),)
+                    .expect("historic absent packet"),
+                AdmissionRecoveryV1::RefuseHistoricAmbiguity
+            );
+            assert_eq!(
+                admission_recovery_v1(historic, Some(AdmissionSignatureStateV1::Pending),)
+                    .expect("historic pending packet"),
+                AdmissionRecoveryV1::PollOnly
+            );
+            assert_eq!(
+                admission_recovery_v1(historic, Some(AdmissionSignatureStateV1::Finalized),)
+                    .expect("historic landed packet"),
+                AdmissionRecoveryV1::Finalize
+            );
+        }
+        for phase in [
+            PhaseV1::Planned,
+            PhaseV1::SignedNotSubmitted,
+            PhaseV1::Submitted,
+            PhaseV1::Finalized,
+        ] {
+            assert_ne!(
+                admission_recovery_v1(phase, Some(AdmissionSignatureStateV1::Absent),).ok(),
+                Some(AdmissionRecoveryV1::ResendIdenticalPacket),
+                "only Dispatching plus an absent exact signature can send"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatching_envelope_refuses_packet_and_signature_substitution() {
+        let (mut report, _) = admission_exactness_fixture();
+        report.phase = PhaseV1::Dispatching;
+        report.envelope_sha256 = admission_envelope_digest(&report).expect("dispatching envelope");
+        authenticate_report_phase_envelopes(&report).expect("exact Dispatching packet");
+
+        let mut packet_substitution = report.clone();
+        packet_substitution.signed_packet_sha256 = Some(hex(&[0x61; 32]));
+        packet_substitution.envelope_sha256 =
+            admission_envelope_digest(&packet_substitution).expect("attacker envelope");
+        assert!(authenticate_report_phase_envelopes(&packet_substitution).is_err());
+
+        let mut signature_substitution = report;
+        signature_substitution.expected_signature = Some(Signature::from([0x62; 64]).to_string());
+        signature_substitution.envelope_sha256 =
+            admission_envelope_digest(&signature_substitution).expect("attacker envelope");
+        assert!(authenticate_report_phase_envelopes(&signature_substitution).is_err());
+    }
+
+    #[test]
+    fn historic_signed_and_submitted_report_phases_remain_authenticatable() {
+        let (mut report, _) = admission_exactness_fixture();
+        for phase in [PhaseV1::SignedNotSubmitted, PhaseV1::Submitted] {
+            report.phase = phase;
+            report.envelope_sha256 =
+                admission_envelope_digest(&report).expect("historic phase envelope");
+            let encoded = serde_json::to_vec(&report).expect("historic report JSON");
+            let reopened: ReportV1 = serde_json::from_slice(&encoded).expect("historic report");
+            assert_eq!(reopened.phase, phase);
+            authenticate_report_phase_envelopes(&reopened)
+                .expect("historic signed packet remains authenticatable");
+            assert_eq!(
+                admission_recovery_v1(reopened.phase, Some(AdmissionSignatureStateV1::Absent),)
+                    .expect("historic recovery"),
+                AdmissionRecoveryV1::RefuseHistoricAmbiguity
+            );
+        }
     }
 }

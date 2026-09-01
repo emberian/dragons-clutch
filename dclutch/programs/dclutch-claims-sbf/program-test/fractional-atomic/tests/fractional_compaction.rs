@@ -65,6 +65,8 @@
 
 use std::{env, fs, path::PathBuf};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
+
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_claims_svm::{
     CallerRole,
@@ -87,12 +89,13 @@ use dclutch_custody_contract::{
 use dclutch_fractional_atomic_program_test::{
     campaign_support::{
         ReleaseSetInputV1, activation_cache, add_account, add_account_with_lamports, add_finalized,
-        add_upgradeable_program, collateral_mint_bytes, finalized, mint_bytes,
+        add_upgradeable_program, collateral_mint_bytes, finalized, mint_bytes, mint_supply,
         token_account_bytes_for, token_amount, token_program_id,
     },
     narrow_fixture::{
-        NarrowFixtureInputV2, NarrowFixtureV2, NarrowRecordV2, NarrowTerminalInputV2,
-        compile_narrow_fixture_v2,
+        NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, NarrowRecordV2,
+        NarrowSplineBasisInputV3, NarrowTerminalInputV2, compile_narrow_fixture_v2,
+        compile_narrow_fixture_v3,
     },
 };
 use dclutch_fractional_claim_contract::{
@@ -101,6 +104,21 @@ use dclutch_fractional_claim_contract::{
 use dclutch_fractional_claim_kernel::{
     FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
+};
+use dclutch_fractional_cubic_life_evidence::{
+    AccountImageV1, COMPACTION_SCHEMA_V1, CompactionBridgeV1, PreterminalBridgeV1, canonical_bytes,
+    digest as bridge_digest, read_preterminal, write_atomic,
+};
+use dclutch_product_payoff_v2_codec::{
+    price_gate_v1::{
+        PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
+        PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
+        PRICE_GATE_MASS_OFFSET_V1, PRICE_GATE_NUMERATORS_OFFSET_V1, PRICE_GATE_PRICES_OFFSET_V1,
+        PRICE_GATE_PROFILE_OFFSET_V1, PRICE_GATE_PROFILE_V1, PRICE_GATE_REQUEST_BYTES_V1,
+        PRICE_GATE_SCALE_OFFSET_V1, PRICE_GATE_SCHEMA_VERSION_V1, PRICE_GATE_VERSION_OFFSET_V1,
+        PRICE_GATE_WEIGHTS_OFFSET_V1, PRICE_GATE_WIDTH_OFFSET_V1,
+    },
+    runtime_v3::ProductBasisV3,
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -157,19 +175,53 @@ const OUTCOME: u32 = 0;
 const MINT_DECIMALS: u8 = 0;
 const COLLATERAL_DECIMALS: u8 = 6;
 const TERMINAL_WIDTH: usize = 8;
+const CURVED_WIDTH: usize = 3;
+const CURVED_PAYOUT_SCALE: u64 = 7;
+const CUBIC_WIDTH: usize = 4;
+const CUBIC_PAYOUT_SCALE: u64 = 11;
+const CURVED_RESULT_NUMERATOR: i128 = 3;
+const CURVED_RESULT_DENOMINATOR: u64 = 2;
+const CURVED_OUTCOME: u32 = 1;
 
 /// Native Claims the sleeping holder's reserve locked at the coordinate.
-const RESERVE_NATIVE_CLAIMS: u64 = 7;
+const RESERVE_NATIVE_CLAIMS: u64 = 4;
 /// Claims the actor holds outside the reserve.
 const ACTOR_FUNDED_BALANCE: u64 = 1_000;
 /// Shards outstanding against the reserve.
 const OUTSTANDING_SHARDS: u64 = RESERVE_NATIVE_CLAIMS * DENOMINATOR;
 /// Collateral the market's hoard holds before the crank.
 const HOARD_ATOMS: u64 = 10_000;
+const HOLDER_SHARD_TOKENS: Pubkey = Pubkey::new_from_array([0xc1; 32]);
+const HOLDER_COLLATERAL_TOKENS: Pubkey = Pubkey::new_from_array([0xc2; 32]);
+const CRANKER_COLLATERAL_TOKENS: Pubkey = Pubkey::new_from_array([0xc3; 32]);
 
 /// The sleeping holder. Funded, and never signs anything in this campaign.
 fn holder_keypair() -> Keypair {
     Keypair::new_from_array([0x5c; 32])
+}
+
+/// The original wrapper/author. It transfers the represented balance to the
+/// sleeping holder and is not the holder the permissionless crank compacts.
+fn actor_keypair() -> Keypair {
+    Keypair::new_from_array([0x2c; 32])
+}
+
+fn propagated_preterminal() -> Option<PreterminalBridgeV1> {
+    let raw = env::var_os("DCLUTCH_CUBIC_PRETERMINAL_BRIDGE")?;
+    let path = PathBuf::from(raw);
+    assert!(
+        path.is_absolute(),
+        "preterminal bridge path must be absolute"
+    );
+    Some(read_preterminal(&path).expect("strict preterminal bridge"))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    hash(bytes)
+        .to_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// The party who opens the escrow and advances its rent.
@@ -257,6 +309,7 @@ fn selection_config_digest(terms_bytes: &[u8]) -> [u8; 32] {
 }
 
 fn terminal_certificate_bytes(
+    basis_profile: CampaignBasisV1,
     winner: u32,
     core_market: Pubkey,
     product_record_digest: [u8; 32],
@@ -276,8 +329,18 @@ fn terminal_certificate_bytes(
         selector: winner,
         work_paid: 0,
         funding_remaining: 0,
-        result_numerator: 1,
-        result_denominator: 1,
+        result_numerator: match basis_profile {
+            CampaignBasisV1::Categorical => 1,
+            CampaignBasisV1::CurvedDegreeTwo | CampaignBasisV1::CurvedDegreeThree => {
+                CURVED_RESULT_NUMERATOR
+            }
+        },
+        result_denominator: match basis_profile {
+            CampaignBasisV1::Categorical => 1,
+            CampaignBasisV1::CurvedDegreeTwo | CampaignBasisV1::CurvedDegreeThree => {
+                CURVED_RESULT_DENOMINATOR
+            }
+        },
         observed_at: 1,
     }
     .to_bytes()
@@ -291,6 +354,7 @@ fn terminal_certificate_bytes(
 
 /// Everything the campaign needs to name after the market is planted.
 struct CampaignFixture {
+    plant: CampaignPlantV1,
     shared: NarrowFixtureV2,
     release_set: [u8; 32],
     activation_cache: Pubkey,
@@ -299,6 +363,9 @@ struct CampaignFixture {
     behavior_record: NarrowRecordV2,
     root: Pubkey,
     shard_mint: Pubkey,
+    holder_shard_tokens: Pubkey,
+    holder_collateral_tokens: Pubkey,
+    cranker_collateral_tokens: Pubkey,
     holder: Pubkey,
     opener: Pubkey,
     cranker: Pubkey,
@@ -313,14 +380,59 @@ struct CampaignFixture {
     vault: Pubkey,
     /// The coordinate the market resolved to.
     winner: u32,
+    /// ProductBasisV3 family this campaign executes.
+    basis_profile: CampaignBasisV1,
+    /// Representation coordinate held by the sleeping holder.
+    outcome: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CampaignBasisV1 {
+    Categorical,
+    CurvedDegreeTwo,
+    CurvedDegreeThree,
+}
+
+impl CampaignBasisV1 {
+    const fn width(self) -> usize {
+        match self {
+            Self::Categorical => TERMINAL_WIDTH,
+            Self::CurvedDegreeTwo => CURVED_WIDTH,
+            Self::CurvedDegreeThree => CUBIC_WIDTH,
+        }
+    }
+
+    const fn outcome(self) -> u32 {
+        match self {
+            Self::Categorical => OUTCOME,
+            Self::CurvedDegreeTwo | Self::CurvedDegreeThree => CURVED_OUTCOME,
+        }
+    }
+
+    const fn degree(self) -> Option<u8> {
+        match self {
+            Self::Categorical => None,
+            Self::CurvedDegreeTwo => Some(2),
+            Self::CurvedDegreeThree => Some(3),
+        }
+    }
+
+    const fn payout_scale(self) -> u64 {
+        match self {
+            Self::Categorical => 1,
+            Self::CurvedDegreeTwo => CURVED_PAYOUT_SCALE,
+            Self::CurvedDegreeThree => CUBIC_PAYOUT_SCALE,
+        }
+    }
 }
 
 /// What this fixture plants wrong on purpose, if anything.
 ///
-/// One knob, and it exists to red-prove the ruled fiftieth account. Everything
-/// else about a hostile run is IDENTICAL to the admitted one -- same market,
-/// same records, same frame, same request -- because a hostile that differs in
-/// more than the fact under test proves only that two different things differ.
+/// Each knob changes one joined fact after every outer compaction guard has a
+/// valid fixture. Everything else about a hostile run is IDENTICAL to the
+/// admitted one -- same market, same records, same frame, same request --
+/// because a hostile that differs in more than the fact under test proves only
+/// that two different things differ.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CampaignPlantV1 {
     /// The faithful market.
@@ -335,6 +447,10 @@ enum CampaignPlantV1 {
     /// Planted at the admission's pinned address, so the two pins pass too and
     /// the derivation is the sole remaining discriminator.
     RentCreditAtANonDerivedAddress,
+    /// The terminal certificate decodes but names another Market.
+    TerminalCertificateIdentityMismatch,
+    /// SignedDelta's caller role coordinates name Trading under a Claims plan.
+    SignedDeltaCallerReleaseMismatch,
 }
 
 fn campaign_fixture() -> (ProgramTest, CampaignFixture) {
@@ -349,7 +465,63 @@ fn campaign_fixture_planting(plant: CampaignPlantV1) -> (ProgramTest, CampaignFi
 /// reserve's own coordinate, the reserve is worthless and the whole compaction
 /// runs on the zero-payout side of every weld.
 fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, CampaignFixture) {
+    campaign_fixture_basis(plant, CampaignBasisV1::Categorical, winner)
+}
+
+fn campaign_fixture_basis(
+    plant: CampaignPlantV1,
+    basis_profile: CampaignBasisV1,
+    winner: u32,
+) -> (ProgramTest, CampaignFixture) {
     let artifacts = artifacts();
+    let propagated = if plant == CampaignPlantV1::Faithful
+        && basis_profile == CampaignBasisV1::CurvedDegreeThree
+    {
+        propagated_preterminal()
+    } else {
+        None
+    };
+    if let Some(bridge) = &propagated {
+        for (name, expected, observed) in [
+            (
+                "Claims",
+                bridge.elves.claims.as_str(),
+                hex_digest(&artifacts.claims),
+            ),
+            (
+                "Registry",
+                bridge.elves.registry.as_str(),
+                hex_digest(&artifacts.registry),
+            ),
+            (
+                "Core",
+                bridge.elves.core.as_str(),
+                hex_digest(&artifacts.core),
+            ),
+            (
+                "Custody",
+                bridge.elves.custody.as_str(),
+                hex_digest(&artifacts.custody),
+            ),
+            (
+                "Rent",
+                bridge.elves.rent.as_str(),
+                hex_digest(&artifacts.rent),
+            ),
+            (
+                "Trading",
+                bridge.elves.trading.as_str(),
+                hex_digest(&artifacts.caller),
+            ),
+            (
+                "Token-2022",
+                bridge.elves.token_2022.as_str(),
+                hex_digest(&artifacts.token),
+            ),
+        ] {
+            assert_eq!(observed, expected, "{name} ELF substitution");
+        }
+    }
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.set_compute_max_units(1_400_000);
@@ -402,6 +574,9 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
         trading: (CALLER_PROGRAM_ID, artifacts.caller.as_slice()),
         custody: Some((CUSTODY_PROGRAM_ID, artifacts.custody.as_slice())),
     });
+    if let Some(bridge) = &propagated {
+        assert_eq!(release_set, bridge.release_set, "release-set substitution");
+    }
     let activation_cache_key = Pubkey::find_program_address(
         &[
             dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1,
@@ -433,7 +608,11 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
     .to_vec();
     let realm_record = finalized(REGISTRY_PROGRAM_ID, REALM_SCHEMA_RELEASE_ID_V1, realm_bytes);
     let realm_id = realm_record.digest;
+    if let Some(bridge) = &propagated {
+        assert_eq!(realm_id, bridge.realm, "Realm substitution");
+    }
 
+    let actor = actor_keypair().pubkey();
     let holder = holder_keypair().pubkey();
     let opener = opener_keypair().pubkey();
     let cranker = cranker_keypair().pubkey();
@@ -441,9 +620,9 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
     // Probe compile: the Core market address is needed to derive the RentCredit
     // before the real compile can name it as the rent beneficiary.
     let compile = |reserve_owner: Pubkey, rent_beneficiary: Pubkey| {
-        compile_narrow_fixture_v2(NarrowFixtureInputV2 {
-            outcome_count: TERMINAL_WIDTH,
-            funded_coordinate: OUTCOME as usize,
+        let input = NarrowFixtureInputV2 {
+            outcome_count: basis_profile.width(),
+            funded_coordinate: basis_profile.outcome() as usize,
             registry_program: REGISTRY_PROGRAM_ID,
             core_program: CORE_PROGRAM_ID,
             claims_program: CLAIMS_PROGRAM_ID,
@@ -451,7 +630,7 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
             realm_id,
             custody_context: CUSTODY_CONTEXT,
             generation: GENERATION,
-            actor_owner: holder,
+            actor_owner: actor,
             reserve_owner,
             funded_balance: ACTOR_FUNDED_BALANCE - RESERVE_NATIVE_CLAIMS,
             reserve_balance: RESERVE_NATIVE_CLAIMS,
@@ -463,7 +642,44 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
             rent_beneficiary,
             graph_id: GRAPH_ID,
             exposure_id: EXPOSURE_ID,
-        })
+        };
+        match basis_profile {
+            CampaignBasisV1::Categorical => compile_narrow_fixture_v2(input),
+            CampaignBasisV1::CurvedDegreeTwo => {
+                let knots = [0_i128, 0, 0, 3, 3, 3];
+                let failure_payouts = [0_u64, 0, CURVED_PAYOUT_SCALE];
+                let price_gate = curved_price_gate_certificate(basis_profile);
+                compile_narrow_fixture_v3(
+                    input,
+                    NarrowBasisInputV3::SplineDegree2To3(NarrowSplineBasisInputV3 {
+                        degree: 2,
+                        interior_multiplicity: false,
+                        payout_scale: CURVED_PAYOUT_SCALE,
+                        knot_denominator: 1,
+                        knots: &knots,
+                        failure_payouts: &failure_payouts,
+                        price_gate_certificate: &price_gate,
+                    }),
+                )
+            }
+            CampaignBasisV1::CurvedDegreeThree => {
+                let knots = [0_i128, 0, 0, 0, 3, 3, 3, 3];
+                let failure_payouts = [0_u64, 0, 0, CUBIC_PAYOUT_SCALE];
+                let price_gate = curved_price_gate_certificate(basis_profile);
+                compile_narrow_fixture_v3(
+                    input,
+                    NarrowBasisInputV3::SplineDegree2To3(NarrowSplineBasisInputV3 {
+                        degree: 3,
+                        interior_multiplicity: false,
+                        payout_scale: CUBIC_PAYOUT_SCALE,
+                        knot_denominator: 1,
+                        knots: &knots,
+                        failure_payouts: &failure_payouts,
+                        price_gate_certificate: &price_gate,
+                    }),
+                )
+            }
+        }
         .expect("narrow terminal fixture")
     };
     let probe = compile(
@@ -489,7 +705,9 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
     // decodes, matches this market, and sits at the address the admission pins
     // -- and still cannot be the credit the Rent program derived.
     let planted_bump = match plant {
-        CampaignPlantV1::Faithful => rent_bump,
+        CampaignPlantV1::Faithful
+        | CampaignPlantV1::TerminalCertificateIdentityMismatch
+        | CampaignPlantV1::SignedDeltaCallerReleaseMismatch => rent_bump,
         CampaignPlantV1::RentCreditAtANonDerivedAddress => rent_bump.wrapping_sub(1),
     };
     let rent_credit_bytes = LifecycleRentCreditV2::new(
@@ -503,7 +721,7 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
     .to_bytes()
     .to_vec();
 
-    let shard_mints: Vec<[u8; 32]> = (0..TERMINAL_WIDTH)
+    let shard_mints: Vec<[u8; 32]> = (0..basis_profile.width())
         .map(|index| {
             let mut bytes = [0x77_u8; 32];
             let index = u32::try_from(index).expect("representation coordinate");
@@ -511,7 +729,9 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
             bytes
         })
         .collect();
-    let shard_mint = Pubkey::new_from_array(shard_mints[OUTCOME as usize]);
+    let shard_mint = Pubkey::new_from_array(
+        shard_mints[usize::try_from(basis_profile.outcome()).expect("outcome")],
+    );
     let behavior_record = finalized(
         REGISTRY_PROGRAM_ID,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
@@ -574,6 +794,42 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
     // admission name the same account, as a founded market's would.
     let shared = compile(root, rent_credit);
     assert_eq!(shared.core_market, core_market);
+    if let Some(bridge) = &propagated {
+        assert_eq!(bridge.market, core_market.to_bytes(), "Market substitution");
+        assert_eq!(
+            bridge.aggregate,
+            shared.claims_market.to_bytes(),
+            "aggregate substitution"
+        );
+        assert_eq!(
+            bridge.product, shared.product.digest,
+            "Product substitution"
+        );
+        assert_eq!(
+            bridge.product_basis, shared.linked_basis.digest,
+            "ProductBasis substitution"
+        );
+        assert_eq!(bridge.terms, terms_record.digest, "terms substitution");
+        assert_eq!(bridge.root, root.to_bytes(), "root substitution");
+        assert_eq!(
+            bridge.shard_mint,
+            shard_mint.to_bytes(),
+            "shard Mint substitution"
+        );
+        assert_eq!(
+            bridge.holder,
+            holder.to_bytes(),
+            "sleeping holder substitution"
+        );
+        assert_eq!(
+            bridge.holder_shard_token,
+            HOLDER_SHARD_TOKENS.to_bytes(),
+            "holder shard account substitution"
+        );
+        assert_eq!(bridge.denominator, DENOMINATOR);
+        assert_eq!(bridge.outstanding_shards, OUTSTANDING_SHARDS);
+        assert_eq!(bridge.reserve_native_claims, RESERVE_NATIVE_CLAIMS);
+    }
 
     let root_state = FractionalRootV1::new(FractionalRootInputV1 {
         bump: root_bump,
@@ -666,7 +922,7 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
             trading_program: CALLER_PROGRAM_ID.to_bytes(),
             capability_descriptor: [0; 32],
             capability_outcome: 0,
-            outcome_count: u32::try_from(TERMINAL_WIDTH).expect("width"),
+            outcome_count: u32::try_from(basis_profile.width()).expect("width"),
         },
     )
     .expect("the reserve's installed admission");
@@ -718,7 +974,7 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
         // state the protocol cannot be in.
         mint_bytes(
             root,
-            if winner == OUTCOME {
+            if winner == basis_profile.outcome() {
                 OUTSTANDING_SHARDS
             } else {
                 0
@@ -728,9 +984,32 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
     );
     add_account(
         &mut test,
+        HOLDER_SHARD_TOKENS,
+        token_program_id(),
+        token_account_bytes_for(
+            shard_mint,
+            holder,
+            if winner == basis_profile.outcome() {
+                OUTSTANDING_SHARDS
+            } else {
+                0
+            },
+        ),
+    );
+    let certificate_market = match plant {
+        CampaignPlantV1::TerminalCertificateIdentityMismatch => Pubkey::new_from_array([0x85; 32]),
+        _ => core_market,
+    };
+    add_account(
+        &mut test,
         CERTIFICATE_ACCOUNT,
         CLAIMS_PROGRAM_ID,
-        terminal_certificate_bytes(winner, core_market, shared.product.digest),
+        terminal_certificate_bytes(
+            basis_profile,
+            winner,
+            certificate_market,
+            shared.product.digest,
+        ),
     );
 
     let custody_authority = Pubkey::find_program_address(
@@ -776,6 +1055,18 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
         token_program_id(),
         token_account_bytes_for(COLLATERAL_MINT, custody_authority, HOARD_ATOMS),
     );
+    add_account(
+        &mut test,
+        HOLDER_COLLATERAL_TOKENS,
+        token_program_id(),
+        token_account_bytes_for(COLLATERAL_MINT, holder, 0),
+    );
+    add_account(
+        &mut test,
+        CRANKER_COLLATERAL_TOKENS,
+        token_program_id(),
+        token_account_bytes_for(COLLATERAL_MINT, cranker, 0),
+    );
     test.add_account(
         custody_replay,
         Account {
@@ -817,6 +1108,7 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
     (
         test,
         CampaignFixture {
+            plant,
             shared,
             release_set,
             activation_cache: activation_cache_key,
@@ -825,6 +1117,9 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
             behavior_record,
             root,
             shard_mint,
+            holder_shard_tokens: HOLDER_SHARD_TOKENS,
+            holder_collateral_tokens: HOLDER_COLLATERAL_TOKENS,
+            cranker_collateral_tokens: CRANKER_COLLATERAL_TOKENS,
             holder,
             opener,
             cranker,
@@ -836,8 +1131,56 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
             escrow,
             vault,
             winner,
+            basis_profile,
+            outcome: basis_profile.outcome(),
         },
     )
+}
+
+fn curved_price_gate_certificate(profile: CampaignBasisV1) -> [u8; PRICE_GATE_REQUEST_BYTES_V1] {
+    let degree = profile.degree().expect("curved degree");
+    let payouts: &[u64] = match profile {
+        CampaignBasisV1::Categorical => panic!("categorical basis is price-gate exempt"),
+        CampaignBasisV1::CurvedDegreeTwo => &[1, 4, 2],
+        CampaignBasisV1::CurvedDegreeThree => &[1, 4, 4, 2],
+    };
+    let mut certificate = [0_u8; PRICE_GATE_REQUEST_BYTES_V1];
+    certificate[PRICE_GATE_MAGIC_OFFSET_V1..PRICE_GATE_MAGIC_OFFSET_V1 + 8]
+        .copy_from_slice(&PRICE_GATE_MAGIC_V1);
+    certificate[PRICE_GATE_VERSION_OFFSET_V1..PRICE_GATE_VERSION_OFFSET_V1 + 2]
+        .copy_from_slice(&PRICE_GATE_SCHEMA_VERSION_V1.to_le_bytes());
+    certificate[PRICE_GATE_PROFILE_OFFSET_V1..PRICE_GATE_PROFILE_OFFSET_V1 + 2]
+        .copy_from_slice(&PRICE_GATE_PROFILE_V1.to_le_bytes());
+    certificate[PRICE_GATE_SCALE_OFFSET_V1..PRICE_GATE_SCALE_OFFSET_V1 + 4].copy_from_slice(
+        &u32::try_from(profile.payout_scale())
+            .expect("price-gate scale")
+            .to_le_bytes(),
+    );
+    certificate[PRICE_GATE_MASS_OFFSET_V1..PRICE_GATE_MASS_OFFSET_V1 + 8]
+        .copy_from_slice(&1_u64.to_le_bytes());
+    certificate[PRICE_GATE_DEGREE_OFFSET_V1] = degree;
+    certificate[PRICE_GATE_WIDTH_OFFSET_V1] =
+        u8::try_from(profile.width()).expect("price-gate width");
+    certificate[PRICE_GATE_ATOM_COUNT_OFFSET_V1] = 1;
+    for (claim, payout) in payouts.iter().enumerate() {
+        let offset = PRICE_GATE_PRICES_OFFSET_V1 + claim * 8;
+        certificate[offset..offset + 8].copy_from_slice(&payout.to_le_bytes());
+    }
+    certificate[PRICE_GATE_WEIGHTS_OFFSET_V1..PRICE_GATE_WEIGHTS_OFFSET_V1 + 8]
+        .copy_from_slice(&1_u64.to_le_bytes());
+    certificate[PRICE_GATE_NUMERATORS_OFFSET_V1..PRICE_GATE_NUMERATORS_OFFSET_V1 + 8]
+        .copy_from_slice(
+            &i64::try_from(CURVED_RESULT_NUMERATOR)
+                .expect("price-gate coordinate")
+                .to_le_bytes(),
+        );
+    certificate[PRICE_GATE_DENOMINATORS_OFFSET_V1..PRICE_GATE_DENOMINATORS_OFFSET_V1 + 4]
+        .copy_from_slice(
+            &u32::try_from(CURVED_RESULT_DENOMINATOR)
+                .expect("price-gate denominator")
+                .to_le_bytes(),
+        );
+    certificate
 }
 
 // ---------------------------------------------------------------------------
@@ -846,6 +1189,94 @@ fn campaign_fixture_full(plant: CampaignPlantV1, winner: u32) -> (ProgramTest, C
 
 async fn account_at(context: &mut ProgramTestContext, key: Pubkey) -> Option<Account> {
     context.banks_client.get_account(key).await.expect("query")
+}
+
+fn account_image(address: Pubkey, account: Account) -> AccountImageV1 {
+    AccountImageV1 {
+        address: address.to_bytes(),
+        owner: account.owner.to_bytes(),
+        lamports: account.lamports,
+        rent_epoch: account.rent_epoch,
+        executable: account.executable,
+        data_base64: STANDARD.encode(account.data),
+    }
+}
+
+async fn emit_propagated_compaction_bridge(
+    context: &mut ProgramTestContext,
+    fixture: &CampaignFixture,
+    payout_per_claim: u64,
+) {
+    let Some(preterminal) = propagated_preterminal() else {
+        return;
+    };
+    let raw = env::var_os("DCLUTCH_CUBIC_COMPACTION_BRIDGE_OUT")
+        .expect("unified compaction requires an output bridge");
+    let path = PathBuf::from(raw);
+    assert!(
+        path.is_absolute(),
+        "compaction bridge path must be absolute"
+    );
+    let image = |address, account| account_image(address, account);
+    let record = record_address(fixture);
+    let value = CompactionBridgeV1 {
+        schema: COMPACTION_SCHEMA_V1.into(),
+        preterminal_bridge_sha256: bridge_digest(
+            &canonical_bytes(&preterminal).expect("canonical preterminal bridge"),
+        ),
+        preterminal,
+        payout_per_claim,
+        escrowed_collateral_atoms: RESERVE_NATIVE_CLAIMS * payout_per_claim,
+        holder_collateral_token: fixture.holder_collateral_tokens.to_bytes(),
+        closer_collateral_token: fixture.cranker_collateral_tokens.to_bytes(),
+        closer: fixture.cranker.to_bytes(),
+        record: image(
+            record,
+            account_at(context, record)
+                .await
+                .expect("claim-check record"),
+        ),
+        escrow: image(
+            fixture.escrow,
+            account_at(context, fixture.escrow).await.expect("escrow"),
+        ),
+        vault: image(
+            fixture.vault,
+            account_at(context, fixture.vault).await.expect("vault"),
+        ),
+        shard_mint: image(
+            fixture.shard_mint,
+            account_at(context, fixture.shard_mint)
+                .await
+                .expect("shard Mint"),
+        ),
+        collateral_mint: image(
+            COLLATERAL_MINT,
+            account_at(context, COLLATERAL_MINT)
+                .await
+                .expect("collateral Mint"),
+        ),
+        holder_shards: image(
+            fixture.holder_shard_tokens,
+            account_at(context, fixture.holder_shard_tokens)
+                .await
+                .expect("holder shards"),
+        ),
+        holder_collateral: image(
+            fixture.holder_collateral_tokens,
+            account_at(context, fixture.holder_collateral_tokens)
+                .await
+                .expect("holder collateral"),
+        ),
+        closer_collateral: image(
+            fixture.cranker_collateral_tokens,
+            account_at(context, fixture.cranker_collateral_tokens)
+                .await
+                .expect("closer collateral"),
+        ),
+    };
+    value.validate().expect("compaction bridge contract");
+    write_atomic(&path, &value).expect("atomic compaction bridge write");
 }
 
 async fn lamports_at(context: &mut ProgramTestContext, key: Pubkey) -> u64 {
@@ -904,6 +1335,125 @@ async fn submit_as(
         units,
         result: processed.result,
     }
+}
+
+/// Submit one holder-facing act. Kept separate from `submit_as` so every
+/// compaction call site continues to make the sleeping-holder absence obvious.
+async fn submit_holder_act(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    signer: &Keypair,
+) -> Outcome {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let payer = context.payer.insecure_clone();
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&payer.pubkey()),
+        &[&payer, signer],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("transaction processing");
+    let units = processed
+        .metadata
+        .map(|metadata| metadata.compute_units_consumed)
+        .unwrap_or_default();
+    Outcome {
+        accepted: processed.result.is_ok(),
+        units,
+        result: processed.result,
+    }
+}
+
+fn fractional_redemption_instruction(
+    fixture: &CampaignFixture,
+    request: dclutch_claims_svm::fractional_claim_check_v1::FractionalRedeemClaimCheckRequestV1,
+    holder: Pubkey,
+    holder_collateral_tokens: Pubkey,
+    holder_shard_tokens: Pubkey,
+) -> Instruction {
+    use dclutch_claims_svm::fractional_claim_check_v1::FractionalClaimCheckRedemptionRoleV1 as Role;
+    let accounts = Role::frame()
+        .iter()
+        .map(|role| {
+            let key = match role {
+                Role::Holder => holder,
+                Role::FractionalClaimCheckRecord => record_address(fixture),
+                Role::Escrow => fixture.escrow,
+                Role::Vault => fixture.vault,
+                Role::HolderCollateralTokens => holder_collateral_tokens,
+                Role::CollateralMint => COLLATERAL_MINT,
+                Role::ShardMint => fixture.shard_mint,
+                Role::HolderShardTokens => holder_shard_tokens,
+                Role::TokenProgram => token_program_id(),
+                Role::FractionalCapabilityRoot => {
+                    panic!("the retired root is not in the redemption frame")
+                }
+            };
+            let (signer, writable) = role.privileges();
+            if writable {
+                AccountMeta::new(key, signer)
+            } else {
+                AccountMeta::new_readonly(key, signer)
+            }
+        })
+        .collect();
+    Instruction {
+        program_id: CLAIMS_PROGRAM_ID,
+        accounts,
+        data: request
+            .to_bytes()
+            .expect("redemption request bytes")
+            .to_vec(),
+    }
+}
+
+fn close_settled_escrow_instruction(fixture: &CampaignFixture) -> Instruction {
+    use dclutch_claims_svm::claim_check_request_v1::CloseClaimCheckEscrowRequestV1;
+    Instruction {
+        program_id: CLAIMS_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(fixture.cranker, true),
+            AccountMeta::new(fixture.escrow, false),
+            AccountMeta::new(fixture.vault, false),
+            AccountMeta::new(fixture.cranker_collateral_tokens, false),
+            AccountMeta::new_readonly(COLLATERAL_MINT, false),
+            AccountMeta::new_readonly(token_program_id(), false),
+        ],
+        data: CloseClaimCheckEscrowRequestV1 {
+            aggregate: fixture.shared.claims_market.to_bytes(),
+        }
+        .new()
+        .expect("escrow close request")
+        .to_bytes()
+        .expect("escrow close bytes")
+        .to_vec(),
+    }
+}
+
+async fn fractional_redemption_state(
+    context: &mut ProgramTestContext,
+    fixture: &CampaignFixture,
+) -> Vec<Option<Account>> {
+    let mut state = Vec::new();
+    for key in [
+        record_address(fixture),
+        fixture.escrow,
+        fixture.vault,
+        fixture.shard_mint,
+        fixture.holder_shard_tokens,
+        fixture.holder_collateral_tokens,
+    ] {
+        state.push(account_at(context, key).await);
+    }
+    state
 }
 
 /// The stranger's permissionless escrow open: the deadline's origin.
@@ -1066,7 +1616,7 @@ fn crank_terminal_request(
         expected_position_revision: POSITION_REVISION,
         expected_custody_revision: 1,
         quantity: RESERVE_NATIVE_CLAIMS,
-        claim_index: OUTCOME,
+        claim_index: fixture.outcome,
         transfer_index: 0,
     })
     .expect("crank terminal settlement request")
@@ -1096,7 +1646,7 @@ fn crank_payout_and_caller(
     };
     use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
     use dclutch_fractional_atomic_program_test::narrow_fixture::{
-        COORDINATE_DOMAIN_ID, EVALUATOR_RELEASE_ID, PAYOUT_SCALE, RESULT_UNIT_ID,
+        COORDINATE_DOMAIN_ID, EVALUATOR_RELEASE_ID, RESULT_UNIT_ID,
     };
     use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
     use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -1121,7 +1671,7 @@ fn crank_payout_and_caller(
         fixture.release_set,
         EVALUATOR_RELEASE_ID,
         shared.outcome_count,
-        PAYOUT_SCALE,
+        shared.payout_scale,
     )
     .expect("terminal admission");
     let width = shared.outcome_count as usize;
@@ -1169,8 +1719,16 @@ fn crank_payout_and_caller(
             // computed a worthless one, and the two would have disagreed
             // silently. The chain derives this from the certificate; the
             // campaign must derive it from the same fact.
-            terminal: TerminalScenarioV3::Categorical(fixture.winner),
-            claim_index: OUTCOME,
+            terminal: match fixture.basis_profile {
+                CampaignBasisV1::Categorical => TerminalScenarioV3::Categorical(fixture.winner),
+                CampaignBasisV1::CurvedDegreeTwo | CampaignBasisV1::CurvedDegreeThree => {
+                    TerminalScenarioV3::Rational {
+                        numerator: CURVED_RESULT_NUMERATOR,
+                        denominator: CURVED_RESULT_DENOMINATOR,
+                    }
+                }
+            },
+            claim_index: fixture.outcome,
             quantity: RESERVE_NATIVE_CLAIMS,
             expected_generation: GENERATION,
             expected_market_revision: market_revision,
@@ -1187,11 +1745,18 @@ fn crank_payout_and_caller(
     // Welded to the scenario rather than assumed. This was `payout > 0`, which
     // was true of every campaign that existed when it was written and became a
     // false assumption the moment one resolved elsewhere.
-    assert_eq!(
-        payout > 0,
-        fixture.winner == OUTCOME,
-        "the reserve's coordinate pays exactly when the market resolved to it"
-    );
+    match fixture.basis_profile {
+        CampaignBasisV1::Categorical => assert_eq!(
+            payout > 0,
+            fixture.winner == fixture.outcome,
+            "the reserve's coordinate pays exactly when the market resolved to it"
+        ),
+        CampaignBasisV1::CurvedDegreeTwo | CampaignBasisV1::CurvedDegreeThree => assert_eq!(
+            payout,
+            RESERVE_NATIVE_CLAIMS * 4,
+            "the curved midpoint's cumulative-floor middle coordinate pays four atoms"
+        ),
+    }
 
     let candidate_digest = hashv(&[
         TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
@@ -1289,6 +1854,12 @@ fn crank_payout_and_caller(
 ///   into one they can collect whenever they return.
 fn terminal_prefix(fixture: &CampaignFixture, custody_caller: Pubkey) -> Vec<AccountMeta> {
     let shared = &fixture.shared;
+    let (caller_program, caller_programdata) = match fixture.plant {
+        CampaignPlantV1::SignedDeltaCallerReleaseMismatch => {
+            (CALLER_PROGRAM_ID, programdata_address(CALLER_PROGRAM_ID))
+        }
+        _ => (CLAIMS_PROGRAM_ID, programdata_address(CLAIMS_PROGRAM_ID)),
+    };
 
     let accounts = vec![
         // WRITABLE, and this is the coordinate that pays the cranker. The
@@ -1317,10 +1888,10 @@ fn terminal_prefix(fixture: &CampaignFixture, custody_caller: Pubkey) -> Vec<Acc
         // all, and the release authentication resolves this coordinate against
         // the activation cache's binding for whichever role the request states.
         // Putting the test signer here -- the obvious copy from the sibling --
-        // is refused as `0x5202 SignedDeltaSbfErrorV3::Release`, and it took
-        // reading that refusal to find it.
-        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
-        AccountMeta::new_readonly(programdata_address(CLAIMS_PROGRAM_ID), false),
+        // is refused as `SignedDeltaSbfErrorV3::Release`, and it took reading
+        // that refusal to find it.
+        AccountMeta::new_readonly(caller_program, false),
+        AccountMeta::new_readonly(caller_programdata, false),
         AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
         AccountMeta::new_readonly(programdata_address(CLAIMS_PROGRAM_ID), false),
         AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
@@ -1502,7 +2073,7 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
             terms: fixture.terms_record.digest,
             token_behavior: fixture.behavior_record.digest,
             expected_root_revision: ROOT_REVISION,
-            representation_coordinate: OUTCOME,
+            representation_coordinate: fixture.outcome,
             payout_per_claim,
         },
         crank_terminal_request(&fixture, market_revision),
@@ -1749,6 +2320,513 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
     println!("================================================================\n");
 }
 
+/// Drive one curved ProductBasisV3 through the whole fractional holder life.
+///
+/// Both the quadratic and cubic choose a middle claim paying four atoms, so the
+/// same physical lifecycle can compare equal economics while changing the
+/// Product's exact evaluator and full partition.
+async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partition: &[u64]) {
+    use dclutch_claims_svm::{
+        fractional_claim_check_compaction_request_v1::{
+            FractionalCompactToClaimCheckRequestV1, FractionalCompactionCoordinatesV1,
+        },
+        liability_basis_state_v2::LiabilityBasisMarketViewV2,
+    };
+    use dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1;
+
+    let (test, fixture) = campaign_fixture_basis(
+        CampaignPlantV1::Faithful,
+        basis_profile,
+        basis_profile.outcome(),
+    );
+    let basis = ProductBasisV3::decode(&fixture.shared.linked_basis.bytes)
+        .expect("finalized curved ProductBasisV3");
+    let mut partition = vec![0_u64; basis_profile.width()];
+    basis
+        .evaluate_rational(
+            CURVED_RESULT_NUMERATOR,
+            CURVED_RESULT_DENOMINATOR,
+            &mut partition,
+        )
+        .expect("exact curved midpoint");
+    assert_eq!(partition.as_slice(), expected_partition);
+    assert_eq!(fixture.shared.payout_scale, basis_profile.payout_scale());
+
+    let mut context = test.start_with_context().await;
+    let opened = submit_as(&mut context, open_instruction(&fixture), &opener_keypair()).await;
+    assert!(
+        opened.accepted,
+        "the escrow open must land: {:?}",
+        opened.result
+    );
+    create_custody_replay(&mut context, &fixture).await;
+    let escrow = ClaimCheckEscrowV1::decode(
+        &account_at(&mut context, fixture.escrow)
+            .await
+            .expect("escrow")
+            .data,
+    )
+    .expect("escrow decodes");
+    let market_revision = LiabilityBasisMarketViewV2::decode(&fixture.shared.claims_market_bytes)
+        .expect("aggregate decode")
+        .revision;
+    let terminal = crank_terminal_request(&fixture, market_revision);
+    let (payout, custody_caller) = crank_payout_and_caller(&fixture, terminal, market_revision);
+    assert_eq!(
+        payout,
+        RESERVE_NATIVE_CLAIMS
+            * partition[usize::try_from(fixture.outcome).expect("curved outcome")]
+    );
+    assert_eq!(payout, 16);
+
+    let whole_claims = OUTSTANDING_SHARDS / DENOMINATOR;
+    let payout_per_claim = payout / whole_claims;
+    assert_eq!(whole_claims, RESERVE_NATIVE_CLAIMS);
+    assert_eq!(payout_per_claim, 4);
+    let request = FractionalCompactToClaimCheckRequestV1::new(
+        FractionalCompactionCoordinatesV1 {
+            terms: fixture.terms_record.digest,
+            token_behavior: fixture.behavior_record.digest,
+            expected_root_revision: ROOT_REVISION,
+            representation_coordinate: fixture.outcome,
+            payout_per_claim,
+        },
+        crank_terminal_request(&fixture, market_revision),
+    )
+    .expect("canonical curved compaction request");
+    context
+        .warp_to_slot(escrow.opened_slot + COMPACTION_DEADLINE_SLOTS_V1)
+        .expect("warp past the real deadline");
+
+    let record = record_address(&fixture);
+    let position = fixture.shared.reserve_position.account;
+    let before_hoard = token_amount(
+        &account_at(&mut context, fixture.hoard)
+            .await
+            .expect("hoard")
+            .data,
+    );
+    let before_vault = token_amount(
+        &account_at(&mut context, fixture.vault)
+            .await
+            .expect("vault")
+            .data,
+    );
+    let before_position = lamports_at(&mut context, position).await;
+    let before_admission = lamports_at(&mut context, fixture.reserve_admission).await;
+    let before_rent_credit = lamports_at(&mut context, fixture.rent_credit).await;
+    let before_opener = lamports_at(&mut context, fixture.opener).await;
+    let before_cranker = lamports_at(&mut context, fixture.cranker).await;
+    let before_record = lamports_at(&mut context, record).await;
+    let before_holder = lamports_at(&mut context, fixture.holder).await;
+
+    let outcome = submit_as(
+        &mut context,
+        compaction_instruction(
+            &fixture,
+            &request,
+            custody_caller,
+            FractionalCompactionCallerActionV1::Signed,
+        ),
+        &cranker_keypair(),
+    )
+    .await;
+    assert!(
+        outcome.accepted,
+        "the curved compaction must land: {:?} (code {:?})",
+        outcome.result,
+        custom_refusal(&outcome.result)
+    );
+
+    let after_hoard = token_amount(
+        &account_at(&mut context, fixture.hoard)
+            .await
+            .expect("hoard")
+            .data,
+    );
+    let after_vault = token_amount(
+        &account_at(&mut context, fixture.vault)
+            .await
+            .expect("vault")
+            .data,
+    );
+    assert_eq!(before_hoard - after_hoard, payout);
+    assert_eq!(after_vault - before_vault, payout);
+    assert_eq!(lamports_at(&mut context, position).await, 0);
+    assert_eq!(
+        lamports_at(&mut context, fixture.reserve_admission).await,
+        0
+    );
+    assert_eq!(
+        lamports_at(&mut context, fixture.holder).await,
+        before_holder
+    );
+
+    let after_rent_credit = lamports_at(&mut context, fixture.rent_credit).await;
+    let after_opener = lamports_at(&mut context, fixture.opener).await;
+    let after_cranker = lamports_at(&mut context, fixture.cranker).await;
+    let after_record = lamports_at(&mut context, record).await;
+    assert_eq!(
+        before_position + before_admission,
+        (after_record - before_record)
+            + (after_opener - before_opener)
+            + (after_cranker - before_cranker)
+            + (after_rent_credit - before_rent_credit),
+        "the curved route strands or conjures no rent lamport"
+    );
+    let record_account = account_at(&mut context, record)
+        .await
+        .expect("curved fractional claim-check");
+    assert_eq!(record_account.owner, CLAIMS_PROGRAM_ID);
+    assert!(!record_account.data.is_empty());
+
+    use dclutch_claims_svm::fractional_claim_check_v1::{
+        FractionalClaimCheckV1, FractionalRedeemClaimCheckRequestV1,
+    };
+    let persisted =
+        FractionalClaimCheckV1::decode(&record_account.data).expect("fractional record decodes");
+    assert_eq!(persisted.escrowed_atoms, payout);
+    assert_eq!(persisted.denominator, DENOMINATOR);
+    assert_eq!(persisted.payout_per_claim, payout_per_claim);
+    let escrow_after_compaction = ClaimCheckEscrowV1::decode(
+        &account_at(&mut context, fixture.escrow)
+            .await
+            .expect("escrow")
+            .data,
+    )
+    .expect("escrow decodes");
+    assert_eq!(escrow_after_compaction.outstanding_claim_checks, 1);
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.holder_shard_tokens)
+                .await
+                .expect("holder shards")
+                .data
+        ),
+        OUTSTANDING_SHARDS
+    );
+    assert_eq!(
+        mint_supply(
+            &account_at(&mut context, fixture.shard_mint)
+                .await
+                .expect("shard mint")
+                .data
+        ),
+        OUTSTANDING_SHARDS
+    );
+
+    if basis_profile == CampaignBasisV1::CurvedDegreeThree {
+        emit_propagated_compaction_bridge(&mut context, &fixture, payout_per_claim).await;
+    }
+
+    let request = |requested_shard_atoms| {
+        FractionalRedeemClaimCheckRequestV1 {
+            aggregate: fixture.shared.claims_market.to_bytes(),
+            shard_mint: fixture.shard_mint.to_bytes(),
+            requested_shard_atoms,
+        }
+        .new()
+        .expect("fractional redemption request")
+    };
+
+    // Every honest local refusal is atomic under the real ELF. Each one starts
+    // and ends with byte-identical program and Token accounts.
+    for (instruction, signer, expected_code, label) in [
+        (
+            fractional_redemption_instruction(
+                &fixture,
+                request(DENOMINATOR - 1),
+                fixture.holder,
+                fixture.holder_collateral_tokens,
+                fixture.holder_shard_tokens,
+            ),
+            holder_keypair(),
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim as u32,
+            "sub-denominator dust",
+        ),
+        (
+            fractional_redemption_instruction(
+                &fixture,
+                request(OUTSTANDING_SHARDS + 1),
+                fixture.holder,
+                fixture.holder_collateral_tokens,
+                fixture.holder_shard_tokens,
+            ),
+            holder_keypair(),
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckRedemptionSbfErrorV1::Conservation as u32,
+            "holder overdraw",
+        ),
+        (
+            fractional_redemption_instruction(
+                &fixture,
+                request(DENOMINATOR),
+                fixture.holder,
+                fixture.cranker_collateral_tokens,
+                fixture.holder_shard_tokens,
+            ),
+            holder_keypair(),
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckRedemptionSbfErrorV1::Authority as u32,
+            "substituted payout owner",
+        ),
+        (
+            fractional_redemption_instruction(
+                &fixture,
+                request(DENOMINATOR),
+                fixture.cranker,
+                fixture.holder_collateral_tokens,
+                fixture.holder_shard_tokens,
+            ),
+            cranker_keypair(),
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckRedemptionSbfErrorV1::Authority as u32,
+            "substituted shard authority",
+        ),
+    ] {
+        let before = fractional_redemption_state(&mut context, &fixture).await;
+        let refused = submit_holder_act(&mut context, instruction, &signer).await;
+        assert!(!refused.accepted, "{label} must refuse");
+        assert_eq!(custom_refusal(&refused.result), Some(expected_code), "{label}");
+        assert_eq!(
+            fractional_redemption_state(&mut context, &fixture).await,
+            before,
+            "{label} changed state despite refusal"
+        );
+    }
+
+    let before_premature_close = fractional_redemption_state(&mut context, &fixture).await;
+    let premature_close = submit_holder_act(
+        &mut context,
+        close_settled_escrow_instruction(&fixture),
+        &cranker_keypair(),
+    )
+    .await;
+    assert!(!premature_close.accepted);
+    assert_eq!(
+        custom_refusal(&premature_close.result),
+        Some(
+            dclutch_claims_sbf::claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1::Vault
+                as u32
+        )
+    );
+    assert_eq!(
+        fractional_redemption_state(&mut context, &fixture).await,
+        before_premature_close,
+        "a live fractional record must make escrow close roll back"
+    );
+
+    let record_rent = record_account.lamports;
+    let holder_lamports_before_partial = lamports_at(&mut context, fixture.holder).await;
+    let partial = submit_holder_act(
+        &mut context,
+        fractional_redemption_instruction(
+            &fixture,
+            request(2 * DENOMINATOR),
+            fixture.holder,
+            fixture.holder_collateral_tokens,
+            fixture.holder_shard_tokens,
+        ),
+        &holder_keypair(),
+    )
+    .await;
+    assert!(
+        partial.accepted,
+        "partial fractional redemption must land: {:?}",
+        partial.result
+    );
+    assert_eq!(
+        lamports_at(&mut context, fixture.holder).await,
+        holder_lamports_before_partial,
+        "a partial burn neither charges the holder nor closes record rent"
+    );
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.holder_shard_tokens)
+                .await
+                .expect("holder shards")
+                .data
+        ),
+        OUTSTANDING_SHARDS - 2 * DENOMINATOR
+    );
+    assert_eq!(
+        mint_supply(
+            &account_at(&mut context, fixture.shard_mint)
+                .await
+                .expect("mint")
+                .data
+        ),
+        OUTSTANDING_SHARDS - 2 * DENOMINATOR
+    );
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.holder_collateral_tokens)
+                .await
+                .expect("holder collateral")
+                .data
+        ),
+        8
+    );
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.vault)
+                .await
+                .expect("vault")
+                .data
+        ),
+        payout - 8
+    );
+    let partial_record = account_at(&mut context, record)
+        .await
+        .expect("partial record remains");
+    assert_eq!(partial_record.lamports, record_rent);
+    assert_eq!(
+        FractionalClaimCheckV1::decode(&partial_record.data)
+            .expect("partial record")
+            .escrowed_atoms,
+        payout - 8
+    );
+    assert_eq!(
+        ClaimCheckEscrowV1::decode(
+            &account_at(&mut context, fixture.escrow)
+                .await
+                .expect("escrow")
+                .data
+        )
+        .expect("escrow")
+        .outstanding_claim_checks,
+        1
+    );
+
+    // Both halves are exactly twenty shards in the propagated 40-shard life.
+    // They are distinct lifecycle acts, not a transaction replay: a real
+    // validator naturally supplies a later blockhash, while ProgramTest keeps
+    // the same bank alive until explicitly advanced. Move one real slot so the
+    // identical economic request receives a fresh transaction identity.
+    context
+        .warp_to_slot(escrow.opened_slot + COMPACTION_DEADLINE_SLOTS_V1 + 1)
+        .expect("advance one slot between equal-sized redemptions");
+    let holder_lamports_before_settle = lamports_at(&mut context, fixture.holder).await;
+    let settling = submit_holder_act(
+        &mut context,
+        fractional_redemption_instruction(
+            &fixture,
+            request(OUTSTANDING_SHARDS - 2 * DENOMINATOR),
+            fixture.holder,
+            fixture.holder_collateral_tokens,
+            fixture.holder_shard_tokens,
+        ),
+        &holder_keypair(),
+    )
+    .await;
+    assert!(
+        settling.accepted,
+        "settling fractional redemption must land: {:?}",
+        settling.result
+    );
+    assert_eq!(lamports_at(&mut context, record).await, 0);
+    assert_eq!(
+        lamports_at(&mut context, fixture.holder).await,
+        holder_lamports_before_settle + record_rent,
+        "all live record lamports, including donations, return to the holder"
+    );
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.holder_collateral_tokens)
+                .await
+                .expect("holder collateral")
+                .data
+        ),
+        payout
+    );
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.holder_shard_tokens)
+                .await
+                .expect("holder shards")
+                .data
+        ),
+        0
+    );
+    assert_eq!(
+        mint_supply(
+            &account_at(&mut context, fixture.shard_mint)
+                .await
+                .expect("mint")
+                .data
+        ),
+        0
+    );
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.vault)
+                .await
+                .expect("vault")
+                .data
+        ),
+        0
+    );
+    assert_eq!(
+        ClaimCheckEscrowV1::decode(
+            &account_at(&mut context, fixture.escrow)
+                .await
+                .expect("escrow")
+                .data
+        )
+        .expect("escrow")
+        .outstanding_claim_checks,
+        0
+    );
+
+    let vault_rent = lamports_at(&mut context, fixture.vault).await;
+    let escrow_rent = lamports_at(&mut context, fixture.escrow).await;
+    let cranker_before_close = lamports_at(&mut context, fixture.cranker).await;
+    let close = submit_holder_act(
+        &mut context,
+        close_settled_escrow_instruction(&fixture),
+        &cranker_keypair(),
+    )
+    .await;
+    assert!(
+        close.accepted,
+        "settled escrow close must land: {:?}",
+        close.result
+    );
+    assert_eq!(lamports_at(&mut context, fixture.vault).await, 0);
+    assert_eq!(lamports_at(&mut context, fixture.escrow).await, 0);
+    assert_eq!(
+        lamports_at(&mut context, fixture.cranker).await,
+        cranker_before_close + vault_rent + escrow_rent,
+        "vault and escrow rent both reach the permissionless closer"
+    );
+    assert_eq!(
+        token_amount(
+            &account_at(&mut context, fixture.cranker_collateral_tokens)
+                .await
+                .expect("closer collateral account")
+                .data
+        ),
+        0,
+        "no collateral residue was stranded or swept"
+    );
+}
+
+/// At `3/2`, the clamped quadratic has exact weights `[1/4,1/2,1/4]`.
+/// Cumulative-floor at scale seven pays `[1,4,2]`; the full hostile lifecycle
+/// proves the middle claim's four-atom rate physically.
+#[tokio::test]
+async fn a_degree_two_curve_compacts_and_redeems_without_stranding() {
+    drive_curve_holder_life(CampaignBasisV1::CurvedDegreeTwo, &[1, 4, 2]).await;
+}
+
+/// At `3/2`, the clamped cubic has exact weights `[1/8,3/8,3/8,1/8]`.
+/// Cumulative-floor at scale eleven pays `[1,4,4,2]`, while independent
+/// per-term flooring would leave the final atom unpaid. The same real-ELF
+/// hostile/partial/settling/close life proves that degree three reaches the
+/// permissionless Fractional physical route without widening Structured's
+/// authoritative K=3 child wall.
+#[tokio::test]
+async fn a_degree_three_curve_compacts_and_redeems_without_stranding() {
+    drive_curve_holder_life(CampaignBasisV1::CurvedDegreeThree, &[1, 4, 4, 2]).await;
+}
+
 /// Create the Claims-role Custody replay cursor, by the real route.
 ///
 /// NOT planted, and the reason is the one the sibling campaign states about the
@@ -1863,7 +2941,7 @@ async fn run_to_the_crank(
             terms: fixture.terms_record.digest,
             token_behavior: fixture.behavior_record.digest,
             expected_root_revision: ROOT_REVISION,
-            representation_coordinate: OUTCOME,
+            representation_coordinate: fixture.outcome,
             payout_per_claim: payout / (OUTSTANDING_SHARDS / DENOMINATOR),
         },
         crank_terminal_request(&fixture, market_revision),
@@ -1908,9 +2986,63 @@ async fn a_rent_credit_that_does_not_derive_is_refused_by_name() {
     );
     assert_eq!(
         custom_refusal(&outcome.result),
-        Some(0x564D),
+        Some(
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckCompactionSbfErrorV1::Rent
+                as u32,
+        ),
         "and it must be refused as Rent, by name -- not folded into Identity, so a \
          validator log can tell 'your rent is going somewhere else' from a mistyped escrow"
+    );
+}
+
+/// The terminal certificate hostile reaches the inner settlement and returns
+/// the fractional route's exact `TerminalIdentity` code.
+///
+/// This is one of the two failures FRACCHECK-7 could diagnose only by
+/// temporarily deleting the old `map_err(|_| Economic)`: the certificate is a
+/// valid record at the Core-pinned address, but its decoded Market identity
+/// disagrees. The faithful campaign proves the same route with the correct
+/// field commits.
+#[tokio::test]
+async fn a_terminal_identity_refusal_is_not_flattened_to_economic() {
+    let outcome = run_to_the_crank(
+        CampaignPlantV1::TerminalCertificateIdentityMismatch,
+        dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1::Signed,
+    )
+    .await;
+    assert!(!outcome.accepted, "the foreign certificate must refuse");
+    assert_eq!(
+        custom_refusal(&outcome.result),
+        Some(
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity
+                as u32,
+        ),
+        "the validator-visible code must name the inner terminal identity failure"
+    );
+}
+
+/// The SignedDelta hostile reaches the generated packet and returns the
+/// fractional route's exact `SignedDeltaRelease` code.
+///
+/// The plan says `CallerRole::Claims`, whose caller coordinates must equal the
+/// Claims deployment. Substituting the activated Trading test caller changes
+/// only that joined role and reproduces the other inner failure FRACCHECK-7 had
+/// to expose by hand.
+#[tokio::test]
+async fn a_signed_delta_release_refusal_is_not_flattened_to_economic() {
+    let outcome = run_to_the_crank(
+        CampaignPlantV1::SignedDeltaCallerReleaseMismatch,
+        dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1::Signed,
+    )
+    .await;
+    assert!(!outcome.accepted, "the wrong caller role must refuse");
+    assert_eq!(
+        custom_refusal(&outcome.result),
+        Some(
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaRelease
+                as u32,
+        ),
+        "the validator-visible code must name the inner SignedDelta release failure"
     );
 }
 
@@ -1939,7 +3071,10 @@ async fn a_compaction_without_trading_is_refused_at_the_frame() {
     );
     assert_eq!(
         custom_refusal(&outcome.result),
-        Some(0x5641),
+        Some(
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckCompactionSbfErrorV1::Authority
+                as u32,
+        ),
         "refused as Authority, at the frame"
     );
 }

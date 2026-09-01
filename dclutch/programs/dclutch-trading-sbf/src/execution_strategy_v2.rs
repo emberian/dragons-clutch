@@ -33,7 +33,9 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
-use crate::{TradingSbfError, dispatch::TradingFamilyContextV1};
+use crate::{
+    TradingSbfError, dispatch::TradingFamilyContextV1, hot_v3::AuthenticatedAcceleratorCallerV4,
+};
 
 /// The extracted callback boundary raises Trading's own refusal codes.
 ///
@@ -137,6 +139,12 @@ pub struct AuthenticatedExecutionStrategyV2 {
     admitted_authorization: Option<AdmittedAotAuthorizationV2>,
 }
 
+#[derive(Clone, Copy)]
+enum CurrentDeploymentAuthenticationV2 {
+    CompleteElf,
+    AttestedAccelerator(AuthenticatedAcceleratorCallerV4),
+}
+
 impl AuthenticatedExecutionStrategyV2 {
     /// Return the selected finalized Capability Program content identity.
     pub const fn capability_program_id(self) -> ContentId {
@@ -234,18 +242,19 @@ pub fn authenticate_execution_strategy_v2(
         registry_program.key,
         &rent,
         accounts,
+        CurrentDeploymentAuthenticationV2::CompleteElf,
     )
 }
 
 /// Authenticate one strategy after Hot has spent a CapabilitySeal token for
 /// the selected descriptor.
 ///
-/// The first two account slots are the execution-only raw/raw alias. The Hot
-/// caller has already authenticated the exact Registry coordinate, body
-/// digest, width, rent and seal row before reaching this crate-private entry;
-/// this boundary re-decodes the same borrowed body and requires it to equal the
-/// supplied descriptor. Every strategy-owned record and deployment retains the
-/// ordinary fully-distinct finalized-record authentication below.
+/// The first two account slots retain the exact descriptor pair authenticated
+/// by Hot. Direct execution may carry its already-authorized raw/raw alias;
+/// other families carry the canonical finalized raw plus vacant staging PDA.
+/// This boundary independently rechecks the pair, body digest, width and rent,
+/// then requires the decoded body to equal the supplied descriptor. Every
+/// strategy-owned record and deployment remains fully distinct below.
 #[inline(never)]
 pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
     context: TradingFamilyContextV1,
@@ -255,10 +264,11 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
     rent_sysvar: &AccountInfo<'_>,
     accounts: &[AccountInfo<'_>],
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
-    let rent = authenticate_common_frame_with_sealed_capability_alias(
+    let rent = authenticate_common_frame_with_sealed_capability_pair(
         registry_program,
         rent_sysvar,
         accounts,
+        capability_program_id,
         capability_program,
     )?;
     authenticate_selected_execution_strategy_v2(
@@ -268,6 +278,41 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
         registry_program.key,
         &rent,
         accounts,
+        CurrentDeploymentAuthenticationV2::CompleteElf,
+    )
+}
+
+/// Authenticate an admitted accelerator after Trading authenticated its exact CPI caller.
+///
+/// This retains the sealed descriptor-pair, strategy, Certificate, Admission,
+/// and ArtifactRelease checks. Only the immutable current-deployment join may
+/// spend `accelerator_caller`; every public and non-attested route continues to
+/// hash the complete observed ELF.
+#[inline(never)]
+pub(crate) fn authenticate_execution_strategy_from_attested_accelerator_v2(
+    context: TradingFamilyContextV1,
+    capability_program_id: ContentId,
+    capability_program: &CapabilityProgramV4,
+    registry_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+    accounts: &[AccountInfo<'_>],
+    accelerator_caller: AuthenticatedAcceleratorCallerV4,
+) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
+    let rent = authenticate_common_frame_with_sealed_capability_pair(
+        registry_program,
+        rent_sysvar,
+        accounts,
+        capability_program_id,
+        capability_program,
+    )?;
+    authenticate_selected_execution_strategy_v2(
+        context,
+        capability_program_id,
+        capability_program,
+        registry_program.key,
+        &rent,
+        accounts,
+        CurrentDeploymentAuthenticationV2::AttestedAccelerator(accelerator_caller),
     )
 }
 
@@ -279,6 +324,7 @@ fn authenticate_selected_execution_strategy_v2(
     registry_program: &Pubkey,
     rent: &Rent,
     accounts: &[AccountInfo<'_>],
+    deployment_authentication: CurrentDeploymentAuthenticationV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
     capability_program
         .validate_persisted_selection(context.selection())
@@ -289,6 +335,12 @@ fn authenticate_selected_execution_strategy_v2(
         != context.root_account_bytes()
     {
         return Err(TradingSbfError::Root);
+    }
+    if let CurrentDeploymentAuthenticationV2::AttestedAccelerator(caller) =
+        deployment_authentication
+        && !caller.binds_context(context)
+    {
+        return Err(TradingSbfError::Release);
     }
 
     let strategy_program_id = capability_program.strategy().program();
@@ -305,6 +357,12 @@ fn authenticate_selected_execution_strategy_v2(
 
     match strategy.disposition() {
         StrategyDispositionV2::Interpreted => {
+            if matches!(
+                deployment_authentication,
+                CurrentDeploymentAuthenticationV2::AttestedAccelerator(_)
+            ) {
+                return Err(TradingSbfError::Content);
+            }
             require_exact_account_count(accounts, INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)?;
             Ok(AuthenticatedExecutionStrategyV2 {
                 capability_program_id,
@@ -319,15 +377,23 @@ fn authenticate_selected_execution_strategy_v2(
                 admitted_authorization: None,
             })
         }
-        StrategyDispositionV2::ShadowAot => authenticate_shadow_aot(
-            registry_program,
-            rent,
-            accounts,
-            capability_program_id,
-            *capability_program,
-            strategy_program_id,
-            strategy,
-        ),
+        StrategyDispositionV2::ShadowAot => {
+            if matches!(
+                deployment_authentication,
+                CurrentDeploymentAuthenticationV2::AttestedAccelerator(_)
+            ) {
+                return Err(TradingSbfError::Content);
+            }
+            authenticate_shadow_aot(
+                registry_program,
+                rent,
+                accounts,
+                capability_program_id,
+                *capability_program,
+                strategy_program_id,
+                strategy,
+            )
+        }
         StrategyDispositionV2::AdmittedAot => authenticate_admitted_aot(
             registry_program,
             rent,
@@ -336,6 +402,7 @@ fn authenticate_selected_execution_strategy_v2(
             *capability_program,
             strategy_program_id,
             strategy,
+            deployment_authentication,
         ),
     }
 }
@@ -382,6 +449,7 @@ fn authenticate_shadow_aot(
         binding,
         account(accounts, SHADOW_ACCELERATOR_PROGRAM)?,
         account(accounts, SHADOW_ACCELERATOR_PROGRAMDATA)?,
+        CurrentDeploymentAuthenticationV2::CompleteElf,
     )?;
     if let CertificateArtifactBindingV2::Release(_) = binding {
         certificate
@@ -411,6 +479,7 @@ fn authenticate_admitted_aot(
     capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
     strategy: ExecutionStrategyProgramV2,
+    deployment_authentication: CurrentDeploymentAuthenticationV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
     require_exact_account_count(accounts, ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2)?;
     let certificate_program_id = strategy
@@ -448,6 +517,7 @@ fn authenticate_admitted_aot(
         CertificateArtifactBindingV2::Release(artifact_release_id),
         account(accounts, ADMITTED_ACCELERATOR_PROGRAM)?,
         account(accounts, ADMITTED_ACCELERATOR_PROGRAMDATA)?,
+        deployment_authentication,
     )?;
     let admitted_authorization = validate_admitted_aot_v4(
         strategy_program_id,
@@ -596,8 +666,11 @@ fn authenticate_admission(
 ///
 /// * the record is a Registry-finalized `ArtifactReleaseV1` -- its content
 ///   digest derives the raw and staging PDAs, so the address proves the bytes;
-/// * that record's `elf_digest` equals a hash of the live programdata, checked
-///   by `authenticate_current_deployment` on every call.
+/// * that record's `elf_digest` equals the live ProgramData ELF. Normal callers
+///   prove this by hashing the complete ELF here. The one private admitted
+///   accelerator callback may instead spend Trading's exact post-full-auth CPI
+///   caller token, but only after rejoining the exact immutable release,
+///   Program, ProgramData, deployment slot, and absent upgrade authority.
 ///
 /// They differ only in which fact the Certificate itself supplies. A `Release`
 /// binding names the record's exact content identity, so the record is selected
@@ -610,8 +683,8 @@ fn authenticate_admission(
 /// `ArtifactReleaseV1` cannot be authored for an accelerator whose ELF embeds
 /// that Certificate: its identity would have to contain the digest of the bytes
 /// it is compiled into. Measured, not argued, in `23eed7df`. Widening to every
-/// build of one exact source is the deliberate price, and the deployment hash
-/// above is what keeps it from widening any further than that.
+/// build of one exact source is the deliberate price, and the complete normal
+/// deployment proof above is what keeps it from widening any further than that.
 #[allow(clippy::too_many_arguments)]
 fn authenticate_pinned_artifact(
     registry_program: &Pubkey,
@@ -621,6 +694,7 @@ fn authenticate_pinned_artifact(
     binding: CertificateArtifactBindingV2,
     accelerator_program: &AccountInfo<'_>,
     accelerator_programdata: &AccountInfo<'_>,
+    deployment_authentication: CurrentDeploymentAuthenticationV2,
 ) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1), TradingSbfError> {
     let data = raw
         .try_borrow_data()
@@ -654,7 +728,26 @@ fn authenticate_pinned_artifact(
     let artifact_release_id =
         ArtifactReleaseIdV1::decode(&digest).map_err(|_| TradingSbfError::Content)?;
     drop(data);
-    authenticate_current_deployment(release, accelerator_program, accelerator_programdata)?;
+    match deployment_authentication {
+        CurrentDeploymentAuthenticationV2::CompleteElf => {
+            authenticate_current_deployment(release, accelerator_program, accelerator_programdata)?;
+        }
+        CurrentDeploymentAuthenticationV2::AttestedAccelerator(caller) => {
+            if !caller.binds_immutable_deployment(
+                artifact_release_id,
+                release,
+                accelerator_program,
+                accelerator_programdata,
+            ) {
+                return Err(TradingSbfError::Release);
+            }
+            authenticate_activated_current_deployment(
+                release,
+                accelerator_program,
+                accelerator_programdata,
+            )?;
+        }
+    }
     Ok((artifact_release_id, release))
 }
 
@@ -748,10 +841,11 @@ fn authenticate_common_frame(
 }
 
 #[inline(never)]
-fn authenticate_common_frame_with_sealed_capability_alias(
+fn authenticate_common_frame_with_sealed_capability_pair(
     registry_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
     accounts: &[AccountInfo<'_>],
+    capability_program_id: ContentId,
     capability_program: &CapabilityProgramV4,
 ) -> Result<Rent, TradingSbfError> {
     if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2
@@ -767,16 +861,21 @@ fn authenticate_common_frame_with_sealed_capability_alias(
         return Err(TradingSbfError::Content);
     }
     let raw = account(accounts, CAPABILITY_RAW)?;
-    let alias = account(accounts, CAPABILITY_STAGING)?;
-    if raw.key != alias.key
+    let staging = account(accounts, CAPABILITY_STAGING)?;
+    let expected_raw = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+            &capability_program_id.to_bytes(),
+        ],
+        registry_program.key,
+    )
+    .0;
+    if raw.key != &expected_raw
         || raw.owner != registry_program.key
-        || raw.owner != alias.owner
         || raw.is_signer
         || raw.is_writable
         || raw.executable
-        || raw.is_signer != alias.is_signer
-        || raw.is_writable != alias.is_writable
-        || raw.executable != alias.executable
     {
         return Err(TradingSbfError::Content);
     }
@@ -786,12 +885,42 @@ fn authenticate_common_frame_with_sealed_capability_alias(
         .map_err(|_| TradingSbfError::Content)?;
     if data.len() != CAPABILITY_PROGRAM_V4_BYTES
         || !rent.is_exempt(raw.lamports(), data.len())
+        || hash(&data).to_bytes() != capability_program_id.to_bytes()
         || CapabilityProgramV4::decode(&data).map_err(|_| TradingSbfError::Content)?
             != *capability_program
     {
         return Err(TradingSbfError::Content);
     }
     drop(data);
+    let capability_is_aliased = raw.key == staging.key;
+    if capability_is_aliased {
+        if raw.owner != staging.owner
+            || raw.is_signer != staging.is_signer
+            || raw.is_writable != staging.is_writable
+            || raw.executable != staging.executable
+        {
+            return Err(TradingSbfError::Content);
+        }
+    } else {
+        let expected_staging = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+                &capability_program_id.to_bytes(),
+            ],
+            registry_program.key,
+        )
+        .0;
+        if staging.key != &expected_staging
+            || staging.owner != &system_program::ID
+            || staging.is_signer
+            || staging.is_writable
+            || staging.executable
+            || staging.data_len() != 0
+        {
+            return Err(TradingSbfError::Content);
+        }
+    }
     for (index, current) in accounts.iter().enumerate() {
         if current.key == registry_program.key
             || current.key == rent_sysvar.key
@@ -803,7 +932,9 @@ fn authenticate_common_frame_with_sealed_capability_alias(
                 .any(|(offset, other)| {
                     let right = index.saturating_add(offset).saturating_add(1);
                     current.key == other.key
-                        && !(index == CAPABILITY_RAW && right == CAPABILITY_STAGING)
+                        && !(capability_is_aliased
+                            && index == CAPABILITY_RAW
+                            && right == CAPABILITY_STAGING)
                 })
         {
             return Err(TradingSbfError::Content);

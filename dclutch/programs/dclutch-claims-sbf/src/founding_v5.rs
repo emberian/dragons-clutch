@@ -22,6 +22,7 @@ use dclutch_claims_svm::{
         ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
         ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
     },
+    series_founding_transport_v1::SeriesClaimsFoundingTransportV1,
 };
 use dclutch_custody_contract::{CallerRoleV1, CustodyReplayV1};
 use dclutch_custody_contract::{
@@ -312,16 +313,64 @@ pub fn process(
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
     let decoded = decode_instruction(instruction_data)?;
+    let accounts = FoundingAccounts::parse(account_infos)?;
+    let rent = Rent::get().map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
+    authenticate_privileges(program_id, accounts, &decoded.request)?;
+    authenticate_authority(accounts, &decoded.request, decoded.request_digest)?;
+    process_authenticated(program_id, accounts, decoded, rent)
+}
+
+/// Execute one root-independent recurring-Series founding transport.
+#[inline(never)]
+pub(crate) fn process_series_transport(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    let transient = decode_series_transport_instruction(instruction_data)?;
+    let accounts = FoundingAccounts::parse(account_infos)?;
+    if transient.transport.permit() != accounts.permit.key.to_bytes() {
+        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+    }
+    authenticate_series_transport_authority(accounts, &transient.transport, transient.digest)?;
+    let permit = decode_permit_account(accounts)?;
+    let request = Box::new(
+        transient
+            .transport
+            .reconstruct_v5(
+                permit.claims_intent_digest().to_bytes(),
+                transient.lock_receipt.request_digest,
+                transient.lock_receipt_digest,
+            )
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Instruction)?,
+    );
+    let request_bytes = request.to_bytes();
+    let decoded = DecodedFounding {
+        request,
+        lock_receipt: transient.lock_receipt,
+        projected_receipt: transient.projected_receipt,
+        request_digest: hash(&request_bytes).to_bytes(),
+        lock_receipt_digest: transient.lock_receipt_digest,
+        projected_receipt_digest: transient.projected_receipt_digest,
+    };
+    let rent = Rent::get().map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
+    authenticate_privileges(program_id, accounts, &decoded.request)?;
+    process_authenticated(program_id, accounts, decoded, rent)
+}
+
+#[inline(never)]
+fn process_authenticated(
+    program_id: &Pubkey,
+    accounts: FoundingAccounts<'_, '_>,
+    decoded: DecodedFounding,
+    rent: Rent,
+) -> Result<(), ProgramError> {
     let request = decoded.request;
     let lock_receipt = decoded.lock_receipt;
     let projected_receipt = decoded.projected_receipt;
     let request_digest = decoded.request_digest;
     let lock_receipt_digest = decoded.lock_receipt_digest;
     let projected_receipt_digest = decoded.projected_receipt_digest;
-    let accounts = FoundingAccounts::parse(account_infos)?;
-    let rent = Rent::get().map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
-    authenticate_privileges(program_id, accounts, &request)?;
-    authenticate_authority(accounts, &request, request_digest)?;
     authenticate_releases(accounts, &request)?;
     let custody_context = authenticate_permit_and_projection(
         accounts,
@@ -441,6 +490,53 @@ struct DecodedFounding {
     projected_receipt_digest: [u8; 32],
 }
 
+struct DecodedSeriesTransport {
+    transport: SeriesClaimsFoundingTransportV1,
+    lock_receipt: Box<ProjectedCustodyLockReceiptV1>,
+    projected_receipt: Box<ProjectedCustodyReceiptV1>,
+    digest: [u8; 32],
+    lock_receipt_digest: [u8; 32],
+    projected_receipt_digest: [u8; 32],
+}
+
+#[inline(never)]
+fn decode_series_transport_instruction(
+    instruction_data: &[u8],
+) -> Result<DecodedSeriesTransport, ProgramError> {
+    if instruction_data.len() != CLAIMS_FOUNDING_INSTRUCTION_BYTES_V5 {
+        return Err(ClaimsFoundingSbfErrorV5::Instruction.into());
+    }
+    let request_end =
+        dclutch_claims_svm::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_BYTES_V1;
+    let lock_end = request_end
+        .checked_add(PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1)
+        .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
+    let request_bytes = instruction_data
+        .get(..request_end)
+        .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
+    let lock_bytes = instruction_data
+        .get(request_end..lock_end)
+        .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
+    let projected_bytes = instruction_data
+        .get(lock_end..)
+        .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
+    Ok(DecodedSeriesTransport {
+        transport: SeriesClaimsFoundingTransportV1::decode(request_bytes)
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Instruction)?,
+        lock_receipt: Box::new(
+            ProjectedCustodyLockReceiptV1::decode(lock_bytes)
+                .map_err(|_| ClaimsFoundingSbfErrorV5::Custody)?,
+        ),
+        projected_receipt: Box::new(
+            ProjectedCustodyReceiptV1::decode(projected_bytes)
+                .map_err(|_| ClaimsFoundingSbfErrorV5::Custody)?,
+        ),
+        digest: hash(request_bytes).to_bytes(),
+        lock_receipt_digest: hash(lock_bytes).to_bytes(),
+        projected_receipt_digest: hash(projected_bytes).to_bytes(),
+    })
+}
+
 #[inline(never)]
 fn authenticate_privileges(
     program_id: &Pubkey,
@@ -543,6 +639,52 @@ fn authenticate_authority(
         return Err(ClaimsFoundingSbfErrorV5::Release.into());
     }
     Ok(())
+}
+
+#[inline(never)]
+fn authenticate_series_transport_authority(
+    accounts: FoundingAccounts<'_, '_>,
+    transport: &SeriesClaimsFoundingTransportV1,
+    transport_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    if !accounts.authority.is_signer
+        || accounts.authority.is_writable
+        || accounts.authority.executable
+        || accounts.trading_program.key.to_bytes() != transport.trading_program()
+        || !accounts.trading_program.executable
+    {
+        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+    }
+    let seeds = CallerAuthoritySeedsV1::from_bytes(
+        transport.release_set(),
+        transport.market(),
+        ExecutionRoleV1::Trading,
+        transport.permit(),
+        transport_digest,
+    )
+    .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+    let expected = Pubkey::find_program_address(&seeds.as_slices(), accounts.trading_program.key).0;
+    if accounts.authority.key != &expected {
+        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn decode_permit_account(
+    accounts: FoundingAccounts<'_, '_>,
+) -> Result<SeriesFoundingPermitV1, ProgramError> {
+    if accounts.permit.owner != accounts.core_program.key
+        || accounts.permit.data_len() != SERIES_FOUNDING_PERMIT_BYTES_V1
+    {
+        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+    }
+    let permit_data = accounts
+        .permit
+        .try_borrow_data()
+        .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
+    SeriesFoundingPermitV1::decode(&permit_data)
+        .map_err(|_| ClaimsFoundingSbfErrorV5::Release.into())
 }
 
 #[inline(never)]
@@ -1480,6 +1622,29 @@ mod tests {
         instruction.extend_from_slice(&lock.encode().expect("lock bytes"));
         instruction.extend_from_slice(&projected.encode().expect("projected bytes"));
         assert!(decode_instruction(&instruction).is_ok());
+        let transport = SeriesClaimsFoundingTransportV1::from_canonical_v5(id(90), request)
+            .expect("Series transport")
+            .to_bytes();
+        let mut transport_instruction = Vec::from(transport);
+        transport_instruction.extend_from_slice(&lock.encode().expect("lock bytes"));
+        transport_instruction.extend_from_slice(&projected.encode().expect("projected bytes"));
+        let decoded = decode_series_transport_instruction(&transport_instruction)
+            .expect("transient instruction");
+        let reconstructed = decoded
+            .transport
+            .reconstruct_v5(
+                permit.claims_intent_digest().to_bytes(),
+                decoded.lock_receipt.request_digest,
+                decoded.lock_receipt_digest,
+            )
+            .expect("canonical reconstruction");
+        assert_eq!(reconstructed, request);
+        authenticate_permit_body(
+            permit,
+            &reconstructed,
+            hash(&reconstructed.to_bytes()).to_bytes(),
+        )
+        .expect("permit binds reconstructed request");
         let short = instruction
             .get(..instruction.len().saturating_sub(1))
             .expect("short instruction slice");

@@ -15,7 +15,8 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
+    INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2,
+    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -156,7 +157,12 @@ const _: () = {
     );
 };
 /// Exact normal Custody InitializeReplay child frame.
-pub const SERIES_PREPARE_REPLAY_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 12;
+///
+/// The current FrameSpec includes the distinct rent-refund account at local
+/// coordinate twelve. Keeping this as an alias of the child-owned constant
+/// prevents Series from reintroducing the superseded twelve-account frame.
+pub const SERIES_PREPARE_REPLAY_INITIALIZE_ACCOUNT_COUNT_V3: u16 =
+    INITIALIZE_REPLAY_ACCOUNT_COUNT_V1;
 /// Exact normal Custody OpenVault child frame.
 pub const SERIES_PREPARE_ESCROW_OPEN_ACCOUNT_COUNT_V3: u16 = 16;
 /// Exact normal Custody Transfer child frame.

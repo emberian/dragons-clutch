@@ -5,15 +5,15 @@ import Std.Tactic
 /-!
 # General V3 action-selected TransitionVM programs
 
-The seven settlement-half TransitionVM programs, authored here and emitted.
+All fourteen General TransitionVM programs, authored here and emitted.
 Before this module the General family had **no Lean counterpart at all** for its
 transition artifacts: `crates/dclutch-general-adapter-contract/src/
 transition_artifacts_v3.rs` built `InstructionV3` values imperatively and
 carried its own instruction counts, which is exactly the gap
-`DirectOrdinaryV3.lean` closed for Direct at `73f0793`. The seven collection and
-candidate actions have no program in either place; authoring theirs is what this
-module exists to make possible, and the seven below are the byte-identity gate
-that says the transcription is faithful before anything new is added.
+`DirectOrdinaryV3.lean` closed for Direct at `73f0793`. The collection and
+candidate actions were subsequently authored against the same typed register
+schema; the byte-identity gate says every Rust transcription is faithful to
+this module.
 
 The register schema is typed here and the wire indices are the Rust constants in
 `hot_candidate_v3.rs`. That module remains the name authority for now, and
@@ -81,6 +81,14 @@ def batchRecordPhase : Nat := 20
 def batchStatusCollecting : Nat := 1
 /-- `BatchStatusV1::Closed.tag()`. -/
 def batchStatusClosed : Nat := 2
+/-- `GeneralCandidateLayoutV1::MAGIC` as one little-endian scalar. -/
+def candidateRecordMagicWord : Nat := 3544405840977412932
+/-- `GeneralCandidateLayoutV1::PHASE`. -/
+def candidateRecordPhase : Nat := 22
+/-- `GeneralCandidateStatusV1::Submitted.tag()`. -/
+def candidateStatusSubmitted : Nat := 1
+/-- `GeneralCandidateStatusV1::Considered.tag()`. -/
+def candidateStatusConsidered : Nat := 3
 /-- `GeneralOrderPhaseV1::Placed.tag()`. -/
 def orderPhasePlaced : Nat := 1
 /-- `GeneralOrderLayoutV1::magic_u64()` -- little-endian `DCGORD01`. -/
@@ -475,7 +483,7 @@ def stateKind (action : Action) : Nat :=
   -- Batch envelope, and PlaceOrder creates the ORDER envelope even though its
   -- primary derived state is the batch window it is admitted into.
   | .openBatch | .cancelOrder | .closeBatch => kindBatch
-  | .submitCandidate | .verifyCandidateRow => kindCandidate
+  | .submitCandidate | .verifyCandidateRow | .closeCandidate => kindCandidate
   | .placeOrder | .releaseOrder => kindOrder
   | _ => kindSettlement
 
@@ -541,11 +549,7 @@ def vaultContextOps (action : Action) : List Op :=
     ]
   | _ => []
 
-/-- The action-selected half of each prelude.
-
-Exhaustive by name, and the five still-unauthored actions answer with the
-empty list: they have no authored program, and `authoredActions` below is
-what says so rather than a silently inherited default. -/
+/-- The action-selected half of each prelude, exhaustive by name. -/
 def actionOps (action : Action) : List Op :=
   match action with
   | .consider => [
@@ -659,6 +663,103 @@ def actionOps (action : Action) : List Op :=
       .checkedMulInto (s .scratchA) (s .scratchB) (s .scratchA),
       .loadConst (s .scratchB) 0,
       .scalarEq (s .scratchA) (s .scratchB)
+    ]
+  | .submitCandidate => [
+      .loadConst (s .one) 1,
+      .nonzero (s .primaryCreated),
+      .identityEq (d .primaryBeneficiary) (d .owner),
+      .identityEq (d .candidate) (d .bestVerifiedDigest),
+      .identityEq (d .selectionPolicy) (d .selectionBatch),
+      .identityEq (d .order) (d .selectionProduct),
+      .scalarEq (s .selectionPriceScale) (s .orderMaxLots),
+      .scalarEq (s .zero) (s .outcomeCount),
+      .scalarEq (s .batchPostOrderCount) (s .outcomeCount),
+      .identityEq (d .resultBeneficiaryObservation) (d .candidate),
+      .identityEq (d .beneficiary) (d .selectionBatch),
+      .scalarEq (s .verifyPostOrderCount) (s .outcomeCount),
+      .scalarEq (s .verifyPostPage) (s .candidatePageCount),
+      .loadConst (s .candidatePostStatus) candidateStatusSubmitted,
+      .scalarEq (s .candidateStatusObservation) (s .candidatePostStatus),
+      .nonzero (s .selectionBestCandidateCoordinate),
+      .nonzero (s .candidatePageRevision),
+      .nonzero (s .candidateRowCount),
+      .nonzero (s .candidateRewardRate),
+      .scalarLe (s .candidatePageCount) (s .candidateRowCount),
+      .loadConst (s .scratchA) batchStatusClosed,
+      .scalarEq (s .batchStatusObservation) (s .scratchA),
+      .scalarLe (s .batchCollectionCloseSlot) (s .currentSlot),
+      .scalarLt (s .currentSlot) (s .batchSettlementCloseSlot),
+      .scalarEq (s .candidateSubmittedSlot) (s .currentSlot),
+      .incrementInto (s .candidateRowCount) (s .candidatePostVerificationRemaining),
+      .checkedMulInto (s .candidatePostVerificationRemaining) (s .candidateRewardRate)
+        (s .candidatePostVerificationRemaining),
+      .copyScalar (s .candidateRewardRate) (s .candidatePostCleanupRemaining),
+      .scalarEq (s .candidateVerificationRemainingObservation)
+        (s .candidatePostVerificationRemaining),
+      .scalarEq (s .candidateCleanupRemainingObservation)
+        (s .candidatePostCleanupRemaining),
+      .checkedAddInto (s .candidatePostVerificationRemaining)
+        (s .candidatePostCleanupRemaining) (s .scratchA),
+      .checkedAddInto (s .scratchA) (s .primaryRentPrincipal) (s .scratchB),
+      .loadConst (s .verifyRevisionObservation) candidateRecordMagicWord,
+      .loadConst (s .verifyPostRevision) candidateRecordPhase
+    ]
+  | .verifyCandidateRow => [
+      -- The Candidate envelope is authenticated by the common prelude and
+      -- Lifecycle V5. Verification may advance only the Submitted phase.
+      .loadConst (s .one) 1,
+      .loadConst (s .scratchA) candidateStatusSubmitted,
+      .scalarEq (s .candidateStatusObservation) (s .scratchA),
+      -- Request subject and optimistic coordinates must name the exact
+      -- authenticated Candidate and persisted verifier cursor. The request
+      -- profile deliberately puts expected_revision at 94: scalar zero is
+      -- ACTION and is overwritten before this program executes.
+      .identityEq (d .parentRequestDigest) (d .candidate),
+      .scalarEq (s .rootExpectedRevision) (s .verifyRevisionObservation),
+      .incrementInto (s .verifyRevisionObservation) (s .verifyPostRevision),
+      .scalarEq (s .completeSetMove) (s .verifyPageObservation),
+      .scalarEq (s .claimsAffineActive) (s .verifyRowObservation),
+      -- One row either continues the current globally grouped order or starts
+      -- exactly one new one; it cannot delete or skip an order coordinate.
+      .scalarLe (s .verifyOrderCountObservation) (s .verifyPostOrderCount),
+      .incrementInto (s .verifyOrderCountObservation) (s .scratchA),
+      .scalarLe (s .verifyPostOrderCount) (s .scratchA),
+      -- Lifecycle V5 uses VERIFY_TERMINAL == 1 as the sole raw-certificate
+      -- creation guard. Pinning this projection to {0,1} makes every other
+      -- value refuse instead of accidentally behaving as nonterminal.
+      .scalarLe (s .verifyTerminal) (s .one)
+    ]
+  | .closeCandidate => [
+      .loadConst (s .one) 1,
+      -- The request, Candidate body, Batch evidence and lifecycle beneficiary
+      -- all name one immutable submission and its solver.
+      .identityEq (d .parentRequestDigest) (d .candidate),
+      .identityEq (d .primaryBeneficiary) (d .owner),
+      .identityEq (d .rentCredit) (d .owner),
+      -- Physical capitalization, not a record-only promise.
+      .nonzero (s .candidateRewardRate),
+      .scalarEq (s .candidateCleanupRemainingObservation) (s .candidateRewardRate),
+      .checkedAddInto (s .candidateVerificationRemainingObservation)
+        (s .candidateCleanupRemainingObservation) (s .scratchA),
+      .checkedAddInto (s .scratchA) (s .primaryRentPrincipal) (s .scratchB),
+      .scalarEq (s .observedPositionLamports) (s .scratchB),
+      -- Permissionless close is legal only after consideration OR after the
+      -- joined Batch's settlement window. Each distance is clamped to a bit;
+      -- their product must be zero, which is the exact disjunction.
+      .loadConst (s .scratchA) candidateStatusConsidered,
+      .nonzero (s .candidateStatusObservation),
+      .scalarLe (s .candidateStatusObservation) (s .scratchA),
+      .minInto (s .candidateStatusObservation) (s .scratchA) (s .scratchB),
+      .subInto (s .scratchA) (s .scratchB) (s .scratchB),
+      .minInto (s .scratchB) (s .one) (s .scratchB),
+      .minInto (s .currentSlot) (s .batchSettlementCloseSlot) (s .scratchA),
+      .subInto (s .batchSettlementCloseSlot) (s .scratchA) (s .scratchA),
+      .minInto (s .scratchA) (s .one) (s .scratchA),
+      .checkedMulInto (s .scratchA) (s .scratchB) (s .scratchA),
+      .loadConst (s .scratchB) 0,
+      .scalarEq (s .scratchA) (s .scratchB),
+      .loadConst (s .scratchA) batchStatusClosed,
+      .scalarEq (s .batchStatusObservation) (s .scratchA)
     ]
   | .placeOrder => [
       -- The second derived state -- the order record this admission CREATES
@@ -801,10 +902,10 @@ def actionOps (action : Action) : List Op :=
       -- The window gate, from the order alone. PlaceOrder pins the signed
       -- valid_until_slot to the batch's settlement close EXACTLY (the recorded
       -- choice that makes this action batch-free), so strictly-after-valid
-      -- is strictly-after-the-window, one slot conservative, and no batch
-      -- account enters the frame. A maker can therefore ALWAYS reach this
-      -- refund: the gate is a constant of the record they signed.
-      .scalarLt (s .orderValidUntilSlot) (s .currentSlot),
+      -- is the batch window's inclusive release boundary, and no batch account
+      -- enters the frame. A maker can therefore ALWAYS reach this refund: the
+      -- gate is a constant of the record they signed.
+      .scalarLe (s .orderValidUntilSlot) (s .currentSlot),
       -- The successor's released slot is now, and now is not before admission.
       .copyScalar (s .currentSlot) (s .orderPostReleasedSlot),
       .scalarLe (s .orderAdmittedSlotObservation) (s .currentSlot),
@@ -856,8 +957,6 @@ def actionOps (action : Action) : List Op :=
       .identityEq (d .rentCredit) (d .owner),
       .identityEq (d .rentRefund) (d .owner)
     ]
-  | _ => []
-
 /-- The Product-owned item body, folded once per authenticated outcome. -/
 def itemOps (action : Action) : List Op :=
   .scalarLt (t .outcome) (s .outcomeCount) ::
@@ -900,20 +999,11 @@ def program (action : Action) : Program := {
   epilogue := []
 }
 
-/-- The actions whose transition program is authored here, in tag order.
-
-`openBatch` and `closeBatch` are the root-writing pair of GEN-SEVEN: the two
-that advance the `GeneralRootV2` tail and route to no Claims or Custody child.
-The remaining five keep their place in `unauthoredActions` until each one's
-complete quadruple lands. -/
+/-- All fifteen actions, in tag order. -/
 def authoredActions : List Action := [
   .consider, .freeze, .initializeSettlement, .collect, .materialize, .distribute, .close,
-  .openBatch, .placeOrder, .cancelOrder, .closeBatch, .releaseOrder
-]
-
-/-- The two that are not, and whose quadruple is the open work. -/
-def unauthoredActions : List Action := [
-  .submitCandidate, .verifyCandidateRow
+  .openBatch, .placeOrder, .cancelOrder, .closeBatch, .submitCandidate, .verifyCandidateRow,
+  .releaseOrder, .closeCandidate
 ]
 
 def programs : List Program := authoredActions.map program
@@ -945,7 +1035,8 @@ theorem authored_section_counts :
           ((program action).prelude.length, (program action).itemBody.length,
             (program action).epilogue.length)) =
       [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
-        (26, 1, 0), (45, 4, 0), (49, 4, 0), (27, 1, 0), (42, 4, 0)] := by
+        (26, 1, 0), (45, 4, 0), (49, 4, 0), (27, 1, 0), (45, 1, 0), (23, 1, 0),
+        (42, 4, 0), (34, 1, 0)] := by
   native_decide
 
 /-- No two authored actions emit the same program. A shared prelude plus an
@@ -953,17 +1044,6 @@ empty action half would produce two identical artifacts with two identities, and
 the digest is what the descriptor and the capability seal name. -/
 theorem authored_programs_are_pairwise_distinct :
     programs.Nodup := by native_decide
-
-/-- The unauthored actions carry no program, and this is what says so.
-
-`program` is total, so it answers for all fourteen; what it must never do is
-answer with something an emitter could mistake for an artifact. An unauthored
-action gets the shared prelude and the item bound alone -- no action conjunct at
-all -- and the emitter below never asks for one. -/
-theorem no_unauthored_action_carries_an_action_conjunct :
-    unauthoredActions.all (fun action => actionOps action == []) = true ∧
-      unauthoredActions.all (fun action => (itemOps action).length == 1) = true := by
-  native_decide
 
 /-- The item space is addressable only from the item body -- `wellFormed` above
 requires it, and this states the consequence that matters: every prelude
@@ -990,7 +1070,8 @@ def encodedWidth (action : Action) : Nat := (Codec.encodeProgram (program action
 
 theorem authored_encoded_widths :
     authoredActions.map encodedWidth =
-      [416, 464, 584, 632, 440, 632, 824, 680, 1208, 1304, 704, 1136] := by
+      [416, 464, 584, 632, 440, 632, 824, 680, 1208, 1304, 704, 1136, 608, 1136,
+        872] := by
   native_decide
 
 -- ---------------------------------------------------------------------------
@@ -1016,6 +1097,86 @@ private def commonBank : List (Nat × Nat) := [
 private def commonIdentityBank : List (Nat × Nat) := [
   (IdentitySlot.index .primaryOwner, 9), (IdentitySlot.index .tradingProgram, 9)
 ]
+
+-- ---------------------------------------------------------------------------
+-- VerifyCandidateRow, executed
+-- ---------------------------------------------------------------------------
+
+/-- One authenticated VerifyCandidateRow bank. The arguments expose every
+request/status join plus the terminal and projected order successor, so each
+hostile theorem below changes exactly one fact. -/
+private def verifyCandidateRowBank
+    (status subject expectedRevision expectedPage expectedRow terminal postOrderCount : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .candidateStatusObservation, status),
+      (ScalarSlot.index .rootExpectedRevision, expectedRevision),
+      (ScalarSlot.index .verifyRevisionObservation, 5),
+      (ScalarSlot.index .verifyPostRevision, 6),
+      (ScalarSlot.index .completeSetMove, expectedPage),
+      (ScalarSlot.index .verifyPageObservation, 2),
+      (ScalarSlot.index .claimsAffineActive, expectedRow),
+      (ScalarSlot.index .verifyRowObservation, 3),
+      (ScalarSlot.index .verifyOrderCountObservation, 4),
+      (ScalarSlot.index .verifyPostOrderCount, postOrderCount),
+      (ScalarSlot.index .verifyTerminal, terminal)
+    ]) (commonIdentityBank ++ [
+      (IdentitySlot.index .parentRequestDigest, subject),
+      (IdentitySlot.index .candidate, 7)
+    ])
+
+/-- Both nonterminal and terminal rows accept, derive revision +1, and permit
+the distinct-order count to stay put or advance by exactly one. Lifecycle V5,
+not this transition, conditionally creates the raw certificate on the latter. -/
+theorem verify_candidate_row_accepts_exact_current_coordinates :
+    ((program .verifyCandidateRow).execute 1
+        (verifyCandidateRowBank candidateStatusSubmitted 7 5 2 3 0 4)).isSome = true ∧
+      ((program .verifyCandidateRow).execute 1
+        (verifyCandidateRowBank candidateStatusSubmitted 7 5 2 3 1 5)).map (fun state =>
+          (state.scalars[ScalarSlot.index .verifyPostRevision]!,
+            state.scalars[ScalarSlot.index .verifyPostOrderCount]!,
+            state.scalars[ScalarSlot.index .verifyTerminal]!)) = some (6, 5, 1) := by
+  native_decide
+
+/-- A substituted optimistic revision cannot consume the cursor. -/
+theorem verify_candidate_row_refuses_a_substituted_revision :
+    (program .verifyCandidateRow).execute 1
+      (verifyCandidateRowBank candidateStatusSubmitted 7 4 2 3 0 4) = none := by
+  native_decide
+
+/-- A substituted page coordinate cannot select another immutable Page. -/
+theorem verify_candidate_row_refuses_a_substituted_page :
+    (program .verifyCandidateRow).execute 1
+      (verifyCandidateRowBank candidateStatusSubmitted 7 5 1 3 0 4) = none := by
+  native_decide
+
+/-- A substituted row coordinate cannot select another execution row. -/
+theorem verify_candidate_row_refuses_a_substituted_row :
+    (program .verifyCandidateRow).execute 1
+      (verifyCandidateRowBank candidateStatusSubmitted 7 5 2 2 0 4) = none := by
+  native_decide
+
+/-- The lifecycle guard's source is canonical boolean state, never an arbitrary
+nonzero terminal marker. -/
+theorem verify_candidate_row_refuses_a_substituted_terminal :
+    (program .verifyCandidateRow).execute 1
+      (verifyCandidateRowBank candidateStatusSubmitted 7 5 2 3 2 5) = none := by
+  native_decide
+
+/-- One row cannot erase an observed order or skip an order coordinate. -/
+theorem verify_candidate_row_refuses_a_nonlocal_order_successor :
+    (program .verifyCandidateRow).execute 1
+        (verifyCandidateRowBank candidateStatusSubmitted 7 5 2 3 0 3) = none ∧
+      (program .verifyCandidateRow).execute 1
+        (verifyCandidateRowBank candidateStatusSubmitted 7 5 2 3 0 6) = none := by
+  native_decide
+
+/-- Only the authenticated Submitted Candidate named by the request advances. -/
+theorem verify_candidate_row_refuses_wrong_status_or_subject :
+    (program .verifyCandidateRow).execute 1
+        (verifyCandidateRowBank 0 7 5 2 3 0 4) = none ∧
+      (program .verifyCandidateRow).execute 1
+        (verifyCandidateRowBank candidateStatusSubmitted 8 5 2 3 0 4) = none := by
+  native_decide
 
 /-- An OpenBatch bank whose optimistic revision matches the observed root. -/
 private def openBatchBank (expectedRevision : Nat) : State :=
@@ -1275,10 +1436,15 @@ theorem release_order_accepts_and_returns_the_observed_residual :
             state.scalars[ScalarSlot.index .settlementPostPositionRevision]!]) =
       some [orderPhaseReleased, 1000, 40, 42, 9, 12, 5] := by native_decide
 
-/-- At or before the signed expiry the release refuses: the maker's window
-promise holds to its last slot. -/
+/-- The signed expiry is the inclusive release boundary, exactly as the Batch
+semantic owner defines it. -/
+theorem release_order_accepts_at_its_signed_expiry :
+    (program .releaseOrder).execute 1 (releaseOrderBank orderPhasePlaced 500 40 3) |>.isSome := by
+  native_decide
+
+/-- One slot before the signed expiry remains inside the maker's window. -/
 theorem release_order_refuses_before_its_signed_expiry :
-    (program .releaseOrder).execute 1 (releaseOrderBank orderPhasePlaced 500 40 3) = none := by
+    (program .releaseOrder).execute 1 (releaseOrderBank orderPhasePlaced 499 40 3) = none := by
   native_decide
 
 /-- A released order does not release again, and a vacant state (phase zero)

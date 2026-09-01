@@ -91,7 +91,8 @@
 
 use core::convert::TryInto;
 
-use crate::claim_check_v1::{ClaimCheckErrorV1, ClaimCheckResultV1};
+use crate::claim_check_request_v1::ClaimCheckActionV1;
+use crate::claim_check_v1::{CLAIM_CHECK_WIRE_VERSION_V1, ClaimCheckErrorV1, ClaimCheckResultV1};
 
 /// Exact width of one durable fractional claim-check record.
 pub const FRACTIONAL_CLAIM_CHECK_BYTES_V1: usize = 320;
@@ -104,6 +105,116 @@ pub const FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1: [u8; 8] = *b"DCLTFCC1";
 
 /// Fractional claim-check redemption request magic.
 pub const FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1: [u8; 8] = *b"DCLTFCR1";
+
+/// Exact width of one fractional claim-check redemption request.
+pub const FRACTIONAL_REDEEM_CLAIM_CHECK_REQUEST_BYTES_V1: usize = 96;
+
+const REDEEM_REQUEST_VERSION_OFFSET: usize = 8;
+const REDEEM_REQUEST_ACTION_OFFSET: usize = 10;
+const REDEEM_REQUEST_RESERVED_HEADER_OFFSET: usize = 11;
+const REDEEM_REQUEST_RESERVED_HEADER_BYTES: usize = 5;
+const REDEEM_REQUEST_AGGREGATE_OFFSET: usize = 16;
+const REDEEM_REQUEST_SHARD_MINT_OFFSET: usize = 48;
+const REDEEM_REQUEST_SHARD_ATOMS_OFFSET: usize = 80;
+const REDEEM_REQUEST_RESERVED_BODY_OFFSET: usize = 88;
+const REDEEM_REQUEST_RESERVED_BODY_BYTES: usize = 8;
+
+/// Holder-signed intent to burn fractional shards for exact collateral.
+///
+/// The holder and payout destination are deliberately absent. The holder is
+/// the signer, and both token accounts in the fixed redemption frame must be
+/// owned by that same signer. The two identities bind the record PDA; the
+/// amount binds the burn intent. No field repeats facts the accounts prove.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalRedeemClaimCheckRequestV1 {
+    /// Claims aggregate whose fractional record is being paid down.
+    pub aggregate: [u8; 32],
+    /// Shard Mint identifying both the record and the instrument burned.
+    pub shard_mint: [u8; 32],
+    /// Maximum shard atoms presented for this redemption.
+    pub requested_shard_atoms: u64,
+}
+
+impl FractionalRedeemClaimCheckRequestV1 {
+    /// Construct one canonical fractional redemption request.
+    pub fn new(self) -> ClaimCheckResultV1<Self> {
+        self.seeds()?;
+        if self.requested_shard_atoms == 0 {
+            return Err(ClaimCheckErrorV1::InvalidEntitlement);
+        }
+        Ok(self)
+    }
+
+    /// Hostile-decode one exact fixed-width fractional redemption request.
+    pub fn decode(input: &[u8]) -> ClaimCheckResultV1<Self> {
+        exact_width(input, FRACTIONAL_REDEEM_CLAIM_CHECK_REQUEST_BYTES_V1)?;
+        exact(input, 0, &FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1)?;
+        if read_u16(input, REDEEM_REQUEST_VERSION_OFFSET)? != CLAIM_CHECK_WIRE_VERSION_V1 {
+            return Err(ClaimCheckErrorV1::InvalidHeader);
+        }
+        if read_byte(input, REDEEM_REQUEST_ACTION_OFFSET)?
+            != ClaimCheckActionV1::FractionalRedeem as u8
+        {
+            return Err(ClaimCheckErrorV1::UnknownTag);
+        }
+        require_zero(
+            input,
+            REDEEM_REQUEST_RESERVED_HEADER_OFFSET,
+            REDEEM_REQUEST_RESERVED_HEADER_BYTES,
+        )?;
+        require_zero(
+            input,
+            REDEEM_REQUEST_RESERVED_BODY_OFFSET,
+            REDEEM_REQUEST_RESERVED_BODY_BYTES,
+        )?;
+        Self {
+            aggregate: read_array(input, REDEEM_REQUEST_AGGREGATE_OFFSET)?,
+            shard_mint: read_array(input, REDEEM_REQUEST_SHARD_MINT_OFFSET)?,
+            requested_shard_atoms: read_u64(input, REDEEM_REQUEST_SHARD_ATOMS_OFFSET)?,
+        }
+        .new()
+    }
+
+    /// Encode one exact canonical fractional redemption request.
+    pub fn to_bytes(
+        self,
+    ) -> ClaimCheckResultV1<[u8; FRACTIONAL_REDEEM_CLAIM_CHECK_REQUEST_BYTES_V1]> {
+        self.new()?;
+        let mut output = [0; FRACTIONAL_REDEEM_CLAIM_CHECK_REQUEST_BYTES_V1];
+        write(&mut output, 0, &FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1)?;
+        write(
+            &mut output,
+            REDEEM_REQUEST_VERSION_OFFSET,
+            &CLAIM_CHECK_WIRE_VERSION_V1.to_le_bytes(),
+        )?;
+        write(
+            &mut output,
+            REDEEM_REQUEST_ACTION_OFFSET,
+            &[ClaimCheckActionV1::FractionalRedeem as u8],
+        )?;
+        write(
+            &mut output,
+            REDEEM_REQUEST_AGGREGATE_OFFSET,
+            &self.aggregate,
+        )?;
+        write(
+            &mut output,
+            REDEEM_REQUEST_SHARD_MINT_OFFSET,
+            &self.shard_mint,
+        )?;
+        write(
+            &mut output,
+            REDEEM_REQUEST_SHARD_ATOMS_OFFSET,
+            &self.requested_shard_atoms.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+
+    /// Return the exact record-PDA coordinates this request binds.
+    pub fn seeds(self) -> ClaimCheckResultV1<FractionalClaimCheckSeedsV1> {
+        FractionalClaimCheckSeedsV1::new(self.aggregate, self.shard_mint)
+    }
+}
 
 /// Persisted fractional-record kind discriminant.
 ///
@@ -1236,6 +1347,110 @@ mod tests {
         }
         .new()
         .expect("record")
+    }
+
+    fn redeem_request() -> FractionalRedeemClaimCheckRequestV1 {
+        FractionalRedeemClaimCheckRequestV1 {
+            aggregate: [1; 32],
+            shard_mint: [2; 32],
+            requested_shard_atoms: 7_019,
+        }
+        .new()
+        .expect("request")
+    }
+
+    #[test]
+    fn redemption_request_round_trips_at_one_exact_width_and_classifies() {
+        let value = redeem_request();
+        let bytes = value.to_bytes().expect("bytes");
+        assert_eq!(bytes.len(), FRACTIONAL_REDEEM_CLAIM_CHECK_REQUEST_BYTES_V1);
+        assert_eq!(
+            FractionalRedeemClaimCheckRequestV1::decode(&bytes),
+            Ok(value)
+        );
+        assert_eq!(
+            crate::claim_check_request_v1::claim_check_action_of(&bytes),
+            Ok(ClaimCheckActionV1::FractionalRedeem)
+        );
+        assert_eq!(
+            value.seeds().expect("seeds").as_slices(),
+            [FRACTIONAL_CLAIM_CHECK_SEED_V1, &[1; 32], &[2; 32]]
+        );
+    }
+
+    #[test]
+    fn redemption_request_hostile_header_and_widths_are_refused() {
+        let bytes = redeem_request().to_bytes().expect("bytes");
+        assert_eq!(
+            FractionalRedeemClaimCheckRequestV1::decode(
+                bytes.get(..bytes.len() - 1).expect("short")
+            ),
+            Err(ClaimCheckErrorV1::InvalidLength)
+        );
+        let mut long = [0_u8; FRACTIONAL_REDEEM_CLAIM_CHECK_REQUEST_BYTES_V1 + 1];
+        long.get_mut(..bytes.len())
+            .expect("prefix")
+            .copy_from_slice(&bytes);
+        assert_eq!(
+            FractionalRedeemClaimCheckRequestV1::decode(&long),
+            Err(ClaimCheckErrorV1::InvalidLength)
+        );
+        for (offset, replacement, error) in [
+            (0, b'X', ClaimCheckErrorV1::InvalidHeader),
+            (
+                REDEEM_REQUEST_VERSION_OFFSET,
+                2,
+                ClaimCheckErrorV1::InvalidHeader,
+            ),
+            (
+                REDEEM_REQUEST_ACTION_OFFSET,
+                ClaimCheckActionV1::Redeem as u8,
+                ClaimCheckErrorV1::UnknownTag,
+            ),
+        ] {
+            let mut forged = bytes;
+            forged[offset] = replacement;
+            assert_eq!(
+                FractionalRedeemClaimCheckRequestV1::decode(&forged),
+                Err(error)
+            );
+        }
+    }
+
+    #[test]
+    fn redemption_request_refuses_every_reserved_byte_and_empty_intent() {
+        for offset in REDEEM_REQUEST_RESERVED_HEADER_OFFSET
+            ..REDEEM_REQUEST_RESERVED_HEADER_OFFSET + REDEEM_REQUEST_RESERVED_HEADER_BYTES
+        {
+            let mut bytes = redeem_request().to_bytes().expect("bytes");
+            bytes[offset] = 1;
+            assert_eq!(
+                FractionalRedeemClaimCheckRequestV1::decode(&bytes),
+                Err(ClaimCheckErrorV1::NonCanonical)
+            );
+        }
+        for offset in
+            REDEEM_REQUEST_RESERVED_BODY_OFFSET..FRACTIONAL_REDEEM_CLAIM_CHECK_REQUEST_BYTES_V1
+        {
+            let mut bytes = redeem_request().to_bytes().expect("bytes");
+            bytes[offset] = 1;
+            assert_eq!(
+                FractionalRedeemClaimCheckRequestV1::decode(&bytes),
+                Err(ClaimCheckErrorV1::NonCanonical)
+            );
+        }
+        for mutate in [
+            |value: &mut FractionalRedeemClaimCheckRequestV1| value.aggregate = [0; 32],
+            |value: &mut FractionalRedeemClaimCheckRequestV1| value.shard_mint = [0; 32],
+            |value: &mut FractionalRedeemClaimCheckRequestV1| value.shard_mint = value.aggregate,
+        ] {
+            let mut value = redeem_request();
+            mutate(&mut value);
+            assert_eq!(value.new(), Err(ClaimCheckErrorV1::InvalidIdentity));
+        }
+        let mut empty = redeem_request();
+        empty.requested_shard_atoms = 0;
+        assert_eq!(empty.new(), Err(ClaimCheckErrorV1::InvalidEntitlement));
     }
 
     #[test]

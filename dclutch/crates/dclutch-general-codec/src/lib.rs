@@ -102,6 +102,8 @@ pub enum Action {
     VerifyCandidateRow = generated_general_controller::ACTION_VERIFY_CANDIDATE_ROW,
     /// Return one order's residual escrow after its batch's window ends.
     ReleaseOrder = generated_general_controller::ACTION_RELEASE_ORDER,
+    /// Close one considered or expired candidate and settle its work escrow.
+    CloseCandidate = generated_general_controller::ACTION_CLOSE_CANDIDATE,
 }
 
 impl Action {
@@ -125,6 +127,7 @@ impl Action {
                 Ok(Self::VerifyCandidateRow)
             }
             generated_general_controller::ACTION_RELEASE_ORDER => Ok(Self::ReleaseOrder),
+            generated_general_controller::ACTION_CLOSE_CANDIDATE => Ok(Self::CloseCandidate),
             _ => Err(Error::UnknownTag),
         }
     }

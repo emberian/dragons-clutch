@@ -3,12 +3,10 @@
 What you hold when you hold a dClutch claim, what it can and cannot do to
 you, and how to read what the protocol tells you.
 
-Seven protocol programs are deployed on Solana devnet, and one devnet market is
-open for trading — the first one on any dClutch deployment whose trading was
-switched on before its deadline. Its collateral is a devnet test token, so
-nothing here is bought with money. This guide describes the trading path that
-market runs, which is the same path exercised on local test chains and in test
-harnesses. No trade has been made on it yet.
+This guide describes the current-source trading path exercised on local test
+chains and devnet. Devnet assets and executions are public-test evidence, not
+mainnet evidence. Treat a live deployment as a dClutch deployment only when its
+checked release manifest authenticates the programs and profile it names.
 
 ## What a claim is
 
@@ -61,20 +59,26 @@ worked out from the market and your own wallet, so nobody assigns you one
 and nobody can hand you someone else's — the addresses are yours before
 either account exists. Joining is what creates them.
 
-Today you join from the command line:
+Today you join from the public command line. Set each path to an absolute path:
 
 ```sh
-dclutch join --plan <market plan> --campaign-evidence <market evidence> \
-  --position-owner <your address> --position-owner-keypair <your key> \
-  --output <where to write the report>
+dclutch --rpc "$DEVNET_RPC" \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --bootstrap-bin "$SUCCESSOR" join \
+  --plan "$PLAN" \
+  --campaign-evidence "$CAMPAIGN_EVIDENCE" \
+  --keypair "$POSITION_KEYPAIR" \
+  --output "$ADMISSION_REPORT"
 ```
 
 Two things worth knowing before you run it.
 
-**It does not send anything unless you tell it to.** Without `--execute` it
-preflights: it reads the market, works out your addresses, builds the exact
-transaction, and writes a report — then stops. Run it, read what it says it
-will do, and only then run it again with `--execute`.
+**It does not send anything unless you tell it to.** Without `--execute` the
+Rust admission child reads finalized state, plans the exact transaction, and
+writes the durable report — then stops. Inspect that report, then rerun the
+same command with `--execute`. If execution is interrupted, rerun with the same
+inputs and report path; the child resumes that operation rather than inventing
+a replacement.
 
 **You need the market's own documents.** The plan and campaign evidence
 describe the market you are joining; they are published alongside a public
@@ -83,10 +87,16 @@ market by address alone, and that is deliberate: what you sign should be
 checkable against something the market published, not assembled from a
 name.
 
-Against a devnet market you also have to say so out loud, by passing
-`--i-mean-devnet` with that cluster's genesis hash. A local chain needs no
-such acknowledgement, and passing one anyway is refused rather than
-guessed at.
+The key file is also the identity: `dclutch` derives the Position owner from
+`$POSITION_KEYPAIR`; you do not type a separate address. When you started from
+the web app, verify that the derived public key is the connected address whose
+Position the page displayed.
+
+Against devnet you must pass the full `--i-mean-devnet` value shown above. An
+owned validator must use the exact credential-free
+`http://127.0.0.1:PORT/` endpoint form and omit the acknowledgement. A
+loopback host in any other form is refused as a spelling error; the CLI does
+not guess which chain you meant.
 
 You can fund the Position as you join, with
 `--collateral-source-owner-keypair`, `--collateral-source-account` and
@@ -98,10 +108,9 @@ start.
 By default the fee payer is you. Name a different one with
 `--fee-payer-keypair` if somebody else is paying.
 
-The web app can show you where you stand in a market — whether you have a
-Position, what it holds, what joining would create — but it cannot build
-the admission transaction for you yet. That is a gap we intend to close,
-not a rule.
+The web app shows whether the connected address has a Position, what it holds,
+what joining creates, and the exact command for its selected endpoint.
+Admission itself currently runs through the CLI, not a browser wallet request.
 
 ## How the market resolves
 

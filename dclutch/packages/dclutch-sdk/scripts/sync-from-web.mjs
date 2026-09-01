@@ -43,6 +43,8 @@ const SDK_OWNED_REEXPORTS = new Set([
   'lib/founding/principalCapacity.ts',
   'lib/marketDiscovery.ts',
   'lib/rationalTerminalChainV4.ts',
+  'lib/directOfferAuthoring.ts',
+  'lib/directMakerReplay.ts',
   // The board's transport is SDK-owned and takes its URL as an argument; the
   // web file is the deployment half, reading the one `NEXT_PUBLIC_*` variable
   // that survives a static export. An SDK that reached for `process.env` would
@@ -60,7 +62,6 @@ const DIVERGED = new Set([
   // its route-admission boundary; the UI copy intentionally remains lighter.
   'lib/operatorSurface.ts',
   'lib/operatorSurface.test.ts',
-  'lib/generalPlanV5.test.ts',
   'scripts/abi-coverage.mjs',
   'scripts/abi-coverage.baseline.json',
 ]);

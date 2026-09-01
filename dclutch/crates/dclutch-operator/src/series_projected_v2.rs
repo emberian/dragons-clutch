@@ -19,7 +19,10 @@ use dclutch_series_v3_kernel::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
 };
 use dclutch_trading_sbf::{
-    hot_v3::{HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3},
+    hot_v3::{
+        HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3,
+        child_request_digest_v4, child_request_digest_v5,
+    },
     projected_market_v2::{
         PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2, ProjectedMarketExecutionV2,
         encode_projected_market_execution_v2,
@@ -29,7 +32,7 @@ use dclutch_trading_sbf::{
     },
 };
 use solana_program::{
-    hash::{hash, hashv},
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
@@ -507,22 +510,19 @@ fn route_commitments(
         let borrowed_count = program
             .borrowed_range_count_for_route(route_index)
             .map_err(|_| SeriesProjectedOperatorErrorV2::Artifact)?;
-        let mut request_parts = Vec::with_capacity(usize::from(borrowed_count) + 1);
-        request_parts.push(template);
-        let mut borrowed = 0_u16;
-        while borrowed < borrowed_count {
-            let range = program
-                .resolved_borrowed_range(route_index, borrowed, &scalars)
-                .map_err(|_| SeriesProjectedOperatorErrorV2::Artifact)?;
-            request_parts.push(
-                range
+        let base_request_digest = if borrowed_count == 0 {
+            child_request_digest_v4(template, None)
+                .map_err(|_| SeriesProjectedOperatorErrorV2::Artifact)?
+        } else {
+            child_request_digest_v5(template, borrowed_count, |borrowed| {
+                program
+                    .resolved_borrowed_range(route_index, borrowed, &scalars)
+                    .ok()?
                     .slice(family_request)
-                    .map_err(|_| SeriesProjectedOperatorErrorV2::Artifact)?,
-            );
-            borrowed = borrowed
-                .checked_add(1)
-                .ok_or(SeriesProjectedOperatorErrorV2::Artifact)?;
-        }
+                    .ok()
+            })
+            .map_err(|_| SeriesProjectedOperatorErrorV2::Artifact)?
+        };
         let dependency_count = usize::from(route.receipt_dependency_count());
         if dependency_count > SERIES_PROJECTED_MAX_RECEIPT_DEPENDENCIES_V2 {
             return Err(SeriesProjectedOperatorErrorV2::Artifact);
@@ -549,7 +549,7 @@ fn route_commitments(
             .get_mut(usize::from(route_index))
             .ok_or(SeriesProjectedOperatorErrorV2::Artifact)? = SeriesProjectedRouteCommitmentV2 {
             role: route.role(),
-            base_request_digest: hashv(&request_parts).to_bytes(),
+            base_request_digest,
             receipt_dependencies: dependencies,
         };
         route_index = route_index
@@ -562,6 +562,7 @@ fn route_commitments(
 #[cfg(test)]
 mod tests {
     use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+    use dclutch_claims_svm::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
     use dclutch_core_contract::ContentId;
     use dclutch_series_v3_kernel::request::encode_series_action_header_v3;
     use dclutch_trading_sbf::series::{
@@ -704,7 +705,7 @@ mod tests {
         let lock = [0x11; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
         let core = [0x22; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
         let realize = [0x33; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let claims = [0x44; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3];
+        let claims = claims_request();
         let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
         let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
         let mut scratch = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
@@ -723,6 +724,53 @@ mod tests {
         )
         .expect("canonical Series DCE5");
         output
+    }
+
+    fn claims_request() -> [u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3] {
+        ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+            release_set: [1; 32],
+            market: [2; 32],
+            product_record_digest: [3; 32],
+            product_instance_id: [4; 32],
+            linked_basis_record_digest: [5; 32],
+            semantic_basis_id: [6; 32],
+            founder: [7; 32],
+            founding_intent_digest: [40; 32],
+            aggregate: [9; 32],
+            position: [10; 32],
+            admission: [11; 32],
+            funding_source: [12; 32],
+            hoard: [13; 32],
+            custody_replay: [14; 32],
+            rent_credit: [15; 32],
+            rent_program: [16; 32],
+            claims_program: [17; 32],
+            trading_program: [18; 32],
+            custody_request_digest: [41; 32],
+            custody_receipt_digest: [42; 32],
+            generation: 8,
+            claim_count: 3,
+            quantity: 3,
+            basis_scale: 3,
+            pre_source_amount: 9,
+            post_source_amount: 0,
+            pre_hoard_amount: 0,
+            post_hoard_amount: 9,
+            pre_custody_revision: 2,
+            post_custody_revision: 3,
+            aggregate_rent_principal: 30,
+            position_rent_principal: 31,
+            admission_rent_principal: 32,
+            observed_aggregate_lamports: 33,
+            observed_position_lamports: 34,
+            observed_admission_lamports: 35,
+            pre_aggregate_revision: 0,
+            post_aggregate_revision: 1,
+            pre_position_revision: 0,
+            post_position_revision: 1,
+        })
+        .expect("canonical Claims founding request")
+        .to_bytes()
     }
 
     #[test]
@@ -960,6 +1008,8 @@ mod tests {
             FUNDING_COUNT,
         )
         .expect("Series DCE5");
+        let program = effect.program();
+        let base = program.base();
         let routes = route_commitments(effect, 9, 288, &family_request).expect("route commitments");
         assert_eq!(
             routes.map(|route| route.role),
@@ -993,6 +1043,27 @@ mod tests {
         );
         assert_eq!(routes[1].base_request_digest, routes[4].base_request_digest);
         assert_ne!(routes[0].base_request_digest, routes[2].base_request_digest);
+
+        let custody_template = base.route_template(0).expect("Custody template").0;
+        assert_eq!(
+            routes[0].base_request_digest,
+            child_request_digest_v4(custody_template, None).expect("legacy zero-range digest")
+        );
+        let core_template = base.route_template(1).expect("Core template").0;
+        let core_range_count = program
+            .borrowed_range_count_for_route(1)
+            .expect("Core range count");
+        assert_eq!(core_range_count, 1);
+        let canonical_core_digest =
+            child_request_digest_v5(core_template, core_range_count, |ordinal| {
+                program
+                    .resolved_borrowed_range(1, ordinal, &scalars)
+                    .ok()?
+                    .slice(&family_request)
+                    .ok()
+            })
+            .expect("canonical ranged request digest");
+        assert_eq!(routes[1].base_request_digest, canonical_core_digest);
     }
 
     #[test]

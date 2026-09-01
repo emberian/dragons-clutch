@@ -205,7 +205,8 @@ fn the_port_and_the_kernel_agree_on_the_exact_weights() {
         let ported = port_weights(case);
 
         assert_eq!(
-            ported.denominator, reference.denominator,
+            ported.denominator_u128().expect("corpus denominator fits"),
+            reference.denominator,
             "common denominator, {}",
             case.note
         );
@@ -223,7 +224,9 @@ fn the_port_and_the_kernel_agree_on_the_exact_weights() {
         assert_eq!(ported.width, reference.width, "width, {}", case.note);
         for claim in 0..reference.width {
             assert_eq!(
-                ported.numerator_at(claim),
+                ported
+                    .numerator_u128_at(claim)
+                    .expect("corpus numerator fits"),
                 reference.numerator_at(claim),
                 "weight numerator of claim {claim}, {}",
                 case.note
@@ -246,6 +249,50 @@ fn the_port_and_the_kernel_agree_on_the_cumulative_apportionment() {
             .unwrap_or_else(|error| panic!("port refused {}: {error:?}", case.note));
         assert_eq!(output.as_slice(), reference.active(), "{}", case.note);
     }
+}
+
+/// A realistic cubic at the published coordinate-denominator ceiling forces
+/// the live recurrence above `u128`.  Its result is checked against the
+/// independent one-span Bernstein identity, evaluated here with reduced exact
+/// integers rather than by either de Boor implementation.
+#[test]
+fn a_wide_cubic_matches_the_independent_exact_bernstein_oracle() {
+    let knots = [0_i128, 0, 0, 0, 3, 3, 3, 3];
+    let coordinate_denominator = SPLINE_COORDINATE_DENOMINATOR_CEILING_V3;
+    let scale = 1_000_003_u64;
+    spline_arithmetic_envelope_v3(knots.as_slice(), 3, 4, scale)
+        .expect("the realistic cubic is foundable");
+    let evaluated =
+        evaluate_spline_weights_v3(knots.as_slice(), 1, 1, coordinate_denominator, 3, 4)
+            .expect("the admitted cubic evaluates at the closed ceiling");
+    assert!(
+        evaluated.denominator_u128().is_err(),
+        "this vector must exercise the widened recurrence, not the old u128 path"
+    );
+    let mut actual = [0_u64; 4];
+    apportion_cumulative_v3(&evaluated, scale, &mut actual)
+        .expect("the widened cumulative floor apportions");
+
+    // For one clamped cubic span [0, 3], at x = 1/d, the reduced exact
+    // Bernstein numerators are `(3d-1)^3`, `3(3d-1)^2`, `3(3d-1)`, `1`
+    // over `(3d)^3`. This is a different derivation from the live triangular
+    // recurrence and all values fit u128 after reduction.
+    let span = 3_u128 * u128::from(coordinate_denominator);
+    let left = span - 1;
+    let exact = [left.pow(3), 3 * left.pow(2), 3 * left, 1];
+    let exact_denominator = span.pow(3);
+    assert_eq!(exact.iter().sum::<u128>(), exact_denominator);
+    let mut expected = [0_u64; 4];
+    let mut running = 0_u128;
+    let mut carried = 0_u128;
+    for (slot, numerator) in exact.iter().enumerate() {
+        running += *numerator;
+        let boundary = u128::from(scale) * running / exact_denominator;
+        expected[slot] = u64::try_from(boundary - carried).expect("payout is scale-bounded");
+        carried = boundary;
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(actual.iter().sum::<u64>(), scale);
 }
 
 /// **The blessed rule partitions the scale exactly**, on every case. This is
@@ -279,7 +326,7 @@ fn the_cumulative_boundary_pays_nothing_outside_the_support() {
         apportion_cumulative_v3(&weights, u64::from(case.scale), &mut output)
             .expect("cumulative apportions");
         for claim in 0..weights.width {
-            if weights.numerator_at(claim) == 0 {
+            if weights.is_zero_at(claim) {
                 assert_eq!(
                     output.get(claim).copied(),
                     Some(0),
@@ -318,12 +365,14 @@ fn every_claim_lands_within_one_atom_of_its_exact_share() {
             // symmetrically: telescoping floors may land either side of the
             // exact value, so the claim is `|paid - share| < 1`, which scaled
             // by `D` is `|paid * D - Q * w| < D`.
-            let share_numerator = scale
-                .checked_mul(weights.numerator_at(claim))
-                .expect("share fits");
-            let paid_numerator = paid.checked_mul(weights.denominator).expect("bound fits");
+            let numerator = weights
+                .numerator_u128_at(claim)
+                .expect("corpus numerator fits");
+            let denominator = weights.denominator_u128().expect("corpus denominator fits");
+            let share_numerator = scale.checked_mul(numerator).expect("share fits");
+            let paid_numerator = paid.checked_mul(denominator).expect("bound fits");
             assert!(
-                paid_numerator.abs_diff(share_numerator) < weights.denominator,
+                paid_numerator.abs_diff(share_numerator) < denominator,
                 "claim {claim} paid {paid} is a full atom or more from its exact share, {}",
                 case.note
             );

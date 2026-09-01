@@ -17,6 +17,7 @@
 #   tools/ci/run.sh seam              the seam register (~20s, needs ast-grep)
 #   tools/ci/run.sh web               web + SDK vitest suites (needs node)
 #   tools/ci/run.sh emission          Lean byte-identity guards (needs lake)
+#   tools/ci/run.sh frameguard        exact per-function SBF frame ratchet
 #   tools/ci/run.sh programs          SBF build + trading program-test (minutes)
 #   tools/ci/run.sh cheap             census + seam
 #   tools/ci/run.sh --list            the table, with costs and prerequisites
@@ -337,6 +338,67 @@ archive_revision() {
   rm -rf -- "$root"
   mkdir -p -- "$root"
   (cd "$repo_root" && git archive "$rev") | tar -x -C "$root"
+}
+
+# ---------------------------------------------------------------------------
+# frameguard -- all thirteen SBF links, complete per-function frame map.
+#
+# The diagnostic grep in `programs` catches a frame only once it reaches the
+# 4,096-byte SBPF wall. It is silent at 4,095 and was silent when one ordinary
+# dispatch arm grew its shared function by 640 bytes (3,072 -> 3,712). This
+# tier gives that below-wall class an owner: fresh `-Zemit-stack-sizes` objects,
+# zero overwrite diagnostics preserved as a separate admission, then an exact
+# comparison against the committed canonical function multiset.
+#
+# The gate itself owns the baseline, normalization and 0/1/2 exit distinction.
+# This runner only selects which source tree is measured and reads that answer.
+# A committed revision is archived because a shared-tree measurement is useful
+# to an author but not quoteable evidence.
+# ---------------------------------------------------------------------------
+tier_frameguard() {
+  say "frameguard -- exact per-function SBF frame ratchet"
+  local build_root="$repo_root" archive_root=""
+  if [ -n "$commit_rev" ]; then
+    local resolved
+    resolved="$(cd "$repo_root" && git rev-parse --verify "$commit_rev^{commit}" 2>/dev/null)" || {
+      record frameguard $EXIT_PREREQ_MISSING "--commit $commit_rev does not name a commit"
+      return
+    }
+    archive_root="${DCLUTCH_CI_BUILD_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/dclutch-ci-frame-src.XXXXXX")}"
+    note "measuring COMMIT $resolved (clean git archive)"
+    archive_revision "$resolved" "$archive_root"
+    build_root="$archive_root"
+  else
+    note "measuring the working tree; use --commit HEAD for a quoteable ratchet run"
+  fi
+
+  local dir="$build_root/tools/frameguard"
+  if [ ! -f "$dir/run.sh" ] || [ ! -f "$dir/frameguard.py" ] \
+      || [ ! -f "$dir/test_frameguard.py" ] || [ ! -f "$dir/test-runner.sh" ]; then
+    record frameguard $EXIT_PREREQ_MISSING "frameguard or its refusal tests are absent from the measured tree"
+    [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
+    return
+  fi
+  if ! have python3; then
+    record frameguard $EXIT_PREREQ_MISSING "python3 not on PATH"
+    [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
+    return
+  fi
+
+  if ! (cd "$build_root" && python3 "$dir/test_frameguard.py" && bash "$dir/test-runner.sh"); then
+    record frameguard $EXIT_GATE_FAILED "the hermetic delta/diagnostic controls failed"
+    [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
+    return
+  fi
+
+  local code=0
+  (cd "$build_root" && bash "$dir/run.sh" --source "$build_root") || code=$?
+  case "$code" in
+  0) record frameguard $EXIT_PASS ;;
+  2) record frameguard $EXIT_PREREQ_MISSING "the exact frame measurement could not run (its exit 2)" ;;
+  *) record frameguard $EXIT_GATE_FAILED "the per-function frame ratchet disagrees" ;;
+  esac
+  [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
 }
 
 tier_programs() {
@@ -911,6 +973,9 @@ release   ~5s          python3            the four release-tooling REFUSAL
 web       ~1 min       node               the web + SDK vitest suites
 emission  minutes      lake (Lean)        every generated file still byte-
                                           matches the emitter that printed it
+frameguard minutes     cargo-build-sbf    every function in the exact thirteen
+                                          SBF links retains its admitted frame;
+                                          catches growth below the 4,096 wall
 journey   ~2 min       cargo              the journey campaign still COMPILES.
                                           Not that it passes -- a real campaign
                                           needs a validator and is tens of
@@ -936,7 +1001,7 @@ workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           is not in `all`
 
 aliases:  cheap = census seam release
-          all   = census seam release web emission journey programs suites
+          all   = census seam release web emission frameguard journey programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
 environment:
@@ -981,8 +1046,8 @@ main() {
       exit 0
       ;;
     cheap) tiers+=(census seam release) ;;
-    all) tiers+=(census seam release web emission journey programs suites) ;;
-    census | seam | release | web | emission | journey | programs | suites | workspaces)
+    all) tiers+=(census seam release web emission frameguard journey programs suites) ;;
+    census | seam | release | web | emission | frameguard | journey | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

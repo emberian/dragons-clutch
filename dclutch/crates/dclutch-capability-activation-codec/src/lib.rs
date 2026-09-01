@@ -44,22 +44,21 @@
 //!
 //! # What a family must be able to say, and when it cannot
 //!
-//! Every byte of an initial root tail must be either a **constant** the family
-//! publishes, or a **seam-seeded register** the outer fills in before any
-//! artifact runs (`activation_registers_v2`). There is no third source: the
-//! effect kernel has no arithmetic and the activation frame holds only the root
-//! and the funding ledgers.
+//! Every byte of an initial root tail must be a **constant** the family
+//! publishes, a **seam-seeded register** the outer fills in before any artifact
+//! runs (`activation_registers_v2`), the profile-projected root rent quote, or
+//! the canonical root bump inserted through the one reviewed checked-arithmetic
+//! expression. There is no family-authored runtime value outside those sources.
 //!
 //! - Direct's 24-byte tail is entirely constant (magic, header word, a zero
 //!   counter).
 //! - General's 128-byte tail is constants PLUS the Market, the config identity
 //!   and the generation — three [`ActivationTailFieldV1`]s reading identity and
 //!   scalar registers 4, 8 and 1.
-//! - Fractional's root cannot be composed at all: its PDA bump is derived after
-//!   the effect runs, its `terms` digest covers Market-carrying bytes the config
-//!   is deliberately free of, and its rent beneficiary has no author. That is an
-//!   impossibility, and this module makes a family discover it here rather than
-//!   on a root.
+//! - Fractional's current root uses the append-only seam: the authenticated
+//!   config and Core context identities, the Market, the profile-projected rent
+//!   quote, and Trading's canonical pre-effect root bump. It does not smuggle
+//!   Market-bound terms into the manifest-selected config coordinate.
 //!
 //! # What varies by family, and what does not
 //!
@@ -106,6 +105,10 @@ use dclutch_capability_program_contract::{
         ACTIVATION_MAX_RUNTIME_SCALARS_V2, ACTIVATION_ROOT_ACCOUNT_V2, ACTIVATION_ROOT_IDENTITY_V2,
         ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
     },
+    activation_registers_v3::{
+        ACTIVATION_COMMON_SCALARS_V3, ACTIVATION_FIRST_FAMILY_SCALAR_V3,
+        ACTIVATION_ROOT_BUMP_SCALAR_V3,
+    },
     encode_v1::{
         CapabilityProgramInputV1, capability_program_v1_bytes, encode_capability_program_v1_atomic,
     },
@@ -145,8 +148,18 @@ pub const ACTIVATION_ACCOUNT_COUNT_V1: u16 = 2;
 /// artifact that writes there clobbers what the outer relies on downstream.
 pub const ACTIVATION_RENT_QUOTE_SCALAR_V1: u16 = ACTIVATION_FIRST_FAMILY_SCALAR_V2;
 
+/// Scalar holding the rent quote when the append-only root-bump bank is used.
+pub const ACTIVATION_RENT_QUOTE_SCALAR_V2: u16 = ACTIVATION_FIRST_FAMILY_SCALAR_V3;
+
 /// First scalar holding a constant root-tail word loaded by the transition.
 pub const ACTIVATION_FIRST_CONSTANT_SCALAR_V1: u16 = ACTIVATION_RENT_QUOTE_SCALAR_V1 + 1;
+
+const ACTIVATION_ROOT_BUMP_MULTIPLIER_SCALAR_V2: u16 = ACTIVATION_RENT_QUOTE_SCALAR_V2 + 1;
+const ACTIVATION_ROOT_BUMP_BASE_SCALAR_V2: u16 = ACTIVATION_ROOT_BUMP_MULTIPLIER_SCALAR_V2 + 1;
+const ACTIVATION_ROOT_BUMP_MAX_SCALAR_V2: u16 = ACTIVATION_ROOT_BUMP_BASE_SCALAR_V2 + 1;
+const ACTIVATION_ROOT_BUMP_WORD_SCALAR_V2: u16 = ACTIVATION_ROOT_BUMP_MAX_SCALAR_V2 + 1;
+const ACTIVATION_FIRST_CONSTANT_SCALAR_V2: u16 = ACTIVATION_ROOT_BUMP_WORD_SCALAR_V2 + 1;
+const ACTIVATION_ROOT_BUMP_SHIFT_V2: u64 = 1 << 16;
 
 /// Exact byte width of one composed root-tail scalar word.
 pub const ACTIVATION_TAIL_WORD_BYTES_V1: usize = 8;
@@ -177,6 +190,23 @@ pub enum ActivationTailFieldV1 {
         /// `ACTIVATION_COMMON_IDENTITIES_V2`.
         register: u16,
     },
+    /// One aligned root header word whose low bytes are family constants and
+    /// whose PDA-bump byte is supplied by Trading's derived V3 register.
+    ///
+    /// This is deliberately not a general arithmetic expression. The only
+    /// newly admitted source is the one canonical bump register, shifted into
+    /// byte two and checked-added to the family-authored base word.
+    RootBumpWord {
+        /// Byte offset within the family root tail.
+        offset: u32,
+    },
+    /// Eight little-endian bytes carrying the account-profile-projected root
+    /// rent quote. The family names only the tail offset; this codec owns which
+    /// scalar receives the quote in each register generation.
+    RentQuoteWord {
+        /// Byte offset within the family root tail.
+        offset: u32,
+    },
 }
 
 impl ActivationTailFieldV1 {
@@ -184,7 +214,10 @@ impl ActivationTailFieldV1 {
     #[must_use]
     pub const fn offset(self) -> u32 {
         match self {
-            Self::SeamScalar { offset, .. } | Self::SeamIdentity { offset, .. } => offset,
+            Self::SeamScalar { offset, .. }
+            | Self::SeamIdentity { offset, .. }
+            | Self::RootBumpWord { offset }
+            | Self::RentQuoteWord { offset } => offset,
         }
     }
 
@@ -192,7 +225,9 @@ impl ActivationTailFieldV1 {
     #[must_use]
     pub const fn width(self) -> usize {
         match self {
-            Self::SeamScalar { .. } => ACTIVATION_TAIL_WORD_BYTES_V1,
+            Self::SeamScalar { .. } | Self::RootBumpWord { .. } | Self::RentQuoteWord { .. } => {
+                ACTIVATION_TAIL_WORD_BYTES_V1
+            }
             Self::SeamIdentity { .. } => ACTIVATION_TAIL_IDENTITY_BYTES_V1,
         }
     }
@@ -319,6 +354,21 @@ pub struct ActivationSeamImageV1<'a> {
     pub rent_quote: u64,
 }
 
+/// Append-only seam image for roots which persist their canonical PDA bump.
+///
+/// The first eight scalars retain their exact V1 meanings. Scalar eight is the
+/// child-root bump derived by Trading from the authenticated root header; no
+/// instruction byte or family artifact authors it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivationSeamImageV2<'a> {
+    /// Seam-seeded scalar bank, exactly `ACTIVATION_COMMON_SCALARS_V3` wide.
+    pub scalars: &'a [u64],
+    /// Unchanged common identity bank.
+    pub identities: &'a [[u8; 32]],
+    /// Lamports the founding parked in the ledger's Rent compartment.
+    pub rent_quote: u64,
+}
+
 /// Schema used to finalize an activation `AccountProfile` record.
 #[must_use]
 pub const fn activation_account_profile_schema_v1() -> [u8; 32] {
@@ -350,7 +400,7 @@ pub fn build_activation_bundle_v1(
     input: ActivationBundleInputV1<'_>,
 ) -> ActivationResultV1<ActivationBundleV1> {
     let plan = CompositionPlanV1::derive(input)?;
-    let account_profile = build_account_profile(input, plan.geometry)?;
+    let account_profile = build_account_profile(input, &plan)?;
     let transition = build_transition(&plan)?;
     let effect = build_effect(input, &plan)?;
     let account_profile_id = digest(&account_profile);
@@ -406,7 +456,7 @@ pub fn validate_activation_bundle_v1(
     {
         return Err(ActivationBundleErrorV1::Descriptor);
     }
-    if bundle.account_profile != build_account_profile(input, plan.geometry)? {
+    if bundle.account_profile != build_account_profile(input, &plan)? {
         return Err(ActivationBundleErrorV1::AccountProfile);
     }
     let profile = AccountProfileV1::decode_selected(
@@ -477,6 +527,47 @@ pub fn project_activation_root_tail_v1(
     {
         return Err(ActivationBundleErrorV1::RegisterGeometry);
     }
+    project_activation_root_tail(
+        bundle,
+        seam.scalars,
+        seam.identities,
+        seam.rent_quote,
+        ACTIVATION_RENT_QUOTE_SCALAR_V1,
+    )
+}
+
+/// Run the append-only root-bump activation seam over one built bundle.
+pub fn project_activation_root_tail_v2(
+    bundle: &ActivationBundleV1,
+    seam: ActivationSeamImageV2<'_>,
+) -> ActivationResultV1<(Vec<u8>, [u64; 2])> {
+    let bump = seam
+        .scalars
+        .get(usize::from(ACTIVATION_ROOT_BUMP_SCALAR_V3))
+        .copied()
+        .ok_or(ActivationBundleErrorV1::RegisterGeometry)?;
+    if seam.scalars.len() != ACTIVATION_COMMON_SCALARS_V3
+        || seam.identities.len() != ACTIVATION_COMMON_IDENTITIES_V2
+        || bump > u64::from(u8::MAX)
+    {
+        return Err(ActivationBundleErrorV1::RegisterGeometry);
+    }
+    project_activation_root_tail(
+        bundle,
+        seam.scalars,
+        seam.identities,
+        seam.rent_quote,
+        ACTIVATION_RENT_QUOTE_SCALAR_V2,
+    )
+}
+
+fn project_activation_root_tail(
+    bundle: &ActivationBundleV1,
+    seam_scalars: &[u64],
+    seam_identities: &[[u8; 32]],
+    rent_quote: u64,
+    rent_quote_scalar: u16,
+) -> ActivationResultV1<(Vec<u8>, [u64; 2])> {
     let effect =
         EffectProgramV2::decode(&bundle.effect).map_err(|_| ActivationBundleErrorV1::Effect)?;
     let profile = AccountProfileV1::decode_selected(
@@ -498,17 +589,13 @@ pub fn project_activation_root_tail_v1(
     let identity_count = usize::from(effect.identity_count());
     let mut scalars = vec![0_u64; scalar_count];
     let mut identities = vec![[0_u8; 32]; identity_count];
-    copy_bank_u64(&mut scalars, seam.scalars)?;
-    copy_bank_identity(&mut identities, seam.identities)?;
+    copy_bank_u64(&mut scalars, seam_scalars)?;
+    copy_bank_identity(&mut identities, seam_identities)?;
     // The profile's one projection: the ledger's parked rent quote into the
     // family scalar the transfer reads. Emulated rather than re-run, because a
     // faithful `AccountObservationV1` image would restate the ledger layout this
     // module deliberately never restates.
-    set_scalar(
-        &mut scalars,
-        ACTIVATION_RENT_QUOTE_SCALAR_V1,
-        seam.rent_quote,
-    )?;
+    set_scalar(&mut scalars, rent_quote_scalar, rent_quote)?;
     run_transition(transition, &mut scalars, &mut identities)?;
     let ledger_bytes = ledger_data_length(&profile)?;
     let request_bytes = usize::from(effect.request_bytes());
@@ -518,7 +605,7 @@ pub fn project_activation_root_tail_v1(
             data_len: 0,
         },
         AccountInput {
-            lamports: seam.rent_quote,
+            lamports: rent_quote,
             data_len: ledger_bytes,
         },
     ];
@@ -563,6 +650,19 @@ enum WriteV1 {
     SeamScalar { offset: u32, register: u16 },
     /// A seam-seeded identity read straight out of the common bank.
     SeamIdentity { offset: u32, register: u16 },
+    /// A family-authored base word with Trading's derived root bump inserted
+    /// into byte two through checked TransitionVM arithmetic.
+    RootBumpWord {
+        offset: u32,
+        base_word: u64,
+        bump_register: u16,
+        multiplier_scalar: u16,
+        base_scalar: u16,
+        max_scalar: u16,
+        output_scalar: u16,
+    },
+    /// Account-profile-projected rent quote written at the family offset.
+    RentQuoteWord { offset: u32, scalar: u16 },
 }
 
 impl WriteV1 {
@@ -570,7 +670,9 @@ impl WriteV1 {
         match self {
             Self::Constant { offset, .. }
             | Self::SeamScalar { offset, .. }
-            | Self::SeamIdentity { offset, .. } => offset,
+            | Self::SeamIdentity { offset, .. }
+            | Self::RootBumpWord { offset, .. }
+            | Self::RentQuoteWord { offset, .. } => offset,
         }
     }
 }
@@ -585,6 +687,8 @@ struct GeometryV1 {
 struct CompositionPlanV1 {
     writes: Vec<WriteV1>,
     geometry: GeometryV1,
+    common_scalars: usize,
+    rent_quote_scalar: u16,
 }
 
 impl CompositionPlanV1 {
@@ -605,6 +709,30 @@ impl CompositionPlanV1 {
         {
             return Err(ActivationBundleErrorV1::RootWidth);
         }
+        let root_bump_fields = input
+            .seam_fields
+            .iter()
+            .filter(|field| matches!(field, ActivationTailFieldV1::RootBumpWord { .. }))
+            .count();
+        if root_bump_fields > 1 {
+            return Err(ActivationBundleErrorV1::TailFieldGeometry);
+        }
+        let uses_root_bump = root_bump_fields == 1;
+        let common_scalars = if uses_root_bump {
+            ACTIVATION_COMMON_SCALARS_V3
+        } else {
+            ACTIVATION_COMMON_SCALARS_V2
+        };
+        let rent_quote_scalar = if uses_root_bump {
+            ACTIVATION_RENT_QUOTE_SCALAR_V2
+        } else {
+            ACTIVATION_RENT_QUOTE_SCALAR_V1
+        };
+        let first_constant_scalar = if uses_root_bump {
+            ACTIVATION_FIRST_CONSTANT_SCALAR_V2
+        } else {
+            ACTIVATION_FIRST_CONSTANT_SCALAR_V1
+        };
         let mut writes = Vec::new();
         // Seam fields first, so the constant walk can refuse a word that
         // overlaps one. They are required strictly ascending and disjoint so
@@ -623,7 +751,9 @@ impl CompositionPlanV1 {
             let region = tail
                 .get(start..end)
                 .ok_or(ActivationBundleErrorV1::TailFieldGeometry)?;
-            if region.iter().any(|byte| *byte != 0) {
+            if !matches!(field, ActivationTailFieldV1::RootBumpWord { .. })
+                && region.iter().any(|byte| *byte != 0)
+            {
                 return Err(ActivationBundleErrorV1::TailFieldOverwritesConstant);
             }
             for flag in covered
@@ -646,6 +776,29 @@ impl CompositionPlanV1 {
                     }
                     WriteV1::SeamIdentity { offset, register }
                 }
+                ActivationTailFieldV1::RootBumpWord { offset } => {
+                    let base_word = u64::from_le_bytes(
+                        region
+                            .try_into()
+                            .map_err(|_| ActivationBundleErrorV1::TailFieldGeometry)?,
+                    );
+                    if base_word & (0xff_u64 << 16) != 0 {
+                        return Err(ActivationBundleErrorV1::TailFieldOverwritesConstant);
+                    }
+                    WriteV1::RootBumpWord {
+                        offset,
+                        base_word,
+                        bump_register: ACTIVATION_ROOT_BUMP_SCALAR_V3,
+                        multiplier_scalar: ACTIVATION_ROOT_BUMP_MULTIPLIER_SCALAR_V2,
+                        base_scalar: ACTIVATION_ROOT_BUMP_BASE_SCALAR_V2,
+                        max_scalar: ACTIVATION_ROOT_BUMP_MAX_SCALAR_V2,
+                        output_scalar: ACTIVATION_ROOT_BUMP_WORD_SCALAR_V2,
+                    }
+                }
+                ActivationTailFieldV1::RentQuoteWord { offset } => WriteV1::RentQuoteWord {
+                    offset,
+                    scalar: rent_quote_scalar,
+                },
             });
         }
         let mut constant_count = 0_u16;
@@ -674,7 +827,7 @@ impl CompositionPlanV1 {
                     .map_err(|_| ActivationBundleErrorV1::RootWidth)?,
             );
             if value != 0 && !word_covered {
-                let scalar = ACTIVATION_FIRST_CONSTANT_SCALAR_V1
+                let scalar = first_constant_scalar
                     .checked_add(constant_count)
                     .ok_or(ActivationBundleErrorV1::RegisterGeometry)?;
                 constant_count = constant_count
@@ -690,7 +843,7 @@ impl CompositionPlanV1 {
             offset = end;
         }
         writes.sort_by_key(|write| write.offset());
-        let scalars = usize::from(ACTIVATION_FIRST_CONSTANT_SCALAR_V1)
+        let scalars = usize::from(first_constant_scalar)
             .checked_add(usize::from(constant_count))
             .ok_or(ActivationBundleErrorV1::RegisterGeometry)?;
         if scalars > ACTIVATION_MAX_RUNTIME_SCALARS_V2
@@ -706,13 +859,15 @@ impl CompositionPlanV1 {
                 identities: u16::try_from(ACTIVATION_COMMON_IDENTITIES_V2)
                     .map_err(|_| ActivationBundleErrorV1::RegisterGeometry)?,
             },
+            common_scalars,
+            rent_quote_scalar,
         })
     }
 }
 
 fn build_account_profile(
     input: ActivationBundleInputV1<'_>,
-    geometry: GeometryV1,
+    plan: &CompositionPlanV1,
 ) -> ActivationResultV1<Vec<u8>> {
     let rules = [
         // The composite root: vacant and System-owned at activation, credited
@@ -759,7 +914,7 @@ fn build_account_profile(
         AccountOperationInputV1::ProjectDataU64 {
             account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
             data_offset: rent_quote_offset,
-            destination: ACTIVATION_RENT_QUOTE_SCALAR_V1,
+            destination: plan.rent_quote_scalar,
         },
     ];
     let width = account_profile_v1_bytes(rules.len(), operations.len())
@@ -770,8 +925,8 @@ fn build_account_profile(
         &rules,
         &operations,
         RegisterGeometryV1 {
-            scalars: geometry.scalars,
-            identities: geometry.identities,
+            scalars: plan.geometry.scalars,
+            identities: plan.geometry.identities,
         },
         &mut scratch,
         &mut output,
@@ -784,16 +939,49 @@ fn build_transition(plan: &CompositionPlanV1) -> ActivationResultV1<Vec<u8>> {
     // Every word the initial tail needs that no account carries and no seam
     // register seeds. They are read out of the family's own canonical initial
     // state, so a layout change moves this artifact with it or refuses.
-    let instructions = plan
-        .writes
-        .iter()
-        .filter_map(|write| match *write {
+    let mut instructions = Vec::new();
+    for write in &plan.writes {
+        match *write {
             WriteV1::Constant { scalar, value, .. } => {
-                Some(TransitionInstructionV2::load_const(scalar, value))
+                instructions.push(TransitionInstructionV2::load_const(scalar, value));
             }
-            WriteV1::SeamScalar { .. } | WriteV1::SeamIdentity { .. } => None,
-        })
-        .collect::<Vec<_>>();
+            WriteV1::RootBumpWord {
+                base_word,
+                bump_register,
+                multiplier_scalar,
+                base_scalar,
+                max_scalar,
+                output_scalar,
+                ..
+            } => {
+                instructions.push(TransitionInstructionV2::load_const(
+                    multiplier_scalar,
+                    ACTIVATION_ROOT_BUMP_SHIFT_V2,
+                ));
+                instructions.push(TransitionInstructionV2::load_const(base_scalar, base_word));
+                instructions.push(TransitionInstructionV2::load_const(
+                    max_scalar,
+                    u64::from(u8::MAX),
+                ));
+                instructions.push(TransitionInstructionV2::scalar_le(
+                    bump_register,
+                    max_scalar,
+                ));
+                instructions.push(TransitionInstructionV2::checked_mul_into(
+                    bump_register,
+                    multiplier_scalar,
+                    output_scalar,
+                ));
+                instructions.push(TransitionInstructionV2::checked_add_into(
+                    output_scalar,
+                    base_scalar,
+                    output_scalar,
+                ));
+            }
+            WriteV1::SeamScalar { .. } | WriteV1::SeamIdentity { .. } => {}
+            WriteV1::RentQuoteWord { .. } => {}
+        }
+    }
     let width = transition_program_v2_bytes(instructions.len())
         .map_err(|_| ActivationBundleErrorV1::Transition)?;
     let mut scratch = vec![0_u8; width];
@@ -826,7 +1014,7 @@ fn build_effect(
     instructions.push(EffectInstructionV2::transfer_lamports(
         ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
         ACTIVATION_ROOT_ACCOUNT_V2,
-        ACTIVATION_RENT_QUOTE_SCALAR_V1,
+        plan.rent_quote_scalar,
     ));
     // Compose the initial root tail into the request buffer, ascending, so the
     // instruction list reads as the tail itself.
@@ -840,6 +1028,14 @@ fn build_effect(
             }
             WriteV1::SeamIdentity { offset, register } => {
                 EffectInstructionV2::write_request_identity(offset, register)
+            }
+            WriteV1::RootBumpWord {
+                offset,
+                output_scalar,
+                ..
+            } => EffectInstructionV2::write_request_u64(offset, output_scalar),
+            WriteV1::RentQuoteWord { offset, scalar } => {
+                EffectInstructionV2::write_request_u64(offset, scalar)
             }
         });
     }
@@ -874,7 +1070,7 @@ fn require_probe_projection_is_the_declared_tail(
     plan: &CompositionPlanV1,
 ) -> ActivationResultV1<()> {
     const PROBE_RENT_QUOTE: u64 = 2_672_640;
-    let mut scalars = [0_u64; ACTIVATION_COMMON_SCALARS_V2];
+    let mut scalars = vec![0_u64; plan.common_scalars];
     for (index, slot) in scalars.iter_mut().enumerate() {
         let ordinal = u64::try_from(index).map_err(|_| ActivationBundleErrorV1::Geometry)?;
         *slot = 0xa53c_0000_0000_0001_u64
@@ -893,15 +1089,31 @@ fn require_probe_projection_is_the_declared_tail(
                 .wrapping_add(0x5b);
         }
     }
-    let expected = expected_tail(input, plan, &scalars, &identities)?;
-    let (projected, lamports) = project_activation_root_tail_v1(
-        bundle,
-        ActivationSeamImageV1 {
-            scalars: &scalars,
-            identities: &identities,
-            rent_quote: PROBE_RENT_QUOTE,
-        },
-    )?;
+    if plan.common_scalars == ACTIVATION_COMMON_SCALARS_V3 {
+        *scalars
+            .get_mut(usize::from(ACTIVATION_ROOT_BUMP_SCALAR_V3))
+            .ok_or(ActivationBundleErrorV1::RegisterGeometry)? = 0xfe;
+    }
+    let expected = expected_tail(input, plan, &scalars, &identities, PROBE_RENT_QUOTE)?;
+    let (projected, lamports) = if plan.common_scalars == ACTIVATION_COMMON_SCALARS_V3 {
+        project_activation_root_tail_v2(
+            bundle,
+            ActivationSeamImageV2 {
+                scalars: &scalars,
+                identities: &identities,
+                rent_quote: PROBE_RENT_QUOTE,
+            },
+        )?
+    } else {
+        project_activation_root_tail_v1(
+            bundle,
+            ActivationSeamImageV1 {
+                scalars: &scalars,
+                identities: &identities,
+                rent_quote: PROBE_RENT_QUOTE,
+            },
+        )?
+    };
     if projected != expected {
         return Err(ActivationBundleErrorV1::ProjectedTailMismatch);
     }
@@ -925,6 +1137,7 @@ fn expected_tail(
     plan: &CompositionPlanV1,
     scalars: &[u64],
     identities: &[[u8; 32]],
+    rent_quote: u64,
 ) -> ActivationResultV1<Vec<u8>> {
     let mut expected = input.constant_root_tail.to_vec();
     for write in &plan.writes {
@@ -943,6 +1156,26 @@ fn expected_tail(
                     .copied()
                     .ok_or(ActivationBundleErrorV1::TailFieldRegisterOutOfBank)?;
                 write_region(&mut expected, offset, &value)?;
+            }
+            WriteV1::RootBumpWord {
+                offset,
+                base_word,
+                bump_register,
+                ..
+            } => {
+                let bump = scalars
+                    .get(usize::from(bump_register))
+                    .copied()
+                    .filter(|value| *value <= u64::from(u8::MAX))
+                    .ok_or(ActivationBundleErrorV1::TailFieldRegisterOutOfBank)?;
+                let value = bump
+                    .checked_mul(ACTIVATION_ROOT_BUMP_SHIFT_V2)
+                    .and_then(|shifted| base_word.checked_add(shifted))
+                    .ok_or(ActivationBundleErrorV1::Geometry)?;
+                write_region(&mut expected, offset, &value.to_le_bytes())?;
+            }
+            WriteV1::RentQuoteWord { offset, .. } => {
+                write_region(&mut expected, offset, &rent_quote.to_le_bytes())?;
             }
         }
     }
@@ -1111,6 +1344,89 @@ mod tests {
         // already zero there.
         let effect = EffectProgramV2::decode(&bundle.effect).expect("effect");
         assert_eq!(effect.instruction_count(), 4);
+    }
+
+    #[test]
+    fn a_root_bump_bundle_projects_only_the_derived_u8_and_exact_rent_quote() {
+        let mut tail = [0_u8; 128];
+        tail.get_mut(..8)
+            .expect("magic")
+            .copy_from_slice(b"DCLTFRA1");
+        tail.get_mut(8..10)
+            .expect("version")
+            .copy_from_slice(&2_u16.to_le_bytes());
+        let fields = [
+            ActivationTailFieldV1::RootBumpWord { offset: 8 },
+            ActivationTailFieldV1::SeamIdentity {
+                offset: 16,
+                register: 8,
+            },
+            ActivationTailFieldV1::SeamIdentity {
+                offset: 48,
+                register: 4,
+            },
+            ActivationTailFieldV1::SeamIdentity {
+                offset: 80,
+                register: 5,
+            },
+            ActivationTailFieldV1::RentQuoteWord { offset: 120 },
+        ];
+        let bundle = build_activation_bundle_v1(input(&tail, &fields)).expect("V2 bundle");
+
+        let mut scalars = [0_u64; ACTIVATION_COMMON_SCALARS_V3];
+        *scalars
+            .get_mut(usize::from(ACTIVATION_ROOT_BUMP_SCALAR_V3))
+            .expect("bump scalar") = 0xfe;
+        let mut identities = [[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V2];
+        *identities.get_mut(8).expect("config") = [0xc8; 32];
+        *identities.get_mut(4).expect("market") = [0x4d; 32];
+        *identities.get_mut(5).expect("context") = [0xbe; 32];
+        let rent_quote = 2_672_640_u64;
+        let (projected, lamports) = project_activation_root_tail_v2(
+            &bundle,
+            ActivationSeamImageV2 {
+                scalars: &scalars,
+                identities: &identities,
+                rent_quote,
+            },
+        )
+        .expect("V2 projection");
+
+        let mut expected = tail;
+        *expected.get_mut(10).expect("bump byte") = 0xfe;
+        expected
+            .get_mut(16..48)
+            .expect("config")
+            .copy_from_slice(&[0xc8; 32]);
+        expected
+            .get_mut(48..80)
+            .expect("market")
+            .copy_from_slice(&[0x4d; 32]);
+        expected
+            .get_mut(80..112)
+            .expect("beneficiary")
+            .copy_from_slice(&[0xbe; 32]);
+        expected
+            .get_mut(120..128)
+            .expect("rent")
+            .copy_from_slice(&rent_quote.to_le_bytes());
+        assert_eq!(projected, expected);
+        assert_eq!(lamports, [rent_quote, 0]);
+
+        *scalars
+            .get_mut(usize::from(ACTIVATION_ROOT_BUMP_SCALAR_V3))
+            .expect("bump scalar") = 256;
+        assert_eq!(
+            project_activation_root_tail_v2(
+                &bundle,
+                ActivationSeamImageV2 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    rent_quote,
+                },
+            ),
+            Err(ActivationBundleErrorV1::RegisterGeometry)
+        );
     }
 
     /// A field reading a family-owned register would compose a silent zero,

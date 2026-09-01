@@ -167,6 +167,34 @@ pub mod activation_registers_v2 {
     const _: () = assert!(ACTIVATION_COMMON_IDENTITIES_V2 <= ACTIVATION_MAX_RUNTIME_IDENTITIES_V2);
 }
 
+/// Append-only activation registers for roots whose canonical PDA bump is part
+/// of their family state.
+///
+/// V2's exact `8 scalar / 12 identity` bank remains the complete legacy ABI.
+/// A descriptor that does not declare the ninth scalar is seeded and executed
+/// exactly as before. Current root schemas may opt into this one additional
+/// scalar; Trading derives it from the already-authenticated root header and
+/// child-root coordinate, never from instruction bytes.
+pub mod activation_registers_v3 {
+    pub use super::activation_registers_v2::*;
+
+    /// Scalar carrying the canonical child-root PDA bump as an exact `u8`
+    /// widened to `u64`.
+    pub const ACTIVATION_ROOT_BUMP_SCALAR_V3: u16 = 8;
+    /// Common scalar width for a descriptor which consumes the root bump.
+    pub const ACTIVATION_COMMON_SCALARS_V3: usize = 9;
+    /// Identity width is unchanged; config and Core context already have
+    /// authenticated V2 coordinates.
+    pub const ACTIVATION_COMMON_IDENTITIES_V3: usize = ACTIVATION_COMMON_IDENTITIES_V2;
+    /// First scalar a V3 family artifact may own.
+    pub const ACTIVATION_FIRST_FAMILY_SCALAR_V3: u16 = 9;
+    /// First family-owned identity remains unchanged.
+    pub const ACTIVATION_FIRST_FAMILY_IDENTITY_V3: u16 = ACTIVATION_FIRST_FAMILY_IDENTITY_V2;
+
+    const _: () = assert!(ACTIVATION_ROOT_BUMP_SCALAR_V3 as usize == ACTIVATION_COMMON_SCALARS_V2);
+    const _: () = assert!(ACTIVATION_COMMON_SCALARS_V3 <= ACTIVATION_MAX_RUNTIME_SCALARS_V2);
+}
+
 /// Stable refusal from the capability-program contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

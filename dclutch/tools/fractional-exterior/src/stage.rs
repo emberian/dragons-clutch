@@ -17,8 +17,21 @@ use dclutch_fractional_claim_contract::{
     FractionalRootV1,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsInputV2,
-    encode_fractional_exposure_terms_v2, fractional_exposure_terms_bytes_v2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
+    encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
+    fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
+};
+use dclutch_product_payoff_v2_codec::price_gate_v1::{
+    PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
+    PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
+    PRICE_GATE_MASS_OFFSET_V1, PRICE_GATE_NUMERATORS_OFFSET_V1, PRICE_GATE_PRICES_OFFSET_V1,
+    PRICE_GATE_PROFILE_OFFSET_V1, PRICE_GATE_PROFILE_V1, PRICE_GATE_REQUEST_BYTES_V1,
+    PRICE_GATE_SCALE_OFFSET_V1, PRICE_GATE_SCHEMA_VERSION_V1, PRICE_GATE_VERSION_OFFSET_V1,
+    PRICE_GATE_WEIGHTS_OFFSET_V1, PRICE_GATE_WIDTH_OFFSET_V1,
+};
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
@@ -32,11 +45,13 @@ use dclutch_release_set_contract::{
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_token_svm::{
-    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+    PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
 };
 
 use crate::narrow_fixture::{
-    NarrowFixtureInputV2, NarrowFixtureV2, NarrowRecordV2, compile_narrow_fixture_v2,
+    NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, NarrowRecordV2,
+    NarrowSplineBasisInputV3, compile_narrow_fixture_v3,
 };
 
 /// Program identities, matched to the ProgramTest campaign so a refusal seen in
@@ -46,23 +61,31 @@ pub const CLAIMS: Pubkey = Pubkey::new_from_array([0xa1; 32]);
 pub const REGISTRY: Pubkey = Pubkey::new_from_array([0xa2; 32]);
 /// Core program.
 pub const CORE: Pubkey = Pubkey::new_from_array([0xa3; 32]);
+/// Custody program.
+pub const CUSTODY: Pubkey = Pubkey::new_from_array([0xa4; 32]);
 /// Test caller standing in for Trading.
-pub const CALLER: Pubkey = Pubkey::new_from_array([0xa8; 32]);
+pub const CALLER: Pubkey = Pubkey::new_from_array([0xa9; 32]);
 
-const REALM_ID: [u8; 32] = [0x61; 32];
+/// Collateral mint pinned by the canonical Realm.
+pub const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0x74; 32]);
 const CUSTODY_CONTEXT: [u8; 32] = [0x62; 32];
 const GENERATION: u64 = 37;
 const ROOT_REVISION: u64 = 1;
 const DENOMINATOR: u64 = 10;
 const WRAP_NATIVE_CLAIMS: u64 = 7;
-const OUTCOME: u32 = 0;
+const OUTCOME: u32 = 1;
+const CUBIC_PAYOUT_SCALE: u64 = 11;
+const CURVED_RESULT_NUMERATOR: i128 = 3;
+const CURVED_RESULT_DENOMINATOR: u64 = 2;
 const ACTOR_FUNDED_BALANCE: u64 = 1_000;
 const RENT_CREDIT: Pubkey = Pubkey::new_from_array([0x65; 32]);
 const GRAPH_ID: [u8; 32] = [0x7c; 32];
 const EXPOSURE_ID: [u8; 32] = [0x7a; 32];
 const HOLDER_TOKEN: Pubkey = Pubkey::new_from_array([0x78; 32]);
+const SLEEPER_TOKEN: Pubkey = Pubkey::new_from_array([0xc1; 32]);
+const SLEEPER_SHARDS: u64 = 40;
 /// Representation width the exterior runs at, inside the settleable bound.
-pub const WIDTH: usize = 8;
+pub const WIDTH: usize = 4;
 
 /// One account to preload at genesis.
 #[derive(Clone, Debug)]
@@ -91,11 +114,61 @@ pub struct Meta {
 pub struct StagedAction {
     /// Stable journal label.
     pub name: &'static str,
+    /// Program receiving the instruction.
+    pub program: Pubkey,
     /// Exact caller wrapper bytes.
     pub data: Vec<u8>,
     /// Exact ordered account frame, caller program first.
     pub metas: Vec<Meta>,
+    /// Complete protocol poststate required after this action commits.
+    pub expected: ExpectedPoststate,
 }
+
+/// Exact four-ledger poststate for one exterior action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExpectedPoststate {
+    /// Outstanding Token-2022 shard supply.
+    pub shard_mint_supply: u64,
+    /// Actor's shard-token balance.
+    pub holder_token_amount: u64,
+    /// Independent sleeping holder's shard-token balance.
+    pub sleeper_token_amount: u64,
+    /// Actor's native Claims balance at the represented coordinate.
+    pub actor_native_claims: u64,
+    /// Capability reserve's native Claims balance.
+    pub reserve_native_claims: u64,
+}
+
+pub(crate) const WRAP_EXPECTED: ExpectedPoststate = ExpectedPoststate {
+    shard_mint_supply: WRAP_NATIVE_CLAIMS * DENOMINATOR,
+    holder_token_amount: WRAP_NATIVE_CLAIMS * DENOMINATOR,
+    sleeper_token_amount: 0,
+    actor_native_claims: ACTOR_FUNDED_BALANCE - WRAP_NATIVE_CLAIMS,
+    reserve_native_claims: WRAP_NATIVE_CLAIMS,
+};
+
+pub(crate) const SLEEPER_TRANSFER_EXPECTED: ExpectedPoststate = ExpectedPoststate {
+    shard_mint_supply: WRAP_NATIVE_CLAIMS * DENOMINATOR,
+    holder_token_amount: WRAP_NATIVE_CLAIMS * DENOMINATOR - SLEEPER_SHARDS,
+    sleeper_token_amount: SLEEPER_SHARDS,
+    actor_native_claims: ACTOR_FUNDED_BALANCE - WRAP_NATIVE_CLAIMS,
+    reserve_native_claims: WRAP_NATIVE_CLAIMS,
+};
+
+pub(crate) const WHOLE_UNWRAP_EXPECTED: ExpectedPoststate = ExpectedPoststate {
+    shard_mint_supply: SLEEPER_SHARDS,
+    holder_token_amount: 0,
+    sleeper_token_amount: SLEEPER_SHARDS,
+    actor_native_claims: ACTOR_FUNDED_BALANCE - SLEEPER_SHARDS / DENOMINATOR,
+    reserve_native_claims: SLEEPER_SHARDS / DENOMINATOR,
+};
+
+/// Canonical action order and exact poststates independently re-read by `verify`.
+pub(crate) const EXPECTED_ACTIONS: [(&str, ExpectedPoststate); 3] = [
+    ("wrap", WRAP_EXPECTED),
+    ("token-2022-transfer-to-sleeper", SLEEPER_TRANSFER_EXPECTED),
+    ("whole-unwrap-actor-remainder", WHOLE_UNWRAP_EXPECTED),
+];
 
 /// The complete staged exterior.
 #[derive(Clone, Debug)]
@@ -108,10 +181,34 @@ pub struct Staged {
     pub shard_mint: Pubkey,
     /// Holder token account, observed for amount.
     pub holder_token: Pubkey,
+    /// Independent sleeping holder's Token-2022 account.
+    pub sleeper_token: Pubkey,
     /// Actor Position, observed for native Claims.
     pub actor_position: Pubkey,
     /// Reserve Position, observed for locked Claims.
     pub reserve_position: Pubkey,
+    /// Representation coordinate driven by this exterior.
+    pub representation_coordinate: usize,
+    /// Activated release-set content identity shared by every phase.
+    pub release_set: [u8; 32],
+    /// Canonical Realm record content identity.
+    pub realm: [u8; 32],
+    /// Product record content identity.
+    pub product: [u8; 32],
+    /// ProductBasisV3 record content identity.
+    pub product_basis: [u8; 32],
+    /// Fractional terms record content identity.
+    pub terms: [u8; 32],
+    /// Claims aggregate carried into compaction.
+    pub aggregate: Pubkey,
+    /// Core Market carried through terminal resolution.
+    pub market: Pubkey,
+    /// Capability root carried into compaction.
+    pub root: Pubkey,
+    /// Sleeping holder identity carried into compaction.
+    pub sleeper_owner: Pubkey,
+    /// Exact outstanding shard atoms carried into compaction.
+    pub sleeper_shards: u64,
 }
 
 fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
@@ -128,6 +225,29 @@ fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 
         .0,
         bytes,
     }
+}
+
+fn selection_config_digest(terms: &NarrowRecordV2) -> [u8; 32] {
+    let decoded = FractionalExposureTermsV2::decode(
+        &terms.bytes,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: terms.digest,
+            finalized_terms_id: terms.digest,
+            recomputed_terms_digest: terms.digest,
+            finalized_terms_digest: terms.digest,
+            record_authenticated: true,
+        },
+    )
+    .expect("finalized Fractional terms");
+    let mut config = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(decoded),
+        &mut config,
+    )
+    .expect("Fractional selection config");
+    hash(&config).to_bytes()
 }
 
 fn identity(key: Pubkey) -> ProgramIdentityV1 {
@@ -194,6 +314,8 @@ pub struct Elves<'a> {
     pub registry: &'a [u8],
     /// Core program.
     pub core: &'a [u8],
+    /// Custody program.
+    pub custody: &'a [u8],
     /// Test caller standing in for Trading.
     pub caller: &'a [u8],
 }
@@ -202,12 +324,13 @@ fn activation_cache(elves: &Elves<'_>) -> ([u8; 32], Vec<u8>) {
     let core = release(CORE, 0x31, elves.core);
     let claims = release(CLAIMS, 0x32, elves.claims);
     let trading = release(CALLER, 0x33, elves.caller);
+    let custody = release(CUSTODY, 0x34, elves.custody);
     let set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(claims),
         binding(trading),
         binding(claims),
-        binding(claims),
+        binding(custody),
     )
     .expect("release set");
     let id = hash(&set.to_bytes()).to_bytes();
@@ -219,7 +342,7 @@ fn activation_cache(elves: &Elves<'_>) -> ([u8; 32], Vec<u8>) {
         (ExecutionRoleV1::Claims, claims),
         (ExecutionRoleV1::Trading, trading),
         (ExecutionRoleV1::Resolution, claims),
-        (ExecutionRoleV1::Custody, claims),
+        (ExecutionRoleV1::Custody, custody),
     ] {
         activate_execution_role_into_v1(
             &mut bytes,
@@ -264,12 +387,35 @@ fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
 }
 
 /// Stage the open-market Fractional exterior: Wrap then WholeUnwrap.
-pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
+pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged {
     let (release_set, cache) = activation_cache(elves);
     let cache_key =
         Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set], &REGISTRY).0;
 
-    let probe = compile(release_set, actor, Pubkey::new_from_array([0xef; 32]));
+    let adapter = PRODUCTION_ADAPTER_RELEASES
+        .get(1)
+        .copied()
+        .expect("Token-2022 production adapter");
+    let realm = finalized(
+        REGISTRY,
+        REALM_SCHEMA_RELEASE_ID_V1,
+        RealmV1::new(RealmV1Input {
+            token_program: TOKEN_2022_PROGRAM_ID,
+            collateral_mint: COLLATERAL_MINT.to_bytes(),
+            collateral_adapter_release_id: hash(&adapter.to_bytes()).to_bytes(),
+            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+        })
+        .expect("canonical Realm")
+        .to_bytes()
+        .to_vec(),
+    );
+    let probe = compile(
+        release_set,
+        realm.digest,
+        actor,
+        Pubkey::new_from_array([0xef; 32]),
+    );
     let core_market = probe.core_market;
 
     let shard_mints: Vec<[u8; 32]> = (0..WIDTH)
@@ -284,7 +430,7 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
     let behavior = finalized(
         REGISTRY,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-        TokenBehaviorSelectionV2::new(REALM_ID, release_set)
+        TokenBehaviorSelectionV2::new(realm.digest, release_set)
             .expect("behavior")
             .to_bytes()
             .to_vec(),
@@ -324,7 +470,7 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
         ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
-        ContentId::new(terms.digest).expect("config"),
+        ContentId::new(selection_config_digest(&terms)).expect("config"),
     )
     .expect("selection");
     let header = CapabilityRootHeaderV1::new(
@@ -336,14 +482,14 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
     )
     .expect("root header");
     let (root, bump) = Pubkey::find_program_address(&header.seeds().as_slices(), &CALLER);
-    let shared = compile(release_set, actor, root);
+    let shared = compile(release_set, realm.digest, actor, root);
     assert_eq!(shared.core_market, core_market, "Market must not move");
 
     let state = FractionalRootV1::new(FractionalRootInputV1 {
         bump,
         terms: terms.digest,
         market: core_market.to_bytes(),
-        rent_beneficiary: actor.to_bytes(),
+        rent_beneficiary: sleeper_owner.to_bytes(),
         revision: ROOT_REVISION,
         historical_rent_principal: 1,
     })
@@ -384,6 +530,11 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
             data: token_account_bytes(shard_mint, actor, 0),
         },
         StagedAccount {
+            key: SLEEPER_TOKEN,
+            owner: token_program(),
+            data: token_account_bytes(shard_mint, sleeper_owner, 0),
+        },
+        StagedAccount {
             key: RENT_CREDIT,
             owner: system(),
             data: Vec::new(),
@@ -395,6 +546,7 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
         &shared.portfolio,
         &shared.linked_basis,
         &shared.exposure,
+        &realm,
         &terms,
         &behavior,
     ] {
@@ -420,7 +572,10 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
     let mut actions = Vec::new();
     for (name, action) in [
         ("wrap", FractionalExposureActionV2::Wrap),
-        ("whole-unwrap", FractionalExposureActionV2::WholeUnwrap),
+        (
+            "whole-unwrap-actor-remainder",
+            FractionalExposureActionV2::WholeUnwrap,
+        ),
     ] {
         let (source, destination, quantity) = match action {
             FractionalExposureActionV2::Wrap => {
@@ -429,7 +584,7 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
             _ => (
                 HOLDER_TOKEN.to_bytes(),
                 [0; 32],
-                WRAP_NATIVE_CLAIMS * DENOMINATOR,
+                WRAP_NATIVE_CLAIMS * DENOMINATOR - SLEEPER_SHARDS,
             ),
         };
         let request = FractionalExposureRequestV2::new(
@@ -519,7 +674,52 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
                 writable,
             });
         }
-        actions.push(StagedAction { name, data, metas });
+        actions.push(StagedAction {
+            name,
+            program: CALLER,
+            data,
+            metas,
+            expected: match action {
+                FractionalExposureActionV2::Wrap => WRAP_EXPECTED,
+                FractionalExposureActionV2::WholeUnwrap => WHOLE_UNWRAP_EXPECTED,
+                _ => unreachable!("the exterior stages only whole-claim actions"),
+            },
+        });
+        if matches!(action, FractionalExposureActionV2::Wrap) {
+            let mut transfer = Vec::with_capacity(10);
+            // SPL Token-2022 TransferChecked(amount, decimals=0).
+            transfer.push(12);
+            transfer.extend_from_slice(&SLEEPER_SHARDS.to_le_bytes());
+            transfer.push(0);
+            actions.push(StagedAction {
+                name: "token-2022-transfer-to-sleeper",
+                program: token_program(),
+                data: transfer,
+                metas: vec![
+                    Meta {
+                        key: HOLDER_TOKEN,
+                        signer: false,
+                        writable: true,
+                    },
+                    Meta {
+                        key: shard_mint,
+                        signer: false,
+                        writable: false,
+                    },
+                    Meta {
+                        key: SLEEPER_TOKEN,
+                        signer: false,
+                        writable: true,
+                    },
+                    Meta {
+                        key: actor,
+                        signer: true,
+                        writable: false,
+                    },
+                ],
+                expected: SLEEPER_TRANSFER_EXPECTED,
+            });
+        }
     }
 
     Staged {
@@ -527,33 +727,104 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey) -> Staged {
         actions,
         shard_mint,
         holder_token: HOLDER_TOKEN,
+        sleeper_token: SLEEPER_TOKEN,
         actor_position: shared.actor_position.account,
         reserve_position: shared.reserve_position.account,
+        representation_coordinate: OUTCOME as usize,
+        release_set,
+        realm: realm.digest,
+        product: shared.product.digest,
+        product_basis: shared.linked_basis.digest,
+        terms: terms.digest,
+        aggregate: shared.claims_market,
+        market: shared.core_market,
+        root,
+        sleeper_owner,
+        sleeper_shards: SLEEPER_SHARDS,
     }
 }
 
-fn compile(release_set: [u8; 32], actor: Pubkey, reserve: Pubkey) -> NarrowFixtureV2 {
-    compile_narrow_fixture_v2(NarrowFixtureInputV2 {
-        outcome_count: WIDTH,
-        registry_program: REGISTRY,
-        core_program: CORE,
-        claims_program: CLAIMS,
-        release_set,
-        realm_id: REALM_ID,
-        custody_context: CUSTODY_CONTEXT,
-        generation: GENERATION,
-        actor_owner: actor,
-        reserve_owner: reserve,
-        funded_coordinate: OUTCOME as usize,
-        funded_balance: ACTOR_FUNDED_BALANCE,
-        reserve_balance: 0,
-        position_revision: 0,
-        terminal: None,
-        rent_beneficiary: RENT_CREDIT,
-        graph_id: GRAPH_ID,
-        exposure_id: EXPOSURE_ID,
-    })
+fn compile(
+    release_set: [u8; 32],
+    realm_id: [u8; 32],
+    actor: Pubkey,
+    reserve: Pubkey,
+) -> NarrowFixtureV2 {
+    let knots = [0_i128, 0, 0, 0, 3, 3, 3, 3];
+    let failure_payouts = [0_u64, 0, 0, CUBIC_PAYOUT_SCALE];
+    let price_gate = curved_price_gate_certificate();
+    compile_narrow_fixture_v3(
+        NarrowFixtureInputV2 {
+            outcome_count: WIDTH,
+            registry_program: REGISTRY,
+            core_program: CORE,
+            claims_program: CLAIMS,
+            release_set,
+            realm_id,
+            custody_context: CUSTODY_CONTEXT,
+            generation: GENERATION,
+            actor_owner: actor,
+            reserve_owner: reserve,
+            funded_coordinate: OUTCOME as usize,
+            funded_balance: ACTOR_FUNDED_BALANCE,
+            reserve_balance: 0,
+            position_revision: 0,
+            terminal: None,
+            rent_beneficiary: RENT_CREDIT,
+            graph_id: GRAPH_ID,
+            exposure_id: EXPOSURE_ID,
+        },
+        NarrowBasisInputV3::SplineDegree2To3(NarrowSplineBasisInputV3 {
+            degree: 3,
+            interior_multiplicity: false,
+            payout_scale: CUBIC_PAYOUT_SCALE,
+            knot_denominator: 1,
+            knots: &knots,
+            failure_payouts: &failure_payouts,
+            price_gate_certificate: &price_gate,
+        }),
+    )
     .expect("narrow fixture at the exterior width")
+}
+
+/// Canonical one-atom DCLTPGT1 witness for the cubic midpoint partition.
+fn curved_price_gate_certificate() -> [u8; PRICE_GATE_REQUEST_BYTES_V1] {
+    let mut certificate = [0_u8; PRICE_GATE_REQUEST_BYTES_V1];
+    certificate[PRICE_GATE_MAGIC_OFFSET_V1..PRICE_GATE_MAGIC_OFFSET_V1 + 8]
+        .copy_from_slice(&PRICE_GATE_MAGIC_V1);
+    certificate[PRICE_GATE_VERSION_OFFSET_V1..PRICE_GATE_VERSION_OFFSET_V1 + 2]
+        .copy_from_slice(&PRICE_GATE_SCHEMA_VERSION_V1.to_le_bytes());
+    certificate[PRICE_GATE_PROFILE_OFFSET_V1..PRICE_GATE_PROFILE_OFFSET_V1 + 2]
+        .copy_from_slice(&PRICE_GATE_PROFILE_V1.to_le_bytes());
+    certificate[PRICE_GATE_SCALE_OFFSET_V1..PRICE_GATE_SCALE_OFFSET_V1 + 4].copy_from_slice(
+        &u32::try_from(CUBIC_PAYOUT_SCALE)
+            .expect("price-gate scale")
+            .to_le_bytes(),
+    );
+    certificate[PRICE_GATE_MASS_OFFSET_V1..PRICE_GATE_MASS_OFFSET_V1 + 8]
+        .copy_from_slice(&1_u64.to_le_bytes());
+    certificate[PRICE_GATE_DEGREE_OFFSET_V1] = 3;
+    certificate[PRICE_GATE_WIDTH_OFFSET_V1] = u8::try_from(WIDTH).expect("price-gate width");
+    certificate[PRICE_GATE_ATOM_COUNT_OFFSET_V1] = 1;
+    for (claim, payout) in [1_u64, 4, 4, 2].iter().enumerate() {
+        let offset = PRICE_GATE_PRICES_OFFSET_V1 + claim * 8;
+        certificate[offset..offset + 8].copy_from_slice(&payout.to_le_bytes());
+    }
+    certificate[PRICE_GATE_WEIGHTS_OFFSET_V1..PRICE_GATE_WEIGHTS_OFFSET_V1 + 8]
+        .copy_from_slice(&1_u64.to_le_bytes());
+    certificate[PRICE_GATE_NUMERATORS_OFFSET_V1..PRICE_GATE_NUMERATORS_OFFSET_V1 + 8]
+        .copy_from_slice(
+            &i64::try_from(CURVED_RESULT_NUMERATOR)
+                .expect("price-gate coordinate")
+                .to_le_bytes(),
+        );
+    certificate[PRICE_GATE_DENOMINATORS_OFFSET_V1..PRICE_GATE_DENOMINATORS_OFFSET_V1 + 4]
+        .copy_from_slice(
+            &u32::try_from(CURVED_RESULT_DENOMINATOR)
+                .expect("price-gate denominator")
+                .to_le_bytes(),
+        );
+    certificate
 }
 
 /// Token-2022 program.

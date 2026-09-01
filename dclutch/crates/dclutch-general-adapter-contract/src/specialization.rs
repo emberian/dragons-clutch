@@ -6,7 +6,6 @@
 //! profile independently revalidates that action and its exact coordinate
 //! grammar before projecting caller-owned registers.
 
-use crate::effect_artifacts_v3::unauthored_actions;
 use dclutch_general_codec::Action;
 use dclutch_request_profile_contract::{Error, RequestProfileV1};
 
@@ -26,12 +25,14 @@ pub const fn general_request_profile_bytes_v1(action: Action) -> &'static [u8] {
         // artifact join compares the supplied profile against this value, and
         // `RequestProfileV1::decode` refuses an empty record, so an unauthored
         // action cannot be admitted with any profile at all.
-        unauthored_actions!() => &[],
+        Action::VerifyCandidateRow => &GENERAL_VERIFY_CANDIDATE_ROW_REQUEST_PROFILE_V1,
         Action::OpenBatch => &GENERAL_OPEN_BATCH_REQUEST_PROFILE_V1,
         Action::CloseBatch => &GENERAL_CLOSE_BATCH_REQUEST_PROFILE_V1,
         Action::PlaceOrder => &GENERAL_PLACE_ORDER_REQUEST_PROFILE_V1,
         Action::CancelOrder => &GENERAL_CANCEL_ORDER_REQUEST_PROFILE_V1,
         Action::ReleaseOrder => &GENERAL_RELEASE_ORDER_REQUEST_PROFILE_V1,
+        Action::CloseCandidate => &GENERAL_CLOSE_CANDIDATE_REQUEST_PROFILE_V1,
+        Action::SubmitCandidate => &GENERAL_SUBMIT_CANDIDATE_REQUEST_PROFILE_V1,
         Action::Consider => &GENERAL_CONSIDER_REQUEST_PROFILE_V1,
         Action::Freeze => &GENERAL_FREEZE_REQUEST_PROFILE_V1,
         Action::InitializeSettlement => &GENERAL_INITIALIZE_REQUEST_PROFILE_V1,
@@ -75,7 +76,10 @@ mod tests {
         Action::CloseBatch,
         Action::PlaceOrder,
         Action::CancelOrder,
+        Action::SubmitCandidate,
+        Action::VerifyCandidateRow,
         Action::ReleaseOrder,
+        Action::CloseCandidate,
     ];
 
     const fn speaks_v3(action: Action) -> bool {
@@ -85,7 +89,10 @@ mod tests {
                 | Action::CloseBatch
                 | Action::PlaceOrder
                 | Action::CancelOrder
+                | Action::VerifyCandidateRow
                 | Action::ReleaseOrder
+                | Action::SubmitCandidate
+                | Action::CloseCandidate
         )
     }
 
@@ -98,24 +105,42 @@ mod tests {
                 // coordinate zero.
                 expected_revision: if matches!(
                     action,
-                    Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder
+                    Action::PlaceOrder
+                        | Action::CancelOrder
+                        | Action::SubmitCandidate
+                        | Action::ReleaseOrder
+                        | Action::CloseCandidate
                 ) {
                     0
                 } else {
                     7
                 },
                 subject_id: Some([0x31; 32]),
-                page_index: 0,
-                execution_index: 0,
+                page_index: if action == Action::VerifyCandidateRow {
+                    2
+                } else {
+                    0
+                },
+                execution_index: if action == Action::VerifyCandidateRow {
+                    3
+                } else {
+                    0
+                },
                 manifest_order_index: 0,
                 primary_state_bump: 42,
-                secondary_state_bump: if matches!(action, Action::PlaceOrder | Action::CancelOrder)
-                {
+                secondary_state_bump: if matches!(
+                    action,
+                    Action::PlaceOrder | Action::CancelOrder | Action::VerifyCandidateRow
+                ) {
                     43
                 } else {
                     0
                 },
-                result_state_bump: 0,
+                result_state_bump: if action == Action::VerifyCandidateRow {
+                    44
+                } else {
+                    0
+                },
             }
             .to_bytes()
             .expect("canonical V3 request");
@@ -183,7 +208,28 @@ mod tests {
                 },
             )
             .expect("selected profile accepts");
-            if matches!(
+            if action == Action::VerifyCandidateRow {
+                assert_eq!(output_scalars.first(), Some(&99));
+                assert_eq!(output_scalars.get(1), Some(&2));
+                assert_eq!(output_scalars.get(2), Some(&3));
+                assert_eq!(output_scalars.get(94), Some(&7));
+                assert_eq!(output_scalars.get(69), Some(&42));
+                assert_eq!(output_scalars.get(70), Some(&43));
+                assert_eq!(output_scalars.get(145), Some(&44));
+                assert_eq!(output_identities.first(), Some(&[0x31; 32]));
+            } else if action == Action::SubmitCandidate {
+                assert_eq!(output_scalars.first(), Some(&99));
+                assert_eq!(output_scalars.get(94), Some(&99));
+                assert_eq!(output_identities.first(), Some(&[0x31; 32]));
+                assert_eq!(output_identities.get(29), Some(&[0x99; 32]));
+            } else if action == Action::CloseCandidate {
+                // Close names the Candidate directly, carries no optimistic
+                // revision, and has no secondary or result state.
+                assert_eq!(output_scalars.first(), Some(&99));
+                assert_eq!(output_scalars.get(94), Some(&99));
+                assert_eq!(output_identities.first(), Some(&[0x31; 32]));
+                assert_eq!(output_identities.get(29), Some(&[0x99; 32]));
+            } else if matches!(
                 action,
                 Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder
             ) {
@@ -216,7 +262,10 @@ mod tests {
                 output_scalars.get(70),
                 Some(&if matches!(
                     action,
-                    Action::Close | Action::PlaceOrder | Action::CancelOrder
+                    Action::Close
+                        | Action::PlaceOrder
+                        | Action::CancelOrder
+                        | Action::VerifyCandidateRow
                 ) {
                     43
                 } else {

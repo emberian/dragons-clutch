@@ -34,6 +34,9 @@ use crate::{
     Error, Result, journal,
     stage::{self, Elves, Staged, StagedAccount},
 };
+use dclutch_fractional_exterior::bridge::{
+    ElfPinsV1, PRETERMINAL_SCHEMA_V1, PreterminalBridgeV1, ROUNDING_BOUNDARY_V1, write_atomic,
+};
 
 /// RPC port this exterior owns. Deliberately not the successor launcher's 20890.
 ///
@@ -42,22 +45,25 @@ use crate::{
 /// The default gossip port is 8000, which is a busy address on a developer
 /// machine and produces a bind panic rather than a readable refusal.
 pub const RPC_PORT: u16 = 20961;
-const GOSSIP_PORT: u16 = RPC_PORT + 3;
-const DYNAMIC_LOW: u16 = RPC_PORT + 10;
-const DYNAMIC_HIGH: u16 = RPC_PORT + 41;
-const ACTOR_SEED: [u8; 32] = [0x5c; 32];
+const ACTOR_SEED: [u8; 32] = [0x2c; 32];
+const SLEEPER_SEED: [u8; 32] = [0x5c; 32];
 
-fn rpc(key: solana_program::pubkey::Pubkey) -> RpcPubkey {
+pub(crate) fn rpc(key: solana_program::pubkey::Pubkey) -> RpcPubkey {
     RpcPubkey::new_from_array(key.to_bytes())
 }
 
-fn rent_exempt(space: usize) -> u64 {
+pub(crate) fn rent_exempt(space: usize) -> u64 {
     solana_program::rent::Rent::default()
         .minimum_balance(space)
         .max(1)
 }
 
-fn account_file(key: &RpcPubkey, owner: &RpcPubkey, data: &[u8], executable: bool) -> Value {
+pub(crate) fn account_file(
+    key: &RpcPubkey,
+    owner: &RpcPubkey,
+    data: &[u8],
+    executable: bool,
+) -> Value {
     json!({
         "pubkey": key.to_string(),
         "account": {
@@ -72,7 +78,7 @@ fn account_file(key: &RpcPubkey, owner: &RpcPubkey, data: &[u8], executable: boo
 }
 
 /// Loader-V3 `Program` account: variant 2 then the ProgramData address.
-fn program_account_bytes(programdata: &RpcPubkey) -> Vec<u8> {
+pub(crate) fn program_account_bytes(programdata: &RpcPubkey) -> Vec<u8> {
     let mut bytes = vec![0_u8; 36];
     bytes[0..4].copy_from_slice(&2_u32.to_le_bytes());
     bytes[4..36].copy_from_slice(&programdata.to_bytes());
@@ -85,18 +91,18 @@ fn program_account_bytes(programdata: &RpcPubkey) -> Vec<u8> {
 /// because Solana 4.0.2 encodes that spelling as option tag 1 plus the zero
 /// Pubkey rather than immutable option tag 0 -- the release authentication
 /// reads the difference.
-fn programdata_bytes(elf: &[u8]) -> Vec<u8> {
+pub(crate) fn programdata_bytes(elf: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0_u8; 45 + elf.len()];
     bytes[0..4].copy_from_slice(&3_u32.to_le_bytes());
     bytes[45..].copy_from_slice(elf);
     bytes
 }
 
-fn programdata_address(program: &RpcPubkey) -> RpcPubkey {
+pub(crate) fn programdata_address(program: &RpcPubkey) -> RpcPubkey {
     RpcPubkey::find_program_address(&[program.as_ref()], &rpc(stage::loader())).0
 }
 
-fn write_account(dir: &Path, value: &Value) -> Result<()> {
+pub(crate) fn write_account(dir: &Path, value: &Value) -> Result<()> {
     let key = value
         .get("pubkey")
         .and_then(Value::as_str)
@@ -112,6 +118,7 @@ fn staged_programs(elves: &Elves<'_>) -> Vec<(RpcPubkey, Vec<u8>)> {
         (rpc(stage::CLAIMS), elves.claims.to_vec()),
         (rpc(stage::REGISTRY), elves.registry.to_vec()),
         (rpc(stage::CORE), elves.core.to_vec()),
+        (rpc(stage::CUSTODY), elves.custody.to_vec()),
         (rpc(stage::CALLER), elves.caller.to_vec()),
     ]
 }
@@ -127,19 +134,24 @@ pub fn prepare(elf_dir: &Path, out: &Path) -> Result<usize> {
     let claims = crate::read_elf(elf_dir, "dclutch_claims_sbf.so")?;
     let registry = crate::read_elf(elf_dir, "dclutch_registry_sbf.so")?;
     let core = crate::read_elf(elf_dir, "dclutch_core_sbf.so")?;
-    let caller = crate::read_elf(elf_dir, "dclutch_fractional_atomic_test_caller_sbf.so")?;
+    let custody = crate::read_elf(elf_dir, "dclutch_custody_sbf.so")?;
+    let caller = crate::read_elf(elf_dir, "dclutch_fractional_compaction_test_caller_sbf.so")?;
     let token = crate::read_elf(elf_dir, "spl_token_2022.so")?;
     let elves = Elves {
         claims: &claims,
         registry: &registry,
         core: &core,
+        custody: &custody,
         caller: &caller,
     };
 
     let actor = keypair_from_seed(&ACTOR_SEED).map_err(|error| Error::new(error.to_string()))?;
+    let sleeper =
+        keypair_from_seed(&SLEEPER_SEED).map_err(|error| Error::new(error.to_string()))?;
     let staged = stage::stage(
         &elves,
         solana_program::pubkey::Pubkey::new_from_array(actor.pubkey().to_bytes()),
+        solana_program::pubkey::Pubkey::new_from_array(sleeper.pubkey().to_bytes()),
     );
 
     let mut written = 0_usize;
@@ -180,6 +192,7 @@ pub fn prepare(elf_dir: &Path, out: &Path) -> Result<usize> {
         "representation_width": stage::WIDTH,
         "accounts": written,
         "actor": actor.pubkey().to_string(),
+        "sleeping_holder": sleeper.pubkey().to_string(),
         "actions": staged.actions.iter().map(|a| a.name).collect::<Vec<_>>(),
     });
     let mut bytes = serde_json::to_vec_pretty(&manifest)?;
@@ -188,28 +201,41 @@ pub fn prepare(elf_dir: &Path, out: &Path) -> Result<usize> {
     Ok(written)
 }
 
-struct Validator {
+pub(crate) struct Validator {
     child: Child,
 }
 
 impl Validator {
     fn start(out: &Path) -> Result<Self> {
-        let ledger = out.join("ledger");
+        Self::start_on(out, RPC_PORT, "")
+    }
+
+    pub(crate) fn start_on(out: &Path, rpc_port: u16, prefix: &str) -> Result<Self> {
+        let ledger = out.join(format!("{prefix}ledger"));
         if ledger.exists() {
             fs::remove_dir_all(&ledger)?;
         }
-        let log = fs::File::create(out.join("validator.log"))?;
+        let log = fs::File::create(out.join(format!("{prefix}validator.log")))?;
+        let gossip_port = rpc_port
+            .checked_add(3)
+            .ok_or_else(|| Error::new("validator gossip port overflow"))?;
+        let dynamic_low = rpc_port
+            .checked_add(10)
+            .ok_or_else(|| Error::new("validator dynamic port overflow"))?;
+        let dynamic_high = rpc_port
+            .checked_add(41)
+            .ok_or_else(|| Error::new("validator dynamic port overflow"))?;
         let child = Command::new("solana-test-validator")
             .arg("--ledger")
             .arg(&ledger)
             .arg("--account-dir")
-            .arg(out.join("accounts"))
+            .arg(out.join(format!("{prefix}accounts")))
             .arg("--rpc-port")
-            .arg(RPC_PORT.to_string())
+            .arg(rpc_port.to_string())
             .arg("--gossip-port")
-            .arg(GOSSIP_PORT.to_string())
+            .arg(gossip_port.to_string())
             .arg("--dynamic-port-range")
-            .arg(format!("{DYNAMIC_LOW}-{DYNAMIC_HIGH}"))
+            .arg(format!("{dynamic_low}-{dynamic_high}"))
             .arg("--reset")
             .arg("--quiet")
             .stdout(Stdio::from(log.try_clone()?))
@@ -219,7 +245,7 @@ impl Validator {
         Ok(Self { child })
     }
 
-    fn stop(mut self) {
+    pub(crate) fn stop(mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -237,7 +263,7 @@ fn submit_legacy(client: &RpcClient, payer: &Keypair, instructions: &[Instructio
     Ok(())
 }
 
-fn await_health(client: &RpcClient) -> Result<()> {
+pub(crate) fn await_health(client: &RpcClient) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut last = String::new();
     while Instant::now() < deadline {
@@ -260,19 +286,36 @@ fn balance_at(data: &[u8], offset: usize) -> u64 {
 
 fn poststate(client: &RpcClient, staged: &Staged) -> Result<Value> {
     const POSITION_HEADER: usize = 128;
+    let claim_offset = staged
+        .representation_coordinate
+        .checked_mul(8)
+        .and_then(|relative| POSITION_HEADER.checked_add(relative))
+        .ok_or_else(|| Error::new("representation-coordinate offset overflow"))?;
     let mint = client.get_account_data(&rpc(staged.shard_mint))?;
     let holder = client.get_account_data(&rpc(staged.holder_token))?;
+    let sleeper = client.get_account_data(&rpc(staged.sleeper_token))?;
     let actor = client.get_account_data(&rpc(staged.actor_position))?;
     let reserve = client.get_account_data(&rpc(staged.reserve_position))?;
     Ok(json!({
         "shard_mint_supply": balance_at(&mint, 36),
         "holder_token_amount": balance_at(&holder, 64),
-        "actor_native_claims": balance_at(&actor, POSITION_HEADER),
-        "reserve_native_claims": balance_at(&reserve, POSITION_HEADER),
+        "sleeper_token_amount": balance_at(&sleeper, 64),
+        "actor_native_claims": balance_at(&actor, claim_offset),
+        "reserve_native_claims": balance_at(&reserve, claim_offset),
     }))
 }
 
-fn refusal_code(error: &str) -> Option<u32> {
+fn expected_poststate(action: &stage::StagedAction) -> Value {
+    json!({
+        "shard_mint_supply": action.expected.shard_mint_supply,
+        "holder_token_amount": action.expected.holder_token_amount,
+        "sleeper_token_amount": action.expected.sleeper_token_amount,
+        "actor_native_claims": action.expected.actor_native_claims,
+        "reserve_native_claims": action.expected.reserve_native_claims,
+    })
+}
+
+pub(crate) fn refusal_code(error: &str) -> Option<u32> {
     let marker = "custom program error: 0x";
     let start = error.find(marker)? + marker.len();
     let hex: String = error[start..]
@@ -290,16 +333,21 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
     let claims = crate::read_elf(elf_dir, "dclutch_claims_sbf.so")?;
     let registry = crate::read_elf(elf_dir, "dclutch_registry_sbf.so")?;
     let core = crate::read_elf(elf_dir, "dclutch_core_sbf.so")?;
-    let caller = crate::read_elf(elf_dir, "dclutch_fractional_atomic_test_caller_sbf.so")?;
+    let custody = crate::read_elf(elf_dir, "dclutch_custody_sbf.so")?;
+    let caller = crate::read_elf(elf_dir, "dclutch_fractional_compaction_test_caller_sbf.so")?;
     let actor = keypair_from_seed(&ACTOR_SEED).map_err(|error| Error::new(error.to_string()))?;
+    let sleeper =
+        keypair_from_seed(&SLEEPER_SEED).map_err(|error| Error::new(error.to_string()))?;
     let staged = stage::stage(
         &Elves {
             claims: &claims,
             registry: &registry,
             core: &core,
+            custody: &custody,
             caller: &caller,
         },
         solana_program::pubkey::Pubkey::new_from_array(actor.pubkey().to_bytes()),
+        solana_program::pubkey::Pubkey::new_from_array(sleeper.pubkey().to_bytes()),
     );
 
     let validator = Validator::start(out)?;
@@ -389,7 +437,7 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
                 frame.push(u8::from(meta.writable));
             }
             let instruction = Instruction {
-                program_id: rpc(stage::CALLER),
+                program_id: rpc(action.program),
                 accounts: metas,
                 data: action.data.clone(),
             };
@@ -431,6 +479,23 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
                 action.name,
                 serde_json::to_string(&state)?
             );
+            if !accepted {
+                return Err(Error::new(format!(
+                    "{} refused instead of committing: code={refusal:?} {detail}",
+                    action.name
+                ))
+                .into());
+            }
+            let expected = expected_poststate(action);
+            if state != expected {
+                return Err(Error::new(format!(
+                    "{} committed an unexpected poststate: expected {} got {}",
+                    action.name,
+                    serde_json::to_string(&expected)?,
+                    serde_json::to_string(&state)?,
+                ))
+                .into());
+            }
             entries.push(journal::Entry {
                 name: action.name.to_string(),
                 data_digest: journal::digest(&action.data),
@@ -452,4 +517,74 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
     let digest = journal::write_canonical(out, &entries)?;
     println!("canonical journal sha256 {digest}");
     Ok(())
+}
+
+/// Emit the exact preterminal output facts consumed by real-ELF compaction.
+pub fn write_preterminal_bridge(
+    elf_dir: &Path,
+    out: &Path,
+    bridge_path: &Path,
+    source_commit: String,
+    source_tree_sha256: String,
+) -> Result<String> {
+    let (_, journal_sha256) = journal::verify(out)?;
+    let claims = crate::read_elf(elf_dir, "dclutch_claims_sbf.so")?;
+    let registry = crate::read_elf(elf_dir, "dclutch_registry_sbf.so")?;
+    let core = crate::read_elf(elf_dir, "dclutch_core_sbf.so")?;
+    let custody = crate::read_elf(elf_dir, "dclutch_custody_sbf.so")?;
+    let rent = crate::read_elf(elf_dir, "dclutch_rent_sbf.so")?;
+    let trading = crate::read_elf(elf_dir, "dclutch_fractional_compaction_test_caller_sbf.so")?;
+    let token = crate::read_elf(elf_dir, "spl_token_2022.so")?;
+    let actor = keypair_from_seed(&ACTOR_SEED).map_err(|error| Error::new(error.to_string()))?;
+    let sleeper =
+        keypair_from_seed(&SLEEPER_SEED).map_err(|error| Error::new(error.to_string()))?;
+    let staged = stage::stage(
+        &Elves {
+            claims: &claims,
+            registry: &registry,
+            core: &core,
+            custody: &custody,
+            caller: &trading,
+        },
+        solana_program::pubkey::Pubkey::new_from_array(actor.pubkey().to_bytes()),
+        solana_program::pubkey::Pubkey::new_from_array(sleeper.pubkey().to_bytes()),
+    );
+    let bridge = PreterminalBridgeV1 {
+        schema: PRETERMINAL_SCHEMA_V1.into(),
+        source_commit,
+        source_tree_sha256,
+        elves: ElfPinsV1 {
+            claims: journal::digest(&claims),
+            registry: journal::digest(&registry),
+            core: journal::digest(&core),
+            custody: journal::digest(&custody),
+            rent: journal::digest(&rent),
+            trading: journal::digest(&trading),
+            token_2022: journal::digest(&token),
+        },
+        journal_sha256,
+        release_set: staged.release_set,
+        realm: staged.realm,
+        market: staged.market.to_bytes(),
+        aggregate: staged.aggregate.to_bytes(),
+        product: staged.product,
+        product_basis: staged.product_basis,
+        terms: staged.terms,
+        root: staged.root.to_bytes(),
+        shard_mint: staged.shard_mint.to_bytes(),
+        holder: staged.sleeper_owner.to_bytes(),
+        holder_shard_token: staged.sleeper_token.to_bytes(),
+        denominator: 10,
+        representation_coordinate: u32::try_from(staged.representation_coordinate)
+            .map_err(|_| Error::new("representation coordinate overflow"))?,
+        outstanding_shards: staged.sleeper_shards,
+        reserve_native_claims: staged.sleeper_shards / 10,
+        curve_degree: 3,
+        payout_scale: 11,
+        rounding_boundary: ROUNDING_BOUNDARY_V1.into(),
+    };
+    bridge.validate().map_err(Error::new)?;
+    write_atomic(bridge_path, &bridge)
+        .map_err(Error::new)
+        .map_err(Into::into)
 }

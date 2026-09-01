@@ -167,7 +167,15 @@ const PACKET_LIMIT: usize = 1_232;
 /// seed-to-seed jitter. That is the "code motion" shape this constant's own
 /// protocol names, one order of magnitude past the jitter bar, so the floor
 /// moves rather than the tolerance.
-const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 103_589;
+///
+/// Moved again 2026-08-31 (cohort-9's wave, post e74b5dd8): re-measured over
+/// eleven seeds, EVERY residual sits exactly 777 CU above the previous floor
+/// on the same clean 3,000 grid -- 104,366 / 107,366 / 110,366, zero jitter.
+/// Key-independent, admission rung intact: the outer composition grew work
+/// of its own across the wave (the fifth ProgramSet entry rides the outer's
+/// derivation, ~282 CU by the direct-route measurement, plus the shared-path
+/// growth the margin gates absorbed reaching this route's outer once more).
+const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 104_366;
 
 /// How far the floor may drift before this gate calls it a change.
 ///

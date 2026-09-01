@@ -66,6 +66,22 @@ pub mod v3_trade;
 pub mod v3_trade_artifacts;
 /// Selector-9 Profile13 protected physical-account geometry.
 pub mod v3_trade_profile;
+/// Physical account authentication and candidate evaluation for junior equity.
+pub mod v4_equity_accelerator_accounts;
+/// Schema-bound selector-1..=6 V4 release finalization for junior equity.
+#[cfg(not(target_os = "solana"))]
+pub mod v4_equity_release;
+/// Physical account authentication and candidate evaluation for LP Open/Close.
+pub mod v4_lp_accelerator_accounts;
+/// Schema-bound SetV2 request construction for LP Open/Close.
+#[cfg(not(target_os = "solana"))]
+pub mod v4_lp_operator;
+/// Schema-bound selector-7/8 V4 release finalization for LP Open and Close.
+#[cfg(not(target_os = "solana"))]
+pub mod v4_lp_release;
+/// Schema-bound SetV2 request construction for selector 9.
+#[cfg(not(target_os = "solana"))]
+pub mod v4_scenario_operator;
 /// Schema-bound selector-9 V4 release finalization and global SetV2 migration.
 #[cfg(not(target_os = "solana"))]
 pub mod v4_scenario_release;

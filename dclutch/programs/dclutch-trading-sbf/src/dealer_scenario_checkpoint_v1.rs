@@ -767,11 +767,9 @@ fn process_dealer_scenario_checkpoint_reservation_receipt_v1(
         || registry.is_writable
         || !registry.executable
         || receipt_account.is_signer
-        || receipt_account.is_writable
         || receipt_account.executable
         || receipt_account.owner != producer.key
         || reservation_state.is_signer
-        || reservation_state.is_writable
         || reservation_state.executable
         || reservation_state.owner != producer.key
         || !effect_producer.executable
@@ -791,6 +789,14 @@ fn process_dealer_scenario_checkpoint_reservation_receipt_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
+    // `receipt_account` and `reservation_state` are deliberately privilege-
+    // tolerant here.  This route only reads them, but the canonical atomic
+    // bundle runs immediately after Custody creates both accounts in the same
+    // transaction.  SVM merges privileges transaction-wide, so the AccountInfo
+    // values observed here are writable even though this instruction's metas
+    // are readonly.  Their Custody owner, exact PDA/body joins, and non-signer/
+    // non-executable properties below remain the authority boundary; requiring
+    // readonly would make the producer-plus-ingest transaction unreachable.
     let (checkpoint, checkpoint_prestate_digest) = read_checkpoint(program_id, checkpoint_account)?;
     require_checkpoint_pda(program_id, checkpoint_account, checkpoint)?;
     let input = checkpoint.input();

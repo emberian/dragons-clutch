@@ -45,6 +45,7 @@ export * from './lib/directTradeSpine';
 export * from './lib/directParticipant';
 export * from './lib/directMakerReplay';
 export * from './lib/directTicket';
+export * from './lib/directOfferAuthoring';
 export * from './lib/directInlinePublicV3';
 export * from './lib/directHotRouteManifest';
 export * from './lib/directWalletPreparationV1';
@@ -59,6 +60,7 @@ export * from './lib/aggregateRetirement';
 
 // Founding and infrastructure: the record graph a market stands on.
 export * from './lib/coreFound';
+export * from './lib/splineProductAuthoring';
 export * from './lib/infrastructure';
 export * from './lib/capabilityManifest';
 export * from './lib/founding/principalCapacity';

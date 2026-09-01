@@ -34,6 +34,8 @@ pub mod graded_basis_v3;
 pub mod lifecycle_rent_v2;
 /// Generic immutable-record publication and Runtime V2 Product graph publication.
 pub mod publication;
+/// Degree-2/3 spline Product graph and admitted price-gate compilation.
+pub mod spline_basis_v3;
 
 /// Compiler or chain-derived instruction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +60,10 @@ pub enum Error {
     CrossRecordMismatch,
     /// Payer principal could not cover the exact current Market rent top-up.
     InsufficientPayer,
+    /// A degree-2/3 ProductBasis input or canonical encoding refused.
+    SplineBasis,
+    /// The offered DCLTPGT1 certificate did not admit the exact spline basis.
+    PriceGate,
 }
 
 /// Operator result alias.

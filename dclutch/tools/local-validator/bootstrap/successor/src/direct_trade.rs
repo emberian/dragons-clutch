@@ -28,7 +28,9 @@ use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
     ordinary_v3::DirectOrdinaryAuthenticatedContextV3,
     replay_setup_v1::{DirectReplaySetupReceiptV1, DirectReplaySetupRequestV1},
-    successor::DirectExecutionConfigV1,
+    successor::{
+        DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1, DirectRootStateV1, MakerReplayRootV1,
+    },
     token_setup_v1::{
         DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenSetupReceiptV1,
         DirectTokenSetupRequestV1,
@@ -536,6 +538,30 @@ pub(crate) struct AuthenticatedDirectTradeEvidenceV1 {
     pub(crate) final_accounts: Vec<DirectTradeExpectedPoststateV1>,
     pub(crate) finalized_slot: u64,
     pub(crate) evidence_sha256: String,
+}
+
+/// History-authenticated Direct facts that remain valid after payout mutates
+/// the live Hot poststates.
+///
+/// This is deliberately distinct from [`AuthenticatedDirectTradeEvidenceV1`]:
+/// the ordinary consumer proves that all ten Hot poststates still stand,
+/// while a terminal consumer proves the exact signed manifest, durable
+/// mutation journals, and finalized transaction history, then projects the
+/// children that the terminal campaign must close from those historical
+/// poststates. A caller cannot accidentally treat stale Hot bytes as current.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectTerminalEvidenceV1 {
+    pub(crate) direct: AuthenticatedDirectTradeEvidenceV1,
+    pub(crate) claims_market: Pubkey,
+    pub(crate) direct_root: Pubkey,
+    pub(crate) open_maker_root_count: u64,
+    pub(crate) maker_replays: Vec<AuthenticatedDirectMakerReplayV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectMakerReplayV1 {
+    pub(crate) maker: Pubkey,
+    pub(crate) replay: Pubkey,
 }
 
 struct ArgumentsV1 {
@@ -3128,6 +3154,42 @@ fn resume_direct_setup_transaction_v1(
     Ok(())
 }
 
+fn direct_chaos_mutation_v1(stage: DirectTradeStageV1) -> Option<&'static str> {
+    match stage {
+        DirectTradeStageV1::LookupFreeze => Some("lookup-freeze"),
+        DirectTradeStageV1::CapabilitySeal => Some("capability-seal"),
+        DirectTradeStageV1::Hot => Some("hot"),
+        DirectTradeStageV1::LookupCreate
+        | DirectTradeStageV1::LookupExtend
+        | DirectTradeStageV1::LookupActivation => None,
+    }
+}
+
+fn park_direct_chaos_boundary_v1(
+    arguments: &ArgumentsV1,
+    journal_path: &Path,
+    journal: &DirectTradeJournalV1,
+    packet: &[u8],
+    boundary: crate::chaos_fault::BoundaryV1,
+) -> Result<()> {
+    let Some(mutation) = direct_chaos_mutation_v1(journal.stage) else {
+        return Ok(());
+    };
+    let signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| refusal("Direct chaos boundary omitted signature"))?;
+    crate::chaos_fault::park_if_armed_v1(
+        arguments.expected_cluster.evidence_label(),
+        mutation,
+        boundary,
+        journal_path,
+        &journal.intent_sha256,
+        &sha256_hex(packet),
+        signature,
+    )
+}
+
 fn authenticate_finalized_direct_setup_history_v1(
     rpc: &mut Rpc,
     planning: &DirectTradeSetupPlanningV1,
@@ -3944,8 +4006,16 @@ fn resume_direct_transaction_v1(
                     .ok_or_else(|| refusal("Dispatching Direct journal omitted packet"))?,
                 "Dispatching Direct packet",
             )?;
-            let already_finalized = finalized_direct_transaction_v1(rpc, &signature.to_string())?;
+            let mut already_finalized =
+                finalized_direct_transaction_v1(rpc, &signature.to_string())?;
             if already_finalized.is_none() {
+                park_direct_chaos_boundary_v1(
+                    arguments,
+                    path,
+                    journal,
+                    &packet,
+                    crate::chaos_fault::BoundaryV1::DispatchingBeforeSend,
+                )?;
                 let returned = rpc
                     .call_once(
                         "sendTransaction",
@@ -3964,6 +4034,25 @@ fn resume_direct_transaction_v1(
                     return Err(refusal(
                         "Direct RPC returned a signature different from the persisted packet",
                     ));
+                }
+                if let Some(mutation) = direct_chaos_mutation_v1(journal.stage)
+                    && crate::chaos_fault::is_armed_for_v1(
+                        mutation,
+                        crate::chaos_fault::BoundaryV1::LandedBeforeFinalizationFsync,
+                    )?
+                {
+                    already_finalized = Some(wait_direct_finalized_v1(
+                        rpc,
+                        &signature.to_string(),
+                        arguments.origin.pacing().confirm_timeout,
+                    )?);
+                    park_direct_chaos_boundary_v1(
+                        arguments,
+                        path,
+                        journal,
+                        &packet,
+                        crate::chaos_fault::BoundaryV1::LandedBeforeFinalizationFsync,
+                    )?;
                 }
             }
             let previous = journal.state_sha256.clone();
@@ -4865,11 +4954,252 @@ pub(crate) fn authenticate_owned_loopback_finalized_evidence_v1(
     expected_plan_sha256: &str,
     expected_market_input_sha256: &str,
 ) -> Result<AuthenticatedDirectTradeEvidenceV1> {
-    let path = absolute_existing_file(path, "owned-loopback Direct finalized evidence")?;
+    let embedded = authenticate_embedded_terminal_history_v1(
+        rpc,
+        path,
+        expected_market,
+        expected_plan_sha256,
+        expected_market_input_sha256,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    let evidence = &embedded.evidence;
+    let public = &embedded.public;
+    let journal = &embedded.journal;
+    let seller = embedded.seller;
+    let buyer = embedded.buyer;
+
+    // This ordinary evidence consumer intentionally requires the original Hot
+    // poststate to remain live. Terminal consumers use the history-only entry
+    // point below after payout has legitimately advanced those accounts.
+    let route_keys = route_keys(&public.route)?;
+    let snapshot = finalized_snapshot(rpc, &route_keys)?;
+    let named_route = build_named_route(&snapshot, &public.route)?;
+    let physical =
+        assemble_direct_inline_ordinary_route_v3(named_route, public.context.outcome_count)
+            .map_err(|error| Error::new(format!("embedded Direct named route: {error:?}")))?;
+    let physical = project_direct_inline_sealed_execution_physical_v3(&physical)
+        .map_err(|error| Error::new(format!("embedded Direct sealed route: {error:?}")))?;
+
+    let lookup_key = parse_key(&journal.lookup_table, "embedded Direct lookup table")?;
+    let lookup_account = finalized_observed_accounts_v1(
+        rpc,
+        core::slice::from_ref(&lookup_key),
+        evidence.finalized_slot,
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| refusal("embedded Direct lookup table disappeared"))?;
+    let table = authenticate_embedded_lookup_table_v1(journal, &lookup_account)?;
+    authenticate_embedded_hot_message_v1(public, seller, buyer, journal, &physical, &table)?;
+    authenticate_finalized_direct_history_v1(rpc, journal)?;
+
+    let expected_keys = journal
+        .expected_poststates
+        .iter()
+        .map(|expected| parse_key(&expected.address, "embedded Direct poststate"))
+        .collect::<Result<Vec<_>>>()?;
+    let accounts = finalized_observed_accounts_v1(rpc, &expected_keys, evidence.finalized_slot)?;
+    let observed = verify_expected_direct_poststates_v1(&accounts, &journal.expected_poststates)?;
+    if observed != journal.finalized_poststates || observed != evidence.poststates {
+        return Err(refusal(
+            "embedded Direct evidence did not match all ten live finalized poststates",
+        ));
+    }
+    authenticate_embedded_buyer_poststates_v1(public, buyer, &accounts)?;
+    let seal = snapshot.account(parse_key(
+        &public.route.fixed.capability_seal,
+        "embedded Direct capability seal",
+    )?)?;
+    if sha256_hex(&seal.data) != evidence.capability_seal_sha256
+        || seal.owner
+            != parse_key(
+                &public.route.fixed.trading_program,
+                "embedded Direct Trading program",
+            )?
+    {
+        return Err(refusal(
+            "embedded Direct capability seal bytes or owner changed",
+        ));
+    }
+    project_authenticated_direct_evidence_v1(&embedded)
+}
+
+struct AuthenticatedEmbeddedDirectV1 {
+    evidence: DirectTradeFinalizedEvidenceV1,
+    public: DirectTradePublicManifestV1,
+    journal: DirectTradeJournalV1,
+    seller: SignedDirectIntentV3,
+    buyer: SignedDirectIntentV3,
+}
+
+/// Reauthenticate the immutable Direct source after later lifecycle actions
+/// have legitimately changed its ten Hot poststates.
+///
+/// The signed manifest, every embedded durable mutation journal, and every
+/// finalized packet/history row remain mandatory. Only the *current-live*
+/// equality used by the ordinary handoff is omitted. Terminal child
+/// coordinates and root count are decoded from the authenticated Hot
+/// poststates rather than accepted from the caller.
+pub(crate) fn authenticate_owned_loopback_terminal_evidence_v1(
+    rpc: &mut Rpc,
+    path: &Path,
+    expected_market: Pubkey,
+    expected_plan_sha256: &str,
+    expected_market_input_sha256: &str,
+) -> Result<AuthenticatedDirectTerminalEvidenceV1> {
+    authenticate_terminal_evidence_v1(
+        rpc,
+        path,
+        expected_market,
+        expected_plan_sha256,
+        expected_market_input_sha256,
+        ExpectedClusterV1::OwnedLoopback,
+    )
+}
+
+/// Reauthenticate a finalized public-devnet Direct source after later,
+/// legitimate payout and retirement mutations changed its live Hot poststate.
+///
+/// This is not the owned-loopback evidence relabeled. The embedded evidence,
+/// public manifest, journal schemas, finalized transaction fees, and exact
+/// genesis are all authenticated under the distinct devnet domains before any
+/// terminal child coordinate is exposed.
+pub(crate) fn authenticate_devnet_terminal_evidence_v1(
+    rpc: &mut Rpc,
+    path: &Path,
+    expected_market: Pubkey,
+    expected_plan_sha256: &str,
+    expected_market_input_sha256: &str,
+) -> Result<AuthenticatedDirectTerminalEvidenceV1> {
+    authenticate_terminal_evidence_v1(
+        rpc,
+        path,
+        expected_market,
+        expected_plan_sha256,
+        expected_market_input_sha256,
+        ExpectedClusterV1::Devnet,
+    )
+}
+
+fn authenticate_terminal_evidence_v1(
+    rpc: &mut Rpc,
+    path: &Path,
+    expected_market: Pubkey,
+    expected_plan_sha256: &str,
+    expected_market_input_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<AuthenticatedDirectTerminalEvidenceV1> {
+    let embedded = authenticate_embedded_terminal_history_v1(
+        rpc,
+        path,
+        expected_market,
+        expected_plan_sha256,
+        expected_market_input_sha256,
+        expected_cluster,
+    )?;
+    let public = &embedded.public;
+    let journal = &embedded.journal;
+    let root_poststate = journal
+        .expected_poststates
+        .first()
+        .ok_or_else(|| refusal("terminal Direct evidence omitted root poststate"))?;
+    let root_data = decode_canonical_base64_v1(
+        &root_poststate.data_base64,
+        "terminal Direct root poststate",
+    )?;
+    let root_tail = root_data
+        .get(root_data.len().saturating_sub(DIRECT_ROOT_STATE_BYTES_V1)..)
+        .filter(|tail| tail.len() == DIRECT_ROOT_STATE_BYTES_V1)
+        .ok_or_else(|| refusal("terminal Direct root poststate omitted its exact tail"))?;
+    let root = DirectRootStateV1::decode(root_tail)
+        .map_err(|error| Error::new(format!("terminal Direct root state: {error:?}")))?;
+
+    let identities = [
+        (
+            embedded.seller.maker,
+            public.route.seller_maker.as_str(),
+            journal.expected_poststates.get(1),
+        ),
+        (
+            embedded.buyer.maker,
+            public.route.buyer_maker.as_str(),
+            journal.expected_poststates.get(2),
+        ),
+    ];
+    let mut maker_replays = Vec::new();
+    for (maker, expected_address, poststate) in identities {
+        let poststate = poststate
+            .ok_or_else(|| refusal("terminal Direct evidence omitted maker replay poststate"))?;
+        if poststate.address != expected_address {
+            return Err(refusal(
+                "terminal Direct evidence changed maker replay poststate order",
+            ));
+        }
+        let data = decode_canonical_base64_v1(
+            &poststate.data_base64,
+            "terminal Direct maker replay poststate",
+        )?;
+        if data.is_empty() && poststate.lamports == 0 {
+            continue;
+        }
+        let replay = MakerReplayRootV1::decode(&data)
+            .map_err(|error| Error::new(format!("terminal Direct maker replay: {error:?}")))?;
+        let address = parse_key(expected_address, "terminal Direct maker replay")?;
+        if replay.market() != expected_market.to_bytes()
+            || replay.generation() != public.context.generation
+            || replay.maker() != maker.to_bytes()
+            || maker_replays
+                .iter()
+                .any(|row: &AuthenticatedDirectMakerReplayV1| {
+                    row.maker == maker || row.replay == address
+                })
+        {
+            return Err(refusal(
+                "terminal Direct maker replay did not bind its Market, generation, maker, or unique address",
+            ));
+        }
+        maker_replays.push(AuthenticatedDirectMakerReplayV1 {
+            maker,
+            replay: address,
+        });
+    }
+    if root.open_maker_root_count()
+        != u64::try_from(maker_replays.len())
+            .map_err(|_| refusal("terminal Direct maker count overflowed"))?
+    {
+        return Err(refusal(
+            "terminal Direct root count did not equal the exhaustive authenticated replay set",
+        ));
+    }
+    Ok(AuthenticatedDirectTerminalEvidenceV1 {
+        direct: project_authenticated_direct_evidence_v1(&embedded)?,
+        claims_market: parse_key(
+            &public.route.claims.aggregate,
+            "terminal Direct Claims aggregate",
+        )?,
+        direct_root: parse_key(&public.route.fixed.root, "terminal Direct root")?,
+        open_maker_root_count: root.open_maker_root_count(),
+        maker_replays,
+    })
+}
+
+fn authenticate_embedded_terminal_history_v1(
+    rpc: &mut Rpc,
+    path: &Path,
+    expected_market: Pubkey,
+    expected_plan_sha256: &str,
+    expected_market_input_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<AuthenticatedEmbeddedDirectV1> {
+    let label = format!(
+        "{} Direct finalized evidence",
+        expected_cluster.evidence_label()
+    );
+    let path = absolute_existing_file(path, &label)?;
     let evidence_bytes = fs::read(path)?;
-    require_unique_json_v1(&evidence_bytes, "owned-loopback Direct finalized evidence")?;
+    require_unique_json_v1(&evidence_bytes, &label)?;
     let evidence: DirectTradeFinalizedEvidenceV1 = serde_json::from_slice(&evidence_bytes)?;
-    authenticate_embedded_direct_evidence_identity_v1(&evidence, ExpectedClusterV1::OwnedLoopback)?;
+    authenticate_embedded_direct_evidence_identity_v1(&evidence, expected_cluster)?;
 
     let public_bytes = decode_canonical_base64_v1(
         &evidence.public_manifest_base64,
@@ -4878,14 +5208,14 @@ pub(crate) fn authenticate_owned_loopback_finalized_evidence_v1(
     require_unique_json_v1(&public_bytes, "embedded Direct public manifest")?;
     let public: DirectTradePublicManifestV1 = serde_json::from_slice(&public_bytes)?;
     if sha256_hex(&public_bytes) != evidence.public_manifest_sha256
-        || public.schema != direct_public_schema_v1(ExpectedClusterV1::OwnedLoopback)
-        || public.cluster != ExpectedClusterV1::OwnedLoopback.evidence_label()
+        || public.schema != direct_public_schema_v1(expected_cluster)
+        || public.cluster != expected_cluster.evidence_label()
         || public.market != expected_market.to_string()
         || public.plan_sha256 != expected_plan_sha256
         || public.market_input_sha256 != expected_market_input_sha256
     {
         return Err(refusal(
-            "embedded Direct manifest did not match the expected owned-loopback Market and founding inputs",
+            "embedded Direct manifest did not match the expected cluster, Market, and founding inputs",
         ));
     }
     hex32(&public.plan_sha256, "Direct plan digest")?;
@@ -4893,11 +5223,14 @@ pub(crate) fn authenticate_owned_loopback_finalized_evidence_v1(
     let observed_genesis = rpc
         .call("getGenesisHash", &json!([]))?
         .as_str()
-        .ok_or_else(|| refusal("owned-loopback Direct genesis was not a string"))?
+        .ok_or_else(|| refusal("terminal Direct genesis was not a string"))?
         .to_owned();
-    if public.genesis_hash != observed_genesis {
+    if public.genesis_hash != observed_genesis
+        || (expected_cluster == ExpectedClusterV1::Devnet
+            && observed_genesis != DEVNET_GENESIS_HASH)
+    {
         return Err(refusal(
-            "embedded Direct manifest named another owned-loopback genesis",
+            "embedded Direct manifest named another cluster genesis",
         ));
     }
     let seller = decode_signed_intent(&public.seller, 0, &public)?;
@@ -4933,59 +5266,25 @@ pub(crate) fn authenticate_owned_loopback_finalized_evidence_v1(
     let journal: DirectTradeJournalV1 = serde_json::from_slice(&journal_bytes)?;
     authenticate_embedded_hot_journal_v1(&public, &evidence, &journal)?;
     authenticate_embedded_direct_mutations_v1(rpc, &public, &evidence, &journal)?;
-
-    let route_keys = route_keys(&public.route)?;
-    let snapshot = finalized_snapshot(rpc, &route_keys)?;
-    let named_route = build_named_route(&snapshot, &public.route)?;
-    let physical =
-        assemble_direct_inline_ordinary_route_v3(named_route, public.context.outcome_count)
-            .map_err(|error| Error::new(format!("embedded Direct named route: {error:?}")))?;
-    let physical = project_direct_inline_sealed_execution_physical_v3(&physical)
-        .map_err(|error| Error::new(format!("embedded Direct sealed route: {error:?}")))?;
-
-    let lookup_key = parse_key(&journal.lookup_table, "embedded Direct lookup table")?;
-    let lookup_account = finalized_observed_accounts_v1(
-        rpc,
-        core::slice::from_ref(&lookup_key),
-        evidence.finalized_slot,
-    )?
-    .into_iter()
-    .next()
-    .ok_or_else(|| refusal("embedded Direct lookup table disappeared"))?;
-    let table = authenticate_embedded_lookup_table_v1(&journal, &lookup_account)?;
-    authenticate_embedded_hot_message_v1(&public, seller, buyer, &journal, &physical, &table)?;
     authenticate_finalized_direct_history_v1(rpc, &journal)?;
+    Ok(AuthenticatedEmbeddedDirectV1 {
+        evidence,
+        public,
+        journal,
+        seller,
+        buyer,
+    })
+}
 
-    let expected_keys = journal
-        .expected_poststates
-        .iter()
-        .map(|expected| parse_key(&expected.address, "embedded Direct poststate"))
-        .collect::<Result<Vec<_>>>()?;
-    let accounts = finalized_observed_accounts_v1(rpc, &expected_keys, evidence.finalized_slot)?;
-    let observed = verify_expected_direct_poststates_v1(&accounts, &journal.expected_poststates)?;
-    if observed != journal.finalized_poststates || observed != evidence.poststates {
-        return Err(refusal(
-            "embedded Direct evidence did not match all ten live finalized poststates",
-        ));
-    }
-    authenticate_embedded_buyer_poststates_v1(&public, buyer, &accounts)?;
-    let seal = snapshot.account(parse_key(
-        &public.route.fixed.capability_seal,
-        "embedded Direct capability seal",
-    )?)?;
-    if sha256_hex(&seal.data) != evidence.capability_seal_sha256
-        || seal.owner
-            != parse_key(
-                &public.route.fixed.trading_program,
-                "embedded Direct Trading program",
-            )?
-    {
-        return Err(refusal(
-            "embedded Direct capability seal bytes or owner changed",
-        ));
-    }
+fn project_authenticated_direct_evidence_v1(
+    embedded: &AuthenticatedEmbeddedDirectV1,
+) -> Result<AuthenticatedDirectTradeEvidenceV1> {
+    let evidence = &embedded.evidence;
+    let public = &embedded.public;
+    let seller = embedded.seller;
+    let buyer = embedded.buyer;
     Ok(AuthenticatedDirectTradeEvidenceV1 {
-        market: expected_market,
+        market: parse_key(&public.market, "Direct Market")?,
         seller_owner: seller.maker,
         seller_position: parse_key(
             &public.route.claims.seller_position,
@@ -5011,7 +5310,7 @@ pub(crate) fn authenticate_owned_loopback_finalized_evidence_v1(
         claim_balances: evidence.claim_balances.clone(),
         final_accounts: evidence.final_accounts.clone(),
         finalized_slot: evidence.finalized_slot,
-        evidence_sha256: evidence.evidence_sha256,
+        evidence_sha256: evidence.evidence_sha256.clone(),
     })
 }
 
@@ -6641,12 +6940,13 @@ mod tests {
         OWNED_PRIVATE_SESSION_SCHEMA_V1, OWNED_PUBLIC_MANIFEST_SCHEMA_V1,
         authenticate_direct_claim_schedule_v1, authenticate_direct_history_v1,
         authenticate_embedded_direct_evidence_identity_v1,
-        authenticate_lookup_activation_slot_order_v1, direct_evidence_digest_v1,
-        direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
-        direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
-        journal_state_sha256, parse_direct_return_data_v1, refresh_direct_journal_digest_v1,
-        refusing_admitted_fee_rate_clause_v1, require_unique_json_v1, usage,
-        verify_expected_direct_poststates_v1, write_direct_journal_v1,
+        authenticate_lookup_activation_slot_order_v1, direct_chaos_mutation_v1,
+        direct_evidence_digest_v1, direct_evidence_schema_v1, direct_journal_schema_v1,
+        direct_private_schema_v1, direct_public_schema_v1, expected_stage_v1, hex32,
+        journal_intent_sha256_v1, journal_state_sha256, parse_direct_return_data_v1,
+        refresh_direct_journal_digest_v1, refusing_admitted_fee_rate_clause_v1,
+        require_unique_json_v1, usage, verify_expected_direct_poststates_v1,
+        write_direct_journal_v1,
     };
     use crate::cluster::ExpectedClusterV1;
     use dclutch_operator::{Finality, Observation, ObservedAccount};
@@ -7155,6 +7455,29 @@ mod tests {
         );
         assert!(direct_journal_schema_v1("mainnet-beta").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn chaos_targets_only_the_three_complete_life_direct_mutations() {
+        assert_eq!(
+            direct_chaos_mutation_v1(DirectTradeStageV1::LookupFreeze),
+            Some("lookup-freeze")
+        );
+        assert_eq!(
+            direct_chaos_mutation_v1(DirectTradeStageV1::CapabilitySeal),
+            Some("capability-seal")
+        );
+        assert_eq!(
+            direct_chaos_mutation_v1(DirectTradeStageV1::Hot),
+            Some("hot")
+        );
+        for stage in [
+            DirectTradeStageV1::LookupCreate,
+            DirectTradeStageV1::LookupExtend,
+            DirectTradeStageV1::LookupActivation,
+        ] {
+            assert_eq!(direct_chaos_mutation_v1(stage), None);
+        }
     }
 
     #[test]

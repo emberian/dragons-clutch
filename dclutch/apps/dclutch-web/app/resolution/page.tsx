@@ -1,5 +1,5 @@
-import MarketWorkbench from '@/components/MarketWorkbench';
+import ResolutionWorkspace from '@/components/ResolutionWorkspace';
 
 export default function ResolutionPage() {
-  return <MarketWorkbench initialStage="resolve" />;
+  return <ResolutionWorkspace />;
 }

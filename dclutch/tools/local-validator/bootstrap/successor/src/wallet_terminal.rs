@@ -9,30 +9,31 @@
 
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 #[cfg(test)]
 use dclutch_capability_contract::ContentId;
 use dclutch_claims_svm::{
-    liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
+    claim_check_v1::{ClaimCheckEscrowSeedsV1, ClaimCheckVaultSeedsV1},
+    liability_basis_state_v2::{LiabilityBasisMarketViewV2, LIABILITY_BASIS_MARKET_SEED_V2},
     product_basis_terminal_v3::ProductClaimsTerminalAdmissionV3,
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1,
-    CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+    CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
 };
 #[cfg(test)]
 use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
 use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES, StateBumpsV1,
+    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, StateBumpsV1, STATE_BYTES,
 };
 use dclutch_operator::{
-    Finality, Observation, ObservedAccount,
     wallet_terminal_payout_v3::{
-        WalletTerminalPayoutInputV3, WalletTerminalPayoutReportV3, WalletTerminalPayoutRouteV3,
         build_wallet_terminal_payout_v3, canonical_wallet_terminal_payout_lookup_addresses_v3,
-        compile_wallet_terminal_payout_v0,
+        compile_wallet_terminal_payout_v0, WalletTerminalPayoutInputV3,
+        WalletTerminalPayoutReportV3, WalletTerminalPayoutRouteV3,
     },
+    Finality, Observation, ObservedAccount,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3, runtime_v3::BasisKindV3,
@@ -41,7 +42,7 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_realm_contract::{RealmV1, REALM_SCHEMA_RELEASE_ID_V1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
     activation_cache_address_v1, authenticate_activated_role_v1,
@@ -50,15 +51,15 @@ use dclutch_registry_activation_auth_v1::{
 use dclutch_release_set_contract::CallerAuthoritySeedsV1;
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_representation_composition_v3_kernel::{
-    COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
-    COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, RecordAdmissionV3,
+    RecordAdmissionV3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+    COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3,
 };
 use dclutch_representation_composition_v3_operator::{
-    CompositionOnlyChainObservationV3, CompositionOnlyObservationV3, FinalizedRecordObservationV3,
-    ProductCompositionObservationV3, authenticate_composition_only_v3,
+    authenticate_composition_only_v3, CompositionOnlyChainObservationV3,
+    CompositionOnlyObservationV3, FinalizedRecordObservationV3, ProductCompositionObservationV3,
 };
 use dclutch_resolution_codec::{
-    RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    ResolutionCertificateKindV2, ResolutionCertificateV2, RESOLUTION_CERTIFICATE_BYTES_V2,
 };
 use dclutch_token_svm::{Mint, TokenProgram};
 use serde::{Deserialize, Serialize};
@@ -72,10 +73,10 @@ use solana_sdk::hash::Hash;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 use crate::{
-    Error, Result,
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, RpcAccount, WritePolicyV1},
+    Error, Result,
 };
 
 use dclutch_versioned_message_operator::EXTEND_ADDRESSES_PER_TRANSACTION_V1;
@@ -196,10 +197,31 @@ pub(crate) enum LookupTableRequirementV1 {
     Absent,
 }
 
+#[derive(Clone, Copy)]
+enum RecipientRouteV1 {
+    Wallet,
+    ClaimCheckEscrow,
+}
+
 impl SelectedInputV1 {
     pub(crate) fn parse(
         input: &PlanInputV1,
         requirement: LookupTableRequirementV1,
+    ) -> Result<Self> {
+        Self::parse_for_route(input, requirement, RecipientRouteV1::Wallet)
+    }
+
+    pub(crate) fn parse_claim_check_compaction(
+        input: &PlanInputV1,
+        requirement: LookupTableRequirementV1,
+    ) -> Result<Self> {
+        Self::parse_for_route(input, requirement, RecipientRouteV1::ClaimCheckEscrow)
+    }
+
+    fn parse_for_route(
+        input: &PlanInputV1,
+        requirement: LookupTableRequirementV1,
+        recipient_route: RecipientRouteV1,
     ) -> Result<Self> {
         if input.format != INPUT_FORMAT {
             return Err(Error::new(format!(
@@ -233,11 +255,6 @@ impl SelectedInputV1 {
         let resolution = nonzero_pubkey(&input.programs.resolution, "programs.resolution")?;
         let terminal_certificate =
             nonzero_pubkey(&input.terminal_certificate, "terminalCertificate")?;
-        if recipient_owner != owner {
-            return Err(Error::new(
-                "recipientOwner must equal owner for a wallet terminal payout",
-            ));
-        }
         if input.transfer_index != 0 {
             return Err(Error::new(
                 "transferIndex must be zero for a wallet terminal payout",
@@ -297,6 +314,35 @@ impl SelectedInputV1 {
             &claims,
         )
         .0;
+        match recipient_route {
+            RecipientRouteV1::Wallet if recipient_owner != owner => {
+                return Err(Error::new(
+                    "recipientOwner must equal owner for a wallet terminal payout",
+                ));
+            }
+            RecipientRouteV1::ClaimCheckEscrow => {
+                let escrow = Pubkey::find_program_address(
+                    &ClaimCheckEscrowSeedsV1::new(aggregate.to_bytes())
+                        .map_err(|error| Error::new(format!("claim-check escrow: {error:?}")))?
+                        .as_slices(),
+                    &claims,
+                )
+                .0;
+                let vault = Pubkey::find_program_address(
+                    &ClaimCheckVaultSeedsV1::new(aggregate.to_bytes())
+                        .map_err(|error| Error::new(format!("claim-check vault: {error:?}")))?
+                        .as_slices(),
+                    &claims,
+                )
+                .0;
+                if recipient_owner != escrow || recipient != vault {
+                    return Err(Error::new(
+                        "claim-check compaction recipient must be the aggregate-derived escrow and vault",
+                    ));
+                }
+            }
+            RecipientRouteV1::Wallet | RecipientRouteV1::ClaimCheckEscrow => {}
+        }
         let position = Pubkey::find_program_address(
             &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
                 .map_err(|error| Error::new(format!("Position seeds: {error:?}")))?
@@ -1030,35 +1076,45 @@ fn terminal_scenario(
             "Core terminal winner is outside the Product result domain",
         ));
     }
+    if certificate.selector != core.terminal_winner {
+        return Err(Error::new(
+            "Resolution certificate selector does not equal Core terminal winner",
+        ));
+    }
+    // Reuse the codec's canonical Product/kind/selector check here without
+    // inventing a second family policy: success selects a result cell, failure
+    // selects the final cell, and recovery/exhaustion are not terminal payout
+    // certificates.
+    if certificate
+        .validate_terminal_product(core.identity.product_record.to_bytes(), outcome_count)
+        .is_err()
+    {
+        return Err(Error::new(
+            "Resolution certificate kind and selector are not terminal for the Product width",
+        ));
+    }
     match kind {
         BasisKindV3::CategoricalQ1 => Ok(TerminalScenarioV3::Categorical(core.terminal_winner)),
-        BasisKindV3::GradedExactComplement => {
-            if core.terminal_winner == outcome_count.saturating_sub(1) {
-                if certificate.kind != ResolutionCertificateKindV2::ResolutionFailure {
-                    return Err(Error::new(
-                        "graded failure selector has another Resolution certificate kind",
-                    ));
+        // Both non-categorical families consume the authenticated rational
+        // coordinate on success and their basis-owned failure vector on
+        // failure. The Claims program and public rational operator use this
+        // exact `TerminalScenarioV3` split, so the successor plans the same
+        // cumulative-floor evaluator instead of reconstructing curve weights.
+        BasisKindV3::GradedExactComplement | BasisKindV3::SplineDegree2To3 { .. } => {
+            match certificate.kind {
+                ResolutionCertificateKindV2::ResolutionSuccess => {
+                    Ok(TerminalScenarioV3::Rational {
+                        numerator: certificate.result_numerator,
+                        denominator: certificate.result_denominator,
+                    })
                 }
-                return Ok(TerminalScenarioV3::Failure);
+                ResolutionCertificateKindV2::ResolutionFailure => Ok(TerminalScenarioV3::Failure),
+                ResolutionCertificateKindV2::RecoveryAdvanced
+                | ResolutionCertificateKindV2::Exhausted => {
+                    Err(Error::new("Resolution certificate is not terminal"))
+                }
             }
-            if certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess {
-                return Err(Error::new(
-                    "graded success selector has another Resolution certificate kind",
-                ));
-            }
-            Ok(TerminalScenarioV3::Rational {
-                numerator: certificate.result_numerator,
-                denominator: certificate.result_denominator,
-            })
         }
-        // The devnet driver refuses the same pair the program refuses
-        // (`ClaimsSbfError::BasisEvaluatorAbsent`, 0x500C). A driver that
-        // guessed a scenario here would build a transaction the chain then
-        // rejects, and the operator would debug the rejection instead of the
-        // guess.
-        BasisKindV3::SplineDegree2To3 { .. } => Err(Error::new(
-            "basis names the degree-2-to-3 spline family and no evaluator exists",
-        )),
     }
 }
 
@@ -1359,11 +1415,11 @@ pub(crate) mod tests {
     use std::borrow::Cow;
 
     use dclutch_claims_svm::{
-        CallerRole,
         terminal_settlement_v3::{TerminalSettlementRequestInputV3, TerminalSettlementRequestV3},
+        CallerRole,
     };
     use dclutch_operator::wallet_terminal_payout_v3::{
-        WalletTerminalPayoutErrorV3, canonical_wallet_terminal_payout_lookup_addresses_v3,
+        canonical_wallet_terminal_payout_lookup_addresses_v3, WalletTerminalPayoutErrorV3,
     };
     use sha2::{Digest as _, Sha256};
     use solana_address_lookup_table_interface::{
@@ -1421,6 +1477,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn recipient_mode_keeps_wallet_and_claim_check_routes_disjoint() {
+        let wallet = input();
+        let selected = SelectedInputV1::parse(&wallet, LookupTableRequirementV1::Present)
+            .expect("wallet route");
+        let escrow = Pubkey::find_program_address(
+            &ClaimCheckEscrowSeedsV1::new(selected.aggregate.to_bytes())
+                .expect("escrow seeds")
+                .as_slices(),
+            &selected.claims,
+        )
+        .0;
+        let vault = Pubkey::find_program_address(
+            &ClaimCheckVaultSeedsV1::new(selected.aggregate.to_bytes())
+                .expect("vault seeds")
+                .as_slices(),
+            &selected.claims,
+        )
+        .0;
+        let mut compaction = wallet.clone();
+        compaction.recipient_owner = escrow.to_string();
+        compaction.recipient = vault.to_string();
+        assert!(SelectedInputV1::parse_claim_check_compaction(
+            &compaction,
+            LookupTableRequirementV1::Present,
+        )
+        .is_ok());
+        assert!(SelectedInputV1::parse(&compaction, LookupTableRequirementV1::Present).is_err());
+        compaction.recipient = wallet.recipient;
+        assert!(SelectedInputV1::parse_claim_check_compaction(
+            &compaction,
+            LookupTableRequirementV1::Present,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn input_is_exact_and_derivations_are_stable() {
         let value = input();
         let selected = SelectedInputV1::parse(&value, LookupTableRequirementV1::Present)
@@ -1431,17 +1523,13 @@ pub(crate) mod tests {
             selected.activation_cache,
             activation_cache_address_v1(&selected.registry, &selected.release_set)
         );
-        assert!(
-            selected
-                .addresses()
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
-        );
-        assert!(
-            selected
-                .addresses()
-                .contains(&selected.terminal_certificate)
-        );
+        assert!(selected
+            .addresses()
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
+        assert!(selected
+            .addresses()
+            .contains(&selected.terminal_certificate));
     }
 
     #[test]
@@ -1466,6 +1554,22 @@ pub(crate) mod tests {
                 denominator: 10,
             }
         );
+        assert_eq!(
+            terminal_scenario(
+                terminal_core(1),
+                BasisKindV3::SplineDegree2To3 {
+                    degree: 3,
+                    interior_multiplicity: false,
+                },
+                4,
+                success,
+            )
+            .expect("cubic success certificate"),
+            TerminalScenarioV3::Rational {
+                numerator: -7,
+                denominator: 10,
+            }
+        );
         let failure = terminal_certificate(ResolutionCertificateKindV2::ResolutionFailure, 2, 0, 0);
         assert_eq!(
             terminal_scenario(
@@ -1477,17 +1581,71 @@ pub(crate) mod tests {
             .expect("graded failure certificate"),
             TerminalScenarioV3::Failure
         );
-        assert!(
+        assert_eq!(
             terminal_scenario(
-                terminal_core(1),
-                BasisKindV3::GradedExactComplement,
+                terminal_core(2),
+                BasisKindV3::SplineDegree2To3 {
+                    degree: 2,
+                    interior_multiplicity: true,
+                },
                 3,
                 failure,
             )
-            .expect_err("success selector with failure certificate must refuse")
-            .to_string()
-            .contains("another Resolution certificate kind")
+            .expect("spline failure certificate"),
+            TerminalScenarioV3::Failure
         );
+        let wrong_kind =
+            terminal_certificate(ResolutionCertificateKindV2::ResolutionFailure, 1, 0, 0);
+        assert!(terminal_scenario(
+            terminal_core(1),
+            BasisKindV3::GradedExactComplement,
+            3,
+            wrong_kind,
+        )
+        .expect_err("success selector with failure certificate must refuse")
+        .to_string()
+        .contains("kind and selector are not terminal"));
+        let mismatched =
+            terminal_certificate(ResolutionCertificateKindV2::ResolutionSuccess, 0, -7, 10);
+        assert!(terminal_scenario(
+            terminal_core(1),
+            BasisKindV3::SplineDegree2To3 {
+                degree: 3,
+                interior_multiplicity: false,
+            },
+            4,
+            mismatched,
+        )
+        .expect_err("certificate selector must equal the Core terminal winner")
+        .to_string()
+        .contains("selector does not equal"));
+        let recovery = terminal_certificate(ResolutionCertificateKindV2::RecoveryAdvanced, 1, 0, 0);
+        assert!(terminal_scenario(
+            terminal_core(1),
+            BasisKindV3::SplineDegree2To3 {
+                degree: 3,
+                interior_multiplicity: false,
+            },
+            4,
+            recovery,
+        )
+        .expect_err("recovery evidence is not a terminal certificate")
+        .to_string()
+        .contains("kind and selector are not terminal"));
+        let mut substituted_product = success;
+        substituted_product.product_record_digest = [99; 32];
+        assert!(terminal_scenario(
+            terminal_core(1),
+            BasisKindV3::SplineDegree2To3 {
+                degree: 3,
+                interior_multiplicity: false,
+            },
+            4,
+            substituted_product,
+        )
+        .expect_err("a substituted Product root must refuse")
+        .to_string()
+        .contains("kind and selector are not terminal"));
     }
 
     fn terminal_core(winner: u32) -> CoreState {
@@ -1528,7 +1686,7 @@ pub(crate) mod tests {
             market: [1; 32],
             route: [2; 32],
             source_material: [3; 32],
-            product_record_digest: [4; 32],
+            product_record_digest: [3; 32],
             provider_evidence: [5; 32],
             funding_allocation: [6; 32],
             receipt_account: [7; 32],
@@ -1911,27 +2069,23 @@ pub(crate) mod tests {
             observation,
             accounts: BTreeMap::from([(raw.key, raw), (staging.key, staging)]),
         };
-        assert!(
-            authenticate_record(
-                selected.realm,
-                &snapshot,
-                &Rent::default(),
-                selected.registry
-            )
-            .is_err()
-        );
+        assert!(authenticate_record(
+            selected.realm,
+            &snapshot,
+            &Rent::default(),
+            selected.registry
+        )
+        .is_err());
 
         let report = payout_report();
         let canonical = lookup(&report, false, report.observation.slot);
-        assert!(
-            compile_wallet_terminal_payout_v0(
-                report.clone(),
-                report.owner,
-                Hash::new_from_array(GEOMETRY_BLOCKHASH),
-                &canonical,
-            )
-            .is_ok()
-        );
+        assert!(compile_wallet_terminal_payout_v0(
+            report.clone(),
+            report.owner,
+            Hash::new_from_array(GEOMETRY_BLOCKHASH),
+            &canonical,
+        )
+        .is_ok());
         let substituted = lookup(&report, true, report.observation.slot);
         assert_eq!(
             compile_wallet_terminal_payout_v0(

@@ -12,9 +12,10 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_pyth_svm::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
 use dclutch_release_set_contract::{
     CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+    ProtocolInfrastructureProfileV2,
 };
 #[cfg(feature = "transaction-planning")]
 use dclutch_resolution_codec::{
@@ -41,7 +42,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 use solana_sdk_ids::{system_program, sysvar};
+#[cfg(feature = "transaction-planning")]
+use solana_system_interface::instruction::transfer;
 
+use dclutch_resolution_core_v3_operator::derive_resolution_funding_base_coordinates_v3;
 pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 #[cfg(feature = "transaction-planning")]
 use dclutch_versioned_message_operator::{
@@ -54,6 +58,75 @@ pub const PROVIDER_SUBMIT_ACCOUNT_COUNT_V3: usize = 38;
 pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 18;
 /// Core provider execution account count frozen by Resolution V3.
 pub const PROVIDER_EXECUTE_ACCOUNT_COUNT_V3: usize = PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3;
+
+/// First-stage chain coordinates for browser provider submission discovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderSubmitBaseCoordinatesV3 {
+    /// Canonical Source state for the Market.
+    pub source_state: Pubkey,
+    /// Finalized SourceMaterial raw record.
+    pub source_material: Pubkey,
+    /// Immutable refund recipient selected by the Market.
+    pub refund_recipient: Pubkey,
+    /// Core-owned immutable infrastructure profile.
+    pub infrastructure: Pubkey,
+    /// Core ProgramData derived from the executable program account.
+    pub core_programdata: Pubkey,
+    /// Resolution ProgramData derived from the executable program account.
+    pub resolution_programdata: Pubkey,
+}
+
+/// Second-stage record coordinates derived from authenticated Market material.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderSubmitMaterialCoordinatesV3 {
+    /// Finalized SourceSpec raw record.
+    pub source_spec: Pubkey,
+    /// Vacant SourceSpec staging cursor.
+    pub source_spec_staging: Pubkey,
+    /// Finalized WindowSpec raw record.
+    pub window: Pubkey,
+    /// Vacant WindowSpec staging cursor.
+    pub window_staging: Pubkey,
+    /// Infrastructure-selected Registry artifact raw record.
+    pub registry_artifact: Pubkey,
+    /// Vacant Registry artifact staging cursor.
+    pub registry_artifact_staging: Pubkey,
+}
+
+/// One raw/staging record pair in the provider discovery graph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderSubmitRecordCoordinatesV3 {
+    /// Finalized raw record.
+    pub raw: Pubkey,
+    /// Vacant staging cursor.
+    pub staging: Pubkey,
+}
+
+/// Provider deployment accounts selected by Pyth release and verified VAA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderSubmitPythCoordinatesV3 {
+    /// Pyth Receiver program.
+    pub receiver_program: Pubkey,
+    /// Pyth Receiver ProgramData.
+    pub receiver_programdata: Pubkey,
+    /// Receiver Config.
+    pub receiver_config: Pubkey,
+    /// Wormhole Router program.
+    pub router_program: Pubkey,
+    /// Wormhole Router ProgramData.
+    pub router_programdata: Pubkey,
+    /// GuardianSet selected by the verified EncodedVaa.
+    pub guardian_set: Pubkey,
+}
+
+/// Fresh account coordinates selected by one submit update signer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderSubmitFreshCoordinatesV3 {
+    /// Resolution-owned lifecycle PDA.
+    pub lifecycle: Pubkey,
+    /// Resolution-owned Receiver write-authority PDA.
+    pub update_authority: Pubkey,
+}
 
 /// Host-side refusal from inconsistent chain observations or intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +143,214 @@ pub enum ProviderTransportOperatorErrorV3 {
     Intent,
     /// Lifecycle was not an exact consumed reclaim candidate.
     Lifecycle,
+}
+
+/// Derive the Market-owned starting coordinates for one provider submission.
+pub fn derive_provider_submit_base_coordinates_v3(
+    market: &ObservedAccount,
+    core_program: Pubkey,
+    registry_program: Pubkey,
+    resolution_program: Pubkey,
+) -> Result<ProviderSubmitBaseCoordinatesV3, ProviderTransportOperatorErrorV3> {
+    if market.observation.finality != Finality::Finalized {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    let base = derive_resolution_funding_base_coordinates_v3(
+        market.key,
+        market.owner,
+        market.executable,
+        &market.data,
+        core_program,
+        registry_program,
+        resolution_program,
+    )
+    .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+    Ok(ProviderSubmitBaseCoordinatesV3 {
+        source_state: base.source_state,
+        source_material: base.source_material,
+        refund_recipient: base.beneficiary,
+        infrastructure: Pubkey::find_program_address(
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+            &core_program,
+        )
+        .0,
+        core_programdata: base.core_programdata,
+        resolution_programdata: base.resolution_programdata,
+    })
+}
+
+/// Continue provider discovery through SourceMaterial and infrastructure.
+pub fn derive_provider_submit_material_coordinates_v3(
+    market: &ObservedAccount,
+    source_material: &ObservedAccount,
+    infrastructure: &ObservedAccount,
+) -> Result<ProviderSubmitMaterialCoordinatesV3, ProviderTransportOperatorErrorV3> {
+    let observation =
+        require_same_finalized_observation(&[market, source_material, infrastructure])?;
+    if observation != market.observation {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    let state =
+        CoreState::decode(&market.data).map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+    let registry = Pubkey::new_from_array(state.identity.registry_program.to_bytes());
+    authenticate_raw(
+        registry,
+        source_material,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        state.identity.resolution_policy.to_bytes(),
+    )?;
+    let material = SourceMaterialV3::decode(&source_material.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+    let expected_infrastructure = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+        &market.owner,
+    )
+    .0;
+    if infrastructure.key != expected_infrastructure
+        || infrastructure.owner != market.owner
+        || infrastructure.executable
+        || infrastructure.lamports == 0
+    {
+        return Err(ProviderTransportOperatorErrorV3::Address);
+    }
+    let profile = ProtocolInfrastructureProfileV2::decode(&infrastructure.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+    if profile.registry().program().to_bytes() != registry.to_bytes() {
+        return Err(ProviderTransportOperatorErrorV3::Record);
+    }
+    let source_spec = record_pair(
+        registry,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        material.primary_source_spec().to_bytes(),
+    );
+    let window = record_pair(
+        registry,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        material.window_spec().to_bytes(),
+    );
+    let registry_artifact = record_pair(
+        registry,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        profile.registry().artifact_release().to_bytes(),
+    );
+    Ok(ProviderSubmitMaterialCoordinatesV3 {
+        source_spec: source_spec.raw,
+        source_spec_staging: source_spec.staging,
+        window: window.raw,
+        window_staging: window.staging,
+        registry_artifact: registry_artifact.raw,
+        registry_artifact_staging: registry_artifact.staging,
+    })
+}
+
+/// Derive the Source ProviderRelease pair from one authenticated SourceSpec.
+pub fn derive_provider_submit_provider_release_coordinates_v3(
+    registry: Pubkey,
+    source_spec: &ObservedAccount,
+) -> Result<ProviderSubmitRecordCoordinatesV3, ProviderTransportOperatorErrorV3> {
+    if source_spec.observation.finality != Finality::Finalized {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    authenticate_raw(
+        registry,
+        source_spec,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        hash(&source_spec.data).to_bytes(),
+    )?;
+    let source = SourceSpecV1::decode(&source_spec.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+    Ok(record_pair(
+        registry,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        source.provider_release_id().to_bytes(),
+    ))
+}
+
+/// Derive the Pyth release pair from one authenticated provider release.
+pub fn derive_provider_submit_pyth_release_coordinates_v3(
+    registry: Pubkey,
+    provider_release: &ObservedAccount,
+) -> Result<ProviderSubmitRecordCoordinatesV3, ProviderTransportOperatorErrorV3> {
+    if provider_release.observation.finality != Finality::Finalized {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    authenticate_raw(
+        registry,
+        provider_release,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        hash(&provider_release.data).to_bytes(),
+    )?;
+    let provider = dclutch_source_contract::ProviderReleaseV1::decode(&provider_release.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+    Ok(record_pair(
+        registry,
+        PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+        provider.provider_deployment_release_id().to_bytes(),
+    ))
+}
+
+/// Derive Receiver and Router coordinates from the selected Pyth release and VAA.
+pub fn derive_provider_submit_pyth_coordinates_v3(
+    registry: Pubkey,
+    pyth_release: &ObservedAccount,
+    encoded_vaa: &ObservedAccount,
+) -> Result<ProviderSubmitPythCoordinatesV3, ProviderTransportOperatorErrorV3> {
+    require_same_finalized_observation(&[pyth_release, encoded_vaa])?;
+    authenticate_raw(
+        registry,
+        pyth_release,
+        PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+        hash(&pyth_release.data).to_bytes(),
+    )?;
+    let pyth = PythReleaseV1::decode(&pyth_release.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+    let router_program = Pubkey::new_from_array(pyth.router_program());
+    if encoded_vaa.owner != router_program || encoded_vaa.executable {
+        return Err(ProviderTransportOperatorErrorV3::Provider);
+    }
+    let encoded = VerifiedEncodedVaaV1::parse(&encoded_vaa.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+    Ok(ProviderSubmitPythCoordinatesV3 {
+        receiver_program: Pubkey::new_from_array(pyth.receiver_program()),
+        receiver_programdata: Pubkey::new_from_array(pyth.receiver_programdata()),
+        receiver_config: Pubkey::new_from_array(pyth.receiver_config()),
+        router_program,
+        router_programdata: Pubkey::new_from_array(pyth.router_programdata()),
+        guardian_set: Pubkey::find_program_address(
+            &[b"GuardianSet", &encoded.guardian_set_index().to_be_bytes()],
+            &router_program,
+        )
+        .0,
+    })
+}
+
+/// Derive the lifecycle and Receiver authority from immutable submit inputs.
+pub fn derive_provider_submit_fresh_coordinates_v3(
+    market: Pubkey,
+    source_state: Pubkey,
+    update_account: Pubkey,
+    resolution_program: Pubkey,
+) -> ProviderSubmitFreshCoordinatesV3 {
+    ProviderSubmitFreshCoordinatesV3 {
+        lifecycle: Pubkey::find_program_address(
+            &[
+                PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+                update_account.as_ref(),
+            ],
+            &resolution_program,
+        )
+        .0,
+        update_authority: Pubkey::find_program_address(
+            &[
+                PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+                market.as_ref(),
+                source_state.as_ref(),
+                update_account.as_ref(),
+            ],
+            &resolution_program,
+        )
+        .0,
+    }
 }
 
 /// Minimal caller intent; all protocol and provider authority is derived from observations.
@@ -222,6 +503,17 @@ pub struct ProviderTransportTransactionPlanV3 {
     pub required_signers: Vec<Pubkey>,
 }
 
+/// Exact submit message plus its chain-derived lifecycle prepayment.
+#[cfg(feature = "transaction-planning")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderSubmitTransactionPlanV3 {
+    /// Packet-safe v0 message and exact signer boundary.
+    pub transaction: ProviderTransportTransactionPlanV3,
+    /// Lamports transferred to the still-vacant lifecycle immediately before
+    /// the provider instruction in the same durable message.
+    pub lifecycle_top_up_lamports: u64,
+}
+
 /// Refusal from a mutated provider report or unsafe transaction routing.
 #[cfg(feature = "transaction-planning")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,6 +523,70 @@ pub enum ProviderTransportTransactionErrorV3 {
     Frame,
     /// Finalized lookup-table selection or signed packet geometry refused.
     Routing(dclutch_versioned_message_operator::Error),
+}
+
+/// Compile one exact provider submission with its required lifecycle prepay.
+///
+/// The fresh Receiver update and Resolution lifecycle are observed at the
+/// builder's identical finalized slot. Neither may already contain account
+/// data, and the update must remain an entirely vacant System account. The
+/// lifecycle may carry a partial prefund, but never more than the caller's
+/// authenticated rent minimum. The owner constructs the System transfer and
+/// provider action together so an exterior cannot reorder or substitute the
+/// prepayment while retaining a superficially valid provider instruction.
+#[cfg(feature = "transaction-planning")]
+pub fn compile_provider_submit_with_lifecycle_prepay_v0(
+    report: &ProviderTransportReportV3,
+    update_account: &ObservedAccount,
+    lifecycle_account: &ObservedAccount,
+    lifecycle_rent_minimum: u64,
+    recent_blockhash: Hash,
+    lookup_tables: &[ObservedAccount],
+) -> Result<ProviderSubmitTransactionPlanV3, ProviderTransportTransactionErrorV3> {
+    let request = validate_submit_report(report)?;
+    if update_account.observation != report.observation
+        || lifecycle_account.observation != report.observation
+        || update_account.key.to_bytes() != request.update_account
+        || lifecycle_account.key.to_bytes() != request.lifecycle
+        || update_account.owner != system_program::ID
+        || lifecycle_account.owner != system_program::ID
+        || update_account.executable
+        || lifecycle_account.executable
+        || !update_account.data.is_empty()
+        || !lifecycle_account.data.is_empty()
+        || update_account.lamports != 0
+        || lifecycle_account.lamports > lifecycle_rent_minimum
+    {
+        return Err(ProviderTransportTransactionErrorV3::Frame);
+    }
+    let lifecycle_top_up_lamports = lifecycle_rent_minimum
+        .checked_sub(lifecycle_account.lamports)
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    let submitter = Pubkey::new_from_array(request.provider_submitter);
+    let instructions = if lifecycle_top_up_lamports == 0 {
+        vec![report.instruction.clone()]
+    } else {
+        vec![
+            transfer(
+                &submitter,
+                &lifecycle_account.key,
+                lifecycle_top_up_lamports,
+            ),
+            report.instruction.clone(),
+        ]
+    };
+    let required_signers = vec![submitter, Pubkey::new_from_array(request.update_account)];
+    let transaction = compile_provider_instructions_v0(
+        report,
+        &instructions,
+        recent_blockhash,
+        lookup_tables,
+        required_signers,
+    )?;
+    Ok(ProviderSubmitTransactionPlanV3 {
+        transaction,
+        lifecycle_top_up_lamports,
+    })
 }
 
 /// Build one exact real-provider submission from same-snapshot chain state.
@@ -328,22 +684,14 @@ pub fn build_provider_submit_v3(
     {
         return Err(ProviderTransportOperatorErrorV3::Address);
     }
-    let (lifecycle, _) = Pubkey::find_program_address(
-        &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
-            intent.update_account.as_ref(),
-        ],
-        &deployment.resolution_program,
+    let fresh = derive_provider_submit_fresh_coordinates_v3(
+        snapshot.market.key,
+        snapshot.source_state.key,
+        intent.update_account,
+        deployment.resolution_program,
     );
-    let (update_authority, _) = Pubkey::find_program_address(
-        &[
-            PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-            snapshot.market.key.as_ref(),
-            snapshot.source_state.key.as_ref(),
-            intent.update_account.as_ref(),
-        ],
-        &deployment.resolution_program,
-    );
+    let lifecycle = fresh.lifecycle;
+    let update_authority = fresh.update_authority;
     let request = ProviderSubmitRequestV3 {
         generation: source.generation(),
         reclaim_after_unix_seconds: intent.reclaim_after_unix_seconds,
@@ -1016,12 +1364,29 @@ fn compile_provider_v0(
     lookup_tables: &[ObservedAccount],
     required_signers: Vec<Pubkey>,
 ) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
+    compile_provider_instructions_v0(
+        report,
+        core::slice::from_ref(&report.instruction),
+        recent_blockhash,
+        lookup_tables,
+        required_signers,
+    )
+}
+
+#[cfg(feature = "transaction-planning")]
+fn compile_provider_instructions_v0(
+    report: &ProviderTransportReportV3,
+    instructions: &[Instruction],
+    recent_blockhash: Hash,
+    lookup_tables: &[ObservedAccount],
+    required_signers: Vec<Pubkey>,
+) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
     let payer = *required_signers
         .first()
         .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
     let message = compile_v0_message_with_optional_tables(
         payer,
-        core::slice::from_ref(&report.instruction),
+        instructions,
         recent_blockhash,
         report.observation,
         lookup_tables,
@@ -1225,6 +1590,17 @@ fn authenticate_raw(
 
 fn staging(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).0
+}
+
+fn record_pair(
+    registry: Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> ProviderSubmitRecordCoordinatesV3 {
+    ProviderSubmitRecordCoordinatesV3 {
+        raw: Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0,
+        staging: staging(registry, schema, digest),
+    }
 }
 
 fn raw_meta(account: &ObservedAccount) -> AccountMeta {
@@ -1461,6 +1837,88 @@ mod tests {
     /// A payer no instruction account names. Distinct from every fixture key.
     fn stage_payer() -> Pubkey {
         key(250)
+    }
+
+    fn vacant(key: Pubkey, lamports: u64, observation: Observation) -> ObservedAccount {
+        ObservedAccount {
+            observation,
+            key,
+            owner: system_program::ID,
+            lamports,
+            executable: false,
+            data: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn submit_prepay_is_same_message_exact_and_refuses_stale_or_occupied_fresh_accounts() {
+        let report = submit_report();
+        let update = vacant(report.instruction.accounts[1].pubkey, 0, report.observation);
+        let lifecycle = vacant(report.lifecycle, 400, report.observation);
+        let table = lookup_table(&report);
+        let plan = compile_provider_submit_with_lifecycle_prepay_v0(
+            &report,
+            &update,
+            &lifecycle,
+            1_000,
+            Hash::new_from_array([7; 32]),
+            core::slice::from_ref(&table),
+        )
+        .expect("exact submit with prepay");
+        assert_eq!(plan.lifecycle_top_up_lamports, 600);
+        assert_eq!(
+            plan.transaction.required_signers,
+            vec![update_key(&report, 0), update.key]
+        );
+        assert!(
+            plan.transaction.message.wire_bytes
+                <= dclutch_versioned_message_operator::PACKET_DATA_BYTES
+        );
+
+        let mut stale = lifecycle.clone();
+        stale.observation.slot -= 1;
+        assert_eq!(
+            compile_provider_submit_with_lifecycle_prepay_v0(
+                &report,
+                &update,
+                &stale,
+                1_000,
+                Hash::new_from_array([7; 32]),
+                core::slice::from_ref(&table),
+            ),
+            Err(ProviderTransportTransactionErrorV3::Frame)
+        );
+        let occupied = ObservedAccount {
+            data: vec![1],
+            ..update.clone()
+        };
+        assert_eq!(
+            compile_provider_submit_with_lifecycle_prepay_v0(
+                &report,
+                &occupied,
+                &lifecycle,
+                1_000,
+                Hash::new_from_array([7; 32]),
+                core::slice::from_ref(&table),
+            ),
+            Err(ProviderTransportTransactionErrorV3::Frame)
+        );
+        let overfunded = vacant(report.lifecycle, 1_001, report.observation);
+        assert_eq!(
+            compile_provider_submit_with_lifecycle_prepay_v0(
+                &report,
+                &update,
+                &overfunded,
+                1_000,
+                Hash::new_from_array([7; 32]),
+                core::slice::from_ref(&table),
+            ),
+            Err(ProviderTransportTransactionErrorV3::Frame)
+        );
+    }
+
+    fn update_key(report: &ProviderTransportReportV3, index: usize) -> Pubkey {
+        report.instruction.accounts[index].pubkey
     }
 
     #[test]

@@ -34,8 +34,8 @@ use crate::{
     Error, Result,
     model::{
         CheckedDeploymentDispositionV1, CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
-        CoreBootstrapPin, GenesisAccountPin, InfrastructureProfilePin, ProgramPin, RecordPair,
-        SuccessorPlan,
+        CoreBootstrapPin, GenesisAccountPin, InfrastructureProfilePin,
+        InfrastructureSuccessionPinV1, ProgramPin, RecordPair, SuccessorPlan,
     },
 };
 
@@ -44,6 +44,11 @@ pub(crate) const LOCAL_PYTH_RECEIVER_ELF: &[u8] =
     include_bytes!("../../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver.so");
 pub(crate) const LOCAL_PYTH_ROUTER_ELF: &[u8] =
     include_bytes!("../../../../../fixtures/pyth/local-upgraded-2026-08-22/router.so");
+pub(crate) const INFRASTRUCTURE_SUCCESSION_SCHEMA_V1: &str =
+    "dclutch-checked-local-infrastructure-succession-v1";
+pub(crate) const REGISTRY_SUCCESSION_BUFFER_LABEL_V1: &str = "loader.registry.succession-buffer";
+const REGISTRY_SUCCESSION_BUFFER_DOMAIN_V1: &[u8] =
+    b"dclutch/checked-local/registry-succession-buffer/v1";
 
 #[derive(Debug)]
 pub(crate) struct PrepareArgs {
@@ -1165,6 +1170,30 @@ fn prepare_inner(
         writer.upgradeable_program(label, program, &image)?;
     }
 
+    let infrastructure_succession = if checked_local_mutable_gate.is_some() {
+        let buffer =
+            registry_succession_buffer_address_v1(args.registry_program, args.core_program)?;
+        let buffer_bytes =
+            loader_buffer_bytes_v1(&registry_elf, args.core_bootstrap_upgrade_authority)?;
+        writer.add(
+            REGISTRY_SUCCESSION_BUFFER_LABEL_V1,
+            buffer,
+            bpf_loader_upgradeable::ID,
+            Rent::default().minimum_balance(buffer_bytes.len()),
+            &buffer_bytes,
+            false,
+        )?;
+        Some(InfrastructureSuccessionPinV1 {
+            schema: INFRASTRUCTURE_SUCCESSION_SCHEMA_V1.into(),
+            registry_upgrade_buffer: buffer.to_string(),
+            registry_candidate_elf_sha256: hex(&sha256_bytes(&registry_elf)),
+            predecessor_registry_artifact_release_id: hex(registry.id.as_bytes()),
+            predecessor_rent_artifact_release_id: hex(rent.id.as_bytes()),
+        })
+    } else {
+        None
+    };
+
     let publication = args.record_publication;
     let mut records = BTreeMap::new();
     records.insert(
@@ -1244,7 +1273,7 @@ fn prepare_inner(
         schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
         genesis_boundary: if checked_local_mutable_gate.is_some() {
             vec![
-                "Genesis installs seven exact checked-release Loader-v3 Program/ProgramData pairs under one disposable retained authority at canonical local slots 1 through 7, plus the two exact immutable slot-zero Pyth provider Loader pairs. Nothing else.".into(),
+                "Genesis installs seven exact checked-release Loader-v3 Program/ProgramData pairs under one disposable retained authority at canonical local slots 1 through 7, the two exact immutable slot-zero Pyth provider Loader pairs, and one exact Registry successor Buffer under that retained authority. Nothing else.".into(),
                 "Every infrastructure record body, activation, founding, participant, trade, resolution, payout, and retirement remains a real localhost transaction.".into(),
             ]
         } else { match publication {
@@ -1260,7 +1289,8 @@ fn prepare_inner(
         bootstrap_order: if checked_local_mutable_gate.is_some() {
             vec![
                 "Re-authenticate the exact checked-release gate and all seven mutable Loader pairs before any key read.".into(),
-                "Publish the exact seven ArtifactRelease records and singleton infrastructure profile through Registry transactions.".into(),
+                "Publish the predecessor ArtifactRelease records and singleton V1 infrastructure profile through Registry transactions.".into(),
+                "Consume the planted Buffer in one real Loader Upgrade, publish the observed successor Registry ArtifactRelease, and create the V2 profile before any activation.".into(),
                 "Activate the five-role exact-authority ExecutionReleaseSet without revoking the disposable local Upgrade authority.".into(),
                 "Execute DCLTGMF3 founding, participant admission, Direct, resolution, payout, and retirement through their accepted exterior callers.".into(),
             ]
@@ -1302,6 +1332,7 @@ fn prepare_inner(
         },
         checked_upgrade_set: args.checked_upgrade_set,
         checked_local_mutable_set,
+        infrastructure_succession,
         infrastructure_profile: InfrastructureProfilePin {
             address: infrastructure_address.to_string(),
             schema_id: hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1),
@@ -1626,6 +1657,54 @@ pub(crate) fn loader_programdata_bytes(
     bytes
 }
 
+/// Deterministic, keyless Buffer coordinate for the checked-local ceremony.
+/// A Loader Buffer needs an authority signature to be consumed, not a keypair
+/// for its own address, so deriving the address avoids manufacturing another
+/// retained secret.
+pub(crate) fn registry_succession_buffer_address_v1(
+    registry_program: Pubkey,
+    core_program: Pubkey,
+) -> Result<Pubkey> {
+    let mut hasher = Sha256::new();
+    hasher.update(REGISTRY_SUCCESSION_BUFFER_DOMAIN_V1);
+    hasher.update(registry_program.as_ref());
+    hasher.update(core_program.as_ref());
+    let address = Pubkey::new_from_array(hasher.finalize().into());
+    if address == Pubkey::default()
+        || address == system_program::ID
+        || address == bpf_loader_upgradeable::ID
+        || address == registry_program
+        || address == core_program
+        || address == programdata(registry_program)
+        || address == programdata(core_program)
+    {
+        return Err(Error::new(
+            "derived Registry succession Buffer aliases a reserved ceremony coordinate",
+        ));
+    }
+    Ok(address)
+}
+
+/// Canonical Loader-v3 Buffer account body: serialized Buffer metadata followed
+/// by exactly the checked Registry candidate ELF.
+pub(crate) fn loader_buffer_bytes_v1(elf: &[u8], authority: Pubkey) -> Result<Vec<u8>> {
+    let state = solana_loader_v3_interface::state::UpgradeableLoaderState::Buffer {
+        authority_address: Some(authority),
+    };
+    let mut bytes = bincode::serialize(&state)
+        .map_err(|error| Error::new(format!("serialize Loader-v3 Buffer: {error}")))?;
+    let metadata =
+        solana_loader_v3_interface::state::UpgradeableLoaderState::size_of_buffer_metadata();
+    if bytes.len() != metadata {
+        return Err(Error::new(format!(
+            "Loader-v3 Buffer metadata serialized to {} bytes, expected {metadata}",
+            bytes.len()
+        )));
+    }
+    bytes.extend_from_slice(elf);
+    Ok(bytes)
+}
+
 /// Exact Loader-v3 ProgramData bytes after its real `SetAuthority(Some -> None)`
 /// transition. Loader bincode overwrites the 13-byte serialized None state but
 /// does not clear the former 32-byte authority region before the fixed ELF
@@ -1948,6 +2027,34 @@ mod tests {
         assert_eq!(hex32(&"ab".repeat(32)).expect("hex"), [0xab; 32]);
         assert!(hex32(&"AB".repeat(32)).is_err());
         assert!(hex32("00").is_err());
+    }
+
+    #[test]
+    fn planted_registry_buffer_is_canonical_and_authority_bound() {
+        let authority = Pubkey::new_unique();
+        let elf = b"\x7fELFchecked-registry";
+        let bytes = loader_buffer_bytes_v1(elf, authority).expect("Loader Buffer bytes");
+        let metadata =
+            solana_loader_v3_interface::state::UpgradeableLoaderState::size_of_buffer_metadata();
+        let state: solana_loader_v3_interface::state::UpgradeableLoaderState =
+            bincode::deserialize(&bytes[..metadata]).expect("canonical Buffer metadata");
+        assert_eq!(
+            state,
+            solana_loader_v3_interface::state::UpgradeableLoaderState::Buffer {
+                authority_address: Some(authority),
+            }
+        );
+        assert_eq!(&bytes[metadata..], elf);
+
+        let other = loader_buffer_bytes_v1(elf, Pubkey::new_unique()).expect("other authority");
+        assert_ne!(&bytes[..metadata], &other[..metadata]);
+        let address = registry_succession_buffer_address_v1(
+            Pubkey::new_from_array([1; 32]),
+            Pubkey::new_from_array([2; 32]),
+        )
+        .expect("derived Buffer address");
+        assert_ne!(address, Pubkey::default());
+        assert_ne!(address, bpf_loader_upgradeable::ID);
     }
 
     fn prepared_plan(publication: RecordPublicationV1) -> (SuccessorPlan, PathBuf) {

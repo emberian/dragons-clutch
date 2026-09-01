@@ -920,6 +920,26 @@ impl<'a> ProductBasisV3<'a> {
         read_array::<32>(self.bytes, PRICE_GATE_DIGEST_OFFSET).unwrap_or([0_u8; 32])
     }
 
+    /// Expose the acyclic semantic-identity fragments of this decoded record.
+    ///
+    /// The Product and ResultDomain links are omitted from the preimage so the
+    /// semantic basis identity can be compiled before those records acquire
+    /// their content digests. `self` is already the proof that the surrounding
+    /// bytes are one canonical ProductBasisV3, so this accessor does not decode
+    /// the same record a second time.
+    pub fn semantic_preimage_v3(self) -> Result<SemanticBasisPreimageV3<'a>> {
+        Ok(SemanticBasisPreimageV3 {
+            prefix: self
+                .bytes
+                .get(..PRODUCT_ID_OFFSET)
+                .ok_or(Error::InvalidLength)?,
+            suffix: self
+                .bytes
+                .get(PRODUCT_LINK_END..)
+                .ok_or(Error::InvalidLength)?,
+        })
+    }
+
     fn knot_at_index(self, index: usize) -> Option<i128> {
         if index >= usize::try_from(self.knot_count).ok()? {
             return None;
@@ -1094,11 +1114,7 @@ pub fn compile_basis_v3(input: BasisInputV3<'_>, output: &mut [u8]) -> Result<()
 
 /// Validate one record and expose its acyclic semantic-identity fragments.
 pub fn semantic_basis_preimage_v3(bytes: &[u8]) -> Result<SemanticBasisPreimageV3<'_>> {
-    let _ = ProductBasisV3::decode(bytes)?;
-    Ok(SemanticBasisPreimageV3 {
-        prefix: bytes.get(..PRODUCT_ID_OFFSET).ok_or(Error::InvalidLength)?,
-        suffix: bytes.get(PRODUCT_LINK_END..).ok_or(Error::InvalidLength)?,
-    })
+    ProductBasisV3::decode(bytes)?.semantic_preimage_v3()
 }
 
 fn validate_input(input: BasisInputV3<'_>) -> Result<()> {

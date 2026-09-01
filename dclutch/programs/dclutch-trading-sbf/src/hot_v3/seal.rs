@@ -844,18 +844,14 @@ pub(super) fn borrow_sealed_record<'a, 'info>(
     digest: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
     let row: SealedRecordRowV1 = closure.row(role).map_err(|_| TradingSbfError::Content)?;
-    if row.schema() != schema
-        || row.content_digest() != digest
-        || row.raw_record_account() != raw.key.to_bytes()
-        || row.staging_account() == row.raw_record_account()
-        || staging.key != raw.key
-        || staging.owner != raw.owner
-        || staging.is_signer != raw.is_signer
-        || staging.is_writable != raw.is_writable
-        || staging.executable != raw.executable
-    {
-        return Err(TradingSbfError::Content.into());
-    }
+    require_sealed_record_coordinates_v1(
+        row,
+        raw,
+        staging,
+        schema,
+        digest,
+        frame.uses_sealed_execution_aliases(),
+    )?;
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
@@ -873,6 +869,58 @@ pub(super) fn borrow_sealed_record<'a, 'info>(
     Ok(core::cell::Ref::map(data, |bytes| &**bytes))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SealedRecordCoordinateModeV1 {
+    Distinct,
+    DirectAlias,
+}
+
+/// Authenticate the wire coordinates persisted by one seal row.
+///
+/// Ordinary families carry the exact finalized raw account and the exact
+/// vacant staging cursor the seal observed. Direct ordinary execution is the
+/// sole family gate that turns on the all-six alias shape; in that shape the
+/// second wire coordinate repeats the already-authenticated raw account while
+/// the row continues to preserve the distinct historical staging coordinate.
+#[allow(clippy::too_many_arguments)]
+fn require_sealed_record_coordinates_v1(
+    row: SealedRecordRowV1,
+    raw: &AccountInfo<'_>,
+    staging: &AccountInfo<'_>,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    direct_alias_shape: bool,
+) -> Result<SealedRecordCoordinateModeV1, ProgramError> {
+    if row.schema() != schema
+        || row.content_digest() != digest
+        || row.raw_record_account() != raw.key.to_bytes()
+        || row.staging_account() == row.raw_record_account()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    if direct_alias_shape {
+        if staging.key != raw.key
+            || staging.owner != raw.owner
+            || staging.is_signer != raw.is_signer
+            || staging.is_writable != raw.is_writable
+            || staging.executable != raw.executable
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        return Ok(SealedRecordCoordinateModeV1::DirectAlias);
+    }
+    if staging.key.to_bytes() != row.staging_account()
+        || staging.owner != &system_program::ID
+        || staging.data_len() != 0
+        || staging.is_signer
+        || staging.is_writable
+        || staging.executable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(SealedRecordCoordinateModeV1::Distinct)
+}
+
 /// Mint one sealed-artifact token for a record this invocation just borrowed.
 pub(super) fn sealed_token<'a>(
     closure: SealedDescriptorClosureV1,
@@ -884,4 +932,167 @@ pub(super) fn sealed_token<'a>(
     closure
         .authenticate_artifact(role, schema, digest, bytes)
         .map_err(|_| TradingSbfError::Content.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{boxed::Box, vec, vec::Vec};
+
+    fn account(
+        key: Pubkey,
+        owner: Pubkey,
+        signer: bool,
+        writable: bool,
+        executable: bool,
+        data: Vec<u8>,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            signer,
+            writable,
+            Box::leak(Box::new(1_u64)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(owner)),
+            executable,
+        )
+    }
+
+    fn row(
+        role: SealedRoleV1,
+        schema: [u8; 32],
+        digest: [u8; 32],
+        raw: Pubkey,
+        staging: Pubkey,
+    ) -> SealedRecordRowV1 {
+        SealedRecordRowV1::new(role, 8, schema, digest, raw.to_bytes(), staging.to_bytes())
+            .expect("sealed row")
+    }
+
+    #[test]
+    fn sealed_record_coordinates_admit_exact_distinct_or_direct_alias_only() {
+        let registry = Pubkey::new_unique();
+        let raw_key = Pubkey::new_unique();
+        let staging_key = Pubkey::new_unique();
+        let schema = [0x31; 32];
+        let digest = [0x41; 32];
+        let descriptor = row(
+            SealedRoleV1::Descriptor,
+            schema,
+            digest,
+            raw_key,
+            staging_key,
+        );
+        let raw = account(raw_key, registry, false, false, false, vec![7; 8]);
+        let staging = account(
+            staging_key,
+            system_program::ID,
+            false,
+            false,
+            false,
+            Vec::new(),
+        );
+        assert_eq!(
+            require_sealed_record_coordinates_v1(
+                descriptor, &raw, &staging, schema, digest, false,
+            )
+            .expect("exact persisted pair"),
+            SealedRecordCoordinateModeV1::Distinct,
+        );
+        assert_eq!(
+            require_sealed_record_coordinates_v1(descriptor, &raw, &raw, schema, digest, true,)
+                .expect("authorized Direct alias"),
+            SealedRecordCoordinateModeV1::DirectAlias,
+        );
+        assert_eq!(
+            require_sealed_record_coordinates_v1(descriptor, &raw, &raw, schema, digest, false,),
+            Err(TradingSbfError::Content.into()),
+            "an ordinary family cannot spend the Direct alias shape",
+        );
+    }
+
+    #[test]
+    fn sealed_record_coordinates_refuse_substituted_or_crossed_rows() {
+        let registry = Pubkey::new_unique();
+        let raw_key = Pubkey::new_unique();
+        let staging_key = Pubkey::new_unique();
+        let schema = [0x51; 32];
+        let digest = [0x61; 32];
+        let descriptor = row(
+            SealedRoleV1::Descriptor,
+            schema,
+            digest,
+            raw_key,
+            staging_key,
+        );
+        let raw = account(raw_key, registry, false, false, false, vec![7; 8]);
+        let staging = account(
+            staging_key,
+            system_program::ID,
+            false,
+            false,
+            false,
+            Vec::new(),
+        );
+        let wrong_raw = account(
+            Pubkey::new_unique(),
+            registry,
+            false,
+            false,
+            false,
+            vec![7; 8],
+        );
+        let wrong_staging = account(
+            Pubkey::new_unique(),
+            system_program::ID,
+            false,
+            false,
+            false,
+            Vec::new(),
+        );
+        assert_eq!(
+            require_sealed_record_coordinates_v1(
+                descriptor, &wrong_raw, &staging, schema, digest, false,
+            ),
+            Err(TradingSbfError::Content.into()),
+            "wrong raw coordinate",
+        );
+        assert_eq!(
+            require_sealed_record_coordinates_v1(
+                descriptor,
+                &raw,
+                &wrong_staging,
+                schema,
+                digest,
+                false,
+            ),
+            Err(TradingSbfError::Content.into()),
+            "wrong staging coordinate",
+        );
+        assert_eq!(
+            require_sealed_record_coordinates_v1(
+                descriptor,
+                &staging,
+                &raw,
+                schema,
+                digest,
+                false,
+            ),
+            Err(TradingSbfError::Content.into()),
+            "swapped raw/staging pair",
+        );
+
+        let adjacent = row(
+            SealedRoleV1::LifecyclePolicy,
+            [0x52; 32],
+            [0x62; 32],
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+        );
+        assert_eq!(
+            require_sealed_record_coordinates_v1(adjacent, &raw, &staging, schema, digest, false,),
+            Err(TradingSbfError::Content.into()),
+            "an adjacent seal row cannot stand in for Descriptor",
+        );
+    }
 }

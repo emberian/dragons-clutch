@@ -16,7 +16,7 @@ use dclutch_claims_sbf::protocol_position_v2::{
     PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2, ProtocolPositionActionV2,
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionCloseReceiptV2,
     ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
-    ProtocolPositionSeedsV2,
+    ProtocolPositionSbfErrorV2, ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_fractional_claim_contract::{
@@ -33,6 +33,11 @@ use dclutch_fractional_claim_kernel::{
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
     encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
     fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
+};
+use dclutch_fractional_claim_operator::{
+    FractionalRetirementCoordinateSnapshotV3, FractionalRetirementDeploymentV3,
+    FractionalRetirementRecordV3, FractionalRetirementSnapshotV3,
+    plan_fractional_retirement_instruction_v3,
 };
 use dclutch_market_core_codec::{CoreState, Identity, Phase as CorePhase};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -52,6 +57,7 @@ use dclutch_rent_contract::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
+use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
     TokenBehaviorSelectionV2,
@@ -755,6 +761,106 @@ fn fixture_for(campaign: CampaignV1) -> (ProgramTest, Fixture) {
     )
 }
 
+async fn observed_account(
+    context: &mut ProgramTestContext,
+    key: Pubkey,
+    observation: Observation,
+) -> ObservedAccount {
+    let account = context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("planner account read")
+        .unwrap_or_else(|| {
+            assert_eq!(key, system_program::ID, "required planner account {key}");
+            Account {
+                lamports: 1,
+                data: Vec::new(),
+                owner: solana_sdk_ids::native_loader::ID,
+                executable: true,
+                rent_epoch: 0,
+            }
+        });
+    ObservedAccount {
+        observation,
+        key,
+        owner: account.owner,
+        lamports: account.lamports,
+        executable: account.executable,
+        data: account.data,
+    }
+}
+
+async fn retirement_deployment(
+    context: &mut ProgramTestContext,
+    program: Pubkey,
+    observation: Observation,
+) -> FractionalRetirementDeploymentV3 {
+    FractionalRetirementDeploymentV3 {
+        program: observed_account(context, program, observation).await,
+        programdata: observed_account(context, programdata(program), observation).await,
+    }
+}
+
+/// Reacquire the complete semantic graph from the live ProgramTest bank.
+///
+/// The fixture supplies only addresses. Every byte, owner, balance, deployment
+/// and cursor decision consumed by the public planner is read back after the
+/// preceding real transaction, so this is the same entrance an RPC adapter
+/// uses rather than a parallel request builder.
+async fn retirement_snapshot(
+    context: &mut ProgramTestContext,
+    f: &Fixture,
+    payer: Pubkey,
+    include_coordinate: bool,
+) -> FractionalRetirementSnapshotV3 {
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("planner clock");
+    let observation = Observation {
+        slot: clock.slot,
+        unix_timestamp: clock.unix_timestamp,
+        finality: Finality::Finalized,
+    };
+    let coordinate = if include_coordinate {
+        Some(FractionalRetirementCoordinateSnapshotV3 {
+            position: observed_account(context, f.position, observation).await,
+            admission: observed_account(context, f.admission, observation).await,
+            shard_mint: observed_account(context, f.mint, observation).await,
+        })
+    } else {
+        None
+    };
+    FractionalRetirementSnapshotV3 {
+        payer,
+        core_market: observed_account(context, f.core_market, observation).await,
+        claims_market: observed_account(context, f.market, observation).await,
+        activation_cache: observed_account(context, f.cache, observation).await,
+        registry_program: observed_account(context, REGISTRY, observation).await,
+        core: retirement_deployment(context, CORE, observation).await,
+        claims: retirement_deployment(context, CLAIMS, observation).await,
+        trading: retirement_deployment(context, TRADING, observation).await,
+        rent: retirement_deployment(context, RENT_PROGRAM, observation).await,
+        root: observed_account(context, f.root, observation).await,
+        rent_credit: observed_account(context, f.rent_credit, observation).await,
+        cursor: observed_account(context, f.cursor, observation).await,
+        terms: FractionalRetirementRecordV3 {
+            raw: observed_account(context, f.terms.raw, observation).await,
+            staging: observed_account(context, f.terms.staging, observation).await,
+        },
+        token_behavior: FractionalRetirementRecordV3 {
+            raw: observed_account(context, f.token_behavior.raw, observation).await,
+            staging: observed_account(context, f.token_behavior.staging, observation).await,
+        },
+        rent_sysvar: observed_account(context, sysvar::rent::ID, observation).await,
+        system_program: observed_account(context, system_program::ID, observation).await,
+        token_program: observed_account(context, TOKEN_PROGRAM, observation).await,
+        coordinate,
+    }
+}
+
 fn request(f: &Fixture, action: ProtocolPositionActionV2) -> ProtocolPositionRequestV2 {
     ProtocolPositionRequestV2 {
         action,
@@ -1456,7 +1562,7 @@ fn refused_with(logs: &[String], code: u32) -> bool {
 /// here; the program's own `const _: () = assert!` band pins the enum.
 const POSITION_REFUSAL: u32 = 0x5145;
 
-/// A STRANGER'S ONE LAMPORT NO LONGER BLOCKS ADMISSION, AND UNDERFUNDING STILL REFUSES.
+/// A STRANGER'S ONE LAMPORT CANNOT BLOCK ADMISSION OR CLOSE, AND UNDERFUNDING STILL REFUSES.
 ///
 /// Census row R13. The Position and admission accounts are keyless, off-curve,
 /// system-owned PDAs, so anyone on the network may send them lamports at any
@@ -1468,25 +1574,12 @@ const POSITION_REFUSAL: u32 = 0x5145;
 /// strictly more than attacking.
 ///
 /// This test executes the attack with a real transfer from a wallet that is
-/// nobody, and then admits the position anyway on a request whose bytes are
-/// unchanged. It also pins the half that must NOT move: over-declaring -- a
-/// caller claiming the accounts hold more than they do -- still refuses at
-/// `0x5145`, which is the entire safety content of the check that was relaxed.
-/// The refusal is proven to reach that check rather than an earlier gate,
-/// because the accepting admit that follows it in this same run differs from it
-/// in nothing but the declared lamports.
-///
-/// WHAT THIS TEST DELIBERATELY DOES NOT FIX, asserted rather than omitted: the
-/// close route's twin comparison is still an exact equality, so the last leg
-/// below shows a truthful pre-attack close REFUSING at `0x5146` and only a
-/// close that re-declares the post-attack balance committing. Close is still
-/// front-runnable the same way. It is not relaxed here because it cannot be
-/// alone -- close credits the rent account `rent_before + declared_total` by
-/// absolute assignment while zeroing accounts that hold the live balance, and
-/// its receipt's lamport fields are re-derived and whole-struct
-/// equality-checked inside trading-sbf
-/// (`programs/dclutch-trading-sbf/src/direct/sell_escrow.rs:497-523`), so
-/// relaxing it changes what the receipt means and moves two ELFs.
+/// nobody, then admits and closes the position using requests whose bytes were
+/// fixed before the attack. It pins both safety halves: an admit may not
+/// over-declare its prepaid balance, and a close may not substitute the
+/// immutable balance baseline recorded by admission. The close receipt and
+/// RentCredit use the authenticated LIVE balances, so the donation is neither
+/// a liveness veto nor a burned/unclassified lamport.
 #[tokio::test]
 async fn a_strangers_lamport_cannot_block_admission_and_underfunding_still_refuses() {
     let (test, f) = fixture();
@@ -1510,28 +1603,25 @@ async fn a_strangers_lamport_cannot_block_admission_and_underfunding_still_refus
         .checked_add(1_000)
         .expect("over-declaration");
     let underfunded = wrapped(&f, overdeclared, false, f.owner);
-    // Two closes: one truthful about the pre-attack balance, one truthful about
-    // the balance the attack left behind.
-    let stale_close = wrapped(
-        &f,
-        request(&f, ProtocolPositionActionV2::Close),
-        false,
-        f.owner,
-    );
-    let mut post_attack = request(&f, ProtocolPositionActionV2::Close);
-    post_attack.observed_position_lamports = f
+    // The close is authored before the attack and carries the immutable
+    // admission baseline. A hostile close that substitutes the donated live
+    // balance must refuse against the persisted admission instead.
+    let baseline_close_request = request(&f, ProtocolPositionActionV2::Close);
+    let baseline_close = wrapped(&f, baseline_close_request, false, f.owner);
+    let mut substituted = request(&f, ProtocolPositionActionV2::Close);
+    substituted.observed_position_lamports = f
         .position_lamports
         .checked_add(1)
-        .expect("post-attack balance");
-    let honest_close = wrapped(&f, post_attack, false, f.owner);
+        .expect("substituted balance");
+    let substituted_close = wrapped(&f, substituted, false, f.owner);
 
     let addresses = lookup_addresses(
         context.payer.pubkey(),
         &[
             underfunded.clone(),
             admit.clone(),
-            stale_close.clone(),
-            honest_close.clone(),
+            baseline_close.clone(),
+            substituted_close.clone(),
         ],
     );
     let table = create_live_lookup_table(&mut context, &addresses).await;
@@ -1624,23 +1714,22 @@ async fn a_strangers_lamport_cannot_block_admission_and_underfunding_still_refus
         logs.join("\n")
     );
 
-    // The close side is NOT fixed, and this is what that costs today: the
-    // truthful-about-yesterday close refuses.
+    // A caller cannot make the donated live balance a new signed baseline.
+    // Admission owns that immutable fact, so this substitution refuses before
+    // mutation at the exact admission conjunct.
     let (accepted, logs, _, _) = submit(
         &mut context,
-        stale_close,
+        substituted_close,
         table,
         &addresses,
-        "claims position: close still refuses a pre-front-run declaration",
+        "claims position: close refuses a substituted admission baseline",
     )
     .await
-    .expect("stale close");
+    .expect("substituted close");
     assert!(!accepted);
     assert!(
-        refused_with(&logs, 0x5146),
-        "the close-side exposure is real and this is where it shows -- it must \
-         refuse at 0x5146 (Rent), so that closing the census row later has a \
-         test to turn green:\n{}",
+        refused_with(&logs, ProtocolPositionSbfErrorV2::Admission as u32),
+        "the substituted immutable baseline must refuse at Admission, not merely fail:\n{}",
         logs.join("\n")
     );
 
@@ -1655,16 +1744,29 @@ async fn a_strangers_lamport_cannot_block_admission_and_underfunding_still_refus
         .lamports;
     let (accepted, logs, returned, _) = submit(
         &mut context,
-        honest_close,
+        baseline_close,
         table,
         &addresses,
-        "claims position: a close that declares the post-attack balance commits",
+        "claims position: baseline close sweeps authenticated live donation",
     )
     .await
     .expect("honest close");
     assert!(accepted, "close refusal logs:\n{}", logs.join("\n"));
     let (_, bytes) = returned.expect("close receipt");
-    ProtocolPositionCloseReceiptV2::decode(&bytes).expect("close receipt");
+    let receipt = ProtocolPositionCloseReceiptV2::decode(&bytes).expect("close receipt");
+    receipt
+        .validate_request(
+            baseline_close_request,
+            hash(&baseline_close_request.to_bytes().expect("request bytes")).to_bytes(),
+            CLAIMS.to_bytes(),
+        )
+        .expect("receipt binds the pre-attack request");
+    assert_eq!(receipt.position_lamports(), f.position_lamports + 1);
+    assert_eq!(receipt.admission_lamports(), f.admission_lamports);
+    assert_eq!(
+        receipt.total_credit(),
+        f.position_lamports + 1 + f.admission_lamports
+    );
     let rent_after = context
         .banks_client
         .get_account(f.rent_credit)
@@ -1766,13 +1868,7 @@ async fn a_fractional_market_retires_end_to_end_from_begin_through_finish() {
         false,
         f.owner,
     );
-    let begin = begin_instruction(&f, payer);
-    let step = retirement_wrapped(&f);
-    let finish = finish_instruction(&f);
-    let addresses = lookup_addresses(
-        payer,
-        &[admit.clone(), begin.clone(), step.clone(), finish.clone()],
-    );
+    let addresses = lookup_addresses(payer, std::slice::from_ref(&admit));
     let table = create_live_lookup_table(&mut context, &addresses).await;
 
     let (accepted, logs, ..) = submit(
@@ -1795,7 +1891,6 @@ async fn a_fractional_market_retires_end_to_end_from_begin_through_finish() {
             .expect("over-funded cursor"),
         "this walk begins on a vacant address a stranger has already over-funded"
     );
-    let payer_before = lamports_of(&mut context, payer).await;
     let rent_credit_before = lamports_of(&mut context, f.rent_credit).await;
     let position_lamports = lamports_of(&mut context, f.position).await;
     let admission_lamports = lamports_of(&mut context, f.admission).await;
@@ -1804,6 +1899,20 @@ async fn a_fractional_market_retires_end_to_end_from_begin_through_finish() {
     let mint_lamports = lamports_of(&mut context, f.mint).await;
 
     // ---- Begin -----------------------------------------------------------
+    let begin_plan = plan_fractional_retirement_instruction_v3(
+        &retirement_snapshot(&mut context, &f, payer, false).await,
+    )
+    .expect("public planner selects begin");
+    assert_eq!(begin_plan.action, FractionalRetirementActionV3::Begin);
+    assert_eq!(begin_plan.coordinate, None);
+    assert_eq!(begin_plan.request, f.begin);
+    let begin = begin_plan.instruction;
+    let addresses = lookup_addresses(payer, std::slice::from_ref(&begin));
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    // ALT creation is transport setup and legitimately debits its rent from
+    // the payer. Measure immediately before the retirement act so this wall
+    // distinguishes transaction fees from an illicit cursor top-up.
+    let payer_before = lamports_of(&mut context, payer).await;
     let (accepted, logs, returned, begin_units) = submit(
         &mut context,
         begin,
@@ -1852,6 +1961,19 @@ async fn a_fractional_market_retires_end_to_end_from_begin_through_finish() {
     );
 
     // ---- The single coordinate -------------------------------------------
+    let step_plan = plan_fractional_retirement_instruction_v3(
+        &retirement_snapshot(&mut context, &f, payer, true).await,
+    )
+    .expect("public planner selects exact next coordinate");
+    assert_eq!(
+        step_plan.action,
+        FractionalRetirementActionV3::RetireCoordinate
+    );
+    assert_eq!(step_plan.coordinate, Some(0));
+    assert_eq!(step_plan.request, f.retirement);
+    let step = step_plan.instruction;
+    let addresses = lookup_addresses(payer, std::slice::from_ref(&step));
+    let table = create_live_lookup_table(&mut context, &addresses).await;
     let (accepted, logs, _, step_units) = submit(
         &mut context,
         step,
@@ -1902,6 +2024,16 @@ async fn a_fractional_market_retires_end_to_end_from_begin_through_finish() {
 
     // ---- Finish ----------------------------------------------------------
     let cursor_lamports = lamports_of(&mut context, f.cursor).await;
+    let finish_plan = plan_fractional_retirement_instruction_v3(
+        &retirement_snapshot(&mut context, &f, payer, false).await,
+    )
+    .expect("public planner selects finish only after width coordinates");
+    assert_eq!(finish_plan.action, FractionalRetirementActionV3::Finish);
+    assert_eq!(finish_plan.coordinate, None);
+    assert_eq!(finish_plan.request, f.finish);
+    let finish = finish_plan.instruction;
+    let addresses = lookup_addresses(payer, std::slice::from_ref(&finish));
+    let table = create_live_lookup_table(&mut context, &addresses).await;
     let (accepted, logs, returned, finish_units) = submit(
         &mut context,
         finish,

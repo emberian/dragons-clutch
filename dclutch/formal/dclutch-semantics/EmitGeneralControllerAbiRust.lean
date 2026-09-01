@@ -97,6 +97,7 @@ def main : IO Unit := do
   IO.println "pub(crate) const ACTION_SUBMIT_CANDIDATE: u8 = 11;"
   IO.println "pub(crate) const ACTION_VERIFY_CANDIDATE_ROW: u8 = 12;"
   IO.println "pub(crate) const ACTION_RELEASE_ORDER: u8 = 13;"
+  IO.println "pub(crate) const ACTION_CLOSE_CANDIDATE: u8 = 14;"
   IO.println "pub(crate) const PHASE_COLLECTING: u8 = 0;"
   IO.println "pub(crate) const PHASE_MATERIALIZING: u8 = 1;"
   IO.println "pub(crate) const PHASE_DISTRIBUTING: u8 = 2;"

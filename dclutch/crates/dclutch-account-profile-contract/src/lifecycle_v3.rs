@@ -16,6 +16,7 @@ use super::{
         AccountPrestateV2, AccountProfileV2, AccountRuleV2, ProjectionRegisterKindV2,
         ProjectionRegisterSpaceV2, ProjectionTargetV2,
     },
+    v3::AccountProfileV3,
 };
 
 /// Safe, allocation-free typed StateLifecyclePolicy V3 artifact encoder.
@@ -911,6 +912,39 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         self.0.validate_account_profile(profile)
     }
 
+    /// Join to a mandatory funding-bound successor without sharing lifecycle authority.
+    ///
+    /// Every funding-bound coordinate remains `LifecycleBound` in the embedded
+    /// V2 profile, but it is deliberately absent from Lifecycle recipes,
+    /// payers, and RentCredit roles. The V3 funding table is therefore the sole
+    /// create/close coverage for those coordinates.
+    pub fn validate_account_profile_with_external_funding(
+        self,
+        profile: AccountProfileV3<'_>,
+    ) -> Result<()> {
+        self.0
+            .validate_account_profile_with_external_funding(profile)
+    }
+
+    /// Validate and record the embedded V2 join after V3 authority separation.
+    ///
+    /// The evidence covers the exact embedded V2 bytes consumed by lifecycle
+    /// planning. It is emitted only after the enclosing V3 funding table has
+    /// been checked as the sole authority for every refined coordinate.
+    pub fn validate_account_profile_with_external_funding_join<'b>(
+        self,
+        profile: AccountProfileV3<'b>,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        self.validate_account_profile_with_external_funding(profile)?;
+        Ok(ValidatedProfileJoinV3 {
+            policy: self.0.bytes(),
+            profile: profile.base().bytes(),
+        })
+    }
+
     /// Seed adapter-authenticated current Rent minima into protected scalars atomically.
     ///
     /// `input_scalars`, scratch, and output are the exact complete runtime scalar
@@ -1235,6 +1269,21 @@ impl<'a> StateLifecyclePolicyV3<'a> {
 
     /// Require every policy coordinate to fit the sole AccountProfile geometry.
     pub fn validate_account_profile(self, profile: AccountProfileV2<'_>) -> Result<()> {
+        self.validate_account_profile_inner(profile, None)
+    }
+
+    fn validate_account_profile_with_external_funding(
+        self,
+        profile: AccountProfileV3<'_>,
+    ) -> Result<()> {
+        self.validate_account_profile_inner(profile.base(), Some(profile))
+    }
+
+    fn validate_account_profile_inner(
+        self,
+        profile: AccountProfileV2<'_>,
+        external_funding: Option<AccountProfileV3<'_>>,
+    ) -> Result<()> {
         let mut recipe_index = 0_u16;
         while recipe_index < self.recipes {
             let recipe = self.recipe(recipe_index)?;
@@ -1280,6 +1329,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                 validate_scalar_source(profile, source)?;
                 validate_invocation_source(recipe.account.scope, source)?;
             }
+            validate_plan_permissions(profile, plan, recipe)?;
             self.validate_protected_outputs_against_profile(plan_index, plan, recipe, profile)?;
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
@@ -1294,7 +1344,41 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             binding_index = binding_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         self.validate_current_rent_quotes_against_profile(profile)?;
-        self.validate_lifecycle_prestates(profile)
+        self.validate_external_funding_exclusion(external_funding)?;
+        self.validate_lifecycle_prestates(profile, external_funding)
+    }
+
+    fn validate_external_funding_exclusion(
+        self,
+        external_funding: Option<AccountProfileV3<'_>>,
+    ) -> Result<()> {
+        let Some(external_funding) = external_funding else {
+            return Ok(());
+        };
+        let mut recipe_index = 0_u16;
+        while recipe_index < self.recipes {
+            if is_external_funding_coordinate(external_funding, self.recipe(recipe_index)?.account)?
+            {
+                return Err(Error::ProfileMismatch);
+            }
+            recipe_index = recipe_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        let mut plan_index = 0_u16;
+        while plan_index < self.plans {
+            let plan = self.plan(plan_index)?;
+            if let Some(payer) = plan.payer {
+                if is_external_funding_coordinate(external_funding, payer)? {
+                    return Err(Error::ProfileMismatch);
+                }
+            }
+            if let Some(rent_credit) = plan.rent_credit {
+                if is_external_funding_coordinate(external_funding, rent_credit)? {
+                    return Err(Error::ProfileMismatch);
+                }
+            }
+            plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        Ok(())
     }
 
     fn validate_current_rent_quotes_against_profile(
@@ -1426,7 +1510,11 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         Ok(())
     }
 
-    fn validate_lifecycle_prestates(self, profile: AccountProfileV2<'_>) -> Result<()> {
+    fn validate_lifecycle_prestates(
+        self,
+        profile: AccountProfileV2<'_>,
+        external_funding: Option<AccountProfileV3<'_>>,
+    ) -> Result<()> {
         let mut fixed = 0_u16;
         while fixed < profile.fixed_account_count() {
             self.validate_lifecycle_prestate_coordinate(
@@ -1435,17 +1523,24 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                     scope: CoordinateScopeV3::Fixed,
                     index: fixed,
                 },
+                external_funding,
             )?;
             fixed = fixed.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         let mut item = 0_u16;
-        while item < profile.item_account_stride() {
+        let lifecycle_item_stride = if profile.uses_dynamic_fixed_spans() {
+            0
+        } else {
+            profile.item_account_stride()
+        };
+        while item < lifecycle_item_stride {
             self.validate_lifecycle_prestate_coordinate(
                 profile,
                 AccountCoordinateV3 {
                     scope: CoordinateScopeV3::Item,
                     index: item,
                 },
+                external_funding,
             )?;
             item = item.checked_add(1).ok_or(Error::Arithmetic)?;
         }
@@ -1470,10 +1565,16 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         self,
         profile: AccountProfileV2<'_>,
         coordinate: AccountCoordinateV3,
+        external_funding: Option<AccountProfileV3<'_>>,
     ) -> Result<()> {
         let rule = rule_for_coordinate(profile, coordinate)?;
         if rule.prestate() != AccountPrestateV2::LifecycleBound {
             return Ok(());
+        }
+        if let Some(external_funding) = external_funding {
+            if is_external_funding_coordinate(external_funding, coordinate)? {
+                return Ok(());
+            }
         }
         let mut matching_recipe = None;
         let mut recipe_index = 0_u16;
@@ -1491,21 +1592,26 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             recipe_index = recipe_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         let recipe_index = matching_recipe.ok_or(Error::ProfileMismatch)?;
-        let mut found_alternative = false;
+        let mut found_lifecycle_plan = false;
         let mut plan_index = 0_u16;
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
             if plan.recipe == recipe_index
-                && plan.operation == LifecycleOperationV3::AuthenticateOrCreate
+                && matches!(
+                    plan.operation,
+                    LifecycleOperationV3::Create | LifecycleOperationV3::AuthenticateOrCreate
+                )
             {
-                if plan.guard != PlanGuardV3::Always {
+                if plan.operation == LifecycleOperationV3::AuthenticateOrCreate
+                    && plan.guard != PlanGuardV3::Always
+                {
                     return Err(Error::ProfileMismatch);
                 }
-                found_alternative = true;
+                found_lifecycle_plan = true;
             }
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
-        if found_alternative {
+        if found_lifecycle_plan {
             Ok(())
         } else {
             Err(Error::ProfileMismatch)
@@ -3347,6 +3453,13 @@ fn validate_account_coordinate(
     profile: AccountProfileV2<'_>,
     coordinate: AccountCoordinateV3,
 ) -> Result<()> {
+    // Profile13 repurposes the item-rule table as templates for dynamic fixed
+    // spans. Those coordinates are physical projection transport, not
+    // Product-N lifecycle items. A lifecycle recipe may therefore name only
+    // the stable fixed prefix of a dynamic-span profile.
+    if profile.uses_dynamic_fixed_spans() && coordinate.scope == CoordinateScopeV3::Item {
+        return Err(Error::ProfileMismatch);
+    }
     let limit = match coordinate.scope {
         CoordinateScopeV3::Fixed => profile.fixed_account_count(),
         CoordinateScopeV3::Item => profile.item_account_stride(),
@@ -3356,6 +3469,19 @@ fn validate_account_coordinate(
     } else {
         Err(Error::ProfileMismatch)
     }
+}
+
+fn is_external_funding_coordinate(
+    profile: AccountProfileV3<'_>,
+    coordinate: AccountCoordinateV3,
+) -> Result<bool> {
+    if coordinate.scope != CoordinateScopeV3::Fixed {
+        return Ok(false);
+    }
+    profile
+        .funding_bound_for(coordinate.index)
+        .map(|bound| bound.is_some())
+        .map_err(|_| Error::ProfileMismatch)
 }
 
 fn rule_for_coordinate(
@@ -3432,6 +3558,51 @@ fn require_permissions(
     }
 }
 
+/// Require the AccountProfile to cover every lamport/data mutation that the
+/// selected lifecycle operation may perform.
+///
+/// `AuthenticateOrCreate` is deliberately checked as Create here. Its guard is
+/// required to be unconditional and its `LifecycleBound` prestate admits both
+/// a live state and a vacancy, so admitting only the authenticate branch would
+/// make the same selected artifacts fail depending on current account state.
+fn validate_plan_permissions(
+    profile: AccountProfileV2<'_>,
+    plan: ActionPlanV3,
+    recipe: RecipeV3,
+) -> Result<()> {
+    match plan.operation {
+        LifecycleOperationV3::Authenticate => Ok(()),
+        LifecycleOperationV3::Create | LifecycleOperationV3::AuthenticateOrCreate => {
+            require_permissions(
+                profile,
+                recipe.account,
+                EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
+            )?;
+            require_permissions(
+                profile,
+                plan.payer.ok_or(Error::ProfileMismatch)?,
+                EFFECT_PERMISSION_DEBIT_LAMPORTS,
+            )?;
+            if plan.rent_credit.is_none() {
+                return Err(Error::ProfileMismatch);
+            }
+            Ok(())
+        }
+        LifecycleOperationV3::Close => {
+            require_permissions(
+                profile,
+                recipe.account,
+                EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
+            )?;
+            require_permissions(
+                profile,
+                plan.rent_credit.ok_or(Error::ProfileMismatch)?,
+                EFFECT_PERMISSION_CREDIT_LAMPORTS,
+            )
+        }
+    }
+}
+
 fn expanded_account_index(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -3460,6 +3631,13 @@ fn expanded_account_index(
 }
 
 fn account_width(profile: AccountProfileV2<'_>, tail_count: u32) -> Result<usize> {
+    if profile.uses_dynamic_fixed_spans() {
+        // Lifecycle receives the stable semantic prefix only. Dynamic fixed
+        // spans have already been authenticated and projected by
+        // AccountProfile; treating their template stride as an affine
+        // lifecycle width invents N semantic accounts that do not exist.
+        return Ok(usize::from(profile.fixed_account_count()));
+    }
     affine_width(
         profile.fixed_account_count(),
         profile.item_account_stride(),
@@ -3784,7 +3962,10 @@ mod tests {
             data_bytes: 152,
             lamports: 30,
         };
-        let plan = |state_owner: [u8; 32], state_data: &[u8], state_key: [u8; 32]| {
+        let plan = |selected: SelectedLifecycleV3<'_>,
+                    state_owner: [u8; 32],
+                    state_data: &[u8],
+                    state_key: [u8; 32]| {
             let accounts = [
                 AccountObservationV1::new(
                     &state_key,
@@ -3815,7 +3996,7 @@ mod tests {
             )
         };
         assert!(matches!(
-            plan(SYSTEM, &[], state),
+            plan(selected, SYSTEM, &[], state),
             Ok(StateLifecyclePlanV3::Create(CreateStatePlanV3 {
                 target_data_bytes: 152,
                 state_before: 5,
@@ -3827,7 +4008,7 @@ mod tests {
         ));
         let live = [0_u8; 152];
         assert!(matches!(
-            plan(TRADING, &live, state),
+            plan(selected, TRADING, &live, state),
             Ok(StateLifecyclePlanV3::Authenticate(
                 AuthenticateStatePlanV3 {
                     data_bytes: 152,
@@ -3835,9 +4016,83 @@ mod tests {
                 }
             ))
         ));
-        assert_eq!(plan([0x44; 32], &[], state), Err(Error::InvalidState));
-        assert_eq!(plan(TRADING, &live[..151], state), Err(Error::InvalidState));
-        assert_eq!(plan(SYSTEM, &[], [0x55; 32]), Err(Error::IdentityMismatch));
+        assert_eq!(
+            plan(selected, [0x44; 32], &[], state),
+            Err(Error::InvalidState)
+        );
+        assert_eq!(
+            plan(selected, TRADING, &live[..151], state),
+            Err(Error::InvalidState)
+        );
+        assert_eq!(
+            plan(selected, SYSTEM, &[], [0x55; 32]),
+            Err(Error::IdentityMismatch)
+        );
+
+        // A conditional Create is also exact coverage for a LifecycleBound
+        // coordinate. It accepts only the vacant System-owned branch; unlike
+        // AuthenticateOrCreate it must refuse a substituted live state. A false
+        // guard disables the plan before either account branch can be used.
+        let guarded_create = |expected| {
+            let plans = [encode::LifecyclePlanInputV3 {
+                action: 2,
+                operation: encode::LifecycleOperationInputV3::Create,
+                recipe: 0,
+                payer: Some(encode::LifecycleAccountCoordinateV3::fixed(1)),
+                rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
+                principal: Some(encode::LifecycleRegisterCoordinateV3::common(1)),
+                beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+                guard: encode::LifecycleGuardInputV3::ScalarEq {
+                    source: encode::LifecycleRegisterCoordinateV3::common(2),
+                    expected,
+                },
+            }];
+            let mut scratch = vec![0_u8; policy_width];
+            let mut bytes = vec![0_u8; policy_width];
+            encode::encode_lifecycle_policy_v3_atomic(
+                &recipes,
+                &seeds,
+                &plans,
+                &mut scratch,
+                &mut bytes,
+            )
+            .expect("guarded Create policy");
+            bytes
+        };
+        let create_bytes = guarded_create(0);
+        let create_policy =
+            StateLifecyclePolicyV3::decode(&create_bytes).expect("guarded Create decode");
+        create_policy
+            .validate_account_profile(profile)
+            .expect("guarded Create covers the exact LifecycleBound recipe");
+        let create = create_policy.action_plan(2, 0).expect("guarded Create");
+        assert!(matches!(
+            plan(create, SYSTEM, &[], state),
+            Ok(StateLifecyclePlanV3::Create(_))
+        ));
+        assert_eq!(
+            plan(create, TRADING, &live, state),
+            Err(Error::InvalidState)
+        );
+        assert_eq!(
+            plan(create, SYSTEM, &[], [0x55; 32]),
+            Err(Error::IdentityMismatch)
+        );
+        let disabled_bytes = guarded_create(1);
+        let disabled_policy =
+            StateLifecyclePolicyV3::decode(&disabled_bytes).expect("disabled Create decode");
+        disabled_policy
+            .validate_account_profile(profile)
+            .expect("guard value does not weaken the recipe join");
+        assert_eq!(
+            plan(
+                disabled_policy.action_plan(2, 0).expect("disabled Create"),
+                SYSTEM,
+                &[],
+                state,
+            ),
+            Err(Error::PlanDisabled)
+        );
 
         // The `Create` acceptance above already runs against the genuine
         // all-zero System Program address, which is the identity every live
@@ -4052,6 +4307,59 @@ mod tests {
         policy
             .validate_account_profile(profile)
             .expect("static profile join");
+
+        let encode_profile = |hostile_rules: &[AccountRuleWithPrestateInputV2; 3],
+                              hostile_scratch: &mut [u8],
+                              hostile_bytes: &mut [u8]| {
+            encode_account_profile_with_lifecycle_v2_atomic(
+                TrustedEnvironmentV2::None,
+                hostile_rules,
+                &[],
+                &operations,
+                &[],
+                RegisterGeometryV2 {
+                    common_scalars: 5,
+                    item_scalar_stride: 0,
+                    common_identities: 5,
+                    item_identity_stride: 0,
+                },
+                hostile_scratch,
+                hostile_bytes,
+            )
+        };
+        let mut missing_state_credit = rules;
+        missing_state_credit[0].rule.effect_permissions =
+            AccountEffectPermissionsV2::new(false, false, true);
+        let mut missing_state_scratch = vec![0; profile_width];
+        let mut missing_state_bytes = vec![0x55; profile_width];
+        let missing_state_before = missing_state_bytes.clone();
+        assert_eq!(
+            encode_profile(
+                &missing_state_credit,
+                &mut missing_state_scratch,
+                &mut missing_state_bytes
+            ),
+            Err(v2::Error::InvalidLifecyclePrestate)
+        );
+        assert_eq!(missing_state_bytes, missing_state_before);
+
+        let assert_permission_hostile = |hostile_rules: &[AccountRuleWithPrestateInputV2; 3]| {
+            let mut hostile_scratch = vec![0; profile_width];
+            let mut hostile_bytes = vec![0; profile_width];
+            encode_profile(hostile_rules, &mut hostile_scratch, &mut hostile_bytes)
+                .expect("permission-hostile profile remains decodable");
+            assert_eq!(
+                policy.validate_account_profile(
+                    AccountProfileV2::decode(&hostile_bytes).expect("hostile profile")
+                ),
+                Err(Error::ProfileMismatch)
+            );
+        };
+        let mut missing_payer_debit = rules;
+        missing_payer_debit[1].rule.effect_permissions =
+            AccountEffectPermissionsV2::new(false, false, false);
+        assert_permission_hostile(&missing_payer_debit);
+
         let selected = policy.action_plan(1, 0).expect("selected");
         assert_eq!(selected.uses_canonical_bump(), Ok(true));
         assert_eq!(selected.protected_observation_count(), Ok(3));
@@ -5005,6 +5313,87 @@ mod tests {
                 Err(Error::ProfileMismatch)
             );
         }
+
+        let item_recipes = [encode::LifecycleRecipeInputV3 {
+            state: encode::LifecycleAccountCoordinateV3::item(0),
+            seed_start: 0,
+            seed_count: 1,
+            bump_offset: 0,
+            data_base: 16,
+            data_stride: 8,
+        }];
+        let item_plans = [encode::LifecyclePlanInputV3 {
+            action: 1,
+            operation: encode::LifecycleOperationInputV3::AuthenticateOrCreate,
+            recipe: 0,
+            payer: Some(encode::LifecycleAccountCoordinateV3::fixed(1)),
+            rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
+            principal: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+            beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+            guard: encode::LifecycleGuardInputV3::Always,
+        }];
+        let mut item_scratch = vec![0_u8; policy_bytes.len()];
+        let mut item_bytes = vec![0_u8; policy_bytes.len()];
+        encode::encode_lifecycle_policy_v3_atomic(
+            &item_recipes,
+            &[encode::LifecycleSeedInputV3::CommonScalar { index: 1, width: 1 }],
+            &item_plans,
+            &mut item_scratch,
+            &mut item_bytes,
+        )
+        .expect("item-coordinate policy remains a decodable hostile");
+        assert_eq!(
+            StateLifecyclePolicyV3::decode(&item_bytes)
+                .expect("item-coordinate policy")
+                .validate_account_profile(profile),
+            Err(Error::ProfileMismatch),
+            "dynamic span templates are not semantic lifecycle items"
+        );
+
+        let state = [0x10; 32];
+        let payer = [0x11; 32];
+        let credit = [0x12; 32];
+        let beneficiary = [0x13; 32];
+        let payer_owner = [0x14; 32];
+        let fixed_prefix = [
+            AccountObservationV1::new(&state, &SYSTEM, 0, &[], false, true, false),
+            AccountObservationV1::new(&payer, &payer_owner, 100, &[], true, true, false),
+            AccountObservationV1::new(&credit, &[0x15; 32], 7, &PRODUCT_DATA, false, false, false),
+        ];
+        let fixed_prefix_plan = plan_lifecycle(
+            selected,
+            LifecycleContextV3 {
+                account_profile: profile,
+                tail_count: 3,
+                item_index: None,
+                accounts: PlannedObservationsV3::observed(&fixed_prefix),
+                registers: LifecycleRegistersV3 {
+                    scalars: &[30, 1],
+                    identities: &[beneficiary],
+                },
+                trading_program: TRADING,
+                system_program: SYSTEM,
+                adapter_derived_pda: state,
+                rent_credit: Some(AuthenticatedRentCreditV3 {
+                    key: credit,
+                    beneficiary,
+                    lamports: 7,
+                }),
+                current_rent_minimum: Some(AuthenticatedRentMinimumV3 {
+                    data_bytes: 40,
+                    lamports: 30,
+                }),
+            },
+        )
+        .expect("dynamic-span lifecycle plans over the exact fixed prefix");
+        assert!(matches!(
+            fixed_prefix_plan,
+            StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+                target_data_bytes: 40,
+                payer_debit: 30,
+                ..
+            })
+        ));
 
         let payer_owner = [0x33; 32];
         let opaque_data = [0x55];

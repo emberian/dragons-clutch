@@ -55,9 +55,10 @@
 //! # Overflow, and why a checked refusal was not enough
 //!
 //! As in the kernel, overflow has no Lean counterpart: the specification
-//! quantifies over unbounded `Int`. This module evaluates inside an
-//! `i128`/`u128` envelope and refuses [`Error::ArithmeticOverflow`] the moment
-//! a checked operation would leave it. No wrong number is reachable.
+//! quantifies over unbounded `Int`. This module carries the de Boor triangle in
+//! a private fixed `[u64; 4]` integer and refuses [`Error::ArithmeticOverflow`]
+//! the moment a checked operation would leave it. No wrong number is reachable,
+//! and the wider accumulator is not a wire fact or a second arithmetic policy.
 //!
 //! **But a checked refusal at the wrong moment is still principal stranding.**
 //! A basis admitted at founding whose triangle overflows at some coordinate
@@ -81,14 +82,14 @@
 //!    nobody their principal.
 //!
 //! What that leaves, stated rather than hidden: a coordinate denominator
-//! *above* the published ceiling still refuses at settlement. That residue is
-//! the price of a `u128` accumulation, and widening to the crate's `SignedU256`
-//! is what retires it — see the measured consequence in
-//! [`spline_arithmetic_envelope_v3`], which is that degree 3 is essentially
-//! unfoundable at `u128` widths and degree 2 is comfortable.
+//! *above* the published ceiling still refuses at settlement. Inside that
+//! closed bound, the founding envelope and evaluator use the same 256-bit
+//! capacity, including realistic degree-3 bases that the former `u128`
+//! implementation could not admit.
 
-use crate::runtime_v3::{
-    BASIS_SPLINE_MAXIMUM_DEGREE_V3, BASIS_SPLINE_MINIMUM_DEGREE_V3, Error, Result,
+use crate::{
+    U256,
+    runtime_v3::{BASIS_SPLINE_MAXIMUM_DEGREE_V3, BASIS_SPLINE_MINIMUM_DEGREE_V3, Error, Result},
 };
 
 /// Claims one coordinate can be locally supported on: `degree + 1`, at the
@@ -171,7 +172,7 @@ impl SplineKnotsV3 for [i128] {
 /// - every level's support is strictly positive, so no selectable span is
 ///   degenerate (a degenerate one refuses at settlement, which is the same
 ///   strand by another name);
-/// - `payout_scale * denominator` fits `u128`.
+/// - `payout_scale * denominator` fits the evaluator's fixed 256-bit integer.
 ///
 /// That second bound is tight rather than conservative. The triangle's step is
 /// sum-preserving, so after each level the values sum to exactly the running
@@ -180,17 +181,10 @@ impl SplineKnotsV3 for [i128] {
 /// multiplied by anything larger afterwards is the apportionment's
 /// `payout_scale * running`, which is the product checked here.
 ///
-/// # The measured consequence, which is not a small one
-///
 /// The denominator grows as `span^(d(d+1)/2)` — cubic in the span at degree 2,
-/// **sixth power at degree 3**. With the ceiling above and a realistic payout
-/// scale, degree 2 admits comfortably wide knot vectors and degree 3 admits
-/// almost nothing. That is a true statement about a `u128` accumulation, not a
-/// defect in this check, and it is the honest form of the sizing note in
-/// `BASIS_ABI_UNIFICATION_V1` section 11.2: widening to `SignedU256` is not
-/// tidying, it is **what makes degree 3 foundable at all**. Until it lands,
-/// degree 3 is allocated, specified, proved, and refused here — which is the
-/// right place to refuse it.
+/// and sixth power at degree 3. The private 256-bit capacity is why realistic
+/// cubic bases now admit; a shape that exceeds even that fixed envelope still
+/// refuses here, before founding, rather than trapping at settlement.
 pub fn spline_arithmetic_envelope_v3<K: SplineKnotsV3 + ?Sized>(
     knots: &K,
     degree: u8,
@@ -215,9 +209,19 @@ pub fn spline_arithmetic_envelope_v3<K: SplineKnotsV3 + ?Sized>(
         return Err(Error::SplineWidthDerivationMismatch);
     }
 
-    let ceiling = u128::from(SPLINE_COORDINATE_DENOMINATOR_CEILING_V3);
+    let ceiling = SPLINE_COORDINATE_DENOMINATOR_CEILING_V3;
     let knot_at =
         |index: usize| -> Result<i128> { knots.knot_at(index).ok_or(Error::SplineDegenerateSpan) };
+    // Evaluation carries each knot numerator onto the coordinate denominator
+    // before locating a span. Bind that signed pre-scaling operation here as
+    // well as the unsigned triangle below; otherwise a translated vector near
+    // `i128::MAX` could pass the difference-only envelope and trap later even
+    // though all of its spans were narrow.
+    for index in 0..knots.knot_count() {
+        knot_at(index)?
+            .checked_mul(i128::from(ceiling))
+            .ok_or(Error::SplineEnvelopeExceeded)?;
+    }
     let mut selectable = 0_usize;
     for span in degree..width {
         // Only spans `locate_span` can actually return are worth bounding; the
@@ -226,7 +230,7 @@ pub fn spline_arithmetic_envelope_v3<K: SplineKnotsV3 + ?Sized>(
             continue;
         }
         selectable = step(selectable)?;
-        let mut denominator = 1_u128;
+        let mut denominator = U256::from_u128(1);
         for level in 1..=degree {
             for offset in 0..level {
                 let index = span
@@ -249,14 +253,14 @@ pub fn spline_arithmetic_envelope_v3<K: SplineKnotsV3 + ?Sized>(
                     return Err(Error::SplineDegenerateSpan);
                 }
                 denominator = denominator
-                    .checked_mul(support)
-                    .and_then(|value| value.checked_mul(ceiling))
-                    .ok_or(Error::SplineEnvelopeExceeded)?;
+                    .checked_mul_u128(support)
+                    .and_then(|value| value.checked_mul_u64(ceiling))
+                    .map_err(|_| Error::SplineEnvelopeExceeded)?;
             }
         }
-        u128::from(payout_scale)
-            .checked_mul(denominator)
-            .ok_or(Error::SplineEnvelopeExceeded)?;
+        denominator
+            .checked_mul_u64(payout_scale)
+            .map_err(|_| Error::SplineEnvelopeExceeded)?;
     }
     if selectable == 0 {
         return Err(Error::SplineDegenerateSpan);
@@ -272,13 +276,13 @@ pub fn spline_arithmetic_envelope_v3<K: SplineKnotsV3 + ?Sized>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SplineWeightsV3 {
     /// Local de Boor numerators, `local_len` of them from index zero.
-    pub local: [u128; SPLINE_MAX_SUPPORT_V3],
+    local: [U256; SPLINE_MAX_SUPPORT_V3],
     /// Valid entries of `local`, always `degree + 1`.
     pub local_len: usize,
     /// First claim the local support covers: `span - degree`.
     pub offset: usize,
     /// Common positive denominator every entry of `local` is a numerator over.
-    pub denominator: u128,
+    denominator: U256,
     /// Runtime claim width the weights scatter into.
     pub width: usize,
     /// The located non-degenerate knot span.
@@ -286,14 +290,32 @@ pub struct SplineWeightsV3 {
 }
 
 impl SplineWeightsV3 {
-    /// The exact weight numerator of one claim.
-    ///
-    /// Claims outside the local support carry an exact zero rather than a
-    /// rounded one.
-    pub fn numerator_at(&self, claim: usize) -> u128 {
+    /// Whether one claim has exact zero weight.
+    pub fn is_zero_at(&self, claim: usize) -> bool {
+        self.wide_numerator_at(claim).is_zero()
+    }
+
+    /// The exact weight numerator when it fits the legacy `u128` inspection
+    /// surface. Evaluation and apportionment themselves use the full fixed
+    /// 256-bit value, so a refusal here cannot strand a live position.
+    pub fn numerator_u128_at(&self, claim: usize) -> Result<u128> {
+        self.wide_numerator_at(claim)
+            .to_u128()
+            .map_err(|_| Error::ArithmeticOverflow)
+    }
+
+    /// The exact common denominator when it fits the legacy `u128`
+    /// inspection surface.
+    pub fn denominator_u128(&self) -> Result<u128> {
+        self.denominator
+            .to_u128()
+            .map_err(|_| Error::ArithmeticOverflow)
+    }
+
+    fn wide_numerator_at(&self, claim: usize) -> U256 {
         match claim.checked_sub(self.offset) {
-            Some(local) if local < self.local_len => read(&self.local, local).unwrap_or(0),
-            _ => 0,
+            Some(local) if local < self.local_len => read(&self.local, local).unwrap_or(U256::ZERO),
+            _ => U256::ZERO,
         }
     }
 }
@@ -384,10 +406,10 @@ pub fn evaluate_spline_weights_v3<K: SplineKnotsV3 + ?Sized>(
         .checked_sub(degree)
         .ok_or(Error::SplineDegenerateSpan)?;
 
-    let mut values = [0_u128; SPLINE_MAX_SUPPORT_V3];
-    write(&mut values, 0, 1)?;
+    let mut values = [U256::ZERO; SPLINE_MAX_SUPPORT_V3];
+    write(&mut values, 0, U256::from_u128(1))?;
     let mut len = 1_usize;
-    let mut denominator = 1_u128;
+    let mut denominator = U256::from_u128(1);
     for level in 1..=degree {
         let (numerators, denominators) = level_weights(&scaled, clamped, span, level)?;
         let suffix = suffix_products(&denominators, level)?;
@@ -396,7 +418,7 @@ pub fn evaluate_spline_weights_v3<K: SplineKnotsV3 + ?Sized>(
         // value already placed to the right is scaled by `q` so the level stays
         // over one common denominator. That is structurally sum-preserving,
         // which is why the partition of unity needs no reindexing argument.
-        let mut raised = [0_u128; SPLINE_MAX_SUPPORT_V3];
+        let mut raised = [U256::ZERO; SPLINE_MAX_SUPPORT_V3];
         for lower in (0..level).rev() {
             let numerator = read(&numerators, lower)?;
             let divisor = read(&denominators, lower)?;
@@ -405,18 +427,22 @@ pub fn evaluate_spline_weights_v3<K: SplineKnotsV3 + ?Sized>(
             let value = read(&values, lower)?;
             for higher in step(right)?..=level {
                 let held = read(&raised, higher)?;
-                write(&mut raised, higher, checked_mul(divisor, held)?)?;
+                write(
+                    &mut raised,
+                    higher,
+                    checked_mul(U256::from_u128(divisor), held)?,
+                )?;
             }
             let held = read(&raised, right)?;
-            let sent_right = checked_mul(checked_mul(numerator, value)?, carried)?
-                .checked_add(checked_mul(divisor, held)?)
-                .ok_or(Error::ArithmeticOverflow)?;
+            let sent_right = checked_mul(checked_mul(U256::from_u128(numerator), value)?, carried)?
+                .checked_add(checked_mul(U256::from_u128(divisor), held)?)
+                .map_err(|_| Error::ArithmeticOverflow)?;
             write(&mut raised, right, sent_right)?;
             // `numerator <= divisor` is structural: the level clamps it.
             let complement = divisor
                 .checked_sub(numerator)
                 .ok_or(Error::ArithmeticOverflow)?;
-            let sent_left = checked_mul(checked_mul(complement, value)?, carried)?;
+            let sent_left = checked_mul(checked_mul(U256::from_u128(complement), value)?, carried)?;
             write(&mut raised, lower, sent_left)?;
         }
         values = raised;
@@ -454,20 +480,16 @@ pub fn apportion_cumulative_v3(
     output: &mut [u64],
 ) -> Result<()> {
     preflight(weights, payout_scale, output)?;
-    let mut running = 0_u128;
-    let mut carried = 0_u128;
+    let mut running = U256::ZERO;
+    let mut carried = 0_u64;
     for claim in 0..weights.width {
         running = running
-            .checked_add(weights.numerator_at(claim))
-            .ok_or(Error::ArithmeticOverflow)?;
-        let boundary = u128::from(payout_scale)
-            .checked_mul(running)
-            .ok_or(Error::ArithmeticOverflow)?
-            .checked_div(weights.denominator)
-            .ok_or(Error::ZeroDenominator)?;
+            .checked_add(weights.wide_numerator_at(claim))
+            .map_err(|_| Error::ArithmeticOverflow)?;
+        let boundary = floor_scaled_ratio(running, weights.denominator, payout_scale)?;
         let payout = boundary.checked_sub(carried).ok_or(Error::NonPartition)?;
         let slot = output.get_mut(claim).ok_or(Error::InvalidLength)?;
-        *slot = u64::try_from(payout).map_err(|_| Error::ArithmeticOverflow)?;
+        *slot = payout;
         carried = boundary;
     }
     // Fail-closed rather than reachable: the de Boor step derives the partition
@@ -483,7 +505,7 @@ fn preflight(weights: &SplineWeightsV3, payout_scale: u64, output: &[u64]) -> Re
     if payout_scale == 0 {
         return Err(Error::ZeroScale);
     }
-    if weights.denominator == 0 {
+    if weights.denominator.is_zero() {
         return Err(Error::ZeroDenominator);
     }
     if weights.width == 0 {
@@ -576,11 +598,11 @@ fn level_weights(
 fn suffix_products(
     denominators: &[u128; LEVEL_CAPACITY],
     level: usize,
-) -> Result<[u128; SPLINE_MAX_SUPPORT_V3]> {
-    let mut suffix = [1_u128; SPLINE_MAX_SUPPORT_V3];
+) -> Result<[U256; SPLINE_MAX_SUPPORT_V3]> {
+    let mut suffix = [U256::from_u128(1); SPLINE_MAX_SUPPORT_V3];
     for lower in (0..level).rev() {
         let above = read(&suffix, step(lower)?)?;
-        let product = checked_mul(read(denominators, lower)?, above)?;
+        let product = checked_mul(U256::from_u128(read(denominators, lower)?), above)?;
         write(&mut suffix, lower, product)?;
     }
     Ok(suffix)
@@ -595,8 +617,42 @@ fn nonnegative(value: i128) -> Result<u128> {
     u128::try_from(value).map_err(|_| Error::ArithmeticOverflow)
 }
 
-fn checked_mul(left: u128, right: u128) -> Result<u128> {
-    left.checked_mul(right).ok_or(Error::ArithmeticOverflow)
+fn checked_mul(left: U256, right: U256) -> Result<U256> {
+    left.checked_mul(right)
+        .map_err(|_| Error::ArithmeticOverflow)
+}
+
+/// `floor(scale * numerator / denominator)` where `numerator <= denominator`.
+///
+/// The quotient is therefore in `[0, scale]`; binary search over that public
+/// bound avoids a general-purpose big-integer division implementation while
+/// preserving the one named cumulative-floor boundary exactly.
+fn floor_scaled_ratio(numerator: U256, denominator: U256, scale: u64) -> Result<u64> {
+    if denominator.is_zero() || numerator > denominator {
+        return Err(Error::NonPartition);
+    }
+    let scaled = numerator
+        .checked_mul_u64(scale)
+        .map_err(|_| Error::ArithmeticOverflow)?;
+    let mut low = 0_u64;
+    let mut high = scale;
+    while low < high {
+        let delta = high.checked_sub(low).ok_or(Error::ArithmeticOverflow)?;
+        let middle = low
+            .checked_add(delta / 2)
+            .and_then(|value| value.checked_add(delta % 2))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if denominator
+            .checked_mul_u64(middle)
+            .map_err(|_| Error::ArithmeticOverflow)?
+            <= scaled
+        {
+            low = middle;
+        } else {
+            high = middle.checked_sub(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+    }
+    Ok(low)
 }
 
 fn step(index: usize) -> Result<usize> {
@@ -606,12 +662,53 @@ fn step(index: usize) -> Result<usize> {
 /// Total read of one fixed-size triangle buffer. Every call site is
 /// structurally in range; an out-of-range read is a fail-closed refusal rather
 /// than a panic, so this module cannot abort.
-fn read(values: &[u128], index: usize) -> Result<u128> {
+fn read<T: Copy>(values: &[T], index: usize) -> Result<T> {
     values.get(index).copied().ok_or(Error::ArithmeticOverflow)
 }
 
 /// Total write into one fixed-size triangle buffer. See [`read`].
-fn write(values: &mut [u128], index: usize, value: u128) -> Result<()> {
+fn write<T>(values: &mut [T], index: usize, value: T) -> Result<()> {
     *values.get_mut(index).ok_or(Error::ArithmeticOverflow)? = value;
     Ok(())
+}
+
+#[cfg(test)]
+mod wide_integer_tests {
+    use super::*;
+
+    #[test]
+    fn multiplication_carries_across_every_64_bit_limb() {
+        let low_128_max = U256([u64::MAX, u64::MAX, 0, 0]);
+        assert_eq!(
+            low_128_max.checked_mul(low_128_max),
+            Ok(U256([1, 0, u64::MAX - 1, u64::MAX]))
+        );
+        let limb_max = U256([u64::MAX, 0, 0, 0]);
+        assert_eq!(
+            limb_max.checked_mul(limb_max),
+            Ok(U256([1, u64::MAX - 1, 0, 0]))
+        );
+    }
+
+    #[test]
+    fn multiplication_refuses_instead_of_truncating_above_bit_255() {
+        let maximum = U256([u64::MAX; 4]);
+        assert_eq!(maximum.checked_mul_u64(1), Ok(maximum));
+        assert!(maximum.checked_mul_u64(2).is_err());
+        assert!(
+            U256([0, 0, 0, 1_u64 << 63])
+                .checked_mul(U256::from_u128(2))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn floor_boundary_handles_the_full_closed_u64_range() {
+        let denominator = U256([u64::MAX, u64::MAX, 7, 0]);
+        assert_eq!(floor_scaled_ratio(U256::ZERO, denominator, u64::MAX), Ok(0));
+        assert_eq!(
+            floor_scaled_ratio(denominator, denominator, u64::MAX),
+            Ok(u64::MAX)
+        );
+    }
 }

@@ -6,7 +6,6 @@
 //! state key, and Trading owner.  Family evaluation never supplies those
 //! protected values.
 
-use crate::effect_artifacts_v3::unauthored_actions;
 use dclutch_account_profile_contract::lifecycle_v3::{
     ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
     PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV4,
@@ -26,6 +25,7 @@ use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
 use dclutch_general_codec::Action;
 
 use crate::{
+    candidate_v1::GENERAL_CANDIDATE_BYTES_V1,
     collection_v1::{
         GENERAL_BATCH_BYTES_V1, GENERAL_ORDER_ROW_BASE_V1, GENERAL_ORDER_ROW_STRIDE_V1,
         GeneralBatchLayoutV1, GeneralOrderLayoutV1,
@@ -33,11 +33,16 @@ use crate::{
     hot_candidate_v3::{identity, scalar},
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
-    runtime_width::{SETTLEMENT_CURSOR_HEADER_BYTES_V2, SettlementCursorLayoutV2},
+    runtime_verify::{RUNTIME_VERIFIER_HEADER_BYTES_V2, RuntimeVerifierLayoutV2},
+    runtime_width::{
+        SETTLEMENT_CURSOR_HEADER_BYTES_V2, SettlementCursorLayoutV2,
+        VERIFIED_CANDIDATE_HEADER_BYTES_V2,
+    },
     state_seeds_v3::{
         GENERAL_CANCEL_ORDER_SEED_START_V3, GENERAL_CANCEL_STATE_SEED_TABLE_V3,
         GENERAL_CLOSE_STATE_SEED_TABLE_V3, GENERAL_CLOSE_TERMINAL_SEED_START_V3,
-        GeneralStateRecipeV3,
+        GENERAL_VERIFY_RESULT_SEED_START_V3, GENERAL_VERIFY_STATE_SEED_TABLE_V3,
+        GENERAL_VERIFY_VERIFIER_SEED_START_V3, GeneralStateRecipeV3,
     },
 };
 
@@ -53,6 +58,14 @@ pub const GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3: u16 = 7;
 pub const GENERAL_CLOSE_PAYER_ACCOUNT_V3: u16 = 7;
 /// Shared Close terminal-create and settlement-close RentCredit coordinate.
 pub const GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3: u16 = 8;
+/// VerifyCandidateRow streamed verifier local state.
+pub const GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3: u16 = 6;
+/// VerifyCandidateRow raw conditional `VerifiedCandidateV2` result.
+pub const GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3: u16 = 7;
+/// Permissionless Verify caller and create payer.
+pub const GENERAL_VERIFY_PAYER_ACCOUNT_V3: u16 = 8;
+/// Permanent RentCredit for verifier/result state creation.
+pub const GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3: u16 = 9;
 
 /// Semantic owner of one readonly General evaluator input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +77,16 @@ pub enum GeneralReadonlyEvidenceKindV3 {
     /// admission consumes is projected from them, and the record the effect
     /// writes is therefore exactly what the maker signed.
     OrderTerms,
+    /// Canonical closed Batch local-state image selected by the candidate.
+    ClosedBatch,
+    /// Runtime-width CandidateV2 content image whose own digest is submitted.
+    CandidateImage,
+    /// Immutable runtime-width Candidate page selected by the request.
+    CandidatePage,
+    /// Exact escrowed General order backing the selected execution row.
+    EscrowedOrder,
+    /// Canonical Submitted GeneralCandidateV1 body endorsed by the solver.
+    SubmittedCandidate,
     /// Immutable interpreted best-valid-submitted-candidate policy.
     SelectionPolicy,
     /// Newly submitted complete verified-candidate record.
@@ -112,6 +135,8 @@ pub struct GeneralChildRentWidthsV5 {
     pub position: u32,
     /// Exact selected Token or Token-2022 vault-account bytes.
     pub custody_vault: u32,
+    /// Exact raw terminal `VerifiedCandidateV2` bytes for Product N.
+    pub verified_candidate: u32,
 }
 
 impl GeneralChildRentWidthsV5 {
@@ -125,12 +150,21 @@ impl GeneralChildRentWidthsV5 {
                     .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
             )
             .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+        let verified_candidate = u32::try_from(VERIFIED_CANDIDATE_HEADER_BYTES_V2)
+            .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?
+            .checked_add(
+                outcome_count
+                    .checked_mul(16)
+                    .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+            )
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
         if outcome_count == 0 || custody_vault == 0 {
             return Err(GeneralStateArtifactErrorV3::Geometry);
         }
         Ok(Self {
             position,
             custody_vault,
+            verified_candidate,
         })
     }
 }
@@ -185,7 +219,9 @@ fn general_state_lifecycle_bytes(action: Action, current_rent_v5: bool) -> Resul
 #[must_use]
 pub const fn general_readonly_evidence_count_v3(action: Action) -> u16 {
     match action {
-        unauthored_actions!() => 0,
+        Action::SubmitCandidate => 3,
+        Action::VerifyCandidateRow => 5,
+        Action::CloseCandidate => 1,
         // The batch pair's evaluator inputs are the Hot prefix itself: the
         // root tail and the config record, both projected by the
         // AccountProfile rather than read as evidence accounts. ReleaseOrder
@@ -209,6 +245,15 @@ pub fn general_readonly_evidence_v3(
 ) -> Result<GeneralReadonlyEvidenceV3> {
     let base = general_readonly_evidence_start_v3(action);
     let kind = match (action, index) {
+        (Action::SubmitCandidate, 0) => GeneralReadonlyEvidenceKindV3::ClosedBatch,
+        (Action::SubmitCandidate, 1) => GeneralReadonlyEvidenceKindV3::CandidateImage,
+        (Action::SubmitCandidate, 2) => GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+        (Action::VerifyCandidateRow, 0) => GeneralReadonlyEvidenceKindV3::ClosedBatch,
+        (Action::VerifyCandidateRow, 1) => GeneralReadonlyEvidenceKindV3::CandidateImage,
+        (Action::VerifyCandidateRow, 2) => GeneralReadonlyEvidenceKindV3::CandidatePage,
+        (Action::VerifyCandidateRow, 3) => GeneralReadonlyEvidenceKindV3::EscrowedOrder,
+        (Action::VerifyCandidateRow, 4) => GeneralReadonlyEvidenceKindV3::SettlementManifest,
+        (Action::CloseCandidate, 0) => GeneralReadonlyEvidenceKindV3::ClosedBatch,
         (Action::Consider, 0) => GeneralReadonlyEvidenceKindV3::SelectionPolicy,
         (Action::Consider, 1) => GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
         (Action::InitializeSettlement, 0) => GeneralReadonlyEvidenceKindV3::FrozenSelection,
@@ -235,16 +280,11 @@ pub fn general_readonly_evidence_v3(
 #[must_use]
 pub const fn general_readonly_evidence_start_v3(action: Action) -> u16 {
     match action {
+        Action::SubmitCandidate => 8,
+        Action::VerifyCandidateRow => 10,
+        Action::CloseCandidate => 8,
         // Two states, a payer and a rent credit before the children.
         Action::Close | Action::PlaceOrder | Action::CancelOrder => 9,
-        // An unauthored action has no evidence and no child frame, so this is
-        // not a shape it has -- but the value stays at the common prefix so that
-        // `general_child_account_start_v3`'s addition cannot be read as a
-        // narrower frame than the one the prefix already occupies. Every
-        // fallible entry point refuses these actions by name before the sum is
-        // used; the arm exists so the next action forces a decision rather than
-        // inheriting the settlement prefix from a catch-all.
-        unauthored_actions!() => 8,
         Action::OpenBatch
         | Action::CloseBatch
         | Action::ReleaseOrder
@@ -274,6 +314,10 @@ pub fn encode_general_state_lifecycle_v3_atomic(
     }
     if action == Action::Close {
         encode_close(action, None, scratch, output)
+    } else if action == Action::CloseCandidate {
+        encode_close_candidate(action, None, scratch, output)
+    } else if action == Action::VerifyCandidateRow {
+        encode_verify_candidate_row(action, None, scratch, output)
     } else if matches!(action, Action::PlaceOrder | Action::CancelOrder) {
         encode_batch_and_order(action, None, scratch, output)
     } else {
@@ -300,6 +344,10 @@ pub fn encode_general_state_lifecycle_v5_atomic(
     let selected = quotes.as_slice(action);
     if action == Action::Close {
         encode_close(action, Some(selected), scratch, output)
+    } else if action == Action::CloseCandidate {
+        encode_close_candidate(action, Some(selected), scratch, output)
+    } else if action == Action::VerifyCandidateRow {
+        encode_verify_candidate_row(action, Some(selected), scratch, output)
     } else if matches!(action, Action::PlaceOrder | Action::CancelOrder) {
         encode_batch_and_order(action, Some(selected), scratch, output)
     } else {
@@ -325,6 +373,9 @@ fn encode_primary(
         // The order record's fixed span: header and mutable window; the
         // per-outcome rows are the stride past it.
         GeneralStateRecipeV3::Order => GENERAL_ORDER_ROW_BASE_V1,
+        GeneralStateRecipeV3::Candidate => GENERAL_CANDIDATE_BYTES_V1,
+        GeneralStateRecipeV3::Verifier => RUNTIME_VERIFIER_HEADER_BYTES_V2,
+        GeneralStateRecipeV3::VerifiedCandidate => VERIFIED_CANDIDATE_HEADER_BYTES_V2,
     };
     let data_base = u32::try_from(
         GENERAL_LOCAL_STATE_HEADER_BYTES_V3
@@ -343,6 +394,9 @@ fn encode_primary(
         data_base,
         data_stride: match state_recipe {
             GeneralStateRecipeV3::Selection | GeneralStateRecipeV3::Batch => 0,
+            GeneralStateRecipeV3::Candidate => 0,
+            GeneralStateRecipeV3::Verifier => 40,
+            GeneralStateRecipeV3::VerifiedCandidate => 16,
             GeneralStateRecipeV3::Order => order_row_stride()?,
             GeneralStateRecipeV3::Settlement | GeneralStateRecipeV3::Terminal => {
                 SettlementCursorLayoutV2::inventory_stride()
@@ -391,6 +445,241 @@ fn encode_primary(
             &plan,
             &protected,
             bindings.as_slice(),
+            scratch,
+            output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    }
+    Ok(())
+}
+
+/// VerifyCandidateRow's three-state policy.
+///
+/// Candidate is an existing envelope, Verifier is the sole resumable envelope,
+/// and Result is a raw immutable `VerifiedCandidateV2`. The result plan is the
+/// only guarded plan: a nonterminal row cannot allocate it, while a terminal
+/// row must create it at the exact current-Rent width declared by Lifecycle V5.
+fn encode_verify_candidate_row(
+    action: Action,
+    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let candidate_recipe = GeneralStateRecipeV3::Candidate;
+    let verifier_recipe = GeneralStateRecipeV3::Verifier;
+    let result_recipe = GeneralStateRecipeV3::VerifiedCandidate;
+    let candidate_base = u32::try_from(
+        GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+            .checked_add(GENERAL_CANDIDATE_BYTES_V1)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )
+    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
+    let verifier_base = u32::try_from(
+        GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+            .checked_add(RUNTIME_VERIFIER_HEADER_BYTES_V2)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )
+    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
+    let result_base = u32::try_from(VERIFIED_CANDIDATE_HEADER_BYTES_V2)
+        .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
+    let recipes = [
+        LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+            seed_start: 0,
+            seed_count: candidate_recipe.seed_count(),
+            bump_offset: candidate_recipe.bump_offset(),
+            data_base: candidate_base,
+            data_stride: 0,
+        },
+        LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3),
+            seed_start: GENERAL_VERIFY_VERIFIER_SEED_START_V3,
+            seed_count: verifier_recipe.seed_count(),
+            bump_offset: verifier_recipe.bump_offset(),
+            data_base: verifier_base,
+            data_stride: 40,
+        },
+        LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3),
+            seed_start: GENERAL_VERIFY_RESULT_SEED_START_V3,
+            seed_count: result_recipe.seed_count(),
+            bump_offset: result_recipe.bump_offset(),
+            data_base: result_base,
+            data_stride: 16,
+        },
+    ];
+    let plans = [
+        LifecyclePlanInputV3 {
+            action: action as u32,
+            operation: LifecycleOperationInputV3::Authenticate,
+            recipe: 0,
+            payer: None,
+            rent_credit: None,
+            principal: None,
+            beneficiary: None,
+            guard: LifecycleGuardInputV3::Always,
+        },
+        LifecyclePlanInputV3 {
+            action: action as u32,
+            operation: LifecycleOperationInputV3::Create,
+            recipe: 2,
+            payer: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_VERIFY_PAYER_ACCOUNT_V3,
+            )),
+            rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
+            )),
+            principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+                scalar::RESULT_PRINCIPAL_OBSERVATION,
+            )?)),
+            beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+                identity::RESULT_BENEFICIARY_OBSERVATION,
+            )?)),
+            guard: LifecycleGuardInputV3::ScalarEq {
+                source: LifecycleRegisterCoordinateV3::common(scalar_u16(scalar::VERIFY_TERMINAL)?),
+                expected: 1,
+            },
+        },
+        LifecyclePlanInputV3 {
+            action: action as u32,
+            operation: LifecycleOperationInputV3::AuthenticateOrCreate,
+            recipe: 1,
+            payer: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_VERIFY_PAYER_ACCOUNT_V3,
+            )),
+            rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
+            )),
+            principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+                scalar::TERMINAL_PRINCIPAL_OBSERVATION,
+            )?)),
+            beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+                identity::TERMINAL_BENEFICIARY_OBSERVATION,
+            )?)),
+            guard: LifecycleGuardInputV3::Always,
+        },
+    ];
+    // Lifecycle policy order is canonical by operation tag, so Result/Create
+    // precedes Verifier/AuthenticateOrCreate even though its state coordinate
+    // follows Verifier in the physical frame.
+    let protected = [None, None, Some(terminal_protected()?)];
+    // Only AuthenticateOrCreate may carry an immutable binding. Candidate is
+    // a mandatory Authenticate plan and its content joins in the evaluator;
+    // Verifier binds its immutable candidate field whenever the live branch is
+    // selected, while creation writes that same canonical field atomically.
+    let bindings = [binding(
+        2,
+        RuntimeVerifierLayoutV2::candidate_id(),
+        identity::CANDIDATE,
+    )?];
+    if let Some(quotes) = current_rent_quotes {
+        encode_lifecycle_policy_v5_atomic(
+            &recipes,
+            &GENERAL_VERIFY_STATE_SEED_TABLE_V3,
+            &plans,
+            &protected,
+            &bindings,
+            quotes,
+            scratch,
+            output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    } else {
+        encode_lifecycle_policy_v4_atomic(
+            &recipes,
+            &GENERAL_VERIFY_STATE_SEED_TABLE_V3,
+            &plans,
+            &protected,
+            &bindings,
+            scratch,
+            output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    }
+    Ok(())
+}
+
+/// CloseCandidate's single-state close policy.
+///
+/// The Candidate's immutable lifecycle beneficiary is the solver. Effects pay
+/// the cleanup crank and return the unspent verification compartment first;
+/// this Close plan then returns only the historical rent principal to that
+/// same solver and leaves the Candidate account vacant.
+fn encode_close_candidate(
+    action: Action,
+    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let recipe_kind = GeneralStateRecipeV3::Candidate;
+    let data_base = u32::try_from(
+        GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+            .checked_add(GENERAL_CANDIDATE_BYTES_V1)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )
+    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
+    let recipes = [LifecycleRecipeInputV3 {
+        state: LifecycleAccountCoordinateV3::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+        seed_start: 0,
+        seed_count: recipe_kind.seed_count(),
+        bump_offset: recipe_kind.bump_offset(),
+        data_base,
+        data_stride: 0,
+    }];
+    let plans = [LifecyclePlanInputV3 {
+        action: action as u32,
+        operation: LifecycleOperationInputV3::Close,
+        recipe: 0,
+        payer: None,
+        rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+            GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
+        )),
+        principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+            scalar::PRIMARY_PRINCIPAL_OBSERVATION,
+        )?)),
+        beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+            identity::PRIMARY_BENEFICIARY_OBSERVATION,
+        )?)),
+        guard: LifecycleGuardInputV3::Always,
+    }];
+    // A Close plan consumes authenticated observations and emits no lifecycle
+    // protected outputs. Those outputs are canonical only for
+    // AuthenticateOrCreate; carrying them here made the first-class
+    // CloseCandidate V5 artifact unencodable.
+    let protected = [None];
+    // Lifecycle immutable bindings are defined only for
+    // AuthenticateOrCreate protected outputs. CloseCandidate is a Close plan;
+    // its Candidate/solver agreement is authenticated by the account-profile
+    // projections and semantic transition before this plan runs, while its PDA
+    // identity is rederived from the canonical seed table here.
+    let bindings = [];
+    if let Some(quotes) = current_rent_quotes {
+        encode_lifecycle_policy_v5_atomic(
+            &recipes,
+            recipe_kind.lifecycle_seeds(),
+            &plans,
+            &protected,
+            &bindings,
+            quotes,
+            scratch,
+            output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    } else {
+        encode_lifecycle_policy_v4_atomic(
+            &recipes,
+            recipe_kind.lifecycle_seeds(),
+            &plans,
+            &protected,
+            &bindings,
             scratch,
             output,
         )
@@ -622,6 +911,8 @@ impl CurrentRentQuoteBufferV5 {
     fn as_slice(&self, action: Action) -> &[LifecycleCurrentRentQuoteInputV5] {
         if matches!(action, Action::InitializeSettlement | Action::PlaceOrder) {
             &self.values
+        } else if action == Action::VerifyCandidateRow {
+            &self.values[..1]
         } else {
             &[]
         }
@@ -633,12 +924,12 @@ fn general_current_rent_quotes_v5(
     child_widths: Option<GeneralChildRentWidthsV5>,
 ) -> Result<CurrentRentQuoteBufferV5> {
     let child_widths = match (action, child_widths) {
-        (Action::InitializeSettlement | Action::PlaceOrder, Some(widths))
-            if widths.position != 0 && widths.custody_vault != 0 =>
-        {
-            widths
-        }
-        (Action::InitializeSettlement | Action::PlaceOrder, _) | (_, Some(_)) => {
+        (
+            Action::InitializeSettlement | Action::PlaceOrder | Action::VerifyCandidateRow,
+            Some(widths),
+        ) if widths.position != 0 && widths.custody_vault != 0 => widths,
+        (Action::InitializeSettlement | Action::PlaceOrder | Action::VerifyCandidateRow, _)
+        | (_, Some(_)) => {
             return Err(GeneralStateArtifactErrorV3::Geometry);
         }
         (_, None) => GeneralChildRentWidthsV5 {
@@ -646,13 +937,22 @@ fn general_current_rent_quotes_v5(
             // action has an empty V5 quote table.
             position: 0,
             custody_vault: 0,
+            verified_candidate: 0,
         },
     };
     Ok(CurrentRentQuoteBufferV5 {
         values: [
             LifecycleCurrentRentQuoteInputV5 {
-                exact_data_len: child_widths.position,
-                scalar_destination: scalar_u16(scalar::POSITION_RENT_PRINCIPAL)?,
+                exact_data_len: if action == Action::VerifyCandidateRow {
+                    child_widths.verified_candidate
+                } else {
+                    child_widths.position
+                },
+                scalar_destination: scalar_u16(if action == Action::VerifyCandidateRow {
+                    scalar::RESULT_PRINCIPAL_OBSERVATION
+                } else {
+                    scalar::POSITION_RENT_PRINCIPAL
+                })?,
             },
             LifecycleCurrentRentQuoteInputV5 {
                 exact_data_len: u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
@@ -674,11 +974,10 @@ fn general_current_rent_quotes_v5(
 
 const fn lifecycle_current_rent_quote_count(action: Action) -> usize {
     match action {
+        Action::SubmitCandidate => 0,
+        Action::VerifyCandidateRow => 1,
+        Action::CloseCandidate => 0,
         Action::InitializeSettlement => 4,
-        // Written out rather than defaulted, for the same reason the new
-        // actions are written out at every other dispatcher: the next action
-        // added must force a decision here instead of inheriting one.
-        unauthored_actions!() => 0,
         Action::OpenBatch
         | Action::CloseBatch
         | Action::CancelOrder
@@ -741,6 +1040,9 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
         values: [empty; 5],
         len: lifecycle_binding_count(action),
     };
+    if action == Action::SubmitCandidate {
+        return Ok(output);
+    }
     if matches!(action, Action::OpenBatch | Action::CloseBatch) {
         // The batch record's three immutable identities, bound to the
         // canonical registers the AccountProfile projects from the root, the
@@ -901,7 +1203,9 @@ const fn require_authored(action: Action) -> Result<()> {
 
 const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
     match action {
-        unauthored_actions!() => (0, 0, 0),
+        Action::SubmitCandidate => (1, 4, 1),
+        Action::VerifyCandidateRow => (3, 12, 3),
+        Action::CloseCandidate => (1, 4, 1),
         Action::OpenBatch | Action::CloseBatch | Action::ReleaseOrder => (1, 5, 1),
         // Two recipes over one ten-entry table: the batch window and the
         // order record.
@@ -917,7 +1221,9 @@ const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
 
 const fn lifecycle_binding_count(action: Action) -> usize {
     match action {
-        unauthored_actions!() => 0,
+        Action::SubmitCandidate => 0,
+        Action::VerifyCandidateRow => 1,
+        Action::CloseCandidate => 0,
         Action::OpenBatch | Action::CloseBatch => 3,
         // The order record's Market alone: it is the sole coordinate with an
         // INDEPENDENT frame source (the root tail). The owner and batch bytes
@@ -956,7 +1262,7 @@ mod tests {
 
     use super::*;
 
-    const ACTIONS: [Action; 12] = [
+    const ACTIONS: [Action; 15] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -968,7 +1274,10 @@ mod tests {
         Action::PlaceOrder,
         Action::CancelOrder,
         Action::CloseBatch,
+        Action::SubmitCandidate,
+        Action::VerifyCandidateRow,
         Action::ReleaseOrder,
+        Action::CloseCandidate,
     ];
 
     #[test]
@@ -983,11 +1292,20 @@ mod tests {
                 StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], &output).expect("decode");
             let two_state = matches!(
                 action,
-                Action::Close | Action::PlaceOrder | Action::CancelOrder
+                Action::Close
+                    | Action::PlaceOrder
+                    | Action::CancelOrder
+                    | Action::VerifyCandidateRow
             );
             assert_eq!(
                 policy.action_plan_count(action as u32),
-                Ok(if two_state { 2 } else { 1 })
+                Ok(if action == Action::VerifyCandidateRow {
+                    3
+                } else if two_state {
+                    2
+                } else {
+                    1
+                })
             );
             assert_eq!(
                 policy
@@ -995,6 +1313,151 @@ mod tests {
                     .expect("selected")
                     .uses_canonical_bump(),
                 Ok(true)
+            );
+        }
+    }
+
+    #[test]
+    fn submit_candidate_lifecycle_is_one_fixed_candidate_recipe_at_runtime_widths() {
+        let action = Action::SubmitCandidate;
+        let width = general_state_lifecycle_bytes_v5(action).expect("lifecycle width");
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0x55_u8; width];
+        encode_general_state_lifecycle_v5_atomic(action, None, &mut scratch, &mut output)
+            .expect("SubmitCandidate lifecycle");
+        let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &output)
+            .expect("canonical lifecycle");
+        assert_eq!(policy.action_plan_count(action as u32), Ok(1));
+        let plan = policy
+            .action_plan(action as u32, 0)
+            .expect("candidate create plan");
+        assert_eq!(plan.seed_count(), Ok(4));
+        assert_eq!(plan.uses_canonical_bump(), Ok(true));
+        for count in [1_u32, 258] {
+            assert_eq!(
+                plan.target_data_bytes(count),
+                Ok(u32::try_from(
+                    GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1,
+                )
+                .expect("fixed candidate width")),
+            );
+        }
+    }
+
+    #[test]
+    fn close_candidate_is_one_unprotected_close_over_the_canonical_candidate_recipe() {
+        let action = Action::CloseCandidate;
+        let width = general_state_lifecycle_bytes_v5(action).expect("lifecycle width");
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0x55_u8; width];
+        encode_general_state_lifecycle_v5_atomic(action, None, &mut scratch, &mut output)
+            .expect("CloseCandidate lifecycle");
+        let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &output)
+            .expect("canonical lifecycle");
+        assert_eq!(policy.action_plan_count(action as u32), Ok(1));
+        let close = policy.action_plan(action as u32, 0).expect("close plan");
+        assert_eq!(
+            close.operation(),
+            dclutch_account_profile_contract::lifecycle_v3::LifecycleOperationV3::Close
+        );
+        assert_eq!(close.protected_outputs(), Ok(None));
+        assert_eq!(close.immutable_identity_binding_count(), Ok(0));
+        assert_eq!(close.seed_count(), Ok(4));
+        assert_eq!(close.uses_canonical_bump(), Ok(true));
+        assert_eq!(
+            close.target_data_bytes(1),
+            Ok(
+                u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1)
+                    .expect("candidate width")
+            )
+        );
+    }
+
+    #[test]
+    fn verify_lifecycle_is_exact_three_state_conditional_raw_result_at_n_one_and_258() {
+        use dclutch_account_profile_contract::lifecycle_v3::LifecycleOperationV3;
+
+        let action = Action::VerifyCandidateRow;
+        for outcome_count in [1_u32, 258] {
+            let widths = GeneralChildRentWidthsV5::new(outcome_count, 165)
+                .expect("authenticated runtime widths");
+            let width = general_state_lifecycle_bytes_v5(action).expect("lifecycle width");
+            let mut scratch = vec![0_u8; width];
+            let mut output = vec![0x55_u8; width];
+            encode_general_state_lifecycle_v5_atomic(
+                action,
+                Some(widths),
+                &mut scratch,
+                &mut output,
+            )
+            .expect("VerifyCandidateRow lifecycle");
+            let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &output)
+                .expect("canonical lifecycle");
+            assert_eq!(policy.action_plan_count(action as u32), Ok(3));
+
+            let candidate = policy.action_plan(action as u32, 0).expect("candidate");
+            let result = policy.action_plan(action as u32, 1).expect("result");
+            let verifier = policy.action_plan(action as u32, 2).expect("verifier");
+            assert_eq!(candidate.operation(), LifecycleOperationV3::Authenticate);
+            assert_eq!(result.operation(), LifecycleOperationV3::Create);
+            assert_eq!(
+                verifier.operation(),
+                LifecycleOperationV3::AuthenticateOrCreate
+            );
+            assert_eq!(candidate.protected_outputs(), Ok(None));
+            assert_eq!(result.protected_outputs(), Ok(None));
+            assert!(verifier.protected_outputs().expect("protected").is_some());
+            assert_eq!(candidate.seed_count(), Ok(4));
+            assert_eq!(verifier.seed_count(), Ok(4));
+            assert_eq!(result.seed_count(), Ok(4));
+            assert_eq!(candidate.uses_canonical_bump(), Ok(true));
+            assert_eq!(verifier.uses_canonical_bump(), Ok(true));
+            assert_eq!(result.uses_canonical_bump(), Ok(true));
+            assert_eq!(
+                candidate.target_data_bytes(outcome_count),
+                Ok(u32::try_from(
+                    GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1,
+                )
+                .expect("candidate width"))
+            );
+            assert_eq!(
+                verifier.target_data_bytes(outcome_count),
+                Ok(u32::try_from(
+                    GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+                        + RUNTIME_VERIFIER_HEADER_BYTES_V2
+                        + 40 * usize::try_from(outcome_count).expect("N"),
+                )
+                .expect("verifier width"))
+            );
+            assert_eq!(
+                result.target_data_bytes(outcome_count),
+                Ok(widths.verified_candidate)
+            );
+            assert_eq!(policy.current_rent_quote_count(), 1);
+            let quote = policy.current_rent_quote(0).expect("result rent quote");
+            assert_eq!(quote.exact_data_len(), widths.verified_candidate);
+            assert_eq!(
+                quote.scalar_destination().index(),
+                u16::try_from(scalar::RESULT_PRINCIPAL_OBSERVATION).expect("result scalar")
+            );
+
+            // Plan one is the canonical Create entry. Its guard is the wire's
+            // ScalarEq form over VERIFY_TERMINAL == 1, pinned here so an Always
+            // guard cannot silently allocate a nonterminal certificate.
+            let guard_offset =
+                HEADER_BYTES + 3 * RECIPE_BYTES + 12 * SEED_BYTES + ACTION_PLAN_BYTES + 24;
+            assert_eq!(output[guard_offset], 1);
+            assert_eq!(
+                u16::from_le_bytes([output[guard_offset + 2], output[guard_offset + 3]]),
+                u16::try_from(scalar::VERIFY_TERMINAL).expect("guard scalar")
+            );
+            assert_eq!(
+                u64::from_le_bytes(
+                    output[guard_offset + 4..guard_offset + 12]
+                        .try_into()
+                        .expect("guard expected"),
+                ),
+                1
             );
         }
     }
@@ -1008,7 +1471,10 @@ mod tests {
                 let width = general_state_lifecycle_bytes_v5(action).expect("V5 width");
                 let mut scratch = vec![0_u8; width];
                 let mut output = vec![0x55_u8; width];
-                let quoted = matches!(action, Action::InitializeSettlement | Action::PlaceOrder);
+                let quoted = matches!(
+                    action,
+                    Action::InitializeSettlement | Action::PlaceOrder | Action::VerifyCandidateRow
+                );
                 encode_general_state_lifecycle_v5_atomic(
                     action,
                     quoted.then_some(widths),
@@ -1018,9 +1484,15 @@ mod tests {
                 .expect("V5 lifecycle artifact");
                 let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &output)
                     .expect("V5 decode");
-                let expected_count = if quoted { 4 } else { 0 };
+                let expected_count = if action == Action::VerifyCandidateRow {
+                    1
+                } else if quoted {
+                    4
+                } else {
+                    0
+                };
                 assert_eq!(policy.current_rent_quote_count(), expected_count);
-                if quoted {
+                if matches!(action, Action::InitializeSettlement | Action::PlaceOrder) {
                     for (ordinal, (data_len, destination)) in [
                         (widths.position, scalar::POSITION_RENT_PRINCIPAL),
                         (
@@ -1083,6 +1555,8 @@ mod tests {
     #[test]
     fn all_actions_select_exact_readonly_evidence_before_child_routes() {
         let expected = [
+            (Action::SubmitCandidate, 8, 3, 11),
+            (Action::VerifyCandidateRow, 10, 5, 15),
             (Action::Consider, 8, 2, 10),
             (Action::Freeze, 8, 0, 8),
             (Action::InitializeSettlement, 8, 3, 11),

@@ -16,7 +16,7 @@ use dclutch_account_profile_contract::v2::{
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
         RegisterGeometryV2, ScalarCoordinateV2,
-        encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
+        encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic_with_item_operations,
     },
 };
 use dclutch_capability_program_contract::{
@@ -48,28 +48,35 @@ use dclutch_product_runtime_v2_admission::{
 
 use crate::{
     artifacts_v3::GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3,
+    candidate_v1::{GENERAL_CANDIDATE_BYTES_V1, GeneralCandidateLayoutV1},
     collection_v1::{
         GENERAL_BATCH_BYTES_V1, GENERAL_ORDER_HEADER_BYTES_V1, GENERAL_ORDER_ROW_BASE_V1,
+        GENERAL_ORDER_ROW_DELIVER_OFFSET_V1, GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
         GENERAL_ORDER_ROW_STRIDE_V1, GeneralBatchLayoutV1, GeneralOrderLayoutV1,
     },
     effect_artifacts_v3::{
         GeneralChildFrameV3, general_custody_callee_account_count_v3,
         general_custody_callee_coordinate_v3, general_effect_account_count_v3,
-        general_effect_route_count_v3, general_effect_route_frame_v3, unauthored_actions,
+        general_effect_route_count_v3, general_effect_route_frame_v3,
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, scalar,
+        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, item_scalar, scalar,
     },
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
     runtime_selection::RUNTIME_SELECTION_CURSOR_BYTES_V2,
     runtime_verify::RUNTIME_VERIFIER_HEADER_BYTES_V2,
-    runtime_width::{SETTLEMENT_CURSOR_HEADER_BYTES_V2, VERIFIED_CANDIDATE_HEADER_BYTES_V2},
+    runtime_width::{
+        CANDIDATE_HEADER_BYTES_V2, CandidateLayoutV2, PAGE_HEADER_BYTES_V2,
+        SETTLEMENT_CURSOR_HEADER_BYTES_V2, VERIFIED_CANDIDATE_HEADER_BYTES_V2,
+    },
     state_artifacts_v3::{
         GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        GENERAL_VERIFY_PAYER_ACCOUNT_V3, GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
+        GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
         GeneralReadonlyEvidenceKindV3, general_readonly_evidence_count_v3,
         general_readonly_evidence_v3,
     },
@@ -208,28 +215,34 @@ pub const fn general_scratch_page_rule_v3() -> AccountRuleWithPrestateInputV2 {
 #[must_use]
 pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     match action {
-        // `211079f6` wrote the seven new actions out one by one at every
-        // dispatcher so the NEXT action forces a decision at each program. This
-        // catch-all escaped that sweep and would have handed an unauthored
-        // action the settlement operation list. Zero is the fail-closed answer
-        // and it cannot reach an encoder: `general_account_profile_bytes_v3`
-        // sizes itself from `general_account_profile_fixed_count_v3`, which
-        // refuses an unauthored action by name first. And a profile that
-        // projected no operations would leave `ROOT_LIFECYCLE_OBSERVATION` at
-        // zero, which is not `Active`, so every action would refuse.
-        unauthored_actions!() => 0,
-        Action::OpenBatch => 19,
-        Action::CloseBatch => 16,
-        Action::PlaceOrder => 28,
-        Action::CancelOrder => 28,
-        Action::ReleaseOrder => 16,
-        Action::Close => 9,
+        Action::SubmitCandidate => 33,
+        Action::VerifyCandidateRow => 12,
+        Action::CloseCandidate => 20,
+        Action::OpenBatch => 20,
+        Action::CloseBatch => 17,
+        Action::PlaceOrder => 31,
+        Action::CancelOrder => 29,
+        Action::ReleaseOrder => 17,
+        Action::Close => 10,
         Action::Consider
         | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
-        | Action::Distribute => 5,
+        | Action::Distribute => 6,
+    }
+}
+
+/// Number of operations evaluated once per Product outcome.
+///
+/// PlaceOrder's signed terms carry one receive/deliver pair per outcome. The
+/// source is a fixed evidence account, but the destinations are item registers,
+/// so these two affine projections belong to Profile13's item-operation body.
+const fn general_account_profile_item_operation_count_v3(action: Action) -> u16 {
+    if matches!(action, Action::PlaceOrder) {
+        2
+    } else {
+        0
     }
 }
 
@@ -243,6 +256,16 @@ pub fn general_account_profile_operation_v3(
 ) -> Result<AccountOperationInputV2> {
     let primary = AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3);
     let terminal = AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3);
+    let creation_payer = if action == Action::VerifyCandidateRow {
+        GENERAL_VERIFY_PAYER_ACCOUNT_V3
+    } else if matches!(
+        action,
+        Action::Close | Action::PlaceOrder | Action::CancelOrder
+    ) {
+        GENERAL_CLOSE_PAYER_ACCOUNT_V3
+    } else {
+        GENERAL_PRIMARY_PAYER_ACCOUNT_V3
+    };
     match index {
         // The Product-owned runtime width, from the authenticated Portfolio.
         0 => Ok(AccountOperationInputV2::ProjectTailCountU32 {
@@ -278,6 +301,292 @@ pub fn general_account_profile_operation_v3(
                     .checked_add(GENERAL_ROOT_LIFECYCLE_OFFSET_V2)
                     .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
             )?,
+        }),
+        // Verify's mutable Candidate owns the refundable work escrow. Project
+        // its actual balance independently of the body compartments so the
+        // semantic projector can prove exact pre/post capitalization and the
+        // Effect can assert the post-transfer balance.
+        5 if action == Action::VerifyCandidateRow => Ok(AccountOperationInputV2::ProjectLamports {
+            account: primary,
+            destination: common_scalar(scalar::OBSERVED_POSITION_LAMPORTS)?,
+        }),
+        // The resumable verifier is lifecycle state coordinate 6. Its local
+        // envelope observations are zero on the create branch and exact on the
+        // authenticate branch; Lifecycle V5 remains the sole branch selector.
+        6 if action == Action::VerifyCandidateRow => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: AccountCoordinateV2::fixed(GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3),
+            destination: common_scalar(scalar::TERMINAL_BUMP_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::bump(),
+        }),
+        7 if action == Action::VerifyCandidateRow => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3),
+            destination: common_scalar(scalar::TERMINAL_PRINCIPAL_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::rent_principal(),
+        }),
+        8 if action == Action::VerifyCandidateRow => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3),
+                destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
+                data_offset: GeneralLocalStateLayoutV3::beneficiary(),
+            })
+        }
+        // The permissionless caller both pays any state creation and receives
+        // the exact candidate-funded crank reward. Its transaction signature
+        // authenticates the payer role, never the candidate semantics.
+        9 if action == Action::VerifyCandidateRow => Ok(AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(GENERAL_VERIFY_PAYER_ACCOUNT_V3),
+            destination: common_identity(identity::PAYER)?,
+        }),
+        // Candidate is an authenticated existing state, so its real lamport
+        // balance may be projected only after anchoring its owner to the
+        // trusted executing Trading program. The resumable Verifier remains
+        // LifecycleBound: projecting its possibly-vacant lamports would be a
+        // noncanonical lifecycle observation, and Verify consumes no such
+        // scalar.
+        10 if action == Action::VerifyCandidateRow => Ok(AccountOperationInputV2::RequireOwner {
+            account: primary,
+            expected: common_identity(identity::TRADING_PROGRAM)?,
+        }),
+        // Candidate close authenticates the persisted work compartments,
+        // their physical balance, the joined Batch deadline, and the two
+        // distinct lamport beneficiaries. CurrentSlot is supplied only by the
+        // trusted environment selected below.
+        5 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectLamports {
+            account: primary,
+            destination: common_scalar(scalar::OBSERVED_POSITION_LAMPORTS)?,
+        }),
+        6 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: primary,
+            destination: common_scalar(scalar::CANDIDATE_STATUS_OBSERVATION)?,
+            data_offset: candidate_body_offset(GeneralCandidateLayoutV1::STATUS_OFFSET)?,
+        }),
+        7 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: primary,
+            destination: common_scalar(scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION)?,
+            data_offset: candidate_body_offset(
+                GeneralCandidateLayoutV1::VERIFICATION_REMAINING_OFFSET,
+            )?,
+        }),
+        8 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: primary,
+            destination: common_scalar(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
+            data_offset: candidate_body_offset(GeneralCandidateLayoutV1::CLEANUP_REMAINING_OFFSET)?,
+        }),
+        9 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: primary,
+            destination: common_scalar(scalar::CANDIDATE_REWARD_RATE)?,
+            data_offset: candidate_body_offset(GeneralCandidateLayoutV1::REWARD_RATE_OFFSET)?,
+        }),
+        10 if action == Action::CloseCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: primary,
+                destination: common_identity(identity::CANDIDATE)?,
+                data_offset: candidate_body_offset(GeneralCandidateLayoutV1::CANDIDATE_ID_OFFSET)?,
+            })
+        }
+        11 if action == Action::CloseCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: primary,
+                destination: common_identity(identity::SELECTION_BATCH)?,
+                data_offset: candidate_body_offset(GeneralCandidateLayoutV1::BATCH_ID_OFFSET)?,
+            })
+        }
+        12 if action == Action::CloseCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: primary,
+                destination: common_identity(identity::OWNER)?,
+                data_offset: candidate_body_offset(GeneralCandidateLayoutV1::SOLVER_ID_OFFSET)?,
+            })
+        }
+        13 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: close_candidate_batch_account()?,
+            destination: common_scalar(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT)?,
+        }),
+        14 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+            destination: common_identity(identity::PAYER)?,
+        }),
+        15 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3),
+            destination: common_identity(identity::RENT_CREDIT)?,
+        }),
+        16 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: close_candidate_batch_account()?,
+            destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+        }),
+        17 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::RequireOwner {
+            account: primary,
+            expected: common_identity(identity::TRADING_PROGRAM)?,
+        }),
+        18 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectLamports {
+            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+            destination: common_scalar(scalar::OBSERVED_ADMISSION_LAMPORTS)?,
+        }),
+        19 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectLamports {
+            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3),
+            destination: common_scalar(scalar::ESCROW_BALANCE_OBSERVATION)?,
+        }),
+        5 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+        }),
+        6 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            destination: common_scalar(scalar::BATCH_POST_ORDER_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::OUTCOME_COUNT)?,
+        }),
+        7 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+        }),
+        8 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            destination: common_scalar(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT)?,
+        }),
+        9 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectKey {
+            account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            destination: common_identity(identity::SELECTION_BATCH)?,
+        }),
+        10 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+                destination: common_identity(identity::SELECTION_PRODUCT)?,
+                data_offset: batch_body_offset(GeneralBatchLayoutV1::PRODUCT_ID)?,
+            })
+        }
+        11 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            destination: common_scalar(scalar::ORDER_MAX_LOTS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::PRICE_SCALE)?,
+        }),
+        12 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+            destination: common_scalar(scalar::ZERO)?,
+            data_offset: width(CandidateLayoutV2::OUTCOME_COUNT)?,
+        }),
+        13 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+            destination: common_scalar(scalar::CANDIDATE_PAGE_COUNT)?,
+            data_offset: width(CandidateLayoutV2::PAGE_COUNT)?,
+        }),
+        14 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+            destination: common_scalar(scalar::SELECTION_BEST_CANDIDATE_COORDINATE)?,
+            data_offset: width(CandidateLayoutV2::CANDIDATE_COORDINATE)?,
+        }),
+        15 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+            destination: common_scalar(scalar::SELECTION_PRICE_SCALE)?,
+            data_offset: width(CandidateLayoutV2::PRICE_SCALE)?,
+        }),
+        16 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+                destination: common_identity(identity::BEST_VERIFIED_DIGEST)?,
+                data_offset: width(CandidateLayoutV2::CANDIDATE_ID)?,
+            })
+        }
+        17 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+                destination: common_identity(identity::ORDER)?,
+                data_offset: width(CandidateLayoutV2::PRODUCT_ID)?,
+            })
+        }
+        18 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+                destination: common_identity(identity::SELECTION_POLICY)?,
+                data_offset: width(CandidateLayoutV2::BATCH_ID)?,
+            })
+        }
+        19 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::VERIFY_POST_ORDER_COUNT)?,
+            data_offset: width(GeneralCandidateLayoutV1::OUTCOME_COUNT_OFFSET)?,
+        }),
+        20 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::VERIFY_POST_PAGE)?,
+            data_offset: width(GeneralCandidateLayoutV1::PAGE_COUNT_OFFSET)?,
+        }),
+        21 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::CANDIDATE_STATUS_OBSERVATION)?,
+            data_offset: width(GeneralCandidateLayoutV1::STATUS_OFFSET)?,
+        }),
+        22 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::CANDIDATE_PAGE_REVISION)?,
+            data_offset: width(GeneralCandidateLayoutV1::PAGE_REVISION_OFFSET)?,
+        }),
+        23 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(
+                    2,
+                    GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+                )?,
+                destination: common_identity(identity::RESULT_BENEFICIARY_OBSERVATION)?,
+                data_offset: width(GeneralCandidateLayoutV1::CANDIDATE_ID_OFFSET)?,
+            })
+        }
+        24 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(
+                    2,
+                    GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+                )?,
+                destination: common_identity(identity::BENEFICIARY)?,
+                data_offset: width(GeneralCandidateLayoutV1::BATCH_ID_OFFSET)?,
+            })
+        }
+        25 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(
+                    2,
+                    GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+                )?,
+                destination: common_identity(identity::OWNER)?,
+                data_offset: width(GeneralCandidateLayoutV1::SOLVER_ID_OFFSET)?,
+            })
+        }
+        26 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::CANDIDATE_SUBMITTED_SLOT)?,
+            data_offset: width(GeneralCandidateLayoutV1::SUBMITTED_SLOT_OFFSET)?,
+        }),
+        27 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::CANDIDATE_ROW_COUNT)?,
+            data_offset: width(GeneralCandidateLayoutV1::ROW_COUNT_OFFSET)?,
+        }),
+        28 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::CANDIDATE_REWARD_RATE)?,
+            data_offset: width(GeneralCandidateLayoutV1::REWARD_RATE_OFFSET)?,
+        }),
+        29 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION)?,
+            data_offset: width(GeneralCandidateLayoutV1::VERIFICATION_REMAINING_OFFSET)?,
+        }),
+        30 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: submit_evidence_account(2, GeneralReadonlyEvidenceKindV3::SubmittedCandidate)?,
+            destination: common_scalar(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
+            data_offset: width(GeneralCandidateLayoutV1::CLEANUP_REMAINING_OFFSET)?,
+        }),
+        31 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::RequireKey {
+            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+            expected: common_identity(identity::OWNER)?,
+        }),
+        32 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::RequireOwner {
+            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+            expected: common_identity(identity::RESULT_OWNER)?,
         }),
         // The batch pair's projections: the root tail, the config windows, and
         // the three identities the batch record binds. `zero` receives the
@@ -511,6 +820,22 @@ pub fn general_account_profile_operation_v3(
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
             destination: common_scalar(scalar::GENERATION)?,
             data_offset: width(GeneralConfigV3Layout::GENERATION)?,
+        }),
+        29 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
+            account: order_terms_account(action)?,
+            destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::CURSOR_INVENTORY)?),
+            data_offset: width(
+                GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
+            )?,
+            data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
+        }),
+        30 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
+            account: order_terms_account(action)?,
+            destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::QUANTITY)?),
+            data_offset: width(
+                GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
+            )?,
+            data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
         }),
         // CancelOrder's projections. The second derived state (the order, at
         // the terminal coordinate) is observed the way Close observes its
@@ -757,6 +1082,24 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::beneficiary(),
         }),
+        // Every exact signer account Lifecycle may debit is anchored to the
+        // trusted System Program identity. SubmitCandidate already carries
+        // this same anchor in its signed-evidence suffix; CloseCandidate has
+        // no create payer. This operation is last in the fixed body so
+        // PlaceOrder's two affine item projections remain the exact tail.
+        owner_anchor
+            if !matches!(action, Action::SubmitCandidate | Action::CloseCandidate)
+                && owner_anchor
+                    == general_account_profile_operation_count_v3(action)
+                        .checked_sub(general_account_profile_item_operation_count_v3(action))
+                        .and_then(|count| count.checked_sub(1))
+                        .ok_or(GeneralAccountRuleErrorV3::Geometry)? =>
+        {
+            Ok(AccountOperationInputV2::RequireOwner {
+                account: AccountCoordinateV2::fixed(creation_payer),
+                expected: common_identity(identity::RESULT_OWNER)?,
+            })
+        }
         _ => Err(GeneralAccountRuleErrorV3::Geometry),
     }
 }
@@ -819,7 +1162,11 @@ pub fn encode_general_account_profile_v3_atomic(
             .get_mut(index)
             .ok_or(GeneralAccountRuleErrorV3::Geometry)? = operation;
     }
-    encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
+    let item_operation_count = usize::from(general_account_profile_item_operation_count_v3(action));
+    let fixed_operation_count = operation_count
+        .checked_sub(item_operation_count)
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic_with_item_operations(
         // The window-gated actions read the trusted current slot; a caller may
         // not state what time it is. The settlement seven declare none, and
         // adding one there would move seven digests for nothing.
@@ -830,6 +1177,8 @@ pub fn encode_general_account_profile_v3_atomic(
                 | Action::PlaceOrder
                 | Action::CancelOrder
                 | Action::ReleaseOrder
+                | Action::SubmitCandidate
+                | Action::CloseCandidate
         ) {
             TrustedEnvironmentV2::CurrentSlot {
                 destination: narrow_u32(scalar::CURRENT_SLOT)?,
@@ -840,7 +1189,13 @@ pub fn encode_general_account_profile_v3_atomic(
         TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
             destination: narrow_u32(identity::TRADING_PROGRAM)?,
         },
-        TrustedBuiltinIdentityV2::None,
+        if action != Action::CloseCandidate {
+            TrustedBuiltinIdentityV2::SystemProgram {
+                destination: narrow_u32(identity::RESULT_OWNER)?,
+            }
+        } else {
+            TrustedBuiltinIdentityV2::None
+        },
         &[general_scratch_page_span_v3(action)?],
         fixed_count,
         |coordinate| {
@@ -849,7 +1204,10 @@ pub fn encode_general_account_profile_v3_atomic(
         },
         &[general_scratch_page_rule_v3()],
         operations
-            .get(..operation_count)
+            .get(..fixed_operation_count)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
+        operations
+            .get(fixed_operation_count..operation_count)
             .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
         RegisterGeometryV2 {
             common_scalars: narrow_u32(GENERAL_HOT_COMMON_SCALARS_V3)?,
@@ -864,7 +1222,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 28;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 33;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -875,7 +1233,7 @@ const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 
 
 const _: () = assert!(
     GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3
-        == general_account_profile_operation_count_v3(Action::PlaceOrder) as usize
+        == general_account_profile_operation_count_v3(Action::SubmitCandidate) as usize
 );
 
 fn narrow_u32(value: u32) -> Result<u16> {
@@ -906,11 +1264,42 @@ fn batch_body_offset(offset: usize) -> Result<u32> {
         .ok_or(GeneralAccountRuleErrorV3::Geometry)
 }
 
+/// One Candidate-record offset behind the General local-state envelope.
+fn candidate_body_offset(offset: usize) -> Result<u32> {
+    GeneralLocalStateLayoutV3::body()
+        .checked_add(width(offset)?)
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)
+}
+
+/// CloseCandidate's independently authenticated Batch evidence coordinate.
+fn close_candidate_batch_account() -> Result<AccountCoordinateV2> {
+    let selected =
+        crate::state_artifacts_v3::general_readonly_evidence_v3(Action::CloseCandidate, 0)
+            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+    if selected.kind != GeneralReadonlyEvidenceKindV3::ClosedBatch {
+        return Err(GeneralAccountRuleErrorV3::Geometry);
+    }
+    Ok(AccountCoordinateV2::fixed(selected.coordinate))
+}
+
 /// The signed-terms evidence coordinate for one admission.
 fn order_terms_account(action: Action) -> Result<AccountCoordinateV2> {
     let selected = crate::state_artifacts_v3::general_readonly_evidence_v3(action, 0)
         .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
     if selected.kind != GeneralReadonlyEvidenceKindV3::OrderTerms {
+        return Err(GeneralAccountRuleErrorV3::Geometry);
+    }
+    Ok(AccountCoordinateV2::fixed(selected.coordinate))
+}
+
+fn submit_evidence_account(
+    index: u16,
+    expected: GeneralReadonlyEvidenceKindV3,
+) -> Result<AccountCoordinateV2> {
+    let selected =
+        crate::state_artifacts_v3::general_readonly_evidence_v3(Action::SubmitCandidate, index)
+            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+    if selected.kind != expected {
         return Err(GeneralAccountRuleErrorV3::Geometry);
     }
     Ok(AccountCoordinateV2::fixed(selected.coordinate))
@@ -948,6 +1337,80 @@ pub fn general_account_profile_rule_v3(
     if coordinate < 5 {
         return common_rule(action, coordinate, widths);
     }
+    if action == Action::VerifyCandidateRow {
+        match coordinate {
+            GENERAL_PRIMARY_STATE_ACCOUNT_V3 => {
+                return Ok(AccountRuleWithPrestateInputV2 {
+                    rule: AccountRuleInputV2 {
+                        privileges: AccountPrivilegesV2::new(false, true, false),
+                        effect_permissions: AccountEffectPermissionsV2::new(true, false, true),
+                        alias: AccountAliasInputV2::SelfCoordinate,
+                        data_length: u32::try_from(
+                            GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1,
+                        )
+                        .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+                        data_item_stride: 0,
+                    },
+                    prestate: AccountPrestateV2::Exact,
+                });
+            }
+            GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3 => {
+                return Ok(AccountRuleWithPrestateInputV2 {
+                    rule: AccountRuleInputV2 {
+                        privileges: AccountPrivilegesV2::new(false, true, false),
+                        effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                        alias: AccountAliasInputV2::SelfCoordinate,
+                        data_length: u32::try_from(
+                            GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + RUNTIME_VERIFIER_HEADER_BYTES_V2,
+                        )
+                        .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+                        data_item_stride: 40,
+                    },
+                    prestate: AccountPrestateV2::LifecycleBound,
+                });
+            }
+            GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3 => {
+                return Ok(AccountRuleWithPrestateInputV2 {
+                    rule: AccountRuleInputV2 {
+                        privileges: AccountPrivilegesV2::new(false, true, false),
+                        effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                        alias: AccountAliasInputV2::SelfCoordinate,
+                        data_length: u32::try_from(VERIFIED_CANDIDATE_HEADER_BYTES_V2)
+                            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+                        data_item_stride: 16,
+                    },
+                    prestate: AccountPrestateV2::LifecycleBound,
+                });
+            }
+            GENERAL_VERIFY_PAYER_ACCOUNT_V3 => {
+                return Ok(exact_rule(
+                    true,
+                    true,
+                    false,
+                    0,
+                    0,
+                    // Effect credits the permissionless crank; Lifecycle may
+                    // debit the same signer when either the resumable Verifier
+                    // or conditional terminal Result is vacant. The emitted
+                    // effect never consumes the debit authority, but the
+                    // profile must cover both live and create lifecycle
+                    // branches selected by the same immutable artifacts.
+                    AccountEffectPermissionsV2::new(true, true, false),
+                ));
+            }
+            GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3 => {
+                return Ok(exact_rule(
+                    false,
+                    true,
+                    false,
+                    widths.rent_credit,
+                    0,
+                    no_effects(),
+                ));
+            }
+            _ => {}
+        }
+    }
     if coordinate == GENERAL_PRIMARY_STATE_ACCOUNT_V3
         || (matches!(
             action,
@@ -971,7 +1434,22 @@ pub fn general_account_profile_rule_v3(
         GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3
     };
     if coordinate == payer {
-        return Ok(exact_rule(true, true, false, 0, 0, no_effects()));
+        return Ok(exact_rule(
+            true,
+            true,
+            false,
+            0,
+            0,
+            if action == Action::CloseCandidate {
+                AccountEffectPermissionsV2::new(false, true, false)
+            } else {
+                // Every other action selecting this coordinate carries at
+                // least one Create or AuthenticateOrCreate plan. This debit
+                // permission is lifecycle authority even when the currently
+                // observed branch is already live.
+                AccountEffectPermissionsV2::new(true, false, false)
+            },
+        ));
     }
     if coordinate == rent_credit {
         return Ok(exact_rule(
@@ -980,7 +1458,11 @@ pub fn general_account_profile_rule_v3(
             false,
             widths.rent_credit,
             0,
-            no_effects(),
+            if matches!(action, Action::Close | Action::CloseCandidate) {
+                AccountEffectPermissionsV2::new(false, true, false)
+            } else {
+                no_effects()
+            },
         ));
     }
     let mut evidence = 0_u16;
@@ -1103,7 +1585,9 @@ fn common_rule(
 fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPrestateInputV2> {
     let cancel_order_state = matches!(action, Action::PlaceOrder | Action::CancelOrder)
         && coordinate == GENERAL_TERMINAL_STATE_ACCOUNT_V3;
-    let semantic_header = if matches!(action, Action::Consider | Action::Freeze) {
+    let semantic_header = if matches!(action, Action::SubmitCandidate | Action::CloseCandidate) {
+        GENERAL_CANDIDATE_BYTES_V1
+    } else if matches!(action, Action::Consider | Action::Freeze) {
         RUNTIME_SELECTION_CURSOR_BYTES_V2
     } else if matches!(action, Action::OpenBatch | Action::CloseBatch)
         || (matches!(action, Action::PlaceOrder | Action::CancelOrder) && !cancel_order_state)
@@ -1126,7 +1610,12 @@ fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPr
     Ok(AccountRuleWithPrestateInputV2 {
         rule: AccountRuleInputV2 {
             privileges: AccountPrivilegesV2::new(false, true, false),
-            effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+            effect_permissions: AccountEffectPermissionsV2::new(
+                action == Action::CloseCandidate
+                    || (action == Action::Close && coordinate == GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+                true,
+                true,
+            ),
             alias: AccountAliasInputV2::SelfCoordinate,
             data_length: u32::try_from(
                 GENERAL_LOCAL_STATE_HEADER_BYTES_V3
@@ -1134,11 +1623,13 @@ fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPr
                     .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
             )
             .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-            data_item_stride: if matches!(
-                action,
-                Action::Consider | Action::Freeze | Action::OpenBatch | Action::CloseBatch
-            ) || (matches!(action, Action::PlaceOrder | Action::CancelOrder)
-                && !cancel_order_state)
+            data_item_stride: if matches!(action, Action::SubmitCandidate | Action::CloseCandidate)
+                || matches!(
+                    action,
+                    Action::Consider | Action::Freeze | Action::OpenBatch | Action::CloseBatch
+                )
+                || (matches!(action, Action::PlaceOrder | Action::CancelOrder)
+                    && !cancel_order_state)
             {
                 0
             } else if action == Action::ReleaseOrder || cancel_order_state {
@@ -1148,7 +1639,7 @@ fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPr
                 8
             },
         },
-        prestate: if closed_settlement_state {
+        prestate: if closed_settlement_state || action == Action::CloseCandidate {
             AccountPrestateV2::Exact
         } else {
             AccountPrestateV2::LifecycleBound
@@ -1169,6 +1660,55 @@ fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithP
             u32::try_from(GENERAL_ORDER_ROW_STRIDE_V1)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
             AccountPrestateV2::Exact,
+        )),
+        GeneralReadonlyEvidenceKindV3::ClosedBatch => Ok(exact_rule(
+            false,
+            false,
+            false,
+            u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_BATCH_BYTES_V1)
+                .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+            0,
+            no_effects(),
+        )),
+        GeneralReadonlyEvidenceKindV3::CandidateImage => Ok(exact_rule(
+            false,
+            false,
+            false,
+            u32::try_from(CANDIDATE_HEADER_BYTES_V2)
+                .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+            8,
+            no_effects(),
+        )),
+        // One immutable page has a fixed hostile-decoded header followed by a
+        // runtime number of canonical execution rows. The AccountProfile can
+        // authenticate its readonly carrier and minimum prefix, while
+        // `PageV2::decode` remains the sole owner of the exact
+        // `64 + rows * (112 + 16N)` width and row ordering.
+        GeneralReadonlyEvidenceKindV3::CandidatePage => Ok(variable_rule(
+            u32::try_from(PAGE_HEADER_BYTES_V2).map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+        )),
+        // Verification consumes the actual escrowed order local state, not a
+        // detached immutable terms image. Its envelope and mutable window are
+        // fixed; the canonical receive/deliver pair contributes one 16-byte
+        // row per Product outcome.
+        GeneralReadonlyEvidenceKindV3::EscrowedOrder => Ok(exact_rule(
+            false,
+            false,
+            false,
+            u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_ORDER_ROW_BASE_V1)
+                .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+            u32::try_from(GENERAL_ORDER_ROW_STRIDE_V1)
+                .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+            no_effects(),
+        )),
+        GeneralReadonlyEvidenceKindV3::SubmittedCandidate => Ok(exact_rule(
+            false,
+            false,
+            false,
+            u32::try_from(GENERAL_CANDIDATE_BYTES_V1)
+                .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+            0,
+            no_effects(),
         )),
         GeneralReadonlyEvidenceKindV3::SelectionPolicy => Ok(exact_rule(
             false,
@@ -1729,7 +2269,7 @@ mod tests {
         rent_credit: 48,
     };
 
-    const ACTIONS: [Action; 12] = [
+    const ACTIONS: [Action; 15] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -1741,7 +2281,10 @@ mod tests {
         Action::PlaceOrder,
         Action::CancelOrder,
         Action::CloseBatch,
+        Action::SubmitCandidate,
+        Action::VerifyCandidateRow,
         Action::ReleaseOrder,
+        Action::CloseCandidate,
     ];
 
     #[test]
@@ -1765,6 +2308,87 @@ mod tests {
             );
             assert_eq!(span.minimum, 1);
             assert_eq!(span.maximum, u32::MAX);
+        }
+    }
+
+    #[test]
+    fn submit_candidate_profile_owns_one_fixed_candidate_and_three_exact_evidence_records() {
+        let action = Action::SubmitCandidate;
+        assert_eq!(general_account_profile_fixed_count_v3(action), Ok(11));
+        assert_eq!(general_account_profile_operation_count_v3(action), 33);
+
+        let candidate =
+            general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)
+                .expect("candidate state rule");
+        assert_eq!(candidate.prestate, AccountPrestateV2::LifecycleBound);
+        assert_eq!(
+            candidate.rule.data_length,
+            u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1)
+                .expect("candidate width"),
+        );
+        assert_eq!(candidate.rule.data_item_stride, 0);
+
+        let payer =
+            general_account_profile_rule_v3(action, GENERAL_PRIMARY_PAYER_ACCOUNT_V3, WIDTHS)
+                .expect("solver payer rule");
+        assert_eq!(payer.prestate, AccountPrestateV2::Exact);
+        assert_eq!(
+            payer.rule.privileges,
+            AccountPrivilegesV2::new(true, true, false),
+        );
+        assert_eq!(
+            payer.rule.effect_permissions,
+            AccountEffectPermissionsV2::new(true, false, false),
+        );
+
+        for (index, kind, base, stride) in [
+            (
+                0,
+                GeneralReadonlyEvidenceKindV3::ClosedBatch,
+                u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_BATCH_BYTES_V1)
+                    .expect("closed batch width"),
+                0,
+            ),
+            (
+                1,
+                GeneralReadonlyEvidenceKindV3::CandidateImage,
+                u32::try_from(CANDIDATE_HEADER_BYTES_V2).expect("candidate image header"),
+                8,
+            ),
+            (
+                2,
+                GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+                u32::try_from(GENERAL_CANDIDATE_BYTES_V1).expect("submission width"),
+                0,
+            ),
+        ] {
+            let selected = general_readonly_evidence_v3(action, index).expect("evidence");
+            assert_eq!(selected.kind, kind);
+            assert_eq!(selected.coordinate, 8 + index);
+            let rule = general_account_profile_rule_v3(action, selected.coordinate, WIDTHS)
+                .expect("evidence rule");
+            assert_eq!(rule.prestate, AccountPrestateV2::Exact);
+            assert_eq!(rule.rule.data_length, base);
+            assert_eq!(rule.rule.data_item_stride, stride);
+            assert_eq!(
+                rule.rule.privileges,
+                AccountPrivilegesV2::new(false, false, false),
+            );
+            assert_eq!(rule.rule.effect_permissions, no_effects());
+        }
+
+        let bytes = general_account_profile_bytes_v3(action).expect("profile width");
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0x55_u8; bytes];
+        encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut output)
+            .expect("SubmitCandidate profile");
+        let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(&output)
+            .expect("canonical profile");
+        for count in [1_u32, 258] {
+            assert_eq!(
+                profile.logical_account_count_with_dynamic_spans(1, &[count]),
+                Ok(usize::from(11_u16) + usize::try_from(count).expect("tail")),
+            );
         }
     }
 
@@ -2021,12 +2645,59 @@ mod tests {
             if action == Action::Close {
                 continue;
             }
+            let expected = if matches!(action, Action::VerifyCandidateRow | Action::CloseCandidate)
+            {
+                // These two authenticate a pre-existing Candidate. Verify
+                // carries an explicit RequireOwner before its lamport
+                // projection; CloseCandidate carries the same anchor before
+                // closing it.
+                AccountPrestateV2::Exact
+            } else {
+                AccountPrestateV2::LifecycleBound
+            };
             assert_eq!(
                 general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)
                     .expect("primary state rule")
                     .prestate,
-                AccountPrestateV2::LifecycleBound,
-                "{action:?} creates its own primary state"
+                expected,
+                "{action:?} primary-state prestate"
+            );
+        }
+    }
+
+    #[test]
+    fn candidate_lamport_effects_are_minimal_and_the_debit_owner_is_anchored() {
+        assert_eq!(
+            general_account_profile_operation_v3(Action::VerifyCandidateRow, 10),
+            Ok(AccountOperationInputV2::RequireOwner {
+                account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+                expected: IdentityCoordinateV2::common(
+                    u16::try_from(identity::TRADING_PROGRAM).expect("Trading identity"),
+                ),
+            })
+        );
+        let verify_payer = general_account_profile_rule_v3(
+            Action::VerifyCandidateRow,
+            GENERAL_VERIFY_PAYER_ACCOUNT_V3,
+            WIDTHS,
+        )
+        .expect("Verify payer");
+        assert_eq!(
+            verify_payer.rule.effect_permissions,
+            AccountEffectPermissionsV2::new(true, true, false),
+            "the same signer is credited by Effect and may fund either vacant Verify state"
+        );
+        for coordinate in [
+            GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
+            GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
+        ] {
+            let beneficiary =
+                general_account_profile_rule_v3(Action::CloseCandidate, coordinate, WIDTHS)
+                    .expect("CloseCandidate beneficiary");
+            assert_eq!(
+                beneficiary.rule.effect_permissions,
+                AccountEffectPermissionsV2::new(false, true, false),
+                "CloseCandidate beneficiary {coordinate} may only receive"
             );
         }
     }
@@ -2035,8 +2706,8 @@ mod tests {
     /// advertises is the width it writes.
     ///
     /// Before this function existed the encoder invocation had two authors and
-    /// only one of them -- the release builder -- ever ran for all seven
-    /// actions; the contract-side copy was pinned to `Freeze`. Now there is one
+    /// only one of them -- the release builder -- ever ran for every authored
+    /// action; the contract-side copy was pinned to `Freeze`. Now there is one
     /// author and this exercises it across the whole action set, including
     /// `Close`, which is the only action with a nine-operation list.
     #[test]
@@ -2059,7 +2730,7 @@ mod tests {
             let mut scratch = vec![0_u8; bytes];
             let mut output = vec![0x55_u8; bytes];
             encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut output)
-                .expect("profile artifact");
+                .unwrap_or_else(|error| panic!("{action:?} profile artifact: {error:?}"));
             let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(&output)
                 .expect("the encoder emits a decodable profile");
             assert_eq!(

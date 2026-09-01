@@ -14,9 +14,10 @@ dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-effect-kernel = { path = "../../../../crates/dclutch-effect-kernel" }
-dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
+dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract", features = ["alloc"] }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-request-profile-contract = { path = "../../../../crates/dclutch-request-profile-contract" }

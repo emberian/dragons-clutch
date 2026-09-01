@@ -74,13 +74,22 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine as _;
 use dclutch_pyth_svm::devnet_release_v1;
 use dclutch_registry_contract::{
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivationCacheProgressV1, ArtifactReleaseV1,
+    ACTIVATION_CACHE_BUMP_OFFSET_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1,
+    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ActivationCacheProgressV1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, activation_cache_progress_v1,
 };
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
     ProgramV3View,
+};
+use dclutch_release_set_contract::{
+    ArtifactReleaseIdV1, EXECUTION_ROLE_ORDER_V1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
+    ProtocolInfrastructureProfileV2,
 };
 use serde::{
     Deserialize,
@@ -104,7 +113,7 @@ use crate::{
         ProgramPin, SuccessorPlan,
     },
     plan::{hex, hex32, pubkey},
-    rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
+    rpc::{Rpc, WritePolicyV1, account_evidence, parse_json_without_duplicate_keys_v1},
     runtime,
     seed::{KeyForge, role},
 };
@@ -477,6 +486,8 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
 /// run at all would be trading the operator's lamports for evidence they did not
 /// ask for. It is opt-in through `--keypair-hostile-authority`.
 pub(crate) const ADMIN_REQUIRED_ROLES: &[&str] = &[role::CORE_UPGRADE_AUTHORITY];
+pub(crate) const ADMIN_ALLOWED_ROLES: &[&str] =
+    &[role::CORE_UPGRADE_AUTHORITY, role::CAMPAIGN_PAYER];
 
 pub(crate) const FOUNDING_REQUIRED_ROLES: &[&str] = &[
     role::CAMPAIGN_PAYER,
@@ -534,6 +545,12 @@ pub(crate) enum StageV1 {
     Publication,
     /// Core's infrastructure profile exists and verifies.
     Initialize,
+    /// On the checked-local rehearsal only: consume the genesis-planted
+    /// Registry Buffer in one real Loader upgrade, publish the chain-derived
+    /// successor record, and create the V2 profile.  These three writes are
+    /// one resumable stage so Activation can never observe a half-flipped
+    /// infrastructure generation as admissible.
+    Succession,
     /// The release activation cache exists and verifies.
     Activation,
     /// A Market exists, founded and Open.
@@ -542,10 +559,11 @@ pub(crate) enum StageV1 {
 
 impl StageV1 {
     /// The canonical order. A campaign runs a prefix of this and stops.
-    pub(crate) const ORDER: [Self; 5] = [
+    pub(crate) const ORDER: [Self; 6] = [
         Self::Substrate,
         Self::Publication,
         Self::Initialize,
+        Self::Succession,
         Self::Activation,
         Self::Founding,
     ];
@@ -555,6 +573,7 @@ impl StageV1 {
             Self::Substrate => "substrate",
             Self::Publication => "publication",
             Self::Initialize => "initialize",
+            Self::Succession => "succession",
             Self::Activation => "activation",
             Self::Founding => "founding",
         }
@@ -654,8 +673,16 @@ impl ObservedRoleV1 {
     /// Exact 0012 substrate pins that an existing ProgramData account must
     /// retain before the driver may write any release-generation state.
     fn pin_conflicts(&self) -> Vec<String> {
+        self.pin_conflicts_allowing_forward_slot(false)
+    }
+
+    fn pin_conflicts_allowing_forward_slot(&self, allow_forward_slot: bool) -> Vec<String> {
         let mut conflicts = Vec::new();
-        if !self.slot_pin_holds() {
+        let admitted_forward_slot = allow_forward_slot
+            && self
+                .observed_slot
+                .is_some_and(|slot| slot > self.pinned_slot);
+        if !self.slot_pin_holds() && !admitted_forward_slot {
             conflicts.push(format!(
                 "{} observed slot {} but the release binds {}",
                 self.role,
@@ -776,6 +803,11 @@ pub(crate) struct CampaignArgsV1 {
     /// runs without one; the founding stage refuses by name when it is absent.
     pub(crate) market_path: Option<PathBuf>,
     pub(crate) evidence_path: Option<PathBuf>,
+    /// Optional standalone, chain-rederived infrastructure lineage artifact.
+    /// Administration execution writes it only after the requested prefix is
+    /// complete. Founding refuses the flag rather than growing a second owner
+    /// for the infrastructure facts already fixed by administration.
+    pub(crate) infrastructure_lineage_path: Option<PathBuf>,
     /// Public identities only. Neither party signs a founding transaction, so
     /// requiring secret-bearing files for them would manufacture authority the
     /// protocol does not use.
@@ -1603,6 +1635,7 @@ fn authenticate_founding_only_prerequisites_v1(states: &[(StageV1, StageStateV1)
         StageV1::Substrate,
         StageV1::Publication,
         StageV1::Initialize,
+        StageV1::Succession,
         StageV1::Activation,
     ] {
         let state = states
@@ -1625,6 +1658,33 @@ fn authenticate_founding_only_prerequisites_v1(states: &[(StageV1, StageStateV1)
     Ok(())
 }
 
+/// One semantic owner for the administration ceiling.  The CLI parser and
+/// the executor both call this function, so adding a stage cannot leave one
+/// admitting it while the other silently refuses it.
+pub(crate) fn authenticate_administration_through_v1(through: StageV1) -> Result<()> {
+    if through > StageV1::Activation {
+        return Err(Error::new(
+            "administration mode is infrastructure-only through activation",
+        ));
+    }
+    Ok(())
+}
+
+fn administration_required_roles_v1(
+    states: &[(StageV1, StageStateV1)],
+    through: StageV1,
+) -> Vec<&'static str> {
+    let mut roles = ADMIN_REQUIRED_ROLES.to_vec();
+    if states.iter().any(|(stage, state)| {
+        *stage == StageV1::Succession
+            && *stage <= through
+            && matches!(state, StageStateV1::Absent | StageStateV1::Partial(_))
+    }) {
+        roles.push(role::CAMPAIGN_PAYER);
+    }
+    roles
+}
+
 fn administration_requires_authority_v1(
     states: &[(StageV1, StageStateV1)],
     through: StageV1,
@@ -1634,6 +1694,29 @@ fn administration_requires_authority_v1(
             && *stage <= through
             && matches!(state, StageStateV1::Absent | StageStateV1::Partial(_))
     })
+}
+
+fn assemble_infrastructure_stage_states_v1(
+    substrate: StageStateV1,
+    publication: StageStateV1,
+    initialize: StageStateV1,
+    succession: StageStateV1,
+    mut activation: StageStateV1,
+) -> Vec<(StageV1, StageStateV1)> {
+    if succession != StageStateV1::Complete && activation != StageStateV1::Absent {
+        activation = StageStateV1::Conflict(format!(
+            "activation is {} while succession is {}; the chain is half-flipped and no resumed campaign may write over it",
+            activation.label(),
+            succession.label(),
+        ));
+    }
+    vec![
+        (StageV1::Substrate, substrate),
+        (StageV1::Publication, publication),
+        (StageV1::Initialize, initialize),
+        (StageV1::Succession, succession),
+        (StageV1::Activation, activation),
+    ]
 }
 
 fn authenticate_local_participant_fixture_policy_v1(
@@ -1790,7 +1873,8 @@ pub(crate) fn substrate_state(
         if account.is_none() {
             absent.push(row.role.clone());
         } else {
-            drifted.extend(row.pin_conflicts());
+            let allow_succession = plan.infrastructure_succession.is_some() && role == "registry";
+            drifted.extend(row.pin_conflicts_allowing_forward_slot(allow_succession));
         }
         observed.push(row);
     }
@@ -1876,6 +1960,639 @@ pub(crate) fn initialize_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
             expected.len()
         ))
     })
+}
+
+struct SuccessionProjectionV1 {
+    registry_release: ArtifactReleaseV1,
+    registry_artifact_id: ArtifactReleaseIdV1,
+    profile: ProtocolInfrastructureProfileV2,
+}
+
+fn succession_projection_v1(
+    plan: &SuccessorPlan,
+    predecessor: ProtocolInfrastructureProfileV1,
+    observed_registry_slot: u64,
+) -> Result<SuccessionProjectionV1> {
+    let pair = plan
+        .records
+        .get("registry_artifact_release")
+        .ok_or_else(|| Error::new("plan omitted predecessor Registry artifact record"))?;
+    let predecessor_bytes = runtime::decode_hex(&pair.body_hex)?;
+    let predecessor_release = ArtifactReleaseV1::decode(&predecessor_bytes)
+        .map_err(|error| Error::new(format!("predecessor Registry artifact: {error:?}")))?;
+    if sha256_bytes(&predecessor_bytes) != predecessor.registry().artifact_release().to_bytes()
+        || observed_registry_slot <= predecessor_release.deployment_slot()
+    {
+        return Err(Error::new(
+            "Registry succession did not move strictly forward from V1's pinned artifact",
+        ));
+    }
+    let registry_release = ArtifactReleaseV1::new(
+        predecessor_release.program(),
+        predecessor_release.loader_program(),
+        predecessor_release.programdata(),
+        predecessor_release.semantic_release_id(),
+        predecessor_release.elf_digest(),
+        observed_registry_slot,
+        predecessor_release.upgrade_policy(),
+        predecessor_release.upgrade_authority(),
+    )
+    .map_err(|error| Error::new(format!("successor Registry artifact: {error:?}")))?;
+    let registry_artifact_id = ArtifactReleaseIdV1::new(sha256_bytes(&registry_release.to_bytes()))
+        .map_err(|error| Error::new(format!("successor Registry artifact id: {error:?}")))?;
+    let profile = ProtocolInfrastructureProfileV2::new(
+        ExecutionRoleBindingV1::new(predecessor.registry().program(), registry_artifact_id),
+        predecessor.rent(),
+        predecessor.registry().artifact_release(),
+        predecessor.rent().artifact_release(),
+    )
+    .map_err(|error| Error::new(format!("successor infrastructure profile: {error:?}")))?;
+    Ok(SuccessionProjectionV1 {
+        registry_release,
+        registry_artifact_id,
+        profile,
+    })
+}
+
+/// Detect the complete three-write succession stage.  A plan with no checked
+/// local pin reads Complete/not-applicable, so neither a legacy immutable plan
+/// nor permanent devnet silently acquires a Loader write.
+pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<StageStateV1> {
+    let Some(pin) = plan.infrastructure_succession.as_ref() else {
+        return Ok(StageStateV1::Complete);
+    };
+    if plan.checked_local_mutable_set.is_none() || plan.checked_upgrade_set.is_some() {
+        return Ok(StageStateV1::Conflict(
+            "infrastructure succession is admitted only by one checked-local mutable plan".into(),
+        ));
+    }
+    let core = pubkey(&plan.core.program_id)?;
+    let v1_address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core).0;
+    let v1_account = rpc.account(v1_address)?;
+    let Some(v1_account) = v1_account else {
+        return Ok(StageStateV1::Absent);
+    };
+    let expected_v1 = runtime::decode_hex(&plan.infrastructure_profile.body_hex)?;
+    if v1_account.owner != core || v1_account.data != expected_v1 {
+        return Ok(StageStateV1::Conflict(
+            "V1 predecessor profile changed before succession".into(),
+        ));
+    }
+    let predecessor = ProtocolInfrastructureProfileV1::decode(&v1_account.data)
+        .map_err(|error| Error::new(format!("V1 predecessor profile: {error:?}")))?;
+    if pin.predecessor_registry_artifact_release_id
+        != hex(predecessor.registry().artifact_release().as_bytes())
+        || pin.predecessor_rent_artifact_release_id
+            != hex(predecessor.rent().artifact_release().as_bytes())
+    {
+        return Ok(StageStateV1::Conflict(
+            "succession pin does not name V1's two predecessor artifacts".into(),
+        ));
+    }
+
+    let registry_programdata = pubkey(&plan.registry.programdata_id)?;
+    let Some(programdata) = rpc.account(registry_programdata)? else {
+        return Ok(StageStateV1::Conflict(
+            "Registry ProgramData disappeared during succession".into(),
+        ));
+    };
+    let view = ProgramDataV3View::parse(&programdata.data)
+        .map_err(|error| Error::new(format!("Registry ProgramData: {error:?}")))?;
+    let expected_authority = plan
+        .registry
+        .upgrade_authority
+        .as_deref()
+        .map(pubkey)
+        .transpose()?
+        .map(|authority| authority.to_bytes());
+    if programdata.owner != bpf_loader_upgradeable::ID
+        || programdata.executable
+        || view.upgrade_authority() != expected_authority
+        || hex(&sha256_bytes(view.elf())) != plan.registry.live_elf_sha256
+    {
+        return Ok(StageStateV1::Conflict(
+            "Registry ProgramData changed outside the pinned one-upgrade succession".into(),
+        ));
+    }
+
+    let buffer = pubkey(&pin.registry_upgrade_buffer)?;
+    let buffer_account = rpc.account(buffer)?;
+    let v2_address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+    let v2_account = rpc.account(v2_address)?;
+    if view.deployment_slot() == plan.registry.deployment_slot {
+        if v2_account.is_some() {
+            return Ok(StageStateV1::Conflict(
+                "V2 profile exists although Registry never moved from V1's slot".into(),
+            ));
+        }
+        let genesis = plan
+            .genesis_accounts
+            .get(crate::plan::REGISTRY_SUCCESSION_BUFFER_LABEL_V1)
+            .ok_or_else(|| Error::new("plan omitted Registry succession Buffer account pin"))?;
+        return Ok(match buffer_account {
+            Some(account)
+                if account.owner == bpf_loader_upgradeable::ID
+                    && !account.executable
+                    && account.lamports == genesis.lamports
+                    && account.data.len() == genesis.data_len
+                    && hex(&sha256_bytes(&account.data)) == genesis.data_sha256 =>
+            {
+                StageStateV1::Absent
+            }
+            _ => StageStateV1::Conflict(
+                "Registry is still at V1 but its exact planted upgrade Buffer is absent or changed"
+                    .into(),
+            ),
+        });
+    }
+    if view.deployment_slot() < plan.registry.deployment_slot {
+        return Ok(StageStateV1::Conflict(
+            "Registry deployment slot moved backward from the predecessor pin".into(),
+        ));
+    }
+    if buffer_account.is_some() {
+        return Ok(StageStateV1::Conflict(
+            "Registry moved but the one-use succession Buffer still exists".into(),
+        ));
+    }
+
+    let projection = succession_projection_v1(plan, predecessor, view.deployment_slot())?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let body = projection.registry_release.to_bytes();
+    let digest = sha256_bytes(&body);
+    let raw = Pubkey::find_program_address(
+        &[
+            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &digest,
+        ],
+        &registry,
+    )
+    .0;
+    let staging = Pubkey::find_program_address(
+        &[
+            dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &digest,
+        ],
+        &registry,
+    )
+    .0;
+    let raw_account = rpc.account(raw)?;
+    let staging_account = rpc.account(staging)?;
+    let record_complete = match runtime::existing_finalized_record_is_exact(
+        registry,
+        raw_account.as_ref(),
+        staging_account.as_ref(),
+        &body,
+        rpc.minimum_balance(body.len())?,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(StageStateV1::Conflict(format!(
+                "successor Registry record conflicts: {error}"
+            )));
+        }
+    };
+    if !record_complete {
+        return Ok(if v2_account.is_some() {
+            StageStateV1::Conflict(
+                "V2 profile exists before the successor Registry record is finalized".into(),
+            )
+        } else {
+            StageStateV1::Partial(
+                "Registry upgrade landed; successor record and V2 ceremony remain".into(),
+            )
+        });
+    }
+    let Some(v2_account) = v2_account else {
+        return Ok(StageStateV1::Partial(
+            "Registry upgrade and successor record landed; V2 ceremony remains".into(),
+        ));
+    };
+    Ok(
+        if v2_account.owner == core
+            && v2_account.data.len() == PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+            && v2_account.data == projection.profile.to_bytes()
+        {
+            StageStateV1::Complete
+        } else {
+            StageStateV1::Conflict(
+                "V2 profile exists but is not the exact chain-derived succession selection".into(),
+            )
+        },
+    )
+}
+
+fn infrastructure_role_label_v1(role: ExecutionRoleV1) -> &'static str {
+    match role {
+        ExecutionRoleV1::Core => "core",
+        ExecutionRoleV1::Claims => "claims",
+        ExecutionRoleV1::Trading => "trading",
+        ExecutionRoleV1::Resolution => "resolution",
+        ExecutionRoleV1::Custody => "custody",
+    }
+}
+
+fn artifact_release_evidence_v1(id: ArtifactReleaseIdV1, release: ArtifactReleaseV1) -> Value {
+    let policy = match release.upgrade_policy() {
+        ArtifactUpgradePolicyV1::Immutable => "immutable",
+        ArtifactUpgradePolicyV1::ExactAuthority => "exact-authority",
+    };
+    json!({
+        "artifactReleaseId": hex(id.as_bytes()),
+        "program": Pubkey::new_from_array(release.program().to_bytes()).to_string(),
+        "loaderProgram": Pubkey::new_from_array(release.loader_program().to_bytes()).to_string(),
+        "programData": Pubkey::new_from_array(release.programdata()).to_string(),
+        "semanticReleaseId": hex(release.semantic_release_id().as_bytes()),
+        "elfSha256": hex(&release.elf_digest()),
+        "deploymentSlot": release.deployment_slot(),
+        "upgradePolicy": policy,
+        "upgradeAuthority": release
+            .upgrade_authority()
+            .map(Pubkey::new_from_array)
+            .map(|value| value.to_string()),
+    })
+}
+
+fn finalized_artifact_release_evidence_v1(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    id: ArtifactReleaseIdV1,
+    label: &str,
+) -> Result<(ArtifactReleaseV1, Value)> {
+    let raw = Pubkey::find_program_address(
+        &[
+            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            id.as_bytes(),
+        ],
+        &registry,
+    )
+    .0;
+    let staging = Pubkey::find_program_address(
+        &[
+            dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            id.as_bytes(),
+        ],
+        &registry,
+    )
+    .0;
+    let raw_account = rpc.account(raw)?.ok_or_else(|| {
+        Error::new(format!(
+            "infrastructure lineage cannot read finalized {label} record {raw}"
+        ))
+    })?;
+    let staging_account = rpc.account(staging)?;
+    let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(&raw_account.data).into();
+    if digest != *id.as_bytes()
+        || !runtime::existing_finalized_record_is_exact(
+            registry,
+            Some(&raw_account),
+            staging_account.as_ref(),
+            &raw_account.data,
+            rpc.minimum_balance(raw_account.data.len())?,
+        )?
+    {
+        return Err(Error::new(format!(
+            "infrastructure lineage {label} record is absent, partial, or not at its content identity"
+        )));
+    }
+    let release = ArtifactReleaseV1::decode(&raw_account.data)
+        .map_err(|error| Error::new(format!("infrastructure lineage {label}: {error:?}")))?;
+    Ok((
+        release,
+        json!({
+            "record": artifact_release_evidence_v1(id, release),
+            "rawAccount": account_evidence(raw, &raw_account),
+            "stagingAddress": staging.to_string(),
+            "stagingAbsentAfterFinalize": staging_account.is_none(),
+        }),
+    ))
+}
+
+/// Authenticate the one carrier byte in a current Registry-written activation
+/// cache without dropping byte-exact authentication of the release projection.
+///
+/// `ActivatedExecutionReleaseSetV1::to_bytes` cannot author the PDA bump: that
+/// byte is a fact about the account address, not the release set. Registry does
+/// author it while creating the account. The current-source lineage therefore
+/// requires the nonzero bump re-derived from the exact Registry program and
+/// release-set ID, then compares every other byte to the canonical projection.
+fn authenticate_current_activation_cache_body_v1(
+    registry_program: Pubkey,
+    activation_address: Pubkey,
+    observed: &[u8],
+    expected: ActivatedExecutionReleaseSetV1,
+) -> Result<()> {
+    let release_set_id = expected.execution_release_set_id();
+    let (expected_address, expected_bump) = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
+        &registry_program,
+    );
+    let observed_bump = observed
+        .get(ACTIVATION_CACHE_BUMP_OFFSET_V1)
+        .copied()
+        .ok_or_else(|| Error::new("current activation cache has the wrong width"))?;
+    if activation_address != expected_address
+        || expected_bump == 0
+        || observed_bump == 0
+        || observed_bump != expected_bump
+    {
+        return Err(Error::new(
+            "current activation cache address-derived bump is not exact and nonzero",
+        ));
+    }
+    let progress = activation_cache_progress_v1(observed, expected).map_err(|error| {
+        Error::new(format!(
+            "current activation cache differs outside its address-derived bump: {error:?}"
+        ))
+    })?;
+    if !progress.is_complete() {
+        return Err(Error::new(format!(
+            "current activation cache has only {} of {} exact roles",
+            progress.written_count(),
+            EXECUTION_ROLE_ORDER_V1.len(),
+        )));
+    }
+    Ok(())
+}
+
+/// Re-derive the complete checked-local infrastructure lineage from finalized
+/// chain state. This is deliberately a post-execution projection: no caller
+/// supplies a successor slot, profile body, record id, or activation role.
+fn infrastructure_lineage_evidence_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    genesis_hash: &str,
+    plan_sha256: &str,
+    campaign_evidence_path: &Path,
+) -> Result<Value> {
+    let set = plan.checked_local_mutable_set.as_ref().ok_or_else(|| {
+        Error::new("standalone infrastructure lineage requires a checked-local mutable release set")
+    })?;
+    crate::local_mutable::authenticate_checked_local_mutable_plan_v1(plan)?;
+    if succession_state(rpc, plan)? != StageStateV1::Complete {
+        return Err(Error::new(
+            "standalone infrastructure lineage requires completed V1-to-V2 succession",
+        ));
+    }
+
+    let core = pubkey(&plan.core.program_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let v1_address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core).0;
+    let v2_address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+    if v1_address.to_string() != plan.infrastructure_profile.address {
+        return Err(Error::new(
+            "plan infrastructure profile is not Core's canonical V1 coordinate",
+        ));
+    }
+    let v1_account = rpc
+        .account(v1_address)?
+        .ok_or_else(|| Error::new("completed succession omitted the V1 predecessor profile"))?;
+    let expected_v1 = runtime::decode_hex(&plan.infrastructure_profile.body_hex)?;
+    if v1_account.owner != core
+        || v1_account.data != expected_v1
+        || hex(&<sha2::Sha256 as sha2::Digest>::digest(&v1_account.data))
+            != plan.infrastructure_profile.body_sha256
+    {
+        return Err(Error::new(
+            "completed succession did not preserve the exact planned V1 profile",
+        ));
+    }
+    let v1 = ProtocolInfrastructureProfileV1::decode(&v1_account.data)
+        .map_err(|error| Error::new(format!("lineage V1 profile: {error:?}")))?;
+    let v2_account = rpc
+        .account(v2_address)?
+        .ok_or_else(|| Error::new("completed succession omitted the V2 profile"))?;
+    if v2_account.owner != core {
+        return Err(Error::new("V2 profile is not Core-owned"));
+    }
+    let v2 = ProtocolInfrastructureProfileV2::decode(&v2_account.data)
+        .map_err(|error| Error::new(format!("lineage V2 profile: {error:?}")))?;
+    if v2.registry().program() != v1.registry().program()
+        || v2.rent().program() != v1.rent().program()
+        || v2.predecessor_registry_artifact() != v1.registry().artifact_release()
+        || v2.predecessor_rent_artifact() != v1.rent().artifact_release()
+        || v2.rent().artifact_release() != v1.rent().artifact_release()
+        || v2.registry().artifact_release() == v1.registry().artifact_release()
+    {
+        return Err(Error::new(
+            "V2 profile does not form the exact one-Registry-move successor of V1",
+        ));
+    }
+
+    let (predecessor_registry, predecessor_registry_evidence) =
+        finalized_artifact_release_evidence_v1(
+            rpc,
+            registry,
+            v1.registry().artifact_release(),
+            "predecessor Registry",
+        )?;
+    let (successor_registry, successor_registry_evidence) = finalized_artifact_release_evidence_v1(
+        rpc,
+        registry,
+        v2.registry().artifact_release(),
+        "successor Registry",
+    )?;
+    let (rent_release, rent_evidence) = finalized_artifact_release_evidence_v1(
+        rpc,
+        registry,
+        v2.rent().artifact_release(),
+        "carried Rent",
+    )?;
+    if predecessor_registry.program() != successor_registry.program()
+        || predecessor_registry.programdata() != successor_registry.programdata()
+        || predecessor_registry.semantic_release_id() != successor_registry.semantic_release_id()
+        || predecessor_registry.elf_digest() != successor_registry.elf_digest()
+        || predecessor_registry.upgrade_authority() != successor_registry.upgrade_authority()
+        || successor_registry.deployment_slot() <= predecessor_registry.deployment_slot()
+        || rent_release.program().to_bytes() != v2.rent().program().to_bytes()
+    {
+        return Err(Error::new(
+            "profile lineage artifact records do not prove one forward Registry deployment with carried Rent",
+        ));
+    }
+
+    let activation_address = pubkey(&plan.activation)?;
+    let activation_account = rpc.account(activation_address)?.ok_or_else(|| {
+        Error::new("standalone infrastructure lineage requires the completed activation cache")
+    })?;
+    if activation_account.owner != registry || activation_account.executable {
+        return Err(Error::new(
+            "completed activation cache is not readonly Registry state",
+        ));
+    }
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_account.data)
+        .map_err(|error| Error::new(format!("infrastructure activation cache: {error:?}")))?;
+    let activated_release_set_id = activated
+        .execution_release_set_id()
+        .map_err(|error| Error::new(format!("activation release-set id: {error:?}")))?;
+    if hex(activated_release_set_id.as_bytes()) != plan.release_set_id {
+        return Err(Error::new(
+            "live activation cache differs from the plan's exact execution release set",
+        ));
+    }
+    let expected_activation = runtime::expected_activation(plan)?;
+    authenticate_current_activation_cache_body_v1(
+        registry,
+        activation_address,
+        &activation_account.data,
+        expected_activation,
+    )?;
+    let activated_roles = EXECUTION_ROLE_ORDER_V1
+        .into_iter()
+        .map(|role| {
+            let row = activated.role(role).map_err(|error| {
+                Error::new(format!(
+                    "decode activated {} role: {error:?}",
+                    infrastructure_role_label_v1(role)
+                ))
+            })?;
+            Ok(json!({
+                "role": infrastructure_role_label_v1(role),
+                "release": artifact_release_evidence_v1(
+                    row.artifact_release_id(),
+                    row.release(),
+                ),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let checked_artifacts = set
+        .roles
+        .iter()
+        .map(|role| {
+            json!({
+                "role": role.role,
+                "program": role.program_id,
+                "programData": role.programdata_id,
+                "checkedCandidateElfPath": role.checked_candidate_elf_path,
+                "checkedCandidateElfSha256": role.checked_candidate_elf_sha256,
+                "genesisLiveElfSha256": role.live_elf_sha256,
+                "genesisProgramDataAccountSha256": role.programdata_account_sha256,
+                "genesisDeploymentSlot": role.deployment_slot,
+                "semanticReleaseId": role.semantic_release_id,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "schema": "dclutch-current-source-infrastructure-lineage-v1",
+        "evidenceLevel": "local-validator-finalized-chain-state",
+        "cluster": "owned-loopback",
+        "genesisHash": genesis_hash,
+        "planSha256": plan_sha256,
+        "campaignEvidencePath": campaign_evidence_path.display().to_string(),
+        "source": {
+            "revision": set.source_revision,
+            "treeSha256": set.source_tree_sha256,
+            "checkedReleaseGatePath": set.checked_release_gate_path,
+            "checkedReleaseGateSha256": set.checked_release_gate_sha256,
+            "checkedLocalMutableSetSha256": set.set_sha256,
+            "solanaCliVersion": set.solana_cli_version,
+        },
+        "checkedArtifacts": checked_artifacts,
+        "profiles": {
+            "predecessorV1": {
+                "address": v1_address.to_string(),
+                "account": account_evidence(v1_address, &v1_account),
+                "registryArtifactReleaseId": hex(v1.registry().artifact_release().as_bytes()),
+                "rentArtifactReleaseId": hex(v1.rent().artifact_release().as_bytes()),
+            },
+            "successorV2": {
+                "address": v2_address.to_string(),
+                "account": account_evidence(v2_address, &v2_account),
+                "registryArtifactReleaseId": hex(v2.registry().artifact_release().as_bytes()),
+                "rentArtifactReleaseId": hex(v2.rent().artifact_release().as_bytes()),
+                "predecessorRegistryArtifactReleaseId": hex(v2.predecessor_registry_artifact().as_bytes()),
+                "predecessorRentArtifactReleaseId": hex(v2.predecessor_rent_artifact().as_bytes()),
+            },
+            "v1PreservedByteIdentical": true,
+        },
+        "artifactLineage": {
+            "registry": {
+                "movedForward": true,
+                "predecessor": predecessor_registry_evidence,
+                "successor": successor_registry_evidence,
+            },
+            "rent": {
+                "carriedForward": true,
+                "release": rent_evidence,
+            },
+        },
+        "activation": {
+            "releaseSetId": plan.release_set_id,
+            "checkedExecutionReleaseSetId": set.execution_release_set.checked_execution_release_set_id,
+            "checkedMultiprogramEnvelopeSha256": hex(&<sha2::Sha256 as sha2::Digest>::digest(
+                base64::engine::general_purpose::STANDARD
+                    .decode(&set.execution_release_set.checked_execution_release_set_base64)
+                    .map_err(|error| Error::new(format!("checked execution release envelope: {error}")))?
+            )),
+            "account": account_evidence(activation_address, &activation_account),
+            "roles": activated_roles,
+        },
+        "migration": {
+            "preexistingMarketsMigrated": 0,
+            "marketsSilentlyRebound": false,
+            "scope": "fresh-validator administration precedes all market founding",
+            "consumerRule": "redeployed infrastructure consumers select V2; immutable V1 remains lineage evidence",
+        },
+    }))
+}
+
+fn write_stable_lineage_evidence_v1(path: &Path, value: &Value) -> Result<String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("infrastructure lineage output requires a parent"))?;
+    let parent_metadata = fs::symlink_metadata(parent).map_err(|error| {
+        Error::new(format!(
+            "inspect infrastructure lineage parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err(Error::new(
+            "infrastructure lineage parent must be an existing non-symlink directory",
+        ));
+    }
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    let digest = hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes));
+    match fs::read(path) {
+        Ok(existing) if existing == bytes => return Ok(digest),
+        Ok(_) => {
+            return Err(Error::new(
+                "existing infrastructure lineage artifact differs; it was not replaced",
+            ));
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(Error::new(format!(
+                "read infrastructure lineage artifact {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| {
+            Error::new(format!(
+                "create infrastructure lineage artifact {}: {error}",
+                path.display()
+            ))
+        })?;
+    output.write_all(&bytes)?;
+    output.sync_all()?;
+    drop(output);
+    fs::File::open(parent)?.sync_all()?;
+    Ok(digest)
 }
 
 /// Is this market input's founding already on the chain?
@@ -2494,6 +3211,24 @@ fn authenticate_live_checked_role(
     programdata: &crate::rpc::RpcAccount,
     candidate: &[u8],
 ) -> Result<()> {
+    authenticate_live_checked_role_with_succession(
+        role,
+        pin,
+        program,
+        programdata,
+        candidate,
+        false,
+    )
+}
+
+fn authenticate_live_checked_role_with_succession(
+    role: &str,
+    pin: &ProgramPin,
+    program: &crate::rpc::RpcAccount,
+    programdata: &crate::rpc::RpcAccount,
+    candidate: &[u8],
+    allow_forward_slot: bool,
+) -> Result<()> {
     let program_key = pubkey(&pin.program_id)?;
     let programdata_key = pubkey(&pin.programdata_id)?;
     let program_view = ProgramV3View::parse(&program.data)
@@ -2514,8 +3249,11 @@ fn authenticate_live_checked_role(
             != programdata_key
         || programdata.owner != bpf_loader_upgradeable::ID
         || programdata.executable
-        || hex(&<sha2::Sha256 as sha2::Digest>::digest(&programdata.data)) != pin.programdata_sha256
-        || programdata_view.deployment_slot() != pin.deployment_slot
+        || (!allow_forward_slot
+            && hex(&<sha2::Sha256 as sha2::Digest>::digest(&programdata.data))
+                != pin.programdata_sha256)
+        || (programdata_view.deployment_slot() != pin.deployment_slot
+            && !(allow_forward_slot && programdata_view.deployment_slot() > pin.deployment_slot))
         || programdata_view.upgrade_authority() != authority
         || hex(&<sha2::Sha256 as sha2::Digest>::digest(live)) != pin.live_elf_sha256
         || live.get(..candidate.len()) != Some(candidate)
@@ -2587,7 +3325,14 @@ pub(crate) fn authenticate_checked_live_substrate(
             .as_ref()
             .ok_or_else(|| Error::new(format!("{role} ProgramData is absent")))?;
         let candidate = fs::read(&pin.checked_candidate_elf_path)?;
-        authenticate_live_checked_role(role, pin, program, programdata, &candidate)?;
+        authenticate_live_checked_role_with_succession(
+            role,
+            pin,
+            program,
+            programdata,
+            &candidate,
+            plan.infrastructure_succession.is_some() && role == "registry",
+        )?;
     }
     Ok(())
 }
@@ -2608,18 +3353,32 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "--execute requires --evidence ABSOLUTE_JSON so intent is durable before any mutation",
         ));
     }
+    if args.infrastructure_lineage_path.is_some()
+        && (!args.execute
+            || args.mode != CampaignModeV1::Administration
+            || args.through != StageV1::Activation)
+    {
+        return Err(Error::new(
+            "standalone infrastructure lineage requires executed administration through activation",
+        ));
+    }
+    if args.infrastructure_lineage_path.as_ref() == args.evidence_path.as_ref() {
+        return Err(Error::new(
+            "campaign report and standalone infrastructure lineage require distinct output paths",
+        ));
+    }
     match args.mode {
         CampaignModeV1::Administration => {
-            authenticate_keypair_paths(&args.keypairs, &[], ADMIN_REQUIRED_ROLES)?;
+            authenticate_keypair_paths(&args.keypairs, &[], ADMIN_ALLOWED_ROLES)?;
             if args.market_path.is_some()
                 || args.founding_founder.is_some()
                 || args.substituted_founder.is_some()
-                || args.through > StageV1::Activation
             {
                 return Err(Error::new(
                     "administration mode is infrastructure-only through activation",
                 ));
             }
+            authenticate_administration_through_v1(args.through)?;
         }
         CampaignModeV1::FoundingOnly => {
             let mut allowed = FOUNDING_REQUIRED_ROLES.to_vec();
@@ -2711,9 +3470,9 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     // The activated release must be the one actually running. Costs no extra
     // RPC: substrate_state already read every role's live slot and ELF digest.
     crate::release_identity::authenticate_activated_release_is_live_v1(&plan, &observed_roles)?;
-    let mut states = vec![(StageV1::Substrate, substrate)];
-    states.push((StageV1::Publication, publication_state(&mut rpc, &plan)?));
-    states.push((StageV1::Initialize, initialize_state(&mut rpc, &plan)?));
+    let publication = publication_state(&mut rpc, &plan)?;
+    let initialize = initialize_state(&mut rpc, &plan)?;
+    let succession = succession_state(&mut rpc, &plan)?;
     let activation_progress = runtime::activation_progress(&mut rpc, &plan);
     let activated_prefix = activation_progress
         .as_ref()
@@ -2727,10 +3486,14 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         Vec::new()
     };
     let activation_address = pubkey(&plan.activation)?;
-    states.push((
-        StageV1::Activation,
-        activation_state_from_progress(activation_address, activation_progress),
-    ));
+    let activation = activation_state_from_progress(activation_address, activation_progress);
+    let mut states = assemble_infrastructure_stage_states_v1(
+        substrate,
+        publication,
+        initialize,
+        succession,
+        activation,
+    );
     let pyth = match &args.origin {
         ClusterOriginV1::AcknowledgedDevnet { .. } => Some(authenticate_pyth_row(&mut rpc)?),
         // The committed row is a devnet fact. Authenticating it against a
@@ -2753,6 +3516,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         "market_input": args.market_path.as_ref().map(|path| path.display().to_string()),
         "market_sha256": market_sha256,
         "evidence_output": args.evidence_path.as_ref().map(|path| path.display().to_string()),
+        "infrastructureLineageEvidence": Value::Null,
         "through_stage": args.through.name(),
         "execution_intent": {
             "authorized_mutation": args.execute,
@@ -2865,12 +3629,18 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             }
         }
         let execution = if administration_requires_authority_v1(&states, args.through) {
-            authenticate_keypair_paths(&args.keypairs, ADMIN_REQUIRED_ROLES, ADMIN_REQUIRED_ROLES)?;
-            let forge = KeyForge::persisted(
-                load_campaign_keypairs(&args.keypairs)?,
-                ADMIN_REQUIRED_ROLES,
-            )?;
+            let required_roles = administration_required_roles_v1(&states, args.through);
+            authenticate_keypair_paths(&args.keypairs, &required_roles, &required_roles)?;
+            let forge =
+                KeyForge::persisted(load_campaign_keypairs(&args.keypairs)?, &required_roles)?;
             let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
+            if required_roles.contains(&role::CAMPAIGN_PAYER)
+                && forge.peek_pubkey(role::CAMPAIGN_PAYER)? == authority.pubkey()
+            {
+                return Err(Error::new(
+                    "succession fee payer aliases the Core/Registry consent authority; Loader and ceremony privileges would merge",
+                ));
+            }
             let wallet = wallet_arithmetic(&mut rpc, &plan, authority.pubkey())?;
             report["pre_key_checkpoint"]["keypair_files_read"] = json!(true);
             report["payer"] = json!(authority.pubkey().to_string());
@@ -2931,6 +3701,24 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "transactions": execution.transactions,
             "market": execution.market,
         });
+        if let Some(lineage_path) = args.infrastructure_lineage_path.as_deref() {
+            let campaign_evidence_path = args.evidence_path.as_deref().ok_or_else(|| {
+                Error::new("standalone infrastructure lineage omitted its campaign evidence path")
+            })?;
+            let lineage = infrastructure_lineage_evidence_v1(
+                &mut rpc,
+                &plan,
+                &observed_genesis_hash,
+                &plan_sha256,
+                campaign_evidence_path,
+            )?;
+            let digest = write_stable_lineage_evidence_v1(lineage_path, &lineage)?;
+            report["infrastructureLineageEvidence"] = json!({
+                "path": lineage_path.display().to_string(),
+                "sha256": digest,
+                "schema": "dclutch-current-source-infrastructure-lineage-v1",
+            });
+        }
         if let Some(path) = &args.evidence_path {
             write_evidence_atomically(path, &report)?;
         }
@@ -3465,6 +4253,162 @@ fn founding_checkpoint_resume_v1(
     }
 }
 
+fn execute_succession_stage_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    authority: &Keypair,
+    forge: &KeyForge,
+    initial_state: &StageStateV1,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<()> {
+    let pin = plan.infrastructure_succession.as_ref().ok_or_else(|| {
+        Error::new("succession executor reached a plan with no checked-local succession pin")
+    })?;
+    let core = pubkey(&plan.core.program_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let v1_address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core).0;
+    let predecessor_bytes = rpc
+        .account(v1_address)?
+        .ok_or_else(|| Error::new("succession executor cannot read the V1 predecessor profile"))?
+        .data;
+    if predecessor_bytes != runtime::decode_hex(&plan.infrastructure_profile.body_hex)? {
+        return Err(Error::new(
+            "succession executor observed changed V1 predecessor bytes",
+        ));
+    }
+
+    if initial_state == &StageStateV1::Absent {
+        let buffer = pubkey(&pin.registry_upgrade_buffer)?;
+        let instruction = solana_loader_v3_interface::instruction::upgrade(
+            &registry,
+            &buffer,
+            &authority.pubkey(),
+            &authority.pubkey(),
+        );
+        transactions.push(rpc.send(
+            "upgrade Registry for infrastructure succession",
+            &[instruction],
+            authority,
+        )?);
+        match succession_state(rpc, plan)? {
+            StageStateV1::Partial(_) => {}
+            state => {
+                return Err(Error::new(format!(
+                    "Registry Upgrade landed but succession detector read {}{}",
+                    state.label(),
+                    state
+                        .detail()
+                        .map(|detail| format!(": {detail}"))
+                        .unwrap_or_default()
+                )));
+            }
+        }
+    }
+
+    let programdata = rpc
+        .account(pubkey(&plan.registry.programdata_id)?)?
+        .ok_or_else(|| Error::new("Registry ProgramData disappeared after Upgrade"))?;
+    let view = ProgramDataV3View::parse(&programdata.data)
+        .map_err(|error| Error::new(format!("Registry ProgramData after Upgrade: {error:?}")))?;
+    let predecessor = ProtocolInfrastructureProfileV1::decode(&predecessor_bytes)
+        .map_err(|error| Error::new(format!("V1 predecessor profile: {error:?}")))?;
+    let projection = succession_projection_v1(plan, predecessor, view.deployment_slot())?;
+    let successor_bytes = projection.registry_release.to_bytes();
+    runtime::publish_record(
+        rpc,
+        registry,
+        authority,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        &successor_bytes,
+        None,
+        transactions,
+    )?;
+    match succession_state(rpc, plan)? {
+        StageStateV1::Partial(_) => {}
+        StageStateV1::Complete => return Ok(()),
+        state => {
+            return Err(Error::new(format!(
+                "successor Registry record landed but succession detector read {}{}",
+                state.label(),
+                state
+                    .detail()
+                    .map(|detail| format!(": {detail}"))
+                    .unwrap_or_default()
+            )));
+        }
+    }
+
+    let payer = forge.keypair(role::CAMPAIGN_PAYER);
+    if payer.pubkey() == authority.pubkey() {
+        return Err(Error::new(
+            "succession fee payer aliases the consenting authority",
+        ));
+    }
+    let report = crate::infrastructure_succession::plan_for_campaign_v1(
+        rpc,
+        core,
+        projection.registry_artifact_id.to_bytes(),
+        predecessor.rent().artifact_release().to_bytes(),
+        payer.pubkey(),
+    )?;
+    let expected_signers = [payer.pubkey(), authority.pubkey()];
+    if report.required_signers.as_slice() != expected_signers {
+        return Err(Error::new(format!(
+            "shipped succession builder required {:?}, expected the distinct payer then the one retained Core/Registry authority",
+            report.required_signers
+        )));
+    }
+    let simulation = rpc.simulate_v0(
+        "infrastructure-succession",
+        &[report.instruction.clone()],
+        payer.pubkey(),
+        report.observation,
+        &[],
+    )?;
+    if !simulation.accepted() {
+        return Err(Error::new(format!(
+            "succession ceremony refused in simulation: {:?}",
+            simulation.error
+        )));
+    }
+    transactions.push(rpc.send_v0_inline_with_signers(
+        "infrastructure-succession",
+        &[report.instruction],
+        &payer,
+        &[authority],
+        report.observation,
+    )?);
+    let landed = rpc
+        .account(report.profile)?
+        .ok_or_else(|| Error::new("succession ceremony landed but V2 is absent"))?;
+    if landed.owner != core || landed.data != report.record.to_bytes() {
+        return Err(Error::new(
+            "landed V2 profile differs from the shipped builder's exact projection",
+        ));
+    }
+    let predecessor_after = rpc
+        .account(v1_address)?
+        .ok_or_else(|| Error::new("succession ceremony removed the V1 profile"))?;
+    if predecessor_after.owner != core || predecessor_after.data != predecessor_bytes {
+        return Err(Error::new(
+            "succession ceremony changed the write-once V1 predecessor profile",
+        ));
+    }
+    let poststate = succession_state(rpc, plan)?;
+    if poststate != StageStateV1::Complete {
+        return Err(Error::new(format!(
+            "succession executed but its own detector reads {}{}",
+            poststate.label(),
+            poststate
+                .detail()
+                .map(|detail| format!(": {detail}"))
+                .unwrap_or_default()
+        )));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_stages(
     rpc: &mut Rpc,
@@ -3559,6 +4503,9 @@ fn execute_stages(
                     authority,
                 )?);
                 runtime::verify_profile(rpc, plan)?;
+            }
+            StageV1::Succession => {
+                execute_succession_stage_v1(rpc, plan, authority, forge, state, &mut transactions)?;
             }
             StageV1::Activation => {
                 for (label, instruction) in
@@ -3689,6 +4636,174 @@ pub(crate) fn acknowledgment_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use dclutch_core_contract::ContentId;
+    use dclutch_registry_contract::{
+        ArtifactActivationInputV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
+        activate_execution_release_set_v1,
+    };
+    use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProgramIdentityV1};
+
+    fn activation_test_content(seed: u8) -> ContentId {
+        ContentId::new([seed; 32]).expect("nonzero content identity")
+    }
+
+    fn activation_test_program(seed: u8) -> ProgramIdentityV1 {
+        ProgramIdentityV1::new([seed; 32]).expect("nonzero program identity")
+    }
+
+    fn activation_test_artifact(seed: u8) -> ArtifactReleaseIdV1 {
+        ArtifactReleaseIdV1::new([seed; 32]).expect("nonzero artifact identity")
+    }
+
+    fn activation_test_release(seed: u8) -> ArtifactReleaseV1 {
+        ArtifactReleaseV1::new(
+            activation_test_program(seed),
+            activation_test_program(200),
+            [seed.wrapping_add(20); 32],
+            activation_test_content(seed.wrapping_add(40)),
+            [seed.wrapping_add(60); 32],
+            u64::from(seed) * 100,
+            ArtifactUpgradePolicyV1::Immutable,
+            None,
+        )
+        .expect("valid immutable release")
+    }
+
+    fn activation_test_input(
+        artifact: ArtifactReleaseIdV1,
+        release: ArtifactReleaseV1,
+    ) -> ArtifactActivationInputV1 {
+        let loader = release.loader_program().to_bytes();
+        let observation = DeploymentObservationV1::new(
+            release.program().to_bytes(),
+            loader,
+            true,
+            release.programdata(),
+            loader,
+            false,
+            release.programdata(),
+            loader,
+            release.deployment_slot(),
+            release.elf_digest(),
+            release.upgrade_authority(),
+        )
+        .expect("valid immutable deployment observation");
+        ArtifactActivationInputV1::new(artifact, release, observation)
+    }
+
+    fn activation_test_binding(
+        artifact: ArtifactReleaseIdV1,
+        release: ArtifactReleaseV1,
+    ) -> ExecutionRoleBindingV1 {
+        ExecutionRoleBindingV1::new(release.program(), artifact)
+    }
+
+    fn current_activation_cache_carrier_fixture()
+    -> (Pubkey, Pubkey, ActivatedExecutionReleaseSetV1, u8) {
+        let artifacts = [
+            activation_test_artifact(21),
+            activation_test_artifact(22),
+            activation_test_artifact(23),
+            activation_test_artifact(24),
+            activation_test_artifact(25),
+        ];
+        let releases = [
+            activation_test_release(1),
+            activation_test_release(2),
+            activation_test_release(3),
+            activation_test_release(4),
+            activation_test_release(5),
+        ];
+        let release_set = ExecutionReleaseSetV1::new(
+            activation_test_binding(artifacts[0], releases[0]),
+            activation_test_binding(artifacts[1], releases[1]),
+            activation_test_binding(artifacts[2], releases[2]),
+            activation_test_binding(artifacts[3], releases[3]),
+            activation_test_binding(artifacts[4], releases[4]),
+        )
+        .expect("valid execution release set");
+        let inputs = ExecutionReleaseActivationInputsV1::new(
+            activation_test_input(artifacts[0], releases[0]),
+            activation_test_input(artifacts[1], releases[1]),
+            activation_test_input(artifacts[2], releases[2]),
+            activation_test_input(artifacts[3], releases[3]),
+            activation_test_input(artifacts[4], releases[4]),
+        );
+        let expected =
+            activate_execution_release_set_v1(activation_test_content(0x71), &release_set, &inputs)
+                .expect("valid complete activation");
+        let registry = Pubkey::new_from_array([0x61; 32]);
+        let (address, bump) = Pubkey::find_program_address(
+            &[
+                ACTIVATION_PDA_DOMAIN_V1,
+                expected.execution_release_set_id().as_bytes(),
+            ],
+            &registry,
+        );
+        assert_ne!(bump, 0, "current Registry route cannot persist a zero bump");
+        (registry, address, expected, bump)
+    }
+
+    #[test]
+    fn current_activation_cache_accepts_the_exact_registry_written_carrier() {
+        let (registry, address, expected, bump) = current_activation_cache_carrier_fixture();
+        let mut observed = expected.to_bytes();
+        observed[ACTIVATION_CACHE_BUMP_OFFSET_V1] = bump;
+        authenticate_current_activation_cache_body_v1(registry, address, &observed, expected)
+            .expect("exact Registry-written carrier and canonical projection");
+    }
+
+    #[test]
+    fn current_activation_cache_refuses_wrong_or_zero_bumps_and_addresses() {
+        let (registry, address, expected, bump) = current_activation_cache_carrier_fixture();
+        let wrong_bump = if bump == 1 { 2 } else { 1 };
+        for (label, hostile_address, hostile_bump) in [
+            ("zero bump", address, 0),
+            ("wrong bump", address, wrong_bump),
+            ("wrong address", Pubkey::new_unique(), bump),
+        ] {
+            let mut observed = expected.to_bytes();
+            observed[ACTIVATION_CACHE_BUMP_OFFSET_V1] = hostile_bump;
+            let refusal = authenticate_current_activation_cache_body_v1(
+                registry,
+                hostile_address,
+                &observed,
+                expected,
+            )
+            .expect_err(label);
+            assert!(refusal.0.contains("address-derived bump"), "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn current_activation_cache_refuses_adjacent_and_full_body_substitutions() {
+        let (registry, address, expected, bump) = current_activation_cache_carrier_fixture();
+        for offset in [
+            ACTIVATION_CACHE_BUMP_OFFSET_V1 - 1,
+            ACTIVATION_CACHE_BUMP_OFFSET_V1 + 1,
+        ] {
+            let mut observed = expected.to_bytes();
+            observed[ACTIVATION_CACHE_BUMP_OFFSET_V1] = bump;
+            observed[offset] ^= 0xff;
+            let refusal = authenticate_current_activation_cache_body_v1(
+                registry, address, &observed, expected,
+            )
+            .expect_err("adjacent authored byte substitution");
+            assert!(refusal.0.contains("outside"), "{refusal:?}");
+        }
+
+        let mut substituted = vec![0xa5; expected.to_bytes().len()];
+        substituted[ACTIVATION_CACHE_BUMP_OFFSET_V1] = bump;
+        let refusal = authenticate_current_activation_cache_body_v1(
+            registry,
+            address,
+            &substituted,
+            expected,
+        )
+        .expect_err("full-body substitution");
+        assert!(refusal.0.contains("outside"), "{refusal:?}");
+    }
 
     fn rpc_account(
         owner: Pubkey,
@@ -4605,9 +5720,10 @@ mod tests {
         // `--through`, so the declaration order is load-bearing.
         assert!(StageV1::Substrate < StageV1::Publication);
         assert!(StageV1::Publication < StageV1::Initialize);
-        assert!(StageV1::Initialize < StageV1::Activation);
+        assert!(StageV1::Initialize < StageV1::Succession);
+        assert!(StageV1::Succession < StageV1::Activation);
         assert!(StageV1::Activation < StageV1::Founding);
-        assert_eq!(StageV1::ORDER.len(), 5);
+        assert_eq!(StageV1::ORDER.len(), 6);
         for (index, stage) in StageV1::ORDER.into_iter().enumerate() {
             assert_eq!(StageV1::parse(stage.name()).expect("round trip"), stage);
             assert_eq!(
@@ -4747,6 +5863,7 @@ mod tests {
             StageV1::Substrate,
             StageV1::Publication,
             StageV1::Initialize,
+            StageV1::Succession,
             StageV1::Activation,
         ]
         .into_iter()
@@ -4775,6 +5892,82 @@ mod tests {
                 );
             }
         }
+        let without_succession = exact
+            .iter()
+            .filter(|(stage, _)| *stage != StageV1::Succession)
+            .cloned()
+            .collect::<Vec<_>>();
+        let refusal = authenticate_founding_only_prerequisites_v1(&without_succession)
+            .expect_err("a literal prerequisite list that forgets succession must fail red");
+        assert!(refusal.0.contains("succession"), "{refusal:?}");
+    }
+
+    #[test]
+    fn detector_assembly_is_the_exact_prefounding_prefix() {
+        let states = assemble_infrastructure_stage_states_v1(
+            StageStateV1::Complete,
+            StageStateV1::Complete,
+            StageStateV1::Complete,
+            StageStateV1::Complete,
+            StageStateV1::Complete,
+        );
+        assert_eq!(
+            states.iter().map(|(stage, _)| *stage).collect::<Vec<_>>(),
+            StageV1::ORDER[..5],
+            "the detector list must include succession between initialize and activation"
+        );
+    }
+
+    #[test]
+    fn activation_can_never_precede_complete_succession() {
+        for activation in [
+            StageStateV1::Partial("one role".into()),
+            StageStateV1::Complete,
+        ] {
+            let states = assemble_infrastructure_stage_states_v1(
+                StageStateV1::Complete,
+                StageStateV1::Complete,
+                StageStateV1::Complete,
+                StageStateV1::Partial("Registry moved; V2 absent".into()),
+                activation,
+            );
+            assert!(matches!(
+                states
+                    .iter()
+                    .find(|(stage, _)| *stage == StageV1::Activation)
+                    .map(|(_, state)| state),
+                Some(StageStateV1::Conflict(detail)) if detail.contains("half-flipped")
+            ));
+        }
+    }
+
+    #[test]
+    fn one_administration_ceiling_admits_succession_and_refuses_founding() {
+        authenticate_administration_through_v1(StageV1::Succession)
+            .expect("succession is an administration stage");
+        authenticate_administration_through_v1(StageV1::Activation)
+            .expect("activation remains the ceiling");
+        let refusal = authenticate_administration_through_v1(StageV1::Founding)
+            .expect_err("founding crosses the shared ceiling");
+        assert!(refusal.0.contains("activation"), "{refusal:?}");
+    }
+
+    #[test]
+    fn incomplete_succession_requires_a_distinct_campaign_payer_role() {
+        let mut states = exact_prerequisite_states_v1();
+        states
+            .iter_mut()
+            .find(|(stage, _)| *stage == StageV1::Succession)
+            .expect("succession state")
+            .1 = StageStateV1::Partial("Registry upgraded".into());
+        assert_eq!(
+            administration_required_roles_v1(&states, StageV1::Succession),
+            vec![role::CORE_UPGRADE_AUTHORITY, role::CAMPAIGN_PAYER]
+        );
+        assert_eq!(
+            administration_required_roles_v1(&states, StageV1::Initialize),
+            vec![role::CORE_UPGRADE_AUTHORITY]
+        );
     }
 
     #[test]
@@ -4827,6 +6020,7 @@ mod tests {
                 },
                 checked_upgrade_set: None,
                 checked_local_mutable_set: None,
+                infrastructure_succession: None,
                 infrastructure_profile: crate::model::InfrastructureProfilePin {
                     address: String::new(),
                     schema_id: String::new(),

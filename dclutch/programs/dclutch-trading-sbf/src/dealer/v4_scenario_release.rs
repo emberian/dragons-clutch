@@ -424,13 +424,17 @@ fn validate_v4_semantics(
     selector: u16,
     descriptor: CapabilityProgramV4,
 ) -> Result<(), DealerScenarioReleaseErrorV4> {
+    let expected_derivation = match selector {
+        1..=8 => descriptor.lifecycle().program(),
+        _ => content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?,
+    };
     if descriptor.kind() != content(digest(DEALER_KIND_PREIMAGE_V2))?
         || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4))?
         || descriptor.request_schema()
             != dealer_request_schema_v3(selector)
                 .map_err(|_| DealerScenarioReleaseErrorV4::Descriptor)?
         || descriptor.root_schema() != content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2))?
-        || descriptor.derivation_policy() != content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?
+        || descriptor.derivation_policy() != expected_derivation
         || usize::try_from(descriptor.root_state_bytes())
             .map_err(|_| DealerScenarioReleaseErrorV4::Geometry)?
             != dclutch_dealer_codec::root_tail::ROOT_TAIL_BYTES
@@ -557,6 +561,87 @@ mod tests {
         )
         .expect("V4")
         .encode()
+    }
+
+    fn lp_descriptor(
+        selector: u16,
+        derivation_policy: ContentId,
+    ) -> [u8; CAPABILITY_PROGRAM_V4_BYTES] {
+        let lifecycle_program = byte_id(83);
+        CapabilityProgramV4::new(
+            content(digest(DEALER_KIND_PREIMAGE_V2)).expect("kind"),
+            content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4)).expect("config"),
+            dealer_request_schema_v3(selector).expect("request"),
+            content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2)).expect("root"),
+            derivation_policy,
+            byte_id(80),
+            CapabilityArtifactsV4 {
+                account_profile: ArtifactReferenceV4::new(
+                    content(ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2).expect("schema"),
+                    byte_id(81),
+                ),
+                request_profile: ArtifactReferenceV4::new(
+                    content(REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID).expect("schema"),
+                    byte_id(82),
+                ),
+                lifecycle: ArtifactReferenceV4::new(
+                    content(LIFECYCLE_SCHEMA_RELEASE_ID_V5).expect("schema"),
+                    lifecycle_program,
+                ),
+                strategy: ArtifactReferenceV4::new(
+                    content(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2).expect("schema"),
+                    byte_id(84),
+                ),
+                transition: ArtifactReferenceV4::new(
+                    content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID).expect("schema"),
+                    byte_id(85),
+                ),
+                effect: ArtifactReferenceV4::new(
+                    content(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4).expect("schema"),
+                    byte_id(86),
+                ),
+            },
+            u32::try_from(dclutch_dealer_codec::root_tail::ROOT_TAIL_BYTES).expect("width"),
+        )
+        .expect("LP V4")
+        .encode()
+    }
+
+    #[test]
+    fn live_v4_records_use_the_exact_lifecycle_program_as_derivation_policy() {
+        let lifecycle_program = byte_id(83);
+        let root_derivation = content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1).expect("root");
+        for selector in 1..=8 {
+            let exact = lp_descriptor(selector, lifecycle_program);
+            assert!(
+                DealerDescriptorRecordV4::new(
+                    selector,
+                    CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
+                    &exact,
+                )
+                .is_ok()
+            );
+
+            let substituted = lp_descriptor(selector, root_derivation);
+            assert_eq!(
+                DealerDescriptorRecordV4::new(
+                    selector,
+                    CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
+                    &substituted,
+                ),
+                Err(DealerScenarioReleaseErrorV4::Descriptor)
+            );
+        }
+
+        let scenario_with_lp_derivation = lp_descriptor(9, lifecycle_program);
+        assert_eq!(
+            DealerDescriptorRecordV4::new(
+                9,
+                CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
+                &scenario_with_lp_derivation,
+            ),
+            Err(DealerScenarioReleaseErrorV4::Descriptor)
+        );
     }
 
     #[test]

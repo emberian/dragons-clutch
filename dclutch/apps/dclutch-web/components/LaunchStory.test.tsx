@@ -28,7 +28,12 @@ describe('launch story', () => {
     expect(html).toContain('href="/markets"');
     expect(html).toContain('href="/explorer"');
     expect(html).toContain('href="/activity"');
-    expect(html).toContain('0.50%');
+    expect(html).toContain('<strong>7</strong><span>programs</span>');
+    expect(html).toContain('<strong>64</strong><span>lock cap</span>');
+    expect(html).toContain('<strong>NO</strong><span>market open</span>');
+    expect(html).not.toContain('0.50%');
+    expect(html).toContain('href="/campaign"');
+    expect(html).toContain('href="/population"');
     expect(html).toContain('Hies3…MD4Qj');
     expect(html).toContain('Test assets have no monetary value.');
   });

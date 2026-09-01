@@ -27,14 +27,13 @@
 //! that creates nothing has no rent to quote. There is no supplied field for
 //! a human to keep in sync.
 //!
-//! **The refund recipient is a rule, not an identity.** The plan declares no
-//! payer, no RentCredit, no principal, and no beneficiary: an Authenticate
-//! plan moves no lamports, so there is no refund for these bytes to claim.
-//! The rule the ruling names — every lamport reaches the beneficiary fixed at
-//! state creation — is structural in the generic kernel: a Close plan's
-//! beneficiary is decoded from the authenticated RentCredit account itself
-//! (`AuthenticatedRentCreditV3::beneficiary`), and the policy wire format has
-//! no field that could carry a recipient identity at all.
+//! **The refund recipient is projected, not supplied.** The legacy Consume
+//! Authenticate plan declares no payer, RentCredit, principal, or beneficiary
+//! because it moves no lamports. The successor Close plan is the sole terminal
+//! exception: it names the post-prefix RentCredit coordinate and consumes the
+//! principal and beneficiary registers projected by its selected profile.
+//! Generic Lifecycle then requires that beneficiary to match the authenticated
+//! RentCredit account before crediting and closing the root.
 //!
 //! # Why the seed table is honest
 //!
@@ -53,8 +52,8 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     StateLifecyclePolicyV5,
     encode::{
         LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-        encode_lifecycle_policy_v5_atomic,
+        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
+        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_capability_program_contract::{
@@ -88,9 +87,19 @@ pub const SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5: usize = HEADER_BYTES
     + ACTION_PLAN_BYTES
     + PROTECTED_OUTPUT_BYTES;
 
+/// Exact width of the canonical policy selected by every live-root action.
+pub const SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5: usize = HEADER_BYTES;
+
 /// Exact seed count of the root recipe: the eight `CapabilityRootSeedsV1`
 /// slices plus the canonical bump.
 pub const SERIES_CONSUME_ROOT_SEED_COUNT_V5: usize = 9;
+
+/// Close-only lifecycle RentCredit coordinate after the five-account Hot prefix.
+pub const SERIES_CLOSE_RENT_CREDIT_COORDINATE_V5: u16 = 5;
+/// Close-only projection of the root's historical rent principal.
+pub const SERIES_CLOSE_ROOT_PRINCIPAL_SCALAR_V5: u16 = 7;
+/// Close-only projection of the authenticated RentCredit beneficiary.
+pub const SERIES_CLOSE_BENEFICIARY_IDENTITY_V5: u16 = 6;
 
 /// Stable refusal from Series lifecycle-policy emission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +112,27 @@ pub enum SeriesLifecyclePolicyErrorV5 {
 
 /// Result alias for Series lifecycle-policy emission.
 pub type Result<T> = core::result::Result<T, SeriesLifecyclePolicyErrorV5>;
+
+/// Emit the canonical plan-free policy for Prepare, Consume, Expire, or Retire.
+///
+/// These actions authenticate the live root through the ordinary Hot root
+/// join. FundingV5 separately owns any Ticket create/close, so Lifecycle must
+/// not acquire a second account-authority path for the same action.
+pub fn encode_series_empty_state_lifecycle_v5_atomic(
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    if scratch.len() != SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5
+        || output.len() != SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5
+    {
+        return Err(SeriesLifecyclePolicyErrorV5::Geometry);
+    }
+    encode_lifecycle_policy_v5_atomic(&[], &[], &[], &[], &[], &[], scratch, output)
+        .map_err(SeriesLifecyclePolicyErrorV5::Lifecycle)?;
+    StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+        .map_err(SeriesLifecyclePolicyErrorV5::Lifecycle)?;
+    Ok(())
+}
 
 /// Emit the canonical Series Consume `StateLifecyclePolicyV5` atomically.
 ///
@@ -164,6 +194,73 @@ pub fn encode_series_consume_state_lifecycle_v5_atomic(
     Ok(())
 }
 
+/// Emit the canonical terminal Series root-close policy atomically.
+///
+/// This is the only reachable Series lifecycle plan. Live roots remain under
+/// the ordinary Hot root/header authentication path; Prepare, Consume,
+/// Expire, and Retire therefore select no lifecycle invocation. Close alone
+/// credits every root lamport to the authenticated lifecycle RentCredit and
+/// leaves Ticket retirement to the EffectV5 funding owner.
+pub fn encode_series_close_state_lifecycle_v5_atomic(
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    if scratch.len() != SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5
+        || output.len() != SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5
+    {
+        return Err(SeriesLifecyclePolicyErrorV5::Geometry);
+    }
+    let recipes = [LifecycleRecipeInputV3 {
+        state: LifecycleAccountCoordinateV3::fixed(SERIES_CONSUME_ROOT_COORDINATE_V4),
+        seed_start: 0,
+        seed_count: u8::try_from(SERIES_CONSUME_ROOT_SEED_COUNT_V5)
+            .map_err(|_| SeriesLifecyclePolicyErrorV5::Geometry)?,
+        bump_offset: u8::try_from(SERIES_CONSUME_ROOT_SEED_COUNT_V5 - 1)
+            .map_err(|_| SeriesLifecyclePolicyErrorV5::Geometry)?,
+        data_base: u32::try_from(SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5)
+            .map_err(|_| SeriesLifecyclePolicyErrorV5::Geometry)?,
+        data_stride: 0,
+    }];
+    let seeds = [
+        LifecycleSeedInputV3::Literal(CAPABILITY_ROOT_PDA_DOMAIN_V1),
+        LifecycleSeedInputV3::CommonIdentity(SERIES_CONSUME_ROOT_MARKET_IDENTITY_V4),
+        LifecycleSeedInputV3::CommonScalar {
+            index: SERIES_CONSUME_ROOT_GENERATION_SCALAR_V4,
+            width: 8,
+        },
+        LifecycleSeedInputV3::CommonIdentity(SERIES_CONSUME_ROOT_MANIFEST_IDENTITY_V4),
+        LifecycleSeedInputV3::CommonScalar {
+            index: SERIES_CONSUME_ROOT_ENTRY_INDEX_SCALAR_V4,
+            width: 2,
+        },
+        LifecycleSeedInputV3::CommonIdentity(SERIES_CONSUME_ROOT_KIND_IDENTITY_V4),
+        LifecycleSeedInputV3::CommonIdentity(SERIES_CONSUME_ROOT_CAPABILITY_RELEASE_IDENTITY_V4),
+        LifecycleSeedInputV3::CommonIdentity(SERIES_CONSUME_ROOT_CONFIG_IDENTITY_V4),
+        LifecycleSeedInputV3::CanonicalBump,
+    ];
+    let plans = [LifecyclePlanInputV3 {
+        action: SeriesActionV3::Close as u32,
+        operation: LifecycleOperationInputV3::Close,
+        recipe: 0,
+        payer: None,
+        rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+            SERIES_CLOSE_RENT_CREDIT_COORDINATE_V5,
+        )),
+        principal: Some(LifecycleRegisterCoordinateV3::common(
+            SERIES_CLOSE_ROOT_PRINCIPAL_SCALAR_V5,
+        )),
+        beneficiary: Some(LifecycleRegisterCoordinateV3::common(
+            SERIES_CLOSE_BENEFICIARY_IDENTITY_V5,
+        )),
+        guard: LifecycleGuardInputV3::Always,
+    }];
+    encode_lifecycle_policy_v5_atomic(&recipes, &seeds, &plans, &[None], &[], &[], scratch, output)
+        .map_err(SeriesLifecyclePolicyErrorV5::Lifecycle)?;
+    StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+        .map_err(SeriesLifecyclePolicyErrorV5::Lifecycle)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -189,6 +286,88 @@ mod tests {
         encode_series_consume_state_lifecycle_v5_atomic(&mut scratch, &mut output)
             .expect("Series lifecycle policy");
         output
+    }
+
+    fn close_policy_bytes() -> vec::Vec<u8> {
+        let mut scratch = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
+        let mut output = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
+        encode_series_close_state_lifecycle_v5_atomic(&mut scratch, &mut output)
+            .expect("Series close lifecycle policy");
+        output
+    }
+
+    fn empty_policy_bytes() -> vec::Vec<u8> {
+        let mut scratch = vec![0_u8; SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5];
+        let mut output = vec![0_u8; SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5];
+        encode_series_empty_state_lifecycle_v5_atomic(&mut scratch, &mut output)
+            .expect("Series empty lifecycle policy");
+        output
+    }
+
+    #[test]
+    fn live_actions_select_no_lifecycle_authority() {
+        let bytes = empty_policy_bytes();
+        let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &bytes)
+            .expect("empty policy");
+        for action in [
+            SeriesActionV3::Prepare,
+            SeriesActionV3::Consume,
+            SeriesActionV3::Expire,
+            SeriesActionV3::Retire,
+            SeriesActionV3::Close,
+        ] {
+            assert_eq!(policy.action_plan_count(action as u32), Ok(0));
+        }
+        assert_eq!(policy.current_rent_quote_count(), 0);
+    }
+
+    #[test]
+    fn empty_policy_refuses_nonexact_buffers() {
+        let mut short_scratch = vec![0_u8; SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5 - 1];
+        let mut short_output = vec![0_u8; SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5 - 1];
+        assert_eq!(
+            encode_series_empty_state_lifecycle_v5_atomic(&mut short_scratch, &mut short_output),
+            Err(SeriesLifecyclePolicyErrorV5::Geometry)
+        );
+    }
+
+    #[test]
+    fn terminal_policy_selects_only_root_close() {
+        let bytes = close_policy_bytes();
+        let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &bytes)
+            .expect("close policy");
+        let selected = policy
+            .action_plan(SeriesActionV3::Close as u32, 0)
+            .expect("sole Close plan");
+        assert_eq!(
+            selected.operation(),
+            dclutch_account_profile_contract::lifecycle_v3::LifecycleOperationV3::Close
+        );
+        assert_eq!(
+            policy.action_plan_count(SeriesActionV3::Close as u32),
+            Ok(1)
+        );
+        for live in [
+            SeriesActionV3::Prepare,
+            SeriesActionV3::Consume,
+            SeriesActionV3::Expire,
+            SeriesActionV3::Retire,
+        ] {
+            assert_eq!(policy.action_plan_count(live as u32), Ok(0));
+        }
+        assert_eq!(selected.protected_outputs(), Ok(None));
+        assert_eq!(policy.current_rent_quote_count(), 0);
+    }
+
+    #[test]
+    fn terminal_policy_is_deterministic_and_refuses_wrong_width() {
+        assert_eq!(close_policy_bytes(), close_policy_bytes());
+        let mut scratch = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5 - 1];
+        let mut output = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5 - 1];
+        assert_eq!(
+            encode_series_close_state_lifecycle_v5_atomic(&mut scratch, &mut output),
+            Err(SeriesLifecyclePolicyErrorV5::Geometry)
+        );
     }
 
     fn profile_bytes() -> vec::Vec<u8> {

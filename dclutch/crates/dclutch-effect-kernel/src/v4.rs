@@ -786,6 +786,7 @@ impl<'a> ProgramV4<'a> {
 
     fn shift_effect(self, effect: ResolvedEffectV3, scalars: &[u64]) -> ResultV4<ResolvedEffectV3> {
         Ok(match effect {
+            ResolvedEffectV3::Noop => ResolvedEffectV3::Noop,
             ResolvedEffectV3::TransferLamports {
                 source,
                 destination,
@@ -1023,8 +1024,10 @@ pub fn project_atomic_visiting(
             write_ranges,
             &mut resolved_writes,
         )?;
-        visit(resolved)?;
-        project_effect(resolved, &mut projection)?;
+        if resolved != ResolvedEffectV3::Noop {
+            visit(resolved)?;
+            project_effect(resolved, &mut projection)?;
+        }
         fixed = fixed.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
     }
     let mut item = 0_u32;
@@ -1044,8 +1047,10 @@ pub fn project_atomic_visiting(
                 write_ranges,
                 &mut resolved_writes,
             )?;
-            visit(resolved)?;
-            project_effect(resolved, &mut projection)?;
+            if resolved != ResolvedEffectV3::Noop {
+                visit(resolved)?;
+                project_effect(resolved, &mut projection)?;
+            }
             operation = operation.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
         }
         item = item.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
@@ -1152,10 +1157,11 @@ impl ResolvedWriteRangeV4 {
 /// before every operation after it is resolved at all.
 ///
 /// `ranges` is a caller-owned scratch bank exactly
-/// [`ProgramV4::data_write_operation_count`] entries wide -- the number of
-/// ordinals that will actually record a range, not the number that will be
-/// resolved. Its incoming contents are not read, and `resolved_writes` counts
-/// how many of its entries the walk has filled so far.
+/// [`ProgramV4::data_write_operation_count`] entries wide -- the maximum number
+/// of ordinals that can record a range, including scalar-conditional writes
+/// disabled in this execution, not the total number that will be resolved. Its
+/// incoming contents are not read, and `resolved_writes` counts how many of its
+/// entries the walk has filled so far.
 fn record_nonoverlapping_write_v4(
     resolved: ResolvedEffectV3,
     aliases: &[usize],
@@ -1334,12 +1340,16 @@ mod tests {
             AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, RouteInputV3,
             ScalarCoordinateV3, encode_effect_program_v3_atomic,
         },
-        v3::{HEADER_BYTES, OPERATION_BYTES, ROUTE_BYTES, RouteKindV3},
+        v3::{HEADER_BYTES, OPERATION_BYTES, ProjectionV3, ROUTE_BYTES, RouteKindV3},
     };
 
     const BASE_BYTES: usize = HEADER_BYTES + 3 * ROUTE_BYTES + OPERATION_BYTES;
     const SUCCESSOR_BYTES: usize =
         HEADER_BYTES_V4 + DYNAMIC_SPAN_BYTES_V4 + 2 * BORROWED_RANGE_BYTES_V4 + BASE_BYTES;
+    const CONDITIONAL_BASE_BYTES: usize = HEADER_BYTES + OPERATION_BYTES;
+    const CONDITIONAL_SUCCESSOR_BYTES: usize = HEADER_BYTES_V4 + CONDITIONAL_BASE_BYTES;
+    const LATER_TAIL_BASE_BYTES: usize = HEADER_BYTES + 4 * OPERATION_BYTES;
+    const LATER_TAIL_SUCCESSOR_BYTES: usize = HEADER_BYTES_V4 + LATER_TAIL_BASE_BYTES;
 
     fn base_program() -> [u8; BASE_BYTES] {
         let routes = [
@@ -1576,6 +1586,252 @@ mod tests {
         let mut hostile = output;
         hostile[20] = 1;
         assert_eq!(ProgramV4::decode(&hostile), Err(ErrorV4::Wire));
+    }
+
+    #[test]
+    fn disabled_conditional_write_is_not_offered_to_v4_visitor() {
+        let operation = EffectInstructionV3::write_u64_if_nonzero(
+            AccountCoordinateV3::fixed(0),
+            0,
+            ScalarCoordinateV3::common(0),
+            1,
+        );
+        let mut base_scratch = [0_u8; CONDITIONAL_BASE_BYTES];
+        let mut base = [0_u8; CONDITIONAL_BASE_BYTES];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[operation],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("conditional base");
+        let mut scratch = [0_u8; CONDITIONAL_SUCCESSOR_BYTES];
+        let mut output = [0_u8; CONDITIONAL_SUCCESSOR_BYTES];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("conditional successor");
+        let program = ProgramV4::decode(&output).expect("conditional decode");
+        let aliases = [0_usize];
+        let accounts = [AccountInput {
+            lamports: 0,
+            data_len: 0,
+        }];
+        let permissions = [AccountPermission::read_only()];
+        let mut scratch_lamports = [7_u64];
+        let mut output_lamports = [8_u64];
+        let mut requests = [];
+        let mut write_ranges = [ResolvedWriteRangeV4::vacant()];
+        let mut visits = 0_u8;
+        project_atomic_visiting(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &[9, 0],
+                identities: &[],
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut requests,
+            },
+            &mut write_ranges,
+            &mut |_| {
+                visits = visits.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+                Ok(())
+            },
+        )
+        .expect("disabled successor projection");
+        assert_eq!(visits, 0);
+        assert_eq!(output_lamports, [0]);
+    }
+
+    #[test]
+    fn second_tail_affine_reaches_v4_as_one_exact_runtime_write_range() {
+        let operation = EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+            AccountCoordinateV3::fixed(0),
+            0,
+            8,
+            ScalarCoordinateV3::item(0),
+            0,
+        );
+        let mut base_scratch = [0_u8; CONDITIONAL_BASE_BYTES];
+        let mut base = [0_u8; CONDITIONAL_BASE_BYTES];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &[operation],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("second tail base");
+        let mut scratch = [0_u8; CONDITIONAL_SUCCESSOR_BYTES];
+        let mut output = [0_u8; CONDITIONAL_SUCCESSOR_BYTES];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("second tail successor");
+        let program = ProgramV4::decode(&output).expect("second tail decode");
+        assert_eq!(program.data_write_operation_count(1), Ok(1));
+        let aliases = [0_usize];
+        let accounts = [AccountInput {
+            lamports: 3,
+            data_len: 16,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let mut scratch_lamports = [0_u64];
+        let mut output_lamports = [9_u64];
+        let mut write_ranges = [ResolvedWriteRangeV4::vacant()];
+        let mut visited = None;
+        project_atomic_visiting(
+            program,
+            1,
+            ProjectionV3 {
+                scalars: &[1, 44],
+                identities: &[],
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+            &mut write_ranges,
+            &mut |effect| {
+                if visited.replace(effect).is_some() {
+                    return Err(ErrorV4::Arithmetic);
+                }
+                Ok(())
+            },
+        )
+        .expect("second tail projection");
+        assert_eq!(
+            visited,
+            Some(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 8,
+                value: 44,
+            })
+        );
+        assert_eq!(output_lamports, [3]);
+    }
+
+    #[test]
+    fn later_planar_tails_reach_v4_as_four_exact_runtime_write_ranges() {
+        let account = AccountCoordinateV3::fixed(0);
+        let value = ScalarCoordinateV3::item(0);
+        let operations = [
+            EffectInstructionV3::write_u64_second_tail_affine(account, 0, 8, value),
+            EffectInstructionV3::write_u64_third_tail_affine(account, 0, 8, value),
+            EffectInstructionV3::write_u64_fourth_tail_affine(account, 0, 8, value),
+            EffectInstructionV3::write_u64_fifth_tail_affine(account, 0, 8, value),
+        ];
+        let mut base_scratch = [0_u8; LATER_TAIL_BASE_BYTES];
+        let mut base = [0_u8; LATER_TAIL_BASE_BYTES];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &operations,
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("later planar base");
+        let mut scratch = [0_u8; LATER_TAIL_SUCCESSOR_BYTES];
+        let mut output = [0_u8; LATER_TAIL_SUCCESSOR_BYTES];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("later planar successor");
+        let program = ProgramV4::decode(&output).expect("later planar decode");
+        assert_eq!(program.data_write_operation_count(1), Ok(4));
+        let aliases = [0_usize];
+        let accounts = [AccountInput {
+            lamports: 3,
+            data_len: 40,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let mut scratch_lamports = [0_u64];
+        let mut output_lamports = [9_u64];
+        let mut write_ranges = [ResolvedWriteRangeV4::vacant(); 4];
+        let mut visited = [None; 4];
+        let mut visit_count = 0_usize;
+        project_atomic_visiting(
+            program,
+            1,
+            ProjectionV3 {
+                scalars: &[1, 44],
+                identities: &[],
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+            &mut write_ranges,
+            &mut |effect| {
+                *visited.get_mut(visit_count).ok_or(ErrorV4::Arithmetic)? = Some(effect);
+                visit_count = visit_count.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+                Ok(())
+            },
+        )
+        .expect("later planar projection");
+        assert_eq!(visit_count, 4);
+        for (effect, offset) in visited.into_iter().zip([8_u32, 16, 24, 32]) {
+            assert_eq!(
+                effect,
+                Some(ResolvedEffectV3::WriteScalar {
+                    account: 0,
+                    offset,
+                    value: 44,
+                })
+            );
+        }
+        assert_eq!(output_lamports, [3]);
     }
 
     #[test]

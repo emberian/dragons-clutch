@@ -72,8 +72,8 @@ one document, checks the witnesses, and folds the result into the census
 ledger. Everything lands under `--work` (default `/private/tmp/dclutch-tier4`),
 never in the repo.
 
-It needs no validator and no port, so unlike `run.sh --mode full` it is not a
-single global slot and may run while another lane holds one.
+It needs no validator and no port. `run.sh --mode full` is unavailable at HEAD,
+so this supported ProgramTest campaign may run alongside other work.
 
 ## The producer
 

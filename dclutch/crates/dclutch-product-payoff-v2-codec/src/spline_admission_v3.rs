@@ -36,8 +36,9 @@
 //! 3 moves that discovery to founding by quantifying over every coordinate
 //! denominator the family accepts. See
 //! [`spline_arithmetic_envelope_v3`] for the bound and for the measured
-//! consequence, which is that degree 3 is essentially unfoundable until the
-//! accumulation widens past `u128`.
+//! fixed-width bound. Degree 3 became foundable when the evaluator and this
+//! envelope moved together to the same 256-bit accumulator; neither side is
+//! permitted to promise a range the other cannot execute.
 //!
 //! # Why conjunct 4 compares nothing
 //!
@@ -216,12 +217,30 @@ mod tests {
     const KNOTS_D2: [i128; 8] = [0, 0, 0, 1, 2, 3, 3, 3];
     /// Clamped uniform degree-3 knot vector: eight knots, width four.
     const KNOTS_D3: [i128; 8] = [0, 0, 0, 0, 1, 1, 1, 1];
-    /// Degree-2 knots whose spans are wide enough that the triangle's cubed
-    /// denominator leaves `u128` at an ordinary payout scale.
-    const KNOTS_WIDE: [i128; 8] = [0, 0, 0, 100_000, 200_000, 300_000, 300_000, 300_000];
-    /// Degree-2 knots that fit at an ordinary scale and not at `u64::MAX`, so
-    /// the apportionment product is what fails rather than the triangle.
-    const KNOTS_MID: [i128; 8] = [0, 0, 0, 4, 8, 12, 12, 12];
+    /// Degree-2 knots whose three envelope factors leave the fixed 256-bit
+    /// accumulator before any position can be admitted.
+    const KNOTS_WIDE: [i128; 8] = [
+        0,
+        0,
+        0,
+        1_i128 << 80,
+        2_i128 << 80,
+        3_i128 << 80,
+        3_i128 << 80,
+        3_i128 << 80,
+    ];
+    /// Degree-2 knots whose triangle fits with the ordinary scale but whose
+    /// product with `u64::MAX` does not.
+    const KNOTS_MID: [i128; 8] = [
+        0,
+        0,
+        0,
+        1_i128 << 56,
+        2_i128 << 56,
+        3_i128 << 56,
+        3_i128 << 56,
+        3_i128 << 56,
+    ];
     /// A payout scale a degree-2 basis apportions comfortably.
     const SCALE: u64 = 1_000_000;
 
@@ -367,6 +386,26 @@ mod tests {
             admit_basis_selection_v3(spline(2, 8, 5, &KNOTS_MID, u64::MAX, DIGEST)),
             Err(Error::SplineEnvelopeExceeded)
         );
+
+        // Translation leaves the mathematical weights unchanged, but the live
+        // evaluator still has to pre-scale signed knot numerators to locate a
+        // span. A narrow vector translated near i128::MAX is therefore caught
+        // here rather than at terminal evaluation.
+        let base = i128::MAX / 2;
+        let translated = [
+            base,
+            base,
+            base,
+            base + 1,
+            base + 2,
+            base + 3,
+            base + 3,
+            base + 3,
+        ];
+        assert_eq!(
+            admit_basis_selection_v3(spline(2, 8, 5, &translated, SCALE, DIGEST)),
+            Err(Error::SplineEnvelopeExceeded)
+        );
     }
 
     /// The envelope is checked *before* the certificate, because a basis that
@@ -392,21 +431,14 @@ mod tests {
         );
     }
 
-    /// **The measured consequence, pinned as a test rather than left in a
-    /// comment.** Degree 3 raises the coordinate denominator to the sixth
-    /// power, so at any payout scale a real Market would use it does not fit a
-    /// `u128` triangle — and is refused at founding. This is what makes
-    /// widening the accumulation the thing that *unlocks* degree 3 rather than
-    /// tidying it. If a later lane widens past `u128`, this test is the one
-    /// that should change, deliberately.
+    /// The former `u128` blocker is retired: this realistic cubic is admitted
+    /// under the same fixed 256-bit envelope the live evaluator executes.
     #[test]
-    fn degree_three_does_not_fit_a_u128_triangle_at_a_realistic_scale() {
+    fn degree_three_fits_the_live_fixed_width_envelope() {
         assert_eq!(
             admit_basis_selection_v3(spline(3, 8, 4, &KNOTS_D3, SCALE, DIGEST)),
-            Err(Error::SplineEnvelopeExceeded)
+            Ok(())
         );
-        // And degree 2, the same scale, is comfortable and admitted — so the
-        // refusal is the degree's, not the vector's or the seam's.
         assert_eq!(admit_basis_selection_v3(well_formed(DIGEST)), Ok(()));
     }
 

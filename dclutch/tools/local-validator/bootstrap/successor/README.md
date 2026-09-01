@@ -769,7 +769,9 @@ minutes; at 16 it is about 16, and you will be debugging against a timer.
 cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -- \
   local-private-validator-series-consume-v1 \
   --campaign /abs/campaign/campaign.json --rpc-url http://127.0.0.1:21600 \
-  --payer-keypair /abs/payer.json --journal /abs/campaign/journal.json --execute
+  --payer-keypair /abs/payer.json \
+  --journal /abs/campaign/found-journal.json \
+  --evidence /abs/campaign/found-evidence.json --execute
 ```
 
 Without `--execute` it preflights: it proves the lookup table is populated, the
@@ -793,10 +795,39 @@ addresses against a 1,232-byte packet. The compute budget comes from
 
 **A write path's acknowledgment is the state it committed**, not a returned
 buffer, so the consumer authenticates the Market being Core-owned and written
-and the founding permit holding its exact expected balance. Rerunning a
-finished campaign is a no-op; that check necessarily precedes the vacant-Market
-preflight, because a succeeded Found is exactly what makes the Market
-non-vacant.
+and the founding permit holding its exact expected balance. Its evidence also
+records every unique writable instruction account before and after Found and
+requires their aggregate lamports to be conserved exactly.
+
+Rerunning a finalized journal is a no-op and rehashes the evidence before it
+returns. Recovery from `prepared` may send only the signed packet already in
+the journal; recovery from `submitted` is poll-only. Neither path can choose a
+fresh blockhash or mint another transaction identity for the occurrence.
+
+### Execute the protocol replay, not a duplicate packet
+
+Use the same campaign, validator, and payer after the accepted Found, but new
+output paths. `12293` is `CoreSbfError::Market` (`0x3005`), the exact guard the
+first Consume makes false by moving the Market out of its vacant prestate.
+
+```sh
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -- \
+  local-private-validator-series-consume-v1 \
+  --campaign /abs/campaign/campaign.json --rpc-url http://127.0.0.1:21600 \
+  --payer-keypair /abs/payer.json \
+  --journal /abs/campaign/replay-journal.json \
+  --evidence /abs/campaign/replay-evidence.json \
+  --replay-after-evidence /abs/campaign/found-evidence.json \
+  --expect-refusal 12293 --execute
+```
+
+The replay input is authenticated as the conserved accepted evidence for this
+exact instruction, Market, permit, table, and payer. The hostile packet must
+have both a different recorded recent blockhash and a different signature.
+That makes the validator execute Core again instead of deduplicating the first transaction. The
+refusal is accepted only when finalized metadata reports `0x3005`, every
+writable protocol account is byte-identical to its post-Found prestate, and the
+only transaction balance change is the payer's exact fee.
 
 ### Hostiles
 

@@ -171,7 +171,7 @@ fn settle_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()>
     report(&plan);
 
     if !arguments.execute {
-        write_evidence(&arguments.evidence, &plan, None, cluster)?;
+        write_evidence(&arguments.evidence, &plan, None, None, cluster)?;
         println!("preflight only; no key was opened and nothing was sent");
         return Ok(());
     }
@@ -212,7 +212,13 @@ fn settle_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()>
     }
     println!("fee_owed after       0 (read back from chain)");
 
-    write_evidence(&arguments.evidence, &plan, Some(&evidence), cluster)?;
+    write_evidence(
+        &arguments.evidence,
+        &plan,
+        Some(payer.pubkey()),
+        Some(&evidence),
+        cluster,
+    )?;
     Ok(())
 }
 
@@ -401,6 +407,7 @@ fn require_account(rpc: &mut Rpc, address: Pubkey, label: &str) -> Result<Vec<u8
 fn write_evidence(
     path: &Path,
     plan: &PlanV1,
+    fee_payer: Option<Pubkey>,
     landed: Option<&TransactionEvidence>,
     cluster: &str,
 ) -> Result<()> {
@@ -420,6 +427,10 @@ fn write_evidence(
         "feeDestination": plan.destination.to_string(),
         "feeDestinationOwner": plan.destination_owner.to_string(),
         "standingAllowance": plan.allowance,
+        // Fixed-width across preflight and execution. A null payer means no
+        // key was opened and no transaction exists; an executed receipt must
+        // name the exact payer whose key signed the landed transaction.
+        "feePayer": fee_payer.map(|payer| payer.to_string()),
         "callerAuthority": plan.caller_authority.to_string(),
         "callerAuthorityBump": plan.caller_authority_bump,
         "custodyExpectedRevision": plan.expected_revision,
@@ -431,11 +442,67 @@ fn write_evidence(
             "feeLamports": evidence.fee_lamports,
         })),
     });
+    authenticate_fee_payer_evidence_v1(&document, fee_payer, landed)?;
     std::fs::write(
         path,
         format!("{}\n", serde_json::to_string_pretty(&document)?),
     )?;
     println!("evidence             {}", path.display());
+    Ok(())
+}
+
+/// Bind the fixed evidence payer to the exact transaction tuple returned by
+/// the RPC semantic owner. This validator deliberately takes the payer as a
+/// `Pubkey`, already derived from the opened signer, rather than accepting a
+/// filename or a caller-authored string.
+fn authenticate_fee_payer_evidence_v1(
+    document: &Value,
+    expected_fee_payer: Option<Pubkey>,
+    expected_landed: Option<&TransactionEvidence>,
+) -> Result<()> {
+    let recorded_payer = document
+        .get("feePayer")
+        .ok_or_else(|| Error::new("fee-settlement evidence omitted its fixed feePayer field"))?;
+    let recorded_landed = document
+        .get("landed")
+        .ok_or_else(|| Error::new("fee-settlement evidence omitted its fixed landed field"))?;
+    match (expected_fee_payer, expected_landed) {
+        (None, None) => {
+            if !recorded_payer.is_null() || !recorded_landed.is_null() {
+                return Err(Error::new(
+                    "fee-settlement preflight evidence named a payer or transaction",
+                ));
+            }
+        }
+        (Some(payer), Some(transaction)) => {
+            if transaction.error.is_some()
+                || recorded_payer.as_str() != Some(payer.to_string().as_str())
+                || recorded_landed.get("signature").and_then(Value::as_str)
+                    != Some(transaction.signature.as_str())
+                || recorded_landed.get("slot").and_then(Value::as_u64) != Some(transaction.slot)
+                || recorded_landed
+                    .get("computeUnitsConsumed")
+                    .and_then(Value::as_u64)
+                    != transaction.compute_units_consumed
+                || recorded_landed.get("feeLamports").and_then(Value::as_u64)
+                    != transaction.fee_lamports
+            {
+                return Err(Error::new(
+                    "fee-settlement evidence payer or landed transaction tuple changed",
+                ));
+            }
+        }
+        (Some(_), None) => {
+            return Err(Error::new(
+                "fee-settlement execute evidence omitted its landed transaction",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(Error::new(
+                "fee-settlement landed evidence omitted its exact transaction payer",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -507,6 +574,32 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn transaction() -> TransactionEvidence {
+        TransactionEvidence {
+            label: "direct fee settlement".into(),
+            signature: "fixture-signature".into(),
+            slot: 17,
+            transaction_metadata_available: true,
+            fee_lamports: Some(5_000),
+            fee_only_balance_change: None,
+            compute_units_consumed: Some(1_234),
+            error: None,
+            logs: Vec::new(),
+        }
+    }
+
+    fn executed_document(payer: Pubkey, transaction: &TransactionEvidence) -> Value {
+        json!({
+            "feePayer": payer.to_string(),
+            "landed": {
+                "signature": transaction.signature,
+                "slot": transaction.slot,
+                "computeUnitsConsumed": transaction.compute_units_consumed,
+                "feeLamports": transaction.fee_lamports,
+            }
+        })
+    }
 
     fn args(extra: &[&str]) -> Vec<String> {
         let mut v = vec![
@@ -580,6 +673,53 @@ mod tests {
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         assert_eq!(derived, vec![0]);
+    }
+
+    #[test]
+    fn fee_evidence_binds_the_exact_opened_payer() {
+        let payer = Pubkey::new_from_array([7; 32]);
+        let transaction = transaction();
+        let document = executed_document(payer, &transaction);
+        authenticate_fee_payer_evidence_v1(&document, Some(payer), Some(&transaction))
+            .expect("the exact payer/transaction tuple is admitted");
+
+        let substituted = executed_document(Pubkey::new_from_array([8; 32]), &transaction);
+        assert!(
+            authenticate_fee_payer_evidence_v1(&substituted, Some(payer), Some(&transaction))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn execute_evidence_cannot_carry_a_null_payer_or_transaction() {
+        let payer = Pubkey::new_from_array([7; 32]);
+        let transaction = transaction();
+        let null_execute = json!({"feePayer": null, "landed": null});
+        assert!(
+            authenticate_fee_payer_evidence_v1(&null_execute, Some(payer), Some(&transaction))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn preflight_evidence_cannot_claim_a_payer() {
+        let claimed = json!({
+            "feePayer": Pubkey::new_from_array([7; 32]).to_string(),
+            "landed": null,
+        });
+        assert!(authenticate_fee_payer_evidence_v1(&claimed, None, None).is_err());
+    }
+
+    #[test]
+    fn fee_evidence_refuses_a_substituted_transaction_tuple() {
+        let payer = Pubkey::new_from_array([7; 32]);
+        let transaction = transaction();
+        let mut substituted = executed_document(payer, &transaction);
+        substituted["landed"]["signature"] = json!("another-signature");
+        assert!(
+            authenticate_fee_payer_evidence_v1(&substituted, Some(payer), Some(&transaction))
+                .is_err()
+        );
     }
 
     /// The three programs and the two token accounts sit where Custody's own

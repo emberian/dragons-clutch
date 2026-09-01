@@ -726,6 +726,74 @@ impl U256 {
         }
         Ok(Self(output))
     }
+
+    /// Multiply two fixed-width integers without allocation.
+    ///
+    /// The convolution uses base-2^32 digits.  One diagonal contains at most
+    /// eight 32-by-32 products, so its sum plus carry fits in `u128`; all
+    /// non-zero digits above bit 255 are then an explicit overflow rather than
+    /// a truncation.
+    fn checked_mul(self, other: Self) -> Result<Self, Error> {
+        let mut digits = [0_u32; 16];
+        let mut carry = 0_u128;
+        let mut diagonal = 0_usize;
+        while diagonal < digits.len() {
+            let mut sum = carry;
+            let mut left = 0_usize;
+            while left < 8 {
+                let Some(right) = diagonal.checked_sub(left) else {
+                    left = left.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+                    continue;
+                };
+                if right < 8 {
+                    sum = sum
+                        .checked_add(
+                            u128::from(self.digit32(left)?)
+                                .checked_mul(u128::from(other.digit32(right)?))
+                                .ok_or(Error::ArithmeticOverflow)?,
+                        )
+                        .ok_or(Error::ArithmeticOverflow)?;
+                }
+                left = left.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+            }
+            *digits.get_mut(diagonal).ok_or(Error::ArithmeticOverflow)? =
+                u32::try_from(sum & u128::from(u32::MAX)).map_err(|_| Error::ArithmeticOverflow)?;
+            carry = sum >> 32;
+            diagonal = diagonal.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        if carry != 0 || digits.iter().skip(8).any(|digit| *digit != 0) {
+            return Err(Error::ArithmeticOverflow);
+        }
+        let mut limbs = [0_u64; 4];
+        let mut index = 0_usize;
+        while index < limbs.len() {
+            let low = u64::from(*digits.get(index * 2).ok_or(Error::ArithmeticOverflow)?);
+            let high = u64::from(*digits.get(index * 2 + 1).ok_or(Error::ArithmeticOverflow)?);
+            *limbs.get_mut(index).ok_or(Error::ArithmeticOverflow)? = low | (high << 32);
+            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(Self(limbs))
+    }
+
+    fn checked_mul_u128(self, multiplier: u128) -> Result<Self, Error> {
+        self.checked_mul(Self::from_u128(multiplier))
+    }
+
+    fn to_u128(self) -> Result<u128, Error> {
+        if self.0.get(2).copied().unwrap_or(1) != 0 || self.0.get(3).copied().unwrap_or(1) != 0 {
+            return Err(Error::ArithmeticOverflow);
+        }
+        Ok(
+            u128::from(*self.0.first().ok_or(Error::ArithmeticOverflow)?)
+                | (u128::from(*self.0.get(1).ok_or(Error::ArithmeticOverflow)?) << 64),
+        )
+    }
+
+    fn digit32(self, index: usize) -> Result<u32, Error> {
+        let limb = *self.0.get(index / 2).ok_or(Error::ArithmeticOverflow)?;
+        let shifted = if index % 2 == 0 { limb } else { limb >> 32 };
+        u32::try_from(shifted & u64::from(u32::MAX)).map_err(|_| Error::ArithmeticOverflow)
+    }
 }
 
 impl Ord for U256 {

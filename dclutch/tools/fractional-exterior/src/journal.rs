@@ -19,7 +19,10 @@ use std::{fs, path::Path};
 
 use serde_json::{Value, json};
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    stage::{EXPECTED_ACTIONS, ExpectedPoststate},
+};
 
 /// Canonical journal filename.
 pub const CANONICAL: &str = "canonical.json";
@@ -85,7 +88,7 @@ pub fn append_observed(out: &Path, value: &Value) -> Result<()> {
 ///
 /// Returns the entry count. Refuses a journal whose entries are not all present
 /// and well formed, so a truncated run cannot be mistaken for a clean one.
-pub fn verify(out: &Path) -> Result<usize> {
+pub fn verify(out: &Path) -> Result<(usize, String)> {
     let path = out.join(CANONICAL);
     let bytes = fs::read(&path)
         .map_err(|error| Error::new(format!("no journal at {}: {error}", path.display())))?;
@@ -99,7 +102,15 @@ pub fn verify(out: &Path) -> Result<usize> {
         .get("entries")
         .and_then(Value::as_array)
         .ok_or_else(|| Error::new("journal has no entries array"))?;
-    for entry in entries {
+    if entries.len() != EXPECTED_ACTIONS.len() {
+        return Err(Error::new(format!(
+            "journal has {} entries; this campaign requires {}",
+            entries.len(),
+            EXPECTED_ACTIONS.len()
+        ))
+        .into());
+    }
+    for (entry, (expected_name, expected_poststate)) in entries.iter().zip(EXPECTED_ACTIONS) {
         for field in [
             "action",
             "instruction_data_sha256",
@@ -111,8 +122,47 @@ pub fn verify(out: &Path) -> Result<usize> {
                 return Err(Error::new(format!("journal entry is missing {field}")).into());
             }
         }
+        if entry.get("action").and_then(Value::as_str) != Some(expected_name) {
+            return Err(Error::new(format!(
+                "journal action order refused: expected {expected_name}"
+            ))
+            .into());
+        }
+        if entry.get("accepted").and_then(Value::as_bool) != Some(true)
+            || !entry.get("refusal").is_some_and(Value::is_null)
+        {
+            return Err(Error::new(format!("{expected_name} did not commit cleanly")).into());
+        }
+        if entry.get("poststate") != Some(&poststate_value(expected_poststate)) {
+            return Err(Error::new(format!("{expected_name} poststate is not exact")).into());
+        }
+        for field in ["instruction_data_sha256", "account_frame_sha256"] {
+            let digest = entry.get(field).and_then(Value::as_str).unwrap_or_default();
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(Error::new(format!("{expected_name} has a malformed {field}")).into());
+            }
+        }
     }
-    Ok(entries.len())
+    let mut canonical = serde_json::to_vec_pretty(&value)?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(Error::new("journal bytes are not canonical JSON").into());
+    }
+    Ok((entries.len(), digest(&bytes)))
+}
+
+fn poststate_value(value: ExpectedPoststate) -> Value {
+    json!({
+        "shard_mint_supply": value.shard_mint_supply,
+        "holder_token_amount": value.holder_token_amount,
+        "sleeper_token_amount": value.sleeper_token_amount,
+        "actor_native_claims": value.actor_native_claims,
+        "reserve_native_claims": value.reserve_native_claims,
+    })
 }
 
 /// Lowercase hex SHA-256, the digest spelling used throughout the tree.

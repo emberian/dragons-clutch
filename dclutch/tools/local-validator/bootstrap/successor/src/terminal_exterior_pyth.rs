@@ -483,7 +483,7 @@ fn authenticate_provider_sources_v1(
         .map_err(|error| Error::new(format!("local-validator profile JSON: {error}")))?;
     let profile: LocalValidatorProfileV1 = serde_json::from_value(profile_value)?;
 
-    let expected_plan_labels = [
+    let mut expected_plan_labels = [
         "registry",
         "core",
         "claims",
@@ -502,9 +502,12 @@ fn authenticate_provider_sources_v1(
         ]
     })
     .collect::<BTreeSet<_>>();
+    if plan.infrastructure_succession.is_some() {
+        expected_plan_labels.insert(crate::plan::REGISTRY_SUCCESSION_BUFFER_LABEL_V1.into());
+    }
     if plan.schema != PROVIDER_PLAN_SCHEMA_V1
         || plan.record_publication != "transaction"
-        || plan.genesis_accounts.len() != 18
+        || plan.genesis_accounts.len() != expected_plan_labels.len()
         || plan
             .genesis_accounts
             .keys()
@@ -513,7 +516,7 @@ fn authenticate_provider_sources_v1(
             != expected_plan_labels
     {
         return Err(Error::new(
-            "provider closure requires the exact transaction-publication 18-account successor plan v2",
+            "provider closure requires an exact transaction-publication successor plan v2 account set",
         ));
     }
     if profile.schema != PROVIDER_PROFILE_SCHEMA_V1

@@ -994,6 +994,20 @@ fn payout_accounts(
     ]
 }
 
+/// Reproduce the exact 36-account frame owned by a payout report.
+///
+/// Successor operators that wrap the terminal route must extend this frame,
+/// never restate its account order. The returned value is derived only from
+/// the report's already-authenticated route, owner, and Custody caller; callers
+/// should still compare it with `report.instruction.accounts` before trusting
+/// a report received across an API boundary.
+#[must_use]
+pub fn wallet_terminal_payout_account_frame_v3(
+    report: &WalletTerminalPayoutReportV3,
+) -> Vec<AccountMeta> {
+    payout_accounts(report.route, report.owner, report.custody_caller)
+}
+
 fn debited_claim_bytes(
     prestate: &[u8],
     revision_offset: usize,
@@ -1066,7 +1080,7 @@ fn token_amount_bytes(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::borrow::Cow;
 
     use super::*;
@@ -1408,6 +1422,24 @@ mod tests {
             expected_market_revision: 7,
             expected_position_revision: 11,
         }
+    }
+
+    pub(crate) fn test_report(claim_index: u32) -> WalletTerminalPayoutReportV3 {
+        let fixture = fixture();
+        build_wallet_terminal_payout_v3(input(&fixture, claim_index)).expect("test payout report")
+    }
+
+    pub(crate) fn test_report_for_recipient(
+        claim_index: u32,
+        recipient: Pubkey,
+        recipient_owner: Pubkey,
+    ) -> WalletTerminalPayoutReportV3 {
+        let mut fixture = fixture();
+        fixture.route.recipient = recipient;
+        fixture.recipient = token(fixture.route.collateral_mint, recipient_owner, 9);
+        let mut input = input(&fixture, claim_index);
+        input.recipient_owner = recipient_owner.to_bytes();
+        build_wallet_terminal_payout_v3(input).expect("recipient-bound test payout report")
     }
 
     fn lookup(report: &WalletTerminalPayoutReportV3, payer: Pubkey) -> ObservedAccount {

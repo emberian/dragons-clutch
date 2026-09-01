@@ -159,11 +159,26 @@ cargo run --manifest-path tools/fractional-exterior/Cargo.toml -- \
   run --elf-dir <dir holding the five real ELFs> --out <absolute output dir>
 ```
 
-`prepare` stages the fixture as 35 genesis account files without starting
-anything; `verify` re-reads the journal. Wrap and WholeUnwrap both commit, with
-the same conservation and the same actor identity as the ProgramTest campaign,
-and a rerun on a fresh ledger produces a byte-identical canonical journal
-(digest `628b9fca…`).
+`prepare` stages the fixture as 36 genesis account files without starting
+anything. The fixture is no longer the categorical identity case: its semantic
+owner is a degree-2 clamped `ProductBasisV3`, with knots `[0,0,0,3,3,3]`, exact
+midpoint `3/2`, payout scale 7, and the admitted canonical DCLTPGT1 price-gate
+certificate `[1,4,2]`. The fixture compiler verifies that certificate before it
+can hash it into the semantic and Product-linked basis records.
+
+The exterior commits three transactions. `Wrap` moves 7 native Claims into the
+reserve and mints 70 denominator-10 shards. A direct Token-2022
+`TransferChecked` then moves 20 shards to a different owner and token account.
+Finally the actor whole-unwraps the remaining 50. The sleeping holder is absent
+from both Claims actions and retains 20 shards backed by exactly 2 native Claims
+in the reserve; the actor finishes with 998 native Claims and no shards. This is
+a transfer-and-partial-unmaterialization life, not a same-holder round trip.
+
+`verify --out <absolute output dir>` needs neither ELFs nor a running validator.
+It independently refuses a missing, reordered, refused, non-canonical, or
+poststate-inexact journal and reports its digest. The hbox campaign journal is
+three exact committed entries with SHA-256
+`4afa098e91200d87c8f601d90f55c9b70f5d54b77ae455983b85d0c890737208`.
 
 The journal is split on purpose. `canonical.json` holds what the protocol did --
 exact instruction bytes, account frame, acceptance, refusal, poststate -- and
@@ -184,9 +199,11 @@ Three facts only a cluster can teach, because ProgramTest enforces none of them:
 - **The lookup table's `recent_slot` must already be in SlotHashes.** ProgramTest
   warps a slot to arrange that; a cluster is waited on.
 
-The two terminal actions are not covered: they need the Custody composition
+The two terminal actions and sleeping-holder compaction are not covered by this
+external-cluster sequence: they need the Custody composition
 staged and its replay cursor created by a real earlier transaction, which is a
-second exterior sequence rather than two more entries.
+second exterior sequence rather than two more entries. Both are covered against
+real ELFs in ProgramTest; that is not external-cluster evidence.
 
 ## Traps worth knowing before touching this
 

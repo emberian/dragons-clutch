@@ -187,6 +187,156 @@ fn the_batch_identity_is_fixed_at_open_and_admission_does_not_move_it() {
 }
 
 #[test]
+fn batch_occurrence_terms_are_canonical_and_exclude_runtime_slots_only() {
+    let original = opening();
+    let terms = GeneralBatchOccurrenceTermsV1::new(original).expect("occurrence terms");
+    let bytes = terms.to_bytes();
+    let decoded = GeneralBatchOccurrenceTermsV1::decode(&bytes).expect("canonical terms");
+    assert_eq!(decoded, terms);
+    assert_eq!(decoded.occurrence_id(), terms.occurrence_id());
+    assert_eq!(decoded.opening().collection_close_slot, 0);
+    assert_eq!(decoded.opening().settlement_close_slot, 0);
+
+    assert_eq!(
+        GeneralBatchOccurrenceTermsV1::decode(&bytes[..bytes.len() - 1]),
+        Err(GeneralCollectionErrorV1::InvalidLength)
+    );
+    let mut reserved = bytes;
+    reserved[GeneralBatchOccurrenceTermsLayoutV1::RESERVED_B] = 1;
+    assert_eq!(
+        GeneralBatchOccurrenceTermsV1::decode(&reserved),
+        Err(GeneralCollectionErrorV1::InvalidHeader)
+    );
+
+    let mut later_window = original;
+    later_window.collection_close_slot += 100;
+    later_window.settlement_close_slot += 100;
+    assert_eq!(
+        GeneralBatchOccurrenceTermsV1::new(later_window)
+            .expect("later runtime window")
+            .occurrence_id(),
+        terms.occurrence_id()
+    );
+
+    for mut substituted in [
+        GeneralBatchOpeningV1 {
+            outcome_count: original.outcome_count + 1,
+            ..original
+        },
+        GeneralBatchOpeningV1 {
+            sequence: original.sequence + 1,
+            ..original
+        },
+        GeneralBatchOpeningV1 {
+            generation: original.generation + 1,
+            ..original
+        },
+        GeneralBatchOpeningV1 {
+            market: id(90),
+            ..original
+        },
+        GeneralBatchOpeningV1 {
+            product_id: id(91),
+            ..original
+        },
+        GeneralBatchOpeningV1 {
+            config_id: id(92),
+            ..original
+        },
+        GeneralBatchOpeningV1 {
+            price_scale: original.price_scale + 1,
+            ..original
+        },
+        GeneralBatchOpeningV1 {
+            max_orders: original.max_orders + 1,
+            ..original
+        },
+    ] {
+        substituted.collection_close_slot = original.collection_close_slot;
+        substituted.settlement_close_slot = original.settlement_close_slot;
+        assert_ne!(
+            GeneralBatchOccurrenceTermsV1::new(substituted)
+                .expect("substituted stable term")
+                .occurrence_id(),
+            terms.occurrence_id()
+        );
+    }
+}
+
+#[test]
+fn the_same_batch_occurrence_cannot_reopen_with_a_substituted_runtime_window() {
+    let mut root = active_root();
+    let first_revision = root.revision();
+    let first =
+        GeneralBatchV1::open(&mut root, opening(), first_revision, 10).expect("first occurrence");
+    let root_after_first = root;
+    let mut replay = opening();
+    replay.collection_close_slot += 100;
+    replay.settlement_close_slot += 100;
+    assert_eq!(
+        GeneralBatchOccurrenceTermsV1::new(replay)
+            .expect("same occurrence terms")
+            .occurrence_id(),
+        first.batch_id()
+    );
+    assert_eq!(
+        GeneralBatchV1::open(&mut root, replay, first_revision, 20),
+        Err(GeneralCollectionErrorV1::Substitution)
+    );
+    assert_eq!(root, root_after_first);
+}
+
+#[test]
+fn atomic_physical_admission_matches_funded_semantics_and_refuses_a_closed_window() {
+    let mut funded_root = active_root();
+    let mut funded_batch = open_batch(&mut funded_root);
+    let bytes = simple_order(funded_batch.batch_id(), 9, 1);
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let mut signed_bytes = vec![0; general_signed_order_terms_len_v1(WIDTH).expect("signed width")];
+    order
+        .encode_signed_terms_into(&mut signed_bytes)
+        .expect("signed immutable terms");
+    let signed = GeneralSignedOrderTermsV1::decode(&signed_bytes).expect("signed terms");
+    assert_eq!(signed.order_id(), order.order_id());
+
+    assert_eq!(
+        GeneralSignedOrderTermsV1::decode(&signed_bytes[..signed_bytes.len() - 1]),
+        Err(GeneralCollectionErrorV1::InvalidLength)
+    );
+    let mut noncanonical = signed_bytes.clone();
+    noncanonical[24] = 1;
+    assert_eq!(
+        GeneralSignedOrderTermsV1::decode(&noncanonical),
+        Err(GeneralCollectionErrorV1::InvalidHeader)
+    );
+    let mut substituted_row = signed_bytes.clone();
+    let last = substituted_row.len() - 1;
+    substituted_row[last] ^= 1;
+    let substituted =
+        GeneralSignedOrderTermsV1::decode(&substituted_row).expect("canonical substituted row");
+    assert_ne!(substituted.order_id(), order.order_id());
+
+    let mut physical_batch = funded_batch;
+    let funded = funded_batch
+        .admit(order, funding(9, 100, &[0, 20, 0]), 10)
+        .expect("funded semantic admission");
+    let physical = physical_batch
+        .admit_signed_for_atomic_physical_escrow(signed, 10)
+        .expect("physical executor admission");
+    assert_eq!(physical, funded);
+    assert_eq!(physical_batch, funded_batch);
+
+    let mut stale_root = active_root();
+    let mut stale_batch = open_batch(&mut stale_root);
+    let stale_before = stale_batch;
+    assert_eq!(
+        stale_batch.admit_signed_for_atomic_physical_escrow(signed, COLLECTION_CLOSE),
+        Err(GeneralCollectionErrorV1::OutsideWindow)
+    );
+    assert_eq!(stale_batch, stale_before);
+}
+
+#[test]
 fn two_batches_differing_only_in_sequence_have_different_identities() {
     let mut root = active_root();
     let first = open_batch(&mut root).batch_id();
@@ -1252,5 +1402,40 @@ fn a_nonzero_reserved_range_refuses_to_decode() {
     assert_eq!(
         GeneralOrderV1::decode(&bytes),
         Err(GeneralCollectionErrorV1::InvalidHeader)
+    );
+}
+
+#[test]
+fn physical_residual_release_uses_the_orders_pinned_window_without_a_batch_projection() {
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    assert_eq!(
+        authenticate_order_residual_release_v1(order, SETTLEMENT_CLOSE - 1),
+        Err(GeneralCollectionErrorV1::OutsideWindow)
+    );
+    let residual = authenticate_order_residual_release_v1(order, SETTLEMENT_CLOSE)
+        .expect("permissionless residual");
+    assert_eq!(residual.order_id, order.order_id());
+    assert_eq!(residual.owner_id, order.header().owner_id);
+    assert_eq!(residual.quote_atoms, 0);
+    assert_eq!(residual.direction, EscrowDirectionV1::Residual);
+
+    let mut cancelled = vec![0; bytes.len()];
+    order
+        .encode_successor_state_into(
+            GeneralOrderStateV1 {
+                phase: GeneralOrderPhaseV1::Cancelled,
+                admitted_slot: order.state().admitted_slot,
+                released_slot: SETTLEMENT_CLOSE,
+            },
+            &mut cancelled,
+        )
+        .expect("cancelled successor");
+    assert_eq!(
+        authenticate_order_residual_release_v1(
+            GeneralOrderV1::decode(&cancelled).expect("cancelled order"),
+            SETTLEMENT_CLOSE,
+        ),
+        Err(GeneralCollectionErrorV1::InvalidOrderPhase)
     );
 }

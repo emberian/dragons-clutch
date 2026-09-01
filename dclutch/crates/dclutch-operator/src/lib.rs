@@ -23,6 +23,8 @@ pub mod capability_program_set_v2;
 pub mod claim_check_v1;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
 pub mod dealer_equity_hot_v3;
+/// Chain-derived unsigned Dealer LP Open/Close Hot construction.
+pub mod dealer_lp_hot_v4;
 /// Lock-bounded Dealer checkpoint callers and crash-safe journal.
 pub mod dealer_scenario_checkpoint_v1;
 /// Chain-derived Dealer scenario exact-fill physical-account projection.
@@ -80,8 +82,12 @@ pub mod release_activation;
 pub mod resolution_core_v3 {
     pub use dclutch_resolution_core_v3_operator::*;
 }
+/// Production acquisition of current Series V5 physical account banks.
+pub mod series_current_acquisition_v5;
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
 pub mod series_hot_v3;
+/// Chain-derived selection of the next recurring-Series lifecycle act.
+pub mod series_lifecycle_v3;
 /// Compact projected-Market Series Consume instruction-data construction.
 pub mod series_projected_v2;
 /// Chain-derived Direct close and retirement replay-handoff construction.
@@ -94,3 +100,5 @@ pub mod versioned {
 }
 /// Finalized devnet planning for wallet-authorized Claims Position admission.
 pub mod user_position_admission_v1;
+/// Finalized devnet planning for wallet-authorized Claims Position close.
+pub mod user_position_close_v1;

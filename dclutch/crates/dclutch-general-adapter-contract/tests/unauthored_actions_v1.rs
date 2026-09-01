@@ -19,7 +19,7 @@
 //!   zero — but a producer of an artifact for an unauthored action is exactly
 //!   what writing the seven out one by one exists to prevent.
 //!
-//! None was reachable — every fallible entry point refuses these actions by name
+//! None was reachable — every fallible entry point refused these actions by name
 //! before the value is consumed — and none would have stayed unreachable,
 //! because reachability is a property of the callers and a catch-all is a
 //! promise about the callees. This file is the check that does not depend on
@@ -27,10 +27,13 @@
 //! says about the seven, and requires the answer to be a refusal or a
 //! fail-closed zero.
 //!
-//! Deleting this file is part of authoring the triples. When
+//! Deleting this file is part of authoring the last triple. When
 //! `general_action_artifacts_authored_v3` returns true for all fourteen, every
 //! assertion below is a statement about the empty set, and the test that
 //! replaces it is the one that emits and joins fourteen artifact bundles.
+//! Individual artifacts may become authored before the full quadruple: the
+//! transition assertion below records that boundary explicitly while Effect
+//! remains the full-bundle gate.
 
 use dclutch_general_adapter_contract::{
     account_rules_v3::{
@@ -52,18 +55,19 @@ use dclutch_general_adapter_contract::{
         general_readonly_evidence_v3, general_state_lifecycle_bytes_v3,
     },
     transition_artifacts_v3::{
-        GeneralTransitionArtifactErrorV3, general_transition_instruction_count_v3,
+        GENERAL_VERIFY_CANDIDATE_ROW_TRANSITION_BYTES_V3, general_transition_instruction_count_v3,
         general_transition_program_bytes_v3,
     },
 };
 use dclutch_general_codec::Action;
 
-/// The two protocol selectors with authenticated pure transitions and no
-/// artifact quadruple, in tag order.
-const UNAUTHORED: [Action; 2] = [Action::SubmitCandidate, Action::VerifyCandidateRow];
+/// The empty set: every accepted General action now owns a full artifact
+/// quadruple. Keeping this typed partition makes the next enum addition force
+/// an explicit decision at the same fail-closed dispatchers.
+const UNAUTHORED: [Action; 0] = [];
 
-/// The twelve whose artifacts are authored, in tag order.
-const AUTHORED: [Action; 12] = [
+/// All fourteen actions whose artifacts are authored, in catalogue order.
+const AUTHORED: [Action; 14] = [
     Action::Consider,
     Action::Freeze,
     Action::InitializeSettlement,
@@ -75,11 +79,13 @@ const AUTHORED: [Action; 12] = [
     Action::PlaceOrder,
     Action::CancelOrder,
     Action::CloseBatch,
+    Action::SubmitCandidate,
+    Action::VerifyCandidateRow,
     Action::ReleaseOrder,
 ];
 
 #[test]
-fn the_two_action_sets_partition_the_enum_and_the_gate_agrees_with_both() {
+fn the_action_sets_partition_the_enum_and_the_gate_agrees_with_both() {
     for action in UNAUTHORED {
         assert!(
             !general_action_artifacts_authored_v3(action),
@@ -103,9 +109,10 @@ fn the_two_action_sets_partition_the_enum_and_the_gate_agrees_with_both() {
     assert_eq!(tags.len(), 14);
 }
 
-/// Every fallible artifact entry point refuses by name.
+/// The incomplete full bundle refuses by name while its independently authored
+/// transition remains available for byte-parity and execution tests.
 #[test]
-fn every_fallible_artifact_entry_point_refuses_an_unauthored_action_by_name() {
+fn incomplete_bundle_refuses_while_its_transition_is_independently_authored() {
     for action in UNAUTHORED {
         assert_eq!(
             general_effect_account_count_v3(action),
@@ -124,8 +131,8 @@ fn every_fallible_artifact_entry_point_refuses_an_unauthored_action_by_name() {
         );
         assert_eq!(
             general_transition_program_bytes_v3(action),
-            Err(GeneralTransitionArtifactErrorV3::UnauthoredAction),
-            "{action:?} was given a transition width",
+            Ok(GENERAL_VERIFY_CANDIDATE_ROW_TRANSITION_BYTES_V3),
+            "{action:?} lost its independently authored transition width",
         );
         assert_eq!(
             general_account_profile_fixed_count_v3(action),

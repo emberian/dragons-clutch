@@ -42,12 +42,13 @@ pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4: usize =
     SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize;
 const FIXED_RULE_COUNT: usize = SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4;
 const SPAN_RULE_COUNT: usize = 1;
-const OPERATION_COUNT: usize = 9;
+const OPERATION_COUNT: usize = 12;
 const CURRENT_TRADING_IDENTITY: u16 = 0;
 const COMMON_SCALAR_COUNT: u16 = 7;
-const COMMON_IDENTITY_COUNT: u16 = 6;
+const COMMON_IDENTITY_COUNT: u16 = 9;
 const ROOT: usize = 0;
 const TICKET_REPLAY: usize = 59;
+const FOUNDING_PERMIT: u16 = 67;
 
 /// Sole Series root coordinate in the global Consume logical frame.
 pub const SERIES_CONSUME_ROOT_COORDINATE_V4: u16 = 0;
@@ -70,6 +71,12 @@ pub const SERIES_CONSUME_ROOT_KIND_IDENTITY_V4: u16 = 3;
 pub const SERIES_CONSUME_ROOT_CAPABILITY_RELEASE_IDENTITY_V4: u16 = 4;
 /// Common identity register carrying the root header's config identity.
 pub const SERIES_CONSUME_ROOT_CONFIG_IDENTITY_V4: u16 = 5;
+/// Common identity register carrying the authenticated outer root key.
+pub const SERIES_CONSUME_ROOT_KEY_IDENTITY_V4: u16 = 6;
+/// Common identity register carrying the newly-created Core permit PDA key.
+pub const SERIES_CONSUME_PERMIT_KEY_IDENTITY_V4: u16 = 7;
+/// Common identity register carrying the parent-root-derived Ticket replay key.
+pub const SERIES_CONSUME_TICKET_KEY_IDENTITY_V4: u16 = 8;
 /// Common scalar register carrying the root header's Market generation.
 pub const SERIES_CONSUME_ROOT_GENERATION_SCALAR_V4: u16 = 5;
 /// Common scalar register carrying the root header's manifest entry index.
@@ -166,6 +173,18 @@ pub fn encode_series_consume_account_profile_v4_atomic(
             SERIES_CONSUME_ROOT_CONFIG_IDENTITY_V4,
             CAPABILITY_ROOT_SELECTION_OFFSET + CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
         )?,
+        AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(SERIES_CONSUME_ROOT_COORDINATE_V4),
+            destination: IdentityCoordinateV2::common(SERIES_CONSUME_ROOT_KEY_IDENTITY_V4),
+        },
+        AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(FOUNDING_PERMIT),
+            destination: IdentityCoordinateV2::common(SERIES_CONSUME_PERMIT_KEY_IDENTITY_V4),
+        },
+        AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(SERIES_CONSUME_TICKET_REPLAY_COORDINATE_V4),
+            destination: IdentityCoordinateV2::common(SERIES_CONSUME_TICKET_KEY_IDENTITY_V4),
+        },
     ];
     let mut project_fixed_rule = |coordinate| {
         fixed_rule(input.fixed_data_lengths, usize::from(coordinate))
@@ -500,6 +519,7 @@ mod tests {
             profile.artifact_profile(),
             DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         );
+        assert_eq!(profile.common_identity_count(), 9);
         assert_eq!(span.insertion_coordinate(), 67);
         assert_eq!(span.count_scalar(), SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4);
         assert_eq!(span.minimum(), 1);

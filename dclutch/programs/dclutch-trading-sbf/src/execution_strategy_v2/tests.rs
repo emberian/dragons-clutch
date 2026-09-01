@@ -127,6 +127,7 @@ struct Fixture {
     rent: AccountInfo<'static>,
     accounts: Vec<AccountInfo<'static>>,
     capability_program_id: ContentId,
+    capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
     certificate_program_id: Option<ContentId>,
     admission_program_id: Option<ContentId>,
@@ -410,6 +411,7 @@ impl Fixture {
             rent,
             accounts,
             capability_program_id,
+            capability_program,
             strategy_program_id,
             certificate_program_id: certificate_selection,
             admission_program_id: admission_selection,
@@ -422,6 +424,17 @@ impl Fixture {
             self.context,
             schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             self.capability_program_id,
+            &self.registry,
+            &self.rent,
+            &self.accounts,
+        )
+    }
+
+    fn authenticate_sealed(&self) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
+        authenticate_execution_strategy_from_sealed_capability_v2(
+            self.context,
+            self.capability_program_id,
+            &self.capability_program,
             &self.registry,
             &self.rent,
             &self.accounts,
@@ -477,6 +490,51 @@ fn interpreted_uses_exact_unpadded_record_frame() {
             &padded,
         ),
         Err(TradingSbfError::Content)
+    );
+}
+
+#[test]
+fn sealed_capability_accepts_only_the_exact_distinct_pair_or_authorized_alias() {
+    let distinct = Fixture::new(StrategyDispositionV2::Interpreted);
+    assert!(distinct.authenticate_sealed().is_ok());
+
+    let mut alias = Fixture::new(StrategyDispositionV2::Interpreted);
+    let capability_raw = fixture_account(&alias, CAPABILITY_RAW).clone();
+    *fixture_account_mut(&mut alias, CAPABILITY_STAGING) = capability_raw;
+    assert!(alias.authenticate_sealed().is_ok());
+
+    let mut wrong_raw = Fixture::new(StrategyDispositionV2::Interpreted);
+    let strategy_raw = fixture_account(&wrong_raw, STRATEGY_RAW).clone();
+    *fixture_account_mut(&mut wrong_raw, CAPABILITY_RAW) = strategy_raw;
+    assert_eq!(
+        wrong_raw.authenticate_sealed(),
+        Err(TradingSbfError::Content)
+    );
+
+    let mut wrong_staging = Fixture::new(StrategyDispositionV2::Interpreted);
+    *fixture_account_mut(&mut wrong_staging, CAPABILITY_STAGING) = account(
+        Pubkey::new_from_array([219; 32]),
+        system_program::ID,
+        0,
+        Vec::new(),
+        false,
+    );
+    assert_eq!(
+        wrong_staging.authenticate_sealed(),
+        Err(TradingSbfError::Content)
+    );
+
+    let mut swapped = Fixture::new(StrategyDispositionV2::Interpreted);
+    swapped.accounts.swap(CAPABILITY_RAW, CAPABILITY_STAGING);
+    assert_eq!(swapped.authenticate_sealed(), Err(TradingSbfError::Content));
+
+    let mut extra_alias = Fixture::new(StrategyDispositionV2::Interpreted);
+    let strategy_raw = fixture_account(&extra_alias, STRATEGY_RAW).clone();
+    *fixture_account_mut(&mut extra_alias, STRATEGY_STAGING) = strategy_raw;
+    assert_eq!(
+        extra_alias.authenticate_sealed(),
+        Err(TradingSbfError::Content),
+        "only the already-authorized descriptor pair may alias"
     );
 }
 

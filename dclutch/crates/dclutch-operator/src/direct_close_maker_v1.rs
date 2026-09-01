@@ -76,7 +76,7 @@ use dclutch_direct_codec::{
     },
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
@@ -311,32 +311,32 @@ pub fn derive_direct_close_maker_meta_closure_v1(
         input.registry_program,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         input.manifest,
-    );
+    )?;
     let (program_set, program_set_staging) = record_pair(
         input.registry_program,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         input.program_set,
-    );
+    )?;
     let (descriptor, descriptor_staging) = record_pair(
         input.registry_program,
         direct_close_maker_descriptor_schema_v1(),
         input.descriptor,
-    );
+    )?;
     let (config, config_staging) = record_pair(
         input.registry_program,
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
         input.config,
-    );
+    )?;
     let (account_profile, account_profile_staging) = record_pair(
         input.registry_program,
         direct_close_maker_account_profile_schema_v1(),
         input.account_profile,
-    );
+    )?;
     let (effect, effect_staging) = record_pair(
         input.registry_program,
         direct_close_maker_effect_schema_v1(),
         input.effect,
-    );
+    )?;
     let activation_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &input.release_set],
         &input.registry_program,
@@ -388,15 +388,58 @@ pub fn derive_direct_close_maker_meta_closure_v1(
     })
 }
 
-fn record_raw(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> Pubkey {
-    Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0
+/// One record's canonical identity, or a refusal if either half is zero.
+///
+/// The seed TUPLE is not spelled here. `dclutch-record-contract` owns both
+/// domains and exports the constructors that place them, so a second spelling
+/// in this crate would be a second source of truth for an address the chain
+/// derives its own way (`DOMAIN_RAW_RESTATEMENT`).
+fn record_key(
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> Result<RecordKeyV1, DirectCloseMakerCoordinateErrorV1> {
+    Ok(RecordKeyV1::new(
+        SchemaReleaseId::new(schema)
+            .map_err(|_| DirectCloseMakerCoordinateErrorV1::InvalidIdentity)?,
+        ContentDigest::new(digest)
+            .map_err(|_| DirectCloseMakerCoordinateErrorV1::InvalidIdentity)?,
+    ))
 }
 
-fn record_pair(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (Pubkey, Pubkey) {
-    (
-        record_raw(registry, schema, digest),
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).0,
+/// One record address from the contract-owned seed material.
+fn record_address(seeds: RecordPdaSeedsV1, registry: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            seeds.schema_release_id().as_bytes(),
+            seeds.expected_digest().as_bytes(),
+        ],
+        &registry,
     )
+    .0
+}
+
+fn record_raw(
+    registry: Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> Result<Pubkey, DirectCloseMakerCoordinateErrorV1> {
+    Ok(record_address(
+        record_key(schema, digest)?.raw_record_pda_seeds(),
+        registry,
+    ))
+}
+
+fn record_pair(
+    registry: Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> Result<(Pubkey, Pubkey), DirectCloseMakerCoordinateErrorV1> {
+    let key = record_key(schema, digest)?;
+    Ok((
+        record_address(key.raw_record_pda_seeds(), registry),
+        record_address(key.staging_cursor_pda_seeds(), registry),
+    ))
 }
 
 /// One exact finalized account graph for the permissionless Trading outer.
@@ -976,6 +1019,25 @@ fn authenticate_root_and_artifacts(
     Ok((header, root_state))
 }
 
+/// One record address from the contract-owned seed material, under a bump the
+/// chain recorded rather than one this crate searched for.
+fn record_address_at_bump(
+    seeds: RecordPdaSeedsV1,
+    registry: Pubkey,
+    bump: u8,
+) -> Result<Pubkey, DirectCloseMakerPlanErrorV1> {
+    Pubkey::create_program_address(
+        &[
+            seeds.domain(),
+            seeds.schema_release_id().as_bytes(),
+            seeds.expected_digest().as_bytes(),
+            &[bump],
+        ],
+        &registry,
+    )
+    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)
+}
+
 fn authenticate_persisted_raw(
     registry: Pubkey,
     rent: &Rent,
@@ -984,11 +1046,8 @@ fn authenticate_persisted_raw(
     digest: [u8; 32],
     bump: u8,
 ) -> Result<(), DirectCloseMakerPlanErrorV1> {
-    let expected = Pubkey::create_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[bump]],
-        &registry,
-    )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+    let key = record_key(schema, digest).map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+    let expected = record_address_at_bump(key.raw_record_pda_seeds(), registry, bump)?;
     if account.key != expected
         || account.owner != registry
         || account.executable
@@ -1009,21 +1068,10 @@ fn require_persisted_pair_bumps(
     raw_bump: u8,
     staging_bump: u8,
 ) -> Result<(), DirectCloseMakerPlanErrorV1> {
-    let expected_raw = Pubkey::create_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[raw_bump]],
-        &registry,
-    )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
-    let expected_staging = Pubkey::create_program_address(
-        &[
-            STAGING_CURSOR_PDA_SEED_V1,
-            &schema,
-            &digest,
-            &[staging_bump],
-        ],
-        &registry,
-    )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+    let key = record_key(schema, digest).map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+    let expected_raw = record_address_at_bump(key.raw_record_pda_seeds(), registry, raw_bump)?;
+    let expected_staging =
+        record_address_at_bump(key.staging_cursor_pda_seeds(), registry, staging_bump)?;
     if raw.key != expected_raw || staging.key != expected_staging {
         return Err(DirectCloseMakerPlanErrorV1::InvalidRecord);
     }

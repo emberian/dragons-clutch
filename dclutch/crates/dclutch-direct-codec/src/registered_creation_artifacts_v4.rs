@@ -48,7 +48,7 @@ pub const DIRECT_REGISTERED_CREATION_ITEM_IDENTITY_STRIDE_V4: u16 = 0;
 /// Parent request digest seeded by common Hot.
 pub const REGISTERED_IDENTITY_PARENT_REQUEST_V4: usize = 0;
 /// Native Ed25519 signer written by RequestProfileV2.
-pub const REGISTERED_IDENTITY_NATIVE_SIGNER_V4: usize = 1;
+pub use crate::registered_identity_v4::REGISTERED_IDENTITY_NATIVE_SIGNER_V4;
 /// Maker carried by the exact request.
 pub const REGISTERED_IDENTITY_REQUEST_MAKER_V4: usize = 2;
 /// Market carried by the signed intent.

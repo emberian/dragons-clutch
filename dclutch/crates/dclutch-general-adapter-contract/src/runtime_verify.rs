@@ -265,6 +265,27 @@ pub struct RuntimeVerifierHeaderV2 {
     pub has_current_order: bool,
 }
 
+/// Fixed fields of the optional globally grouped order carried by a verifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeCurrentOrderV2 {
+    /// Immutable signed-order identity.
+    pub order_id: [u8; 32],
+    /// Immutable order owner.
+    pub owner_id: [u8; 32],
+    /// Signed order nonce.
+    pub nonce: u64,
+    /// Candidate-wide maximum fill.
+    pub max_lots: u64,
+    /// Signed maximum quote debit per lot.
+    pub max_quote_debit_per_lot: u64,
+    /// Lots accumulated for this grouped order so far.
+    pub lots: u64,
+    /// Page containing the first execution fragment for this order.
+    pub source_page_index: u32,
+    /// Row containing the first execution fragment for this order.
+    pub source_execution_index: u32,
+}
+
 /// Borrowed hostile-decoded runtime-width verifier cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeCandidateVerifierV2<'a> {
@@ -348,6 +369,45 @@ impl<'a> RuntimeCandidateVerifierV2<'a> {
         )
     }
 
+    /// Return the optional current grouped-order fields.
+    pub fn current_order(self) -> RuntimeVerifyResultV2<Option<RuntimeCurrentOrderV2>> {
+        if !self.header.has_current_order {
+            return Ok(None);
+        }
+        Ok(Some(RuntimeCurrentOrderV2 {
+            order_id: read_array32(self.bytes, 176)?,
+            owner_id: read_array32(self.bytes, 208)?,
+            nonce: read_u64(self.bytes, 240)?,
+            max_lots: read_u64(self.bytes, 248)?,
+            max_quote_debit_per_lot: read_u64(self.bytes, 256)?,
+            lots: read_u64(self.bytes, 264)?,
+            source_page_index: read_u32(self.bytes, 272)?,
+            source_execution_index: read_u32(self.bytes, 276)?,
+        }))
+    }
+
+    /// Return one current-order receive coefficient, or canonical zero when no
+    /// grouped order is open.
+    pub fn current_receive_per_lot(self, index: u32) -> RuntimeVerifyResultV2<u64> {
+        read_tail_u64(
+            self.bytes,
+            self.header.outcome_count,
+            CURRENT_RECEIVE_TAIL,
+            index,
+        )
+    }
+
+    /// Return one current-order deliver coefficient, or canonical zero when no
+    /// grouped order is open.
+    pub fn current_deliver_per_lot(self, index: u32) -> RuntimeVerifyResultV2<u64> {
+        read_tail_u64(
+            self.bytes,
+            self.header.outcome_count,
+            CURRENT_DELIVER_TAIL,
+            index,
+        )
+    }
+
     /// Return the exact hostile-decoded cursor bytes.
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes
@@ -396,6 +456,18 @@ pub struct RuntimeManifestBuffersV2<'a> {
     pub manifest_scratch: &'a mut [u8],
     /// Complete verifier-derived manifest chunk; unchanged on refusal.
     pub manifest_output: &'a mut [u8],
+}
+
+struct RuntimeConsiderRowInnerBuffersV2<'a> {
+    cursor_scratch: &'a mut [u8],
+    cursor_output: Option<&'a mut [u8]>,
+    verified_scratch: &'a mut [u8],
+    verified_output: Option<&'a mut [u8]>,
+}
+
+struct RuntimeManifestInnerBuffersV2<'a> {
+    manifest_scratch: &'a mut [u8],
+    manifest_output: Option<&'a mut [u8]>,
 }
 
 /// Accepted summary for one runtime-width candidate row.
@@ -473,7 +545,22 @@ pub fn evaluate_runtime_consider_row_v2(
     view: RuntimeConsiderRowViewV2<'_>,
     buffers: RuntimeConsiderRowBuffersV2<'_>,
 ) -> RuntimeVerifyResultV2<RuntimeConsiderRowSummaryV2> {
-    evaluate_runtime_consider_row_inner_v2(view, buffers, None)
+    let RuntimeConsiderRowBuffersV2 {
+        cursor_scratch,
+        cursor_output,
+        verified_scratch,
+        verified_output,
+    } = buffers;
+    evaluate_runtime_consider_row_inner_v2(
+        view,
+        RuntimeConsiderRowInnerBuffersV2 {
+            cursor_scratch,
+            cursor_output: Some(cursor_output),
+            verified_scratch,
+            verified_output: Some(verified_output),
+        },
+        None,
+    )
 }
 
 /// Evaluate one exact row and also emit every newly completed order manifest.
@@ -488,26 +575,83 @@ pub fn evaluate_runtime_consider_row_with_manifest_v2(
     buffers: RuntimeConsiderRowBuffersV2<'_>,
     manifest: RuntimeManifestBuffersV2<'_>,
 ) -> RuntimeVerifyResultV2<RuntimeConsiderRowSummaryV2> {
-    evaluate_runtime_consider_row_inner_v2(view, buffers, Some(manifest))
+    let RuntimeConsiderRowBuffersV2 {
+        cursor_scratch,
+        cursor_output,
+        verified_scratch,
+        verified_output,
+    } = buffers;
+    let RuntimeManifestBuffersV2 {
+        manifest_scratch,
+        manifest_output,
+    } = manifest;
+    evaluate_runtime_consider_row_inner_v2(
+        view,
+        RuntimeConsiderRowInnerBuffersV2 {
+            cursor_scratch,
+            cursor_output: Some(cursor_output),
+            verified_scratch,
+            verified_output: Some(verified_output),
+        },
+        Some(RuntimeManifestInnerBuffersV2 {
+            manifest_scratch,
+            manifest_output: Some(manifest_output),
+        }),
+    )
+}
+
+/// Evaluate one row directly in non-authoritative verifier, certificate, and
+/// manifest workspaces.
+///
+/// This preserves the same decoder and transition semantics as
+/// [`evaluate_runtime_consider_row_with_manifest_v2`] but omits the three
+/// state-last copies. It is only suitable where the caller discards every
+/// workspace on refusal and publishes no effect before success.
+#[inline(never)]
+pub fn evaluate_runtime_consider_row_with_manifest_workspace_v2(
+    view: RuntimeConsiderRowViewV2<'_>,
+    cursor_workspace: &mut [u8],
+    verified_workspace: &mut [u8],
+    manifest_workspace: &mut [u8],
+) -> RuntimeVerifyResultV2<RuntimeConsiderRowSummaryV2> {
+    evaluate_runtime_consider_row_inner_v2(
+        view,
+        RuntimeConsiderRowInnerBuffersV2 {
+            cursor_scratch: cursor_workspace,
+            cursor_output: None,
+            verified_scratch: verified_workspace,
+            verified_output: None,
+        },
+        Some(RuntimeManifestInnerBuffersV2 {
+            manifest_scratch: manifest_workspace,
+            manifest_output: None,
+        }),
+    )
 }
 
 #[inline(never)]
 fn evaluate_runtime_consider_row_inner_v2(
     view: RuntimeConsiderRowViewV2<'_>,
-    buffers: RuntimeConsiderRowBuffersV2<'_>,
-    mut manifest_buffers: Option<RuntimeManifestBuffersV2<'_>>,
+    mut buffers: RuntimeConsiderRowInnerBuffersV2<'_>,
+    mut manifest_buffers: Option<RuntimeManifestInnerBuffersV2<'_>>,
 ) -> RuntimeVerifyResultV2<RuntimeConsiderRowSummaryV2> {
     let candidate = CandidateV2::decode(view.candidate).map_err(map_codec)?;
     let page = PageV2::decode(view.page).map_err(map_codec)?;
     let candidate_header = candidate.header();
     let cursor_len = runtime_verifier_len_v2(candidate_header.outcome_count)?;
     let verified_len = verified_candidate_len(candidate_header.outcome_count).map_err(map_codec)?;
-    if view.cursor_before.len() != cursor_len
+    if (!view.cursor_before.is_empty() && view.cursor_before.len() != cursor_len)
         || buffers.cursor_scratch.len() != cursor_len
-        || buffers.cursor_output.len() != cursor_len
-        || view.verified_before.len() != verified_len
+        || buffers
+            .cursor_output
+            .as_ref()
+            .is_some_and(|output| output.len() != cursor_len)
+        || (!view.verified_before.is_empty() && view.verified_before.len() != verified_len)
         || buffers.verified_scratch.len() != verified_len
-        || buffers.verified_output.len() != verified_len
+        || buffers
+            .verified_output
+            .as_ref()
+            .is_some_and(|output| output.len() != verified_len)
         || view.max_orders == 0
         || view.verified_before.iter().any(|byte| *byte != 0)
     {
@@ -531,7 +675,7 @@ fn evaluate_runtime_consider_row_inner_v2(
     let execution = page.execution(view.expected_row_index).map_err(map_codec)?;
     require_authenticated_order(execution.header(), view.authenticated_order)?;
 
-    if view.cursor_before.iter().all(|byte| *byte == 0) {
+    if view.cursor_before.is_empty() || view.cursor_before.iter().all(|byte| *byte == 0) {
         if view.expected_page_index != 0
             || view.expected_row_index != 0
             || view.expected_revision != 0
@@ -571,7 +715,10 @@ fn evaluate_runtime_consider_row_inner_v2(
                 settlement_manifest_len_v2(candidate_header.outcome_count, manifest_order_count)
                     .map_err(map_manifest)?;
             if manifest.manifest_scratch.len() != required
-                || manifest.manifest_output.len() != required
+                || manifest
+                    .manifest_output
+                    .as_ref()
+                    .is_some_and(|output| output.len() != required)
             {
                 return Err(RuntimeVerifyErrorV2::InvalidLength);
             }
@@ -676,19 +823,17 @@ fn evaluate_runtime_consider_row_inner_v2(
     let _ = manifest_writer.take();
     if let Some(manifest) = manifest_buffers.as_mut() {
         SettlementManifestV2::decode(manifest.manifest_scratch).map_err(map_manifest)?;
-        manifest
-            .manifest_output
-            .copy_from_slice(manifest.manifest_scratch);
+        if let Some(output) = manifest.manifest_output.as_deref_mut() {
+            output.copy_from_slice(manifest.manifest_scratch);
+        }
     }
 
     let accepted = RuntimeCandidateVerifierV2::decode(buffers.cursor_scratch)?;
-    buffers
-        .cursor_output
-        .copy_from_slice(buffers.cursor_scratch);
-    if complete {
-        buffers
-            .verified_output
-            .copy_from_slice(buffers.verified_scratch);
+    if let Some(output) = buffers.cursor_output.as_deref_mut() {
+        output.copy_from_slice(buffers.cursor_scratch);
+    }
+    if complete && let Some(output) = buffers.verified_output.as_deref_mut() {
+        output.copy_from_slice(buffers.verified_scratch);
     }
     Ok(RuntimeConsiderRowSummaryV2 {
         complete,
@@ -1629,8 +1774,12 @@ mod tests {
             .outcome_count;
         let mut cursor_scratch = vec![0; runtime_verifier_len_v2(width).expect("cursor")];
         let mut cursor_output = vec![0; cursor_scratch.len()];
-        let mut verified_scratch = vec![0; verified_candidate_len(width).expect("verified")];
-        let mut verified_output = verified_before.to_vec();
+        let verified_len = verified_candidate_len(width).expect("verified");
+        let mut verified_scratch = vec![0; verified_len];
+        let mut verified_output = vec![0; verified_len];
+        if !verified_before.is_empty() {
+            verified_output.copy_from_slice(verified_before);
+        }
         let summary = evaluate_runtime_consider_row_v2(
             RuntimeConsiderRowViewV2 {
                 candidate,
@@ -1730,13 +1879,13 @@ mod tests {
         let deliver = vec![1; 258];
         let row = row(width, 1, 1, 1, 1, (&receive, &deliver), 0);
         let page = page(width, 1, 1, 11, &[&row.bytes]);
-        let zero_cursor = vec![0; runtime_verifier_len_v2(width).expect("cursor")];
-        let zero_verified = vec![0; verified_candidate_len(width).expect("verified")];
+        let vacant_cursor = [];
+        let vacant_verified = [];
         let (summary, cursor, verified) = apply_row(
             &candidate,
             &page,
-            &zero_cursor,
-            &zero_verified,
+            &vacant_cursor,
+            &vacant_verified,
             row.order,
             (0, 0, 0),
         );

@@ -1514,3 +1514,43 @@ rather than taken from a lane's report.
   Ed25519 (the board does, at admission) and a test forbids the word.
   Known limit for any public deployment: no rate limiting — loopback
   default stands until that rung is built.
+
+- **CLOSE-DRIVER's verdict tag CONFIRMED (orchestrator):
+  `checked-caller-excludes-payer`** — for a payer-exclusion check that
+  lives across a crate boundary no proximity reader will bridge: the
+  tag says the standing question was asked, answered yes, and closed
+  in code; `hazard-*` would send the next reader to redo finished
+  work. Second honest tag this session (after
+  benign-typed-nonzero-wire); the register's vocabulary grows only
+  when a finding genuinely fits nothing — both did. Also binding: its
+  discipline of fixing the UNFLAGGED bump-bearing derivations beside
+  the flagged ones ("retiring a finding while the tuple stays spelled
+  retires the finding, not the defect").
+
+## 2026-09-01
+
+- **Codex's completion wave landed and handed back.** `AGENTS.md` +
+  `docs/MASTER_COMPLETION_CONTRACT.md` (C-00..C-16) are now the standing
+  authority; `docs/LETTER_TO_CLAUDE_2026_09_01.md` carries the frontier,
+  the five honest walls and the counterfactual ten-hour dispatch board.
+  GOAL.md and this file are historical ledgers from here, not queues.
+  Cohort-cut vocabulary is retired in favour of checked release
+  candidate -> authorized devnet flight.
+
+- **DEVNET IS DISPOSABLE; REDEPLOY BEATS SUCCESSION (ember, 2026-09-01):**
+  asked whether the never-executed `ProtocolInfrastructureProfileV1 -> V2`
+  ceremony (P-008) must run before the next devnet flight, ember ruled:
+  it is all just devnet — tear everything down, forget the old, and
+  redeploy anew when we are ready; and there is enough devnet SOL to
+  stand the new set up WITHOUT tearing the old one down first.
+  Consequences: the succession ceremony is NOT a prerequisite for a
+  checked release candidate or for the next devnet flight; a fresh
+  deployment from exact current sources is the preferred path; the
+  cohort-8 devnet programs are abandoned in place, not migrated. The
+  ceremony code is KEPT, not deleted — it is the machinery a
+  non-disposable deployment will need — but it is demoted from blocker
+  to capability, and nothing may report it as executed until it runs.
+  OPEN COROLLARY, not assumed here: whether C-01 still wants
+  succession/migration EXECUTED before assurance at all, or whether
+  "redeploy fresh" stands until a deployment exists that someone would
+  lose something by abandoning. That one is ember's.

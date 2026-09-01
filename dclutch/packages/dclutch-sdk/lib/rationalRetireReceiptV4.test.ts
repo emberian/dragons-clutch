@@ -74,18 +74,31 @@ describe('compact Rational RetireReceipt V4', () => {
     await expect(deriveRationalRetireReceiptChildDigestV4(request, [])).rejects.toThrow(/wrong exact width/);
   });
 
-  it('compiles the exact Hot fixed frame plus Claims20+4K v0 candidate while refusing execution', async () => {
+  it('compiles a wallet-signable candidate only with the exact Hot frame and an active ALT', async () => {
     // The Hot fixed frame width is a protocol fact, not a number this test may
     // pin: hard-coding it left the candidate a frame short of what the chain
     // requires the moment the frame grew.
     const fixed = Array.from({ length: HOT_FIXED_ACCOUNT_COUNT_V3 }, (_, index) => Object.freeze({ address: address(40 + index), isSigner: false, isWritable: index === 1 }));
     const decoded = decodeRationalRepresentationDescriptorV3(descriptor(), bytes(21));
     const support = deriveRationalRetireReceiptSupportV4(address(30), bytes(21), decoded.support, address(31));
-    const claims = Array.from({ length: RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2 + RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2 * support.length }, (_, index) => Object.freeze({ address: address(90 + index), isSigner: false, isWritable: index === 12 || index === 14 }));
+    // Ten Claims-common entries are physical aliases of the fixed Hot frame.
+    // Count the compiled message, never the 59+4K source metas: ALT changes
+    // packet encoding but not the runtime lock set.
+    const common = [
+      address(90), fixed[25]!.address, fixed[26]!.address, address(91), address(92),
+      fixed[27]!.address, fixed[22]!.address, fixed[28]!.address, address(93), fixed[8]!.address,
+      fixed[9]!.address, address(94), address(95), address(96), address(97), address(98),
+      address(99), fixed[0]!.address, fixed[23]!.address, fixed[24]!.address,
+    ].map((value, index) => Object.freeze({ address: value, isSigner: false, isWritable: index === 12 || index === 14 }));
+    const claims = Object.freeze([
+      ...common,
+      ...support.flatMap((row) => [row.shardMint, row.structuredCustody, row.position, row.admission]
+        .map((value) => Object.freeze({ address: value, isSigner: false, isWritable: false }))),
+    ]);
     const table = new AddressLookupTableAccount({
       key: new PublicKey(bytes(200)),
       state: { deactivationSlot: 18_446_744_073_709_551_615n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, authority: undefined,
-        addresses: [...fixed, ...claims].map((meta) => new PublicKey(meta.address)) },
+        addresses: Array.from(new Set([...fixed, ...claims].map((meta) => meta.address))).map((value) => new PublicKey(value)) },
     });
     const request = family();
     const inspection = Object.freeze({
@@ -94,16 +107,43 @@ describe('compact Rational RetireReceipt V4', () => {
       representationAuthority: address(22), receiptMint: address(16), claimsProgram: address(30), claimsRevision: 3n,
       representationWidth: 5, resultOutcomeCount: 258, rentCredit: address(24), rentProgram: address(25), receiptLamports: 10n,
       receiptRentPrincipal: 10n, rentCreditBefore: 100n, familyBytes: request, familyDigest: bytes(202),
-      childDigest: bytes(203), rootDigest: bytes(204), callerAuthority: address(205), executionStatus: 'blocked' as const,
-      refusal: 'EffectV4 pending',
+      childDigest: bytes(203), rootDigest: bytes(204), callerAuthority: address(205), executionStatus: 'ready' as const,
     }) satisfies RationalRetireReceiptInspectionV4;
     const plan = buildRationalRetireReceiptCandidateV4(inspection, address(206));
     expect(plan.outerBytes).toHaveLength(RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4);
     expect(plan.accountCount).toBe(HOT_FIXED_ACCOUNT_COUNT_V3 + RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2 + RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2 * support.length);
     expect(plan.supportCount).toBe(3);
     expect(plan.loadedAddresses).toBeGreaterThan(0);
+    expect(plan.accountLocks).toBe(62);
     expect(plan.wireBytes.length).toBeLessThanOrEqual(1232);
     expect(plan.requiredSigners).toEqual([address(201)]);
-    expect(plan.executionStatus).toBe('blocked');
+    expect(plan.executionStatus).toBe('ready');
+    const withoutAlt = Object.freeze({
+      ...inspection,
+      lookupTable: new AddressLookupTableAccount({
+        key: new PublicKey(bytes(200)),
+        state: { deactivationSlot: 18_446_744_073_709_551_615n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, authority: undefined, addresses: [] },
+      }),
+    });
+    expect(() => buildRationalRetireReceiptCandidateV4(withoutAlt, address(206))).toThrow();
+    const support4 = Object.freeze([...support, Object.freeze({
+      ...support[2]!, outcome: 5, owner: address(210), shardMint: address(211), structuredCustody: address(212), position: address(213), admission: address(214),
+    })]);
+    const claims4 = Object.freeze([
+      ...common,
+      ...support4.flatMap((row) => [row.shardMint, row.structuredCustody, row.position, row.admission]
+        .map((value) => Object.freeze({ address: value, isSigner: false, isWritable: false }))),
+    ]);
+    const k4 = Object.freeze({
+      ...inspection,
+      support: support4,
+      claimsAccounts: claims4,
+      lookupTable: new AddressLookupTableAccount({
+        key: new PublicKey(bytes(200)),
+        state: { deactivationSlot: 18_446_744_073_709_551_615n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, authority: undefined,
+          addresses: Array.from(new Set([...fixed, ...claims4].map((meta) => meta.address))).map((value) => new PublicKey(value)) },
+      }),
+    });
+    expect(() => buildRationalRetireReceiptCandidateV4(k4, address(206))).toThrow(/66 unique account locks.*64-lock/);
   });
 });

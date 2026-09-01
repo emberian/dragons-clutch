@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import TicketCard from '@/components/trade/TicketCard';
+import MakerOfferComposer from '@/components/trade/MakerOfferComposer';
 import StepRefusal from '@/components/trade/StepRefusal';
+import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import { type StepRefusalV1 } from '@/lib/tradeFlowRefusals';
 import { screenBoardOffersV1, type BoardScreenContextV1 } from '@/lib/tradeFlowBoard';
 import {
@@ -85,6 +87,13 @@ type BoardStateV1 =
 
 export default function TicketBoard({
   marketAddress,
+  endpoint,
+  coreProgramId,
+  registryProgramId,
+  claimsProgramId,
+  tradingProgramId,
+  custodyProgramId,
+  rentProgramId,
   outcome,
   outcomeLabel,
   screenContext,
@@ -96,10 +105,18 @@ export default function TicketBoard({
   ticketState,
   onTicketText,
   refusal,
+  wallets,
 }: Readonly<{
   /** The ticket refusal this step owns, routed by the host. */
   refusal: StepRefusalV1 | null;
   marketAddress: string;
+  endpoint: string;
+  coreProgramId: string;
+  registryProgramId: string | null;
+  claimsProgramId: string | null;
+  tradingProgramId: string | null;
+  custodyProgramId: string | null;
+  rentProgramId: string | null;
   outcome: number | null;
   outcomeLabel: (index: number) => string;
   screenContext: BoardScreenContextV1;
@@ -110,6 +127,7 @@ export default function TicketBoard({
   ticketText: string;
   ticketState: TicketState;
   onTicketText: (next: string) => void;
+  wallets: WalletDirectoryHandleV1;
 }>) {
   // The deployment's board is a build-time constant, so it is resolved once.
   // Rebuilding it every render would give `load` a new identity every render,
@@ -162,13 +180,35 @@ export default function TicketBoard({
       <button type="button" className="secondary-action" onClick={() => { setBoard({ kind: 'loading' }); void load(); }}>Ask the board again</button>
     </div>}
 
+    <MakerOfferComposer
+      endpoint={endpoint}
+      marketAddress={marketAddress}
+      coreProgramId={coreProgramId}
+      registryProgramId={registryProgramId}
+      claimsProgramId={claimsProgramId}
+      tradingProgramId={tradingProgramId}
+      custodyProgramId={custodyProgramId}
+      rentProgramId={rentProgramId}
+      generation={screenContext.generation}
+      feeBasisPoints={screenContext.feeBasisPoints}
+      outcomeCount={screenContext.outcomeCount}
+      outcome={outcome}
+      outcomeLabel={outcomeLabel}
+      denomination={denomination}
+      priceScale={priceScale}
+      clock={clock}
+      nowMs={nowMs}
+      wallets={wallets}
+      boardConfig={config}
+    />
+
     {screen !== null && answered !== null && <>
       {screen.offers.length === 0
         ? <div className="board-empty">
           <p className="direct-status">{screen.hidden.length === 0
             ? `No one is offering ${outcome === null ? 'anything on this market' : outcomeLabel(outcome)} right now.`
             : `${screen.hidden.length} offers here, none you can take right now.`}</p>
-          <p className="direct-status">Nothing in this build authors an offer yet, so a ticket has to reach you from somewhere else. Paste it below.</p>
+          <p className="direct-status">You can author a portable sell ticket above, or take a ticket that reaches you directly by pasting it below.</p>
         </div>
         : <ul className="board-offers">
           {screen.offers.map((offer) => <li key={offer.digest}>

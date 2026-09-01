@@ -126,6 +126,14 @@ pub(crate) struct MarketRunInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_capability: Option<SelectedCapabilityV1>,
     pub(crate) linked_basis_hex: String,
+    /// Canonical `DCLTPGT1` certificate body selected by a curved basis.
+    ///
+    /// Empty is the byte-compatible categorical/degree-one case. A spline
+    /// basis must carry the exact body whose digest its ProductBasisV3 names;
+    /// Found publishes and authenticates that record rather than trusting the
+    /// run spec's claim that a certificate exists.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) price_gate_hex: String,
 }
 
 /// One Registry record a selected capability's publication chain finalizes.
@@ -555,6 +563,24 @@ pub(crate) struct GenesisAccountPin {
     pub(crate) json_file_sha256: String,
 }
 
+/// Checked-local prestate for the one real Registry upgrade that makes the
+/// infrastructure succession ceremony non-vacuous.
+///
+/// The successor artifact id cannot be known at plan time because Loader V3
+/// writes the transaction's landing slot into ProgramData.  The plan instead
+/// pins everything knowable before launch: one exact genesis Buffer, the ELF
+/// it carries, and both predecessor identities.  The campaign derives the
+/// successor record from the finalized post-upgrade ProgramData observation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InfrastructureSuccessionPinV1 {
+    pub(crate) schema: String,
+    pub(crate) registry_upgrade_buffer: String,
+    pub(crate) registry_candidate_elf_sha256: String,
+    pub(crate) predecessor_registry_artifact_release_id: String,
+    pub(crate) predecessor_rent_artifact_release_id: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct SuccessorPlan {
     pub(crate) schema: String,
@@ -580,6 +606,11 @@ pub(crate) struct SuccessorPlan {
     /// localhost validator with all seven decision-0012 authorities retained.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) checked_local_mutable_set: Option<CheckedLocalMutableSetPinV1>,
+    /// Present only on the owned-loopback checked-mutable rehearsal.  A
+    /// permanent-devnet plan never grows a surprise Loader write from this
+    /// optional field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) infrastructure_succession: Option<InfrastructureSuccessionPinV1>,
     pub(crate) infrastructure_profile: InfrastructureProfilePin,
     pub(crate) records: BTreeMap<String, RecordPair>,
     /// `"genesis"` or `"transaction"`. Devnet has no genesis, so the

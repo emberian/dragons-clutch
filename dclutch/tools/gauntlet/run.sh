@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# The dClutch functional gauntlet: one command, arbitrarily resumable.
+# The dClutch functional gauntlet's census entry point and parked tier-1 runner.
 #
-#   build -> deploy (transaction-only, local validator) -> campaign -> census
+#   census (supported)
+#   build -> deploy -> tier-1 campaign -> census (parked; refuses before build)
 #
-# WHAT THIS PRODUCES IS LOCAL-VALIDATOR EVIDENCE. It is not devnet evidence and
-# it is not mainnet evidence. Nothing here signs with a persisted key, funds an
-# external account, publishes, or deploys anywhere but a fresh localhost ledger
-# on 127.0.0.1, at the base --rpc-port names (default 20890).
+# Census mode produces no chain evidence. The parked campaign code below is
+# limited to LOCAL-VALIDATOR EVIDENCE: never devnet or mainnet evidence, and
+# never a persisted signer, external account, publication, or remote deploy.
 #
 # Read tools/gauntlet/DESIGN.md before changing anything here, and TIERS.md
 # before adding a tier.
@@ -21,45 +21,40 @@ usage: tools/gauntlet/run.sh [options]
   --commit REV     source revision to archive and build (default: HEAD)
   --mode MODE      census | full   (default: full)
                      census  static enumeration + report only, seconds, no chain
-                     full    the tier-1 campaign on a real solana-test-validator
+                     full    unavailable: refuses before creating --work or
+                             starting a build. The tier-1 producer is parked at
+                             the retired demo-market boundary.
   --from STAGE     force a restart at a stage: archive|elf|tool|inventory|
                    campaign|census  (later stages always re-run)
-  --keep-runs      keep previous campaign run directories (default: keep the
-                   last three)
+  --keep-runs      parked full-mode option; accepted but not used
   --rpc-port PORT|auto
-                   the validator origin for this run. Default 20890, the
-                   historical one, so nothing that never asked for a port
-                   notices. `auto` asks the kernel for a free base, which is
-                   what lets N campaigns run on one machine at once.
+                   parked full-mode option; accepted but not used
                    Also readable from $DCLUTCH_GAUNTLET_RPC_PORT.
-  --record-publication MODE
-                   genesis | transaction  (default: genesis)
-                     genesis      the nine infrastructure record bodies are
-                                  injected as finalized account fixtures
-                     transaction  they are NOT at genesis; the campaign
-                                  publishes each through Registry
-                                  Begin/Append/Finalize. This is the only
-                                  shape a real cluster can reach, so it is
-                                  the devnet rehearsal.
+  --record-publication genesis|transaction
+                   parked full-mode option; accepted but not used
   --allow-stale-fixture-pins
-                   run even though the committed Pyth fixture pin list does not
-                   verify, recording the exact drift in the run directory. Off
-                   by default: a failing integrity gate is a finding, not a
-                   nuisance. See tier1/launcher.sh for what this gives up and
-                   what replaces it.
+                   parked full-mode option; accepted but not used
   -h, --help       show this message
 
 Stages are stamped by their exact inputs under --work/stamps. A re-run skips a
 stage whose stamp matches and re-runs everything downstream of the first stage
 that does not.
 
-There is no ProgramTest fast lane for tier 1 and the gauntlet will not pretend
-there is: tier 1 depends on genesis Loader-v3 ProgramData spans, on a real
-Loader SetAuthority(Some -> None), and on real per-transaction compute, none of
-which solana-program-test reproduces identically. Family tiers may declare a
-fast lane; see TIERS.md for the bar.
+The former tier-1 full campaign has no supported Market input at HEAD.
+`demo-market` is deliberately retired, while `devnet-market` and
+`graduation-market` require acknowledged inputs that this localhost runner does
+not own. `--mode full` therefore exits 1 before any build. Use `--mode census`
+here; supported validator campaigns have their own family runners under
+tools/gauntlet/.
+
+Tier 1 cannot be made available by substituting ProgramTest: it depends on
+genesis Loader-v3 ProgramData spans, a real Loader SetAuthority(Some -> None),
+and real per-transaction compute. Family tiers may declare a fast lane; see
+TIERS.md for the bar.
 USAGE
 }
+
+die() { printf 'gauntlet: %s\n' "$*" >&2; exit 1; }
 
 REPO=""
 WORK="/private/tmp/dclutch-gauntlet"
@@ -86,11 +81,23 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+case "$MODE" in census|full) ;; *) echo "--mode must be census or full" >&2; exit 2 ;; esac
+
+# Tier 1's only localhost Market producer was `demo-market`. It is retired
+# because a standalone Registry address cannot authenticate the current Direct
+# facts. The acknowledged `devnet-market` and `graduation-market` planners are
+# not interchangeable replacements: they require externally supplied facts and
+# fee-policy choices this runner does not own. Until a supported tier-1 Market
+# input is designed, refuse before resolving a revision, creating --work,
+# checking build tools, or compiling seven ELFs.
+if [ "$MODE" = "full" ]; then
+    die "--mode full is unavailable: the tier-1 campaign is parked at the retired demo-market boundary. No build or campaign was started; use --mode census or a supported family runner under tools/gauntlet/."
+fi
+
 if [ -z "$REPO" ]; then
     REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
-case "$MODE" in census|full) ;; *) echo "--mode must be census or full" >&2; exit 2 ;; esac
 case "$RECORD_PUBLICATION" in genesis|transaction) ;; *) echo "--record-publication must be genesis or transaction" >&2; exit 2 ;; esac
 
 # ------------------------------------------------------------------ the origin
@@ -139,7 +146,6 @@ mkdir -p "$WORK" "$STAMPS" "$OUT" "$LOGS" "$RUNS"
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
 say() { printf '\n== %s\n' "$*"; }
-die() { printf 'gauntlet: %s\n' "$*" >&2; exit 1; }
 # Resolve `--rpc-port auto` into a base whose WHOLE 42-port block binds.
 #
 # Deliberately NOT `bind(0)`. The kernel's ephemeral range is the range it also

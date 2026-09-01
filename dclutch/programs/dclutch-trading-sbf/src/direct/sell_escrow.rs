@@ -497,10 +497,16 @@ pub fn verify_sell_close_receipt_v2(
     let request_bytes = request
         .to_bytes()
         .map_err(|_| DirectPhysicalError::Claims)?;
-    let total_credit = request
-        .observed_position_lamports
-        .checked_add(request.observed_admission_lamports)
-        .ok_or(DirectPhysicalError::Arithmetic)?;
+    let observed = ProtocolPositionCloseReceiptV2::decode(receipt_bytes)
+        .map_err(|_| DirectPhysicalError::Claims)?;
+    observed
+        .validate_request(
+            request,
+            hash(&request_bytes).to_bytes(),
+            context.claims_program,
+        )
+        .map_err(|_| DirectPhysicalError::Postcondition)?;
+    let total_credit = observed.total_credit();
     let expected = ProtocolPositionCloseReceiptV2::new(
         request,
         ProtocolPositionCloseEvidenceV2 {
@@ -508,6 +514,8 @@ pub fn verify_sell_close_receipt_v2(
             admission_digest: hash(admission_state_bytes).to_bytes(),
             claims_program: context.claims_program,
             post_resource_digest,
+            position_lamports: observed.position_lamports(),
+            admission_lamports: observed.admission_lamports(),
             rent_credit_before,
             rent_credit_after: rent_credit_before
                 .checked_add(total_credit)
@@ -515,8 +523,6 @@ pub fn verify_sell_close_receipt_v2(
         },
     )
     .map_err(|_| DirectPhysicalError::Claims)?;
-    let observed = ProtocolPositionCloseReceiptV2::decode(receipt_bytes)
-        .map_err(|_| DirectPhysicalError::Claims)?;
     if observed != expected {
         return Err(DirectPhysicalError::Postcondition);
     }

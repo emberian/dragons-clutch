@@ -8,14 +8,17 @@ use solana_sdk::pubkey::Pubkey;
 mod aggregate_retirement_exterior;
 mod aggregate_retirement_journal;
 mod campaign;
+mod capability_seal_close;
+mod chaos_fault;
 mod claims_custody_replay;
 mod cluster;
 mod direct_capability_activation;
-mod capability_seal_close;
 mod direct_close_maker;
 mod direct_fee_settlement;
 mod direct_hot_route_manifest;
 mod direct_market;
+mod direct_resolution_campaign;
+mod direct_terminal_children;
 mod direct_ticket;
 mod direct_trade;
 mod direct_trade_producer;
@@ -30,10 +33,14 @@ mod funding_readiness;
 mod general_capability_activation;
 mod general_market;
 mod general_settlement_fixture;
+mod general_successor_plan;
 mod infrastructure_succession;
 mod local_mutable;
 mod release_lineage;
 mod series_consume_campaign;
+mod series_lifecycle_campaign;
+mod series_permit_expiry_campaign;
+mod series_terminal_campaign;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
 // helpers stay allowed the way every #[path] include here is.
@@ -55,6 +62,7 @@ mod runtime;
 mod seed;
 mod selected_capability;
 mod source_abort_exterior;
+mod spline_product;
 mod sponsored_push;
 mod structured_market;
 mod terminal_exterior_pyth;
@@ -62,6 +70,7 @@ mod terminal_lifecycle;
 mod terminal_sequence;
 mod upgrade;
 mod user_position_admission;
+mod user_position_close;
 mod wallet_terminal;
 mod wallet_terminal_payout_exterior;
 
@@ -158,8 +167,23 @@ fn run() -> Result<()> {
         Some("local-private-validator-user-position-admission-v1") => {
             user_position_admission::run_owned_loopback(arguments.collect())
         }
+        Some(command) if command == user_position_close::COMMAND_V1 => {
+            user_position_close::run(arguments.collect())
+        }
+        Some(command) if command == user_position_close::COMMAND_DEVNET_V1 => {
+            user_position_close::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == direct_terminal_children::COMMAND_V1 => {
+            direct_terminal_children::run(arguments.collect())
+        }
+        Some(command) if command == direct_terminal_children::COMMAND_DEVNET_V1 => {
+            direct_terminal_children::run_devnet_v1(arguments.collect())
+        }
         Some("local-private-validator-wallet-terminal-payout-v1") => {
             wallet_terminal_payout_exterior::run(arguments.collect())
+        }
+        Some(command) if command == wallet_terminal_payout_exterior::COMMAND_DEVNET_V1 => {
+            wallet_terminal_payout_exterior::run_devnet_v1(arguments.collect())
         }
         Some(command) if command == aggregate_retirement_exterior::COMMAND_V1 => {
             aggregate_retirement_exterior::run(arguments.collect())
@@ -176,6 +200,19 @@ fn run() -> Result<()> {
         }
         Some(command) if command == series_consume_campaign::SERIES_CONSUME_COMMAND_V1 => {
             series_consume_campaign::run(arguments.collect())
+        }
+        Some(command)
+            if command == series_lifecycle_campaign::SERIES_LIFECYCLE_PREFIX_COMMAND_V1 =>
+        {
+            series_lifecycle_campaign::run(arguments.collect())
+        }
+        Some(command) if command == series_permit_expiry_campaign::COMMAND_V1 => {
+            series_permit_expiry_campaign::run(arguments.collect())
+        }
+        Some(command)
+            if command == series_terminal_campaign::SERIES_TERMINAL_CAMPAIGN_COMMAND_V1 =>
+        {
+            series_terminal_campaign::run(arguments.collect())
         }
         Some(command) if command == family_hot_campaign::SERIES_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::Series)
@@ -253,6 +290,9 @@ fn run() -> Result<()> {
         {
             general_capability_activation::run(arguments.collect())
         }
+        Some(command) if command == general_successor_plan::COMMAND_V1 => {
+            general_successor_plan::run(arguments.collect())
+        }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
         Some(command) if command == source_abort_exterior::COMMAND_V1 => {
@@ -315,6 +355,12 @@ fn run() -> Result<()> {
         Some(command) if command == OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[1] => {
             terminal_sequence::run_terminal_sequence_owned_loopback_v1(arguments.collect())
         }
+        Some(command) if command == direct_resolution_campaign::COMMAND_V1 => {
+            direct_resolution_campaign::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == spline_product::COMMAND_V1 => {
+            spline_product::run(arguments.collect())
+        }
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -370,6 +416,7 @@ fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignAr
     let mut plan = None;
     let mut market = None;
     let mut evidence = None;
+    let mut infrastructure_lineage = None;
     let mut through = None;
     let mut founding_founder = None;
     let mut substituted_founder = None;
@@ -421,6 +468,7 @@ fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignAr
             // without one, and the founding refuses by name when it is absent.
             "--market" => &mut market,
             "--evidence" => &mut evidence,
+            "--infrastructure-lineage-evidence" => &mut infrastructure_lineage,
             "--through" => &mut through,
             "--founding-founder" => &mut founding_founder,
             "--substituted-founder" => &mut substituted_founder,
@@ -452,27 +500,42 @@ fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignAr
         .transpose()?;
     match mode {
         campaign::CampaignModeV1::Administration => {
-            if through > campaign::StageV1::Activation {
-                return Err(Error::new(
+            campaign::authenticate_administration_through_v1(through).map_err(|_| {
+                Error::new(
                     "administration mode is infrastructure-only and stops at activation; pass --founding-only for a Market founding",
-                ));
-            }
+                )
+            })?;
             if market_path.is_some() || founding_founder.is_some() || substituted_founder.is_some()
             {
                 return Err(Error::new(
                     "administration mode refuses --market, --founding-founder, and --substituted-founder; pass --founding-only for a Market founding",
                 ));
             }
-            if let Some(role) = keypairs
-                .keys()
-                .find(|role| role.as_str() != seed::role::CORE_UPGRADE_AUTHORITY)
+            if infrastructure_lineage.is_some()
+                && (!execute || through != campaign::StageV1::Activation)
             {
+                return Err(Error::new(
+                    "--infrastructure-lineage-evidence requires executed administration through activation; a prefix or read-only projection is not complete lineage evidence",
+                ));
+            }
+            if let Some(role) = keypairs.keys().find(|role| {
+                ![
+                    seed::role::CORE_UPGRADE_AUTHORITY,
+                    seed::role::CAMPAIGN_PAYER,
+                ]
+                .contains(&role.as_str())
+            }) {
                 return Err(Error::new(format!(
-                    "administration mode refuses --keypair-{role}; its only signer path is --keypair-core-upgrade-authority"
+                    "administration mode refuses --keypair-{role}; its signer paths are the Core authority and, only for succession, a distinct campaign payer"
                 )));
             }
         }
         campaign::CampaignModeV1::FoundingOnly => {
+            if infrastructure_lineage.is_some() {
+                return Err(Error::new(
+                    "--founding-only refuses --infrastructure-lineage-evidence; the administration campaign is the sole owner of the infrastructure lineage artifact",
+                ));
+            }
             if through != campaign::StageV1::Founding {
                 return Err(Error::new(
                     "--founding-only requires --through founding; it never owns an infrastructure prefix",
@@ -545,6 +608,10 @@ fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignAr
         evidence_path: match evidence {
             None => None,
             Some(path) => Some(absolute(Some(path), "--evidence")?),
+        },
+        infrastructure_lineage_path: match infrastructure_lineage {
+            None => None,
+            Some(path) => Some(absolute(Some(path), "--infrastructure-lineage-evidence")?),
         },
         founding_founder,
         substituted_founder,
@@ -1599,8 +1666,10 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 fn campaign_usage_v1() -> String {
     format!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] \
-         --plan ABSOLUTE_JSON [--evidence ABSOLUTE_JSON] [--through STAGE] [--execute] \
-         [--keypair-core-upgrade-authority ABSOLUTE_KEYPAIR_JSON]\n\
+         --plan ABSOLUTE_JSON [--evidence ABSOLUTE_JSON] \
+         [--infrastructure-lineage-evidence ABSOLUTE_JSON] [--through STAGE] [--execute] \
+         [--keypair-core-upgrade-authority ABSOLUTE_KEYPAIR_JSON] \
+         [--keypair-campaign-payer ABSOLUTE_KEYPAIR_JSON]\n\
          \n  dclutch-local-successor-bootstrap campaign --founding-only --rpc-url URL \
          [{ack} GENESIS_HASH] --plan ABSOLUTE_JSON --market ABSOLUTE_JSON \
          --keypair-campaign-payer ABSOLUTE_KEYPAIR_JSON \
@@ -1612,10 +1681,17 @@ fn campaign_usage_v1() -> String {
          --keypair-founding-source-funder ABSOLUTE_KEYPAIR_JSON \
          --substituted-founder PUBKEY [--evidence ABSOLUTE_JSON] [--execute]\n\n\
          The campaign command is the EXTERNAL-CLUSTER driver. Default is an infrastructure-only \
-         administration preflight through activation. Its only possible signer is the Core upgrade \
-         authority, loaded lazily only when execution has an incomplete admitted stage. \
-         --founding-only is a disjoint path: publication, profile initialization, and activation \
-         must already read Complete before any key file opens. It never accepts an upgrade-authority \
+         administration preflight through activation. The Core upgrade authority is loaded lazily \
+         only when execution has an incomplete admitted stage. A checked-local succession also \
+         requires --keypair-campaign-payer: this must be a different wallet because the Core/Registry \
+         consent key is readonly in the ceremony while the fee payer is writable. The succession \
+         stage performs one real Registry Loader Upgrade, publishes its observed-slot artifact, and \
+         creates V2 before activation; plans without the checked-local pin treat it as not applicable. \
+         The optional standalone lineage output is admitted only by executed administration through \
+         activation; it re-derives source, checked artifact, V1/V2 profile, Registry/Rent record, and \
+         activated release identities from finalized chain state and never replaces a differing file. \
+         --founding-only is a disjoint path: publication, profile initialization, succession, and \
+         activation must already read Complete before any key file opens. It never accepts an upgrade-authority \
          path. Its campaign payer is disposable after terminal completion; its five created signer \
          coordinates must start vacant and are not wallets to pre-fund. The founder and substituted \
          founder are public identities and never keypair files. Default is PREFLIGHT: read-only RPC \
@@ -1644,11 +1720,14 @@ fn usage() {
     println!("{}", terminal_lifecycle::owned_loopback_usage());
     println!("{}", terminal_sequence::usage());
     println!("{}", terminal_sequence::owned_loopback_usage());
+    println!("{}", direct_resolution_campaign::usage());
     println!("{}", aggregate_retirement_exterior::usage());
     println!("{}", source_abort_exterior::usage());
     println!("{}", source_abort_exterior::interruption_audit_usage());
     println!("{}", user_position_admission::usage());
     println!("{}", user_position_admission::local_usage());
+    println!("{}", user_position_close::usage());
+    println!("{}", direct_terminal_children::usage());
     println!("{}", pyth_vaa_provisioning::usage());
     println!("{}", terminal_exterior_pyth::usage());
     println!(
@@ -1673,6 +1752,7 @@ fn usage() {
     println!("{}", sponsored_push::owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
     println!("{}", wallet_terminal_payout_exterior::usage());
+    println!("{}", wallet_terminal_payout_exterior::devnet_usage());
     println!("{}", direct_trade::usage());
     println!("{}", direct_trade_producer::usage());
     println!("{}", direct_trade_producer::devnet_session_usage());
@@ -1686,6 +1766,8 @@ fn usage() {
     println!("{}", direct_capability_activation::usage());
     println!("{}", direct_capability_activation::owned_loopback_usage());
     println!("{}", general_capability_activation::usage());
+    println!("{}", general_successor_plan::usage());
+    println!("{}", series_terminal_campaign::usage());
     println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \
@@ -1765,6 +1847,65 @@ mod tests {
         assert_eq!(admin.through, campaign::StageV1::Activation);
         assert!(admin.keypairs.is_empty());
         assert!(admin.market_path.is_none());
+        assert!(admin.infrastructure_lineage_path.is_none());
+
+        let lineage_path = PathBuf::from("/current-source-infrastructure-lineage.json");
+        let executed = parse_campaign_args_v1(vec![
+            "--rpc-url".into(),
+            "http://127.0.0.1:20890/".into(),
+            "--plan".into(),
+            "/campaign-plan-must-not-be-read.json".into(),
+            "--evidence".into(),
+            "/campaign-evidence.json".into(),
+            "--infrastructure-lineage-evidence".into(),
+            lineage_path.display().to_string(),
+            "--execute".into(),
+        ])
+        .expect("executed administration lineage surface");
+        assert_eq!(
+            executed.infrastructure_lineage_path.as_ref(),
+            Some(&lineage_path)
+        );
+        assert!(executed.execute);
+
+        let succession = parse_campaign_args_v1(vec![
+            "--rpc-url".into(),
+            "http://127.0.0.1:20890/".into(),
+            "--plan".into(),
+            "/campaign-plan-must-not-be-read.json".into(),
+            "--through".into(),
+            "succession".into(),
+            "--keypair-core-upgrade-authority".into(),
+            "/core-authority-must-not-be-read.json".into(),
+            "--keypair-campaign-payer".into(),
+            "/succession-payer-must-not-be-read.json".into(),
+        ])
+        .expect("succession administration surface");
+        assert_eq!(succession.through, campaign::StageV1::Succession);
+        assert_eq!(succession.keypairs.len(), 2);
+
+        let mut projection_with_lineage = vec![
+            "--rpc-url".into(),
+            "http://127.0.0.1:20890/".into(),
+            "--plan".into(),
+            "/campaign-plan-must-not-be-read.json".into(),
+            "--infrastructure-lineage-evidence".into(),
+            "/lineage-must-not-be-written.json".into(),
+        ];
+        assert!(
+            parse_campaign_args_v1(projection_with_lineage.clone())
+                .expect_err("read-only lineage projection")
+                .0
+                .contains("requires executed administration through activation")
+        );
+        projection_with_lineage.push("--execute".into());
+        projection_with_lineage.extend(["--through".into(), "succession".into()]);
+        assert!(
+            parse_campaign_args_v1(projection_with_lineage)
+                .expect_err("prefix lineage projection")
+                .0
+                .contains("requires executed administration through activation")
+        );
 
         let founding = parse_campaign_args_v1(founding_campaign_cli_v1())
             .expect("exact founding-only surface");
@@ -1775,6 +1916,18 @@ mod tests {
             campaign::FOUNDING_REQUIRED_ROLES.len()
         );
         assert_ne!(founding.founding_founder, founding.substituted_founder);
+
+        let mut founding_with_lineage = founding_campaign_cli_v1();
+        founding_with_lineage.extend([
+            "--infrastructure-lineage-evidence".into(),
+            "/lineage-must-not-be-written.json".into(),
+        ]);
+        assert!(
+            parse_campaign_args_v1(founding_with_lineage)
+                .expect_err("founding lineage ownership")
+                .0
+                .contains("--founding-only refuses --infrastructure-lineage-evidence")
+        );
     }
 
     #[test]

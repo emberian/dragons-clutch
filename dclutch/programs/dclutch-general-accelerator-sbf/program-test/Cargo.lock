@@ -1722,6 +1722,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
+ "dclutch-general-accelerator-sbf",
  "dclutch-general-accelerator-test-caller-sbf",
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
@@ -1737,6 +1738,7 @@ dependencies = [
  "dclutch-transition-vm",
  "solana-account 4.6.0",
  "solana-address-lookup-table-interface",
+ "solana-compute-budget-interface",
  "solana-hash 4.6.0",
  "solana-program",
  "solana-program-test",
@@ -1744,6 +1746,23 @@ dependencies = [
  "solana-sdk-ids",
  "solana-transaction 4.2.0",
  "tokio",
+]
+
+[[package]]
+name = "dclutch-general-accelerator-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-execution-strategy-contract",
+ "dclutch-general-adapter-contract",
+ "dclutch-general-codec",
+ "dclutch-general-config-contract",
+ "dclutch-refusal-registry",
+ "solana-compute-budget-interface",
+ "solana-instructions-sysvar 3.0.1",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]

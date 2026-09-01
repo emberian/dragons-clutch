@@ -13,8 +13,8 @@
 //! cluster. Every command that touches a CLUSTER here is a read, and takes no
 //! credential of any kind.
 //!
-//! THE TWO EXCEPTIONS, stated where they cannot be missed, because neither is a
-//! cluster write and both would otherwise look like one:
+//! THE LOCAL-WRITE EXCEPTIONS, stated where they cannot be missed, because none
+//! is a cluster write and each would otherwise look like one:
 //!
 //! - `dclutch ticket author` opens ONE key file — named by an environment
 //!   variable, never by a flag — to sign one Direct intent into a portable
@@ -23,11 +23,17 @@
 //!   relay and not a cluster. It builds no transaction and moves no lamport. A
 //!   board can lose or hide an offer; it cannot change one, because every field
 //!   is covered by the maker's signature.
+//! - `dclutch general plan` writes one private local JSON file containing an
+//!   unsigned, expiring wallet handoff. It reads finalized cluster state but no
+//!   key; it never simulates, signs, or submits that transaction.
+//! - `dclutch fractional-retirement-next` writes the same kind of private,
+//!   unsigned wallet handoff after finalized state—not its route—selects the
+//!   exact next retirement act.
 //!
 //! Authoring, publishing, and submitting are three separate acts. This binary
 //! does the first two and never the third.
 //!
-//! SINGLE AUTHORSHIP, which is why this file is short. Three crates own every
+//! SINGLE AUTHORSHIP, which is why this file is short. Protocol crates own every
 //! byte interpreted here:
 //!
 //! - `dclutch_market_core_codec::CoreState` — the Market Core account, emitted
@@ -36,6 +42,8 @@
 //!   immutable activation projection at the front of a Trading root account.
 //! - `dclutch_direct_codec::successor::DirectRootStateV1` — the Direct family
 //!   tail behind that header.
+//! - `dclutch_fractional_claim_operator` — authenticated state selection and
+//!   unsigned construction for the next ordered Fractional retirement act.
 //!
 //! This crate calls `decode` on each of them and prints what comes back. It
 //! does not know a single field offset, and a decoder that refuses is reported
@@ -45,6 +53,8 @@
 use std::{fmt, process::ExitCode};
 
 mod capability;
+mod fractional;
+mod general;
 mod market;
 mod rpc;
 mod ticket;
@@ -73,10 +83,9 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 /// The cluster this tool reads when nobody names one.
 ///
-/// dClutch is deployed on Solana devnet and nowhere else. Devnet SOL has no
-/// value and devnet state is wiped by the cluster's operators without notice,
-/// which is exactly why this is a safe default: the worst outcome of running
-/// the wrong command is reading the wrong test chain.
+/// This development binary defaults to Solana devnet. That default is not a
+/// claim that any program or frontend there is an official release; only a
+/// checked release manifest can establish one.
 pub const DEFAULT_RPC_URL_V1: &str = "https://api.devnet.solana.com";
 
 /// The environment variable that overrides the cluster.
@@ -117,9 +126,11 @@ fn run(arguments: Vec<String>) -> Result<()> {
         }
         "market" => market::run(rest),
         "capability" => capability::run(rest),
+        "fractional-retirement-next" => fractional::run(rest),
+        "general" => general::run(rest),
         "ticket" => ticket::run(rest),
         other => Err(Error::new(format!(
-            "unknown command `{other}`. Run `dclutch --help` for the four it knows."
+            "unknown command `{other}`. Run `dclutch --help` for the commands it knows."
         ))),
     }
 }
@@ -128,12 +139,14 @@ fn run(arguments: Vec<String>) -> Result<()> {
 #[must_use]
 pub fn usage() -> String {
     format!(
-        "dclutch {version} — read dClutch markets off a Solana cluster.\n\
+        "dclutch {version} — inspect dClutch state and build unsigned handoffs.\n\
          \n\
          This tool never submits a transaction. Reading takes no credential at\n\
-         all; `ticket author` opens one key file, named by an environment\n\
-         variable, and signs one intent onto local disk — nothing else here\n\
-         touches a key. dClutch runs on Solana DEVNET, where money is not money.\n\
+         all; ticket authoring (standalone or inline before `ticket post`)\n\
+         opens one key file named by an environment variable and signs one\n\
+         intent onto local disk — nothing else here touches a key. This\n\
+         development binary defaults to Solana DEVNET; a\n\
+         checked release manifest, not that default, identifies a release.\n\
          \n\
          COMMANDS\n\
          \n\
@@ -165,7 +178,22 @@ pub fn usage() -> String {
          \x20 dclutch ticket post --board URL <PATH | AUTHOR ARGUMENTS>\n\
          \x20     Publish a ticket to an offer board so a taker can find it.\n\
          \x20     A board is a relay, not a cluster: nothing is submitted.\n\
-         \x20     No key, no network.\n\
+         \x20     Posting a file reads no key; inline authoring uses only the\n\
+         \x20     explicitly named key environment variable, then contacts the\n\
+         \x20     board—not a Solana RPC endpoint.\n\
+         \n\
+         \x20 dclutch general plan --route ABSOLUTE.json --output ABSENT-ABSOLUTE.json\n\
+         \x20     Reacquire every routed account in one finalized snapshot,\n\
+         \x20     derive the canonical General request and lifecycle, and write\n\
+         \x20     one mode-0600 unsigned v0 wallet handoff. Reads no key, signs\n\
+         \x20     nothing, simulates nothing, and submits nothing. Run\n\
+         \x20     `dclutch general --help` for its exact RPC and file contract.\n\
+         \n\
+         \x20 dclutch fractional-retirement-next --route ABSOLUTE.json --output ABSENT-ABSOLUTE.json\n\
+         \x20     Reacquire one terminal Fractional root, let its authenticated\n\
+         \x20     cursor choose Begin, the exact next coordinate, or Finish,\n\
+         \x20     and write one unsigned wallet handoff. No action, coordinate,\n\
+         \x20     mint, or position is accepted from the route.\n\
          \n\
          OPTIONS (on the `show` commands)\n\
          \n\
@@ -333,7 +361,14 @@ mod tests {
     #[test]
     fn usage_names_every_command_it_dispatches() {
         let text = usage();
-        for command in ["market show", "market decode", "capability show", "ticket"] {
+        for command in [
+            "market show",
+            "market decode",
+            "capability show",
+            "ticket",
+            "general plan",
+            "fractional-retirement-next",
+        ] {
             assert!(text.contains(command), "usage never mentions `{command}`");
         }
     }

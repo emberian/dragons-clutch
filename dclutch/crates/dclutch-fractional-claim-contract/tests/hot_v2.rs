@@ -13,12 +13,14 @@ use dclutch_fractional_claim_contract::{
     FractionalExposureActionV2, FractionalExposureRequestInputV2, FractionalExposureRequestV2,
     FractionalHotAccountRefV2, FractionalHotCandidateInputV2, FractionalHotCandidateV2,
     FractionalHotClaimsEffectV2, FractionalHotErrorV2, FractionalHotTokenEffectV2,
-    FractionalHotTokenKindV2, FractionalHotTokenPostV2, FractionalRootInputV1, FractionalRootV1,
+    FractionalHotTokenKindV2, FractionalHotTokenPostV2, FractionalRootInputV1,
+    FractionalRootInputV2, FractionalRootV1, FractionalRootV2,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
-    fractional_exposure_terms_bytes_v2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
+    encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
+    fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -111,6 +113,25 @@ fn root_bytes() -> [u8; 128] {
     FractionalRootV1::new(FractionalRootInputV1 {
         bump: 4,
         terms: TERMS,
+        market: MARKET,
+        rent_beneficiary: [14; 32],
+        revision: 7,
+        historical_rent_principal: 99,
+    })
+    .unwrap()
+    .to_bytes()
+}
+
+fn root_bytes_v2(bytes: &[u8]) -> [u8; 128] {
+    let mut config = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms(bytes)),
+        &mut config,
+    )
+    .unwrap();
+    FractionalRootV2::new(FractionalRootInputV2 {
+        bump: 4,
+        selection_config: Sha256::digest(config).into(),
         market: MARKET,
         rent_beneficiary: [14; 32],
         revision: 7,
@@ -292,6 +313,49 @@ fn account_amount_direction_poststate_and_stale_root_substitutions_refuse() {
             root_bytes: &stale,
             root: account(0, ROOT),
             token_effects: &[token_effect()],
+            claims: FractionalHotClaimsEffectV2::SignedDelta {
+                claims_program: account(5, [15; 32]),
+                route_base: 20,
+                packet: &packet,
+            },
+            rent_close: None,
+        }),
+        Err(FractionalHotErrorV2::IdentityMismatch)
+    );
+}
+
+#[test]
+fn v2_root_rejoins_the_market_free_config_not_market_bound_terms() {
+    let bytes = terms_bytes();
+    let root = root_bytes_v2(&bytes);
+    let token = [token_effect()];
+    let packet = packet();
+    assert!(
+        FractionalHotCandidateV2::prepare(FractionalHotCandidateInputV2 {
+            request: request(),
+            terms: terms(&bytes),
+            root_bytes: &root,
+            root: account(0, ROOT),
+            token_effects: &token,
+            claims: FractionalHotClaimsEffectV2::SignedDelta {
+                claims_program: account(5, [15; 32]),
+                route_base: 20,
+                packet: &packet,
+            },
+            rent_close: None,
+        })
+        .is_ok()
+    );
+
+    let mut substituted = root;
+    substituted[16] ^= 1;
+    assert_eq!(
+        FractionalHotCandidateV2::prepare(FractionalHotCandidateInputV2 {
+            request: request(),
+            terms: terms(&bytes),
+            root_bytes: &substituted,
+            root: account(0, ROOT),
+            token_effects: &token,
             claims: FractionalHotClaimsEffectV2::SignedDelta {
                 claims_program: account(5, [15; 32]),
                 route_base: 20,

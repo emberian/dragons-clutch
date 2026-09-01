@@ -11,7 +11,8 @@
 //!    request profiles),
 //! 5. project the family request through the RequestProfile,
 //! 6. run the lifecycle preplan (which derives every to-be-created PDA),
-//! 7. execute the transition fold,
+//! 7. execute the transition fold, or the selected authenticated accelerator's
+//!    opt-in candidate projector for admitted AOT,
 //! 8. project the Effect program (which yields the child-request bank).
 //!
 //! One deliberate difference from the chain: where the chain *refuses* an
@@ -40,7 +41,11 @@ use dclutch_capability_program_contract::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENT
 use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission},
     v3::{ProgramV3 as EffectBaseV3, ProjectionV3, ResolvedInvocationV3},
-    v4::{ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4, project_atomic_visiting},
+    v4::{
+        ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
+        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_RELEASE_ID_V4, project_atomic_visiting,
+    },
+    v5::{ProgramV5 as EffectProgramV5, SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_RELEASE_ID_V5},
 };
 use dclutch_execution_strategy_contract::v2::{
     BankTransportV2, ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
@@ -111,6 +116,8 @@ pub struct EngineInputV1<'a> {
     pub transition_bytes: &'a [u8],
     /// Effect program record bytes.
     pub effect_bytes: &'a [u8],
+    /// Schema release identity of the effect program.
+    pub effect_schema: [u8; 32],
     /// Selected action (for lifecycle plan selection).
     pub action: u32,
     /// Release-waist facts.
@@ -145,6 +152,19 @@ pub struct EngineInputV1<'a> {
     pub rent: &'a Rent,
 }
 
+fn decode_execution_effect_program<'a>(
+    schema: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<EffectProgramV4<'a>, ()> {
+    match schema {
+        EFFECT_SCHEMA_RELEASE_ID_V4 => EffectProgramV4::decode(bytes).map_err(|_| ()),
+        EFFECT_SCHEMA_RELEASE_ID_V5 => EffectProgramV5::decode(bytes)
+            .map(EffectProgramV5::base)
+            .map_err(|_| ()),
+        _ => Err(()),
+    }
+}
+
 /// One lifecycle-derived state address the builder must realize.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LifecycleStateDerivationV1 {
@@ -174,6 +194,11 @@ pub struct DerivedInvocationV1 {
 /// Everything the pipeline derives.
 #[derive(Clone, Debug)]
 pub struct EngineOutputV1 {
+    /// Register bank presented to the selected execution strategy, after
+    /// request projection and lifecycle preplanning but before the transition.
+    pub input_scalars: Vec<u64>,
+    /// Identity half of the exact pre-transition strategy input bank.
+    pub input_identities: Vec<[u8; 32]>,
     /// Transition output scalars (the candidate registers).
     pub scalars: Vec<u64>,
     /// Transition output identities.
@@ -190,6 +215,52 @@ pub struct EngineOutputV1 {
     pub complete: bool,
 }
 
+/// Seed the exact authenticated span widths into their AccountProfile-owned
+/// selector registers before account projection.
+///
+/// Profile13's projection kernel deliberately checks the selector bank rather
+/// than trusting the account-vector length. `derive_dynamic_span_geometry`
+/// has already authenticated these widths from the selected request/effect/
+/// strategy artifacts; this is the host equivalent of Hot copying that
+/// authenticated result into the pre-projection bank. The u32 width is
+/// zero-extended to u64, never narrowed, and every coordinate comes from the
+/// decoded profile.
+fn seed_authenticated_dynamic_span_counts(
+    profile: AccountProfileV2<'_>,
+    span_counts: &[u32],
+    scalars: &mut [u64],
+) -> Result<(), BuilderError> {
+    if span_counts.len() != usize::from(profile.dynamic_fixed_span_count()) {
+        return Err(BuilderError::Spans("span-selector-count"));
+    }
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count() {
+        let span = profile
+            .dynamic_fixed_span(index)
+            .map_err(|_| BuilderError::Spans("span-selector-decode"))?;
+        let count = *span_counts
+            .get(usize::from(index))
+            .ok_or(BuilderError::Spans("span-selector-count"))?;
+        span.validate_count(count)
+            .map_err(|_| BuilderError::Spans("span-selector-width"))?;
+        *scalars
+            .get_mut(usize::from(span.count_scalar()))
+            .ok_or(BuilderError::Spans("span-selector-register"))? = u64::from(count);
+        index = index.checked_add(1).ok_or(BuilderError::Arithmetic)?;
+    }
+    Ok(())
+}
+
+/// Opt-in semantic owner for an admitted-AOT candidate register bank.
+///
+/// The slices are initialized with the exact post-lifecycle preplan bank that
+/// Trading presents to the authenticated accelerator. Implementations mutate
+/// them commit-last into the candidate bank the accelerator would return. The
+/// ordinary interpreted path never receives a projector and continues to
+/// execute the selected Transition artifact byte-for-byte.
+pub type AdmittedCandidateProjectorV1<'a> =
+    dyn Fn(&mut [u64], &mut [[u8; 32]]) -> Result<(), BuilderError> + 'a;
+
 fn digest32(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
@@ -197,6 +268,20 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
 /// Run the full register pipeline. See the module documentation for phases.
 #[allow(clippy::too_many_lines)]
 pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderError> {
+    run_engine_with_admitted_candidate(input, None)
+}
+
+/// Run the register pipeline with an optional authenticated admitted-AOT
+/// candidate evaluator.
+///
+/// The projector replaces only phase 7. Phases 1--6 still derive the exact
+/// preplan-owned input bank, and phase 8 still projects the selected Effect
+/// and child requests from the resulting candidate exactly as Hot does.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn run_engine_with_admitted_candidate(
+    input: &EngineInputV1<'_>,
+    candidate_projector: Option<&AdmittedCandidateProjectorV1<'_>>,
+) -> Result<EngineOutputV1, BuilderError> {
     let profile = input.profile;
     let tail_count = input.tail_count;
     let lifecycle_digest = digest32(input.lifecycle_bytes);
@@ -211,7 +296,7 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
         .map_err(|_| BuilderError::Projection("profile-join"))?;
     let transition = TransitionProgramV3::decode(input.transition_bytes)
         .map_err(|_| BuilderError::Projection("transition-decode"))?;
-    let effect = EffectProgramV4::decode(input.effect_bytes)
+    let effect = decode_execution_effect_program(input.effect_schema, input.effect_bytes)
         .map_err(|_| BuilderError::Projection("effect-decode"))?;
     let effect_base = effect.base();
 
@@ -237,14 +322,8 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
     // Phase 2 inputs: the observation bank, with the shared runtime prefix's
     // content-digest projection keys substituted for physical keys.
     let request_digest = digest32(input.family_request);
-    let selected_config_is_variable = profile
-        .rule(
-            false,
-            u16::try_from(1_usize).map_err(|_| BuilderError::Arithmetic)?,
-        )
-        .map_err(|_| BuilderError::Profile(line!()))?
-        .prestate()
-        == AccountPrestateV2::AdapterAuthenticatedVariableData;
+    let selected_config_is_variable = projected_account_uses_variable_marker(profile, 1)?;
+    let linked_basis_is_variable = projected_account_uses_variable_marker(profile, 4)?;
     let projected_keys = [
         input.content_keys.selected_config,
         input.content_keys.product_root,
@@ -272,7 +351,9 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
         .zip(&observation_keys)
         .enumerate()
         .map(|(coordinate, (observed, key))| {
-            if coordinate == 4 || (coordinate == 1 && selected_config_is_variable) {
+            if (coordinate == 1 && selected_config_is_variable)
+                || (coordinate == 4 && linked_basis_is_variable)
+            {
                 AccountObservationV1::new_adapter_authenticated_variable_data(
                     key,
                     &observed.owner,
@@ -318,6 +399,7 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
             .get_mut(usize::from(destination))
             .ok_or(BuilderError::Projection("system-register"))? = system_program::ID.to_bytes();
     }
+    seed_authenticated_dynamic_span_counts(profile, span_counts, &mut current_scalars)?;
 
     let mut scratch_scalars = vec![0_u64; scalar_count];
     let mut scratch_identities = vec![[0_u8; 32]; identity_count];
@@ -435,6 +517,8 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
     )?;
     if !preplan.complete {
         return Ok(EngineOutputV1 {
+            input_scalars: Vec::new(),
+            input_identities: Vec::new(),
             scalars: Vec::new(),
             identities: Vec::new(),
             request_bank: Vec::new(),
@@ -445,29 +529,42 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
     }
     current_scalars = preplan.scalars;
     current_identities = preplan.identities;
+    let input_scalars = current_scalars.clone();
+    let input_identities = current_identities.clone();
 
-    // Phase 7: the transition fold.
-    scratch_scalars.copy_from_slice(&current_scalars);
-    scratch_identities.copy_from_slice(&current_identities);
+    // Phase 7: either the ordinary interpreted fold or the admitted-AOT
+    // candidate evaluator. The latter starts from the same preplan bank and
+    // is commit-last: a refusing projector cannot expose a partial candidate.
     next_scalars.copy_from_slice(&current_scalars);
     next_identities.copy_from_slice(&current_identities);
-    execute_fold_atomic(
-        transition,
-        tail_count,
-        RegisterInput {
-            scalars: &current_scalars,
-            identities: &current_identities,
-        },
-        RegisterOutput {
-            scalars: &mut scratch_scalars,
-            identities: &mut scratch_identities,
-        },
-        RegisterOutput {
-            scalars: &mut next_scalars,
-            identities: &mut next_identities,
-        },
-    )
-    .map_err(|_| BuilderError::Projection("transition"))?;
+    if let Some(projector) = candidate_projector {
+        let mut candidate_scalars = current_scalars.clone();
+        let mut candidate_identities = current_identities.clone();
+        projector(&mut candidate_scalars, &mut candidate_identities)
+            .map_err(|_| BuilderError::Projection("admitted-candidate"))?;
+        next_scalars.copy_from_slice(&candidate_scalars);
+        next_identities.copy_from_slice(&candidate_identities);
+    } else {
+        scratch_scalars.copy_from_slice(&current_scalars);
+        scratch_identities.copy_from_slice(&current_identities);
+        execute_fold_atomic(
+            transition,
+            tail_count,
+            RegisterInput {
+                scalars: &current_scalars,
+                identities: &current_identities,
+            },
+            RegisterOutput {
+                scalars: &mut scratch_scalars,
+                identities: &mut scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut next_scalars,
+                identities: &mut next_identities,
+            },
+        )
+        .map_err(|_| BuilderError::Projection("transition"))?;
+    }
     let transition_scalars = next_scalars.clone();
     let transition_identities = next_identities.clone();
 
@@ -541,9 +638,12 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
         &transition_identities,
         &request_bank,
         input.family_request,
+        candidate_projector.is_none(),
     )?;
 
     Ok(EngineOutputV1 {
+        input_scalars,
+        input_identities,
         scalars: transition_scalars,
         identities: transition_identities,
         request_bank,
@@ -551,6 +651,25 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
         invocations,
         complete: true,
     })
+}
+
+const fn prestate_uses_variable_marker(prestate: AccountPrestateV2) -> bool {
+    matches!(
+        prestate,
+        AccountPrestateV2::AdapterAuthenticatedVariableData
+    )
+}
+
+fn projected_account_uses_variable_marker(
+    profile: AccountProfileV2<'_>,
+    coordinate: usize,
+) -> Result<bool, BuilderError> {
+    let coordinate = u16::try_from(coordinate).map_err(|_| BuilderError::Arithmetic)?;
+    let prestate = profile
+        .rule(false, coordinate)
+        .map_err(|_| BuilderError::Profile(line!()))?
+        .prestate();
+    Ok(prestate_uses_variable_marker(prestate))
 }
 
 #[derive(Clone, Copy)]
@@ -621,6 +740,8 @@ pub struct SpanWidthInputV1<'a> {
     pub request_profile_schema: [u8; 32],
     /// Effect program record bytes.
     pub effect_bytes: &'a [u8],
+    /// Schema release identity of the effect program.
+    pub effect_schema: [u8; 32],
     /// Execution strategy record bytes.
     pub strategy_bytes: &'a [u8],
     /// Release-waist facts (the trusted executing-program identity).
@@ -631,6 +752,16 @@ pub struct SpanWidthInputV1<'a> {
     pub family_request: &'a [u8],
     /// Trusted current slot.
     pub clock_slot: u64,
+}
+
+/// Authenticated span widths plus the optional AccountProfile-only transport
+/// span which makes the accelerator input scratch-backed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpanWidthDerivationV1 {
+    /// One exact width per declared dynamic fixed span.
+    pub widths: Vec<u32>,
+    /// Sole trailing profile-only input-transport span, when present.
+    pub transport_span: Option<u16>,
 }
 
 /// Derive the authenticated dynamic fixed-span widths for one bundle.
@@ -651,15 +782,25 @@ pub struct SpanWidthInputV1<'a> {
 ///   span is admissible **only** under `AdmittedAot`, only as the trailing
 ///   span, and only when no EffectV4 span claims the same selector.
 pub fn derive_dynamic_span_widths(input: &SpanWidthInputV1<'_>) -> Result<Vec<u32>, BuilderError> {
+    Ok(derive_dynamic_span_geometry(input)?.widths)
+}
+
+/// Derive widths together with the semantic owner of input scratch transport.
+pub fn derive_dynamic_span_geometry(
+    input: &SpanWidthInputV1<'_>,
+) -> Result<SpanWidthDerivationV1, BuilderError> {
     let profile = input.profile;
-    let effect = EffectProgramV4::decode(input.effect_bytes)
+    let effect = decode_execution_effect_program(input.effect_schema, input.effect_bytes)
         .map_err(|_| BuilderError::Spans("effect-decode"))?;
     let span_count = profile.dynamic_fixed_span_count();
     if !profile.uses_dynamic_fixed_spans() || span_count == 0 {
         if span_count != 0 || effect.span_count() != 0 {
             return Err(BuilderError::Spans("undeclared-spans"));
         }
-        return Ok(Vec::new());
+        return Ok(SpanWidthDerivationV1 {
+            widths: Vec::new(),
+            transport_span: None,
+        });
     }
     let strategy = ExecutionStrategyProgramV2::decode(input.strategy_bytes)
         .map_err(|_| BuilderError::Spans("strategy-decode"))?;
@@ -783,7 +924,10 @@ pub fn derive_dynamic_span_widths(input: &SpanWidthInputV1<'_>) -> Result<Vec<u3
     {
         return Err(BuilderError::Spans("transport-span-mismatch"));
     }
-    Ok(widths)
+    Ok(SpanWidthDerivationV1 {
+        widths,
+        transport_span,
+    })
 }
 
 /// An AccountProfile-only span must be the trailing one.
@@ -855,6 +999,53 @@ struct PreplannedV1 {
     complete: bool,
 }
 
+/// Exact observation prefix lifecycle may inspect.
+///
+/// Dynamic fixed spans are projection transport. The current executable shape
+/// admits them here only when every span is trailing, so the fixed prefix keeps
+/// its AccountProfile coordinates byte-for-byte. Lifecycle's own join rejects
+/// item coordinates for these profiles; no scratch page can become a state,
+/// payer, or RentCredit by changing this slice.
+fn lifecycle_semantic_prefix_width(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    expanded_width: usize,
+) -> Result<usize, BuilderError> {
+    let expected = if profile.uses_dynamic_fixed_spans() {
+        profile
+            .logical_account_count_with_dynamic_spans(tail_count, span_counts)
+            .map_err(|_| BuilderError::Lifecycle("dynamic-account-width"))?
+    } else {
+        if !span_counts.is_empty() {
+            return Err(BuilderError::Lifecycle("unexpected-span-widths"));
+        }
+        profile
+            .logical_account_count(tail_count)
+            .map_err(|_| BuilderError::Lifecycle("account-width"))?
+    };
+    if expanded_width != expected {
+        return Err(BuilderError::Lifecycle("expanded-account-width"));
+    }
+    if !profile.uses_dynamic_fixed_spans() {
+        return Ok(expanded_width);
+    }
+    let fixed = profile.fixed_account_count();
+    let mut span = 0_u16;
+    while span < profile.dynamic_fixed_span_count() {
+        if profile
+            .dynamic_fixed_span(span)
+            .map_err(|_| BuilderError::Lifecycle("span-decode"))?
+            .insertion_coordinate()
+            != fixed
+        {
+            return Err(BuilderError::Lifecycle("non-trailing-lifecycle-span"));
+        }
+        span = span.checked_add(1).ok_or(BuilderError::Arithmetic)?;
+    }
+    Ok(usize::from(fixed))
+}
+
 /// The lifecycle preplan of `prepare_lifecycle_v4`, with adoption in place of
 /// key refusal: the derived PDA is reported per state coordinate, and the
 /// enclosing fixed-point loop re-runs the engine until the observed keys are
@@ -872,6 +1063,18 @@ fn preplan_lifecycle(
 ) -> Result<PreplannedV1, BuilderError> {
     let tail_count = input.tail_count;
     let action = input.action;
+    let lifecycle_width = lifecycle_semantic_prefix_width(
+        profile,
+        tail_count,
+        input.span_counts,
+        observations.len(),
+    )?;
+    let observations = observations
+        .get(..lifecycle_width)
+        .ok_or(BuilderError::Lifecycle("observation-prefix"))?;
+    let aliases = aliases
+        .get(..lifecycle_width)
+        .ok_or(BuilderError::Lifecycle("alias-prefix"))?;
     let mut output_scalars = scalars.to_vec();
     let mut output_identities = identities.to_vec();
     let mut scalar_scratch = vec![0_u64; scalars.len()];
@@ -1142,6 +1345,7 @@ fn resolve_invocations(
     identities: &[[u8; 32]],
     request_bank: &[u8],
     family_request: &[u8],
+    synthesize_disabled_shadows: bool,
 ) -> Result<Vec<DerivedInvocationV1>, BuilderError> {
     let mut output = Vec::new();
     let mut request_offset = 0_usize;
@@ -1162,11 +1366,11 @@ fn resolve_invocations(
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| BuilderError::Projection("invocation-count"))?;
-        if count == 0 {
-            // A disabled route projects no invocation, but its request bytes
-            // still occupy the bank and the Hot executor still derives its
-            // caller-authority coordinate from them. Synthesize the shadow
-            // geometry so the authority can be derived.
+        if count == 0 && synthesize_disabled_shadows {
+            // Preserve the ordinary builder's historical shadow-authority
+            // construction byte-for-byte. The opt-in admitted candidate path
+            // omits this block and matches Hot's exact `0..invocation_count`
+            // walk: an accelerator-disabled route has no child authority.
             let end = request_offset
                 .checked_add(
                     usize::try_from(declared.fixed_request_bytes())
@@ -1233,4 +1437,202 @@ fn resolve_invocations(
         route = route.checked_add(1).ok_or(BuilderError::Arithmetic)?;
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_effect_kernel::{
+        v2::FixedRole,
+        v3::{
+            HEADER_BYTES as EFFECT_HEADER_BYTES_V3, ROUTE_BYTES, RouteKindV3,
+            encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
+        },
+        v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic},
+        v5::{HEADER_BYTES_V5, encode_program_v5_atomic},
+    };
+    use dclutch_general_adapter_contract::{
+        account_rules_v3::{
+            GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
+            general_account_profile_bytes_v3,
+        },
+        hot_candidate_v3::{general_hot_scalar_count_v3, scalar},
+    };
+    use dclutch_general_codec::Action;
+
+    fn exact_effect_v4() -> Vec<u8> {
+        let routes = [RouteInputV3 {
+            role: FixedRole::Core,
+            kind: RouteKindV3::Once,
+            enable_common_scalar: None,
+            witness_range_common_scalar: None,
+            receipt_dependency: None,
+            fixed_account_start: 0,
+            fixed_account_count: 5,
+            item_account_start: 0,
+            item_account_count: 0,
+            fixed_request: &[],
+            item_request: &[],
+        }];
+        let mut base_scratch = vec![0_u8; EFFECT_HEADER_BYTES_V3 + ROUTE_BYTES];
+        let mut base = vec![0_u8; base_scratch.len()];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 5,
+                item_account_stride: 0,
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 2,
+                item_identity_stride: 0,
+            },
+            &routes,
+            &[],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("V3 effect");
+        let mut scratch = vec![0_u8; HEADER_BYTES_V4 + base.len()];
+        let mut output = vec![0_u8; scratch.len()];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("V4 effect");
+        output
+    }
+
+    fn exact_effect_v5(base: &[u8]) -> Vec<u8> {
+        let mut scratch = vec![0_u8; HEADER_BYTES_V5 + base.len()];
+        let mut output = vec![0_u8; scratch.len()];
+        encode_program_v5_atomic(base, &[], &[], &mut scratch, &mut output).expect("V5 effect");
+        output
+    }
+
+    #[test]
+    fn effect_schema_selects_v4_or_full_v5_base_execution_view() {
+        let base = exact_effect_v4();
+        let successor = exact_effect_v5(&base);
+        assert_eq!(
+            decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V4, &base)
+                .expect("V4 execution view")
+                .bytes(),
+            base
+        );
+        assert_eq!(
+            decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &successor)
+                .expect("V5 base execution view")
+                .bytes(),
+            base
+        );
+        assert_ne!(successor, base);
+    }
+
+    #[test]
+    fn effect_schema_refuses_unknown_malformed_and_hybrid_programs() {
+        let base = exact_effect_v4();
+        let successor = exact_effect_v5(&base);
+        assert!(decode_execution_effect_program([0x72; 32], &base).is_err());
+        assert!(decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V4, &successor).is_err());
+        assert!(decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &base).is_err());
+        let mut malformed = successor;
+        malformed[5] = 1;
+        assert!(decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &malformed).is_err());
+        let mut malformed_base = exact_effect_v5(&base);
+        malformed_base[HEADER_BYTES_V5] ^= 1;
+        assert!(
+            decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &malformed_base).is_err()
+        );
+    }
+
+    #[test]
+    fn projected_observation_marker_mirrors_exact_profile_prestate() {
+        assert!(prestate_uses_variable_marker(
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        ));
+        for substituted in [
+            AccountPrestateV2::Exact,
+            AccountPrestateV2::LifecycleBound,
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias,
+            AccountPrestateV2::AuthenticatedRouteAlias,
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        ] {
+            assert!(!prestate_uses_variable_marker(substituted));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+    fn authenticated_span_selectors_seed_exactly_and_refuse_hostile_banks() {
+        let widths = GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 256,
+            result_domain: 192,
+            rent_sysvar: 17,
+            core_market: 320,
+            activation_cache: 160,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 112,
+            rent_credit: 48,
+        };
+        let profile_bytes =
+            general_account_profile_bytes_v3(Action::OpenBatch).expect("General Profile13 width");
+        let mut scratch = vec![0_u8; profile_bytes];
+        let mut bytes = vec![0_u8; profile_bytes];
+        encode_general_account_profile_v3_atomic(
+            Action::OpenBatch,
+            widths,
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("General Profile13");
+        let profile = AccountProfileV2::decode(&bytes).expect("Profile13 decode");
+        let scalar_count =
+            usize::try_from(general_hot_scalar_count_v3(4).expect("General scalar count"))
+                .expect("host usize");
+        let selector =
+            usize::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT).expect("selector coordinate");
+        let mut scalars = vec![0_u64; scalar_count];
+        scalars[0] = 0x55;
+        seed_authenticated_dynamic_span_counts(profile, &[3], &mut scalars)
+            .expect("authenticated width seeds selector");
+        assert_eq!(scalars[selector], 3);
+        assert_eq!(scalars[0], 0x55, "unrelated semantic register is unchanged");
+
+        assert_eq!(
+            seed_authenticated_dynamic_span_counts(profile, &[], &mut scalars),
+            Err(BuilderError::Spans("span-selector-count"))
+        );
+        assert_eq!(
+            seed_authenticated_dynamic_span_counts(profile, &[0], &mut scalars),
+            Err(BuilderError::Spans("span-selector-width"))
+        );
+        assert_eq!(
+            seed_authenticated_dynamic_span_counts(profile, &[3, 3], &mut scalars),
+            Err(BuilderError::Spans("span-selector-count"))
+        );
+        let mut short_bank = vec![0_u64; selector];
+        assert_eq!(
+            seed_authenticated_dynamic_span_counts(profile, &[3], &mut short_bank),
+            Err(BuilderError::Spans("span-selector-register"))
+        );
+        let expanded = profile
+            .logical_account_count_with_dynamic_spans(4, &[3])
+            .expect("expanded Profile13 width");
+        assert_eq!(
+            lifecycle_semantic_prefix_width(profile, 4, &[3], expanded),
+            Ok(usize::from(profile.fixed_account_count()))
+        );
+        assert_eq!(
+            lifecycle_semantic_prefix_width(profile, 4, &[3], expanded + 1),
+            Err(BuilderError::Lifecycle("expanded-account-width"))
+        );
+    }
 }

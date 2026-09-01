@@ -16,7 +16,7 @@ use dclutch_custody_contract::{
     CustodyFrameSpecV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
     CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, DELEGATED_CUSTODY_REQUEST_MAGIC_V2,
     OperationV1, PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
-    ProjectedCustodyRequestV1, ReceiptEvidenceV1,
+    ProjectedCustodyRequestV1, ReceiptEvidenceV1, classify_premarket_series_escrow_v1,
 };
 
 mod dealer_reservation_v1;
@@ -290,7 +290,7 @@ pub fn process_instruction(
         CustodyRequestV1::decode(request_bytes).map_err(|_| CustodySbfError::Instruction)?;
     require_account_count(accounts, request.operation, continuation.is_some())?;
     let request_digest = hash(request_bytes).to_bytes();
-    let market = authenticate_common_frame(
+    let market = authenticate_series_aware_common_frame(
         program_id,
         accounts,
         request,
@@ -298,7 +298,14 @@ pub fn process_instruction(
         continuation,
         relay,
     )?;
-    let realm = authenticate_realm(program_id, accounts, request, market)?;
+    let realm = match market {
+        AuthenticatedMarketAdmissionV1::Live(market) => {
+            authenticate_realm(program_id, accounts, request, market.state)?
+        }
+        AuthenticatedMarketAdmissionV1::Premarket { .. } => {
+            authenticate_premarket_realm(program_id, accounts, request)?
+        }
+    };
     match request.operation {
         OperationV1::InitializeReplay => {
             initialize_replay(program_id, accounts, request, request_digest)
@@ -498,6 +505,70 @@ fn authenticate_common_frame(
         return Err(CustodySbfError::Release.into());
     }
     let market = authenticate_market(accounts, request)?;
+    authenticate_common_frame_tail(
+        program_id,
+        accounts,
+        request,
+        request_digest,
+        continuation,
+        relay,
+        market.cache_bump,
+        caller_authority,
+        caller_program,
+        replay,
+    )?;
+    Ok(market.state)
+}
+
+#[inline(never)]
+fn authenticate_series_aware_common_frame(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+    request_digest: [u8; 32],
+    continuation: Option<RegistryContinuationRequestV1>,
+    relay: CustodyBumpRelayV1,
+) -> Result<AuthenticatedMarketAdmissionV1, ProgramError> {
+    let caller_authority = account(accounts, CALLER_AUTHORITY)?;
+    let caller_program = account(accounts, CALLER_PROGRAM)?;
+    let replay = account(accounts, REPLAY)?;
+
+    if caller_program.key.to_bytes() != request.caller_program {
+        return Err(CustodySbfError::Release.into());
+    }
+    let market = match try_authenticate_premarket_market(accounts, request)? {
+        Some(cache_bump) => AuthenticatedMarketAdmissionV1::Premarket { cache_bump },
+        None => AuthenticatedMarketAdmissionV1::Live(authenticate_market(accounts, request)?),
+    };
+    authenticate_common_frame_tail(
+        program_id,
+        accounts,
+        request,
+        request_digest,
+        continuation,
+        relay,
+        market.cache_bump(),
+        caller_authority,
+        caller_program,
+        replay,
+    )?;
+    Ok(market)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_common_frame_tail(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+    request_digest: [u8; 32],
+    continuation: Option<RegistryContinuationRequestV1>,
+    relay: CustodyBumpRelayV1,
+    cache_bump: AuthenticatedActivationCacheBumpV1,
+    caller_authority: &AccountInfo<'_>,
+    caller_program: &AccountInfo<'_>,
+    replay: &AccountInfo<'_>,
+) -> ProgramResult {
     let caller_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set).map_err(|_| CustodySbfError::Release)?,
         request.market,
@@ -524,21 +595,77 @@ fn authenticate_common_frame(
     if caller_authority.key != &expected_caller {
         return Err(CustodySbfError::CallerAuthority.into());
     }
-    authenticate_calling_release(
-        program_id,
-        accounts,
-        request,
-        continuation,
-        market.cache_bump,
-    )?;
+    authenticate_calling_release(program_id, accounts, request, continuation, cache_bump)?;
     authenticate_replay_identity(program_id, replay, request, relay.replay)?;
-    Ok(market.state)
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum AuthenticatedMarketAdmissionV1 {
+    Live(AuthenticatedMarketV1),
+    Premarket {
+        cache_bump: AuthenticatedActivationCacheBumpV1,
+    },
+}
+
+impl AuthenticatedMarketAdmissionV1 {
+    const fn cache_bump(self) -> AuthenticatedActivationCacheBumpV1 {
+        match self {
+            Self::Live(market) => market.cache_bump,
+            Self::Premarket { cache_bump } => cache_bump,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 struct AuthenticatedMarketV1 {
     state: CoreState,
     cache_bump: AuthenticatedActivationCacheBumpV1,
+}
+
+/// Select the deliberately vacant future-Market path before ordinary Market
+/// authentication, but only for an exact precommitted SeriesEscrow request.
+///
+/// System-owned/data-empty is the selection boundary.  Once selected, every
+/// remaining mismatch is a refusal from this path; no partially authenticated
+/// request can fall through to the live-Market verifier.
+#[inline(never)]
+fn try_authenticate_premarket_market(
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+) -> Result<Option<AuthenticatedActivationCacheBumpV1>, ProgramError> {
+    let market = account(accounts, CORE_MARKET)?;
+    if !is_premarket_series_vacancy(market, request) {
+        return Ok(None);
+    }
+    require_premarket_series_market(market, request)?;
+    let cache = account(accounts, ACTIVATION_CACHE)?;
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)
+        .map(Some)
+        .map_err(|error| CustodySbfError::from(error).into())
+}
+
+fn is_premarket_series_vacancy(market: &AccountInfo<'_>, request: CustodyRequestV1) -> bool {
+    classify_premarket_series_escrow_v1(request).is_some()
+        && market.owner == &system_program::ID
+        && market.data_len() == 0
+}
+
+fn require_premarket_series_market(
+    market: &AccountInfo<'_>,
+    request: CustodyRequestV1,
+) -> ProgramResult {
+    if market.key.to_bytes() != request.market
+        || market.owner != &system_program::ID
+        || market.data_len() != 0
+        || market.is_signer
+        || market.is_writable
+        || market.executable
+    {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -860,6 +987,92 @@ fn authenticate_realm(
     require_realm_authority(RealmAuthorityObservation {
         registry: *registry.key,
         persisted_registry: Pubkey::new_from_array(market.identity.registry_program.to_bytes()),
+        expected_realm,
+        realm_key: *realm_account.key,
+        realm_owner: *realm_account.owner,
+        expected_staging,
+        staging_key: *staging.key,
+        staging_owner: *staging.owner,
+        staging_data_len: staging.data_len(),
+        realm_digest,
+        expected_digest: request.realm,
+    })?;
+    let realm = RealmV1::decode(&realm_data).map_err(|_| CustodySbfError::Realm)?;
+    let profile = collateral_profile(realm)?;
+    if matches!(
+        request.operation,
+        OperationV1::OpenVault | OperationV1::Transfer | OperationV1::CloseVault
+    ) && (request.mint != *realm.collateral_mint()
+        || request.token_program != *realm.token_program()
+        || request.token_program != profile.program_id())
+    {
+        return Err(CustodySbfError::Realm.into());
+    }
+    Ok(RealmFacts { realm, profile })
+}
+
+/// Authenticate the same finalized Realm authority as the live path without
+/// borrowing Market-state bumps that cannot exist before the Market does.
+///
+/// The request's Realm content digest is signed by the current Trading caller.
+/// Custody searches the Registry's canonical raw/staging coordinates from that
+/// digest, requires the raw record to be finalized, and otherwise applies the
+/// unchanged collateral profile checks.
+#[inline(never)]
+fn authenticate_premarket_realm(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+) -> Result<RealmFacts, ProgramError> {
+    let cache = account(accounts, ACTIVATION_CACHE)?;
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let realm_account = account(accounts, REALM)?;
+    let staging = account(accounts, REALM_STAGING)?;
+    let cache_data = cache
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
+        .map_err(|_| CustodySbfError::Release)?;
+    if activated
+        .execution_release_set_id()
+        .map_err(|_| CustodySbfError::Release)?
+        .as_bytes()
+        != &request.release_set
+        || activated
+            .role(ExecutionRoleV1::Custody)
+            .map_err(|_| CustodySbfError::Release)?
+            .release()
+            .program()
+            .as_bytes()
+            != &program_id.to_bytes()
+    {
+        return Err(CustodySbfError::Release.into());
+    }
+    drop(cache_data);
+
+    if realm_account.owner != registry.key
+        || realm_account.data_len() != REALM_BYTES
+        || !Rent::get()
+            .map_err(|_| CustodySbfError::Realm)?
+            .is_exempt(realm_account.lamports(), REALM_BYTES)
+    {
+        return Err(CustodySbfError::Realm.into());
+    }
+    let realm_data = realm_account
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Realm)?;
+    let realm_digest = hash(&realm_data).to_bytes();
+    let expected_realm =
+        registry_record_address_v1(RAW_RECORD_PDA_SEED_V1, &request.realm, registry.key, None)?;
+    let expected_staging = registry_record_address_v1(
+        STAGING_CURSOR_PDA_SEED_V1,
+        &request.realm,
+        registry.key,
+        None,
+    )?;
+    require_realm_authority(RealmAuthorityObservation {
+        registry: *registry.key,
+        persisted_registry: *registry.key,
         expected_realm,
         realm_key: *realm_account.key,
         realm_owner: *realm_account.owner,
@@ -2126,6 +2339,268 @@ mod tests {
         assert_eq!(CLOSE_REPLAY_ACCOUNT_COUNT_V1, 10);
     }
 
+    fn premarket_series_initialize_request() -> CustodyRequestV1 {
+        CustodyRequestV1 {
+            operation: OperationV1::InitializeReplay,
+            caller_role: CallerRoleV1::Trading,
+            source_compartment: CompartmentV1::None,
+            destination_compartment: CompartmentV1::None,
+            release_set: [0x11; 32],
+            market: [0x12; 32],
+            realm: [0x13; 32],
+            context: [0x14; 32],
+            caller_program: [0x15; 32],
+            semantic: dclutch_custody_contract::ContextV1 {
+                candidate: [0x16; 32],
+                source_owner: [0; 32],
+                destination_owner: [0; 32],
+                order: [0x14; 32],
+                parent_request_digest: [0x17; 32],
+                order_nonce: 9,
+                generation: 3,
+                page_index: 0,
+                execution_index: 9,
+                transfer_index: 0,
+            },
+            source: [0; 32],
+            destination: [0; 32],
+            source_vault_context: [0; 32],
+            destination_vault_context: [0; 32],
+            mint: [0; 32],
+            token_program: [0; 32],
+            payer: [0x18; 32],
+            rent_refund: [0x19; 32],
+            expected_revision: 0,
+            resulting_revision: 1,
+            amount: 0,
+            rent_lamports: 1,
+        }
+    }
+
+    fn premarket_series_lock_request() -> CustodyRequestV1 {
+        let mut request = premarket_series_initialize_request();
+        request.operation = OperationV1::Transfer;
+        request.source_compartment = CompartmentV1::External;
+        request.destination_compartment = CompartmentV1::SeriesEscrow;
+        request.semantic.source_owner = [0x20; 32];
+        request.semantic.transfer_index = 2;
+        request.source = [0x21; 32];
+        request.destination = [0x22; 32];
+        request.destination_vault_context = request.context;
+        request.mint = [0x23; 32];
+        request.token_program = [0x24; 32];
+        request.payer = [0; 32];
+        request.rent_refund = [0; 32];
+        request.expected_revision = 2;
+        request.resulting_revision = 3;
+        request.amount = 41;
+        request.rent_lamports = 0;
+        request
+    }
+
+    #[test]
+    fn only_exact_series_requests_with_a_system_empty_market_select_premarket() {
+        let request = premarket_series_initialize_request();
+        let market_key = Pubkey::new_from_array(request.market);
+        let system_owner = system_program::ID;
+        let mut lamports = 37;
+        let mut empty_data = [];
+        let market = AccountInfo::new(
+            &market_key,
+            false,
+            false,
+            &mut lamports,
+            &mut empty_data,
+            &system_owner,
+            false,
+        );
+        assert!(is_premarket_series_vacancy(&market, request));
+        assert_eq!(require_premarket_series_market(&market, request), Ok(()));
+
+        let core_owner = Pubkey::new_from_array([0x31; 32]);
+        let mut live_lamports = 38;
+        let mut live_data = alloc::vec![0; STATE_BYTES];
+        let live_market = AccountInfo::new(
+            &market_key,
+            false,
+            false,
+            &mut live_lamports,
+            &mut live_data,
+            &core_owner,
+            false,
+        );
+        assert!(
+            !is_premarket_series_vacancy(&live_market, request),
+            "an allocated live Market must continue through authenticate_market"
+        );
+
+        let mut non_trading = request;
+        non_trading.caller_role = CallerRoleV1::Core;
+        assert!(!is_premarket_series_vacancy(&market, non_trading));
+        let mut inexact = request;
+        inexact.semantic.transfer_index = 1;
+        assert!(!is_premarket_series_vacancy(&market, inexact));
+    }
+
+    #[test]
+    fn selected_vacant_market_refuses_every_key_and_privilege_substitution() {
+        let request = premarket_series_initialize_request();
+        let key = Pubkey::new_from_array(request.market);
+        let owner = system_program::ID;
+        let mut lamports = 5;
+        let mut data = [];
+        let exact = AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+        let expected = Err(CustodySbfError::AccountFrame.into());
+
+        let wrong_key = Pubkey::new_from_array([0x41; 32]);
+        let mut wrong_key_lamports = 5;
+        let mut wrong_key_data = [];
+        let wrong_key_info = AccountInfo::new(
+            &wrong_key,
+            false,
+            false,
+            &mut wrong_key_lamports,
+            &mut wrong_key_data,
+            &owner,
+            false,
+        );
+        assert_eq!(
+            require_premarket_series_market(&wrong_key_info, request),
+            expected
+        );
+        let mut signer = exact.clone();
+        signer.is_signer = true;
+        assert_eq!(require_premarket_series_market(&signer, request), expected);
+        let mut writable = exact.clone();
+        writable.is_writable = true;
+        assert_eq!(
+            require_premarket_series_market(&writable, request),
+            expected
+        );
+        let mut executable = exact;
+        executable.executable = true;
+        assert_eq!(
+            require_premarket_series_market(&executable, request),
+            expected
+        );
+    }
+
+    #[test]
+    fn selected_vacancy_refusal_occurs_before_any_account_write() {
+        let request = premarket_series_initialize_request();
+        let owner = system_program::ID;
+        let dummy_key = Pubkey::new_from_array([0x51; 32]);
+        let mut dummy_lamports = 7;
+        let mut dummy_data = [0x52];
+        let dummy = AccountInfo::new(
+            &dummy_key,
+            false,
+            false,
+            &mut dummy_lamports,
+            &mut dummy_data,
+            &owner,
+            false,
+        );
+        let wrong_market_key = Pubkey::new_from_array([0x53; 32]);
+        let mut market_lamports = 11;
+        let mut market_data = [];
+        let market = AccountInfo::new(
+            &wrong_market_key,
+            false,
+            false,
+            &mut market_lamports,
+            &mut market_data,
+            &owner,
+            false,
+        );
+        let accounts = [dummy, market];
+        let before = (
+            accounts[0].lamports(),
+            accounts[0].try_borrow_data().expect("dummy data").to_vec(),
+            accounts[1].lamports(),
+            accounts[1].try_borrow_data().expect("market data").to_vec(),
+        );
+        assert_eq!(
+            try_authenticate_premarket_market(&accounts, request),
+            Err(CustodySbfError::AccountFrame.into())
+        );
+        assert_eq!(
+            (
+                accounts[0].lamports(),
+                accounts[0].try_borrow_data().expect("dummy data").to_vec(),
+                accounts[1].lamports(),
+                accounts[1].try_borrow_data().expect("market data").to_vec(),
+            ),
+            before
+        );
+    }
+
+    #[test]
+    fn series_vacancy_keeps_replay_and_vault_pdas_as_commit_authorities() {
+        let program = Pubkey::new_from_array([0x61; 32]);
+        let initialize = premarket_series_initialize_request();
+        let replay_key = Pubkey::find_program_address(
+            &CustodyReplaySeedsV1::from_request(initialize).as_slices(),
+            &program,
+        )
+        .0;
+        let system_owner = system_program::ID;
+        let mut replay_lamports = 0;
+        let mut replay_data = [];
+        let replay = AccountInfo::new(
+            &replay_key,
+            false,
+            true,
+            &mut replay_lamports,
+            &mut replay_data,
+            &system_owner,
+            false,
+        );
+        assert_eq!(
+            authenticate_replay_identity(&program, &replay, initialize, None),
+            Ok(())
+        );
+        let wrong_replay_key = Pubkey::new_from_array([0x62; 32]);
+        let mut wrong_replay_lamports = 0;
+        let mut wrong_replay_data = [];
+        let wrong_replay = AccountInfo::new(
+            &wrong_replay_key,
+            false,
+            true,
+            &mut wrong_replay_lamports,
+            &mut wrong_replay_data,
+            &system_owner,
+            false,
+        );
+        assert_eq!(
+            authenticate_replay_identity(&program, &wrong_replay, initialize, None),
+            Err(CustodySbfError::Replay.into())
+        );
+
+        let lock = premarket_series_lock_request();
+        let vault_key = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::from_request(lock, false).as_slices(),
+            &program,
+        )
+        .0;
+        let mut vault_lamports = 0;
+        let mut vault_data = [];
+        let vault = AccountInfo::new(
+            &vault_key,
+            false,
+            true,
+            &mut vault_lamports,
+            &mut vault_data,
+            &system_owner,
+            false,
+        );
+        assert_eq!(validate_vault_key(&program, &vault, lock, false), Ok(()));
+        assert_eq!(
+            validate_vault_key(&program, &wrong_replay, lock, false),
+            Err(CustodySbfError::TokenState.into())
+        );
+    }
+
     fn continuation(roles: &[ExecutionRoleV1]) -> RegistryContinuationRequestV1 {
         RegistryContinuationRequestV1::new(
             ContentId::new([0x31; 32]).expect("release"),
@@ -2244,6 +2719,14 @@ mod tests {
             },
             RealmAuthorityObservation {
                 registry: Pubkey::new_unique(),
+                ..exact
+            },
+            RealmAuthorityObservation {
+                realm_digest: [0x41; 32],
+                ..exact
+            },
+            RealmAuthorityObservation {
+                expected_digest: [0x42; 32],
                 ..exact
             },
         ] {

@@ -16,9 +16,9 @@ use dclutch_trading_sbf::dealer::{
         build_equity_request_v3, materialize_equity_intent_v3, prepare_equity_request_v3,
     },
     v3_hot_artifact::{
-        dealer_equity_effect_program_bytes_v3, dealer_equity_identity_count_v3,
-        dealer_equity_scalar_count_v3, encode_dealer_equity_effect_program_v3,
-        project_dealer_equity_hot_registers_v3,
+        dealer_equity_effect_program_bytes_v3, dealer_equity_evidence_owner_identity_register_v3,
+        dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3,
+        encode_dealer_equity_effect_program_v3, project_dealer_equity_hot_registers_v3,
     },
     v3_multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
@@ -399,6 +399,10 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     let mut scalars = vec![0; dealer_equity_scalar_count_v3(physical.action).expect("scalars")];
     let mut identities =
         vec![[0; 32]; dealer_equity_identity_count_v3(physical.action).expect("identities")];
+    let evidence_owner = dealer_equity_evidence_owner_identity_register_v3(physical.action)
+        .expect("evidence-owner register");
+    let claims_program = [0xc7; 32];
+    identities[usize::from(evidence_owner)] = claims_program;
     project_dealer_equity_hot_registers_v3(
         request,
         physical,
@@ -408,6 +412,11 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         &mut identities,
     )
     .expect("chain-derived Hot registers");
+    assert_eq!(
+        identities[usize::from(evidence_owner)],
+        claims_program,
+        "TransitionVM preserves the AccountProfile-authenticated Claims owner"
+    );
     let effect_bytes = equity_effect(cash, merge, 2);
     let effect = EffectProgramV3::decode(&effect_bytes).expect("Dealer Hot effect");
     let composition = authenticate_dealer_equity_routes_v3(

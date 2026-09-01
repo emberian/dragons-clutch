@@ -1,5 +1,11 @@
 # GOAL — work until 11am: the protocol as good as it can be, all debt burned down
 
+## CONVERGENCE (~17:3x): docs/HANDOFF_CODEX_2026_08_31.md is the
+## queue — 17 items, 3 tracks, house law attached. Four lanes still
+## landing (PUBLISH-8, OPERATOR-BOOK, OPERATOR-FORMS, CLOSE-DRIVER's
+## verdicts); their reports append here. NOT handed off: the cut
+## (steward+ember), ember's four rulings, the vault review, cohort-10.
+
 ## THE AFTERNOON SWARM (ember: "what oughta we be swarming over") —
 ## six lanes live, all opus:
 - FLOW-1 LANDED (6ba98617): @theme binds BY REFERENCE (verified in the
@@ -35,6 +41,70 @@
   missing maker flow gets its first primitive.
 - PROFILE-3: §8.1 brick repro, §8.5 declarations, the bootstrap
   ceremony rehearsal (unblocked by 6a9a2ba0).
+★ PUBLISH-8 SHIPPED THE FLOW LIVE (9fe6ec208, pages 33442687321,
+  69 commits): the 7-step rail renders on clutch.dregg.pro; the
+  DCLTCOR2 fix PROVEN end-to-end (market22 decodes DCLTCOR3/v3/368B —
+  the conjunct no account could satisfy now reads one); zero console
+  errors; SBOM debt zero; 2 rust rows red→green. Remaining reds
+  attributed: seam's 10 self-heal at the next cut (the verdicts landed
+  after the pin); the heap-inertness wire pin is stale vs cohort-9's
+  five-entry set → orch measuring now. DIRECT SMALLS TAKEN (66edf88f):
+  claims runner exits 2 pre-build; the tautology deleted; accepted.rs
+  dead items gone.
+- OPERATOR-BOOK OPENED (93552415): the contract + two walkthroughs
+  written BY RUNNING THEM — a real market founded mid-writing
+  (3UugcUQt…, founding-dcltgmf3 at 1,069,561 CU = 76% of the ceiling
+  in one tx). FOUR WALLS: two site-published guides teach commands
+  that cannot run (→ handoff 18); the gauntlet's full mode is dead
+  code after its own 15-min build (→ 19); founding unreachable cold
+  (--predecessor-profile has no fixture, → 20); stale release binary
+  (→ 21). Book left unwired from the site ON PURPOSE ("unlinked is
+  not unpublished" — listing IS publishing; rides the next cut).
+  Walkthrough 3 chartered in the book: "Keep the chain" — the tickets
+  of walkthrough one crossing on the market of walkthrough two.
+- OPERATOR-FORMS LANDED (5 commits, web 1440 / SDK 634, honesty
+  guards 246→289): 106 fields audited — 1/106 validates pre-submit,
+  46% answer typos in web3.js's voice, 42% fully derivable; seven
+  typed fields shipped (validation = a total function of the text);
+  /product-v2's six required inputs became DERIVED values proven by
+  round-trip through the real builder; /found's refusals land at
+  their fields. Found bugs → handoff item 5 (/liquidity 38-vs-39;
+  /direct's two dead fields). Its best move: reconnaissance caught
+  FLOW-2's landing and REUSED its grammar instead of building a twin.
+- CLOSE-DRIVER's verdicts restored seam to PASS (f19e10e5): 4 seed
+  restatements fixed via accessors (+2 unflagged bump-bearing siblings
+  — retiring the finding isn't retiring the defect), 3 verdicted with
+  attribution to PROFILE-3's file, and the class-6 pair EXPOSED A REAL
+  CUT-DAY BUG: rent_owner-as-fee-payer (the first thing an operator
+  would try) would refuse on chain unexplained — now refused at plan
+  time by name, held by a test. Addresses proven unchanged: the real-
+  ELF close lands at the identical 111,505 CU. New tag confirmed in
+  WAVE.
+★ TIERS CLOSED THE MARGIN (e74b5dd8): +6,876 attributed to the BASIS
+lane — unconditional admit_selection_v3 (+446) + rewritten decode with
+price-gate probe (+4,567) running 4× per trade; all three brief
+suspects AND its own leading hypothesis refuted by measurement (the
+suspected 50-account frame: 2 CU). Falsified BASIS_ABI_UNIFICATION's
+"zero CU" claim → doc corrected by orch (33d89959; cheap recovery
+named: hoist to the founding caller, ~4,500 back, unchartered).
+Floors re-pinned 1,271,552 / 1,269,919 with the honest comment that
+the bargain was NOT met. Clippy fixed at source (the 8-arg group
+became a binding struct, killing a transposition hazard). Board: 7/9
+green; seam's 10 new findings routed to CLOSE-DRIVER (fix-or-verdict);
+suites/claims = the arm64 host limit + an exit-code conflation queued.
+★ FLOW-2 SHIPPED THE FLOW (b7a53b6c + 5e184264, web 1363/1363): all
+7 steps + the pre-stepper walls; 44 refusals routed to their owning
+steps behind a DRIFT GUARD (every fragment asserted verbatim in the
+module that raises it — a reworded refusal fails at the rewording);
+self-caught the shared-tail bug that would have told a step-7 reader
+to re-sign; FOK renders as a fixed value not an input-that-always-
+refuses; the effect-loop fix means connecting a wallet hides your own
+offers with no relay round-trip; machine BYTE-IDENTICAL to FLOW-1's.
+Flags queued: maker flow (§4.5, the board's empty state says so
+honestly), TicketBoard fetch-surface test, board slotBasis vs own
+finalized slot, devnet e2e needs a live wallet. Doc-comment handback
+fixed by orch (a8439ed6). → PUBLISH-8 SPAWNED (the flow + the
+DCLTCOR2 guard fix to the live site).
 - OPERATOR-FORMS SPAWNED (ember: "extremely raw forms... oughta be
   more semantic"): phase A = the full-input audit across 8 consoles +
   OPERATOR_FORMS_V1 spec (typed fields; DERIVE rule — chain-derivable
@@ -42,6 +112,13 @@
   typed into a browser; the ACT shape — simulate primary, execute
   gated); phase B = shared typed fields + the two worst consoles
   converted. Grouping not simplification; precision preserved.
+- HBOX-CONTROL CONFIRMED the bump (23/23: campaign 13 + compaction 6 +
+  2 walls, canonical Linux Token-2022 fixture e2acdfb7…, digest ring
+  closed; proved the run COMPILED the bumped pins — not stale
+  artifacts). Peak 6.01 GiB under swarm-build; co-tenants untouched.
+  LOCKS' debt paid. Standing fact: hbox:~/dev/dclutch is now a warm
+  Linux runner for the campaign (~15 min saved next time; reclaim
+  command in its report).
 - LOCKS LANDED (3a4565bd): SBOM STOP → PASS (58 manifests, 0/0). The
   conflict decided by STRUCTURE not headcount (downward impossible:
   dclutch-operator hard-pins ALT 3.2.0) + the documented bump-older-

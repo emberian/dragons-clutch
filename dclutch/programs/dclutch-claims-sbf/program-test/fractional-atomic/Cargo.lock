@@ -1665,6 +1665,7 @@ dependencies = [
 name = "dclutch-fractional-atomic-program-test"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dclutch-capability-program-contract",
  "dclutch-claim-check-escrow-signer-test-sbf",
  "dclutch-claims-affine-batch-program-test",
@@ -1677,6 +1678,7 @@ dependencies = [
  "dclutch-fractional-claim-kernel",
  "dclutch-fractional-claims-kernel",
  "dclutch-fractional-compaction-test-caller-sbf",
+ "dclutch-fractional-cubic-life-evidence",
  "dclutch-market-core-codec",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
@@ -1754,9 +1756,19 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
+ "dclutch-fractional-atomic-test-caller-sbf",
  "dclutch-fractional-claim-contract",
  "dclutch-refusal-registry",
  "solana-program",
+]
+
+[[package]]
+name = "dclutch-fractional-cubic-life-evidence"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

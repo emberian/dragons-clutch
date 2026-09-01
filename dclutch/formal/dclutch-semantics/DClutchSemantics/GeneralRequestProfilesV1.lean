@@ -75,6 +75,36 @@ def releaseOrderCoordinates : List Operation := [
   ⟨.requireU8, false, false, 63, 0, 0⟩
 ]
 
+/-- SubmitCandidate. The subject is the candidate content identity in identity
+0 (`CANDIDATE`), which is also the candidate-state PDA coordinate. Submission
+has no optimistic revision and creates one primary state, so only the primary
+bump is projected. -/
+def submitCandidateCoordinates : List Operation := [
+  ⟨.requireU8, false, false, 11, 0, 0⟩,
+  ⟨.requireU64, false, false, 16, 0, 0⟩,
+  ⟨.projectIdentity, false, false, 24, 0, 0⟩,
+  ⟨.requireU32, false, false, 56, 0, 0⟩,
+  ⟨.requireU8, false, false, 60, 0, 0⟩,
+  ⟨.projectU8, false, false, 61, 69, 0⟩,
+  ⟨.requireU8, false, false, 62, 0, 0⟩,
+  ⟨.requireU8, false, false, 63, 0, 0⟩
+]
+
+/-- CloseCandidate. The subject is the Candidate identity in identity 0, and
+the primary bump is the one Candidate state coordinate. Every cursor and the
+two unused state-bump bytes are required zero: close is permissionless and its
+timing comes only from trusted CurrentSlot plus the authenticated Batch. -/
+def closeCandidateCoordinates : List Operation := [
+  ⟨.requireU8, false, false, 11, 0, 0⟩,
+  ⟨.requireU64, false, false, 16, 0, 0⟩,
+  ⟨.projectIdentity, false, false, 24, 0, 0⟩,
+  ⟨.requireU32, false, false, 56, 0, 0⟩,
+  ⟨.requireU8, false, false, 60, 0, 0⟩,
+  ⟨.projectU8, false, false, 61, 69, 0⟩,
+  ⟨.requireU8, false, false, 62, 0, 0⟩,
+  ⟨.requireU8, false, false, 63, 0, 0⟩
+]
+
 /-- CancelOrder. The subject (offset 24) is the ORDER's content identity in
 identity 3, the primary bump witness (the batch state) in scalar 69, and the
 secondary bump witness (the order state) in scalar 70 -- the same register
@@ -106,6 +136,26 @@ def placeOrderCoordinates : List Operation := [
   ⟨.projectU8, false, false, 61, 69, 0⟩,
   ⟨.projectU8, false, false, 62, 70, 0⟩,
   ⟨.requireU8, false, false, 63, 0, 0⟩
+]
+
+/-- VerifyCandidateRow speaks V3 and names all three independently derived
+states: Candidate at 69, Verifier at 70, and conditional verified result at
+145. The action is a row step, so it projects the optimistic verifier revision,
+candidate identity, page, and row exactly as a settlement row does. -/
+def verifyCandidateRowCoordinates : List Operation := [
+  ⟨.requireU8, false, false, 11, 0, 0⟩,
+  -- The expected verifier revision must survive the read-only accelerator.
+  -- Scalar zero is ACTION and the projector writes the action tag there
+  -- before TransitionVM folds, so placing the revision there erased the
+  -- optimistic guard. Scalar 94 is the already-declared replay coordinate and
+  -- remains untouched by the verifier projector.
+  ⟨.projectU64, false, false, 16, 94, 0⟩,
+  ⟨.projectIdentity, false, false, 24, 0, 0⟩,
+  ⟨.projectU32, false, false, 56, 1, 0⟩,
+  ⟨.projectU8, false, false, 60, 2, 0⟩,
+  ⟨.projectU8, false, false, 61, 69, 0⟩,
+  ⟨.projectU8, false, false, 62, 70, 0⟩,
+  ⟨.projectU8, false, false, 63, 145, 0⟩
 ]
 
 def manifestOrderCoordinate : List Operation := [
@@ -171,6 +221,12 @@ def profile (action : Action) : Profile := {
       requirePrefixV3 action ++ cancelOrderCoordinates
     else if action = .releaseOrder then
       requirePrefixV3 action ++ releaseOrderCoordinates
+    else if action = .submitCandidate then
+      requirePrefixV3 action ++ submitCandidateCoordinates
+    else if action = .verifyCandidateRow then
+      requirePrefixV3 action ++ verifyCandidateRowCoordinates
+    else if action = .closeCandidate then
+      requirePrefixV3 action ++ closeCandidateCoordinates
     else
       requirePrefix action ++
         (if action = .collect || action = .distribute then manifestOrderCoordinate
@@ -183,7 +239,8 @@ def profile (action : Action) : Profile := {
 
 def actions : List Action := [
   .consider, .freeze, .initializeSettlement, .collect, .materialize, .distribute, .close,
-  .openBatch, .placeOrder, .cancelOrder, .closeBatch, .releaseOrder
+  .openBatch, .placeOrder, .cancelOrder, .closeBatch, .submitCandidate, .verifyCandidateRow,
+  .releaseOrder, .closeCandidate
 ]
 
 def profiles : List Profile := actions.map profile
@@ -238,11 +295,11 @@ theorem settlement_rows_alone_project_manifest_order :
 for its terminal record, PlaceOrder for the order it creates, CancelOrder for
 the order it flips. Every other grammar requires the byte zero. -/
 theorem only_the_two_state_actions_project_the_secondary_bump :
-    ([Action.close, .placeOrder, .cancelOrder].all fun action =>
+    ([Action.close, .placeOrder, .cancelOrder, .verifyCandidateRow].all fun action =>
       (profile action).fixedOperations.any
         (fun operation => operation.kind = .projectU8 ∧
           operation.requestOffset = 62 ∧ operation.register = 70)) ∧
-      (((actions.erase .close).erase .placeOrder).erase .cancelOrder).all fun action =>
+      ((((actions.erase .close).erase .placeOrder).erase .cancelOrder).erase .verifyCandidateRow).all fun action =>
         (profile action).fixedOperations.any
           (fun operation => operation.kind = .requireU8 ∧
             operation.requestOffset = 62 ∧ operation.immediate = 0) := by
@@ -296,6 +353,18 @@ theorem cancel_order_names_its_order_and_projects_both_bumps :
           operation.register = 70) &&
       (profile .cancelOrder).fixedOperations.all (fun operation =>
         operation.requestOffset ≠ 16 || operation.kind ≠ .projectU64)) = true := by
+  native_decide
+
+theorem verify_projects_revision_and_the_conditional_result_bump :
+    ((profile .verifyCandidateRow).fixedOperations.any (fun operation =>
+        operation.kind = .requireU64 && operation.requestOffset = 0 &&
+          operation.immediate = requestMagicWordV3) &&
+      (profile .verifyCandidateRow).fixedOperations.any (fun operation =>
+        operation.kind = .projectU64 && operation.requestOffset = 16 &&
+          operation.register = 94) &&
+      (profile .verifyCandidateRow).fixedOperations.any (fun operation =>
+        operation.kind = .projectU8 && operation.requestOffset = 63 &&
+          operation.register = 145)) = true := by
   native_decide
 
 end DClutch.General.RequestProfilesV1

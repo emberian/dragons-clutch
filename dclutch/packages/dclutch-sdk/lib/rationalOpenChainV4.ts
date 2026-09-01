@@ -95,8 +95,58 @@ export type RationalOpenChainInspectionV4 = Readonly<{
   fixedAccounts: ReadonlyArray<Meta>;
   physicalClaimsAccounts: ReadonlyArray<Meta>;
   lookupTable: AddressLookupTableAccount;
+  poststate: RationalOpenPoststateV4;
   executionStatus: 'blocked';
   refusal: string;
+}>;
+
+export type RationalOpenTokenPoststateV4 = Readonly<{
+  mint: string;
+  mintSupply: bigint;
+  actorAccount: string;
+  actorAmount: bigint;
+  structuredAccount: string;
+  structuredAmount: bigint;
+}>;
+
+export type RationalOpenPositionPoststateV4 = Readonly<{
+  address: string;
+  owner: string;
+  revision: bigint;
+  balances: ReadonlyArray<bigint>;
+}>;
+
+export type RationalOpenPoststateContextV4 = Readonly<{
+  claimsProgram: string;
+  descriptorId: Uint8Array;
+  actor: string;
+  representationAuthority: string;
+  aggregate: string;
+  market: string;
+  releaseSet: Uint8Array;
+  registry: string;
+  product: Uint8Array;
+  realm: Uint8Array;
+  generation: bigint;
+  outcomes: number;
+  basis: Uint8Array;
+  custodyContext: Uint8Array;
+}>;
+
+/** Exact accounts and atoms that must exist after one finalized open action. */
+export type RationalOpenPoststateV4 = Readonly<{
+  context: RationalOpenPoststateContextV4;
+  replay: Readonly<{ address: string; revision: bigint }>;
+  aggregate: Readonly<{ address: string; revision: bigint; balances: ReadonlyArray<bigint> }> | null;
+  positions: ReadonlyArray<RationalOpenPositionPoststateV4>;
+  receipt: Readonly<{ mint: string; supply: bigint; account: string; amount: bigint }> | null;
+  assets: ReadonlyArray<RationalOpenTokenPoststateV4>;
+}>;
+
+export type RationalOpenFinalizedPoststateV4 = Readonly<{
+  observedSlot: string;
+  action: RationalOpenActionV3;
+  poststate: RationalOpenPoststateV4;
 }>;
 
 export type RationalOpenCandidateV4 = Readonly<{
@@ -134,6 +184,30 @@ function putU64(bytes: Uint8Array, offset: number, value: bigint): void {
   new DataView(bytes.buffer, bytes.byteOffset + offset, 8).setBigUint64(0, value, true);
 }
 
+function addU64(left: bigint, right: bigint, field: string): bigint {
+  const value = left + right;
+  if (left < 0n || right < 0n || value > MAX_U64) throw new Error(`${field} overflows canonical u64`);
+  return value;
+}
+
+function subtractU64(left: bigint, right: bigint, field: string): bigint {
+  if (left < 0n || right < 0n || left < right) throw new Error(`${field} underflows canonical u64`);
+  return left - right;
+}
+
+function withBalance(balances: ReadonlyArray<bigint>, index: number, value: bigint, field: string): ReadonlyArray<bigint> {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= balances.length) throw new Error(`${field} outcome is outside the Claims vector`);
+  const output = [...balances];
+  output[index] = value;
+  return Object.freeze(output);
+}
+
+function requireExactBalances(observed: ReadonlyArray<bigint>, expected: ReadonlyArray<bigint>, field: string): void {
+  if (observed.length !== expected.length || observed.some((value, index) => value !== expected[index])) {
+    throw new Error(`${field} differs from the exact finalized poststate`);
+  }
+}
+
 function key(value: string, field: string): PublicKey {
   const parsed = new PublicKey(value);
   if (parsed.toBase58() !== value) throw new Error(`${field} must be canonical base58 text`);
@@ -167,7 +241,12 @@ function selectedAction(action: RationalOpenActionV3): boolean {
   return action === 'denominate' || action === 'reconstitute';
 }
 
-export type RationalClaimsAggregateV2 = Readonly<{ revision: bigint; basis: Uint8Array; custodyContext: Uint8Array }>;
+export type RationalClaimsAggregateV2 = Readonly<{
+  revision: bigint;
+  basis: Uint8Array;
+  custodyContext: Uint8Array;
+  balances: ReadonlyArray<bigint>;
+}>;
 export function decodeRationalClaimsAggregateV2(bytes: Uint8Array, input: Readonly<{
   market: string; releaseSet: Uint8Array; registry: string; product: Uint8Array; realm: Uint8Array; generation: bigint; outcomes: number;
 }>): RationalClaimsAggregateV2 {
@@ -188,7 +267,16 @@ export function decodeRationalClaimsAggregateV2(bytes: Uint8Array, input: Readon
   if (u64(bytes, LIABILITY_BASIS_MARKET_GENERATION_OFFSET) !== input.generation) throw new Error('Claims aggregate generation differs from Core');
   const basis = slice(bytes, LIABILITY_BASIS_MARKET_BASIS_OFFSET, 32); requireNonzero(basis, 'Claims semantic basis');
   const custodyContext = slice(bytes, LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET, 32); requireNonzero(custodyContext, 'Claims custody context');
-  return Object.freeze({ revision: u64(bytes, LIABILITY_BASIS_MARKET_REVISION_OFFSET), basis, custodyContext });
+  const balances = Object.freeze(Array.from({ length: input.outcomes }, (_, index) => u64(bytes, LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + index * 8)));
+  return Object.freeze({ revision: u64(bytes, LIABILITY_BASIS_MARKET_REVISION_OFFSET), basis, custodyContext, balances });
+}
+
+export type RationalClaimsPositionStateV2 = Readonly<{ revision: bigint; balances: ReadonlyArray<bigint> }>;
+export function decodeRationalClaimsPositionStateV2(bytes: Uint8Array, aggregate: string, owner: string, basis: Uint8Array, outcomes: number): RationalClaimsPositionStateV2 {
+  if (!Number.isSafeInteger(outcomes) || outcomes <= 0) throw new Error('Claims Position outcome width is not positive');
+  const revision = decodeRationalClaimsPositionV2(bytes, aggregate, owner, basis, outcomes);
+  const balances = Object.freeze(Array.from({ length: outcomes }, (_, index) => u64(bytes, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + index * 8)));
+  return Object.freeze({ revision, balances });
 }
 
 export function decodeRationalClaimsPositionV2(bytes: Uint8Array, aggregate: string, owner: string, basis: Uint8Array, outcomes: number): bigint {
@@ -205,17 +293,86 @@ export function decodeRationalClaimsPositionV2(bytes: Uint8Array, aggregate: str
   return u64(bytes, LIABILITY_BASIS_POSITION_REVISION_OFFSET);
 }
 
-export function decodeRationalRepresentationReplayV2(account: RpcAccount, claims: string, descriptor: Uint8Array, actor: string): bigint {
+function decodeRationalRepresentationReplayStateV2(
+  account: RpcAccount,
+  claims: string,
+  descriptor: Uint8Array,
+  actor: string,
+  allowVacant: boolean,
+  refuseExhausted: boolean,
+): bigint {
   if (account.owner === claims) {
     if (account.executable || account.data.length !== 88 || ascii(account.data, 0, 8) !== 'DCRRREP2' || u16(account.data, 8) !== 2) throw new Error('representation replay has the wrong exact V2 ABI');
     requireZero(account.data, 10, 6, 'representation replay');
     if (!same(slice(account.data, 16, 32), descriptor) || new PublicKey(slice(account.data, 48, 32)).toBase58() !== actor) throw new Error('representation replay descriptor or actor differs');
-    const revision = u64(account.data, 80); if (revision === MAX_U64) throw new Error('representation replay revision is exhausted'); return revision;
+    const revision = u64(account.data, 80);
+    if (refuseExhausted && revision === MAX_U64) throw new Error('representation replay revision is exhausted');
+    return revision;
   }
-  if (account.owner !== SYSTEM_PROGRAM_ID || account.executable || account.data.length !== 0 || BigInt(account.lamports) === 0n) {
-    throw new Error('new representation replay is not a funded data-free System account');
+  if (allowVacant && account.owner === SYSTEM_PROGRAM_ID && !account.executable && account.data.length === 0 && BigInt(account.lamports) > 0n) {
+    return 0n;
   }
-  return 0n;
+  throw new Error(allowVacant
+    ? 'new representation replay is not a funded data-free System account'
+    : 'finalized representation replay is not exact Claims-owned V2 state');
+}
+
+export function decodeRationalRepresentationReplayV2(account: RpcAccount, claims: string, descriptor: Uint8Array, actor: string): bigint {
+  return decodeRationalRepresentationReplayStateV2(account, claims, descriptor, actor, true, true);
+}
+
+/** Apply one Rust-owned raw-delta plan to authenticated Token-2022 prestates. */
+export function projectRationalOpenTokenPoststateV4(input: Readonly<{
+  action: RationalOpenActionV3;
+  rawQuantity: bigint;
+  rawShardDeltas: ReadonlyArray<bigint>;
+  receipt: Readonly<{ mint: string; supply: bigint; account: string; amount: bigint }> | null;
+  assets: ReadonlyArray<RationalOpenTokenPoststateV4>;
+}>): Readonly<Pick<RationalOpenPoststateV4, 'receipt' | 'assets'>> {
+  const selected = selectedAction(input.action);
+  if (input.rawQuantity <= 0n || input.rawQuantity > MAX_U64
+      || input.assets.length !== input.rawShardDeltas.length
+      || (selected && (input.assets.length !== 1 || input.receipt !== null))
+      || (!selected && (input.assets.length === 0 || input.receipt === null))) {
+    throw new Error('Rational open Token poststate input differs from the exact action shape');
+  }
+  const assets = Object.freeze(input.assets.map((observed, index): RationalOpenTokenPoststateV4 => {
+    const delta = input.rawShardDeltas[index];
+    if (delta === undefined || delta < 0n || delta > MAX_U64) throw new Error(`Rational open plan has an invalid raw shard delta ${index}`);
+    let mintSupply = observed.mintSupply;
+    let actorAmount = observed.actorAmount;
+    let structuredAmount = observed.structuredAmount;
+    if (input.action === 'denominate') {
+      mintSupply = addU64(mintSupply, delta, `shard Mint ${index} supply`);
+      actorAmount = addU64(actorAmount, delta, `actor shard ${index} balance`);
+    } else if (input.action === 'reconstitute') {
+      mintSupply = subtractU64(mintSupply, delta, `shard Mint ${index} supply`);
+      actorAmount = subtractU64(actorAmount, delta, `actor shard ${index} balance`);
+    } else if (input.action === 'issue-structured') {
+      actorAmount = subtractU64(actorAmount, delta, `actor shard ${index} balance`);
+      structuredAmount = addU64(structuredAmount, delta, `Structured custody ${index} balance`);
+    } else {
+      actorAmount = addU64(actorAmount, delta, `actor shard ${index} balance`);
+      structuredAmount = subtractU64(structuredAmount, delta, `Structured custody ${index} balance`);
+    }
+    return Object.freeze({ ...observed, mintSupply, actorAmount, structuredAmount });
+  }));
+  let receipt: RationalOpenPoststateV4['receipt'] = null;
+  if (!selected) {
+    const observed = input.receipt;
+    if (observed === null) throw new Error('Structured Rational open lacks its authenticated receipt account');
+    const issuing = input.action === 'issue-structured';
+    receipt = Object.freeze({
+      ...observed,
+      supply: issuing
+        ? addU64(observed.supply, input.rawQuantity, 'receipt Mint supply')
+        : subtractU64(observed.supply, input.rawQuantity, 'receipt Mint supply'),
+      amount: issuing
+        ? addU64(observed.amount, input.rawQuantity, 'actor receipt balance')
+        : subtractU64(observed.amount, input.rawQuantity, 'actor receipt balance'),
+    });
+  }
+  return Object.freeze({ receipt, assets });
 }
 
 function validateProgramAccount(address: string, account: RpcAccount, field: string): void {
@@ -381,22 +538,31 @@ export async function inspectRationalOpenChainV4(
   const receiptMint = decodeToken2022BehaviorMintV2(descriptor.receiptMint, required(accounts, descriptor.receiptMint, 'receipt Mint'));
   if (receiptMint.controller !== authority.toBase58()) throw new Error('receipt Mint controller differs from the descriptor-derived authority');
   let actorPositionRevision = RATIONAL_OPEN_ABSENT_REVISION_V3;
+  let actorPositionState: RationalClaimsPositionStateV2 | null = null;
   if (actorPosition !== null) {
     const account = required(accounts, actorPosition.toBase58(), 'actor Claims Position');
     if (account.owner !== activation.claims || account.executable) throw new Error('actor Claims Position owner/executable state differs');
-    actorPositionRevision = decodeRationalClaimsPositionV2(account.data, aggregate.toBase58(), actor, claims.basis, descriptor.outcomeCount);
+    actorPositionState = decodeRationalClaimsPositionStateV2(account.data, aggregate.toBase58(), actor, claims.basis, descriptor.outcomeCount);
+    actorPositionRevision = actorPositionState.revision;
   }
+  let actorReceiptState: ReturnType<typeof decodeToken2022BehaviorAccountV2> | null = null;
   if (actorReceipt !== null) {
-    const receipt = decodeToken2022BehaviorAccountV2(actorReceipt.toBase58(), required(accounts, actorReceipt.toBase58(), 'actor receipt account'));
-    if (receipt.mint !== descriptor.receiptMint || receipt.owner !== actor) throw new Error('actor receipt account differs from the canonical actor/Mint ATA');
+    actorReceiptState = decodeToken2022BehaviorAccountV2(actorReceipt.toBase58(), required(accounts, actorReceipt.toBase58(), 'actor receipt account'));
+    if (actorReceiptState.mint !== descriptor.receiptMint || actorReceiptState.owner !== actor) throw new Error('actor receipt account differs from the canonical actor/Mint ATA');
   }
   const assets: RationalOpenAssetV3[] = []; const childAssets: Array<Readonly<{ position: string; asset: RationalOpenAssetV3 }>> = [];
+  const observedAssets: Array<Readonly<{
+    position: string; positionState: RationalClaimsPositionStateV2;
+    mint: ReturnType<typeof decodeToken2022BehaviorMintV2>;
+    actor: ReturnType<typeof decodeToken2022BehaviorAccountV2>;
+    structured: ReturnType<typeof decodeToken2022BehaviorAccountV2>;
+  }>> = [];
   let selectedCustodyRevision = RATIONAL_OPEN_ABSENT_REVISION_V3;
   for (const row of derived) {
     const positionAccount = required(accounts, row.position.toBase58(), `Claims custody Position outcome ${row.outcome}`);
     if (positionAccount.owner !== activation.claims || positionAccount.executable) throw new Error(`Claims custody Position ${row.outcome} owner/executable state differs`);
-    const positionRevision = decodeRationalClaimsPositionV2(positionAccount.data, aggregate.toBase58(), row.owner.toBase58(), claims.basis, descriptor.outcomeCount);
-    if (selectedAction(input.action)) selectedCustodyRevision = positionRevision;
+    const positionState = decodeRationalClaimsPositionStateV2(positionAccount.data, aggregate.toBase58(), row.owner.toBase58(), claims.basis, descriptor.outcomeCount);
+    if (selectedAction(input.action)) selectedCustodyRevision = positionState.revision;
     const mint = decodeToken2022BehaviorMintV2(row.mint.toBase58(), required(accounts, row.mint.toBase58(), `shard Mint ${row.outcome}`));
     const actorToken = decodeToken2022BehaviorAccountV2(row.actorToken.toBase58(), required(accounts, row.actorToken.toBase58(), `actor shard ATA ${row.outcome}`));
     const custody = decodeToken2022BehaviorAccountV2(row.custody.toBase58(), required(accounts, row.custody.toBase58(), `Structured custody ${row.outcome}`));
@@ -407,6 +573,7 @@ export async function inspectRationalOpenChainV4(
       structuredCustodyAccount: row.custody.toBase58(), claimsCustodyOwner: row.owner.toBase58(), coefficient,
       expectedShardSupply: mint.rawSupply, expectedActorShards: actorToken.rawAmount, expectedStructuredShards: custody.rawAmount });
     assets.push(asset); childAssets.push(Object.freeze({ position: row.position.toBase58(), asset }));
+    observedAssets.push(Object.freeze({ position: row.position.toBase58(), positionState, mint, actor: actorToken, structured: custody }));
   }
   const family = await compileRationalOpenHotV3({
     action: input.action, releaseSet: market.releaseSet, market: marketAddress, graphId: descriptor.graphId, descriptorId,
@@ -434,15 +601,198 @@ export async function inspectRationalOpenChainV4(
   const injected = [fixed[Hot.HOT_ROOT_ACCOUNT_V3], fixed[Hot.HOT_CONFIG_RAW_ACCOUNT_V3], fixed[Hot.HOT_PRODUCT_RAW_ACCOUNT_V3], fixed[Hot.HOT_PORTFOLIO_RAW_ACCOUNT_V3], fixed[Hot.HOT_LINKED_BASIS_RAW_ACCOUNT_V3]];
   if (injected.some((meta) => meta === undefined)) throw new Error('Hot fixed frame omits one injected profile coordinate');
   const physical = compactRationalProfile11AccountsV4(artifacts[0]?.data ?? new Uint8Array(), selectedAction(input.action) ? 0 : descriptor.outcomeCount, injected as ReadonlyArray<Meta>, child, accounts);
+  const context: RationalOpenPoststateContextV4 = Object.freeze({
+    claimsProgram: activation.claims,
+    descriptorId: new Uint8Array(descriptorId),
+    actor,
+    representationAuthority: authority.toBase58(),
+    aggregate: aggregate.toBase58(),
+    market: marketAddress,
+    releaseSet: new Uint8Array(market.releaseSet),
+    registry,
+    product: new Uint8Array(market.productRecord),
+    realm: new Uint8Array(market.realm),
+    generation: market.generation,
+    outcomes: descriptor.outcomeCount,
+    basis: new Uint8Array(claims.basis),
+    custodyContext: new Uint8Array(claims.custodyContext),
+  });
+  let aggregatePoststate: RationalOpenPoststateV4['aggregate'] = null;
+  const positionPoststates: RationalOpenPositionPoststateV4[] = [];
+  if (selectedAction(input.action)) {
+    if (actorPosition === null || actorPositionState === null || input.selectedOutcome === null) {
+      throw new Error('selected Rational open lacks one authenticated Claims Position prestate');
+    }
+    const custody = observedAssets[0];
+    const asset = assets[0];
+    if (custody === undefined || asset === undefined) throw new Error('selected Rational open lacks its one custody asset');
+    const outcome = input.selectedOutcome;
+    const actorBalance = actorPositionState.balances[outcome];
+    const custodyBalance = custody.positionState.balances[outcome];
+    if (actorBalance === undefined || custodyBalance === undefined) throw new Error('selected Claims balance is outside the authenticated vector');
+    const denominating = input.action === 'denominate';
+    const actorAfter = denominating
+      ? subtractU64(actorBalance, input.rawQuantity, 'actor Claims balance')
+      : addU64(actorBalance, input.rawQuantity, 'actor Claims balance');
+    const custodyAfter = denominating
+      ? addU64(custodyBalance, input.rawQuantity, 'custody Claims balance')
+      : subtractU64(custodyBalance, input.rawQuantity, 'custody Claims balance');
+    aggregatePoststate = Object.freeze({
+      address: aggregate.toBase58(),
+      revision: addU64(claims.revision, 1n, 'Claims aggregate revision'),
+      balances: Object.freeze([...claims.balances]),
+    });
+    positionPoststates.push(
+      Object.freeze({
+        address: actorPosition.toBase58(),
+        owner: actor,
+        revision: addU64(actorPositionState.revision, 1n, 'actor Claims Position revision'),
+        balances: withBalance(actorPositionState.balances, outcome, actorAfter, 'actor Claims Position'),
+      }),
+      Object.freeze({
+        address: custody.position,
+        owner: asset.claimsCustodyOwner,
+        revision: addU64(custody.positionState.revision, 1n, 'custody Claims Position revision'),
+        balances: withBalance(custody.positionState.balances, outcome, custodyAfter, 'custody Claims Position'),
+      }),
+    );
+  }
+  const tokenPoststate = projectRationalOpenTokenPoststateV4({
+    action: input.action,
+    rawQuantity: input.rawQuantity,
+    rawShardDeltas: family.rawShardDeltas,
+    receipt: actorReceipt === null || actorReceiptState === null ? null : Object.freeze({
+      mint: descriptor.receiptMint,
+      supply: receiptMint.rawSupply,
+      account: actorReceipt.toBase58(),
+      amount: actorReceiptState.rawAmount,
+    }),
+    assets: observedAssets.map((observed) => Object.freeze({
+      mint: observed.mint.mint,
+      mintSupply: observed.mint.rawSupply,
+      actorAccount: observed.actor.address,
+      actorAmount: observed.actor.rawAmount,
+      structuredAccount: observed.structured.address,
+      structuredAmount: observed.structured.rawAmount,
+    })),
+  });
+  const poststate: RationalOpenPoststateV4 = Object.freeze({
+    context,
+    replay: Object.freeze({
+      address: replay.toBase58(),
+      revision: addU64(replayRevision, 1n, 'representation replay revision'),
+    }),
+    aggregate: aggregatePoststate,
+    positions: Object.freeze(positionPoststates),
+    receipt: tokenPoststate.receipt,
+    assets: tokenPoststate.assets,
+  });
   return Object.freeze({ observedSlot: dynamicObservation.slot, action: input.action, payer, actor, market: marketAddress,
     generation: market.generation, representationWidth: admittedBasis.basis.width,
     resultOutcomeCount: common.product.outcomeCount, selectedOutcome: input.selectedOutcome,
     rawQuantity: input.rawQuantity,
     displayDecimals: receiptMint.displayDecimals, descriptorId, tokenBehaviorDigest: configDigest,
     capabilityDigest: capabilitySelection.digest, rootDigest, family, fixedAccounts: fixed,
+    poststate,
     physicalClaimsAccounts: physical, lookupTable: common.lookupTable, executionStatus: 'blocked',
     refusal: 'The CapabilityV4 family is chain-derived and packet-compilable, but no checked positive common-Hot real-SBF release attests this outer; wallet signing remains disabled.',
   });
+}
+
+/**
+ * Reacquire every mutable account at finalized commitment and authenticate the
+ * exact atom/revision vector promised before wallet handoff.
+ */
+export async function verifyRationalOpenFinalizedPoststateV4(
+  client: Pick<OpenRpc, 'finalizedSlot' | 'multipleAccounts'>,
+  action: RationalOpenActionV3,
+  poststate: RationalOpenPoststateV4,
+  minimumSlot?: string,
+): Promise<RationalOpenFinalizedPoststateV4> {
+  const selected = selectedAction(action);
+  if ((selected && (poststate.aggregate === null || poststate.positions.length !== 2 || poststate.receipt !== null || poststate.assets.length !== 1))
+      || (!selected && (poststate.aggregate !== null || poststate.positions.length !== 0 || poststate.receipt === null
+        || poststate.assets.length !== poststate.context.outcomes))) {
+    throw new Error('Rational open poststate shape differs from the selected action family');
+  }
+  const context = poststate.context;
+  key(context.claimsProgram, 'Claims program');
+  key(context.actor, 'actor');
+  key(context.representationAuthority, 'representation authority');
+  key(context.aggregate, 'Claims aggregate');
+  key(context.market, 'Market');
+  key(context.registry, 'Registry');
+  if (context.descriptorId.length !== 32 || context.releaseSet.length !== 32 || context.product.length !== 32
+      || context.realm.length !== 32 || context.basis.length !== 32 || context.custodyContext.length !== 32
+      || context.outcomes <= 0 || !Number.isSafeInteger(context.outcomes)
+      || context.generation < 0n || context.generation > MAX_U64) {
+    throw new Error('Rational open poststate context is not one exact bounded authenticated identity set');
+  }
+  const positionAddresses = poststate.positions.map((row) => row.address);
+  const tokenAddresses = poststate.assets.flatMap((row) => [row.mint, row.actorAccount, row.structuredAccount]);
+  const receiptAddresses = poststate.receipt === null ? [] : [poststate.receipt.mint, poststate.receipt.account];
+  const requested = [poststate.replay.address, ...(poststate.aggregate === null ? [] : [poststate.aggregate.address]),
+    ...positionAddresses, ...receiptAddresses, ...tokenAddresses];
+  if (new Set(requested).size !== requested.length) throw new Error('Rational open poststate aliases two semantically distinct mutable accounts');
+  const observation = await acquireRationalHotAccountsV4(client, requested, minimumSlot);
+  const replayAccount = required(observation.accounts, poststate.replay.address, 'finalized representation replay');
+  const replayRevision = decodeRationalRepresentationReplayStateV2(
+    replayAccount,
+    context.claimsProgram,
+    context.descriptorId,
+    context.actor,
+    false,
+    false,
+  );
+  if (replayRevision !== poststate.replay.revision) throw new Error('representation replay revision differs from the exact finalized poststate');
+  if (poststate.aggregate !== null) {
+    if (poststate.aggregate.address !== context.aggregate) throw new Error('Claims aggregate poststate substitutes another aggregate');
+    const account = required(observation.accounts, poststate.aggregate.address, 'finalized Claims aggregate');
+    if (account.owner !== context.claimsProgram || account.executable) throw new Error('finalized Claims aggregate owner/executable state differs');
+    const aggregate = decodeRationalClaimsAggregateV2(account.data, {
+      market: context.market,
+      releaseSet: context.releaseSet,
+      registry: context.registry,
+      product: context.product,
+      realm: context.realm,
+      generation: context.generation,
+      outcomes: context.outcomes,
+    });
+    if (aggregate.revision !== poststate.aggregate.revision
+        || !same(aggregate.basis, context.basis)
+        || !same(aggregate.custodyContext, context.custodyContext)) {
+      throw new Error('Claims aggregate identities or revision differ from the exact finalized poststate');
+    }
+    requireExactBalances(aggregate.balances, poststate.aggregate.balances, 'Claims aggregate balances');
+  }
+  for (const [index, expected] of poststate.positions.entries()) {
+    const account = required(observation.accounts, expected.address, `finalized Claims Position ${index}`);
+    if (account.owner !== context.claimsProgram || account.executable) throw new Error(`finalized Claims Position ${index} owner/executable state differs`);
+    const position = decodeRationalClaimsPositionStateV2(account.data, context.aggregate, expected.owner, context.basis, context.outcomes);
+    if (position.revision !== expected.revision) throw new Error(`Claims Position ${index} revision differs from the exact finalized poststate`);
+    requireExactBalances(position.balances, expected.balances, `Claims Position ${index} balances`);
+  }
+  if (poststate.receipt !== null) {
+    const mint = decodeToken2022BehaviorMintV2(poststate.receipt.mint, required(observation.accounts, poststate.receipt.mint, 'finalized receipt Mint'));
+    const account = decodeToken2022BehaviorAccountV2(poststate.receipt.account, required(observation.accounts, poststate.receipt.account, 'finalized receipt account'));
+    if (mint.controller !== context.representationAuthority || mint.rawSupply !== poststate.receipt.supply
+        || account.mint !== poststate.receipt.mint || account.owner !== context.actor
+        || account.rawAmount !== poststate.receipt.amount) {
+      throw new Error('Structured receipt differs from the exact finalized poststate');
+    }
+  }
+  for (const [index, expected] of poststate.assets.entries()) {
+    const mint = decodeToken2022BehaviorMintV2(expected.mint, required(observation.accounts, expected.mint, `finalized shard Mint ${index}`));
+    const actor = decodeToken2022BehaviorAccountV2(expected.actorAccount, required(observation.accounts, expected.actorAccount, `finalized actor shard account ${index}`));
+    const structured = decodeToken2022BehaviorAccountV2(expected.structuredAccount, required(observation.accounts, expected.structuredAccount, `finalized Structured custody ${index}`));
+    if (mint.controller !== context.representationAuthority || mint.rawSupply !== expected.mintSupply
+        || actor.mint !== expected.mint || actor.owner !== context.actor || actor.rawAmount !== expected.actorAmount
+        || structured.mint !== expected.mint || structured.owner !== context.representationAuthority
+        || structured.rawAmount !== expected.structuredAmount) {
+      throw new Error(`Rational shard asset ${index} differs from the exact finalized poststate`);
+    }
+  }
+  return Object.freeze({ observedSlot: observation.slot, action, poststate });
 }
 
 export function buildRationalOpenCandidateV4(inspection: RationalOpenChainInspectionV4, recentBlockhash: string): RationalOpenCandidateV4 {

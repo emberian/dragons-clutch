@@ -361,7 +361,7 @@ pub fn build_equity_request_v3(
     post_dealer_claims: &mut [u64],
     post_lp_claims: &mut [u64],
 ) -> Result<UnsignedEquityRequestV3, EquityOperatorErrorV3> {
-    validate_projection(chain)?;
+    validate_projection(&chain)?;
     let width = chain.dealer_claims.inventory.len();
     for observed in [
         obligation_scratch.len(),
@@ -452,7 +452,7 @@ pub fn build_equity_request_v3(
         minimum_complete_sets_to_split: equity.minimum_complete_sets_to_split,
         maximum_complete_sets_to_merge: equity.maximum_complete_sets_to_merge,
     };
-    let provisional = claims_context([1; 32], chain);
+    let provisional = claims_context([1; 32], &chain);
     let geometry = equity_claims_geometry_v3(provisional, transition)
         .map_err(|_| EquityOperatorErrorV3::Claims)?;
     let claims_packet_bytes =
@@ -481,7 +481,7 @@ pub fn build_equity_request_v3(
     )?;
     let request_id = hash(&header).to_bytes();
     let mut packet = vec![0_u8; geometry.packet_bytes];
-    encode_equity_claims_packet_v3(claims_context(request_id, chain), transition, &mut packet)
+    encode_equity_claims_packet_v3(claims_context(request_id, &chain), transition, &mut packet)
         .map_err(|_| EquityOperatorErrorV3::Claims)?;
     let request_bytes = header
         .len()
@@ -494,7 +494,7 @@ pub fn build_equity_request_v3(
     request.extend_from_slice(&header);
     request.extend_from_slice(&packet);
     let decoded = DealerEquityRequestV3::decode(&request)?;
-    authenticate_equity_request_v3(decoded, chain)?;
+    authenticate_equity_request_v3(&decoded, &chain)?;
     output
         .get_mut(..request_bytes)
         .ok_or(EquityOperatorErrorV3::WidthMismatch)?
@@ -508,8 +508,8 @@ pub fn build_equity_request_v3(
 /// Rejoin one signed request to the exact current authenticated chain state.
 #[inline(never)]
 pub fn authenticate_equity_request_v3(
-    request: DealerEquityRequestV3<'_>,
-    chain: EquityPoolChainProjectionV3<'_>,
+    request: &DealerEquityRequestV3<'_>,
+    chain: &EquityPoolChainProjectionV3<'_>,
 ) -> Result<(), EquityOperatorErrorV3> {
     validate_projection(chain)?;
     if chain.terminal
@@ -553,8 +553,8 @@ pub fn authenticate_equity_request_v3(
 /// Derive the physical intent solely from authenticated request data.
 #[inline(never)]
 pub fn materialize_equity_intent_v3<'a>(
-    request: DealerEquityRequestV3<'_>,
-    chain: EquityPoolChainProjectionV3<'_>,
+    request: &DealerEquityRequestV3<'_>,
+    chain: &EquityPoolChainProjectionV3<'_>,
     claims_scratch: &'a mut [u64],
 ) -> Result<MultiLpIntentV3<'a>, EquityOperatorErrorV3> {
     if usize::try_from(request.width).ok() != Some(claims_scratch.len()) {
@@ -603,9 +603,9 @@ pub fn materialize_equity_intent_v3<'a>(
 /// Authenticate, plan physical effects, and byte-compare the Claims suffix.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_equity_request_v3(
-    request: DealerEquityRequestV3<'_>,
-    chain: EquityPoolChainProjectionV3<'_>,
-    context: MultiLpContextV3,
+    request: &DealerEquityRequestV3<'_>,
+    chain: &EquityPoolChainProjectionV3<'_>,
+    context: &MultiLpContextV3,
     request_claims_scratch: &mut [u64],
     obligation_scratch: &mut [u64],
     residual_before: &mut [u64],
@@ -632,7 +632,7 @@ pub fn prepare_equity_request_v3(
     }
     let intent = materialize_equity_intent_v3(request, chain, request_claims_scratch)?;
     let plan = prepare_multi_lp_v3(
-        context,
+        *context,
         chain.collateral,
         DealerLpAccountObservationV3 {
             address: chain.lp_position_address,
@@ -823,7 +823,7 @@ fn materialize_lp_poststate(
 
 fn claims_context(
     request_id: [u8; 32],
-    chain: EquityPoolChainProjectionV3<'_>,
+    chain: &EquityPoolChainProjectionV3<'_>,
 ) -> EquityClaimsContextV3 {
     EquityClaimsContextV3 {
         release_set: chain.release_set,
@@ -870,7 +870,7 @@ pub fn dealer_equity_selector_v3(
 }
 
 fn validate_projection(
-    chain: EquityPoolChainProjectionV3<'_>,
+    chain: &EquityPoolChainProjectionV3<'_>,
 ) -> Result<(), EquityOperatorErrorV3> {
     for identity in [
         chain.trading_program,

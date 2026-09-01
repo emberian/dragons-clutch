@@ -38,6 +38,7 @@ mod project_found;
 mod retirement_checkpoint_v1;
 mod retirement_v1;
 mod series_permit;
+mod series_unallocated_expiry_v1;
 
 pub use capability::*;
 pub use capability_funding_v2::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2};
@@ -61,3 +62,4 @@ pub use project_found::*;
 pub use retirement_checkpoint_v1::*;
 pub use retirement_v1::*;
 pub use series_permit::*;
+pub use series_unallocated_expiry_v1::*;

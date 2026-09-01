@@ -110,8 +110,9 @@ the rule is applied to that residual exactly as it always was.
 
 Both campaigns take a fixed seed and derive every key from it.
 
-**tier 1** — `dclutch-local-successor-bootstrap run --keypair-seed <64 lowercase
-hex>`. `tools/gauntlet/run.sh` passes
+**tier 1 (historical evidence)** — `dclutch-local-successor-bootstrap run
+--keypair-seed <64 lowercase hex>`. The former `tools/gauntlet/run.sh` campaign
+passed
 `SHA-256("dclutch/gauntlet/tier1/keypair-seed/v1")`, hashed from the preimage in
 the script rather than written down as a constant, and the seed is part of the
 campaign stamp so changing the preimage re-runs the campaign instead of being
@@ -243,7 +244,11 @@ chain's number, not ours.
 `current` is the pinned value, which is the highest draw observed on
 2026-08-27. `headroom` is what is left to the ceiling from that draw.
 
-### tier 1 — `tools/gauntlet/run.sh --mode full`, real validator
+### tier 1 — historical `tools/gauntlet/run.sh --mode full` evidence, real validator
+
+`--mode full` is unavailable at HEAD and refuses before work or a build. The
+rows below preserve the dated evidence they were pinned against; they are not a
+runnable current top-level campaign.
 
 | budget | budget CU | current | tolerance | headroom to ceiling |
 |---|---:|---:|---:|---:|

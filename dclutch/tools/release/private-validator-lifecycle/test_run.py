@@ -83,6 +83,39 @@ def offline_preflight_fixture(
     return report
 
 
+def direct_activation_report(*, market: str = PUBKEY_A, root: str = PUBKEY_B) -> dict[str, object]:
+    return {
+        "verdict": "ACTIVATED",
+        "facts": {
+            "schema": "dclutch-local-private-validator-direct-capability-activation-report-v1",
+            "market": market,
+            "generation": 1,
+            "entryIndex": 0,
+            "root": root,
+            "foundingPermitRoot": PUBKEY_C,
+            "fundingLedger": base58(bytes([4]) * 32),
+            "callerAuthority": base58(bytes([5]) * 32),
+            "contextSha256": "a" * 64,
+            "roleRequestSha256": "b" * 64,
+            "activationDeadlineSlot": 100,
+            "observedSlot": 10,
+            "instructionAccounts": 37,
+            "instructionDataBytes": 320,
+        },
+        "activationSignature": SIGNATURES[0],
+        "activationSlot": 11,
+        "feeLamports": 75_000,
+        "computeUnitsConsumed": 30_000,
+        "rootLamports": 1_000_000,
+        "rootBytes": 128,
+        "rootPhase": "Open",
+        "ledgerLamportsAfter": 1_000_000,
+        "tableTransactions": [
+            {"label": "create DIRECT-ACT table", "signature": SIGNATURES[1], "slot": 9}
+        ],
+    }
+
+
 class PrivateValidatorLifecycleTests(unittest.TestCase):
     def test_mixed_gate_uses_shared_authenticator_and_explicit_pins(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -313,7 +346,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    MODULE, "parse", return_value=(paths, 1, "full-probe", False)
+                    MODULE, "parse", return_value=(paths, 1, "full-probe", False, False)
                 ),
                 mock.patch.object(MODULE, "clean_commit", return_value="33" * 20),
                 mock.patch.object(MODULE, "clean_tree", return_value="44" * 20),
@@ -356,7 +389,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    MODULE, "parse", return_value=(paths, 1, "full-probe", False)
+                    MODULE, "parse", return_value=(paths, 1, "full-probe", False, False)
                 ),
                 mock.patch.object(MODULE, "clean_commit", return_value="33" * 20),
                 mock.patch.object(MODULE, "clean_tree", return_value="44" * 20),
@@ -376,6 +409,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
     def test_full_help_requires_every_dispatched_final_evidence_command(self) -> None:
         probe_required = (
             *MODULE.FOUNDING_PARTICIPANT_COMMANDS,
+            MODULE.DIRECT_CAPABILITY_ACTIVATION_COMMAND,
             MODULE.DIRECT_PRODUCER_COMMAND,
             MODULE.DIRECT_EXECUTE_COMMAND,
             MODULE.DIRECT_PAYOUT_SCHEDULE_COMMAND,
@@ -407,6 +441,97 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     )
                     with self.assertRaisesRegex(MODULE.Refusal, omitted):
                         MODULE.command_surface(bootstrap, "full")
+
+    def test_direct_activation_stage_pins_inputs_and_shifts_producer_ordinal(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            run = root / "run"
+            (run / "direct").mkdir(parents=True)
+            plan = root / "plan.json"
+            market = root / "market.json"
+            campaign = root / "founding.json"
+            payer_key = root / "validator-mint.json"
+            for path in (plan, market, payer_key):
+                path.write_text("{}\n")
+            campaign.write_text(
+                MODULE.json.dumps({"founding_targets": {"open_market": PUBKEY_A}})
+            )
+            output = run / "direct" / "direct-capability-activation.json"
+            stdout = (MODULE.json.dumps(direct_activation_report(), indent=2) + "\n").encode()
+            output.write_bytes(stdout)
+            paths = mock.Mock(bootstrap=root / "bootstrap", solana=root / "solana")
+            mutable = {"keypairs": {MODULE.VALIDATOR_MINT_ROLE: str(payer_key)}}
+            with mock.patch.object(
+                MODULE, "run_stage", return_value=mock.Mock(stdout=stdout)
+            ) as stage, mock.patch.object(MODULE, "key_address", return_value=PUBKEY_C):
+                activation, next_ordinal = MODULE.run_direct_capability_activation(
+                    run,
+                    paths,
+                    mutable,
+                    "http://127.0.0.1:8899",
+                    plan,
+                    market,
+                    campaign,
+                    9,
+                )
+            self.assertEqual(next_ordinal, 10)
+            self.assertEqual(stage.call_args.args[1:3], (9, "direct-capability-activation"))
+            argv = stage.call_args.args[3]
+            self.assertEqual(argv[1], MODULE.DIRECT_CAPABILITY_ACTIVATION_COMMAND)
+            self.assertEqual(argv[argv.index("--expected-plan-sha256") + 1], MODULE.sha256_file(plan))
+            self.assertEqual(
+                argv[argv.index("--expected-market-input-sha256") + 1],
+                MODULE.sha256_file(market),
+            )
+            self.assertEqual(
+                argv[argv.index("--expected-campaign-report-sha256") + 1],
+                MODULE.sha256_file(campaign),
+            )
+            self.assertEqual(argv[argv.index("--payer") + 1], PUBKEY_C)
+            self.assertEqual(argv[argv.index("--payer-keypair") + 1], str(payer_key))
+            self.assertEqual(argv[-1], "--execute")
+            self.assertEqual(activation["root"], PUBKEY_B)
+            self.assertEqual(activation["finalized"]["slot"], 11)
+
+    def test_direct_activation_authenticator_refuses_hostile_shape_and_nonfinal_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            plan = root / "plan.json"
+            market = root / "market.json"
+            campaign = root / "founding.json"
+            for path in (plan, market):
+                path.write_text("{}\n")
+            campaign.write_text(
+                MODULE.json.dumps({"founding_targets": {"open_market": PUBKEY_A}})
+            )
+
+            def authenticate(document: dict[str, object]) -> None:
+                MODULE.authenticate_direct_capability_activation(
+                    document,
+                    plan=plan,
+                    market_input=market,
+                    campaign_report=campaign,
+                    expected_market=PUBKEY_A,
+                )
+
+            authenticate(direct_activation_report())
+            hostile_cases = []
+            schema = direct_activation_report()
+            schema["facts"] = {**schema["facts"], "schema": "foreign-schema"}
+            hostile_cases.append(schema)
+            root_substitution = direct_activation_report()
+            root_substitution["facts"] = {**root_substitution["facts"], "root": "not-a-pubkey"}
+            hostile_cases.append(root_substitution)
+            market_substitution = direct_activation_report()
+            market_substitution["facts"] = {**market_substitution["facts"], "market": PUBKEY_C}
+            hostile_cases.append(market_substitution)
+            nonfinal = direct_activation_report()
+            nonfinal["activationSlot"] = 0
+            hostile_cases.append(nonfinal)
+            for hostile in hostile_cases:
+                with self.subTest(hostile=hostile):
+                    with self.assertRaises(MODULE.Refusal):
+                        authenticate(hostile)
 
     def test_named_seeds_are_stable_distinct_and_named(self) -> None:
         first = MODULE.named_seed(1)
@@ -452,6 +577,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         report = {
             "campaign_administration_keypairs": {
                 "core-upgrade-authority": "/owned/core.json",
+                "campaign-payer": "/owned/admin-payer.json",
             },
             "campaign_founding_keypairs": {
                 role: f"/owned/{role}.json"
@@ -468,7 +594,12 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(
             MODULE.key_flags(report, "campaign_administration_keypairs"),
-            ["--keypair-core-upgrade-authority", "/owned/core.json"],
+            [
+                "--keypair-campaign-payer",
+                "/owned/admin-payer.json",
+                "--keypair-core-upgrade-authority",
+                "/owned/core.json",
+            ],
         )
         with self.assertRaisesRegex(MODULE.Refusal, "Rust-owned"):
             MODULE.key_flags({"campaign_keypairs": {"wrong": "/wrong"}})
@@ -516,6 +647,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         report = {
             "campaign_administration_keypairs": {
                 "core-upgrade-authority": "/owned/core.json",
+                "campaign-payer": "/owned/admin-payer.json",
             },
             "campaign_founding_keypairs": {
                 role: f"/owned/{role}.json"
@@ -531,6 +663,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             "http://127.0.0.1:8899",
             Path("/plan.json"),
             Path("/administration.json"),
+            Path("/infrastructure-lineage.json"),
             report,
         )
         founding = MODULE.founding_campaign_argv(
@@ -543,7 +676,11 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         )
         self.assertNotIn("--founding-only", admin)
         self.assertIn("--keypair-core-upgrade-authority", admin)
-        self.assertNotIn("--keypair-campaign-payer", admin)
+        self.assertIn("--keypair-campaign-payer", admin)
+        self.assertEqual(
+            admin[admin.index("--infrastructure-lineage-evidence") + 1],
+            "/infrastructure-lineage.json",
+        )
         self.assertIn("--founding-only", founding)
         self.assertIn("--keypair-campaign-payer", founding)
         self.assertNotIn("--keypair-core-upgrade-authority", founding)
@@ -681,6 +818,178 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 wrong_journal, "founding-only", plan, market_path
             )
 
+    def test_infrastructure_lineage_joins_source_profiles_artifacts_and_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            plan = root / "plan.json"
+            plan.write_bytes(b"exact plan\n")
+            lineage_path = root / "infrastructure-lineage.json"
+            artifact_ids = [f"{index:02x}" * 32 for index in range(1, 12)]
+            programs = {
+                role: base58(bytes([index + 10]) * 32)
+                for index, role in enumerate(MODULE.ROLE_ORDER)
+            }
+            programdata = {
+                role: base58(bytes([index + 30]) * 32)
+                for index, role in enumerate(MODULE.ROLE_ORDER)
+            }
+            loader = base58(bytes([50]) * 32)
+
+            def account(address: str, data_sha256: str) -> dict[str, object]:
+                return {
+                    "address": address,
+                    "owner": programs["registry"],
+                    "lamports": 1,
+                    "executable": False,
+                    "data_len": 224,
+                    "data_sha256": data_sha256,
+                    "account_sha256": "aa" * 32,
+                }
+
+            def release(
+                role: str, artifact_id: str, slot: int
+            ) -> dict[str, object]:
+                return {
+                    "artifactReleaseId": artifact_id,
+                    "program": programs[role],
+                    "loaderProgram": loader,
+                    "programData": programdata[role],
+                    "semanticReleaseId": f"{MODULE.ROLE_ORDER.index(role) + 60:02x}" * 32,
+                    "elfSha256": f"{MODULE.ROLE_ORDER.index(role) + 70:02x}" * 32,
+                    "deploymentSlot": slot,
+                    "upgradePolicy": "exact-authority",
+                    "upgradeAuthority": PUBKEY_C,
+                }
+
+            def record(row: dict[str, object]) -> dict[str, object]:
+                artifact_id = str(row["artifactReleaseId"])
+                return {
+                    "record": row,
+                    "rawAccount": account(PUBKEY_A, artifact_id),
+                    "stagingAddress": PUBKEY_B,
+                    "stagingAbsentAfterFinalize": True,
+                }
+
+            predecessor_registry = release("registry", artifact_ids[0], 1)
+            successor_registry = release("registry", artifact_ids[1], 10)
+            rent_release = release("rent", artifact_ids[2], 2)
+            execution_roles = ("core", "claims", "trading", "resolution", "custody")
+            activated = [
+                {"role": role, "release": release(role, artifact_ids[index + 3], index + 3)}
+                for index, role in enumerate(execution_roles)
+            ]
+            checked = [
+                {
+                    "role": role,
+                    "program": programs[role],
+                    "programData": programdata[role],
+                    "checkedCandidateElfPath": f"/release/{role}.so",
+                    "checkedCandidateElfSha256": (
+                        successor_registry["elfSha256"]
+                        if role == "registry"
+                        else rent_release["elfSha256"]
+                        if role == "rent"
+                        else next(row["release"]["elfSha256"] for row in activated if row["role"] == role)
+                    ),
+                    "genesisLiveElfSha256": (
+                        successor_registry["elfSha256"]
+                        if role == "registry"
+                        else rent_release["elfSha256"]
+                        if role == "rent"
+                        else next(row["release"]["elfSha256"] for row in activated if row["role"] == role)
+                    ),
+                    "genesisProgramDataAccountSha256": "bb" * 32,
+                    "genesisDeploymentSlot": MODULE.ROLE_ORDER.index(role) + 1,
+                    "semanticReleaseId": (
+                        successor_registry["semanticReleaseId"]
+                        if role == "registry"
+                        else rent_release["semanticReleaseId"]
+                        if role == "rent"
+                        else next(row["release"]["semanticReleaseId"] for row in activated if row["role"] == role)
+                    ),
+                }
+                for role in MODULE.ROLE_ORDER
+            ]
+            lineage = {
+                "schema": "dclutch-current-source-infrastructure-lineage-v1",
+                "evidenceLevel": "local-validator-finalized-chain-state",
+                "cluster": "owned-loopback",
+                "genesisHash": PUBKEY_A,
+                "planSha256": MODULE.sha256_file(plan),
+                "campaignEvidencePath": "/administration.json",
+                "source": {
+                    "revision": "11" * 20,
+                    "treeSha256": "12" * 32,
+                    "checkedReleaseGatePath": "/release/CHECKED_UPGRADE_GATE.json",
+                    "checkedReleaseGateSha256": "13" * 32,
+                    "checkedLocalMutableSetSha256": "14" * 32,
+                    "solanaCliVersion": "4.0.2",
+                },
+                "checkedArtifacts": checked,
+                "profiles": {
+                    "predecessorV1": {
+                        "address": PUBKEY_A,
+                        "account": account(PUBKEY_A, "21" * 32),
+                        "registryArtifactReleaseId": artifact_ids[0],
+                        "rentArtifactReleaseId": artifact_ids[2],
+                    },
+                    "successorV2": {
+                        "address": PUBKEY_B,
+                        "account": account(PUBKEY_B, "22" * 32),
+                        "registryArtifactReleaseId": artifact_ids[1],
+                        "rentArtifactReleaseId": artifact_ids[2],
+                        "predecessorRegistryArtifactReleaseId": artifact_ids[0],
+                        "predecessorRentArtifactReleaseId": artifact_ids[2],
+                    },
+                    "v1PreservedByteIdentical": True,
+                },
+                "artifactLineage": {
+                    "registry": {
+                        "movedForward": True,
+                        "predecessor": record(predecessor_registry),
+                        "successor": record(successor_registry),
+                    },
+                    "rent": {"carriedForward": True, "release": record(rent_release)},
+                },
+                "activation": {
+                    "releaseSetId": "31" * 32,
+                    "checkedExecutionReleaseSetId": "32" * 32,
+                    "checkedMultiprogramEnvelopeSha256": "33" * 32,
+                    "account": account(PUBKEY_C, "34" * 32),
+                    "roles": activated,
+                },
+                "migration": {
+                    "preexistingMarketsMigrated": 0,
+                    "marketsSilentlyRebound": False,
+                    "scope": "fresh validator",
+                    "consumerRule": "V2 consumers",
+                },
+            }
+            lineage_path.write_text(MODULE.json.dumps(lineage))
+            administration = {
+                "genesis_hash": PUBKEY_A,
+                "evidence_output": "/administration.json",
+                "infrastructureLineageEvidence": {
+                    "path": str(lineage_path),
+                    "sha256": MODULE.sha256_file(lineage_path),
+                    "schema": lineage["schema"],
+                },
+            }
+            self.assertEqual(
+                MODULE.authenticate_infrastructure_lineage(
+                    lineage_path, administration, plan
+                ),
+                lineage,
+            )
+            hostile = copy.deepcopy(lineage)
+            hostile["profiles"]["successorV2"]["predecessorRegistryArtifactReleaseId"] = "ff" * 32
+            lineage_path.write_text(MODULE.json.dumps(hostile))
+            administration["infrastructureLineageEvidence"]["sha256"] = MODULE.sha256_file(lineage_path)
+            with self.assertRaisesRegex(MODULE.Refusal, "join exactly"):
+                MODULE.authenticate_infrastructure_lineage(
+                    lineage_path, administration, plan
+                )
+
     def test_external_rpc_is_structurally_refused(self) -> None:
         with self.assertRaisesRegex(MODULE.Refusal, "escaped loopback"):
             MODULE.rpc("https://api.devnet.solana.com", "getHealth")
@@ -714,7 +1023,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                         "1",
                     ]
                 )
-            paths, seeds, through, hold_participant = MODULE.parse(
+            paths, seeds, through, hold_participant, hot_cu_profile = MODULE.parse(
                 [
                     "--repo",
                     str(repo),
@@ -736,6 +1045,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             self.assertEqual(paths.work, root / "work")
             self.assertEqual((seeds, through), (1, "participant"))
             self.assertTrue(hold_participant)
+            self.assertFalse(hot_cu_profile)
 
     def test_participant_handoff_is_fsync_new_and_reauthenticated_after_resume(
         self,
@@ -855,7 +1165,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     ]
                 )
 
-    def test_full_mode_refuses_until_all_callers_are_accepted(self) -> None:
+    def test_full_mode_admits_exact_twenty_seed_release_campaign(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
             fake = root / "fake"
@@ -865,21 +1175,25 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             release = root / "release"
             repo.mkdir()
             release.mkdir()
-            with self.assertRaisesRegex(MODULE.Refusal, "seventeen-case"):
-                MODULE.parse(
-                    [
-                        "--repo",
-                        str(repo),
-                        "--release-root",
-                        str(release),
-                        "--validator",
-                        str(fake),
-                        "--solana",
-                        str(fake),
-                        "--work",
-                        str(root / "work"),
-                    ]
-                )
+            paths, seeds, through, hold, hot_cu_profile = MODULE.parse(
+                [
+                    "--repo",
+                    str(repo),
+                    "--release-root",
+                    str(release),
+                    "--validator",
+                    str(fake),
+                    "--solana",
+                    str(fake),
+                    "--work",
+                    str(root / "work"),
+                ]
+            )
+            self.assertEqual(paths.repo, repo.resolve())
+            self.assertEqual(seeds, 20)
+            self.assertEqual(through, "full")
+            self.assertFalse(hold)
+            self.assertFalse(hot_cu_profile)
 
     def test_fee_profile_is_exactly_half_a_percent(self) -> None:
         self.assertEqual(MODULE.DEVELOPMENT_FEE_BASIS_POINTS, 50)
@@ -2074,8 +2388,24 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             ]
             with self.assertRaisesRegex(MODULE.Refusal, "exactly one"):
                 MODULE.parse([*common, "--seeds", "2"])
-            _paths, seeds, through, hold = MODULE.parse([*common, "--seeds", "1"])
+            _paths, seeds, through, hold, hot_cu_profile = MODULE.parse(
+                [*common, "--seeds", "1", "--hot-cu-profile"]
+            )
             self.assertEqual((seeds, through, hold), (1, "full-probe", False))
+            self.assertTrue(hot_cu_profile)
+            ordinary = [*common, "--seeds", "1"]
+            _paths, seeds, through, hold, hot_cu_profile = MODULE.parse(ordinary)
+            self.assertEqual((seeds, through, hold), (1, "full-probe", False))
+            self.assertFalse(hot_cu_profile)
+            with self.assertRaisesRegex(MODULE.Refusal, "diagnostic-only"):
+                MODULE.parse(
+                    [
+                        *ordinary,
+                        "--through",
+                        "participant",
+                        "--hot-cu-profile",
+                    ]
+                )
             self.assertNotEqual(MODULE.FULL_PROBE_SCHEMA, MODULE.SCHEMA)
             self.assertNotEqual(MODULE.FULL_PROBE_RUN_SCHEMA, MODULE.RUN_SCHEMA)
 
@@ -2092,6 +2422,444 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(receipt["exit_status"], 7)
             self.assertTrue((run / "stages" / "01-hostile" / "stderr.bin").is_file())
+
+    def test_stage_supervisor_observes_real_sigkill_and_restarts_exact_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            run = Path(root_text).resolve()
+            (run / "stages").mkdir()
+            journal = run / "target.json"
+            journal.write_text('{"phase":"dispatching"}')
+            receipt_path = run / "fault.json"
+            signature = SIGNATURES[0]
+            script = """
+import hashlib, json, os, pathlib, time
+journal = pathlib.Path(os.environ.get("DCLUTCH_CHAOS_FAULT_JOURNAL_V1", %r))
+receipt = os.environ.get("DCLUTCH_CHAOS_FAULT_RECEIPT_V1")
+if receipt is None:
+    journal.write_text('{"phase":"finalized"}')
+    print("recovered")
+    raise SystemExit(0)
+body = journal.read_bytes()
+row = {
+    "schema": "dclutch-owned-loopback-chaos-fault-boundary-v1",
+    "status": "armed",
+    "caseId": os.environ["DCLUTCH_CHAOS_FAULT_CASE_V1"],
+    "targetMutation": os.environ["DCLUTCH_CHAOS_FAULT_MUTATION_V1"],
+    "boundary": os.environ["DCLUTCH_CHAOS_FAULT_BOUNDARY_V1"],
+    "processId": os.getpid(),
+    "durablePhase": "dispatching",
+    "journalPath": str(journal),
+    "journalBeforeKillSha256": hashlib.sha256(body).hexdigest(),
+    "intentSha256": "11" * 32,
+    "packetSha256": "22" * 32,
+    "signature": %r,
+    "sendCountBeforeKill": 0,
+}
+path = pathlib.Path(receipt)
+with path.open("x") as target:
+    json.dump(row, target, separators=(",", ":"))
+    target.flush()
+    os.fsync(target.fileno())
+while True:
+    time.sleep(1)
+""" % (str(journal), signature)
+            supervisor = MODULE.ChaosStageSupervisor(
+                case_id="founding:dispatching-before-send",
+                mutation="dcltgmf3",
+                boundary="dispatching-before-send",
+                journal=journal,
+                receipt=receipt_path,
+            )
+            prior = MODULE._ACTIVE_CHAOS_SUPERVISOR
+            MODULE._ACTIVE_CHAOS_SUPERVISOR = supervisor
+            try:
+                result = MODULE.run_stage(
+                    run, 1, "faulted", [sys.executable, "-c", script]
+                )
+            finally:
+                MODULE._ACTIVE_CHAOS_SUPERVISOR = prior
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout.strip(), b"recovered")
+            self.assertTrue(supervisor.fired)
+            self.assertEqual(supervisor.facts["exitCode"], -MODULE.signal.SIGKILL)
+            stage = run / "stages" / "01-faulted"
+            self.assertTrue((stage / "fault-stdout.bin").is_file())
+            receipt = MODULE.read_unique_json(stage / "receipt.json", "stage receipt")
+            self.assertEqual(
+                receipt["chaos_fault"]["signal"], MODULE.signal.SIGKILL
+            )
+            self.assertEqual(receipt["chaos_recovery"]["sendCountAfterRestart"], 1)
+            self.assertNotEqual(
+                receipt["chaos_recovery"]["journalAfterFinalizationSha256"],
+                receipt["chaos_fault"]["journalBeforeKillSha256"],
+            )
+
+    def test_finalized_chaos_target_facts_authenticate_schema_and_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            packet = b"one exact signed packet"
+            packet_base64 = MODULE.base64.b64encode(packet).decode("ascii")
+            packet_sha256 = MODULE.sha256_bytes(packet)
+            direct = root / "0007-hot.json"
+            MODULE.write_json_new(
+                direct,
+                {
+                    "schema": "dclutch-owned-loopback-direct-trade-journal-v1",
+                    "stage": "hot",
+                    "phase": "finalized",
+                    "intentSha256": "11" * 32,
+                    "signedPacketBase64": packet_base64,
+                    "expectedSignature": SIGNATURES[0],
+                    "finalizedSlot": 91,
+                },
+            )
+            facts = MODULE.finalized_chaos_target_facts("hot", direct)
+            self.assertEqual(facts["packetSha256"], packet_sha256)
+            self.assertEqual(facts["signature"], SIGNATURES[0])
+            self.assertEqual(facts["finalizedSlot"], 91)
+
+            hostile = root / "hostile.json"
+            MODULE.write_json_new(
+                hostile,
+                {
+                    "schema": "dclutch-devnet-direct-trade-journal-v1",
+                    "stage": "hot",
+                    "phase": "finalized",
+                    "intentSha256": "11" * 32,
+                    "signedPacketBase64": packet_base64,
+                    "expectedSignature": SIGNATURES[0],
+                    "finalizedSlot": 91,
+                },
+            )
+            with self.assertRaisesRegex(MODULE.Refusal, "schema or stage"):
+                MODULE.finalized_chaos_target_facts("hot", hostile)
+
+    def test_control_chaos_case_uses_authenticated_aggregate_finish(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            journal = root / "retirement" / "aggregate-journals" / "03-finish.json"
+            journal.parent.mkdir(parents=True)
+            MODULE.write_json_new(
+                journal,
+                {
+                    "schema": "dclutch-owned-loopback-aggregate-retirement-journal-v1",
+                    "operation": "finish",
+                    "phase": "finalized",
+                    "intentSha256": "11" * 32,
+                    "packet": {
+                        "signed": {
+                            "packetSha256": "22" * 32,
+                            "signature": SIGNATURES[0],
+                        }
+                    },
+                    "finalization": {"finalizedSlot": 123},
+                },
+            )
+            result = root / "RESULT.json"
+            MODULE.write_json_new(result, {"status": "passed"})
+            contract = MODULE.load_chaos_contract(
+                type("RepoPaths", (), {"repo": MODULE_PATH.parents[3]})()
+            )
+            case = MODULE.build_chaos_case(
+                contract=contract,
+                spec=contract.MATRIX[0],
+                index=1,
+                run=root,
+                result_path=result,
+                name="chaos-01",
+                genesis_hash=PUBKEY_A,
+                session_identity_sha256="33" * 32,
+                source_revision="44" * 20,
+                checked_release_gate_sha256="55" * 32,
+                supervisor=None,
+            )
+            self.assertEqual(case["targetMutation"], "complete-life")
+            self.assertEqual(case["targetPacketSha256"], "22" * 32)
+            self.assertEqual(case["targetSendCount"], 1)
+            self.assertIsNone(case["fault"])
+            self.assertIsNone(case["recovery"])
+
+    def test_final_activity_uses_historical_direct_owner_and_exact_stage_order(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            run = Path(root_text).resolve()
+            (run / "stages").mkdir()
+            direct_journals = run / "direct" / "direct-trade-journal"
+            direct_journals.mkdir(parents=True)
+
+            def source(path: Path) -> Path:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                MODULE.write_json_new(path, {"source": path.name})
+                return path
+
+            plan = source(run / "plan.json")
+            profile = source(run / "validator-profile.json")
+            founding = source(run / "founding.json")
+            source(run / "participant.json")
+            source(direct_journals / "0001-lookup-freeze.json")
+            source(direct_journals / "0002-capability-seal.json")
+            direct_evidence = source(run / "direct" / "finalized.json")
+            fee = source(run / "direct" / "fee.json")
+            resolution_input = source(run / "resolution" / "input.json")
+            resolution_checkpoint = source(run / "resolution" / "checkpoint.json")
+            payout_input = source(run / "payouts" / "000" / "input.json")
+            payout_evidence = source(run / "payouts" / "000" / "evidence.json")
+            retirement = source(run / "retirement" / "completion.json")
+            direct = {
+                "finalized_evidence": str(direct_evidence),
+                "fee_settlement": {"evidence": str(fee)},
+            }
+            post_direct = {
+                "resolution": {
+                    "input": str(resolution_input),
+                    "checkpoint": str(resolution_checkpoint),
+                },
+                "payouts": [
+                    {"input": str(payout_input), "evidence": str(payout_evidence)}
+                ],
+                "retirement": {"completion": str(retirement)},
+            }
+            observed_sources: dict[str, list[tuple[str, Path]]] = {}
+
+            def wrap(
+                _run: Path,
+                _paths: MODULE.Paths,
+                _url: str,
+                stage: str,
+                sources: list[tuple[str, Path]],
+                ordinal: int,
+            ) -> tuple[Path, int]:
+                observed_sources[stage] = sources
+                output = run / "activity" / f"{stage}.json"
+                MODULE.write_json_new(
+                    output,
+                    {
+                        "schema": "dclutch-owned-loopback-activity-stage-completion-v1",
+                        "stage": stage,
+                        "status": "finalized",
+                    },
+                )
+                return output, ordinal + 1
+
+            def stage_command(
+                _run: Path, _ordinal: int, label: str, argv: list[str]
+            ) -> dict[str, object]:
+                output = Path(argv[argv.index("--output") + 1])
+                documents: dict[str, dict[str, object]] = {
+                    "activity-manifest": {
+                        "schema": "dclutch-owned-loopback-activity-reconcile-manifest-v1"
+                    },
+                    "activity-finalized-capture": {
+                        "schema": "dclutch-owned-loopback-captured-finalized-rpc-v1",
+                        "commitment": "finalized",
+                    },
+                    "pyth-provider-closure": {
+                        "schema": "dclutch-owned-loopback-pyth-provider-closure-v1",
+                        "status": "finalized",
+                    },
+                    "activity-lifecycle-session": {
+                        "schema": "dclutch-owned-loopback-private-lifecycle-session-v1",
+                        "status": "finalized",
+                    },
+                }
+                document = documents[label]
+                MODULE.write_json_new(output, document)
+                return document
+
+            paths = MODULE.Paths(
+                repo=MODULE_PATH.parents[3],
+                release_root=run,
+                expected_release_gate_sha256=None,
+                expected_release_source_revision=None,
+                expected_release_source_tree_sha256=None,
+                bootstrap=source(run / "bootstrap"),
+                reuse_bootstrap_work=None,
+                validator=Path("/bin/true"),
+                solana=Path("/bin/true"),
+                work=run,
+            )
+            with mock.patch.object(
+                MODULE, "run_activity_stage_wrapper", side_effect=wrap
+            ), mock.patch.object(MODULE, "run_json_stage", side_effect=stage_command):
+                controller, ordinal = MODULE.run_final_activity_evidence(
+                    run,
+                    paths,
+                    "http://127.0.0.1:31432",
+                    plan,
+                    profile,
+                    direct,
+                    post_direct,
+                    20,
+                )
+            self.assertEqual(ordinal, 30)
+            self.assertEqual(observed_sources["direct"][0], ("campaign", founding))
+            self.assertEqual(
+                [role for role, _path in observed_sources["payout"]],
+                ["direct-evidence", "input-000", "evidence-000"],
+            )
+            descriptors = MODULE.read_unique_json(
+                Path(controller["stage_descriptors"]), "activity descriptors"
+            )
+            self.assertEqual(
+                tuple(row["semanticRole"] for row in descriptors["journals"]),
+                MODULE.ACTIVITY_DESCRIPTOR_ROLES,
+            )
+
+    def test_final_receipt_emits_exact_eleven_role_order(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            run = root / "run"
+            (run / "stages").mkdir(parents=True)
+            (run / "activity").mkdir()
+            direct_journals = run / "direct" / "direct-trade-journal"
+            direct_journals.mkdir(parents=True)
+
+            def source(path: Path) -> Path:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                MODULE.write_json_new(path, {"source": path.name})
+                return path
+
+            wrappers = {
+                stage: source(run / "activity" / f"{stage}.json")
+                for stage in (
+                    "founding",
+                    "participant",
+                    "direct",
+                    "resolution",
+                    "payout",
+                    "retirement",
+                )
+            }
+            source(direct_journals / "0001-lookup-freeze.json")
+            source(direct_journals / "0002-capability-seal.json")
+            pyth = source(run / "pyth-provisioning.json")
+            session = source(run / "activity" / "lifecycle-session.json")
+            capture = source(run / "activity" / "capture.json")
+            manifest = source(run / "activity" / "manifest.json")
+            provider = source(run / "activity" / "provider.json")
+            plan = source(run / "plan.json")
+            facts = source(run / "pyth-facts.json")
+            gate = source(root / "gate.json")
+            chaos = source(root / "chaos.json")
+            MODULE.write_json_new(
+                run / "RESULT.json",
+                {
+                    "plan": str(plan),
+                    "final_activity": {
+                        "stage_wrappers": {
+                            stage: {
+                                "path": str(path),
+                                "sha256": MODULE.sha256_file(path),
+                            }
+                            for stage, path in wrappers.items()
+                        },
+                        "session": str(session),
+                        "capture": str(capture),
+                        "manifest": str(manifest),
+                        "provider_closure": str(provider),
+                    },
+                    "post_direct": {"pyth": {"facts": str(pyth)}},
+                },
+            )
+            paths = MODULE.Paths(
+                repo=MODULE_PATH.parents[3],
+                release_root=root,
+                expected_release_gate_sha256=None,
+                expected_release_source_revision=None,
+                expected_release_source_tree_sha256=None,
+                bootstrap=source(root / "bootstrap"),
+                reuse_bootstrap_work=None,
+                validator=Path("/bin/true"),
+                solana=Path("/bin/true"),
+                work=root,
+            )
+            observed_roles: tuple[str, ...] | None = None
+
+            def stage_command(
+                _run: Path, _ordinal: int, label: str, argv: list[str]
+            ) -> dict[str, object]:
+                nonlocal observed_roles
+                self.assertEqual(label, "lifecycle-receipt")
+                descriptors = Path(argv[argv.index("--stage-journal-descriptors") + 1])
+                rows = MODULE.read_unique_json(descriptors, "final descriptors")["journals"]
+                observed_roles = tuple(row["semanticRole"] for row in rows)
+                output = Path(argv[argv.index("--output") + 1])
+                document: dict[str, object] = {
+                    "schema": "dclutch-owned-loopback-reconcile-session-receipt-v1",
+                    "status": "finalized",
+                }
+                MODULE.write_json_new(output, document)
+                return document
+
+            with mock.patch.object(MODULE, "run_json_stage", side_effect=stage_command):
+                receipt = MODULE.finalize_lifecycle_receipt(
+                    run=run,
+                    paths=paths,
+                    gate_path=gate,
+                    gate_digest="11" * 32,
+                    source_revision="22" * 20,
+                    chaos_session_path=chaos,
+                )
+            self.assertEqual(observed_roles, MODULE.FINAL_LIFECYCLE_DESCRIPTOR_ROLES)
+            self.assertEqual(receipt["run"], "run")
+
+    def test_maker_close_binds_direct_generation_root_and_source_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            direct = root / "direct.json"
+            MODULE.write_json_new(direct, {"generation": 7})
+            evidence = {
+                "schema": "dclutch-direct-close-maker-evidence-v1",
+                "cluster": "owned-loopback",
+                "market": PUBKEY_C,
+                "generation": 7,
+                "directRoot": PUBKEY_A,
+                "directEvidenceSha256": MODULE.sha256_file(direct),
+                "makerReplay": PUBKEY_B,
+                "plan": {
+                    "maker": PUBKEY_C,
+                    "rentOwner": PUBKEY_A,
+                    "rentPrincipal": 100,
+                    "unclassifiedDonation": 0,
+                    "totalCredit": 100,
+                    "beneficiaryLamportsAfter": 100,
+                    "remainingOpenMakerRoots": 0,
+                    "requestDigest": "11" * 32,
+                    "expectedPostRootDigest": "22" * 32,
+                    "expectedReceipt": "00",
+                },
+                "alreadyClosed": False,
+                "landed": {
+                    "signature": SIGNATURES[0],
+                    "slot": 1,
+                    "computeUnitsConsumed": 1,
+                    "feeLamports": 5_000,
+                },
+            }
+            accepted = MODULE.authenticate_direct_close_maker(
+                evidence,
+                child={"maker": PUBKEY_C, "replay": PUBKEY_B},
+                market=PUBKEY_C,
+                direct_evidence=direct,
+                direct_root=PUBKEY_A,
+                remaining_roots=0,
+            )
+            self.assertEqual(accepted["finalized"]["slot"], 1)
+            for field, hostile in (
+                ("generation", 8),
+                ("directRoot", PUBKEY_B),
+                ("directEvidenceSha256", "33" * 32),
+            ):
+                substituted = copy.deepcopy(evidence)
+                substituted[field] = hostile
+                with self.assertRaisesRegex(MODULE.Refusal, "generation, root"):
+                    MODULE.authenticate_direct_close_maker(
+                        substituted,
+                        child={"maker": PUBKEY_C, "replay": PUBKEY_B},
+                        market=PUBKEY_C,
+                        direct_evidence=direct,
+                        direct_root=PUBKEY_A,
+                        remaining_roots=0,
+                    )
 
 
 class FrozenRoutingTableTests(unittest.TestCase):
@@ -2175,6 +2943,74 @@ class FrozenRoutingTableTests(unittest.TestCase):
 
 
 class ValidatorLaunchTests(unittest.TestCase):
+    def test_validator_profile_binds_exact_loopback_loader_facts(self):
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            ledger = root / "ledger"
+            accounts = root / "accounts"
+            ledger.mkdir()
+            accounts.mkdir()
+            plan = root / "plan.json"
+            plan.write_text('{"schema":"test-plan"}')
+            paths = MODULE.Paths(
+                repo=MODULE_PATH.parents[3],
+                release_root=root,
+                expected_release_gate_sha256=None,
+                expected_release_source_revision=None,
+                expected_release_source_tree_sha256=None,
+                bootstrap=root / "bootstrap",
+                reuse_bootstrap_work=None,
+                validator=Path("/bin/true"),
+                solana=Path("/bin/true"),
+                work=root / "work",
+            )
+            completed = MODULE.subprocess.CompletedProcess(
+                args=["/bin/true", "--version"],
+                returncode=0,
+                stdout=b"solana-test-validator 2.2.1\n",
+                stderr=b"",
+            )
+            with mock.patch.object(MODULE.subprocess, "run", return_value=completed):
+                profile_path = MODULE.write_local_validator_profile(
+                    paths,
+                    ledger=ledger,
+                    plan=plan,
+                    account_dir=str(accounts),
+                    port=31_432,
+                )
+            profile = MODULE.read_unique_json(profile_path, "validator profile")
+            self.assertEqual(
+                profile["schema"], "dclutch-successor-local-validator-profile-v1"
+            )
+            self.assertEqual(profile["network"]["rpc_url"], "http://127.0.0.1:31432")
+            self.assertEqual(profile["network"]["faucet_port"], 31_434)
+            self.assertEqual(profile["network"]["dynamic_port_range"], "31442-31473")
+            self.assertEqual(
+                profile["validator"]["version"], "solana-test-validator 2.2.1"
+            )
+            self.assertEqual(
+                [row["name"] for row in profile["programs"][:7]],
+                [
+                    "registry",
+                    "core",
+                    "claims",
+                    "trading",
+                    "resolution",
+                    "custody",
+                    "rent-credit",
+                ],
+            )
+            provider_rows = profile["programs"][7:]
+            self.assertEqual(
+                [row["name"] for row in provider_rows],
+                ["pyth-receiver", "pyth-router"],
+            )
+            for row in provider_rows:
+                self.assertIsNone(row["upgrade_authority"])
+                self.assertEqual(row["deployment_slot"], 0)
+                self.assertRegex(row["programdata_sha256"], r"^[0-9a-f]{64}$")
+                self.assertRegex(row["elf_sha256"], r"^[0-9a-f]{64}$")
+
     def test_the_session_keeps_its_transaction_history(self):
         """A purge between two stages strands a journal permanently.
 

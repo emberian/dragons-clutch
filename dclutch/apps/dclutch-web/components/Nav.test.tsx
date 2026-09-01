@@ -36,6 +36,17 @@ describe('the site nav', () => {
     }
   });
 
+  it('keeps observer and redemption routes in their product journeys', () => {
+    for (const path of ['/campaign', '/population', '/smoke', '/bounty']) {
+      const html = renderToStaticMarkup(<Nav current={path} />);
+      expect(html).toContain('href="/live" class="active" aria-current="page"');
+      expect(html).not.toContain('href="/console" class="active"');
+    }
+    const redemption = renderToStaticMarkup(<Nav current="/redeem" />);
+    expect(redemption).toContain('href="/portfolio" class="active" aria-current="page"');
+    expect(redemption).not.toContain('href="/console" class="active"');
+  });
+
   it('states one honest status, defaulting to the devnet preview', () => {
     expect(renderToStaticMarkup(<Nav />)).toContain('devnet preview');
     expect(renderToStaticMarkup(<Nav status="operator tool" />)).toContain('operator tool');

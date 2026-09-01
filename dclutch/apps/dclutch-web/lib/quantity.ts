@@ -241,6 +241,49 @@ export function formatClaimPriceV1(price: bigint | string, priceScale: bigint | 
 }
 
 /**
+ * Read a price typed as cents on one full collateral unit into the Market's
+ * exact scaled integer.
+ *
+ * This is deliberately stricter than a decimal parser. A displayed cents
+ * value is a rational number, while Direct carries one integer `limitPrice`.
+ * The conversion therefore succeeds only when
+ *
+ *     typed cents / 100 = limitPrice / priceScale
+ *
+ * exactly. No nearest tick, binary float, or hidden rounding boundary is
+ * admitted. The remedy names the immutable price scale so a caller can show
+ * the reader why a seemingly ordinary decimal was refused.
+ */
+export function parseClaimPriceV1(text: string, priceScale: bigint): bigint {
+  const cleaned = text.trim();
+  if (priceScale <= 0n || priceScale > U64_MAX_V1) {
+    throw new Error('this market does not carry one positive u64 price scale');
+  }
+  const match = /^([0-9]+)(?:\.([0-9]+))?$/.exec(cleaned);
+  if (match === null) {
+    throw new Error('price must be one positive decimal number of cents, from more than 0 through 100');
+  }
+  const fraction = match[2] ?? '';
+  // Keep the typed rational exactly. BigInt also lets a hostile, very wide
+  // input fail at the protocol bound below rather than losing precision first.
+  const decimalScale = 10n ** BigInt(fraction.length);
+  const centsNumerator = BigInt(match[1]!) * decimalScale
+    + BigInt(fraction === '' ? '0' : fraction);
+  const denominator = 100n * decimalScale;
+  const scaled = centsNumerator * priceScale;
+  if (scaled % denominator !== 0n) {
+    throw new Error(
+      `that cents value is not exactly representable at this market's immutable ${priceScale.toString()} price scale; no rounding was applied`,
+    );
+  }
+  const price = scaled / denominator;
+  if (price <= 0n || price > priceScale) {
+    throw new Error('price must be more than 0 and no more than 100 cents on one full collateral unit');
+  }
+  return price;
+}
+
+/**
  * The one inline gloss that explains the price scale, the first time a price
  * appears in the flow. It teaches the identity the numbers already carry:
  * cents on the unit and the market's implied percentage are the same figure.

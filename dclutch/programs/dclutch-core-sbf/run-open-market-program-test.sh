@@ -30,7 +30,9 @@ log="$output/build-core-links.log"
 for manifest in \
   programs/dclutch-registry-sbf/Cargo.toml \
   programs/dclutch-rent-sbf/Cargo.toml \
+  programs/dclutch-claims-sbf/Cargo.toml \
   programs/dclutch-custody-sbf/Cargo.toml \
+  programs/dclutch-resolution-proof-sbf/Cargo.toml \
   programs/dclutch-trading-sbf/Cargo.toml \
   programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml \
   programs/dclutch-core-sbf/Cargo.toml; do

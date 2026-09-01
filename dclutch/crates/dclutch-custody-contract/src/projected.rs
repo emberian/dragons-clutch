@@ -13,6 +13,21 @@ pub const PROJECTED_CUSTODY_STATE_MAGIC_V2: [u8; 8] = *b"DCLPCS02";
 pub const PROJECTED_CUSTODY_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCR01";
 /// Exact request width.
 pub const PROJECTED_CUSTODY_REQUEST_BYTES_V1: usize = 768;
+/// Public fixed-layout coordinates for one projected-Custody request.
+///
+/// Parent Effect emitters consume these semantic-owner coordinates when an
+/// authenticated runtime identity replaces a root-independent transport
+/// placeholder. No parent family needs to restate the projected wire layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectedCustodyRequestLayoutV1;
+
+impl ProjectedCustodyRequestLayoutV1 {
+    /// Exact projected request width.
+    pub const BYTES: usize = PROJECTED_CUSTODY_REQUEST_BYTES_V1;
+    /// Thirty-two-byte parent capability-root identity offset.
+    pub const PARENT_CAPABILITY_ROOT_OFFSET: usize = 240;
+}
+
 /// Exact persisted-state width.
 pub const PROJECTED_CUSTODY_STATE_BYTES_V2: usize = 808;
 /// Exact terminal receipt width.
@@ -1937,6 +1952,25 @@ mod tests {
         assert_eq!(
             CustodyReplayV1::decode(&normal.to_bytes().expect("normal bytes")),
             Ok(normal)
+        );
+    }
+
+    #[test]
+    fn public_parent_root_coordinate_is_pinned_to_the_canonical_wire() {
+        let input = request(ProjectedCustodyOperationV1::LockHoard, 2, 500);
+        let bytes = input.encode().expect("request bytes");
+        assert_eq!(
+            bytes
+                .get(
+                    ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET
+                        ..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET + 32,
+                )
+                .expect("parent root coordinate"),
+            input.parent_capability_root
+        );
+        assert_eq!(
+            ProjectedCustodyRequestLayoutV1::BYTES,
+            PROJECTED_CUSTODY_REQUEST_BYTES_V1
         );
     }
 

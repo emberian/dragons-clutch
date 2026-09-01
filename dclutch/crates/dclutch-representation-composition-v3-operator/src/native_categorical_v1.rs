@@ -1,4 +1,4 @@
-//! Canonical Product-native categorical composition publication.
+//! Canonical Product-native basis composition publication.
 //!
 //! Native Claims positions already carry one coordinate per categorical
 //! Product outcome. Their execution exposure is therefore the identity map
@@ -11,8 +11,11 @@
 //! Rational receipt Mint or one aggregate receipt recipe, and inventing either
 //! would create a second semantic truth.
 
-use dclutch_product_payoff_v2_codec::runtime_v3::{
-    BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
+use dclutch_product_payoff_v2_codec::{
+    price_gate_v1::verify_price_gate_v1,
+    runtime_v3::{
+        BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
+    },
 };
 use dclutch_product_runtime_v2::{PortfolioV2, ResultDomainV2, join_product_v2};
 use dclutch_product_runtime_v2_admission::ProductRecordV2;
@@ -35,6 +38,32 @@ const GRAPH_ID_DOMAIN_V1: &[u8] = b"dclutch/native-categorical-composition/graph
 const ROOT_ID_DOMAIN_V1: &[u8] = b"dclutch/native-categorical-composition/root/v1";
 const LEAF_ID_DOMAIN_V1: &[u8] = b"dclutch/native-categorical-composition/leaf/v1";
 const TRANSLATION_ID_DOMAIN_V1: &[u8] = b"dclutch/native-categorical-composition/translation/v1";
+const BASIS_GRAPH_ID_DOMAIN_V1: &[u8] = b"dclutch/native-basis-composition/graph/v1";
+const BASIS_ROOT_ID_DOMAIN_V1: &[u8] = b"dclutch/native-basis-composition/root/v1";
+const BASIS_LEAF_ID_DOMAIN_V1: &[u8] = b"dclutch/native-basis-composition/leaf/v1";
+const BASIS_TRANSLATION_ID_DOMAIN_V1: &[u8] = b"dclutch/native-basis-composition/translation/v1";
+
+/// Exact semantic-owner bodies used to derive one native basis bundle.
+///
+/// A spline basis carries the exact `DCLTPGT1` body named by its authenticated
+/// digest. Exempt categorical and graded bases must not carry one.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeBasisCompositionInputV1<'a> {
+    /// Canonical Core Market PDA selected for terminal payout.
+    pub market: [u8; 32],
+    /// Immutable activated release set.
+    pub release_set: [u8; 32],
+    /// Exact Product root record bytes.
+    pub product_record_bytes: &'a [u8],
+    /// Exact Product result-domain record bytes.
+    pub result_domain_bytes: &'a [u8],
+    /// Exact Product portfolio record bytes.
+    pub portfolio_bytes: &'a [u8],
+    /// Exact linked ProductBasisV3 record bytes.
+    pub product_basis_bytes: &'a [u8],
+    /// Exact linked price-gate body, present only when the basis names it.
+    pub price_gate_bytes: Option<&'a [u8]>,
+}
 
 /// Exact semantic-owner bodies used to derive one native categorical bundle.
 ///
@@ -57,10 +86,9 @@ pub struct NativeCategoricalCompositionInputV1<'a> {
     pub product_basis_bytes: &'a [u8],
 }
 
-/// Four canonical Registry bodies required by native categorical terminal
-/// payout.
+/// Four canonical Registry bodies required by native basis terminal payout.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NativeCategoricalCompositionRecordsV1 {
+pub struct NativeBasisCompositionRecordsV1 {
     descriptor: Vec<u8>,
     graph: Vec<u8>,
     translation: Vec<u8>,
@@ -70,9 +98,11 @@ pub struct NativeCategoricalCompositionRecordsV1 {
     translation_id: [u8; 32],
     representation_basis: [u8; 32],
     width: u32,
+    basis_kind: BasisKindV3,
+    payout_scale: u64,
 }
 
-impl NativeCategoricalCompositionRecordsV1 {
+impl NativeBasisCompositionRecordsV1 {
     /// Exact composition-descriptor bytes.
     pub fn descriptor(&self) -> &[u8] {
         &self.descriptor
@@ -118,6 +148,16 @@ impl NativeCategoricalCompositionRecordsV1 {
         self.width
     }
 
+    /// Authenticated ProductBasisV3 evaluator family.
+    pub const fn basis_kind(&self) -> BasisKindV3 {
+        self.basis_kind
+    }
+
+    /// Authenticated exact ProductBasisV3 payout partition scale.
+    pub const fn payout_scale(&self) -> u64 {
+        self.payout_scale
+    }
+
     /// Canonically ordered immutable Registry publication targets.
     pub fn publication_targets(&self) -> [PublicationTargetV3<'_>; 4] {
         [
@@ -141,8 +181,34 @@ impl NativeCategoricalCompositionRecordsV1 {
     }
 }
 
+/// Byte-compatible categorical result returned by the legacy strict wrapper.
+pub type NativeCategoricalCompositionRecordsV1 = NativeBasisCompositionRecordsV1;
+
+#[derive(Clone, Copy)]
+struct IdentityDomainsV1 {
+    graph: &'static [u8],
+    root: &'static [u8],
+    leaf: &'static [u8],
+    translation: &'static [u8],
+}
+
+const CATEGORICAL_IDENTITY_DOMAINS_V1: IdentityDomainsV1 = IdentityDomainsV1 {
+    graph: GRAPH_ID_DOMAIN_V1,
+    root: ROOT_ID_DOMAIN_V1,
+    leaf: LEAF_ID_DOMAIN_V1,
+    translation: TRANSLATION_ID_DOMAIN_V1,
+};
+
+const BASIS_IDENTITY_DOMAINS_V1: IdentityDomainsV1 = IdentityDomainsV1 {
+    graph: BASIS_GRAPH_ID_DOMAIN_V1,
+    root: BASIS_ROOT_ID_DOMAIN_V1,
+    leaf: BASIS_LEAF_ID_DOMAIN_V1,
+    translation: BASIS_TRANSLATION_ID_DOMAIN_V1,
+};
+
 #[derive(Clone, Copy)]
 struct IdentityFactsV1 {
+    domains: IdentityDomainsV1,
     market: [u8; 32],
     result_domain: [u8; 32],
     release_set: [u8; 32],
@@ -159,7 +225,7 @@ impl IdentityFactsV1 {
         let width = self.width.to_le_bytes();
         let payout_scale = self.payout_scale.to_le_bytes();
         hashv(&[
-            GRAPH_ID_DOMAIN_V1,
+            self.domains.graph,
             &self.market,
             &self.result_domain,
             &self.release_set,
@@ -174,22 +240,47 @@ impl IdentityFactsV1 {
     }
 }
 
-fn root_id(graph_id: [u8; 32]) -> [u8; 32] {
-    hashv(&[ROOT_ID_DOMAIN_V1, &graph_id]).to_bytes()
+fn root_id(domain: &[u8], graph_id: [u8; 32]) -> [u8; 32] {
+    hashv(&[domain, &graph_id]).to_bytes()
 }
 
-fn leaf_id(graph_id: [u8; 32], coordinate: u32) -> [u8; 32] {
-    hashv(&[LEAF_ID_DOMAIN_V1, &graph_id, &coordinate.to_le_bytes()]).to_bytes()
+fn leaf_id(domain: &[u8], graph_id: [u8; 32], coordinate: u32) -> [u8; 32] {
+    hashv(&[domain, &graph_id, &coordinate.to_le_bytes()]).to_bytes()
 }
 
-fn translation_id(graph_id: [u8; 32], root_id: [u8; 32]) -> [u8; 32] {
-    hashv(&[TRANSLATION_ID_DOMAIN_V1, &graph_id, &root_id]).to_bytes()
+fn translation_id(domain: &[u8], graph_id: [u8; 32], root_id: [u8; 32]) -> [u8; 32] {
+    hashv(&[domain, &graph_id, &root_id]).to_bytes()
 }
 
 /// Compile one canonical identity exposure for a native categorical Product.
 pub fn compile_native_categorical_composition_v1(
     input: NativeCategoricalCompositionInputV1<'_>,
 ) -> Result<NativeCategoricalCompositionRecordsV1> {
+    let product_basis =
+        ProductBasisV3::decode(input.product_basis_bytes).map_err(|_| Error::ProductBasis)?;
+    if product_basis.kind() != BasisKindV3::CategoricalQ1 || product_basis.payout_scale() != 1 {
+        return Err(Error::CrossRecord);
+    }
+    compile_native_basis_composition_v1(NativeBasisCompositionInputV1 {
+        market: input.market,
+        release_set: input.release_set,
+        product_record_bytes: input.product_record_bytes,
+        result_domain_bytes: input.result_domain_bytes,
+        portfolio_bytes: input.portfolio_bytes,
+        product_basis_bytes: input.product_basis_bytes,
+        price_gate_bytes: None,
+    })
+}
+
+/// Compile one canonical identity exposure for an admitted ProductBasisV3.
+///
+/// The Product coordinates and native Claims coordinates remain the exact
+/// identity map `K = N`; the selected basis controls their payoff semantics and
+/// exact payout scale. Spline bases are admitted only alongside the canonical
+/// price-gate body named by the basis itself.
+pub fn compile_native_basis_composition_v1(
+    input: NativeBasisCompositionInputV1<'_>,
+) -> Result<NativeBasisCompositionRecordsV1> {
     if input.market == [0; 32] || input.release_set == [0; 32] {
         return Err(Error::CrossRecord);
     }
@@ -221,6 +312,33 @@ pub fn compile_native_categorical_composition_v1(
 
     let product_basis =
         ProductBasisV3::decode(input.product_basis_bytes).map_err(|_| Error::ProductBasis)?;
+    product_basis
+        .admit_selection_v3()
+        .map_err(|_| Error::ProductBasis)?;
+    let price_gate_digest = product_basis.price_gate_certificate_digest_v3();
+    match (price_gate_digest == [0; 32], input.price_gate_bytes) {
+        (true, None) => {}
+        (true, Some(_)) | (false, None) => return Err(Error::ProductBasis),
+        (false, Some(price_gate)) => {
+            let expected = price_gate_digest;
+            if hash(price_gate).to_bytes() != expected {
+                return Err(Error::CrossRecord);
+            }
+            let degree = match product_basis.kind() {
+                BasisKindV3::SplineDegree2To3 { degree, .. } => degree,
+                _ => return Err(Error::ProductBasis),
+            };
+            verify_price_gate_v1(
+                &product_basis,
+                product_basis.knot_denominator(),
+                product_basis.payout_scale(),
+                degree,
+                product_basis.basis_width(),
+                price_gate,
+            )
+            .map_err(|_| Error::ProductBasis)?;
+        }
+    }
     let product_basis_digest = hash(input.product_basis_bytes).to_bytes();
     let semantic =
         semantic_basis_preimage_v3(input.product_basis_bytes).map_err(|_| Error::ProductBasis)?;
@@ -230,9 +348,7 @@ pub fn compile_native_categorical_composition_v1(
         semantic.suffix(),
     ])
     .to_bytes();
-    if product_basis.kind() != BasisKindV3::CategoricalQ1
-        || product_basis.payout_scale() != 1
-        || product_basis.product_id() != joined.product_id.to_bytes()
+    if product_basis.product_id() != joined.product_id.to_bytes()
         || product_basis.result_domain_id() != result_domain_digest
         || product_basis.basis_width() != joined.outcome_count
         || representation_basis != joined.liability_basis_id.to_bytes()
@@ -243,7 +359,13 @@ pub fn compile_native_categorical_composition_v1(
     let width = joined.outcome_count;
     let node_count = width.checked_add(1).ok_or(Error::Arithmetic)?;
     let term_count = width.checked_mul(2).ok_or(Error::Arithmetic)?;
+    let domains = if product_basis.kind() == BasisKindV3::CategoricalQ1 {
+        CATEGORICAL_IDENTITY_DOMAINS_V1
+    } else {
+        BASIS_IDENTITY_DOMAINS_V1
+    };
     let facts = IdentityFactsV1 {
+        domains,
         market: input.market,
         result_domain: result_domain_digest,
         release_set: input.release_set,
@@ -255,8 +377,8 @@ pub fn compile_native_categorical_composition_v1(
         payout_scale: product_basis.payout_scale(),
     };
     let graph_id = facts.graph_id();
-    let root_id = root_id(graph_id);
-    let translation_id = translation_id(graph_id, root_id);
+    let root_id = root_id(domains.root, graph_id);
+    let translation_id = translation_id(domains.translation, graph_id, root_id);
     if [graph_id, root_id, translation_id]
         .into_iter()
         .any(|identity| identity == [0; 32])
@@ -267,7 +389,7 @@ pub fn compile_native_categorical_composition_v1(
     let width_usize = usize::try_from(width).map_err(|_| Error::Arithmetic)?;
     let mut leaf_ids_by_outcome = Vec::with_capacity(width_usize);
     for coordinate in 0..width {
-        let id = leaf_id(graph_id, coordinate);
+        let id = leaf_id(domains.leaf, graph_id, coordinate);
         if id == [0; 32] {
             return Err(Error::Composition);
         }
@@ -443,7 +565,7 @@ pub fn compile_native_categorical_composition_v1(
         &translation,
         &exposure,
     )?;
-    Ok(NativeCategoricalCompositionRecordsV1 {
+    Ok(NativeBasisCompositionRecordsV1 {
         descriptor: descriptor.to_vec(),
         graph,
         translation,
@@ -453,14 +575,24 @@ pub fn compile_native_categorical_composition_v1(
         translation_id,
         representation_basis,
         width,
+        basis_kind: product_basis.kind(),
+        payout_scale: product_basis.payout_scale(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
-        BasisInputV3, basis_record_bytes_v3, compile_basis_v3,
+    use dclutch_product_payoff_v2_codec::{
+        price_gate_v1::{
+            PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
+            PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
+            PRICE_GATE_MASS_OFFSET_V1, PRICE_GATE_NUMERATORS_OFFSET_V1,
+            PRICE_GATE_PRICES_OFFSET_V1, PRICE_GATE_PROFILE_OFFSET_V1, PRICE_GATE_PROFILE_V1,
+            PRICE_GATE_REQUEST_BYTES_V1, PRICE_GATE_SCALE_OFFSET_V1, PRICE_GATE_SCHEMA_VERSION_V1,
+            PRICE_GATE_VERSION_OFFSET_V1, PRICE_GATE_WEIGHTS_OFFSET_V1, PRICE_GATE_WIDTH_OFFSET_V1,
+        },
+        runtime_v3::{BasisInputV3, basis_record_bytes_v3, compile_basis_v3},
     };
     use dclutch_product_runtime_v2::{
         ContentId, portfolio_record_bytes, result_domain_record_bytes,
@@ -468,6 +600,10 @@ mod tests {
     use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
     use dclutch_product_runtime_v2_operator::{
         ProductCompilationInputV2, compile_product_records_v2,
+        spline_basis_v3::{
+            SplineProductCompilationInputV3, compile_spline_product_records_v3,
+            spline_basis_output_bytes_v3,
+        },
     };
     use dclutch_representation_composition_v3_kernel::{
         COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_ROW_BYTES_V3,
@@ -535,6 +671,101 @@ mod tests {
         domain: Vec<u8>,
         portfolio: Vec<u8>,
         basis: Vec<u8>,
+    }
+
+    struct CubicFixture {
+        product: Vec<u8>,
+        domain: Vec<u8>,
+        portfolio: Vec<u8>,
+        basis: Vec<u8>,
+        gate: [u8; PRICE_GATE_REQUEST_BYTES_V1],
+    }
+
+    impl CubicFixture {
+        fn new() -> Self {
+            const SCALE: u64 = 11;
+            let mut gate = [0_u8; PRICE_GATE_REQUEST_BYTES_V1];
+            gate[PRICE_GATE_MAGIC_OFFSET_V1..PRICE_GATE_MAGIC_OFFSET_V1 + 8]
+                .copy_from_slice(&PRICE_GATE_MAGIC_V1);
+            gate[PRICE_GATE_VERSION_OFFSET_V1..PRICE_GATE_VERSION_OFFSET_V1 + 2]
+                .copy_from_slice(&PRICE_GATE_SCHEMA_VERSION_V1.to_le_bytes());
+            gate[PRICE_GATE_PROFILE_OFFSET_V1..PRICE_GATE_PROFILE_OFFSET_V1 + 2]
+                .copy_from_slice(&PRICE_GATE_PROFILE_V1.to_le_bytes());
+            gate[PRICE_GATE_SCALE_OFFSET_V1..PRICE_GATE_SCALE_OFFSET_V1 + 4]
+                .copy_from_slice(&u32::try_from(SCALE).expect("scale").to_le_bytes());
+            gate[PRICE_GATE_MASS_OFFSET_V1..PRICE_GATE_MASS_OFFSET_V1 + 8]
+                .copy_from_slice(&1_u64.to_le_bytes());
+            gate[PRICE_GATE_DEGREE_OFFSET_V1] = 3;
+            gate[PRICE_GATE_WIDTH_OFFSET_V1] = 4;
+            gate[PRICE_GATE_ATOM_COUNT_OFFSET_V1] = 1;
+            for (claim, payout) in [1_u64, 4, 4, 2].iter().enumerate() {
+                let offset = PRICE_GATE_PRICES_OFFSET_V1 + claim * 8;
+                gate[offset..offset + 8].copy_from_slice(&payout.to_le_bytes());
+            }
+            gate[PRICE_GATE_WEIGHTS_OFFSET_V1..PRICE_GATE_WEIGHTS_OFFSET_V1 + 8]
+                .copy_from_slice(&1_u64.to_le_bytes());
+            gate[PRICE_GATE_NUMERATORS_OFFSET_V1..PRICE_GATE_NUMERATORS_OFFSET_V1 + 8]
+                .copy_from_slice(&3_i64.to_le_bytes());
+            gate[PRICE_GATE_DENOMINATORS_OFFSET_V1..PRICE_GATE_DENOMINATORS_OFFSET_V1 + 4]
+                .copy_from_slice(&2_u32.to_le_bytes());
+
+            let cuts = [1_i128, 2];
+            let coefficients = [1_u64; 4];
+            let knots = [0_i128, 0, 0, 0, 3, 3, 3, 3];
+            let failure = [0_u64, 0, 0, SCALE];
+            let input = SplineProductCompilationInputV3 {
+                product_id: content(1),
+                coordinate_domain_id: content(3),
+                result_unit_id: content(4),
+                claim_basis_id: content(8),
+                representation_release_id: content(6),
+                mapping_release_id: content(7),
+                cut_denominator: 1,
+                cuts: &cuts,
+                portfolio_denominator: 1,
+                coefficients: &coefficients,
+                evaluator_release_id: content(5),
+                degree: 3,
+                interior_multiplicity: false,
+                payout_scale: SCALE,
+                knot_denominator: 1,
+                knots: &knots,
+                failure_payouts: &failure,
+                price_gate_certificate: &gate,
+            };
+            let mut product = vec![0; PRODUCT_RECORD_BYTES_V2];
+            let mut domain = vec![0; result_domain_record_bytes(2).expect("domain width")];
+            let mut portfolio = vec![0; portfolio_record_bytes(4).expect("portfolio width")];
+            let mut basis = vec![0; spline_basis_output_bytes_v3(input).expect("basis width")];
+            compile_spline_product_records_v3(
+                Pubkey::new_from_array(id(90)),
+                input,
+                &mut product,
+                &mut domain,
+                &mut portfolio,
+                &mut basis,
+            )
+            .expect("cubic Product graph");
+            Self {
+                product,
+                domain,
+                portfolio,
+                basis,
+                gate,
+            }
+        }
+
+        fn input(&self) -> NativeBasisCompositionInputV1<'_> {
+            NativeBasisCompositionInputV1 {
+                market: id(80),
+                release_set: id(81),
+                product_record_bytes: &self.product,
+                result_domain_bytes: &self.domain,
+                portfolio_bytes: &self.portfolio,
+                product_basis_bytes: &self.basis,
+                price_gate_bytes: Some(&self.gate),
+            }
+        }
     }
 
     impl Fixture {
@@ -607,6 +838,8 @@ mod tests {
         let fixture = Fixture::new(4, 1);
         let output = compile_native_categorical_composition_v1(fixture.input()).expect("compiler");
         assert_eq!(output.width(), 4);
+        assert_eq!(output.payout_scale(), 1);
+        assert_eq!(output.basis_kind(), BasisKindV3::CategoricalQ1);
         assert_eq!(
             output.publication_targets().map(|target| target.schema_id),
             [
@@ -633,7 +866,13 @@ mod tests {
         assert_ne!(
             graph_leaf_ids,
             (0..4)
-                .map(|coordinate| leaf_id(output.graph_id(), coordinate))
+                .map(|coordinate| {
+                    leaf_id(
+                        CATEGORICAL_IDENTITY_DOMAINS_V1.leaf,
+                        output.graph_id(),
+                        coordinate,
+                    )
+                })
                 .collect::<Vec<_>>()
         );
 
@@ -646,7 +885,11 @@ mod tests {
             assert_eq!(
                 &output.exposure()[row + CompositionExposureRowLayoutV3::NODE_ID
                     ..row + CompositionExposureRowLayoutV3::NODE_ID + 32],
-                &leaf_id(output.graph_id(), coordinate)
+                &leaf_id(
+                    CATEGORICAL_IDENTITY_DOMAINS_V1.leaf,
+                    output.graph_id(),
+                    coordinate,
+                )
             );
             assert_eq!(
                 u32_at(
@@ -680,6 +923,99 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn cubic_scale_eleven_is_one_admitted_identity_mapping() {
+        let fixture = CubicFixture::new();
+        let output = compile_native_basis_composition_v1(fixture.input()).expect("cubic compiler");
+        assert_eq!(output.width(), 4);
+        assert_eq!(output.payout_scale(), 11);
+        assert_eq!(
+            output.basis_kind(),
+            BasisKindV3::SplineDegree2To3 {
+                degree: 3,
+                interior_multiplicity: false,
+            }
+        );
+        assert_eq!(
+            u64_at(output.descriptor(), DescriptorLayoutV3::ROOT_DENOMINATOR),
+            1
+        );
+        let terms_start = COMPOSITION_EXPOSURE_HEADER_BYTES_V3
+            + usize::try_from(output.width()).expect("width") * COMPOSITION_EXPOSURE_ROW_BYTES_V3;
+        for coordinate in 0..output.width() {
+            let row = COMPOSITION_EXPOSURE_HEADER_BYTES_V3
+                + usize::try_from(coordinate).expect("coordinate")
+                    * COMPOSITION_EXPOSURE_ROW_BYTES_V3;
+            assert_eq!(
+                u64_at(
+                    output.exposure(),
+                    row + CompositionExposureRowLayoutV3::DENOMINATOR,
+                ),
+                1
+            );
+            let term = terms_start
+                + usize::try_from(coordinate).expect("coordinate")
+                    * COMPOSITION_EXPOSURE_TERM_BYTES_V3;
+            assert_eq!(
+                u32_at(
+                    output.exposure(),
+                    term + CompositionExposureTermLayoutV3::PRODUCT_COORDINATE,
+                ),
+                coordinate
+            );
+            assert_eq!(
+                u64_at(
+                    output.exposure(),
+                    term + CompositionExposureTermLayoutV3::NUMERATOR,
+                ),
+                1
+            );
+        }
+
+        assert_eq!(
+            compile_native_categorical_composition_v1(NativeCategoricalCompositionInputV1 {
+                market: id(80),
+                release_set: id(81),
+                product_record_bytes: &fixture.product,
+                result_domain_bytes: &fixture.domain,
+                portfolio_bytes: &fixture.portfolio,
+                product_basis_bytes: &fixture.basis,
+            })
+            .err(),
+            Some(Error::CrossRecord)
+        );
+    }
+
+    #[test]
+    fn cubic_gate_and_link_substitutions_refuse() {
+        let fixture = CubicFixture::new();
+        let mut missing = fixture.input();
+        missing.price_gate_bytes = None;
+        assert_eq!(
+            compile_native_basis_composition_v1(missing).err(),
+            Some(Error::ProductBasis)
+        );
+
+        let mut forged_gate = fixture.gate;
+        forged_gate[PRICE_GATE_PRICES_OFFSET_V1] ^= 1;
+        let mut forged = fixture.input();
+        forged.price_gate_bytes = Some(&forged_gate);
+        assert_eq!(
+            compile_native_basis_composition_v1(forged).err(),
+            Some(Error::CrossRecord)
+        );
+
+        let other = CubicFixture::new();
+        let mut substituted_basis = other.basis;
+        substituted_basis[32] ^= 1;
+        let mut substituted = fixture.input();
+        substituted.product_basis_bytes = &substituted_basis;
+        assert_eq!(
+            compile_native_basis_composition_v1(substituted).err(),
+            Some(Error::CrossRecord)
+        );
     }
 
     #[test]

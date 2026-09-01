@@ -1107,6 +1107,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-fractional-cubic-life-evidence"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "dclutch-fractional-exterior"
 version = "0.1.0"
 dependencies = [
@@ -1118,6 +1127,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-fractional-claim-contract",
  "dclutch-fractional-claim-kernel",
+ "dclutch-fractional-cubic-life-evidence",
  "dclutch-market-core-codec",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
@@ -1130,6 +1140,7 @@ dependencies = [
  "dclutch-representation-composition-v3-kernel",
  "dclutch-resolution-codec",
  "dclutch-token-svm",
+ "serde",
  "serde_json",
  "solana-client",
  "solana-program 3.0.0",

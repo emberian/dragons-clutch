@@ -1816,6 +1816,15 @@ impl Rpc {
         )))
     }
 
+    /// Return a recent finalized blockhash for a read-only unsigned planner.
+    ///
+    /// The last-valid height is submission liveness metadata. A producer that
+    /// neither signs nor submits needs only the hash carried by the message,
+    /// while still going through this RPC client's read-method allowlist.
+    pub(crate) fn latest_finalized_blockhash(&mut self) -> Result<Hash> {
+        self.latest_blockhash_with_height().map(|(hash, _)| hash)
+    }
+
     /// A recent blockhash and the last block height at which it is still valid.
     ///
     /// The height is what lets [`confirm`] tell a transaction that is merely

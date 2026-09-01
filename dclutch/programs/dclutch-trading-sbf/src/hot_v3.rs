@@ -27,6 +27,7 @@ use dclutch_account_profile_contract::{
         derive_effect_permissions, derive_effect_permissions_with_dynamic_spans,
         project_atomic as project_accounts_atomic, project_dynamic_fixed_spans_atomic,
     },
+    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3},
 };
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
@@ -105,11 +106,15 @@ use dclutch_direct_codec::{
 };
 use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
-    v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3},
+    v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3, RouteKindV3},
     v4::{
         ErrorV4 as EffectKernelErrorV4, ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
         SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
         project_atomic_visiting as project_effects_v4_atomic_visiting,
+    },
+    v5::{
+        FundingOperationV5, FundingSeedInputV5, MAX_ACTION_SEEDS_V5, ProgramV5 as EffectProgramV5,
+        SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5,
     },
 };
 use dclutch_execution_strategy_contract::{
@@ -131,7 +136,11 @@ use dclutch_execution_strategy_contract::{
         register_bank_bytes_v2,
     },
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_market_core_codec::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
+    STATE_BYTES, SeriesFoundingPermitSeedsV1, SeriesUnallocatedPermitExpiryRequestV1,
+};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     AuthenticatedProductRuntimeV3, FinalizedRecordFrameV2 as ProductRecordFrameV2,
@@ -144,10 +153,11 @@ use dclutch_registry_activation_auth_v1::{
 };
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
-    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1,
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1,
 };
 use dclutch_registry_svm::{
-    AuthenticatedRoleReceiptV1,
+    AuthenticatedRoleReceiptV1, ProgramDataMetadataV3View,
     continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -162,6 +172,17 @@ use dclutch_request_profile_contract::{
         RequestProfileV3,
     },
     v4::{ProjectionRegistersV4, REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID, RequestProfileV4},
+};
+use dclutch_series_v3_kernel::{
+    AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+    SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+    admit_occurrence_bytes, future_market_projection,
+    plan::{ReplayCandidateV3, SeriesReplayActionV3, evaluate_replay_v3},
+    replay::{
+        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketPhaseV3,
+        TicketStateSeedsV3, TicketStateV3,
+    },
+    request::{SeriesActionRequestV3, SeriesActionV3, admit_series_action_v3},
 };
 use dclutch_token_svm::{COption as TokenCOption, TokenAccount};
 use dclutch_transition_vm::v3::{
@@ -199,7 +220,8 @@ use crate::{
     },
     claims_composition_v3::{SparsePostResourceVerificationV3, claims_child_wire_capacity_v3},
     core_composition_v3::{
-        CoreCompositionParentV3, execute_core_route_v3, preflight_core_route_v3,
+        CoreCompositionParentV3, execute_core_route_v3,
+        is_series_permit_expiry_precommit_observation_v1, preflight_core_route_v3,
     },
     dispatch::TradingFamilyContextV1,
     dynamic_accounts_v4::{
@@ -211,8 +233,8 @@ use crate::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
         authenticate_activated_current_deployment,
+        authenticate_execution_strategy_from_attested_accelerator_v2,
         authenticate_execution_strategy_from_sealed_capability_v2,
-        authenticate_execution_strategy_v2,
     },
     native_signature::{
         SysvarInstructionV1, borrow_authenticated_instructions_v1,
@@ -220,6 +242,8 @@ use crate::{
     },
     shadow_composition_v3::{ShadowCpiFrameV3, execute_shadow_aot_v3},
 };
+
+mod series_expiry_v1;
 
 /// One authenticated Effect artifact selected by the schema-bound V4
 /// capability descriptor. V3 remains an explicit migration input; successor
@@ -229,11 +253,104 @@ use crate::{
 struct SelectedEffectProgramV4<'a> {
     base: EffectProgramV3<'a>,
     successor: EffectProgramV4<'a>,
+    funding: Option<EffectProgramV5<'a>>,
+}
+
+/// One route's ordered borrowed ranges from the authenticated Effect V4.
+///
+/// This view carries no family tag and invents no range. Every byte appended by
+/// [`Self::append_to`] is selected by the sealed Effect, resolved from the
+/// transition's authenticated output registers, and borrowed from the exact
+/// top-level request. The range table remains the sole topology authority.
+#[derive(Clone, Copy)]
+pub(crate) struct BorrowedRouteRangesV4<'effect, 'registers, 'request> {
+    effect: EffectProgramV4<'effect>,
+    route: u16,
+    tail_count: u32,
+    scalars: &'registers [u64],
+    family_request: &'request [u8],
+}
+
+impl<'effect, 'registers, 'request> BorrowedRouteRangesV4<'effect, 'registers, 'request> {
+    const fn new(
+        effect: EffectProgramV4<'effect>,
+        route: u16,
+        tail_count: u32,
+        scalars: &'registers [u64],
+        family_request: &'request [u8],
+    ) -> Self {
+        Self {
+            effect,
+            route,
+            tail_count,
+            scalars,
+            family_request,
+        }
+    }
+
+    /// Exact number of route-local ranges in source-table order.
+    pub(crate) fn count(self) -> Result<u16, ProgramError> {
+        self.effect
+            .borrowed_range_count_for_route(self.route)
+            .map_err(|_| TradingSbfError::Content.into())
+    }
+
+    /// Exact concatenated width, with every request bound checked first.
+    pub(crate) fn byte_len(self) -> Result<usize, ProgramError> {
+        let count = self.count()?;
+        let mut total = 0_usize;
+        let mut ordinal = 0_u16;
+        while ordinal < count {
+            let bytes = self.range(ordinal)?;
+            total = total
+                .checked_add(bytes.len())
+                .ok_or(TradingSbfError::Content)?;
+            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Ok(total)
+    }
+
+    /// Append every route-local range atomically in authenticated table order.
+    pub(crate) fn append_to(self, output: &mut Vec<u8>) -> Result<(), ProgramError> {
+        let count = self.count()?;
+        let additional = self.byte_len()?;
+        output
+            .len()
+            .checked_add(additional)
+            .ok_or(TradingSbfError::Content)?;
+        output
+            .try_reserve_exact(additional)
+            .map_err(|_| TradingSbfError::Content)?;
+        let mut ordinal = 0_u16;
+        while ordinal < count {
+            output.extend_from_slice(self.range(ordinal)?);
+            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Ok(())
+    }
+
+    /// Exact family request used only by the zero-range legacy compatibility
+    /// branch. A V4 range never derives its bytes through this accessor.
+    pub(crate) const fn family_request(self) -> &'request [u8] {
+        self.family_request
+    }
+
+    fn range(self, ordinal: u16) -> Result<&'request [u8], ProgramError> {
+        self.effect
+            .resolved_borrowed_range_for_tail(self.route, ordinal, self.tail_count, self.scalars)
+            .map_err(|_| TradingSbfError::Content)?
+            .slice(self.family_request)
+            .map_err(|_| TradingSbfError::Content.into())
+    }
 }
 
 impl<'a> SelectedEffectProgramV4<'a> {
     const fn base(self) -> EffectProgramV3<'a> {
         self.base
+    }
+
+    const fn funding(self) -> Option<EffectProgramV5<'a>> {
+        self.funding
     }
 
     fn resolved_invocation(
@@ -319,6 +436,97 @@ const HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3: usize = 4;
 
 const CHILD_RECEIPT_CONTEXT_DOMAIN_V4: &[u8] = b"dclutch:hot-child-receipt-context:v4";
 const CHILD_REQUEST_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:hot-child-request:v4";
+const CHILD_REQUEST_DIGEST_DOMAIN_V5: &[u8] = b"dclutch:hot-child-request-ranges:v5";
+const VACANT_ROOT_POSTSTATE_DOMAIN_V3: &[u8] = b"dclutch:hot-vacant-root-poststate:v3";
+
+/// Canonical digest of a base child request and the legacy optional witness.
+///
+/// This is the exact historical V4 framing and remains the zero-range path, so
+/// existing General and legacy bundles retain byte-for-byte receipt provenance.
+pub fn child_request_digest_v4(
+    child_request: &[u8],
+    borrowed_witness: Option<&[u8]>,
+) -> Result<[u8; 32], ProgramError> {
+    let presence = [0_u8, u8::from(borrowed_witness.is_some())];
+    let child_request_len = u32::try_from(child_request.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let witness_len = u32::try_from(borrowed_witness.map_or(0, <[u8]>::len))
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    Ok(hashv(&[
+        CHILD_REQUEST_DIGEST_DOMAIN_V4,
+        &presence,
+        &child_request_len,
+        &witness_len,
+        child_request,
+        borrowed_witness.unwrap_or(&[]),
+    ])
+    .to_bytes())
+}
+
+/// Canonical digest of one base child request and ordered authenticated ranges.
+///
+/// Count and every component width precede the bytes. Neither a different
+/// range split nor a base/range boundary substitution can therefore share a
+/// digest merely because the concatenated child wire matches. `range_at` is
+/// evaluated once per ordinal and its results are retained for both framing
+/// passes, so a stateful caller cannot substitute between length and data.
+pub fn child_request_digest_v5<'a>(
+    child_request: &[u8],
+    range_count: u16,
+    mut range_at: impl FnMut(u16) -> Option<&'a [u8]>,
+) -> Result<[u8; 32], ProgramError> {
+    if range_count == 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let mut ranges = Vec::new();
+    ranges
+        .try_reserve_exact(usize::from(range_count))
+        .map_err(|_| TradingSbfError::Content)?;
+    let mut range_bytes = 0_usize;
+    let mut ordinal = 0_u16;
+    while ordinal < range_count {
+        let range = range_at(ordinal).ok_or(TradingSbfError::Content)?;
+        range_bytes = range_bytes
+            .checked_add(range.len())
+            .ok_or(TradingSbfError::Content)?;
+        ranges.push(range);
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    let child_request_len = u32::try_from(child_request.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let length_table_bytes = usize::from(range_count)
+        .checked_mul(4)
+        .ok_or(TradingSbfError::Content)?;
+    let capacity = CHILD_REQUEST_DIGEST_DOMAIN_V5
+        .len()
+        .checked_add(2 + 4)
+        .and_then(|width| width.checked_add(length_table_bytes))
+        .and_then(|width| width.checked_add(child_request.len()))
+        .and_then(|width| width.checked_add(range_bytes))
+        .ok_or(TradingSbfError::Content)?;
+    let mut framed = Vec::new();
+    framed
+        .try_reserve_exact(capacity)
+        .map_err(|_| TradingSbfError::Content)?;
+    framed.extend_from_slice(CHILD_REQUEST_DIGEST_DOMAIN_V5);
+    framed.extend_from_slice(&range_count.to_le_bytes());
+    framed.extend_from_slice(&child_request_len);
+    for range in &ranges {
+        let len = u32::try_from(range.len()).map_err(|_| TradingSbfError::Content)?;
+        framed.extend_from_slice(&len.to_le_bytes());
+    }
+    framed.extend_from_slice(child_request);
+    for range in ranges {
+        framed.extend_from_slice(range);
+    }
+    if framed.len() != capacity {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(hash(&framed).to_bytes())
+}
 
 /// Diagnostic-only phase checkpoint: phase name, remaining compute units, and
 /// the SBF bump allocator's total-ever-allocated position.
@@ -497,6 +705,65 @@ pub struct AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
     runtime_accounts: &'accounts [AccountInfo<'info>],
 }
 
+/// Ephemeral proof that Trading authenticated one exact accelerator CPI caller.
+///
+/// The type and its fields are crate-private, and only the private caller-PDA
+/// boundary below constructs it. It is neither wire data nor a reusable
+/// deployment credential: it binds the current release set, Market, root, full
+/// accelerator request digest, and exact observed Program/ProgramData metadata
+/// on this stack. The strategy adapter may spend it only for an immutable
+/// admitted-AOT deployment after independently rejoining the finalized
+/// ArtifactRelease and every structural Loader fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedAcceleratorCallerV4 {
+    release_set: [u8; 32],
+    market: [u8; 32],
+    root: [u8; 32],
+    request_digest: [u8; 32],
+    artifact_release: [u8; 32],
+    accelerator_program: [u8; 32],
+    accelerator_programdata: [u8; 32],
+    deployment_slot: u64,
+    upgrade_authority: Option<[u8; 32]>,
+}
+
+impl AuthenticatedAcceleratorCallerV4 {
+    /// Rejoin the token to the one already-authenticated Trading root.
+    pub(crate) fn binds_context(self, context: TradingFamilyContextV1) -> bool {
+        self.binds_context_parts(
+            context.release_set().to_bytes(),
+            context.market(),
+            context.child_root_key(),
+        )
+    }
+
+    fn binds_context_parts(self, release_set: [u8; 32], market: [u8; 32], root: [u8; 32]) -> bool {
+        self.release_set == release_set
+            && self.market == market
+            && self.root == root
+            && self.request_digest != [0; 32]
+    }
+
+    /// Rejoin the token to one immutable finalized release and live deployment.
+    pub(crate) fn binds_immutable_deployment(
+        self,
+        artifact_release: dclutch_release_set_contract::ArtifactReleaseIdV1,
+        release: ArtifactReleaseV1,
+        program: &AccountInfo<'_>,
+        programdata: &AccountInfo<'_>,
+    ) -> bool {
+        release.upgrade_policy() == ArtifactUpgradePolicyV1::Immutable
+            && release.upgrade_authority().is_none()
+            && self.upgrade_authority.is_none()
+            && self.artifact_release == artifact_release.to_bytes()
+            && self.accelerator_program == program.key.to_bytes()
+            && self.accelerator_program == release.program().to_bytes()
+            && self.accelerator_programdata == programdata.key.to_bytes()
+            && self.accelerator_programdata == release.programdata()
+            && self.deployment_slot == release.deployment_slot()
+    }
+}
+
 impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
     /// Exact canonical AcceleratorRequestV2 supplied by Trading.
     pub const fn request(&self) -> AcceleratorRequestV2<'request> {
@@ -639,6 +906,48 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         authenticate_accelerator_top_level_v4(frame, strategy_evidence, caller_authority, request)?;
     let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
         .map_err(|_| TradingSbfError::Content)?;
+    let accelerator_program_evidence = account(
+        strategy_evidence,
+        ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
+            .checked_sub(2)
+            .ok_or(TradingSbfError::Content)?,
+    )?;
+    let accelerator_programdata_evidence = account(
+        strategy_evidence,
+        ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
+            .checked_sub(1)
+            .ok_or(TradingSbfError::Content)?,
+    )?;
+    let artifact_release_digest = {
+        let artifact_release = account(
+            strategy_evidence,
+            ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
+                .checked_sub(4)
+                .ok_or(TradingSbfError::Content)?,
+        )?;
+        let data = artifact_release
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Release)?;
+        hash(&data).to_bytes()
+    };
+    let accelerator_programdata_metadata = {
+        let data = accelerator_programdata_evidence
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Release)?;
+        ProgramDataMetadataV3View::parse(&data).map_err(|_| TradingSbfError::Release)?
+    };
+    let accelerator_caller = authenticate_accelerator_caller_authority_v4(
+        frame.trading_program.key,
+        caller_authority,
+        envelope,
+        frame.root.key,
+        request_bytes,
+        artifact_release_digest,
+        accelerator_program,
+        accelerator_program_evidence,
+        accelerator_programdata_evidence,
+        accelerator_programdata_metadata,
+    )?;
     let root_prestate = {
         let data = frame
             .root
@@ -760,12 +1069,13 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .to_bytes(),
     })?;
     drop(market);
-    let (strategy, strategy_end) = authenticate_strategy_boxed_v3(
+    let (strategy, strategy_end) = authenticate_strategy_for_accelerator_boxed_v4(
         &frame,
         strategy_evidence,
         family_context,
-        selected_descriptor.schema(),
         selected_descriptor.program(),
+        &descriptor,
+        accelerator_caller,
         0,
     )?;
     if strategy_end != strategy_evidence.len()
@@ -817,14 +1127,6 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         &geometry.representatives,
         root_prestate,
     )?;
-    authenticate_accelerator_caller_authority_v4(
-        frame.trading_program.key,
-        caller_authority,
-        envelope,
-        frame.root.key,
-        request_bytes,
-    )?;
-
     Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
         request,
         envelope,
@@ -1008,6 +1310,8 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
     let runtime_observations_digest = accelerator_runtime_observations_digest_v4(
         runtime_accounts,
         representatives,
+        request,
+        frame.trading_program.key,
         family_context.selection().config().to_bytes(),
         product_runtime
             .runtime
@@ -1702,6 +2006,8 @@ fn decode_accelerator_register_bank_v4(
 fn accelerator_runtime_observations_digest_v4(
     runtime_accounts: &[AccountInfo<'_>],
     representatives: &[usize],
+    request: AcceleratorRequestV2<'_>,
+    trading_program: &Pubkey,
     selected_config: [u8; 32],
     product_root: [u8; 32],
     portfolio: [u8; 32],
@@ -1716,6 +2022,8 @@ fn accelerator_runtime_observations_digest_v4(
         portfolio,
         linked_basis,
     };
+    let trading_program_id =
+        ContentId::new(trading_program.to_bytes()).map_err(|_| TradingSbfError::Content)?;
     // Exact capacity, not `collect::<Result<Vec<_>, _>>()`. A fallible collect
     // reports a zero lower bound, so the SBF bump allocator - which never frees
     // - is walked through the whole doubling ladder and charges several times
@@ -1732,18 +2040,38 @@ fn accelerator_runtime_observations_digest_v4(
         .iter()
         .zip(&runtime_data)
         .enumerate()
-        .map(|(coordinate, (account, data))| ShadowRuntimeObservationV3 {
-            key: *logical_projection_key_v3(
-                *representatives.get(coordinate).unwrap_or(&coordinate),
-                account.key,
-                &projected,
-            ),
-            owner: account.owner.to_bytes(),
-            lamports: account.lamports(),
-            data: data.as_ref(),
-            signer: false,
-            writable: false,
-            executable: account.executable,
+        .map(|(coordinate, (account, data))| {
+            // A scratch input page embeds the invocation-context digest this
+            // transcript is constructing. Its exact bytes therefore cannot
+            // also be an input to that digest. Canonicalize only a page whose
+            // account facts and page header authenticate against this exact
+            // request; the input-bank digest independently commits its bytes.
+            let canonical_scratch = request.transport() == RequestTransportV2::ScratchPages
+                && account.owner == trading_program
+                && !account.is_signer
+                && !account.is_writable
+                && !account.executable
+                && AuthenticatedScratchPageV2::decode(data.as_ref()).is_ok_and(|page| {
+                    page.validate_request_input(trading_program_id, request)
+                        .is_ok()
+                });
+            ShadowRuntimeObservationV3 {
+                key: *logical_projection_key_v3(
+                    *representatives.get(coordinate).unwrap_or(&coordinate),
+                    account.key,
+                    &projected,
+                ),
+                owner: account.owner.to_bytes(),
+                lamports: account.lamports(),
+                data: if canonical_scratch {
+                    &[]
+                } else {
+                    data.as_ref()
+                },
+                signer: false,
+                writable: false,
+                executable: account.executable,
+            }
         })
         .collect::<Vec<_>>();
     runtime_observations_digest_v3(&observations).map_err(|_| TradingSbfError::Content.into())
@@ -1755,7 +2083,12 @@ fn authenticate_accelerator_caller_authority_v4(
     envelope: HotExecutionEnvelopeV3,
     root: &Pubkey,
     request_bytes: &[u8],
-) -> Result<(), ProgramError> {
+    artifact_release: [u8; 32],
+    expected_accelerator_program: &Pubkey,
+    accelerator_program: &AccountInfo<'_>,
+    accelerator_programdata: &AccountInfo<'_>,
+    programdata_metadata: ProgramDataMetadataV3View,
+) -> Result<AuthenticatedAcceleratorCallerV4, ProgramError> {
     let request_digest =
         ContentId::new(hash(request_bytes).to_bytes()).map_err(|_| TradingSbfError::Release)?;
     let seeds = CallerAuthoritySeedsV1::new(
@@ -1771,10 +2104,21 @@ fn authenticate_accelerator_caller_authority_v4(
         || !caller_authority.is_signer
         || caller_authority.is_writable
         || caller_authority.executable
+        || accelerator_program.key != expected_accelerator_program
     {
         Err(TradingSbfError::Release.into())
     } else {
-        Ok(())
+        Ok(AuthenticatedAcceleratorCallerV4 {
+            release_set: envelope.release_set(),
+            market: envelope.market(),
+            root: root.to_bytes(),
+            request_digest: request_digest.to_bytes(),
+            artifact_release,
+            accelerator_program: accelerator_program.key.to_bytes(),
+            accelerator_programdata: accelerator_programdata.key.to_bytes(),
+            deployment_slot: programdata_metadata.deployment_slot(),
+            upgrade_authority: programdata_metadata.upgrade_authority(),
+        })
     }
 }
 
@@ -1985,6 +2329,11 @@ pub fn process_hot_execution_v3(
         return Err(TradingSbfError::Root.into());
     }
 
+    // The fixed Market is always the live Series controller. Exceptional
+    // Expire authority is earned only after this ordinary Hot prelude has
+    // authenticated the controller Market, its persistent root, and Product
+    // graph. The occurrence's distinct future Market is a route-local account,
+    // never a substitute for the fixed controller coordinate.
     let market = authenticate_market_boxed_v3(&frame, envelope)?;
     let root = authenticate_root_boxed_v3(
         program_id,
@@ -1993,10 +2342,882 @@ pub fn process_hot_execution_v3(
         &market,
         invocation.role_authentication,
     )?;
-    let context = &root.context;
-
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
+    let authenticated_series_expiry_rent_credit = try_authenticate_series_expiry_premarket_v1(
+        program_id,
+        accounts,
+        family_request,
+        invocation,
+        &frame,
+        &rent,
+        &root,
+        &product_runtime_v3,
+    )?;
+    let market = AuthenticatedLogicalMarketV3::from_live(&market);
+
+    authenticate_and_execute_hot_v3(&AuthenticatedHotPreludeV3 {
+        program_id,
+        accounts,
+        instruction_data,
+        family_request,
+        envelope,
+        invocation,
+        frame,
+        request_digest,
+        root_prestate,
+        market,
+        root,
+        rent,
+        product_runtime_v3,
+        authenticated_series_expiry_replay: authenticated_series_expiry_rent_credit.is_some(),
+        authenticated_series_expiry_rent_credit: authenticated_series_expiry_rent_credit
+            .unwrap_or([0; 32]),
+    })
+}
+
+/// Common authenticated artifact/interpreter tail shared by live-Market Hot
+/// and the exact Series pre-Market expiry mode.
+///
+/// Each caller owns how its logical Market facts, root, and Product graph are
+/// authenticated. From this boundary onward there is one semantic owner for
+/// release selection, sealed artifacts, the generic interpreter, child CPIs,
+/// and commit-last persistence.
+struct AuthenticatedHotPreludeV3<'program, 'request, 'accounts, 'info> {
+    program_id: &'program Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    instruction_data: &'request [u8],
+    family_request: &'request [u8],
+    envelope: HotExecutionEnvelopeV3,
+    invocation: AuthenticatedHotInvocationV3,
+    frame: Box<HotFrameV3<'accounts, 'info>>,
+    request_digest: [u8; 32],
+    root_prestate: [u8; 32],
+    market: AuthenticatedLogicalMarketV3,
+    root: Box<AuthenticatedRootV3>,
+    rent: Rent,
+    product_runtime_v3: Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>,
+    authenticated_series_expiry_replay: bool,
+    authenticated_series_expiry_rent_credit: [u8; 32],
+}
+
+/// Authenticated byte-and-lamport facts which the final Series Core child may
+/// observe but may not alter before Trading's commit-last replay writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SeriesExpiryReplayPrestateV1 {
+    root_key: [u8; 32],
+    root_data_digest: [u8; 32],
+    root_lamports: u64,
+    ticket_key: [u8; 32],
+    ticket_data_digest: [u8; 32],
+    ticket_lamports: u64,
+}
+
+impl SeriesExpiryReplayPrestateV1 {
+    fn authenticated(
+        root: &AccountInfo<'_>,
+        authenticated_root_digest: [u8; 32],
+        ticket: &AccountInfo<'_>,
+        authenticated_ticket_digest: [u8; 32],
+    ) -> Result<Self, ProgramError> {
+        let root_digest =
+            hash(&root.try_borrow_data().map_err(|_| TradingSbfError::Root)?).to_bytes();
+        let ticket_digest = hash(
+            &ticket
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)?,
+        )
+        .to_bytes();
+        if root_digest != authenticated_root_digest || ticket_digest != authenticated_ticket_digest
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        Ok(Self {
+            root_key: root.key.to_bytes(),
+            root_data_digest: root_digest,
+            root_lamports: root.lamports(),
+            ticket_key: ticket.key.to_bytes(),
+            ticket_data_digest: ticket_digest,
+            ticket_lamports: ticket.lamports(),
+        })
+    }
+}
+
+/// Exact Market facts consumed by the family-neutral Hot tail.
+///
+/// Ordinary execution copies these from authenticated persisted Core state.
+/// The Series pre-Market mode instead supplies the same facts from its
+/// independently authenticated immutable projection and founding permit; it
+/// never invents a `CoreState` for an account which does not exist yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedLogicalMarketV3 {
+    identity: MarketIdentity,
+    rent_beneficiary: CoreIdentity,
+}
+
+impl AuthenticatedLogicalMarketV3 {
+    fn from_live(market: &CoreState) -> Self {
+        Self {
+            identity: market.identity,
+            rent_beneficiary: market.rent_beneficiary,
+        }
+    }
+}
+
+/// Authenticate the one exact Series Expire execution whose Market does not
+/// exist yet.
+///
+/// The negative result is deliberately non-refusing. Until the authenticated
+/// ProgramSet and sealed descriptor select the exact Series Expire shape, the
+/// ordinary live-Market path remains the authority for the invocation. Once
+/// that selection is made, every later failure is a refusal: a selected
+/// pre-Market action may not fall back to pretending its vacant account is a
+/// live `CoreState`.
+#[inline(never)]
+fn try_authenticate_series_expiry_premarket_v1<'accounts, 'info>(
+    program_id: &Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    family_request: &[u8],
+    invocation: AuthenticatedHotInvocationV3,
+    frame: &HotFrameV3<'accounts, 'info>,
+    rent: &Rent,
+    root: &AuthenticatedRootV3,
+    product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
+) -> Result<Option<[u8; 32]>, ProgramError> {
+    if !matches!(
+        SeriesActionRequestV3::decode(family_request),
+        Ok(request) if request.action() == SeriesActionV3::Expire
+    ) {
+        return Ok(None);
+    }
+    // All errors before the exact sealed descriptor is classified are a
+    // negative classification, not a new public refusal path. Ordinary Hot
+    // repeats these checks in its historical order in the common tail.
+    let Some((descriptor, selected_program, selected_action)) =
+        authenticate_series_expiry_selection_v1(program_id, family_request, frame, rent, root)
+            .ok()
+            .flatten()
+    else {
+        return Ok(None);
+    };
+
+    authenticate_selected_series_expiry_premarket_v1(
+        program_id,
+        accounts,
+        family_request,
+        invocation,
+        frame,
+        rent,
+        root,
+        product_runtime_v3,
+        descriptor,
+        selected_program,
+        selected_action,
+    )
+    .map(Some)
+}
+
+/// Finish a fully selected Series Expire without keeping selection, sealed
+/// artifact, record, and replay values in one SBPF frame.
+///
+/// This is only a mechanical frame boundary. Each subordinate stage consumes
+/// the original authenticated objects or immutable record bytes; it does not
+/// introduce another protocol representation.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_selected_series_expiry_premarket_v1<'accounts, 'info>(
+    program_id: &Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    family_request: &[u8],
+    invocation: AuthenticatedHotInvocationV3,
+    frame: &HotFrameV3<'accounts, 'info>,
+    rent: &Rent,
+    root: &AuthenticatedRootV3,
+    product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    descriptor: CapabilityProgramV4,
+    selected_program: ContentId,
+    selected_action: u32,
+) -> Result<[u8; 32], ProgramError> {
+    let (runtime_accounts, core_template) = authenticate_series_expiry_execution_artifacts_v1(
+        program_id,
+        accounts,
+        invocation,
+        frame,
+        rent,
+        root,
+        descriptor,
+        selected_program,
+        selected_action,
+    )?;
+    authenticate_series_expiry_records_and_projection_v1(
+        program_id,
+        family_request,
+        frame,
+        rent,
+        &runtime_accounts,
+        &core_template,
+        product_runtime_v3,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_series_expiry_execution_artifacts_v1<'accounts, 'info>(
+    program_id: &Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    invocation: AuthenticatedHotInvocationV3,
+    frame: &HotFrameV3<'accounts, 'info>,
+    rent: &Rent,
+    root: &AuthenticatedRootV3,
+    descriptor: CapabilityProgramV4,
+    selected_program: ContentId,
+    selected_action: u32,
+) -> Result<(Vec<&'accounts AccountInfo<'info>>, Vec<u8>), ProgramError> {
+    if frame.uses_sealed_execution_aliases() {
+        return Err(TradingSbfError::Content.into());
+    }
+    let context = root.context;
+    let seal_data = frame
+        .capability_seal
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let seal = authenticate_capability_seal_v3(
+        program_id,
+        *frame,
+        &rent,
+        PROGRAM_SCHEMA_ID_V4,
+        selected_program.to_bytes(),
+        selected_action,
+        root.trading_semantic_release,
+        &seal_data,
+    )?;
+
+    let account_profile_data = borrow_sealed_record(
+        *frame,
+        seal,
+        SealedRoleV1::AccountProfile,
+        frame.account_profile_raw,
+        frame.account_profile_staging,
+        &rent,
+        descriptor.account_profile().schema().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
+    )?;
+    let account_profile_token = sealed_token(
+        seal,
+        SealedRoleV1::AccountProfile,
+        descriptor.account_profile().schema().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
+        &account_profile_data,
+    )?;
+    let funding_profile =
+        AccountProfileV3::from_sealed(&account_profile_data, account_profile_token)
+            .map_err(|_| TradingSbfError::Content)?;
+    let account_profile = funding_profile.base();
+    if funding_profile.funding_bound_count() != 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+
+    let effect_data = borrow_sealed_record(
+        *frame,
+        seal,
+        SealedRoleV1::EffectProgram,
+        frame.effect_raw,
+        frame.effect_staging,
+        &rent,
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
+    )?;
+    let effect_token = sealed_token(
+        seal,
+        SealedRoleV1::EffectProgram,
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
+        &effect_data,
+    )?;
+    let funding_effect = EffectProgramV5::from_sealed(&effect_data, effect_token)
+        .map_err(|_| TradingSbfError::Content)?;
+    if funding_effect.funding_action_count() != 0 || funding_effect.funding_seed_count() != 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let effect = funding_effect.base().base();
+
+    let (strategy, strategy_extras_end) = authenticate_strategy_from_sealed_boxed_v3(
+        frame,
+        accounts,
+        context,
+        selected_program,
+        &descriptor,
+        invocation.strategy_extras_start,
+    )?;
+    if strategy.strategy().disposition() != StrategyDispositionV2::Interpreted {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+
+    // Expire's selected Profile13 has no dynamic insertions and no item
+    // accounts. A zero tail therefore resolves the exact same fixed logical
+    // vector as the later authenticated Product outcome count; the common tail
+    // repeats the expansion and the full geometry agreement before mutation.
+    let runtime_accounts = expand_runtime_accounts_v3(
+        account_profile,
+        0,
+        &[],
+        [
+            frame.root,
+            frame.config_raw,
+            frame.product_raw,
+            frame.portfolio_raw,
+            frame.linked_basis_raw,
+        ],
+        accounts
+            .get(strategy_extras_end..)
+            .ok_or(TradingSbfError::Content)?,
+    )?;
+    if runtime_accounts.len() != series_expiry_v1::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1
+        || account_profile.fixed_account_count()
+            != u16::try_from(series_expiry_v1::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1)
+                .map_err(|_| TradingSbfError::Content)?
+        || effect.route_count() != 5
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+
+    let core_route = effect.route(4).map_err(|_| TradingSbfError::Content)?;
+    let (core_template, core_item) = effect
+        .route_template(4)
+        .map_err(|_| TradingSbfError::Content)?;
+    if core_route.role() != FixedRole::Core
+        || core_route.kind() != RouteKindV3::Once
+        || usize::from(core_route.fixed_account_start())
+            != series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1
+        || usize::from(core_route.fixed_account_count())
+            != series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_COUNT_V1
+        || core_route.item_account_count() != 0
+        || core_route.item_request_bytes() != 0
+        || !core_item.is_empty()
+        || core_template.len() != SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+
+    Ok((runtime_accounts, core_template.to_vec()))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
+    program_id: &Pubkey,
+    family_request: &[u8],
+    frame: &HotFrameV3<'accounts, 'info>,
+    rent: &Rent,
+    runtime_accounts: &[&'accounts AccountInfo<'info>],
+    core_template: &[u8],
+    product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
+) -> Result<[u8; 32], ProgramError> {
+    let template_raw = *runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_TEMPLATE_RAW_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let template_staging = *runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_TEMPLATE_STAGING_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let occurrence_raw = *runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_OCCURRENCE_RAW_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let occurrence_staging = *runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_OCCURRENCE_STAGING_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let ticket_raw = *runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_TICKET_RAW_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let ticket_staging = *runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_TICKET_STAGING_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let template_bytes = borrow_series_finalized_record_v1(
+        *frame,
+        template_raw,
+        template_staging,
+        &rent,
+        SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+    )?;
+    let occurrence_bytes = borrow_series_finalized_record_v1(
+        *frame,
+        occurrence_raw,
+        occurrence_staging,
+        &rent,
+        SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+    )?;
+    let ticket_bytes = borrow_series_finalized_record_v1(
+        *frame,
+        ticket_raw,
+        ticket_staging,
+        &rent,
+        SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+    )?;
+    let future = derive_series_expiry_future_projection_from_records_v1(
+        frame,
+        family_request,
+        &template_bytes,
+        &occurrence_bytes,
+        product_runtime_v3,
+    )?;
+    let expected_future_market =
+        Pubkey::find_program_address(&future.seeds().as_slices(), frame.core_program.key).0;
+    let future_market = *runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    require_series_expiry_future_market_vacancy_v1(
+        future_market,
+        expected_future_market,
+        frame.market.key,
+    )?;
+    authenticate_series_expiry_replay_from_records_v1(
+        program_id,
+        frame,
+        runtime_accounts,
+        family_request,
+        &template_bytes,
+        &occurrence_bytes,
+        &ticket_bytes,
+    )?;
+    authenticate_series_expiry_core_request_from_records_v1(family_request, core_template)?;
+    let rent_credit = authenticate_series_expiry_vacant_permit_request_v1(
+        program_id,
+        frame,
+        runtime_accounts,
+        family_request,
+        &template_bytes,
+        &occurrence_bytes,
+        &ticket_bytes,
+        rent,
+    )?;
+    drop(template_bytes);
+    drop(occurrence_bytes);
+    drop(ticket_bytes);
+
+    Ok(rent_credit)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn derive_series_expiry_future_projection_from_records_v1(
+    frame: &HotFrameV3<'_, '_>,
+    family_request: &[u8],
+    template_bytes: &[u8],
+    occurrence_bytes: &[u8],
+    product_runtime_v3: &AuthenticatedProductRuntimeV3<'_, '_>,
+) -> Result<dclutch_series_v3_kernel::FutureMarketProjectionV3, ProgramError> {
+    let family =
+        SeriesActionRequestV3::decode(family_request).map_err(|_| TradingSbfError::Content)?;
+    let occurrence = admit_occurrence_bytes(template_bytes, occurrence_bytes, family.proof_bytes())
+        .map_err(|_| TradingSbfError::Content)?;
+    if family.action() != SeriesActionV3::Expire
+        || family.template() != occurrence.template_id()
+        || family.occurrence() != Some(occurrence.occurrence_id())
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let projected_product = AuthenticatedProductProjectionV2::new(
+        ContentId::new(
+            product_runtime_v3
+                .runtime
+                .product_record
+                .content_digest
+                .to_bytes(),
+        )
+        .map_err(|_| TradingSbfError::Content)?,
+        ContentId::new(product_runtime_v3.runtime.product_id.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        ContentId::new(
+            product_runtime_v3
+                .runtime
+                .result_domain_record
+                .content_digest
+                .to_bytes(),
+        )
+        .map_err(|_| TradingSbfError::Content)?,
+    );
+    let future = future_market_projection(
+        occurrence,
+        projected_product,
+        AccountKeyV3::new(frame.registry.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let expected_market =
+        Pubkey::find_program_address(&future.seeds().as_slices(), frame.core_program.key).0;
+    future
+        .require_address(
+            AccountKeyV3::new(expected_market.to_bytes()).map_err(|_| TradingSbfError::Content)?,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(future)
+}
+
+#[inline(never)]
+fn authenticate_series_expiry_selection_v1(
+    program_id: &Pubkey,
+    family_request: &[u8],
+    frame: &HotFrameV3<'_, '_>,
+    rent: &Rent,
+    root: &AuthenticatedRootV3,
+) -> Result<Option<(CapabilityProgramV4, ContentId, u32)>, ProgramError> {
+    let context = root.context;
+    let bumps = context.record_bumps();
+    let manifest_data = borrow_finalized_record_at(
+        *frame,
+        frame.manifest_raw,
+        frame.manifest_staging,
+        rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        context.selection().manifest().to_bytes(),
+        bumps.manifest_raw(),
+        bumps.manifest_staging(),
+    )?;
+    let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, &context)?;
+    let release = context.selection().capability_release().to_bytes();
+    let program_set_data = borrow_finalized_record_at(
+        *frame,
+        frame.program_set_raw,
+        frame.program_set_staging,
+        rent,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        release,
+        context.selection().capability_release_raw_bump(),
+        context.selection().capability_release_staging_bump(),
+    )?;
+    let set = CapabilityProgramSetV2::decode_selected(release, release, &program_set_data)
+        .map_err(|_| TradingSbfError::Content)?;
+    let selected = set
+        .select_entry(family_request)
+        .map_err(|_| TradingSbfError::Content)?;
+    let reference = selected.descriptor();
+    if reference.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4 {
+        return Ok(None);
+    }
+    let selected_program = reference.program();
+    let selected_action = selected.selector();
+    let seal_data = frame
+        .capability_seal
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let seal = authenticate_capability_seal_v3(
+        program_id,
+        *frame,
+        rent,
+        reference.schema().to_bytes(),
+        selected_program.to_bytes(),
+        selected_action,
+        root.trading_semantic_release,
+        &seal_data,
+    )?;
+    let descriptor_data = borrow_sealed_record(
+        *frame,
+        seal,
+        SealedRoleV1::Descriptor,
+        frame.descriptor_raw,
+        frame.descriptor_staging,
+        rent,
+        reference.schema().to_bytes(),
+        selected_program.to_bytes(),
+    )?;
+    if descriptor_data.len() != CAPABILITY_PROGRAM_V4_BYTES {
+        return Err(TradingSbfError::Content.into());
+    }
+    let descriptor =
+        CapabilityProgramV4::decode(&descriptor_data).map_err(|_| TradingSbfError::Content)?;
+    authenticate_descriptor_root_selection(&descriptor, &context, &entry)?;
+    if series_expiry_v1::classify_selected_series_expiry_v1(
+        family_request,
+        selected_action,
+        context.selection().config(),
+        descriptor,
+    )
+    .is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some((descriptor, selected_program, selected_action)))
+}
+
+fn borrow_series_finalized_record_v1<'a, 'info>(
+    frame: HotFrameV3<'_, 'info>,
+    raw: &'a AccountInfo<'info>,
+    staging: &AccountInfo<'info>,
+    rent: &Rent,
+    schema: [u8; 32],
+) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
+    let digest = {
+        let data = raw
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Content)?;
+        hash(&data).to_bytes()
+    };
+    borrow_finalized_record(frame, raw, staging, rent, schema, digest)
+}
+
+fn require_series_expiry_future_market_vacancy_v1(
+    market: &AccountInfo<'_>,
+    expected_market: Pubkey,
+    controller_market: &Pubkey,
+) -> Result<(), ProgramError> {
+    if market.key != &expected_market
+        || market.key == controller_market
+        || market.owner != &system_program::ID
+        || !market.data_is_empty()
+        || market.is_signer
+        || market.is_writable
+        || market.executable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
+}
+
+fn require_series_expiry_vacant_permit_v1(
+    permit: &AccountInfo<'_>,
+    expected_permit: Pubkey,
+    rent: &Rent,
+) -> Result<(), ProgramError> {
+    if permit.key != &expected_permit
+        || permit.owner != &system_program::ID
+        || !permit.data_is_empty()
+        || !permit.is_writable
+        || permit.is_signer
+        || permit.executable
+        || permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_series_expiry_replay_from_records_v1(
+    program_id: &Pubkey,
+    frame: &HotFrameV3<'_, '_>,
+    runtime: &[&AccountInfo<'_>],
+    family_request: &[u8],
+    template_bytes: &[u8],
+    occurrence_bytes: &[u8],
+    ticket_bytes: &[u8],
+) -> Result<(), ProgramError> {
+    let admitted = admit_series_action_v3(
+        family_request,
+        template_bytes,
+        Some(occurrence_bytes),
+        Some(ticket_bytes),
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let family = admitted.request();
+    let occurrence = admitted
+        .required_occurrence()
+        .map_err(|_| TradingSbfError::Content)?;
+    let ticket = admitted
+        .required_ticket()
+        .map_err(|_| TradingSbfError::Content)?;
+    let replay_root = *runtime.first().ok_or(TradingSbfError::Content)?;
+    let replay_ticket = *runtime
+        .get(series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    if replay_root.key != frame.root.key
+        || replay_root.owner != program_id
+        || replay_root.data_len() != CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3
+        || replay_ticket.owner != program_id
+        || replay_ticket.data_len() != SERIES_TICKET_STATE_BYTES_V3
+        || runtime
+            .get(series_expiry_v1::SERIES_EXPIRE_ROOT_REPLAY_ACCOUNT_V1)
+            .is_none_or(|account| account.key != replay_root.key)
+        || runtime
+            .get(series_expiry_v1::SERIES_EXPIRE_TICKET_REPLAY_ACCOUNT_V1)
+            .is_none_or(|account| account.key != replay_ticket.key)
+    {
+        return Err(TradingSbfError::Root.into());
+    }
+    let root_data = replay_root
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Root)?;
+    let series = SeriesStateV3::decode(
+        root_data
+            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .ok_or(TradingSbfError::Root)?,
+        occurrence.template().occurrence_count(),
+    )
+    .map_err(|_| TradingSbfError::Root)?;
+    let series_bytes = series
+        .encode(occurrence.template().occurrence_count())
+        .map_err(|_| TradingSbfError::Root)?;
+    drop(root_data);
+    let ticket_data = replay_ticket
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Root)?;
+    let ticket_state = TicketStateV3::decode(&ticket_data).map_err(|_| TradingSbfError::Root)?;
+    let ticket_bytes = ticket_state.encode();
+    drop(ticket_data);
+    let ticket_seeds = TicketStateSeedsV3::new(replay_root.key.to_bytes(), ticket.content_id());
+    if Pubkey::find_program_address(&ticket_seeds.as_slices(), program_id).0 != *replay_ticket.key
+        || series.next_occurrence() != occurrence.occurrence().occurrence()
+        || !series.current_ticket_prepared()
+        || series.revision() != family.expected_series_revision()
+        || ticket_state.ticket_record_id() != ticket.content_id()
+        || ticket_state.phase() != TicketPhaseV3::Prepared
+        || ticket_state.revision() != family.expected_ticket_revision()
+    {
+        return Err(TradingSbfError::Root.into());
+    }
+    let replay = evaluate_replay_v3(
+        SeriesReplayActionV3::Expire {
+            ticket_record: ticket.content_id(),
+            expected_ticket_revision: family.expected_ticket_revision(),
+        },
+        occurrence.template().occurrence_count(),
+        family.expected_series_revision(),
+        &series_bytes,
+        Some(&ticket_bytes),
+    )
+    .map_err(|_| TradingSbfError::Root)?;
+    if !matches!(replay.series(), ReplayCandidateV3::Replace(_))
+        || !matches!(replay.ticket(), ReplayCandidateV3::Replace(_))
+    {
+        return Err(TradingSbfError::Root.into());
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn authenticate_series_expiry_core_request_from_records_v1(
+    family_request: &[u8],
+    core_template: &[u8],
+) -> Result<(), ProgramError> {
+    let family =
+        SeriesActionRequestV3::decode(family_request).map_err(|_| TradingSbfError::Content)?;
+    let request = SeriesUnallocatedPermitExpiryRequestV1::decode(core_template)
+        .map_err(|_| TradingSbfError::Content)?;
+    if family.action() != SeriesActionV3::Expire
+        || request.expected_series_revision() != family.expected_series_revision()
+        || request.expected_ticket_revision() != family.expected_ticket_revision()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_series_expiry_vacant_permit_request_v1(
+    _program_id: &Pubkey,
+    frame: &HotFrameV3<'_, '_>,
+    runtime: &[&AccountInfo<'_>],
+    family_request: &[u8],
+    template_bytes: &[u8],
+    occurrence_bytes: &[u8],
+    ticket_bytes: &[u8],
+    rent: &Rent,
+) -> Result<[u8; 32], ProgramError> {
+    let admitted = admit_series_action_v3(
+        family_request,
+        template_bytes,
+        Some(occurrence_bytes),
+        Some(ticket_bytes),
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let occurrence = admitted
+        .required_occurrence()
+        .map_err(|_| TradingSbfError::Content)?;
+    let ticket = admitted
+        .required_ticket()
+        .map_err(|_| TradingSbfError::Content)?;
+    let release_set = occurrence.template().release_set().to_bytes();
+    let future_market = occurrence.occurrence().market().to_bytes();
+    let generation = u64::from(occurrence.occurrence().occurrence())
+        .checked_add(1)
+        .ok_or(TradingSbfError::Content)?;
+    let permit_seeds = SeriesFoundingPermitSeedsV1::new(
+        CoreIdentity::new(release_set).map_err(|_| TradingSbfError::Content)?,
+        CoreIdentity::new(future_market).map_err(|_| TradingSbfError::Content)?,
+        CoreIdentity::new(ticket.content_id().to_bytes()).map_err(|_| TradingSbfError::Content)?,
+    );
+    let expected_permit =
+        Pubkey::find_program_address(&permit_seeds.as_slices(), frame.core_program.key).0;
+    let permit = *runtime
+        .get(series_expiry_v1::SERIES_EXPIRE_PERMIT_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    require_series_expiry_vacant_permit_v1(permit, expected_permit, rent)?;
+
+    let rent_credit = *runtime
+        .get(series_expiry_v1::SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let rent_program = *runtime
+        .get(series_expiry_v1::SERIES_EXPIRE_RENT_PROGRAM_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let credit_data = rent_credit
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let credit =
+        LifecycleRentCreditV2::decode(&credit_data).map_err(|_| TradingSbfError::Content)?;
+    if credit.refund_wallet().to_bytes() != ticket.ticket().refund_owner().to_bytes()
+        || credit.market().to_bytes() != future_market
+        || credit.release_set().to_bytes() != release_set
+        || credit.generation() != generation
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let credit_seeds = credit.pda_seeds();
+    let credit_bump = [credit_seeds.bump()];
+    let credit_market = credit_seeds.market().to_bytes();
+    let credit_generation = credit_seeds.generation();
+    let expected_credit = Pubkey::create_program_address(
+        &[
+            credit_seeds.domain(),
+            &credit_market,
+            &credit_generation,
+            credit_bump.as_slice(),
+        ],
+        rent_program.key,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if rent_credit.key != &expected_credit
+        || rent_credit.owner != rent_program.key
+        || rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
+        || !rent.is_exempt(rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        || !rent_program.executable
+        || rent_program.is_signer
+        || rent_program.is_writable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    drop(credit_data);
+    let system = runtime
+        .get(series_expiry_v1::SERIES_EXPIRE_SYSTEM_PROGRAM_ACCOUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    if system.key != &system_program::ID
+        || !system.executable
+        || system.is_signer
+        || system.is_writable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(rent_credit.key.to_bytes())
+}
+
+#[inline(never)]
+fn authenticate_and_execute_hot_v3(
+    prepared: &AuthenticatedHotPreludeV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    let program_id = prepared.program_id;
+    let accounts = prepared.accounts;
+    let instruction_data = prepared.instruction_data;
+    let family_request = prepared.family_request;
+    let envelope = prepared.envelope;
+    let invocation = prepared.invocation;
+    let frame: &HotFrameV3<'_, '_> = &prepared.frame;
+    let request_digest = prepared.request_digest;
+    let root_prestate = prepared.root_prestate;
+    let market = &prepared.market;
+    let root = &prepared.root;
+    let rent = &prepared.rent;
+    let product_runtime_v3 = &prepared.product_runtime_v3;
+    let authenticated_series_expiry_replay = prepared.authenticated_series_expiry_replay;
+    let authenticated_series_expiry_rent_credit = prepared.authenticated_series_expiry_rent_credit;
+    let context = &root.context;
     let product_runtime = product_runtime_v3.runtime;
     hot_cu_checkpoint!("root-product");
     // The three record coordinates below are read, not searched for. See
@@ -2006,7 +3227,7 @@ pub fn process_hot_execution_v3(
         *frame,
         frame.manifest_raw,
         frame.manifest_staging,
-        &rent,
+        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
         record_bumps.manifest_raw(),
@@ -2019,7 +3240,7 @@ pub fn process_hot_execution_v3(
         *frame,
         frame.program_set_raw,
         frame.program_set_staging,
-        &rent,
+        rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         capability_release,
         context.selection().capability_release_raw_bump(),
@@ -2072,7 +3293,7 @@ pub fn process_hot_execution_v3(
     let seal = authenticate_capability_seal_v3(
         program_id,
         *frame,
-        &rent,
+        rent,
         selected_descriptor.schema().to_bytes(),
         selected_program.to_bytes(),
         selected_action,
@@ -2086,7 +3307,7 @@ pub fn process_hot_execution_v3(
         SealedRoleV1::Descriptor,
         frame.descriptor_raw,
         frame.descriptor_staging,
-        &rent,
+        rent,
         selected_descriptor.schema().to_bytes(),
         selected_program.to_bytes(),
     )?;
@@ -2100,7 +3321,7 @@ pub fn process_hot_execution_v3(
         *frame,
         frame.config_raw,
         frame.config_staging,
-        &rent,
+        rent,
         descriptor.config_schema().to_bytes(),
         context.selection().config().to_bytes(),
         record_bumps.config_raw(),
@@ -2141,7 +3362,7 @@ pub fn process_hot_execution_v3(
         SealedRoleV1::LifecyclePolicy,
         frame.lifecycle_raw,
         frame.lifecycle_staging,
-        &rent,
+        rent,
         descriptor.lifecycle().schema().to_bytes(),
         descriptor.lifecycle().program().to_bytes(),
     )?;
@@ -2166,13 +3387,10 @@ pub fn process_hot_execution_v3(
         SealedRoleV1::AccountProfile,
         frame.account_profile_raw,
         frame.account_profile_staging,
-        &rent,
+        rent,
         descriptor.account_profile().schema().to_bytes(),
         descriptor.account_profile().program().to_bytes(),
     )?;
-    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
     let account_profile_token = sealed_token(
         seal,
         SealedRoleV1::AccountProfile,
@@ -2180,21 +3398,38 @@ pub fn process_hot_execution_v3(
         descriptor.account_profile().program().to_bytes(),
         &account_profile_data,
     )?;
-    let account_profile =
-        AccountProfileV2::from_sealed(&account_profile_data, account_profile_token)
+    let account_schema = descriptor.account_profile().schema().to_bytes();
+    let (account_profile, funding_profile) = if account_schema == ACCOUNT_PROFILE_SCHEMA_ID_V2 {
+        (
+            AccountProfileV2::from_sealed(&account_profile_data, account_profile_token)
+                .map_err(|_| TradingSbfError::Content)?,
+            None,
+        )
+    } else if account_schema == ACCOUNT_PROFILE_SCHEMA_ID_V3 {
+        let funding = AccountProfileV3::from_sealed(&account_profile_data, account_profile_token)
             .map_err(|_| TradingSbfError::Content)?;
+        (funding.base(), Some(funding))
+    } else {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    };
     // One validated join for the whole execution: the lifecycle preplan runs a
     // batch of plans over these same two immutable artifacts, twice, and the
     // planner otherwise re-derives this join for every planned state. The join
     // is a fact about the pair, so the seal owns it and mints it from its own
     // two tokens.
-    let profile_join = lifecycle
-        .sealed_account_profile_join(
-            account_profile,
-            seal.authenticate_profile_join(lifecycle_token, account_profile_token)
-                .map_err(|_| TradingSbfError::Content)?,
-        )
-        .map_err(|_| TradingSbfError::Content)?;
+    let profile_join = if let Some(funding) = funding_profile {
+        lifecycle
+            .validate_account_profile_with_external_funding_join(funding)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        lifecycle
+            .sealed_account_profile_join(
+                account_profile,
+                seal.authenticate_profile_join(lifecycle_token, account_profile_token)
+                    .map_err(|_| TradingSbfError::Content)?,
+            )
+            .map_err(|_| TradingSbfError::Content)?
+    };
 
     let request_profile_data = borrow_sealed_record(
         *frame,
@@ -2202,7 +3437,7 @@ pub fn process_hot_execution_v3(
         SealedRoleV1::RequestProfile,
         frame.request_profile_raw,
         frame.request_profile_staging,
-        &rent,
+        rent,
         descriptor.request_profile().schema().to_bytes(),
         descriptor.request_profile().program().to_bytes(),
     )?;
@@ -2231,7 +3466,7 @@ pub fn process_hot_execution_v3(
         SealedRoleV1::TransitionProgram,
         frame.transition_raw,
         frame.transition_staging,
-        &rent,
+        rent,
         descriptor.transition().schema().to_bytes(),
         descriptor.transition().program().to_bytes(),
     )?;
@@ -2257,7 +3492,7 @@ pub fn process_hot_execution_v3(
         SealedRoleV1::EffectProgram,
         frame.effect_raw,
         frame.effect_staging,
-        &rent,
+        rent,
         descriptor.effect().schema().to_bytes(),
         descriptor.effect().program().to_bytes(),
     )?;
@@ -2273,6 +3508,10 @@ pub fn process_hot_execution_v3(
         &effect_data,
         effect_token,
     )?;
+    if effect.funding().is_some() != funding_profile.is_some() {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    require_funding_profile_join_v5(effect, funding_profile)?;
     // The ownership conjunction is a fact about four immutable artifacts and
     // the selected action, and the action is a seed of this seal.
     let sealed_ownership = seal
@@ -2292,13 +3531,13 @@ pub fn process_hot_execution_v3(
         family_request,
         envelope,
         invocation,
-        frame: &frame,
+        frame,
         request_digest,
         root_prestate,
-        market: &market,
-        root: &root,
-        rent,
-        product_runtime_v3: &product_runtime_v3,
+        market,
+        root,
+        rent: rent.clone(),
+        product_runtime_v3,
         selected_program,
         selected_action,
         selected_kind,
@@ -2306,6 +3545,7 @@ pub fn process_hot_execution_v3(
         descriptor: &descriptor,
         lifecycle,
         account_profile,
+        funding_profile,
         profile_join,
         request_profile,
         strategy: &strategy,
@@ -2313,6 +3553,8 @@ pub fn process_hot_execution_v3(
         transition,
         effect,
         sealed_ownership,
+        authenticated_series_expiry_replay,
+        authenticated_series_expiry_rent_credit,
     })
 }
 
@@ -2336,7 +3578,7 @@ struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
     frame: &'a HotFrameV3<'accounts, 'info>,
     request_digest: [u8; 32],
     root_prestate: [u8; 32],
-    market: &'a CoreState,
+    market: &'a AuthenticatedLogicalMarketV3,
     root: &'a AuthenticatedRootV3,
     rent: Rent,
     product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
@@ -2347,6 +3589,7 @@ struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
     descriptor: &'a CapabilityProgramV4,
     lifecycle: StateLifecyclePolicyV5<'artifact>,
     account_profile: AccountProfileV2<'artifact>,
+    funding_profile: Option<AccountProfileV3<'artifact>>,
     profile_join: ValidatedProfileJoinV3<'artifact>,
     request_profile: RequestProfileKindV3<'artifact>,
     strategy: &'a AuthenticatedExecutionStrategyV2,
@@ -2354,6 +3597,8 @@ struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
     transition: TransitionProgramV3<'artifact>,
     effect: SelectedEffectProgramV4<'artifact>,
     sealed_ownership: SealedStaticOwnershipV1<'artifact>,
+    authenticated_series_expiry_replay: bool,
+    authenticated_series_expiry_rent_credit: [u8; 32],
 }
 
 /// Run the ten execution phases over artifacts that are already authenticated.
@@ -2382,6 +3627,7 @@ fn execute_authenticated_hot_v3(
         descriptor,
         lifecycle,
         account_profile,
+        funding_profile,
         profile_join,
         request_profile,
         strategy,
@@ -2389,6 +3635,8 @@ fn execute_authenticated_hot_v3(
         transition,
         effect,
         sealed_ownership,
+        authenticated_series_expiry_replay,
+        authenticated_series_expiry_rent_credit,
     } = prepared;
     let context = &root.context;
     let immutable_root_header = &root.immutable_header;
@@ -2549,13 +3797,14 @@ fn execute_authenticated_hot_v3(
             .content_digest
             .to_bytes(),
     });
-    let selected_config_coordinate = u16::try_from(HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3)
-        .map_err(|_| TradingSbfError::Content)?;
-    let selected_config_is_variable = account_profile
-        .rule(false, selected_config_coordinate)
-        .map_err(|_| TradingSbfError::Content)?
-        .prestate()
-        == AccountPrestateV2::AdapterAuthenticatedVariableData;
+    let selected_config_is_variable = projected_account_uses_variable_marker_v3(
+        account_profile,
+        HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3,
+    )?;
+    let linked_basis_is_variable = projected_account_uses_variable_marker_v3(
+        account_profile,
+        HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3,
+    )?;
     let mut observations = ScratchVecV1::with_capacity(&scratch, runtime_accounts.len())?;
     for (coordinate, (account, data)) in
         runtime_accounts.iter().zip(runtime_data.iter()).enumerate()
@@ -2566,9 +3815,8 @@ fn execute_authenticated_hot_v3(
             &projected_keys,
         );
         observations.push(
-            if coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3
-                || (coordinate == HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3
-                    && selected_config_is_variable)
+            if (coordinate == HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3 && selected_config_is_variable)
+                || (coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3 && linked_basis_is_variable)
             {
                 // The Product-runtime reader above authenticated Registry
                 // finality, schema, content digest, and either the selected
@@ -2609,6 +3857,21 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         &dynamic_spans.request_projection_scalars,
     )?;
+    let lifecycle_width = lifecycle_semantic_prefix_width_v3(
+        account_profile,
+        tail_count,
+        &dynamic_spans.widths,
+        runtime_accounts.len(),
+    )?;
+    let lifecycle_observations = observations
+        .get(..lifecycle_width)
+        .ok_or(TradingSbfError::Content)?;
+    let lifecycle_runtime_accounts = runtime_accounts
+        .get(..lifecycle_width)
+        .ok_or(TradingSbfError::Content)?;
+    let lifecycle_aliases = aliases
+        .get(..lifecycle_width)
+        .ok_or(TradingSbfError::Content)?;
     let scalar_count = effect
         .scalar_count(tail_count)
         .map_err(|_| TradingSbfError::Content)?;
@@ -2677,8 +3940,8 @@ fn execute_authenticated_hot_v3(
     // pair of `scalar_count` and `identity_count` banks that is never charged.
     let mut preplan_scratch = LifecyclePreplanScratchV4::new(
         &scratch,
-        &observations,
-        &runtime_accounts,
+        lifecycle_observations,
+        lifecycle_runtime_accounts,
         scalar_count,
         identity_count,
         spare_scalars,
@@ -2701,19 +3964,21 @@ fn execute_authenticated_hot_v3(
         identities: replan_output_identities,
     } = prepare_lifecycle_v4(
         program_id,
+        frame.registry,
         envelope.market(),
         envelope.release_set(),
         envelope.generation(),
+        market.rent_beneficiary.to_bytes(),
         lifecycle,
         selected_action,
         account_profile,
         tail_count,
-        &observations,
-        &runtime_accounts,
+        lifecycle_observations,
+        lifecycle_runtime_accounts,
         &request_output_scalars,
         &request_output_identities,
         &rent,
-        &aliases,
+        lifecycle_aliases,
         profile_join,
         envelope.bump_hints().lifecycle,
         None,
@@ -2803,6 +4068,22 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         &transition_output_scalars,
     )?;
+    require_funding_runtime_v5(
+        program_id,
+        frame.registry,
+        effect,
+        funding_profile,
+        tail_count,
+        &transition_output_scalars,
+        &transition_output_identities,
+        &runtime_accounts,
+        &aliases,
+        &rent,
+        envelope.market(),
+        envelope.release_set(),
+        envelope.generation(),
+        market.rent_beneficiary.to_bytes(),
+    )?;
     hot_cu_checkpoint!("p7-post-candidate-checks");
 
     require_borrowed_witness_coverage_v3(
@@ -2832,19 +4113,21 @@ fn execute_authenticated_hot_v3(
         identities: revalidated_identities,
     } = prepare_lifecycle_v4(
         program_id,
+        frame.registry,
         envelope.market(),
         envelope.release_set(),
         envelope.generation(),
+        market.rent_beneficiary.to_bytes(),
         lifecycle,
         selected_action,
         account_profile,
         tail_count,
-        &observations,
-        &runtime_accounts,
+        lifecycle_observations,
+        lifecycle_runtime_accounts,
         &transition_output_scalars,
         &transition_output_identities,
         &rent,
-        &aliases,
+        lifecycle_aliases,
         profile_join,
         envelope.bump_hints().lifecycle,
         Some(&preplanned_plans),
@@ -2864,6 +4147,7 @@ fn execute_authenticated_hot_v3(
     // building a duplicate of it, so the table the commit executes is the one
     // the transition was handed and the replan reproduced.
     let lifecycle_plans = preplanned_plans;
+    let root_lifecycle_close = selected_root_lifecycle_close_v3(&lifecycle_plans)?;
 
     // What the effect projection reads out of the observation bank is two
     // numbers per coordinate, and it read them by walking the bank itself.
@@ -2877,6 +4161,7 @@ fn execute_authenticated_hot_v3(
         Some(runtime_transcript_digest_v3(
             &observations,
             &runtime_accounts,
+            &[],
         )?)
     } else {
         None
@@ -2918,6 +4203,15 @@ fn execute_authenticated_hot_v3(
     let locally_mutated = projected_effects.locally_mutated;
     hot_cu_checkpoint!("p7-effect-projection");
     hot_cu_checkpoint!("p7-local-effect-discipline");
+    if root_lifecycle_close {
+        require_root_lifecycle_close_child_separation_v3(
+            effect,
+            tail_count,
+            &transition_output_scalars,
+            &transition_output_identities,
+            &aliases,
+        )?;
+    }
     // One byte per logical coordinate, decoded once, whole frame checked here.
     let effect_privileges = child_route_privileges_v3(
         account_profile,
@@ -2961,8 +4255,34 @@ fn execute_authenticated_hot_v3(
         &aliases,
         &child_walk,
         locally_mutated.as_deref(),
+        authenticated_series_expiry_replay,
+        authenticated_series_expiry_rent_credit,
     )?;
     hot_cu_checkpoint!("preflight-children");
+    let series_expiry_replay_prestate = if authenticated_series_expiry_replay {
+        let replay_root = runtime_accounts
+            .first()
+            .copied()
+            .ok_or(TradingSbfError::Content)?;
+        let replay_ticket = runtime_accounts
+            .get(series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
+            .copied()
+            .ok_or(TradingSbfError::Content)?;
+        let ticket_digest = hash(
+            &replay_ticket
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)?,
+        )
+        .to_bytes();
+        Some(SeriesExpiryReplayPrestateV1::authenticated(
+            replay_root,
+            root_prestate,
+            replay_ticket,
+            ticket_digest,
+        )?)
+    } else {
+        None
+    };
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
         execute_shadow_candidate_v3(ShadowCandidateViewV3 {
             program_id,
@@ -3035,7 +4355,9 @@ fn execute_authenticated_hot_v3(
             request_digest,
             envelope,
             selected_program,
+            funding_profile,
             lifecycle_plans: &lifecycle_plans,
+            root_lifecycle_close,
             aliases: &aliases,
             output_lamports: &output_lamports,
             rent: &rent,
@@ -3051,6 +4373,7 @@ fn execute_authenticated_hot_v3(
             root_commit_plan,
             child_walk: &child_walk,
             direct_crosscheck,
+            series_expiry_replay_prestate,
         }),
     );
     hot_cu_checkpoint!("after-commit");
@@ -3076,7 +4399,9 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
     selected_program: ContentId,
+    funding_profile: Option<AccountProfileV3<'artifact>>,
     lifecycle_plans: &'a [PreparedLifecycleInvocationV3],
+    root_lifecycle_close: bool,
     aliases: &'a [usize],
     output_lamports: &'a [u64],
     rent: &'a Rent,
@@ -3086,7 +4411,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     descriptor: &'a CapabilityProgramV4,
     strategy: &'a AuthenticatedExecutionStrategyV2,
     context: &'a TradingFamilyContextV1,
-    market: &'a CoreState,
+    market: &'a AuthenticatedLogicalMarketV3,
     product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
     product_outcome_count: u32,
     // Allocated while the heap still has room. The commit phase only fills the
@@ -3097,6 +4422,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     // registers and the same activation cache; see `ChildWalkResolutionV3`.
     child_walk: &'a ChildWalkResolutionV3<'a, 'info>,
     direct_crosscheck: Option<HeapBoxV3<DirectInlineHotCrosscheckV3>>,
+    series_expiry_replay_prestate: Option<SeriesExpiryReplayPrestateV1>,
 }
 
 #[inline(never)]
@@ -3127,14 +4453,31 @@ fn commit_prepared_hot_result_v3(
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
     )?;
+    apply_funding_creates_v5(
+        prepared.program_id,
+        prepared.effect.funding(),
+        prepared.tail_count,
+        prepared.scalars,
+        prepared.identities,
+        prepared.runtime_accounts,
+    )?;
     hot_heap_mark!("lifecycle-creates");
     let child_execution_digest = execute_prepared_child_routes_v3(caller_bumps, prepared)?;
     hot_heap_mark!("children-executed");
     verify_fractional_root_unchanged_after_children_v3(prepared)?;
+    verify_series_expiry_replay_unchanged_after_children_v1(prepared)?;
     verify_direct_inline_post_children_v3(prepared)?;
     commit_prepared_post_children_v3(prepared)?;
     hot_heap_mark!("post-children");
-    let root_poststate = {
+    let root_poststate = if prepared.root_lifecycle_close {
+        if prepared.frame.root.owner != &system_program::ID
+            || prepared.frame.root.data_len() != 0
+            || prepared.frame.root.lamports() != 0
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        vacant_root_poststate_digest_v3(prepared.frame.root.key)
+    } else {
         let bytes = prepared
             .frame
             .root
@@ -3186,12 +4529,29 @@ fn commit_prepared_post_children_v3(
 ) -> Result<(), ProgramError> {
     apply_lifecycle_closes_v3(
         prepared.program_id,
+        prepared.frame.registry,
         prepared.envelope.market(),
         prepared.envelope.release_set(),
         prepared.envelope.generation(),
+        prepared.market.rent_beneficiary.to_bytes(),
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
         prepared.rent,
+    )?;
+    apply_funding_closes_v5(
+        prepared.program_id,
+        prepared.frame.registry,
+        prepared.effect.funding(),
+        prepared.funding_profile,
+        prepared.tail_count,
+        prepared.scalars,
+        prepared.identities,
+        prepared.runtime_accounts,
+        prepared.rent,
+        prepared.envelope.market(),
+        prepared.envelope.release_set(),
+        prepared.envelope.generation(),
+        prepared.market.rent_beneficiary.to_bytes(),
     )?;
     hot_cu_checkpoint!("commit-lifecycle-closes");
     commit_non_root_effects_into_v3(
@@ -3206,20 +4566,39 @@ fn commit_prepared_post_children_v3(
         &mut prepared.root_commit_plan,
     )?;
     hot_cu_checkpoint!("commit-non-root");
-    commit_root_effects_v3(
-        prepared.effect,
-        prepared.tail_count,
-        prepared.scalars,
-        prepared.identities,
-        prepared.runtime_accounts,
-        prepared.aliases,
-        prepared.output_lamports,
-        prepared.rent,
-        &prepared.root_commit_plan,
-    )?;
+    if prepared.root_lifecycle_close {
+        if prepared.root_commit_plan.bits.iter().any(|byte| *byte != 0) {
+            return Err(TradingSbfError::Commit.into());
+        }
+    } else {
+        commit_root_effects_v3(
+            prepared.effect,
+            prepared.tail_count,
+            prepared.scalars,
+            prepared.identities,
+            prepared.runtime_accounts,
+            prepared.aliases,
+            prepared.output_lamports,
+            prepared.rent,
+            &prepared.root_commit_plan,
+        )?;
+    }
     hot_cu_checkpoint!("commit-root");
     verify_direct_inline_local_poststate_v3(prepared)?;
     Ok(())
+}
+
+fn vacant_root_poststate_digest_v3(root: &Pubkey) -> [u8; 32] {
+    let lamports = 0_u64.to_le_bytes();
+    let data_len = 0_u64.to_le_bytes();
+    hashv(&[
+        VACANT_ROOT_POSTSTATE_DOMAIN_V3,
+        root.as_ref(),
+        system_program::ID.as_ref(),
+        &lamports,
+        &data_len,
+    ])
+    .to_bytes()
 }
 
 #[inline(never)]
@@ -3392,6 +4771,23 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
     market: &CoreState,
     role_authentication: HotRoleAuthenticationV3,
 ) -> Result<Box<AuthenticatedRootV3>, ProgramError> {
+    authenticate_root_against_market_boxed_v3(
+        program_id,
+        frame,
+        envelope,
+        market.identity.market_id.to_bytes(),
+        role_authentication,
+    )
+}
+
+#[inline(never)]
+fn authenticate_root_against_market_boxed_v3<'accounts, 'info>(
+    program_id: &Pubkey,
+    frame: &HotFrameV3<'accounts, 'info>,
+    envelope: HotExecutionEnvelopeV3,
+    expected_market: [u8; 32],
+    role_authentication: HotRoleAuthenticationV3,
+) -> Result<Box<AuthenticatedRootV3>, ProgramError> {
     // Both arms are ONE out-of-line call. This route runs within a few
     // thousand CU of the 1,400,000 ceiling at four outcomes, so whichever arm
     // a caller takes must not pay for the other arm's registers or frame.
@@ -3426,7 +4822,7 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
     if context.market() != envelope.market()
         || context.release_set().to_bytes() != envelope.release_set()
         || context.generation() != envelope.generation()
-        || market.identity.market_id.to_bytes() != envelope.market()
+        || expected_market != envelope.market()
     {
         return Err(TradingSbfError::Root.into());
     }
@@ -3581,11 +4977,24 @@ fn authenticate_product_runtime_boxed_v3<'accounts, 'info>(
     rent: &Rent,
     market: &CoreState,
 ) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
-    authenticate_product_runtime_v3(
-        frame.registry.key,
+    authenticate_product_runtime_for_record_boxed_v3(
+        frame,
         rent,
         ProductContentId::new(market.identity.product_record.to_bytes())
             .map_err(|_| TradingSbfError::Content)?,
+    )
+}
+
+#[inline(never)]
+fn authenticate_product_runtime_for_record_boxed_v3<'accounts, 'info>(
+    frame: &HotFrameV3<'accounts, 'info>,
+    rent: &Rent,
+    product_record: ProductContentId,
+) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
+    authenticate_product_runtime_v3(
+        frame.registry.key,
+        rent,
+        product_record,
         ProductRuntimeFrameV3 {
             product: ProductRecordFrameV2 {
                 raw: frame.product_raw,
@@ -3638,12 +5047,13 @@ fn authenticate_manifest_entry_boxed_v3(
 }
 
 #[inline(never)]
-fn authenticate_strategy_boxed_v3<'accounts, 'info>(
+fn authenticate_strategy_for_accelerator_boxed_v4<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
     accounts: &'accounts [AccountInfo<'info>],
     context: TradingFamilyContextV1,
-    selected_schema: ContentId,
     selected_program: ContentId,
+    descriptor: &CapabilityProgramV4,
+    accelerator_caller: AuthenticatedAcceleratorCallerV4,
     strategy_extras_start: usize,
 ) -> Result<(Box<AuthenticatedExecutionStrategyV2>, usize), ProgramError> {
     let strategy_data = frame
@@ -3678,13 +5088,14 @@ fn authenticate_strategy_boxed_v3<'accounts, 'info>(
         frame.strategy_staging.clone(),
     ]);
     strategy_accounts.extend_from_slice(strategy_extras);
-    let strategy = authenticate_execution_strategy_v2(
+    let strategy = authenticate_execution_strategy_from_attested_accelerator_v2(
         context,
-        selected_schema,
         selected_program,
+        descriptor,
         frame.registry,
         frame.rent,
         &strategy_accounts,
+        accelerator_caller,
     )?;
     if strategy.strategy().disposition() == StrategyDispositionV2::ShadowAot
         && strategy
@@ -3950,7 +5361,7 @@ fn prepare_direct_inline_hot_crosscheck_v3(
     descriptor: &CapabilityProgramV4,
     strategy: &AuthenticatedExecutionStrategyV2,
     family_context: &TradingFamilyContextV1,
-    market: &CoreState,
+    market: &AuthenticatedLogicalMarketV3,
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'_, '_>,
     product_outcome_count: u32,
     child_programs: Option<AuthenticatedChildProgramsV3>,
@@ -4528,18 +5939,28 @@ fn account_inputs_v3(
 fn runtime_transcript_digest_v3(
     observations: &[AccountObservationV1<'_>],
     runtime_accounts: &[&AccountInfo<'_>],
+    canonical_scratch_pages: &[&AccountInfo<'_>],
 ) -> Result<ContentId, ProgramError> {
     let runtime_transcript = observations
         .iter()
         .zip(runtime_accounts)
-        .map(|(observation, account)| ShadowRuntimeObservationV3 {
-            key: observation.key(),
-            owner: observation.owner(),
-            lamports: observation.lamports(),
-            data: observation.data(),
-            signer: false,
-            writable: false,
-            executable: account.executable,
+        .map(|(observation, account)| {
+            let canonical_scratch = canonical_scratch_pages
+                .iter()
+                .any(|page| page.key == account.key);
+            ShadowRuntimeObservationV3 {
+                key: observation.key(),
+                owner: observation.owner(),
+                lamports: observation.lamports(),
+                data: if canonical_scratch {
+                    &[]
+                } else {
+                    observation.data()
+                },
+                signer: false,
+                writable: false,
+                executable: account.executable,
+            }
         })
         .collect::<Vec<_>>();
     runtime_observations_digest_v3(&runtime_transcript).map_err(|_| TradingSbfError::Content.into())
@@ -4578,6 +5999,7 @@ fn project_hot_effects_v3(
     }
     hot_heap_mark!("effects-account-inputs");
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
+    apply_funding_candidates_v5(effect.funding(), scalars, aliases, &mut account_inputs)?;
     // Four of this projection's six banks are read only by the kernel walk
     // below and are dead the instant it returns, and the two that are not are
     // the ones this function returns. Splitting them by END rather than by
@@ -4705,13 +6127,16 @@ fn project_hot_effects_v3(
             requests: &mut requests,
         },
         &mut write_ranges,
-        &mut |resolved| match inspect_local_effect_discipline_v5(
-            lifecycle_plans,
-            resolved,
-            aliases,
-            &mut written,
-            locally_mutated.as_deref_mut(),
-        ) {
+        &mut |resolved| match require_no_funding_local_mutation_v5(effect.funding(), resolved)
+            .and_then(|()| {
+                inspect_local_effect_discipline_v5(
+                    lifecycle_plans,
+                    resolved,
+                    aliases,
+                    &mut written,
+                    locally_mutated.as_deref_mut(),
+                )
+            }) {
             Ok(()) => Ok(()),
             Err(error) => {
                 refused = Some(error);
@@ -4732,6 +6157,54 @@ fn project_hot_effects_v3(
     })
 }
 
+fn require_no_funding_local_mutation_v5(
+    funding: Option<EffectProgramV5<'_>>,
+    resolved: ResolvedEffectV3,
+) -> Result<(), ProgramError> {
+    let Some(funding) = funding else {
+        return Ok(());
+    };
+    match resolved {
+        ResolvedEffectV3::TransferLamports {
+            source,
+            destination,
+            ..
+        } if funding_owns_coordinate_v5(funding, source)
+            || funding_owns_coordinate_v5(funding, destination) =>
+        {
+            Err(TradingSbfError::Transition.into())
+        }
+        ResolvedEffectV3::WriteScalar { account, .. }
+        | ResolvedEffectV3::WriteIdentity { account, .. }
+        | ResolvedEffectV3::WriteU8 { account, .. }
+        | ResolvedEffectV3::WriteU16 { account, .. }
+        | ResolvedEffectV3::WriteU32 { account, .. }
+            if funding_owns_coordinate_v5(funding, account)
+                && !funding_allows_created_state_write_v5(funding, account) =>
+        {
+            Err(TradingSbfError::Transition.into())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn funding_allows_created_state_write_v5(funding: EffectProgramV5<'_>, coordinate: usize) -> bool {
+    let mut index = 0_u16;
+    while index < funding.funding_action_count() {
+        let Ok(action) = funding.funding_action(index) else {
+            return false;
+        };
+        if usize::from(action.state()) == coordinate {
+            return action.operation() == FundingOperationV5::Create;
+        }
+        index = match index.checked_add(1) {
+            Some(index) => index,
+            None => return false,
+        };
+    }
+    false
+}
+
 #[inline(never)]
 fn execute_admitted_candidate_v3(
     view: AdmittedCandidateViewV3<'_, '_, '_, '_>,
@@ -4746,22 +6219,11 @@ fn execute_admitted_candidate_v3(
         .ok_or(TradingSbfError::Content)?;
     let family_request_digest =
         family_request_digest_v3(view.family_request).map_err(|_| TradingSbfError::Content)?;
-    let runtime_transcript = view
-        .observations
-        .iter()
-        .zip(view.runtime_accounts)
-        .map(|(observation, account)| ShadowRuntimeObservationV3 {
-            key: observation.key(),
-            owner: observation.owner(),
-            lamports: observation.lamports(),
-            data: observation.data(),
-            signer: false,
-            writable: false,
-            executable: account.executable,
-        })
-        .collect::<Vec<_>>();
-    let runtime_observations_digest = runtime_observations_digest_v3(&runtime_transcript)
-        .map_err(|_| TradingSbfError::Content)?;
+    let runtime_observations_digest = runtime_transcript_digest_v3(
+        view.observations,
+        view.runtime_accounts,
+        view.input_scratch_pages,
+    )?;
     let product_runtime = view.product_runtime_v3.runtime;
     let admitted_context = AdmittedInvocationContextV3 {
         release_set: ContentId::new(view.envelope.release_set())
@@ -5024,6 +6486,25 @@ fn logical_projection_key_v3<'a>(
     }
 }
 
+const fn prestate_uses_variable_marker_v3(prestate: AccountPrestateV2) -> bool {
+    matches!(
+        prestate,
+        AccountPrestateV2::AdapterAuthenticatedVariableData
+    )
+}
+
+fn projected_account_uses_variable_marker_v3(
+    profile: AccountProfileV2<'_>,
+    coordinate: usize,
+) -> Result<bool, ProgramError> {
+    let coordinate = u16::try_from(coordinate).map_err(|_| TradingSbfError::Content)?;
+    let prestate = profile
+        .rule(false, coordinate)
+        .map_err(|_| TradingSbfError::Content)?
+        .prestate();
+    Ok(prestate_uses_variable_marker_v3(prestate))
+}
+
 struct AuthenticatedDynamicSpanWidthsV3 {
     widths: Vec<u32>,
     request_projection_scalars: Vec<u64>,
@@ -5247,6 +6728,53 @@ fn authenticated_input_scratch_pages_v3<'accounts, 'info>(
     logical_accounts
         .get(start..end)
         .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+/// Exact logical prefix the lifecycle kernel may inspect.
+///
+/// Dynamic fixed spans are authenticated projection transport. They are not
+/// Product-N lifecycle coordinates, so the lifecycle kernel receives only the
+/// stable fixed prefix after this function proves the full expanded geometry
+/// and the current trailing-span layout. Projection, effects, and accelerator
+/// execution continue to receive the complete expanded account bank.
+fn lifecycle_semantic_prefix_width_v3(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    expanded_width: usize,
+) -> Result<usize, ProgramError> {
+    let expected = if profile.uses_dynamic_fixed_spans() {
+        profile
+            .logical_account_count_with_dynamic_spans(tail_count, span_counts)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        if !span_counts.is_empty() {
+            return Err(TradingSbfError::Content.into());
+        }
+        profile
+            .logical_account_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?
+    };
+    if expanded_width != expected {
+        return Err(TradingSbfError::Content.into());
+    }
+    if !profile.uses_dynamic_fixed_spans() {
+        return Ok(expanded_width);
+    }
+    let fixed = profile.fixed_account_count();
+    let mut span = 0_u16;
+    while span < profile.dynamic_fixed_span_count() {
+        if profile
+            .dynamic_fixed_span(span)
+            .map_err(|_| TradingSbfError::Content)?
+            .insertion_coordinate()
+            != fixed
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        span = span.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(usize::from(fixed))
 }
 
 fn require_trailing_account_profile_only_span_v3(
@@ -6185,6 +7713,25 @@ struct PreparedLifecycleBatchV4<'region> {
     identities: ScratchVecV1<'region, [u8; 32]>,
 }
 
+/// The root is an ordinary live CapabilityRoot unless the selected lifecycle
+/// table itself owns its terminal close. Merely mentioning coordinate zero is
+/// never enough: Authenticate and Create retain the historical refusal.
+fn selected_root_lifecycle_close_v3(
+    plans: &[PreparedLifecycleInvocationV3],
+) -> Result<bool, ProgramError> {
+    let mut selected = false;
+    for prepared in plans {
+        if prepared.state != 0 {
+            continue;
+        }
+        if selected || !matches!(prepared.plan, StateLifecyclePlanV3::Close(_)) {
+            return Err(TradingSbfError::Transition.into());
+        }
+        selected = true;
+    }
+    Ok(selected)
+}
+
 /// Where one prepared lifecycle invocation goes.
 ///
 /// # Why the preparation runs twice, and what the second run actually has to do
@@ -6610,9 +8157,11 @@ impl<'region> LifecyclePreplanScratchV4<'region> {
 #[allow(clippy::too_many_arguments)]
 fn prepare_lifecycle_v4<'a, 'region>(
     program_id: &Pubkey,
+    lifecycle_owner_program: &AccountInfo<'_>,
     expected_market: [u8; 32],
     expected_release_set: [u8; 32],
     expected_generation: u64,
+    expected_rent_credit: [u8; 32],
     policy: StateLifecyclePolicyV5<'_>,
     action: u32,
     account_profile: AccountProfileV2<'_>,
@@ -6796,6 +8345,7 @@ fn prepare_lifecycle_v4<'a, 'region>(
                 .map(|index| {
                     authenticate_lifecycle_credit_v3(
                         accounts,
+                        lifecycle_owner_program,
                         index,
                         *planned_lamports
                             .get(index)
@@ -6804,6 +8354,7 @@ fn prepare_lifecycle_v4<'a, 'region>(
                         expected_market,
                         expected_release_set,
                         expected_generation,
+                        expected_rent_credit,
                     )
                 })
                 .transpose()?;
@@ -6854,6 +8405,9 @@ fn prepare_lifecycle_v4<'a, 'region>(
                 },
             )
             .map_err(|_| TradingSbfError::Content)?;
+            if state == 0 && !matches!(plan, StateLifecyclePlanV3::Close(_)) {
+                return Err(TradingSbfError::Content.into());
+            }
             let binding_count = selected
                 .immutable_identity_binding_count()
                 .map_err(|_| TradingSbfError::Content)?;
@@ -7030,9 +8584,39 @@ fn inspect_local_effect_discipline_v5(
     locally_mutated: Option<&mut [bool]>,
 ) -> Result<(), ProgramError> {
     require_root_write_is_state_only(resolved, aliases)?;
+    if selected_root_lifecycle_close_v3(plans)? {
+        require_no_root_local_mutation_v3(resolved, aliases)?;
+    }
     inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, written)?;
     if let Some(bank) = locally_mutated {
         mark_local_mutation(resolved, aliases, bank)?;
+    }
+    Ok(())
+}
+
+fn require_no_root_local_mutation_v3(
+    resolved: ResolvedEffectV3,
+    aliases: &[usize],
+) -> Result<(), ProgramError> {
+    let coordinates = match resolved {
+        ResolvedEffectV3::TransferLamports {
+            source,
+            destination,
+            ..
+        } => [Some(source), Some(destination)],
+        ResolvedEffectV3::WriteScalar { account, .. }
+        | ResolvedEffectV3::WriteIdentity { account, .. }
+        | ResolvedEffectV3::WriteU8 { account, .. }
+        | ResolvedEffectV3::WriteU16 { account, .. }
+        | ResolvedEffectV3::WriteU32 { account, .. } => [Some(account), None],
+        ResolvedEffectV3::Noop
+        | ResolvedEffectV3::RequireLamportsEq { .. }
+        | ResolvedEffectV3::WriteRequest { .. } => [None, None],
+    };
+    for coordinate in coordinates.into_iter().flatten() {
+        if representative_v3(coordinate, aliases)? == 0 {
+            return Err(TradingSbfError::Transition.into());
+        }
     }
     Ok(())
 }
@@ -7105,7 +8689,8 @@ fn inspect_lifecycle_binding_effect_v4(
         ResolvedEffectV3::WriteU32 {
             account, offset, ..
         } => (account, offset, 4_u32, None),
-        ResolvedEffectV3::TransferLamports { .. }
+        ResolvedEffectV3::Noop
+        | ResolvedEffectV3::TransferLamports { .. }
         | ResolvedEffectV3::RequireLamportsEq { .. }
         | ResolvedEffectV3::WriteRequest { .. } => return Ok(false),
     };
@@ -7161,11 +8746,10 @@ fn representative_v3(index: usize, aliases: &[usize]) -> Result<usize, ProgramEr
 }
 
 fn reserve_lifecycle_state_v3(state: usize, used_states: &mut [bool]) -> Result<(), ProgramError> {
-    if state == 0
-        || used_states
-            .get(state)
-            .copied()
-            .ok_or(TradingSbfError::Content)?
+    if used_states
+        .get(state)
+        .copied()
+        .ok_or(TradingSbfError::Content)?
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -7175,15 +8759,30 @@ fn reserve_lifecycle_state_v3(state: usize, used_states: &mut [bool]) -> Result<
 
 fn authenticate_lifecycle_credit_v3(
     accounts: &[&AccountInfo<'_>],
+    owner_program: &AccountInfo<'_>,
     index: usize,
     observed_lamports: u64,
     rent: &Rent,
     expected_market: [u8; 32],
     expected_release_set: [u8; 32],
     expected_generation: u64,
+    expected_key: [u8; 32],
 ) -> Result<AuthenticatedRentCreditV3, ProgramError> {
     let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
-    if account.is_signer
+    // The credit's persisted owner, not a caller-selected family program,
+    // identifies the program whose PDA namespace owns this lifecycle credit.
+    // That owner is the already authenticated fixed Registry coordinate. It is
+    // deliberately not rediscovered in the selected lifecycle runtime frame:
+    // requiring a duplicate coordinate widens every profile and contradicts
+    // the fixed-prefix single-owner contract. Solana unions privileges for a
+    // repeated physical key, so any hostile runtime twin would also widen this
+    // fixed observation and refuse here (and earlier in `HotFrameV3::parse`).
+    if account.key.to_bytes() != expected_key
+        || owner_program.key != account.owner
+        || owner_program.is_signer
+        || owner_program.is_writable
+        || !owner_program.executable
+        || account.is_signer
         || !account.is_writable
         || account.executable
         || account.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
@@ -7217,14 +8816,7 @@ fn authenticate_lifecycle_credit_v3(
         account.owner,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    if account.key != &expected
-        || !accounts.iter().any(|candidate| {
-            candidate.key == account.owner
-                && candidate.executable
-                && !candidate.is_signer
-                && !candidate.is_writable
-        })
-    {
+    if account.key != &expected {
         return Err(TradingSbfError::Content.into());
     }
     Ok(AuthenticatedRentCreditV3 {
@@ -7268,6 +8860,90 @@ fn apply_lifecycle_candidates_v3(
                 )?;
             }
         }
+    }
+    Ok(())
+}
+
+fn apply_funding_candidates_v5(
+    effect: Option<EffectProgramV5<'_>>,
+    scalars: &[u64],
+    aliases: &[usize],
+    accounts: &mut [AccountInput],
+) -> Result<(), ProgramError> {
+    let Some(effect) = effect else {
+        return Ok(());
+    };
+    let mut index = 0_u16;
+    while index < effect.funding_action_count() {
+        let action = effect
+            .funding_action(index)
+            .map_err(|_| TradingSbfError::Transition)?;
+        let state = usize::from(action.state());
+        let counterparty = usize::from(action.counterparty());
+        if aliases.get(state).copied() != Some(state)
+            || aliases.get(counterparty).copied() != Some(counterparty)
+        {
+            return Err(TradingSbfError::Transition.into());
+        }
+        let amount = *scalars
+            .get(usize::from(action.lamports_scalar()))
+            .ok_or(TradingSbfError::Transition)?;
+        match action.operation() {
+            FundingOperationV5::Create => {
+                let refund = usize::from(
+                    action
+                        .refund_destination()
+                        .ok_or(TradingSbfError::Transition)?,
+                );
+                if aliases.get(refund).copied() != Some(refund) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                let state_before = accounts
+                    .get(state)
+                    .ok_or(TradingSbfError::Transition)?
+                    .lamports;
+                if state_before < amount {
+                    let debit = amount
+                        .checked_sub(state_before)
+                        .ok_or(TradingSbfError::Transition)?;
+                    let payer = accounts
+                        .get_mut(counterparty)
+                        .ok_or(TradingSbfError::Transition)?;
+                    payer.lamports = payer
+                        .lamports
+                        .checked_sub(debit)
+                        .ok_or(TradingSbfError::Transition)?;
+                } else if state_before > amount {
+                    let surplus = state_before
+                        .checked_sub(amount)
+                        .ok_or(TradingSbfError::Transition)?;
+                    let refund = accounts
+                        .get_mut(refund)
+                        .ok_or(TradingSbfError::Transition)?;
+                    refund.lamports = refund
+                        .lamports
+                        .checked_add(surplus)
+                        .ok_or(TradingSbfError::Transition)?;
+                }
+                let state = accounts.get_mut(state).ok_or(TradingSbfError::Transition)?;
+                state.lamports = amount;
+                state.data_len = usize::try_from(action.live_bytes())
+                    .map_err(|_| TradingSbfError::Transition)?;
+            }
+            FundingOperationV5::Close => {
+                let credit = accounts
+                    .get_mut(counterparty)
+                    .ok_or(TradingSbfError::Transition)?;
+                credit.lamports = credit
+                    .lamports
+                    .checked_add(amount)
+                    .ok_or(TradingSbfError::Transition)?;
+                let state = accounts.get_mut(state).ok_or(TradingSbfError::Transition)?;
+                state.lamports = 0;
+                state.data_len = 0;
+            }
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Transition)?;
     }
     Ok(())
 }
@@ -7384,11 +9060,151 @@ fn apply_lifecycle_creates_v3(
     Ok(())
 }
 
+fn apply_funding_creates_v5(
+    program_id: &Pubkey,
+    effect: Option<EffectProgramV5<'_>>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[&AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let Some(effect) = effect else {
+        return Ok(());
+    };
+    let mut index = 0_u16;
+    while index < effect.funding_action_count() {
+        let action = effect
+            .funding_action(index)
+            .map_err(|_| TradingSbfError::Commit)?;
+        if action.operation() != FundingOperationV5::Create {
+            index = index.checked_add(1).ok_or(TradingSbfError::Commit)?;
+            continue;
+        }
+        let state = accounts
+            .get(usize::from(action.state()))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let payer = accounts
+            .get(usize::from(action.payer().ok_or(TradingSbfError::Commit)?))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let refund = accounts
+            .get(usize::from(
+                action.refund_destination().ok_or(TradingSbfError::Commit)?,
+            ))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let system = accounts
+            .get(usize::from(
+                action.system_program().ok_or(TradingSbfError::Commit)?,
+            ))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let target = *scalars
+            .get(usize::from(action.lamports_scalar()))
+            .ok_or(TradingSbfError::Commit)?;
+        let refund_owner = *identities
+            .get(usize::from(action.refund_owner_identity()))
+            .ok_or(TradingSbfError::Commit)?;
+        let signer =
+            prepare_funding_signer_v5(program_id, effect, index, tail_count, scalars, identities)?;
+        if state.key != &signer.address
+            || state.owner != &system_program::ID
+            || state.data_len() != 0
+            || !state.is_writable
+            || state.is_signer
+            || !payer.is_signer
+            || !payer.is_writable
+            || !refund.is_writable
+            || refund.key.to_bytes() != refund_owner
+            || system.key != &system_program::ID
+            || !system.executable
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        let state_before = state.lamports();
+        let payer_before = payer.lamports();
+        let refund_before = refund.lamports();
+        let (payer_after, refund_after) = if state_before < target {
+            let debit = target
+                .checked_sub(state_before)
+                .ok_or(TradingSbfError::Commit)?;
+            let payer_after = payer_before
+                .checked_sub(debit)
+                .ok_or(TradingSbfError::Commit)?;
+            invoke(
+                &system_transfer(payer.key, state.key, debit),
+                &[payer.clone(), state.clone(), system.clone()],
+            )
+            .map_err(|_| TradingSbfError::Commit)?;
+            (payer_after, refund_before)
+        } else if state_before > target {
+            let surplus = state_before
+                .checked_sub(target)
+                .ok_or(TradingSbfError::Commit)?;
+            let refund_after = refund_before
+                .checked_add(surplus)
+                .ok_or(TradingSbfError::Commit)?;
+            invoke_funding_signed_v5(
+                &signer,
+                &system_transfer(state.key, refund.key, surplus),
+                &[state.clone(), refund.clone(), system.clone()],
+            )?;
+            (payer_before, refund_after)
+        } else {
+            (payer_before, refund_before)
+        };
+        invoke_funding_signed_v5(
+            &signer,
+            &allocate(state.key, u64::from(action.live_bytes())),
+            &[state.clone(), system.clone()],
+        )?;
+        invoke_funding_signed_v5(
+            &signer,
+            &assign(state.key, program_id),
+            &[state.clone(), system.clone()],
+        )?;
+        let data = state
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Commit)?;
+        if state.owner != program_id
+            || state.lamports() != target
+            || data.len()
+                != usize::try_from(action.live_bytes()).map_err(|_| TradingSbfError::Commit)?
+            || data.iter().any(|value| *value != 0)
+            || payer.lamports() != payer_after
+            || refund.lamports() != refund_after
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Commit)?;
+    }
+    Ok(())
+}
+
+fn invoke_funding_signed_v5(
+    signer: &FundingSignerV5,
+    instruction: &solana_program::instruction::Instruction,
+    accounts: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let mut slices: [&[u8]; MAX_ACTION_SEEDS_V5 as usize] = [&[]; MAX_ACTION_SEEDS_V5 as usize];
+    let mut index = 0_usize;
+    while index < signer.non_bump {
+        slices[index] = &signer.values[index][..signer.lengths[index]];
+        index = index.checked_add(1).ok_or(TradingSbfError::Commit)?;
+    }
+    slices[signer.non_bump] = &signer.bump;
+    invoke_signed(instruction, accounts, &[&slices[..=signer.non_bump]])
+        .map_err(|_| TradingSbfError::Commit.into())
+}
+
 fn apply_lifecycle_closes_v3(
     program_id: &Pubkey,
+    lifecycle_owner_program: &AccountInfo<'_>,
     expected_market: [u8; 32],
     expected_release_set: [u8; 32],
     expected_generation: u64,
+    expected_rent_credit: [u8; 32],
     plans: &[PreparedLifecycleInvocationV3],
     accounts: &[&AccountInfo<'_>],
     rent: &Rent,
@@ -7407,12 +9223,14 @@ fn apply_lifecycle_closes_v3(
             .ok_or(TradingSbfError::Commit)?;
         let authenticated_credit = authenticate_lifecycle_credit_v3(
             accounts,
+            lifecycle_owner_program,
             prepared.rent_credit.ok_or(TradingSbfError::Commit)?,
             credit.lamports(),
             rent,
             expected_market,
             expected_release_set,
             expected_generation,
+            expected_rent_credit,
         )?;
         if state.key.to_bytes() != plan.state
             || credit.key.to_bytes() != plan.rent_credit
@@ -7444,6 +9262,107 @@ fn apply_lifecycle_closes_v3(
         {
             return Err(TradingSbfError::Commit.into());
         }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_funding_closes_v5(
+    program_id: &Pubkey,
+    lifecycle_owner_program: &AccountInfo<'_>,
+    effect: Option<EffectProgramV5<'_>>,
+    profile: Option<AccountProfileV3<'_>>,
+    _tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[&AccountInfo<'_>],
+    rent: &Rent,
+    market: [u8; 32],
+    release_set: [u8; 32],
+    generation: u64,
+    expected_rent_credit: [u8; 32],
+) -> Result<(), ProgramError> {
+    let (Some(effect), Some(profile)) = (effect, profile) else {
+        return if effect.is_none() && profile.is_none() {
+            Ok(())
+        } else {
+            Err(TradingSbfError::Commit.into())
+        };
+    };
+    let mut index = 0_u16;
+    while index < effect.funding_action_count() {
+        let action = effect
+            .funding_action(index)
+            .map_err(|_| TradingSbfError::Commit)?;
+        if action.operation() != FundingOperationV5::Close {
+            index = index.checked_add(1).ok_or(TradingSbfError::Commit)?;
+            continue;
+        }
+        let state = accounts
+            .get(usize::from(action.state()))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let credit_index = usize::from(action.rent_credit().ok_or(TradingSbfError::Commit)?);
+        let credit = accounts
+            .get(credit_index)
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let bound = profile
+            .funding_bound_for(action.state())
+            .map_err(|_| TradingSbfError::Commit)?
+            .ok_or(TradingSbfError::Commit)?;
+        let observed = *scalars
+            .get(usize::from(action.lamports_scalar()))
+            .ok_or(TradingSbfError::Commit)?;
+        let refund_owner = *identities
+            .get(usize::from(action.refund_owner_identity()))
+            .ok_or(TradingSbfError::Commit)?;
+        let authenticated_credit = authenticate_lifecycle_credit_v3(
+            accounts,
+            lifecycle_owner_program,
+            credit_index,
+            credit.lamports(),
+            rent,
+            market,
+            release_set,
+            generation,
+            expected_rent_credit,
+        )?;
+        let credit_after = credit
+            .lamports()
+            .checked_add(observed)
+            .ok_or(TradingSbfError::Commit)?;
+        if state.owner != program_id
+            || state.data_len()
+                != usize::try_from(bound.live_bytes()).map_err(|_| TradingSbfError::Commit)?
+            || state.lamports() != observed
+            || authenticated_credit.beneficiary != refund_owner
+            || !state.is_writable
+            || !credit.is_writable
+            || state.key == credit.key
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        state
+            .try_borrow_mut_data()
+            .map_err(|_| TradingSbfError::Commit)?
+            .fill(0);
+        **state
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)? = 0;
+        **credit
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)? = credit_after;
+        state.resize(0).map_err(|_| TradingSbfError::Commit)?;
+        state.assign(&system_program::ID);
+        if state.owner != &system_program::ID
+            || state.data_len() != 0
+            || state.lamports() != 0
+            || credit.lamports() != credit_after
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Commit)?;
     }
     Ok(())
 }
@@ -7885,6 +9804,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     // `require_local_effect_discipline_v5` already makes, at these exact
     // registers. `None` only when that walk saw no route to answer for.
     locally_mutated: Option<&[bool]>,
+    authenticated_series_expiry_replay: bool,
+    authenticated_series_expiry_rent_credit: [u8; 32],
 ) -> Result<ChildCallerBumpsV4, ProgramError> {
     #[cfg(not(feature = "families"))]
     let _ = (
@@ -7898,6 +9819,13 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     }
     let locally_mutated = locally_mutated.ok_or(TradingSbfError::Content)?;
     if locally_mutated.len() != aliases.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    let successor_account_count = effect
+        .successor
+        .account_count(tail_count, scalars)
+        .map_err(|_| TradingSbfError::Content)?;
+    if successor_account_count != effect_accounts.len() {
         return Err(TradingSbfError::Content.into());
     }
     hot_heap_mark!("pf-enter");
@@ -7956,17 +9884,38 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             hot_cu_checkpoint!("pf-invocation-resolved");
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
-            let allowed_local_representative = fractional_local_root_overlap_v3(
-                invocation,
-                request_bank,
-                family_request,
-                aliases,
-            )?;
+            let allowed_local_overlap = if let Some(root) =
+                fractional_local_root_overlap_v3(invocation, request_bank, family_request, aliases)?
+            {
+                AllowedLocalOverlapV3::FractionalRoot(root)
+            } else {
+                series_expiry_local_replay_overlap_v1(
+                    effect,
+                    route,
+                    invocation_index,
+                    invocation,
+                    tail_count,
+                    scalars,
+                    request_bank,
+                    family_request,
+                    aliases,
+                    locally_mutated,
+                    effect_accounts,
+                    authenticated_series_expiry_replay,
+                    authenticated_series_expiry_rent_credit,
+                    CoreCompositionParentV3 {
+                        release_set: envelope.release_set(),
+                        market: envelope.market(),
+                        generation: envelope.generation(),
+                        trading_program: program_id.to_bytes(),
+                    },
+                )?
+            };
             require_child_disjoint_from_local(
                 invocation,
                 aliases,
                 locally_mutated,
-                allowed_local_representative,
+                allowed_local_overlap,
             )?;
             match invocation.role {
                 FixedRole::Core => {
@@ -7975,12 +9924,17 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         effect.base(),
                         route,
                         invocation_index,
-                        tail_count,
-                        scalars,
-                        identities,
+                        invocation,
+                        successor_account_count,
+                        BorrowedRouteRangesV4::new(
+                            effect.successor,
+                            route,
+                            tail_count,
+                            scalars,
+                            family_request,
+                        ),
                         effect_accounts,
                         request_bank,
-                        family_request,
                         &mut preflight_frame,
                         &mut preflight_wire,
                         frame.core_program,
@@ -8043,9 +9997,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     ))]
                     caller_bumps.record(preflight_custody_route_v3(
                         program_id,
-                        effect.base(),
+                        successor_account_count,
                         invocation,
-                        tail_count,
                         effect_accounts,
                         request_bank,
                         &mut preflight_frame,
@@ -8245,6 +10198,13 @@ fn execute_child_routes_v3<'accounts, 'info>(
     if effect.route_count() == 0 {
         return Ok(execution.transcript);
     }
+    let successor_account_count = effect
+        .successor
+        .account_count(tail_count, scalars)
+        .map_err(|_| TradingSbfError::Content)?;
+    if successor_account_count != effect_accounts.len() {
+        return Err(TradingSbfError::Content.into());
+    }
     #[cfg(any(
         feature = "families",
         feature = "series-family",
@@ -8335,6 +10295,13 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     .map_err(|_| TradingSbfError::Content)?;
                 let expected_provenance = child_receipt_provenance_v4(
                     producer_invocation,
+                    BorrowedRouteRangesV4::new(
+                        effect.successor,
+                        dependency.producer_route,
+                        tail_count,
+                        scalars,
+                        family_request,
+                    ),
                     dependency.producer_role,
                     dependency.producer_route,
                     dependency.producer_invocation,
@@ -8374,20 +10341,24 @@ fn execute_child_routes_v3<'accounts, 'info>(
             } else {
                 Some(prior_receipt_bytes.as_slice())
             };
-            let (role, child_digest, child_program) = match resolved.role {
-                FixedRole::Core => (
-                    FixedRole::Core,
-                    execute_core_route_v3(
+            let (role, child_digest, child_program, receiptless) = match resolved.role {
+                FixedRole::Core => {
+                    let executed = execute_core_route_v3(
                         program_id,
                         effect.base(),
+                        resolved,
                         route,
                         invocation,
-                        tail_count,
-                        scalars,
-                        identities,
+                        successor_account_count,
+                        BorrowedRouteRangesV4::new(
+                            effect.successor,
+                            route,
+                            tail_count,
+                            scalars,
+                            family_request,
+                        ),
                         effect_accounts,
                         request_bank,
-                        family_request,
                         prior_receipt,
                         buffers,
                         frame.core_program,
@@ -8398,9 +10369,14 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             trading_program: program_id.to_bytes(),
                         },
                         take_caller_bump_v4(caller_bumps, &mut caller_bump_cursor)?,
-                    )?,
-                    frame.core_program,
-                ),
+                    )?;
+                    (
+                        FixedRole::Core,
+                        executed.digest(),
+                        frame.core_program,
+                        executed.receiptless(),
+                    )
+                }
                 FixedRole::Claims => {
                     #[cfg(any(
                         feature = "families",
@@ -8412,14 +10388,13 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             FixedRole::Claims,
                             execute_claims_route_digest_v3(
                                 program_id,
-                                effect.base(),
+                                successor_account_count,
                                 claims_composition
                                     .copied()
                                     .ok_or(TradingSbfError::Content)?,
                                 route,
                                 invocation,
                                 resolved,
-                                tail_count,
                                 effect_accounts,
                                 request_bank,
                                 family_request,
@@ -8430,6 +10405,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 child_caller_hint_v1(envelope, child_ordinal),
                             )?,
                             claims_program.ok_or(TradingSbfError::Release)?,
+                            false,
                         )
                     }
                     #[cfg(not(any(
@@ -8448,11 +10424,10 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     {
                         let digest = execute_custody_route_v3(
                             program_id,
-                            effect.base(),
+                            successor_account_count,
                             route,
                             invocation,
                             resolved,
-                            tail_count,
                             effect_accounts,
                             request_bank,
                             prior_receipt,
@@ -8472,6 +10447,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             FixedRole::Custody,
                             digest,
                             custody_program.ok_or(TradingSbfError::Release)?,
+                            false,
                         )
                     }
                     #[cfg(not(any(
@@ -8514,6 +10490,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             FixedRole::Resolution,
                             digest,
                             resolution_program.ok_or(TradingSbfError::Release)?,
+                            false,
                         )
                     }
                     #[cfg(not(feature = "families"))]
@@ -8533,9 +10510,44 @@ fn execute_child_routes_v3<'accounts, 'info>(
             if producer != *child_program.key {
                 return Err(TradingSbfError::Transition.into());
             }
+            if receiptless {
+                // The typed Core composition has already proved this is the
+                // permissionless Series permit-expiry request, invoked the
+                // activated Core with no signer seeds, required an absent
+                // return channel, and refused every Effect dependency on this
+                // invocation. Successful execution therefore contributes its
+                // dedicated digest to the transcript but no invented receipt
+                // payload to the dependency bank.
+                if role != FixedRole::Core || !receipt_bytes.is_empty() {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                *transcript = hashv(&[
+                    CHILD_EXECUTION_DIGEST_DOMAIN_V3,
+                    &*transcript,
+                    &[fixed_role_tag_v3(role)],
+                    &route.to_le_bytes(),
+                    &invocation.to_le_bytes(),
+                    child_program.key.as_ref(),
+                    &child_digest,
+                ])
+                .to_bytes();
+                hot_heap_mark!("child-receiptless");
+                invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
+                child_ordinal = child_ordinal
+                    .checked_add(1)
+                    .ok_or(TradingSbfError::Content)?;
+                continue;
+            }
             require_borrowed_witness_receipt_v3(request_profile, resolved, role, &receipt_bytes)?;
             let provenance = child_receipt_provenance_v4(
                 resolved,
+                BorrowedRouteRangesV4::new(
+                    effect.successor,
+                    route,
+                    tail_count,
+                    scalars,
+                    family_request,
+                ),
                 role,
                 route,
                 invocation,
@@ -8599,6 +10611,7 @@ fn fixed_role_tag_v3(role: FixedRole) -> u8 {
 #[allow(clippy::too_many_arguments)]
 fn child_receipt_provenance_v4(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    borrowed_ranges: BorrowedRouteRangesV4<'_, '_, '_>,
     role: FixedRole,
     route: u16,
     invocation_index: u32,
@@ -8625,10 +10638,20 @@ fn child_receipt_provenance_v4(
                 .map_err(|_| TradingSbfError::Content)
         })
         .transpose()?;
+    let range_count = borrowed_ranges.count()?;
+    if range_count != 0 && borrowed_request.is_some() {
+        return Err(TradingSbfError::Content.into());
+    }
     let request_kind_source = if child_request.len() >= 8 {
         child_request
     } else if child_request.is_empty() {
-        borrowed_request.ok_or(TradingSbfError::Content)?
+        if let Some(request) = borrowed_request {
+            request
+        } else if range_count != 0 {
+            borrowed_ranges.range(0)?
+        } else {
+            return Err(TradingSbfError::Content.into());
+        }
     } else {
         return Err(TradingSbfError::Content.into());
     };
@@ -8651,22 +10674,15 @@ fn child_receipt_provenance_v4(
     // digest is exactly what binds a resolved receipt to the request that
     // produced it, so a collision here lets one invocation's receipt satisfy
     // another's declared dependency.
-    let presence = [0_u8, u8::from(borrowed_request.is_some())];
-    let child_request_len = u32::try_from(child_request.len())
-        .map_err(|_| TradingSbfError::Content)?
-        .to_le_bytes();
-    let witness_len = u32::try_from(borrowed_request.map_or(0, |witness| witness.len()))
-        .map_err(|_| TradingSbfError::Content)?
-        .to_le_bytes();
-    let request_digest = hashv(&[
-        CHILD_REQUEST_DIGEST_DOMAIN_V4,
-        &presence,
-        &child_request_len,
-        &witness_len,
-        child_request,
-        borrowed_request.unwrap_or(&[]),
-    ])
-    .to_bytes();
+    let request_digest = if range_count == 0 {
+        // Exact compatibility for every existing zero-range bundle and the
+        // legacy single-witness grammar.
+        child_request_digest_v4(child_request, borrowed_request)?
+    } else {
+        child_request_digest_v5(child_request, range_count, |ordinal| {
+            borrowed_ranges.range(ordinal).ok()
+        })?
+    };
     let context_digest = hashv(&[
         CHILD_RECEIPT_CONTEXT_DOMAIN_V4,
         &release_set,
@@ -8739,9 +10755,9 @@ fn mark_local_mutation(
         | ResolvedEffectV3::WriteU8 { account, .. }
         | ResolvedEffectV3::WriteU16 { account, .. }
         | ResolvedEffectV3::WriteU32 { account, .. } => [Some(account), None],
-        ResolvedEffectV3::RequireLamportsEq { .. } | ResolvedEffectV3::WriteRequest { .. } => {
-            [None, None]
-        }
+        ResolvedEffectV3::Noop
+        | ResolvedEffectV3::RequireLamportsEq { .. }
+        | ResolvedEffectV3::WriteRequest { .. } => [None, None],
     };
     for coordinate in coordinates.into_iter().flatten() {
         let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Content)?;
@@ -8766,7 +10782,7 @@ fn require_child_disjoint_from_local(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     aliases: &[usize],
     locally_mutated: &[bool],
-    allowed_local_representative: Option<usize>,
+    allowed_local_overlap: AllowedLocalOverlapV3,
 ) -> Result<(), ProgramError> {
     let refuse_window = |start: usize, end: usize| -> Result<(), ProgramError> {
         let mut coordinate = start;
@@ -8776,7 +10792,7 @@ fn require_child_disjoint_from_local(
                 .get(representative)
                 .copied()
                 .ok_or(TradingSbfError::Content)?
-                && allowed_local_representative != Some(representative)
+                && !allowed_local_overlap.permits(representative)
             {
                 return Err(TradingSbfError::Content.into());
             }
@@ -8809,6 +10825,151 @@ fn require_child_disjoint_from_local(
         item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(())
+}
+
+/// The complete closed set of intentional child/local observation overlaps.
+///
+/// This is deliberately not a list: each variant names one protocol proof and
+/// fixes the only representatives that proof may admit. A third representative
+/// cannot be appended by a caller or by a future descriptor extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AllowedLocalOverlapV3 {
+    None,
+    FractionalRoot(usize),
+    SeriesExpiryReplay { root: usize, ticket: usize },
+}
+
+impl AllowedLocalOverlapV3 {
+    const fn permits(self, representative: usize) -> bool {
+        match self {
+            Self::None => false,
+            Self::FractionalRoot(root) => representative == root,
+            Self::SeriesExpiryReplay { root, ticket } => {
+                representative == root || representative == ticket
+            }
+        }
+    }
+}
+
+/// Select the one Series child which must observe both replay prestates before
+/// Trading commits their independently planned Expire candidates.
+#[allow(clippy::too_many_arguments)]
+fn series_expiry_local_replay_overlap_v1(
+    effect: SelectedEffectProgramV4<'_>,
+    route_index: u16,
+    invocation_index: u32,
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    tail_count: u32,
+    scalars: &[u64],
+    request_bank: &[u8],
+    family_request: &[u8],
+    aliases: &[usize],
+    locally_mutated: &[bool],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    authenticated_series_expiry_replay: bool,
+    authenticated_series_expiry_rent_credit: [u8; 32],
+    parent: CoreCompositionParentV3,
+) -> Result<AllowedLocalOverlapV3, ProgramError> {
+    use series_expiry_v1::{
+        SERIES_EXPIRE_CORE_ROUTE_COUNT_V1, SERIES_EXPIRE_CORE_ROUTE_START_V1,
+        SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1, SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1,
+    };
+
+    if !authenticated_series_expiry_replay
+        || usize::from(invocation.fixed_account_start) != SERIES_EXPIRE_CORE_ROUTE_START_V1
+        || usize::from(invocation.fixed_account_count) != SERIES_EXPIRE_CORE_ROUTE_COUNT_V1
+        || !is_series_permit_expiry_precommit_observation_v1(
+            effect.base(),
+            route_index,
+            invocation_index,
+            invocation,
+            request_bank,
+            family_request,
+            parent,
+        )?
+    {
+        return Ok(AllowedLocalOverlapV3::None);
+    }
+    let ranges = BorrowedRouteRangesV4::new(
+        effect.successor,
+        route_index,
+        tail_count,
+        scalars,
+        family_request,
+    );
+    let family = match SeriesActionRequestV3::decode(family_request) {
+        Ok(request) if request.action() == SeriesActionV3::Expire => request,
+        Ok(_) | Err(_) => return Ok(AllowedLocalOverlapV3::None),
+    };
+    if ranges.count()? != 1 || ranges.range(0)? != family.proof_bytes() {
+        return Ok(AllowedLocalOverlapV3::None);
+    }
+    let request_end = invocation
+        .request_offset
+        .checked_add(invocation.request_len)
+        .ok_or(TradingSbfError::Content)?;
+    let transport = request_bank
+        .get(invocation.request_offset..request_end)
+        .and_then(|request| request.get(..SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1))
+        .and_then(|request| SeriesUnallocatedPermitExpiryRequestV1::decode(request).ok());
+    if transport.is_none_or(|request| {
+        request.expected_series_revision() != family.expected_series_revision()
+            || request.expected_ticket_revision() != family.expected_ticket_revision()
+    }) || effect_accounts
+        .view(SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1)?
+        .key
+        .to_bytes()
+        != authenticated_series_expiry_rent_credit
+    {
+        return Ok(AllowedLocalOverlapV3::None);
+    }
+
+    const CORE_ROOT_LOCAL_V1: usize = 14;
+    const CORE_TICKET_LOCAL_V1: usize = 15;
+    let logical_root = SERIES_EXPIRE_CORE_ROUTE_START_V1 + CORE_ROOT_LOCAL_V1;
+    let logical_ticket = SERIES_EXPIRE_CORE_ROUTE_START_V1 + CORE_TICKET_LOCAL_V1;
+    if aliases.get(logical_root).copied() != Some(0)
+        || aliases.get(logical_ticket).copied() != Some(SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
+        || !locally_mutated.first().copied().unwrap_or(false)
+        || !locally_mutated
+            .get(SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
+            .copied()
+            .unwrap_or(false)
+    {
+        return Ok(AllowedLocalOverlapV3::None);
+    }
+    let root = effect_accounts.view(logical_root)?;
+    let ticket = effect_accounts.view(logical_ticket)?;
+    if root.is_signer
+        || root.is_writable
+        || root.executable
+        || ticket.is_signer
+        || ticket.is_writable
+        || ticket.executable
+    {
+        return Ok(AllowedLocalOverlapV3::None);
+    }
+    let mut coordinate = SERIES_EXPIRE_CORE_ROUTE_START_V1;
+    let end = coordinate
+        .checked_add(SERIES_EXPIRE_CORE_ROUTE_COUNT_V1)
+        .ok_or(TradingSbfError::Content)?;
+    while coordinate < end {
+        let representative = aliases
+            .get(coordinate)
+            .copied()
+            .ok_or(TradingSbfError::Content)?;
+        if (representative == 0 && coordinate != logical_root)
+            || (representative == SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1
+                && coordinate != logical_ticket)
+        {
+            return Ok(AllowedLocalOverlapV3::None);
+        }
+        coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(AllowedLocalOverlapV3::SeriesExpiryReplay {
+        root: 0,
+        ticket: SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1,
+    })
 }
 
 /// Select the one local/child overlap Fractional requires.
@@ -8897,6 +11058,59 @@ fn require_fractional_root_prestate_v3(
         == Some(dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
         && dclutch_sha256_adapter::digest(root) != expected_prestate
     {
+        return Err(TradingSbfError::Commit.into());
+    }
+    Ok(())
+}
+
+/// Refuse any Core-side mutation of the two replay prestates observed by the
+/// exact Series precommit child. Trading is their sole writer and commits both
+/// only after this proof; transaction atomicity then rolls the CPI back if the
+/// later local commit cannot complete.
+fn verify_series_expiry_replay_unchanged_after_children_v1(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    let Some(expected) = prepared.series_expiry_replay_prestate else {
+        return Ok(());
+    };
+    let root = prepared
+        .runtime_accounts
+        .first()
+        .copied()
+        .ok_or(TradingSbfError::Commit)?;
+    let ticket = prepared
+        .runtime_accounts
+        .get(series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
+        .copied()
+        .ok_or(TradingSbfError::Commit)?;
+    require_series_expiry_replay_prestate_v1(root, ticket, expected)
+}
+
+fn require_series_expiry_replay_prestate_v1(
+    root: &AccountInfo<'_>,
+    ticket: &AccountInfo<'_>,
+    expected: SeriesExpiryReplayPrestateV1,
+) -> Result<(), ProgramError> {
+    if root.key.to_bytes() != expected.root_key
+        || root.lamports() != expected.root_lamports
+        || ticket.key.to_bytes() != expected.ticket_key
+        || ticket.lamports() != expected.ticket_lamports
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
+    let root_digest = hash(
+        &root
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Commit)?,
+    )
+    .to_bytes();
+    let ticket_digest = hash(
+        &ticket
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Commit)?,
+    )
+    .to_bytes();
+    if root_digest != expected.root_data_digest || ticket_digest != expected.ticket_data_digest {
         return Err(TradingSbfError::Commit.into());
     }
     Ok(())
@@ -9223,12 +11437,11 @@ fn resolve_carrier_by_representative_v3<'info>(
 #[inline(never)]
 fn execute_claims_route_digest_v3<'info>(
     program_id: &Pubkey,
-    effect: EffectProgramV3<'_>,
+    successor_account_count: usize,
     composition: ClaimsCompositionV3<'_>,
     route_index: u16,
     invocation_index: u32,
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
-    tail_count: u32,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
@@ -9240,12 +11453,11 @@ fn execute_claims_route_digest_v3<'info>(
 ) -> Result<[u8; 32], ProgramError> {
     claims_receipt_digest_v3(execute_claims_route_v3(
         program_id,
-        effect,
+        successor_account_count,
         composition,
         route_index,
         invocation_index,
         invocation,
-        tail_count,
         effect_accounts,
         request_bank,
         family_request,
@@ -9508,18 +11720,26 @@ fn decode_sealed_effect_v4<'a>(
     bytes: &'a [u8],
     sealed: SealedArtifactV1<'_>,
 ) -> Result<SelectedEffectProgramV4<'a>, ProgramError> {
-    if schema != EFFECT_SCHEMA_ID_V4 {
+    let (successor, funding) = if schema == EFFECT_SCHEMA_ID_V4 {
+        (
+            EffectProgramV4::from_sealed(bytes, sealed).map_err(|_| TradingSbfError::Content)?,
+            None,
+        )
+    } else if schema == EFFECT_SCHEMA_ID_V5 {
+        let funding =
+            EffectProgramV5::from_sealed(bytes, sealed).map_err(|_| TradingSbfError::Content)?;
+        (funding.base(), Some(funding))
+    } else {
         return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let successor =
-        EffectProgramV4::from_sealed(bytes, sealed).map_err(|_| TradingSbfError::Content)?;
-    // Profile13 and the EffectV4 kernel jointly own selected account spans.
-    if successor.range_count() != 0 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
+    };
+    // Profile13 and the EffectV4 kernel jointly own selected account spans and
+    // borrowed family-request ranges. The sealed Effect is the range authority;
+    // runtime coverage is checked after request projection resolves its scalar
+    // coordinates and before any lifecycle or child mutation.
     Ok(SelectedEffectProgramV4 {
         base: successor.base(),
         successor,
+        funding,
     })
 }
 
@@ -9529,20 +11749,434 @@ fn decode_selected_effect_v4<'a>(
     schema: [u8; 32],
     bytes: &'a [u8],
 ) -> Result<SelectedEffectProgramV4<'a>, ProgramError> {
-    if schema != EFFECT_SCHEMA_ID_V4 {
+    let (successor, funding) = if schema == EFFECT_SCHEMA_ID_V4 {
+        (
+            EffectProgramV4::decode(bytes).map_err(|_| TradingSbfError::Content)?,
+            None,
+        )
+    } else if schema == EFFECT_SCHEMA_ID_V5 {
+        let funding = EffectProgramV5::decode(bytes).map_err(|_| TradingSbfError::Content)?;
+        (funding.base(), Some(funding))
+    } else {
         return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let successor = EffectProgramV4::decode(bytes).map_err(|_| TradingSbfError::Content)?;
-    // Profile13 and the EffectV4 kernel jointly own selected account spans.
-    // Borrowed family ranges remain fail-closed until the child-request append
-    // and continuation-window path lands as one coherent boundary.
-    if successor.range_count() != 0 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
+    };
+    // The unsealed test/migration path admits the identical successor grammar.
+    // Runtime coverage and child append are shared with the sealed path.
     Ok(SelectedEffectProgramV4 {
         base: successor.base(),
         successor,
+        funding,
     })
+}
+
+fn require_funding_profile_join_v5(
+    effect: SelectedEffectProgramV4<'_>,
+    profile: Option<AccountProfileV3<'_>>,
+) -> Result<(), ProgramError> {
+    let (Some(effect), Some(profile)) = (effect.funding(), profile) else {
+        return if effect.funding().is_none() && profile.is_none() {
+            Ok(())
+        } else {
+            Err(TradingSbfError::UnsupportedContent.into())
+        };
+    };
+    let mut index = 0_u16;
+    while index < effect.funding_action_count() {
+        let action = effect
+            .funding_action(index)
+            .map_err(|_| TradingSbfError::Content)?;
+        let bound = profile
+            .funding_bound_for(action.state())
+            .map_err(|_| TradingSbfError::Content)?
+            .ok_or(TradingSbfError::Content)?;
+        match action.operation() {
+            FundingOperationV5::Create
+                if bound.actions().permits_create()
+                    && action.live_bytes() == bound.live_bytes() => {}
+            FundingOperationV5::Close if bound.actions().permits_close() => {}
+            _ => return Err(TradingSbfError::Content.into()),
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_funding_runtime_v5(
+    program_id: &Pubkey,
+    lifecycle_owner_program: &AccountInfo<'_>,
+    effect: SelectedEffectProgramV4<'_>,
+    profile: Option<AccountProfileV3<'_>>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    rent: &Rent,
+    market: [u8; 32],
+    release_set: [u8; 32],
+    generation: u64,
+    expected_rent_credit: [u8; 32],
+) -> Result<(), ProgramError> {
+    let (Some(effect), Some(profile)) = (effect.funding(), profile) else {
+        return if effect.funding().is_none() && profile.is_none() {
+            Ok(())
+        } else {
+            Err(TradingSbfError::UnsupportedContent.into())
+        };
+    };
+    let mut index = 0_u16;
+    while index < effect.funding_action_count() {
+        let action = effect
+            .funding_action(index)
+            .map_err(|_| TradingSbfError::Transition)?;
+        let state_index = usize::from(action.state());
+        let counterparty_index = usize::from(action.counterparty());
+        require_funding_representative_v5(state_index, accounts, aliases)?;
+        require_funding_representative_v5(counterparty_index, accounts, aliases)?;
+        let state = accounts
+            .get(state_index)
+            .copied()
+            .ok_or(TradingSbfError::Transition)?;
+        let counterparty = accounts
+            .get(counterparty_index)
+            .copied()
+            .ok_or(TradingSbfError::Transition)?;
+        let refund_owner = *identities
+            .get(usize::from(action.refund_owner_identity()))
+            .ok_or(TradingSbfError::Transition)?;
+        if refund_owner.iter().all(|value| *value == 0)
+            || !state.is_writable
+            || state.is_signer
+            || state.executable
+            || !counterparty.is_writable
+            || counterparty.executable
+        {
+            return Err(TradingSbfError::Transition.into());
+        }
+        let amount = *scalars
+            .get(usize::from(action.lamports_scalar()))
+            .ok_or(TradingSbfError::Transition)?;
+        match action.operation() {
+            FundingOperationV5::Create => {
+                let payer = counterparty;
+                let refund_index = usize::from(
+                    action
+                        .refund_destination()
+                        .ok_or(TradingSbfError::Transition)?,
+                );
+                let system_index =
+                    usize::from(action.system_program().ok_or(TradingSbfError::Transition)?);
+                require_funding_representative_v5(refund_index, accounts, aliases)?;
+                require_funding_representative_v5(system_index, accounts, aliases)?;
+                let refund = accounts
+                    .get(refund_index)
+                    .copied()
+                    .ok_or(TradingSbfError::Transition)?;
+                let system = accounts
+                    .get(system_index)
+                    .copied()
+                    .ok_or(TradingSbfError::Transition)?;
+                let live_bytes = usize::try_from(action.live_bytes())
+                    .map_err(|_| TradingSbfError::Transition)?;
+                let signer = prepare_funding_signer_v5(
+                    program_id, effect, index, tail_count, scalars, identities,
+                )?;
+                if state.key != &signer.address
+                    || state.owner != &system_program::ID
+                    || state.data_len() != 0
+                    || !payer.is_signer
+                    || payer.key == state.key
+                    || !refund.is_writable
+                    || refund.is_signer
+                    || refund.executable
+                    || refund.key.to_bytes() != refund_owner
+                    || system.key != &system_program::ID
+                    || system.is_signer
+                    || system.is_writable
+                    || !system.executable
+                    || amount != rent.minimum_balance(live_bytes)
+                {
+                    return Err(TradingSbfError::Transition.into());
+                }
+            }
+            FundingOperationV5::Close => {
+                let bound = profile
+                    .funding_bound_for(action.state())
+                    .map_err(|_| TradingSbfError::Transition)?
+                    .ok_or(TradingSbfError::Transition)?;
+                let live_bytes =
+                    usize::try_from(bound.live_bytes()).map_err(|_| TradingSbfError::Transition)?;
+                let authenticated_credit = authenticate_lifecycle_credit_v3(
+                    accounts,
+                    lifecycle_owner_program,
+                    counterparty_index,
+                    counterparty.lamports(),
+                    rent,
+                    market,
+                    release_set,
+                    generation,
+                    expected_rent_credit,
+                )?;
+                if state.owner != program_id
+                    || state.data_len() != live_bytes
+                    || state.lamports() != amount
+                    || state.key == counterparty.key
+                    || counterparty.is_signer
+                    || authenticated_credit.beneficiary != refund_owner
+                {
+                    return Err(TradingSbfError::Transition.into());
+                }
+            }
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Transition)?;
+    }
+    require_funding_child_separation_v5(effect, tail_count, scalars, identities)
+}
+
+fn require_funding_representative_v5(
+    coordinate: usize,
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+) -> Result<(), ProgramError> {
+    if coordinate == 0
+        || coordinate >= accounts.len()
+        || aliases.get(coordinate).copied() != Some(coordinate)
+    {
+        Err(TradingSbfError::Transition.into())
+    } else {
+        Ok(())
+    }
+}
+
+struct FundingSignerV5 {
+    values: [[u8; 32]; MAX_ACTION_SEEDS_V5 as usize],
+    lengths: [usize; MAX_ACTION_SEEDS_V5 as usize],
+    non_bump: usize,
+    bump: [u8; 1],
+    address: Pubkey,
+}
+
+fn prepare_funding_signer_v5(
+    program_id: &Pubkey,
+    effect: EffectProgramV5<'_>,
+    action_index: u16,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Result<FundingSignerV5, ProgramError> {
+    let action = effect
+        .funding_action(action_index)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if action.operation() != FundingOperationV5::Create || action.seed_count() < 1 {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let non_bump = usize::from(action.seed_count() - 1);
+    if non_bump >= usize::from(MAX_ACTION_SEEDS_V5) {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let mut values = [[0_u8; 32]; MAX_ACTION_SEEDS_V5 as usize];
+    let mut lengths = [0_usize; MAX_ACTION_SEEDS_V5 as usize];
+    let mut ordinal = 0_usize;
+    while ordinal < non_bump {
+        let resolved = effect
+            .resolve_funding_seed(
+                action_index,
+                u8::try_from(ordinal).map_err(|_| TradingSbfError::Transition)?,
+                tail_count,
+                scalars,
+                identities,
+            )
+            .map_err(|_| TradingSbfError::Transition)?;
+        let FundingSeedInputV5::Bytes(resolved) = resolved else {
+            return Err(TradingSbfError::Transition.into());
+        };
+        let bytes = resolved.as_slice();
+        values[ordinal][..bytes.len()].copy_from_slice(bytes);
+        lengths[ordinal] = bytes.len();
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Transition)?;
+    }
+    if effect
+        .resolve_funding_seed(
+            action_index,
+            action.seed_count() - 1,
+            tail_count,
+            scalars,
+            identities,
+        )
+        .map_err(|_| TradingSbfError::Transition)?
+        != FundingSeedInputV5::CanonicalBump
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let mut slices: [&[u8]; MAX_ACTION_SEEDS_V5 as usize] = [&[]; MAX_ACTION_SEEDS_V5 as usize];
+    let mut seed = 0_usize;
+    while seed < non_bump {
+        slices[seed] = &values[seed][..lengths[seed]];
+        seed = seed.checked_add(1).ok_or(TradingSbfError::Transition)?;
+    }
+    let (address, bump) = Pubkey::try_find_program_address(&slices[..non_bump], program_id)
+        .ok_or(TradingSbfError::Transition)?;
+    Ok(FundingSignerV5 {
+        values,
+        lengths,
+        non_bump,
+        bump: [bump],
+        address,
+    })
+}
+
+fn funding_owns_coordinate_v5(effect: EffectProgramV5<'_>, coordinate: usize) -> bool {
+    let mut index = 0_u16;
+    while index < effect.funding_action_count() {
+        let Ok(action) = effect.funding_action(index) else {
+            return true;
+        };
+        if usize::from(action.state()) == coordinate
+            || usize::from(action.counterparty()) == coordinate
+            || action
+                .refund_destination()
+                .is_some_and(|value| usize::from(value) == coordinate)
+            || action
+                .system_program()
+                .is_some_and(|value| usize::from(value) == coordinate)
+        {
+            return true;
+        }
+        index = match index.checked_add(1) {
+            Some(index) => index,
+            None => return true,
+        };
+    }
+    false
+}
+
+fn require_funding_child_separation_v5(
+    effect: EffectProgramV5<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Result<(), ProgramError> {
+    let base = effect.base();
+    let mut route = 0_u16;
+    while route < base.base().route_count() {
+        let count = base
+            .base()
+            .invocation_count(route, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Transition)?;
+        let mut invocation = 0_u32;
+        while invocation < count {
+            let resolved = base
+                .resolved_invocation(route, invocation, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Transition)?
+                .invocation;
+            let fixed_end = resolved
+                .fixed_account_start
+                .checked_add(resolved.fixed_account_count)
+                .ok_or(TradingSbfError::Transition)?;
+            for coordinate in usize::from(resolved.fixed_account_start)..usize::from(fixed_end) {
+                if funding_owns_coordinate_v5(effect, coordinate) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+            }
+            let mut item = 0_u32;
+            while item < resolved.repeated_item_count {
+                let item_start = resolved
+                    .item_account_start
+                    .checked_add(
+                        usize::try_from(item)
+                            .map_err(|_| TradingSbfError::Transition)?
+                            .checked_mul(usize::from(resolved.item_account_stride))
+                            .ok_or(TradingSbfError::Transition)?,
+                    )
+                    .ok_or(TradingSbfError::Transition)?;
+                let item_end = item_start
+                    .checked_add(usize::from(resolved.item_account_count))
+                    .ok_or(TradingSbfError::Transition)?;
+                for coordinate in item_start..item_end {
+                    if funding_owns_coordinate_v5(effect, coordinate) {
+                        return Err(TradingSbfError::Transition.into());
+                    }
+                }
+                item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
+            }
+            invocation = invocation
+                .checked_add(1)
+                .ok_or(TradingSbfError::Transition)?;
+        }
+        route = route.checked_add(1).ok_or(TradingSbfError::Transition)?;
+    }
+    Ok(())
+}
+
+/// A lifecycle-selected root close is the sole physical owner of coordinate
+/// zero for the whole execution. Unlike the live-root Fractional exception,
+/// no child may observe or mutate the root while its terminal close is pending.
+fn require_root_lifecycle_close_child_separation_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    aliases: &[usize],
+) -> Result<(), ProgramError> {
+    let mut route = 0_u16;
+    while route < effect.route_count() {
+        let count = effect
+            .invocation_count(route, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Transition)?;
+        let mut invocation_index = 0_u32;
+        while invocation_index < count {
+            let invocation = effect
+                .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Transition)?;
+            let fixed_start = usize::from(invocation.fixed_account_start);
+            let fixed_end = fixed_start
+                .checked_add(usize::from(invocation.fixed_account_count))
+                .ok_or(TradingSbfError::Transition)?;
+            require_window_excludes_root_v3(fixed_start, fixed_end, aliases)?;
+            let item_width = usize::from(invocation.item_account_count);
+            let item_stride = usize::from(invocation.item_account_stride);
+            let mut item = 0_u32;
+            while item < invocation.repeated_item_count {
+                let item_start = invocation
+                    .item_account_start
+                    .checked_add(
+                        usize::try_from(item)
+                            .map_err(|_| TradingSbfError::Transition)?
+                            .checked_mul(item_stride)
+                            .ok_or(TradingSbfError::Transition)?,
+                    )
+                    .ok_or(TradingSbfError::Transition)?;
+                let item_end = item_start
+                    .checked_add(item_width)
+                    .ok_or(TradingSbfError::Transition)?;
+                require_window_excludes_root_v3(item_start, item_end, aliases)?;
+                item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
+            }
+            invocation_index = invocation_index
+                .checked_add(1)
+                .ok_or(TradingSbfError::Transition)?;
+        }
+        route = route.checked_add(1).ok_or(TradingSbfError::Transition)?;
+    }
+    Ok(())
+}
+
+fn require_window_excludes_root_v3(
+    start: usize,
+    end: usize,
+    aliases: &[usize],
+) -> Result<(), ProgramError> {
+    let mut coordinate = start;
+    while coordinate < end {
+        if representative_v3(coordinate, aliases)? == 0 {
+            return Err(TradingSbfError::Transition.into());
+        }
+        coordinate = coordinate
+            .checked_add(1)
+            .ok_or(TradingSbfError::Transition)?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -9614,6 +12248,12 @@ fn require_borrowed_witness_coverage_v3<'a>(
     identities: &[[u8; 32]],
     family_request: &'a [u8],
 ) -> Result<(), ProgramError> {
+    if effect.successor.range_count() != 0 {
+        effect
+            .successor
+            .validate_request_coverage(family_request.len(), tail_count, scalars, identities)
+            .map_err(|_| ProgramError::from(TradingSbfError::Content))?;
+    }
     let RequestProfileKindV3::Borrowed(profile) = request_profile else {
         return Ok(());
     };
@@ -10257,7 +12897,7 @@ fn commit_non_root_effects_into_v3(
     {
         return Err(TradingSbfError::Commit.into());
     }
-    commit_output_lamports_v3(accounts, aliases, output_lamports, false)?;
+    commit_output_lamports_v3(effect, accounts, aliases, output_lamports, false)?;
     let mut ordinal = 0_u32;
     let mut fixed = 0_u16;
     while fixed < effect.fixed_operation_count() {
@@ -10332,7 +12972,7 @@ fn commit_root_effects_v3(
     if plan.ordinals != root_commit_ordinal_count_v3(effect, tail_count)? {
         return Err(TradingSbfError::Commit.into());
     }
-    commit_output_lamports_v3(accounts, aliases, output_lamports, true)?;
+    commit_output_lamports_v3(effect, accounts, aliases, output_lamports, true)?;
     let item_operations = u32::from(effect.item_operation_count());
     for (byte_index, byte) in plan.bits.iter().enumerate() {
         let mut remaining = *byte;
@@ -10376,6 +13016,7 @@ fn commit_root_effects_v3(
 }
 
 fn commit_output_lamports_v3(
+    effect: SelectedEffectProgramV4<'_>,
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     output_lamports: &[u64],
@@ -10383,7 +13024,12 @@ fn commit_output_lamports_v3(
 ) -> Result<(), ProgramError> {
     for (coordinate, account) in accounts.iter().enumerate() {
         let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Commit)?;
-        if representative != coordinate || (coordinate == 0) != root_only {
+        if representative != coordinate
+            || (coordinate == 0) != root_only
+            || effect
+                .funding()
+                .is_some_and(|funding| funding_owns_coordinate_v5(funding, coordinate))
+        {
             continue;
         }
         let output = *output_lamports
@@ -10513,7 +13159,10 @@ fn commit_data_effect(
                 4,
             )
         }
-        _ => return Ok(false),
+        ResolvedEffectV3::Noop
+        | ResolvedEffectV3::TransferLamports { .. }
+        | ResolvedEffectV3::RequireLamportsEq { .. }
+        | ResolvedEffectV3::WriteRequest { .. } => return Ok(false),
     };
     let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Commit)?;
     let commits_last = representative == 0;
@@ -11116,7 +13765,7 @@ mod tests {
     use super::*;
 
     use dclutch_account_profile_contract::lifecycle_v3::{
-        AuthenticateStatePlanV3, CreateStatePlanV3,
+        AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3,
     };
     use dclutch_account_profile_contract::v2::{
         AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
@@ -11166,6 +13815,14 @@ mod tests {
             terminal_receipt: None,
             bumps,
         }
+    }
+
+    #[test]
+    fn ordinary_logical_market_is_byte_exact_persisted_authority() {
+        let live = market_state_with_bumps(StateBumpsV1::UNRECORDED);
+        let logical = AuthenticatedLogicalMarketV3::from_live(&live);
+        assert_eq!(logical.identity, live.identity);
+        assert_eq!(logical.rent_beneficiary, live.rent_beneficiary);
     }
 
     /// The Market address is reproduced from whichever carrier holds the bump,
@@ -11234,6 +13891,188 @@ mod tests {
             Box::leak(Box::new(Pubkey::new_unique())),
             false,
         )
+    }
+
+    #[test]
+    fn accelerator_caller_token_binds_request_context_and_immutable_deployment() {
+        let trading_program = Pubkey::new_unique();
+        let root = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let accelerator_program = Pubkey::new_unique();
+        let accelerator_programdata = Pubkey::new_unique();
+        let loader_program = Pubkey::new_unique();
+        let release_set = [0x31; 32];
+        let request = b"complete admitted accelerator request";
+        let envelope = HotExecutionEnvelopeV3::new(
+            u32::try_from(request.len()).expect("request width"),
+            release_set,
+            market.to_bytes(),
+            7,
+            [0x32; 32],
+        )
+        .expect("envelope");
+        let request_digest =
+            ContentId::new(hash(request).to_bytes()).expect("nonzero request digest");
+        let caller_seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(release_set).expect("release set"),
+            market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            root.to_bytes(),
+            request_digest.to_bytes(),
+        )
+        .expect("caller seeds");
+        let caller_key =
+            Pubkey::find_program_address(&caller_seeds.as_slices(), &trading_program).0;
+        let mut caller = readonly_info(caller_key);
+        caller.is_signer = true;
+        let program = readonly_info(accelerator_program);
+        let programdata = readonly_info(accelerator_programdata);
+        let deployment_slot = 19_u64;
+        let mut metadata_bytes = vec![0_u8; 45];
+        metadata_bytes
+            .get_mut(..4)
+            .expect("variant")
+            .copy_from_slice(&3_u32.to_le_bytes());
+        metadata_bytes
+            .get_mut(4..12)
+            .expect("slot")
+            .copy_from_slice(&deployment_slot.to_le_bytes());
+        let metadata = ProgramDataMetadataV3View::parse(&metadata_bytes).expect("metadata");
+        let release = ArtifactReleaseV1::new(
+            dclutch_release_set_contract::ProgramIdentityV1::new(accelerator_program.to_bytes())
+                .expect("program"),
+            dclutch_release_set_contract::ProgramIdentityV1::new(loader_program.to_bytes())
+                .expect("loader"),
+            accelerator_programdata.to_bytes(),
+            ContentId::new([0x33; 32]).expect("semantic release"),
+            [0x34; 32],
+            deployment_slot,
+            ArtifactUpgradePolicyV1::Immutable,
+            None,
+        )
+        .expect("artifact release");
+        let artifact_release_digest = hash(&release.to_bytes()).to_bytes();
+        let artifact_release =
+            dclutch_release_set_contract::ArtifactReleaseIdV1::decode(&artifact_release_digest)
+                .expect("artifact release identity");
+        let token = authenticate_accelerator_caller_authority_v4(
+            &trading_program,
+            &caller,
+            envelope,
+            &root,
+            request,
+            artifact_release_digest,
+            &accelerator_program,
+            &program,
+            &programdata,
+            metadata,
+        )
+        .expect("caller token");
+        assert!(token.binds_context_parts(release_set, market.to_bytes(), root.to_bytes()));
+        assert!(token.binds_immutable_deployment(
+            artifact_release,
+            release,
+            &program,
+            &programdata,
+        ));
+
+        let mut nonsigner = caller.clone();
+        nonsigner.is_signer = false;
+        assert_eq!(
+            authenticate_accelerator_caller_authority_v4(
+                &trading_program,
+                &nonsigner,
+                envelope,
+                &root,
+                request,
+                artifact_release_digest,
+                &accelerator_program,
+                &program,
+                &programdata,
+                metadata,
+            ),
+            Err(TradingSbfError::Release.into())
+        );
+        assert_eq!(
+            authenticate_accelerator_caller_authority_v4(
+                &trading_program,
+                &caller,
+                envelope,
+                &root,
+                b"substituted request",
+                artifact_release_digest,
+                &accelerator_program,
+                &program,
+                &programdata,
+                metadata,
+            ),
+            Err(TradingSbfError::Release.into())
+        );
+        assert_eq!(
+            authenticate_accelerator_caller_authority_v4(
+                &trading_program,
+                &caller,
+                envelope,
+                &root,
+                request,
+                artifact_release_digest,
+                &Pubkey::new_unique(),
+                &program,
+                &programdata,
+                metadata,
+            ),
+            Err(TradingSbfError::Release.into())
+        );
+
+        for hostile in [
+            AuthenticatedAcceleratorCallerV4 {
+                artifact_release: [0x51; 32],
+                ..token
+            },
+            AuthenticatedAcceleratorCallerV4 {
+                accelerator_program: Pubkey::new_unique().to_bytes(),
+                ..token
+            },
+            AuthenticatedAcceleratorCallerV4 {
+                accelerator_programdata: Pubkey::new_unique().to_bytes(),
+                ..token
+            },
+            AuthenticatedAcceleratorCallerV4 {
+                deployment_slot: deployment_slot.saturating_add(1),
+                ..token
+            },
+            AuthenticatedAcceleratorCallerV4 {
+                upgrade_authority: Some(Pubkey::new_unique().to_bytes()),
+                ..token
+            },
+        ] {
+            assert!(!hostile.binds_immutable_deployment(
+                artifact_release,
+                release,
+                &program,
+                &programdata,
+            ));
+        }
+        for hostile in [
+            AuthenticatedAcceleratorCallerV4 {
+                release_set: [0x41; 32],
+                ..token
+            },
+            AuthenticatedAcceleratorCallerV4 {
+                market: Pubkey::new_unique().to_bytes(),
+                ..token
+            },
+            AuthenticatedAcceleratorCallerV4 {
+                root: Pubkey::new_unique().to_bytes(),
+                ..token
+            },
+            AuthenticatedAcceleratorCallerV4 {
+                request_digest: [0; 32],
+                ..token
+            },
+        ] {
+            assert!(!hostile.binds_context_parts(release_set, market.to_bytes(), root.to_bytes()));
+        }
     }
 
     fn distinct_fixed_infos() -> Vec<AccountInfo<'static>> {
@@ -11320,8 +14159,13 @@ mod tests {
                 .expect("exact overlap"),
             Some(0)
         );
-        require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, Some(0))
-            .expect("sole root overlap");
+        require_child_disjoint_from_local(
+            invocation,
+            &aliases,
+            &locally_mutated,
+            AllowedLocalOverlapV3::FractionalRoot(0),
+        )
+        .expect("sole root overlap");
 
         let mut foreign = request.clone();
         foreign[0] ^= 1;
@@ -11331,14 +14175,24 @@ mod tests {
             None
         );
         assert!(
-            require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, None)
-                .is_err()
+            require_child_disjoint_from_local(
+                invocation,
+                &aliases,
+                &locally_mutated,
+                AllowedLocalOverlapV3::None,
+            )
+            .is_err()
         );
 
         locally_mutated[6] = true;
         assert!(
-            require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, Some(0))
-                .is_err(),
+            require_child_disjoint_from_local(
+                invocation,
+                &aliases,
+                &locally_mutated,
+                AllowedLocalOverlapV3::FractionalRoot(0),
+            )
+            .is_err(),
             "a second local/child overlap must not ride the root exception"
         );
     }
@@ -11356,6 +14210,284 @@ mod tests {
         assert!(require_fractional_root_prestate_v3(&request, &after, digest).is_err());
         require_fractional_root_prestate_v3(b"another-family", &after, digest)
             .expect("unrelated family is not widened");
+    }
+
+    #[test]
+    fn series_expiry_overlap_is_exactly_root_and_ticket_never_a_subset_or_superset() {
+        let invocation = dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+            role: FixedRole::Core,
+            kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+            item: None,
+            fixed_account_start: u16::try_from(series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1)
+                .expect("route start"),
+            fixed_account_count: u16::try_from(series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_COUNT_V1)
+                .expect("route count"),
+            item_account_start: 0,
+            item_account_count: 0,
+            item_account_stride: 0,
+            repeated_item_count: 0,
+            request_offset: 0,
+            request_len: 976,
+            borrowed_witness: None,
+            receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
+            receipt_dependency: None,
+        };
+        let mut aliases =
+            (0..series_expiry_v1::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1).collect::<Vec<_>>();
+        aliases[series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1 + 14] = 0;
+        aliases[series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1 + 15] =
+            series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1;
+        let mut locally_mutated = vec![false; series_expiry_v1::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1];
+        locally_mutated[0] = true;
+        locally_mutated[series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1] = true;
+        let exact = AllowedLocalOverlapV3::SeriesExpiryReplay { root: 0, ticket: 5 };
+
+        require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, exact)
+            .expect("exact replay pair");
+        assert!(
+            require_child_disjoint_from_local(
+                invocation,
+                &aliases,
+                &locally_mutated,
+                AllowedLocalOverlapV3::FractionalRoot(0),
+            )
+            .is_err(),
+            "root-only overlap cannot omit Ticket",
+        );
+        assert!(
+            require_child_disjoint_from_local(
+                invocation,
+                &aliases,
+                &locally_mutated,
+                AllowedLocalOverlapV3::FractionalRoot(5),
+            )
+            .is_err(),
+            "Ticket-only overlap cannot omit root",
+        );
+
+        aliases[series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1] = 6;
+        locally_mutated[6] = true;
+        assert!(
+            require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, exact)
+                .is_err(),
+            "a third representative cannot ride the fixed pair",
+        );
+    }
+
+    #[test]
+    fn series_expiry_post_child_proof_binds_both_data_and_lamports() {
+        let root_key = Pubkey::new_unique();
+        let ticket_key = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let mut root_lamports = 41_u64;
+        let mut ticket_lamports = 43_u64;
+        let mut root_data = [0x51_u8; 96];
+        let mut ticket_data = [0x52_u8; 80];
+        let root = AccountInfo::new(
+            &root_key,
+            false,
+            true,
+            &mut root_lamports,
+            &mut root_data,
+            &owner,
+            false,
+        );
+        let ticket = AccountInfo::new(
+            &ticket_key,
+            false,
+            true,
+            &mut ticket_lamports,
+            &mut ticket_data,
+            &owner,
+            false,
+        );
+        let expected = SeriesExpiryReplayPrestateV1::authenticated(
+            &root,
+            hash(&root.try_borrow_data().expect("root data")).to_bytes(),
+            &ticket,
+            hash(&ticket.try_borrow_data().expect("Ticket data")).to_bytes(),
+        )
+        .expect("authenticated prestates");
+        require_series_expiry_replay_prestate_v1(&root, &ticket, expected)
+            .expect("exact post-child state");
+
+        root.try_borrow_mut_data().expect("root mutation")[0] ^= 1;
+        assert!(require_series_expiry_replay_prestate_v1(&root, &ticket, expected).is_err());
+        root.try_borrow_mut_data().expect("root restore")[0] ^= 1;
+        **ticket
+            .try_borrow_mut_lamports()
+            .expect("Ticket lamport mutation") += 1;
+        assert!(require_series_expiry_replay_prestate_v1(&root, &ticket, expected).is_err());
+    }
+
+    #[test]
+    fn series_expiry_future_market_is_route_local_distinct_and_system_vacant() {
+        let key = Pubkey::new_unique();
+        let other = Pubkey::new_unique();
+        let controller = Pubkey::new_unique();
+        let core = Pubkey::new_unique();
+        let mut lamports = 0_u64;
+        let mut empty = [];
+        let exact = AccountInfo::new(
+            &key,
+            false,
+            false,
+            &mut lamports,
+            &mut empty,
+            &system_program::ID,
+            false,
+        );
+        require_series_expiry_future_market_vacancy_v1(&exact, key, &controller)
+            .expect("exact vacant future Market");
+        assert!(
+            require_series_expiry_future_market_vacancy_v1(&exact, other, &controller).is_err(),
+            "a different canonical PDA must refuse",
+        );
+        assert!(
+            require_series_expiry_future_market_vacancy_v1(&exact, key, &key).is_err(),
+            "the live controller Market may never alias the future Market",
+        );
+
+        let mut writable_lamports = 0_u64;
+        let mut writable_empty = [];
+        let writable = AccountInfo::new(
+            &key,
+            false,
+            true,
+            &mut writable_lamports,
+            &mut writable_empty,
+            &system_program::ID,
+            false,
+        );
+        assert!(
+            require_series_expiry_future_market_vacancy_v1(&writable, key, &controller).is_err(),
+            "the route-local future Market is always readonly",
+        );
+
+        let mut owned_lamports = 0_u64;
+        let mut owned_empty = [];
+        let owned = AccountInfo::new(
+            &key,
+            false,
+            false,
+            &mut owned_lamports,
+            &mut owned_empty,
+            &core,
+            false,
+        );
+        assert!(
+            require_series_expiry_future_market_vacancy_v1(&owned, key, &controller).is_err(),
+            "a live or stranger-owned Market is not the pre-Market state",
+        );
+
+        let mut data_lamports = 0_u64;
+        let mut data = [1_u8];
+        let initialized = AccountInfo::new(
+            &key,
+            false,
+            false,
+            &mut data_lamports,
+            &mut data,
+            &system_program::ID,
+            false,
+        );
+        assert!(
+            require_series_expiry_future_market_vacancy_v1(&initialized, key, &controller,)
+                .is_err(),
+            "System ownership alone is not vacancy",
+        );
+
+        let second = Pubkey::new_unique();
+        let mut second_lamports = 0_u64;
+        let mut second_empty = [];
+        let second_future = AccountInfo::new(
+            &second,
+            false,
+            false,
+            &mut second_lamports,
+            &mut second_empty,
+            &system_program::ID,
+            false,
+        );
+        require_series_expiry_future_market_vacancy_v1(&exact, key, &controller)
+            .expect("first occurrence under persistent controller root");
+        require_series_expiry_future_market_vacancy_v1(&second_future, second, &controller)
+            .expect("second occurrence under the same persistent controller root");
+    }
+
+    #[test]
+    fn series_expiry_permit_requires_exact_prefunded_writable_system_vacancy() {
+        let rent = Rent::default();
+        let key = Pubkey::new_unique();
+        let other = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let minimum = rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1);
+        let mut lamports = minimum;
+        let mut empty = [];
+        let exact = AccountInfo::new(
+            &key,
+            false,
+            true,
+            &mut lamports,
+            &mut empty,
+            &system_program::ID,
+            false,
+        );
+        require_series_expiry_vacant_permit_v1(&exact, key, &rent)
+            .expect("exact unallocated permit");
+        assert!(require_series_expiry_vacant_permit_v1(&exact, other, &rent).is_err());
+
+        let mut readonly_lamports = minimum;
+        let mut readonly_empty = [];
+        let readonly = AccountInfo::new(
+            &key,
+            false,
+            false,
+            &mut readonly_lamports,
+            &mut readonly_empty,
+            &system_program::ID,
+            false,
+        );
+        assert!(require_series_expiry_vacant_permit_v1(&readonly, key, &rent).is_err());
+
+        let mut signer_lamports = minimum;
+        let mut signer_empty = [];
+        let signer = AccountInfo::new(
+            &key,
+            true,
+            true,
+            &mut signer_lamports,
+            &mut signer_empty,
+            &system_program::ID,
+            false,
+        );
+        assert!(require_series_expiry_vacant_permit_v1(&signer, key, &rent).is_err());
+
+        let mut owned_lamports = minimum;
+        let mut owned_empty = [];
+        let owned = AccountInfo::new(
+            &key,
+            false,
+            true,
+            &mut owned_lamports,
+            &mut owned_empty,
+            &owner,
+            false,
+        );
+        assert!(require_series_expiry_vacant_permit_v1(&owned, key, &rent).is_err());
+
+        let mut thin_lamports = minimum.saturating_sub(1);
+        let mut thin_empty = [];
+        let thin = AccountInfo::new(
+            &key,
+            false,
+            true,
+            &mut thin_lamports,
+            &mut thin_empty,
+            &system_program::ID,
+            false,
+        );
+        assert!(require_series_expiry_vacant_permit_v1(&thin, key, &rent).is_err());
     }
 
     #[test]
@@ -11397,7 +14529,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_rent_credit_v2_binds_market_release_and_generation() {
+    fn lifecycle_rent_credit_v2_binds_expected_key_market_release_and_generation() {
         use dclutch_rent_contract::{
             RefundAuthority,
             lifecycle_v2::{
@@ -11447,57 +14579,137 @@ mod tests {
             Box::leak(Box::new(Pubkey::new_unique())),
             true,
         );
-        let accounts = [&credit, &owner];
+        // The fixed authenticated Registry is the single owner-program fact;
+        // lifecycle runtime contains only the credit coordinate.
+        let accounts = [&credit];
         let authenticated = authenticate_lifecycle_credit_v3(
             &accounts,
+            &owner,
             0,
             floor,
             &rent,
             market.to_bytes(),
             release.to_bytes(),
             generation,
+            credit_key.to_bytes(),
         )
         .expect("exact lifecycle credit");
         assert_eq!(authenticated.beneficiary, refund.to_bytes());
+
+        let mut non_executable_owner = owner.clone();
+        non_executable_owner.executable = false;
+        let mut writable_owner = owner.clone();
+        writable_owner.is_writable = true;
+        let mut signer_owner = owner.clone();
+        signer_owner.is_signer = true;
+        let unrelated_owner_key = Pubkey::new_unique();
+        let unrelated_executable_owner = AccountInfo::new(
+            Box::leak(Box::new(unrelated_owner_key)),
+            false,
+            false,
+            Box::leak(Box::new(1_u64)),
+            Box::leak(Vec::new().into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::new_unique())),
+            true,
+        );
+        for (name, hostile_owner) in [
+            ("non-executable", &non_executable_owner),
+            ("writable", &writable_owner),
+            ("signer", &signer_owner),
+            ("unrelated", &unrelated_executable_owner),
+        ] {
+            assert_eq!(
+                authenticate_lifecycle_credit_v3(
+                    &accounts,
+                    hostile_owner,
+                    0,
+                    floor,
+                    &rent,
+                    market.to_bytes(),
+                    release.to_bytes(),
+                    generation,
+                    credit_key.to_bytes(),
+                ),
+                Err(TradingSbfError::Content.into()),
+                "{name} owner substitution or privilege widening must refuse",
+            );
+        }
+
+        let unrelated_runtime = [&credit, &unrelated_executable_owner];
         assert!(
             authenticate_lifecycle_credit_v3(
+                &unrelated_runtime,
+                &owner,
+                0,
+                floor,
+                &rent,
+                market.to_bytes(),
+                release.to_bytes(),
+                generation,
+                credit_key.to_bytes(),
+            )
+            .is_ok(),
+            "runtime contents neither supply nor replace the fixed owner fact",
+        );
+        assert_eq!(
+            authenticate_lifecycle_credit_v3(
                 &accounts,
+                &owner,
+                0,
+                floor,
+                &rent,
+                market.to_bytes(),
+                release.to_bytes(),
+                generation,
+                Pubkey::new_unique().to_bytes(),
+            ),
+            Err(TradingSbfError::Content.into()),
+        );
+        assert_eq!(
+            authenticate_lifecycle_credit_v3(
+                &accounts,
+                &owner,
                 0,
                 floor,
                 &rent,
                 Pubkey::new_unique().to_bytes(),
                 release.to_bytes(),
                 generation,
-            )
-            .is_err()
+                credit_key.to_bytes(),
+            ),
+            Err(TradingSbfError::Content.into()),
         );
-        assert!(
+        assert_eq!(
             authenticate_lifecycle_credit_v3(
                 &accounts,
+                &owner,
                 0,
                 floor,
                 &rent,
                 market.to_bytes(),
                 Pubkey::new_unique().to_bytes(),
                 generation,
-            )
-            .is_err()
+                credit_key.to_bytes(),
+            ),
+            Err(TradingSbfError::Content.into()),
         );
-        assert!(
+        assert_eq!(
             authenticate_lifecycle_credit_v3(
                 &accounts,
+                &owner,
                 0,
                 floor,
                 &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation + 1,
-            )
-            .is_err()
+                credit_key.to_bytes(),
+            ),
+            Err(TradingSbfError::Content.into()),
         );
 
         let stale_v1 = AccountInfo::new(
-            Box::leak(Box::new(Pubkey::new_unique())),
+            Box::leak(Box::new(credit_key)),
             false,
             true,
             Box::leak(Box::new(rent.minimum_balance(48))),
@@ -11505,18 +14717,20 @@ mod tests {
             Box::leak(Box::new(rent_program)),
             false,
         );
-        let stale_accounts = [&stale_v1, &owner];
-        assert!(
+        let stale_accounts = [&stale_v1];
+        assert_eq!(
             authenticate_lifecycle_credit_v3(
                 &stale_accounts,
+                &owner,
                 0,
                 stale_v1.lamports(),
                 &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation,
-            )
-            .is_err()
+                credit_key.to_bytes(),
+            ),
+            Err(TradingSbfError::Content.into()),
         );
     }
 
@@ -11568,6 +14782,187 @@ mod tests {
         let mut hostile = output;
         *hostile.first_mut().expect("effect output is non-empty") ^= 1;
         assert!(decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &hostile).is_err());
+    }
+
+    fn borrowed_range_effect_v4(
+        policy: dclutch_effect_kernel::v4::BorrowedRangePolicyV4,
+        ranges: &[dclutch_effect_kernel::v4::BorrowedRangeV4],
+    ) -> Vec<u8> {
+        use dclutch_effect_kernel::{
+            v2::FixedRole,
+            v3::{
+                HEADER_BYTES, ROUTE_BYTES, RouteKindV3,
+                encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
+            },
+            v4::{BORROWED_RANGE_BYTES_V4, HEADER_BYTES_V4, encode_program_v4_atomic},
+        };
+
+        const BASE_REQUEST: &[u8] = b"CORE_REQ";
+        let route = RouteInputV3 {
+            role: FixedRole::Core,
+            kind: RouteKindV3::Once,
+            enable_common_scalar: None,
+            witness_range_common_scalar: None,
+            receipt_dependency: None,
+            fixed_account_start: 0,
+            fixed_account_count: 1,
+            item_account_start: 0,
+            item_account_count: 0,
+            fixed_request: BASE_REQUEST,
+            item_request: &[],
+        };
+        let base_bytes = HEADER_BYTES + ROUTE_BYTES + BASE_REQUEST.len();
+        let mut base_scratch = vec![0_u8; base_bytes];
+        let mut base = vec![0_u8; base_bytes];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[route],
+            &[],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("one-route base");
+        let successor_bytes = HEADER_BYTES_V4 + ranges.len() * BORROWED_RANGE_BYTES_V4 + base.len();
+        let mut scratch = vec![0_u8; successor_bytes];
+        let mut output = vec![0_u8; successor_bytes];
+        encode_program_v4_atomic(&base, policy, 4, &[], ranges, &mut scratch, &mut output)
+            .expect("range successor");
+        output
+    }
+
+    #[test]
+    fn child_request_digest_helpers_pin_zero_range_and_range_topology() {
+        let base = b"CORE_REQ";
+        let legacy = b"legacy-proof";
+        let expected_v4 = hashv(&[
+            CHILD_REQUEST_DIGEST_DOMAIN_V4,
+            &[0, 1],
+            &(base.len() as u32).to_le_bytes(),
+            &(legacy.len() as u32).to_le_bytes(),
+            base,
+            legacy,
+        ])
+        .to_bytes();
+        assert_eq!(
+            child_request_digest_v4(base, Some(legacy)).expect("legacy digest"),
+            expected_v4
+        );
+
+        let proof = b"proof";
+        let mut framed = Vec::new();
+        framed.extend_from_slice(CHILD_REQUEST_DIGEST_DOMAIN_V5);
+        framed.extend_from_slice(&1_u16.to_le_bytes());
+        framed.extend_from_slice(&(base.len() as u32).to_le_bytes());
+        framed.extend_from_slice(&(proof.len() as u32).to_le_bytes());
+        framed.extend_from_slice(base);
+        framed.extend_from_slice(proof);
+        assert_eq!(
+            child_request_digest_v5(base, 1, |ordinal| (ordinal == 0)
+                .then_some(proof.as_slice()))
+            .expect("one authenticated range"),
+            hash(&framed).to_bytes()
+        );
+        assert_eq!(
+            child_request_digest_v5(base, 0, |_| None),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(
+            child_request_digest_v5(base, 2, |ordinal| (ordinal == 0)
+                .then_some(proof.as_slice())),
+            Err(TradingSbfError::Content.into())
+        );
+
+        let substituted = b"proog";
+        assert_ne!(
+            child_request_digest_v5(base, 1, |_| Some(proof.as_slice())).expect("proof"),
+            child_request_digest_v5(base, 1, |_| Some(substituted.as_slice()))
+                .expect("substitution")
+        );
+        let first = b"pr";
+        let second = b"oof";
+        assert_ne!(
+            child_request_digest_v5(base, 1, |_| Some(proof.as_slice())).expect("one range"),
+            child_request_digest_v5(base, 2, |ordinal| match ordinal {
+                0 => Some(first.as_slice()),
+                1 => Some(second.as_slice()),
+                _ => None,
+            })
+            .expect("same concatenation, different topology")
+        );
+    }
+
+    #[test]
+    fn borrowed_ranges_append_exactly_and_refuse_overlap_oob_without_mutation() {
+        use dclutch_effect_kernel::v4::{
+            BorrowedRangePolicyV4, BorrowedRangeV4, ProgramV4, RequestCoordinateV4,
+        };
+
+        let exact = [BorrowedRangeV4::new(
+            0,
+            RequestCoordinateV4::Fixed(4),
+            RequestCoordinateV4::Fixed(4),
+        )];
+        let exact_bytes =
+            borrowed_range_effect_v4(BorrowedRangePolicyV4::DisjointExactCoverage, &exact);
+        let exact_program = ProgramV4::decode(&exact_bytes).expect("exact range program");
+        let family_request = b"HEADPROO";
+        assert_eq!(
+            exact_program.validate_request_coverage(family_request.len(), 0, &[0], &[]),
+            Ok(())
+        );
+        let ranges = BorrowedRouteRangesV4::new(exact_program, 0, 0, &[0], family_request);
+        let mut output = b"CORE_REQ".to_vec();
+        ranges.append_to(&mut output).expect("exact append");
+        assert_eq!(output, b"CORE_REQPROO");
+
+        let overlapping = [
+            BorrowedRangeV4::new(
+                0,
+                RequestCoordinateV4::Fixed(4),
+                RequestCoordinateV4::Fixed(3),
+            ),
+            BorrowedRangeV4::new(
+                0,
+                RequestCoordinateV4::Fixed(6),
+                RequestCoordinateV4::Fixed(2),
+            ),
+        ];
+        let overlap_bytes =
+            borrowed_range_effect_v4(BorrowedRangePolicyV4::DisjointExactCoverage, &overlapping);
+        let overlap_program = ProgramV4::decode(&overlap_bytes).expect("shape-decodable overlap");
+        assert_eq!(
+            overlap_program.validate_request_coverage(family_request.len(), 0, &[0], &[]),
+            Err(dclutch_effect_kernel::v4::ErrorV4::RequestCoverage)
+        );
+
+        let oob = [BorrowedRangeV4::new(
+            0,
+            RequestCoordinateV4::Fixed(4),
+            RequestCoordinateV4::Fixed(8),
+        )];
+        let oob_bytes =
+            borrowed_range_effect_v4(BorrowedRangePolicyV4::DisjointExactCoverage, &oob);
+        let oob_program = ProgramV4::decode(&oob_bytes).expect("shape-decodable oob");
+        assert_eq!(
+            oob_program.validate_request_coverage(family_request.len(), 0, &[0], &[]),
+            Err(dclutch_effect_kernel::v4::ErrorV4::RequestCoverage)
+        );
+        let hostile = BorrowedRouteRangesV4::new(oob_program, 0, 0, &[0], family_request);
+        let mut unchanged = b"sentinel".to_vec();
+        let before = unchanged.clone();
+        assert_eq!(
+            hostile.append_to(&mut unchanged),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(unchanged, before, "refusal mutated the child wire");
     }
 
     #[test]
@@ -12577,6 +15972,12 @@ mod tests {
         );
         assert!(authenticated_input_scratch_pages_v3(profile, &[2], Some(1), &logical).is_err());
         assert!(authenticated_input_scratch_pages_v3(profile, &[4], Some(0), &logical).is_err());
+        assert_eq!(
+            lifecycle_semantic_prefix_width_v3(profile, 0, &[2], logical.len())
+                .expect("lifecycle receives the exact fixed semantic prefix"),
+            fixed_rules.len()
+        );
+        assert!(lifecycle_semantic_prefix_width_v3(profile, 0, &[2], logical.len() + 1).is_err());
     }
 
     #[cfg(any(
@@ -12716,6 +16117,11 @@ mod tests {
 
     #[test]
     fn typed_writes_initialize_zeroed_lifecycle_state_exactly() {
+        assert_eq!(
+            commit_data_effect(ResolvedEffectV3::Noop, &[], &[], false),
+            Ok(false),
+            "disabled conditional write reached an account or commit pass"
+        );
         let root_key = Box::leak(Box::new(Pubkey::new_unique()));
         let state_key = Box::leak(Box::new(Pubkey::new_unique()));
         let owner = Box::leak(Box::new(Pubkey::new_unique()));
@@ -13073,7 +16479,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_candidate_updates_every_alias_and_reserves_nonroot_once() {
+    fn lifecycle_candidate_updates_every_alias_and_reserves_one_state_once() {
         let plan = PreparedLifecycleInvocationV3 {
             plan: StateLifecyclePlanV3::Create(CreateStatePlanV3 {
                 state: [1; 32],
@@ -13110,6 +16516,7 @@ mod tests {
         assert_eq!(accounts.get(2).map(|account| account.lamports), Some(75));
 
         let mut used = [false; 3];
+        assert_eq!(reserve_lifecycle_state_v3(0, &mut used), Ok(()));
         assert_eq!(
             reserve_lifecycle_state_v3(0, &mut used),
             Err(TradingSbfError::Content.into())
@@ -13119,6 +16526,152 @@ mod tests {
             reserve_lifecycle_state_v3(1, &mut used),
             Err(TradingSbfError::Content.into())
         );
+    }
+
+    fn root_close_plan_v3() -> PreparedLifecycleInvocationV3 {
+        PreparedLifecycleInvocationV3 {
+            plan: StateLifecyclePlanV3::Close(CloseStatePlanV3 {
+                state: [1; 32],
+                rent_credit: [2; 32],
+                beneficiary: [3; 32],
+                source_data_bytes: 144,
+                historical_rent_principal: 30,
+                source_before: 37,
+                source_after: 0,
+                rent_credit_before: 100,
+                rent_credit_after: 137,
+                bump: 9,
+            }),
+            state: 0,
+            payer: None,
+            rent_credit: Some(2),
+            seeds: Vec::new(),
+            immutable_identity_bindings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn root_lifecycle_close_is_the_only_root_plan_and_projects_vacancy() {
+        assert_eq!(
+            selected_root_lifecycle_close_v3(&[root_close_plan_v3()]),
+            Ok(true)
+        );
+
+        let aliases = [0, 0, 2];
+        let mut accounts = vec![
+            AccountInput {
+                lamports: 37,
+                data_len: 144,
+            },
+            AccountInput {
+                lamports: 37,
+                data_len: 144,
+            },
+            AccountInput {
+                lamports: 100,
+                data_len: 96,
+            },
+        ];
+        apply_lifecycle_candidates_v3(&[root_close_plan_v3()], &aliases, &mut accounts)
+            .expect("root close candidate");
+        for coordinate in [0_usize, 1] {
+            assert_eq!(
+                accounts.get(coordinate),
+                Some(&AccountInput {
+                    lamports: 0,
+                    data_len: 0,
+                })
+            );
+        }
+        assert_eq!(accounts.get(2).map(|account| account.lamports), Some(137));
+
+        let mut create = root_close_plan_v3();
+        create.plan = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+            state: [1; 32],
+            payer: [4; 32],
+            rent_credit: [2; 32],
+            beneficiary: [3; 32],
+            target_data_bytes: 144,
+            historical_rent_principal: 30,
+            state_before: 0,
+            state_after: 30,
+            payer_debit: 30,
+            payer_after: 70,
+            bump: 9,
+        });
+        assert_eq!(
+            selected_root_lifecycle_close_v3(&[create]),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(
+            selected_root_lifecycle_close_v3(&[root_close_plan_v3(), root_close_plan_v3()]),
+            Err(TradingSbfError::Transition.into())
+        );
+    }
+
+    #[test]
+    fn root_lifecycle_close_refuses_effect_and_child_alias_overlap() {
+        let aliases = [0_usize, 1, 0, 3];
+        assert_eq!(
+            require_no_root_local_mutation_v3(
+                ResolvedEffectV3::WriteU8 {
+                    account: 2,
+                    offset: u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1).expect("offset"),
+                    value: 1,
+                },
+                &aliases,
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(
+            require_no_root_local_mutation_v3(
+                ResolvedEffectV3::TransferLamports {
+                    source: 1,
+                    destination: 0,
+                    amount: 1,
+                },
+                &aliases,
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(
+            require_no_root_local_mutation_v3(
+                ResolvedEffectV3::RequireLamportsEq {
+                    account: 0,
+                    value: 37,
+                },
+                &aliases,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            require_window_excludes_root_v3(1, 3, &aliases),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(require_window_excludes_root_v3(3, 4, &aliases), Ok(()));
+    }
+
+    #[test]
+    fn vacant_root_digest_binds_address_owner_balance_and_width() {
+        let root = Pubkey::new_unique();
+        let digest = vacant_root_poststate_digest_v3(&root);
+        let zero = 0_u64.to_le_bytes();
+        assert_eq!(
+            digest,
+            hashv(&[
+                VACANT_ROOT_POSTSTATE_DOMAIN_V3,
+                root.as_ref(),
+                system_program::ID.as_ref(),
+                &zero,
+                &zero,
+            ])
+            .to_bytes()
+        );
+        assert_ne!(
+            digest,
+            vacant_root_poststate_digest_v3(&Pubkey::new_unique())
+        );
+        assert_ne!(digest, hash(&[]).to_bytes());
     }
 
     #[test]
@@ -13684,6 +17237,22 @@ mod tests {
     }
 
     #[test]
+    fn projected_observation_marker_is_owned_only_by_variable_prestate() {
+        assert!(prestate_uses_variable_marker_v3(
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        ));
+        for substituted in [
+            AccountPrestateV2::Exact,
+            AccountPrestateV2::LifecycleBound,
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias,
+            AccountPrestateV2::AuthenticatedRouteAlias,
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        ] {
+            assert!(!prestate_uses_variable_marker_v3(substituted));
+        }
+    }
+
+    #[test]
     fn projected_product_tail_count_is_rechecked_after_atomic_account_projection() {
         let rules = [AccountRuleInputV2 {
             privileges: AccountPrivilegesV2::new(false, false, false),
@@ -13742,15 +17311,124 @@ mod tests {
         owner: [u8; 32],
         data: Vec<u8>,
     ) -> AccountInfo<'static> {
+        leaked_account_with_facts(key, owner, 1_000, data, false)
+    }
+
+    fn leaked_account_with_facts(
+        key: [u8; 32],
+        owner: [u8; 32],
+        lamports: u64,
+        data: Vec<u8>,
+        executable: bool,
+    ) -> AccountInfo<'static> {
         AccountInfo::new(
             Box::leak(Box::new(Pubkey::new_from_array(key))),
             false,
             false,
-            Box::leak(Box::new(1_000_u64)),
+            Box::leak(Box::new(lamports)),
             Box::leak(data.into_boxed_slice()),
             Box::leak(Box::new(Pubkey::new_from_array(owner))),
-            false,
+            executable,
         )
+    }
+
+    fn test_runtime_transcript(
+        accounts: &[AccountInfo<'static>],
+        canonical_scratch_coordinates: &[usize],
+    ) -> ContentId {
+        let data = accounts
+            .iter()
+            .map(|account| account.try_borrow_data().expect("readable account"))
+            .collect::<Vec<_>>();
+        let observations = accounts
+            .iter()
+            .zip(&data)
+            .map(|(account, bytes)| {
+                AccountObservationV1::new(
+                    account.key.as_array(),
+                    account.owner.as_array(),
+                    account.lamports(),
+                    bytes.as_ref(),
+                    false,
+                    false,
+                    account.executable,
+                )
+            })
+            .collect::<Vec<_>>();
+        let borrowed = accounts.iter().collect::<Vec<_>>();
+        let canonical = canonical_scratch_coordinates
+            .iter()
+            .map(|coordinate| {
+                borrowed
+                    .get(*coordinate)
+                    .copied()
+                    .expect("canonical coordinate")
+            })
+            .collect::<Vec<_>>();
+        runtime_transcript_digest_v3(&observations, &borrowed, &canonical)
+            .expect("runtime transcript")
+    }
+
+    #[test]
+    fn authenticated_scratch_data_is_the_only_runtime_observation_fact_canonicalized() {
+        let accounts =
+            |scratch_key, scratch_owner, scratch_lamports, scratch_data, executable, other_data| {
+                vec![
+                    leaked_account_with_facts(
+                        scratch_key,
+                        scratch_owner,
+                        scratch_lamports,
+                        scratch_data,
+                        executable,
+                    ),
+                    leaked_readonly_account([0x82; 32], [0x83; 32], other_data),
+                ]
+            };
+        let baseline = test_runtime_transcript(
+            &accounts([0x80; 32], [0x81; 32], 7_000, vec![1, 2, 3], false, vec![4]),
+            &[0],
+        );
+        assert_eq!(
+            baseline,
+            test_runtime_transcript(
+                &accounts(
+                    [0x80; 32],
+                    [0x81; 32],
+                    7_000,
+                    vec![9, 8, 7, 6],
+                    false,
+                    vec![4],
+                ),
+                &[0],
+            ),
+            "the authenticated input-bank digest, not this transcript, commits page bytes"
+        );
+        for substituted in [
+            accounts([0x84; 32], [0x81; 32], 7_000, vec![1], false, vec![4]),
+            accounts([0x80; 32], [0x85; 32], 7_000, vec![1], false, vec![4]),
+            accounts([0x80; 32], [0x81; 32], 7_001, vec![1], false, vec![4]),
+            accounts([0x80; 32], [0x81; 32], 7_000, vec![1], true, vec![4]),
+            accounts([0x80; 32], [0x81; 32], 7_000, vec![1], false, vec![5]),
+        ] {
+            assert_ne!(baseline, test_runtime_transcript(&substituted, &[0]));
+        }
+        let reversed = {
+            let mut value = accounts([0x80; 32], [0x81; 32], 7_000, vec![1], false, vec![4]);
+            value.reverse();
+            value
+        };
+        assert_ne!(
+            baseline,
+            test_runtime_transcript(&reversed, &[1]),
+            "account order remains committed"
+        );
+        let mut expanded = accounts([0x80; 32], [0x81; 32], 7_000, vec![1], false, vec![4]);
+        expanded.push(leaked_readonly_account([0x86; 32], [0x87; 32], vec![6]));
+        assert_ne!(
+            baseline,
+            test_runtime_transcript(&expanded, &[0]),
+            "account geometry remains committed"
+        );
     }
 
     /// Both admitted-AOT observation walks over one bank, compared directly.
@@ -13787,10 +17465,29 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let borrowed = accounts.iter().collect::<Vec<_>>();
+        let inline_bank = [0_u8; 8];
+        let content = |tag| ContentId::new([tag; 32]).expect("nonzero content");
+        let request = AcceleratorRequestV2::new(
+            RequestTransportV2::Inline,
+            content(0x71),
+            content(0x72),
+            content(0x73),
+            content(0x74),
+            content(0x75),
+            1,
+            1,
+            0,
+            0,
+            &inline_bank,
+        )
+        .expect("inline request");
+        let trading_program = Pubkey::new_from_array([0x76; 32]);
 
         let accelerator = accelerator_runtime_observations_digest_v4(
             &accounts,
             &representatives,
+            request,
+            &trading_program,
             projected.selected_config,
             projected.product_root,
             projected.portfolio,
@@ -13823,7 +17520,7 @@ mod tests {
                     )
                 })
                 .collect::<Vec<_>>();
-            runtime_transcript_digest_v3(&observations, &borrowed).expect("Trading transcript")
+            runtime_transcript_digest_v3(&observations, &borrowed, &[]).expect("Trading transcript")
         };
 
         assert_eq!(

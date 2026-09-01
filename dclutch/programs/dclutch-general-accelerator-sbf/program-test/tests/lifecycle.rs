@@ -2,7 +2,10 @@
 
 use std::{collections::BTreeMap, vec, vec::Vec};
 
-use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1,
+    hot_v3::{DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3},
+};
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
 use dclutch_execution_strategy_contract::v2::{
@@ -10,18 +13,21 @@ use dclutch_execution_strategy_contract::v2::{
     AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
     SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
+use dclutch_general_accelerator_sbf::GeneralAcceleratorSbfErrorV3;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
+    artifacts_v3::decode_general_request_v3,
     candidate_v1::{
-        CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateOpeningV1,
-        GeneralCandidateV1, authenticate_candidate_identity_v1, general_candidate_identity_v1,
-        verify_candidate_row_v1,
+        CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateLayoutV1,
+        GeneralCandidateOpeningV1, GeneralCandidateStatusV1, GeneralCandidateV1,
+        authenticate_candidate_identity_v1, general_candidate_identity_v1, verify_candidate_row_v1,
     },
     collection_v1::{
-        EscrowDirectionV1, GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1,
-        GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1,
-        authenticate_batch_candidate_v1, authenticate_order_execution_v1, general_order_len_v1,
+        BatchStatusV1, EscrowDirectionV1, GENERAL_ORDER_ROW_BASE_V1, GeneralBatchOpeningV1,
+        GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, authenticate_batch_candidate_v1,
+        authenticate_order_execution_v1, general_order_len_v1,
     },
     escrow_v1::{
         OrderEscrowObservationV1, OrderEscrowPlanV1, WorkEscrowClosePlanV1, WorkEscrowDrawPlanV1,
@@ -30,8 +36,9 @@ use dclutch_general_adapter_contract::{
         work_escrow_required_lamports_v1,
     },
     hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
-        general_hot_scalar_count_v3, identity, scalar,
+        GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
+        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, general_hot_candidate_bank_len_v3,
+        general_hot_scalar_count_v3, identity, item_scalar, scalar,
     },
     local_state_v3::{
         GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
@@ -54,20 +61,26 @@ use dclutch_general_adapter_contract::{
         execution_len, page_len, settlement_cursor_len, verified_candidate_len,
     },
     state_artifacts_v3::{
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
-        general_readonly_evidence_v3,
+        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        GENERAL_VERIFY_PAYER_ACCOUNT_V3, GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
+        GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
+        GeneralReadonlyEvidenceKindV3, general_readonly_evidence_v3,
     },
 };
 use dclutch_general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::ControllerRequestV2,
+    successor_request_v3::{ControllerActionV3, ControllerRequestV3},
 };
 use dclutch_general_config_contract::{
+    GENERAL_ROOT_BYTES_V2,
     root::GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
 use dclutch_program_test_evidence::{TransactionEvidence, record};
 use solana_account::Account;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -123,6 +136,7 @@ struct RealSbfFixture {
 
 struct TerminalFixture {
     width: u32,
+    candidate: Vec<u8>,
     verifier: Vec<u8>,
     verified: Vec<u8>,
     manifests: Vec<Vec<u8>>,
@@ -135,8 +149,23 @@ struct TerminalFixture {
     batch: GeneralBatchV1,
     /// The order records this batch admitted, in the candidate's row order.
     orders: Vec<Vec<u8>>,
+    /// Exact prestate/evidence/successor tuple for every verified row.
+    verify_steps: Vec<VerifyStepFixture>,
     /// Every balance the escrow moved, carried through the whole campaign.
     escrow: EscrowLedgerV1,
+}
+
+#[derive(Clone)]
+struct VerifyStepFixture {
+    submission_before: GeneralCandidateV1,
+    verifier_before: Vec<u8>,
+    page: Vec<u8>,
+    order: Vec<u8>,
+    manifest: Vec<u8>,
+    submission_after: GeneralCandidateV1,
+    verifier_after: Vec<u8>,
+    verified_after: Vec<u8>,
+    complete: bool,
 }
 
 /// Rent-exempt minimum for one 224-byte submission record, at the current Rent.
@@ -260,7 +289,7 @@ fn config(width: u32) -> Vec<u8> {
 fn config_with_price_scale(price_scale: u64) -> Vec<u8> {
     GeneralConfigV3::new(GeneralConfigV3Input {
         capacity_profile_id: [1; 32],
-        claim_basis_id: [2; 32],
+        claim_basis_id: [5; 32],
         program_set_id: [3; 32],
         generation: 9,
         price_scale,
@@ -327,6 +356,15 @@ fn selection_body(before: &[u8], verified: &[u8], expected_revision: u64) -> Vec
 }
 
 fn local_state(kind: GeneralLocalStateKindV3, width: u32, body: &[u8]) -> Vec<u8> {
+    local_state_with_beneficiary(kind, width, body, BENEFICIARY)
+}
+
+fn local_state_with_beneficiary(
+    kind: GeneralLocalStateKindV3,
+    width: u32,
+    body: &[u8],
+    beneficiary: [u8; 32],
+) -> Vec<u8> {
     let state_len = general_local_state_len_v3(kind, width).expect("local state width");
     let mut scratch = vec![0_u8; state_len];
     let mut output = vec![0_u8; state_len];
@@ -335,7 +373,7 @@ fn local_state(kind: GeneralLocalStateKindV3, width: u32, body: &[u8]) -> Vec<u8
             kind,
             bump: 1,
             rent_principal: 99,
-            beneficiary: BENEFICIARY,
+            beneficiary,
         },
         body,
         &mut scratch,
@@ -423,6 +461,7 @@ fn input_bank(width: u32, action: Action) -> Vec<u8> {
         (identity::RELEASE_SET, [2; 32]),
         (identity::MARKET, [3; 32]),
         (identity::PRODUCT_RECORD_DIGEST, product_id()),
+        (identity::GENERAL_CONFIG_ID, hash(&config(width)).to_bytes()),
         (identity::SEMANTIC_BASIS_ID, [5; 32]),
         (identity::LINKED_BASIS_RECORD_DIGEST, [6; 32]),
         (identity::REALM, [7; 32]),
@@ -493,6 +532,526 @@ fn input_bank(width: u32, action: Action) -> Vec<u8> {
     bank
 }
 
+fn open_batch_bank(width: u32, root: GeneralRootV2) -> Vec<u8> {
+    let config = GeneralConfigV3::decode(&config(width)).expect("General config");
+    let mut bank = input_bank(width, Action::OpenBatch);
+    for (coordinate, value) in [
+        (scalar::CURRENT_SLOT, 1),
+        (scalar::ZERO, u64::from(width)),
+        (scalar::ROOT_EXPECTED_REVISION, root.revision()),
+        (scalar::ROOT_REVISION_OBSERVATION, root.revision()),
+        (
+            scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION,
+            root.next_batch_sequence(),
+        ),
+        (scalar::ROOT_OPEN_BATCHES_OBSERVATION, root.open_batches()),
+        (
+            scalar::ROOT_LIFECYCLE_OBSERVATION,
+            u64::from(root.lifecycle().tag()),
+        ),
+        (scalar::CONFIG_COLLECTION_SLOTS, config.collection_slots()),
+        (scalar::CONFIG_SELECTION_SLOTS, config.selection_slots()),
+        (scalar::CONFIG_SETTLEMENT_SLOTS, config.settlement_slots()),
+        (
+            scalar::CONFIG_MAX_ORDERS,
+            u64::from(config.max_orders_per_candidate()),
+        ),
+        (scalar::SELECTION_PRICE_SCALE, config.price_scale()),
+        (scalar::STATE_BUMP, 1),
+        (scalar::PRIMARY_CANONICAL_BUMP, 1),
+        (scalar::PRIMARY_RENT_PRINCIPAL, 99),
+    ] {
+        write_scalar(&mut bank, coordinate, value);
+    }
+    for (coordinate, value) in [
+        (identity::SELECTION_PRODUCT, product_id()),
+        (identity::PRIMARY_OWNER, CALLER.to_bytes()),
+    ] {
+        write_identity(&mut bank, width, coordinate, value);
+    }
+    bank
+}
+
+fn close_batch_bank(width: u32, root: GeneralRootV2, batch: GeneralBatchV1) -> Vec<u8> {
+    let opening = batch.opening();
+    let state = batch.state();
+    let mut bank = input_bank(width, Action::CloseBatch);
+    for (coordinate, value) in [
+        (
+            scalar::CURRENT_SLOT,
+            opening
+                .collection_close_slot
+                .checked_add(1)
+                .expect("test collection window"),
+        ),
+        (scalar::ZERO, u64::from(width)),
+        (scalar::ROOT_EXPECTED_REVISION, root.revision()),
+        (scalar::ROOT_REVISION_OBSERVATION, root.revision()),
+        (scalar::ROOT_OPEN_BATCHES_OBSERVATION, root.open_batches()),
+        (
+            scalar::ROOT_LIFECYCLE_OBSERVATION,
+            u64::from(root.lifecycle().tag()),
+        ),
+        (
+            scalar::BATCH_STATUS_OBSERVATION,
+            u64::from(state.status.tag()),
+        ),
+        (
+            scalar::BATCH_ORDER_COUNT_OBSERVATION,
+            u64::from(state.order_count),
+        ),
+        (
+            scalar::BATCH_COLLECTION_CLOSE_SLOT,
+            opening.collection_close_slot,
+        ),
+        (scalar::CONFIG_MAX_ORDERS, u64::from(opening.max_orders)),
+        (scalar::STATE_BUMP, 1),
+        (scalar::PRIMARY_CANONICAL_BUMP, 1),
+        (scalar::PRIMARY_RENT_PRINCIPAL, 99),
+    ] {
+        write_scalar(&mut bank, coordinate, value);
+    }
+    for (coordinate, value) in [
+        (identity::SELECTION_PRODUCT, opening.product_id),
+        (identity::PRIMARY_OWNER, CALLER.to_bytes()),
+    ] {
+        write_identity(&mut bank, width, coordinate, value);
+    }
+    bank
+}
+
+/// Make the exact immutable image a maker signs for `PlaceOrder`.
+///
+/// An order account has a fixed 32-byte mutable lifecycle window between its
+/// 160-byte immutable header and its `N` interleaved rows.  The evidence
+/// account deliberately omits that window: Trading creates it at admission,
+/// so accepting a pre-filled state here would let a maker sign a fact the
+/// transition, rather than the maker, owns.  The order identity masks precisely
+/// the same window, making this image and the admitted order join on one id.
+fn signed_order_terms(record: &[u8], width: u32) -> Vec<u8> {
+    let expected_record = general_order_len_v1(width).expect("order record width");
+    assert_eq!(record.len(), expected_record);
+    let mut terms = Vec::with_capacity(
+        GeneralOrderLayoutV1::STATE_PHASE
+            .checked_add(usize::try_from(width).expect("width") * 16)
+            .expect("terms width"),
+    );
+    terms.extend_from_slice(
+        record
+            .get(..GeneralOrderLayoutV1::STATE_PHASE)
+            .expect("immutable header"),
+    );
+    terms.extend_from_slice(
+        record
+            .get(GENERAL_ORDER_ROW_BASE_V1..)
+            .expect("interleaved immutable rows"),
+    );
+    assert_eq!(
+        terms.len(),
+        160 + 16 * usize::try_from(width).expect("width")
+    );
+    terms
+}
+
+/// Build the whole AccountProfile image that PlaceOrder consumes.
+///
+/// The readonly accelerator receives this completed bank from Trading's
+/// authenticated profile; it does not get to reconstruct it from account
+/// order.  Keeping the construction here explicit makes this a real frame
+/// test, including the terms-to-owner/order/child-address joins, rather than a
+/// direct call whose inputs bypass the profile boundary.
+fn place_order_bank(
+    width: u32,
+    root: GeneralRootV2,
+    batch: GeneralBatchV1,
+    order: GeneralOrderV1<'_>,
+    maker: [u8; 32],
+    state_bump: u8,
+    order_bump: u8,
+) -> Vec<u8> {
+    let opening = batch.opening();
+    let state = batch.state();
+    let header = order.header();
+    let order_id = order.order_id();
+    let mut bank = input_bank(width, Action::PlaceOrder);
+    for (coordinate, value) in [
+        (scalar::CURRENT_SLOT, ADMISSION_SLOT),
+        (scalar::ZERO, u64::from(width)),
+        (scalar::SCRATCH_A, u64::from(width)),
+        (
+            scalar::ROOT_LIFECYCLE_OBSERVATION,
+            u64::from(root.lifecycle().tag()),
+        ),
+        (
+            scalar::BATCH_STATUS_OBSERVATION,
+            u64::from(state.status.tag()),
+        ),
+        (
+            scalar::BATCH_ORDER_COUNT_OBSERVATION,
+            u64::from(state.order_count),
+        ),
+        (
+            scalar::BATCH_QUOTE_RESERVE_OBSERVATION,
+            state.committed_quote_reserve,
+        ),
+        (
+            scalar::BATCH_COLLECTION_CLOSE_SLOT,
+            opening.collection_close_slot,
+        ),
+        (
+            scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
+            opening.settlement_close_slot,
+        ),
+        (scalar::CONFIG_MAX_ORDERS, u64::from(opening.max_orders)),
+        (scalar::ORDER_NONCE, header.nonce),
+        (scalar::ORDER_MAX_LOTS, header.max_lots),
+        (
+            scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT,
+            header.max_quote_debit_per_lot,
+        ),
+        (scalar::ORDER_VALID_UNTIL_SLOT, header.valid_until_slot),
+        (scalar::GENERATION, header.generation),
+        (scalar::STATE_BUMP, u64::from(state_bump)),
+        (scalar::PRIMARY_CANONICAL_BUMP, u64::from(state_bump)),
+        (scalar::PRIMARY_RENT_PRINCIPAL, 99),
+        (scalar::TERMINAL_RECORD_BUMP, u64::from(order_bump)),
+        (scalar::TERMINAL_CANONICAL_BUMP, u64::from(order_bump)),
+        (scalar::TERMINAL_RENT_PRINCIPAL, 99),
+        (scalar::CLAIMS_MARKET_REVISION, 7),
+    ] {
+        write_scalar(&mut bank, coordinate, value);
+    }
+    for item in 0..width {
+        let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+        write_scalar(&mut bank, base, u64::from(item));
+        write_scalar(
+            &mut bank,
+            base + item_scalar::CURSOR_INVENTORY,
+            order.receive_per_lot(item).expect("receive row"),
+        );
+        write_scalar(
+            &mut bank,
+            base + item_scalar::QUANTITY,
+            order.deliver_per_lot(item).expect("deliver row"),
+        );
+    }
+    for (coordinate, value) in [
+        (identity::MARKET, root.market()),
+        (identity::GENERAL_CONFIG_ID, root.config_id()),
+        (identity::SELECTION_PRODUCT, opening.product_id),
+        (identity::SELECTION_BATCH, batch.batch_id()),
+        (identity::CANDIDATE, batch.batch_id()),
+        (identity::OWNER, maker),
+        (identity::ORDER, order_id),
+        (identity::PRIMARY_OWNER, CALLER.to_bytes()),
+        (identity::TERMINAL_OWNER, CALLER.to_bytes()),
+        (identity::TERMINAL_BENEFICIARY_OBSERVATION, maker),
+        (identity::DESTINATION_VAULT_CONTEXT, order_id),
+        (identity::CUSTODY_SOURCE_OWNER, maker),
+        (identity::POSITION_ZERO_OWNER, maker),
+        (identity::POSITION_ONE_OWNER, order_id),
+        (identity::SETTLEMENT_POSITION_OWNER, order_id),
+        (identity::RENT_CREDIT, maker),
+        (identity::TRADING_PROGRAM, CALLER.to_bytes()),
+    ] {
+        write_identity(&mut bank, width, coordinate, value);
+    }
+    bank
+}
+
+/// Build the complete AccountProfile image for a candidate submission.
+///
+/// The three evidence accounts below are deliberately projected into this bank
+/// rather than recreated by the evaluator: the accelerator must authenticate
+/// the records and then prove that every projected fact describes the same
+/// closed batch, candidate image, solver and exact work escrow.
+fn submit_candidate_bank(
+    width: u32,
+    root: GeneralRootV2,
+    batch: GeneralBatchV1,
+    candidate: CandidateV2<'_>,
+    submission: GeneralCandidateV1,
+    state_bump: u8,
+    rent_principal: u64,
+    current_slot: u64,
+) -> Vec<u8> {
+    let opening = batch.opening();
+    let batch_state = batch.state();
+    let candidate_header = candidate.header();
+    let submitted_opening = submission.opening();
+    let submitted_state = submission.state();
+    let mut bank = input_bank(width, Action::SubmitCandidate);
+    for (coordinate, value) in [
+        (scalar::CURRENT_SLOT, current_slot),
+        (scalar::ZERO, u64::from(width)),
+        (
+            scalar::ROOT_LIFECYCLE_OBSERVATION,
+            u64::from(root.lifecycle().tag()),
+        ),
+        (
+            scalar::BATCH_STATUS_OBSERVATION,
+            u64::from(batch_state.status.tag()),
+        ),
+        (
+            scalar::BATCH_POST_ORDER_COUNT,
+            u64::from(opening.outcome_count),
+        ),
+        (
+            scalar::BATCH_COLLECTION_CLOSE_SLOT,
+            opening.collection_close_slot,
+        ),
+        (
+            scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
+            opening.settlement_close_slot,
+        ),
+        (scalar::ORDER_MAX_LOTS, opening.price_scale),
+        (
+            scalar::CANDIDATE_PAGE_COUNT,
+            u64::from(candidate_header.page_count),
+        ),
+        (
+            scalar::SELECTION_BEST_CANDIDATE_COORDINATE,
+            u64::from(candidate_header.candidate_coordinate),
+        ),
+        (scalar::SELECTION_PRICE_SCALE, candidate_header.price_scale),
+        (
+            scalar::VERIFY_POST_ORDER_COUNT,
+            u64::from(submitted_opening.outcome_count),
+        ),
+        (
+            scalar::VERIFY_POST_PAGE,
+            u64::from(submitted_opening.page_count),
+        ),
+        (
+            scalar::CANDIDATE_STATUS_OBSERVATION,
+            u64::from(submitted_state.status.tag()),
+        ),
+        (
+            scalar::CANDIDATE_PAGE_REVISION,
+            submitted_opening.page_revision,
+        ),
+        (
+            scalar::CANDIDATE_SUBMITTED_SLOT,
+            submitted_opening.submitted_slot,
+        ),
+        (
+            scalar::CANDIDATE_ROW_COUNT,
+            u64::from(submitted_opening.row_count),
+        ),
+        (
+            scalar::CANDIDATE_REWARD_RATE,
+            submitted_opening.reward_rate_lamports,
+        ),
+        (
+            scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION,
+            submitted_state.verification_remaining,
+        ),
+        (
+            scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION,
+            submitted_state.cleanup_remaining,
+        ),
+        (scalar::PRIMARY_BUMP_OBSERVATION, 0),
+        (scalar::PRIMARY_PRINCIPAL_OBSERVATION, 0),
+        (scalar::PRIMARY_CREATED, 1),
+        (scalar::STATE_BUMP, u64::from(state_bump)),
+        (scalar::PRIMARY_CANONICAL_BUMP, u64::from(state_bump)),
+        (scalar::PRIMARY_RENT_PRINCIPAL, rent_principal),
+    ] {
+        write_scalar(&mut bank, coordinate, value);
+    }
+    for item in 0..width {
+        let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+        write_scalar(&mut bank, base + item_scalar::OUTCOME, u64::from(item));
+    }
+    for (coordinate, value) in [
+        (identity::MARKET, root.market()),
+        (identity::GENERAL_CONFIG_ID, root.config_id()),
+        (identity::CANDIDATE, candidate_header.candidate_id),
+        (
+            identity::BEST_VERIFIED_DIGEST,
+            candidate_header.candidate_id,
+        ),
+        (identity::ORDER, candidate_header.product_id),
+        (identity::SELECTION_POLICY, candidate_header.batch_id),
+        (identity::SELECTION_PRODUCT, opening.product_id),
+        // AccountProfile's ProjectKey sees the evidence account key here.  The
+        // semantic projector replaces it with the authenticated batch id.
+        (identity::SELECTION_BATCH, [0x73; 32]),
+        (
+            identity::RESULT_BENEFICIARY_OBSERVATION,
+            submitted_opening.candidate_id,
+        ),
+        (identity::BENEFICIARY, submitted_opening.batch_id),
+        (identity::OWNER, submitted_opening.solver_id),
+        (identity::PRIMARY_BENEFICIARY_OBSERVATION, [0; 32]),
+        (identity::PRIMARY_BENEFICIARY, submitted_opening.solver_id),
+        (identity::PRIMARY_OWNER, CALLER.to_bytes()),
+        (identity::TRADING_PROGRAM, CALLER.to_bytes()),
+        (identity::GENERAL_ROOT, [12; 32]),
+        (identity::RESULT_OWNER, system_program::ID.to_bytes()),
+    ] {
+        write_identity(&mut bank, width, coordinate, value);
+    }
+    bank
+}
+
+fn verify_candidate_bank(
+    width: u32,
+    submission: GeneralCandidateV1,
+    page_index: u32,
+    row_index: u32,
+) -> Vec<u8> {
+    let principal = 99_u64;
+    let mut bank = input_bank(width, Action::VerifyCandidateRow);
+    for (coordinate, value) in [
+        (scalar::ROOT_EXPECTED_REVISION, u64::from(page_index)),
+        (scalar::COMPLETE_SET_MOVE, u64::from(page_index)),
+        (scalar::CLAIMS_AFFINE_ACTIVE, u64::from(row_index)),
+        (
+            scalar::ROOT_LIFECYCLE_OBSERVATION,
+            u64::from(dclutch_general_config_contract::root::GeneralLifecycleV2::Active.tag()),
+        ),
+        (scalar::PRIMARY_PRINCIPAL_OBSERVATION, principal),
+        (
+            scalar::OBSERVED_POSITION_LAMPORTS,
+            principal
+                + submission.state().verification_remaining
+                + submission.state().cleanup_remaining,
+        ),
+    ] {
+        write_scalar(&mut bank, coordinate, value);
+    }
+    for (coordinate, value) in [
+        (
+            identity::PARENT_REQUEST_DIGEST,
+            submission.opening().candidate_id,
+        ),
+        (identity::PAYER, [0xf3; 32]),
+        (identity::TRADING_PROGRAM, CALLER.to_bytes()),
+    ] {
+        write_identity(&mut bank, width, coordinate, value);
+    }
+    bank
+}
+
+fn close_candidate_bank(
+    width: u32,
+    batch: GeneralBatchV1,
+    submission: GeneralCandidateV1,
+    current_slot: u64,
+) -> Vec<u8> {
+    let opening = submission.opening();
+    let state = submission.state();
+    let rent_principal = 99_u64;
+    let mut bank = input_bank(width, Action::CloseCandidate);
+    for (coordinate, value) in [
+        (scalar::ACTION, u64::from(Action::CloseCandidate as u8)),
+        (scalar::CURRENT_SLOT, current_slot),
+        (
+            scalar::ROOT_LIFECYCLE_OBSERVATION,
+            u64::from(dclutch_general_config_contract::root::GeneralLifecycleV2::Active.tag()),
+        ),
+        (
+            scalar::CANDIDATE_STATUS_OBSERVATION,
+            u64::from(state.status.tag()),
+        ),
+        (
+            scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION,
+            state.verification_remaining,
+        ),
+        (
+            scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION,
+            state.cleanup_remaining,
+        ),
+        (scalar::CANDIDATE_REWARD_RATE, opening.reward_rate_lamports),
+        (
+            scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
+            batch.opening().settlement_close_slot,
+        ),
+        (
+            scalar::BATCH_STATUS_OBSERVATION,
+            u64::from(batch.state().status.tag()),
+        ),
+        (scalar::PRIMARY_PRINCIPAL_OBSERVATION, rent_principal),
+        (scalar::PRIMARY_RENT_PRINCIPAL, rent_principal),
+        (
+            scalar::OBSERVED_POSITION_LAMPORTS,
+            rent_principal + state.verification_remaining + state.cleanup_remaining,
+        ),
+        (scalar::OBSERVED_ADMISSION_LAMPORTS, 300),
+        (scalar::ESCROW_BALANCE_OBSERVATION, 400),
+    ] {
+        write_scalar(&mut bank, coordinate, value);
+    }
+    for (coordinate, value) in [
+        (identity::PARENT_REQUEST_DIGEST, opening.candidate_id),
+        (identity::CANDIDATE, opening.candidate_id),
+        (identity::SELECTION_BATCH, opening.batch_id),
+        (identity::OWNER, opening.solver_id),
+        (identity::RENT_CREDIT, opening.solver_id),
+        (identity::PRIMARY_BENEFICIARY_OBSERVATION, opening.solver_id),
+        (identity::PRIMARY_BENEFICIARY, opening.solver_id),
+        (identity::PAYER, [0xf4; 32]),
+    ] {
+        write_identity(&mut bank, width, coordinate, value);
+    }
+    bank
+}
+
+fn submitted_candidate_for_close(width: u32) -> (GeneralBatchV1, GeneralCandidateV1) {
+    let config_id = hash(&config(width)).to_bytes();
+    let mut root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
+    let opening = GeneralBatchOpeningV1 {
+        outcome_count: width,
+        sequence: root.next_batch_sequence(),
+        generation: 9,
+        market: root.market(),
+        product_id: product_id(),
+        config_id,
+        price_scale: u64::from(width),
+        collection_close_slot: 11,
+        settlement_close_slot: 31,
+        max_orders: 4,
+    };
+    let revision = root.revision();
+    let mut batch =
+        GeneralBatchV1::open(&mut root, opening, revision, ADMISSION_SLOT).expect("opened batch");
+    let revision = root.revision();
+    batch
+        .close(&mut root, revision)
+        .expect("closed candidate batch");
+    let count = usize::try_from(width).expect("test width");
+    let mut prices = vec![0_u64; count];
+    prices[0] = u64::from(width);
+    let mut candidate_bytes = vec![0_u8; candidate_len(width).expect("candidate width")];
+    let mut header = CandidateHeaderV2 {
+        outcome_count: width,
+        page_count: 1,
+        candidate_coordinate: 1,
+        price_scale: u64::from(width),
+        candidate_id: [0x71; 32],
+        product_id: product_id(),
+        batch_id: batch.batch_id(),
+    };
+    CandidateV2::encode_into(header, &prices, &mut candidate_bytes).expect("candidate draft");
+    header.candidate_id =
+        general_candidate_identity_v1(&candidate_bytes).expect("candidate identity");
+    CandidateV2::encode_into(header, &prices, &mut candidate_bytes).expect("candidate image");
+    let work_capacity = (u64::from(width) + 2) * CRANK_REWARD_LAMPORTS;
+    let submission = GeneralCandidateV1::submit(
+        batch,
+        CandidateV2::decode(&candidate_bytes).expect("candidate"),
+        CANDIDATE_PAGE_REVISION,
+        width,
+        CRANK_REWARD_LAMPORTS,
+        SOLVER,
+        work_capacity,
+        12,
+    )
+    .expect("submitted candidate");
+    (batch, submission)
+}
+
 fn page_key(index: u32) -> Pubkey {
     let byte =
         u8::try_from(index.checked_add(1).expect("page key")).expect("bounded test page count");
@@ -511,7 +1070,50 @@ fn real_sbf_fixture(
     width: u32,
     controller: ControllerRequestV2,
     bank: Vec<u8>,
+    runtime_data: BTreeMap<u16, Vec<u8>>,
+) -> RealSbfFixture {
+    real_sbf_fixture_wire(
+        width,
+        controller.action,
+        controller.to_bytes().expect("controller request"),
+        bank,
+        runtime_data,
+    )
+}
+
+fn real_sbf_fixture_v3(
+    width: u32,
+    controller: ControllerRequestV3,
+    bank: Vec<u8>,
+    runtime_data: BTreeMap<u16, Vec<u8>>,
+) -> RealSbfFixture {
+    let action = controller.action.legacy().expect("legacy General action");
+    real_sbf_fixture_wire(
+        width,
+        action,
+        controller.to_bytes().expect("controller request"),
+        bank,
+        runtime_data,
+    )
+}
+
+fn real_sbf_fixture_wire(
+    width: u32,
+    action: Action,
+    family_request: [u8; 64],
+    bank: Vec<u8>,
+    runtime_data: BTreeMap<u16, Vec<u8>>,
+) -> RealSbfFixture {
+    real_sbf_fixture_wire_chunk(width, action, family_request, bank, runtime_data, 0)
+}
+
+fn real_sbf_fixture_wire_chunk(
+    width: u32,
+    action: Action,
+    family_request: [u8; 64],
+    bank: Vec<u8>,
     mut runtime_data: BTreeMap<u16, Vec<u8>>,
+    output_chunk: u32,
 ) -> RealSbfFixture {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -529,7 +1131,6 @@ fn real_sbf_fixture(
         .entry(2)
         .or_insert_with(|| PRODUCT_RECORD.to_vec());
 
-    let family_request = controller.to_bytes().expect("controller request");
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(family_request.len()).expect("family width"),
         [0xd1; 32],
@@ -553,7 +1154,7 @@ fn real_sbf_fixture(
         width,
         scalar_count,
         GENERAL_HOT_COMMON_IDENTITIES_V3,
-        0,
+        output_chunk,
         &[],
     )
     .expect("accelerator request");
@@ -605,9 +1206,8 @@ fn real_sbf_fixture(
         page_keys.push(key);
     }
 
-    let fixed_count = usize::from(
-        general_account_profile_fixed_count_v3(controller.action).expect("account geometry"),
-    );
+    let fixed_count =
+        usize::from(general_account_profile_fixed_count_v3(action).expect("account geometry"));
     // The runtime coordinates start where the contract says they start. This
     // read `18` until 2026-08-29, which is the same defect class as the frame
     // count asserted in `assert_execution_evidence`: a restated constant is one
@@ -618,7 +1218,7 @@ fn real_sbf_fixture(
     *frame.get_mut(5).expect("Trading frame") = CALLER;
     let mut observed_accounts = Vec::with_capacity(runtime_data.len());
     for (coordinate, data) in runtime_data {
-        let key = runtime_key(controller.action, coordinate);
+        let key = runtime_key(action, coordinate);
         add_account(&mut test, key, CALLER, data.clone());
         *frame
             .get_mut(ADMITTED_RUNTIME_ACCOUNTS_START_V3 + usize::from(coordinate))
@@ -649,12 +1249,27 @@ fn real_sbf_fixture(
         // back as a typed ack on a SUCCEEDING transaction, and binding on a
         // disposition the census cannot see would be a label asserting
         // something its own evidence does not carry.
-        label: format!(
-            "general accelerator {:?} at runtime width {width}",
-            controller.action
-        ),
+        label: format!("general accelerator {:?} at runtime width {width}", action),
         recorded: width == 1,
     }
+}
+
+fn real_sbf_fixture_v3_chunk(
+    width: u32,
+    controller: ControllerRequestV3,
+    bank: Vec<u8>,
+    runtime_data: BTreeMap<u16, Vec<u8>>,
+    output_chunk: u32,
+) -> RealSbfFixture {
+    let action = controller.action.legacy().expect("legacy General action");
+    real_sbf_fixture_wire_chunk(
+        width,
+        action,
+        controller.to_bytes().expect("controller request"),
+        bank,
+        runtime_data,
+        output_chunk,
+    )
 }
 
 async fn submit(
@@ -662,6 +1277,7 @@ async fn submit(
     instruction: Instruction,
     label: &str,
     recorded: bool,
+    declare_general_heap: bool,
 ) -> Result<
     (
         solana_program_test::BanksTransactionResultWithMetadata,
@@ -672,8 +1288,14 @@ async fn submit(
 > {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let instruction_accounts = instruction.accounts.len();
+    let heap_frame = ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1);
+    let instructions = if declare_general_heap {
+        vec![heap_frame, instruction]
+    } else {
+        vec![instruction]
+    };
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &instructions,
         Some(&context.payer.pubkey()),
         &[&context.payer],
         blockhash,
@@ -740,7 +1362,7 @@ async fn execute(
     let request = AcceleratorRequestV2::decode(&fixture.request_bytes).expect("request decode");
     let (_, family_request) =
         HotExecutionEnvelopeV3::split_instruction(&fixture.instruction.data).expect("Hot request");
-    let controller = ControllerRequestV2::decode(family_request).expect("controller request");
+    let controller = decode_general_request_v3(family_request).expect("controller request");
     let request_digest =
         ContentId::new(hash(&fixture.request_bytes).to_bytes()).expect("request digest");
     let observed = fixture.observed_accounts;
@@ -750,6 +1372,7 @@ async fn execute(
         fixture.instruction,
         &fixture.label,
         fixture.recorded,
+        true,
     )
     .await
     .expect("ProgramTest processing");
@@ -798,6 +1421,73 @@ fn read_payload_scalar(payload: &[u8], coordinate: u32) -> u64 {
             .try_into()
             .expect("u64 bytes"),
     )
+}
+
+fn read_chunk_scalar(ack: AcceleratorAckV2<'_>, chunk: u32, coordinate: u32) -> u64 {
+    let chunk_start = usize::try_from(chunk)
+        .expect("chunk")
+        .checked_mul(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2)
+        .expect("chunk offset");
+    let scalar_start = usize::try_from(coordinate)
+        .expect("scalar")
+        .checked_mul(8)
+        .expect("scalar offset");
+    let local = scalar_start
+        .checked_sub(chunk_start)
+        .expect("scalar belongs to requested chunk");
+    u64::from_le_bytes(
+        ack.payload()
+            .get(local..local + 8)
+            .expect("complete scalar in chunk")
+            .try_into()
+            .expect("scalar bytes"),
+    )
+}
+
+async fn read_v3_identity(
+    width: u32,
+    controller: ControllerRequestV3,
+    bank: Vec<u8>,
+    runtime: BTreeMap<u16, Vec<u8>>,
+    coordinate: u32,
+) -> [u8; 32] {
+    let scalar_bytes = usize::try_from(general_hot_scalar_count_v3(width).expect("scalar count"))
+        .expect("count")
+        * 8;
+    let byte = scalar_bytes + usize::try_from(coordinate).expect("identity") * 32;
+    let page = u32::try_from(byte / ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2).expect("identity page");
+    let (ack, _, _) = execute(real_sbf_fixture_v3_chunk(
+        width,
+        controller,
+        bank.clone(),
+        runtime.clone(),
+        page,
+    ))
+    .await;
+    assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+    let page_start = usize::try_from(page).expect("page") * ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2;
+    let local = byte.checked_sub(page_start).expect("identity page offset");
+    let first = (ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2 - local).min(32);
+    let mut observed = [0_u8; 32];
+    observed[..first].copy_from_slice(
+        ack.payload()
+            .get(local..local + first)
+            .expect("identity prefix"),
+    );
+    if first < observed.len() {
+        let tail_len = observed.len() - first;
+        let (tail, _, _) = execute(real_sbf_fixture_v3_chunk(
+            width,
+            controller,
+            bank,
+            runtime,
+            page.checked_add(1).expect("identity tail page"),
+        ))
+        .await;
+        assert_eq!(tail.disposition(), AcceleratorDispositionV2::Accepted);
+        observed[first..].copy_from_slice(tail.payload().get(..tail_len).expect("identity suffix"));
+    }
+    observed
 }
 
 fn evidence_coordinate(action: Action, kind: GeneralReadonlyEvidenceKindV3) -> u16 {
@@ -1132,6 +1822,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
     let mut cursor = vec![0_u8; cursor_len];
     let mut verified = zero_verified.clone();
     let mut manifests = Vec::new();
+    let mut verify_steps = Vec::new();
     for (index, (row, terms)) in rows.iter().enumerate() {
         let page_coordinate = u32::try_from(index).expect("page index") + 1;
         let mut page = vec![0_u8; page_len(width, 1).expect("page width")];
@@ -1163,13 +1854,16 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         // revision the submission pinned, authenticates the row against the
         // ESCROWED order record it names, and pays one crank out of the
         // candidate's own work escrow.
+        let submission_before = submission;
+        let verifier_before = cursor.clone();
+        let order = order_bytes_for(&placed, index).to_vec();
         let summary = verify_candidate_row_v1(
             CandidateVerifyRowViewV1 {
                 batch,
                 submission,
                 candidate: &candidate,
                 page: &page,
-                order: order_bytes_for(&placed, index),
+                order: &order,
                 cursor_before: &cursor,
                 verified_before: &zero_verified,
                 expected_page_index: u32::try_from(index).expect("page index"),
@@ -1214,6 +1908,17 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
                 .expect("order")
                 .terms()
         );
+        verify_steps.push(VerifyStepFixture {
+            submission_before,
+            verifier_before,
+            page: page.clone(),
+            order,
+            manifest: manifest_output.clone(),
+            submission_after: summary.submission,
+            verifier_after: cursor_output.clone(),
+            verified_after: verified_output.clone(),
+            complete: summary.complete,
+        });
         submission = summary.submission;
         cursor = cursor_output;
         if manifest_count != 0 {
@@ -1224,10 +1929,13 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         }
     }
     assert_eq!(manifests.len(), 2);
-    // Two rows paid, and the remainder is what the consideration is for.
-    submission
-        .record_verified(batch, &verified)
-        .expect("the certificate this verification produced");
+    // The terminal verifier row records the certificate atomically with the
+    // terminal cursor and Result production; no second record transition is
+    // permitted here.
+    assert_eq!(
+        submission.state().status,
+        GeneralCandidateStatusV1::Verified
+    );
     assert_eq!(
         submission.state().verification_remaining,
         CRANK_REWARD_LAMPORTS
@@ -1238,6 +1946,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         .expect("the verified submission still holds exactly what it owes");
     TerminalFixture {
         width,
+        candidate,
         verifier: cursor,
         verified,
         manifests,
@@ -1245,6 +1954,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         submission,
         batch,
         orders: placed.iter().map(|(bytes, _)| bytes.clone()).collect(),
+        verify_steps,
         escrow: ledger,
     }
 }
@@ -1551,7 +2261,8 @@ fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcom
         ))
         .saturating_add(usize::try_from(evidence.scratch_pages).expect("scratch page span"));
     assert_eq!(
-        evidence.instruction_accounts, expected_accounts,
+        evidence.instruction_accounts,
+        expected_accounts,
         "{action:?} at N={outcome_count} built a {}-account frame; the profile derives {expected_accounts} \
          (2 + start {ADMITTED_RUNTIME_ACCOUNTS_START_V3} + fixed {} + scratch pages {}). \
          If the frame legitimately moved, re-run the campaign and move the evidence document with it -- \
@@ -1688,6 +2399,1014 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
                 .best_candidate_id,
             BEST_CANDIDATE
         );
+    }
+}
+
+#[tokio::test]
+async fn real_sbf_open_batch_advances_the_real_root_and_materializes_batch_facts() {
+    for width in [1_u32, 258] {
+        let config_id = hash(&config(width)).to_bytes();
+        let root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
+        let mut root_data = vec![0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + GENERAL_ROOT_BYTES_V2];
+        root_data[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(&root.to_bytes());
+        let mut runtime = BTreeMap::new();
+        runtime.insert(0, root_data);
+        runtime.insert(1, config(width));
+        runtime.insert(2, PRODUCT_RECORD.to_vec());
+        let mut preflight_root = root;
+        let preflight_revision = preflight_root.revision();
+        let batch_id = GeneralBatchV1::open(
+            &mut preflight_root,
+            GeneralBatchOpeningV1 {
+                outcome_count: width,
+                sequence: root.next_batch_sequence(),
+                generation: 9,
+                market: [3; 32],
+                product_id: product_id(),
+                config_id,
+                price_scale: u64::from(width),
+                collection_close_slot: 11,
+                settlement_close_slot: 31,
+                max_orders: 4,
+            },
+            preflight_revision,
+            1,
+        )
+        .expect("preflight batch")
+        .batch_id();
+        let controller = ControllerRequestV3 {
+            action: ControllerActionV3::OpenBatch,
+            expected_revision: root.revision(),
+            subject_id: Some(batch_id),
+            page_index: 0,
+            execution_index: 0,
+            manifest_order_index: 0,
+            primary_state_bump: 1,
+            secondary_state_bump: 0,
+            result_state_bump: 0,
+        };
+        let (ack, _, evidence) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            open_batch_bank(width, root),
+            runtime,
+        ))
+        .await;
+        assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_eq!(read_payload_scalar(ack.payload(), scalar::ACTION), 7);
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ROOT_POST_REVISION),
+            2
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ROOT_POST_BATCH_SEQUENCE),
+            1
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ROOT_POST_OPEN_BATCHES),
+            1
+        );
+        assert_execution_evidence(evidence, Action::OpenBatch, width);
+    }
+}
+
+#[tokio::test]
+async fn real_sbf_close_batch_closes_the_real_root_and_batch_after_the_collection_window() {
+    for width in [1_u32, 258] {
+        let config_id = hash(&config(width)).to_bytes();
+        let mut root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
+        let open_revision = root.revision();
+        let batch_sequence = root.next_batch_sequence();
+        let batch = GeneralBatchV1::open(
+            &mut root,
+            GeneralBatchOpeningV1 {
+                outcome_count: width,
+                sequence: batch_sequence,
+                generation: 9,
+                market: [3; 32],
+                product_id: product_id(),
+                config_id,
+                price_scale: u64::from(width),
+                collection_close_slot: 11,
+                settlement_close_slot: 31,
+                max_orders: 4,
+            },
+            open_revision,
+            1,
+        )
+        .expect("open batch");
+        assert_eq!(root.revision(), 2);
+        assert_eq!(root.open_batches(), 1);
+        assert_eq!(batch.state().status, BatchStatusV1::Collecting);
+
+        let mut expected_root = root;
+        let mut expected_batch = batch;
+        let close_revision = expected_root.revision();
+        expected_batch
+            .close(&mut expected_root, close_revision)
+            .expect("semantic close poststate");
+        assert_eq!(expected_root.revision(), 3);
+        assert_eq!(expected_root.open_batches(), 0);
+        assert_eq!(expected_batch.state().status, BatchStatusV1::Closed);
+        assert_eq!(expected_batch.state().closed_root_revision, 3);
+
+        let mut root_data = vec![0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + GENERAL_ROOT_BYTES_V2];
+        root_data[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(&root.to_bytes());
+        let mut runtime = BTreeMap::new();
+        runtime.insert(0, root_data);
+        runtime.insert(1, config(width));
+        runtime.insert(2, PRODUCT_RECORD.to_vec());
+        runtime.insert(
+            GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+            local_state(GeneralLocalStateKindV3::Batch, width, &batch.to_bytes()),
+        );
+        let controller = ControllerRequestV3 {
+            action: ControllerActionV3::CloseBatch,
+            expected_revision: root.revision(),
+            subject_id: Some(batch.batch_id()),
+            page_index: 0,
+            execution_index: 0,
+            manifest_order_index: 0,
+            primary_state_bump: 1,
+            secondary_state_bump: 0,
+            result_state_bump: 0,
+        };
+        let (ack, _, evidence) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            close_batch_bank(width, root, batch),
+            runtime,
+        ))
+        .await;
+        assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ACTION),
+            u64::from(Action::CloseBatch as u8)
+        );
+        let projected_revision = read_payload_scalar(ack.payload(), scalar::ROOT_POST_REVISION);
+        assert_eq!(projected_revision, expected_root.revision());
+        // CloseBatch's effect writes this same authoritative register into the
+        // batch record's `closed_root_revision`; there is deliberately no
+        // parallel candidate coordinate that could disagree with the root.
+        assert_eq!(
+            projected_revision,
+            expected_batch.state().closed_root_revision
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ROOT_POST_OPEN_BATCHES),
+            expected_root.open_batches()
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::BATCH_POST_STATUS),
+            u64::from(expected_batch.state().status.tag())
+        );
+        assert_execution_evidence(evidence, Action::CloseBatch, width);
+    }
+}
+
+#[tokio::test]
+async fn real_sbf_place_order_admits_canonical_signed_terms_at_runtime_widths() {
+    for width in [1_u32, 258] {
+        let config_id = hash(&config(width)).to_bytes();
+        let mut root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
+        let opening = GeneralBatchOpeningV1 {
+            outcome_count: width,
+            sequence: root.next_batch_sequence(),
+            generation: 9,
+            market: [3; 32],
+            product_id: product_id(),
+            config_id,
+            price_scale: u64::from(width),
+            collection_close_slot: 11,
+            settlement_close_slot: 31,
+            max_orders: 4,
+        };
+        let open_revision = root.revision();
+        let batch = GeneralBatchV1::open(&mut root, opening, open_revision, ADMISSION_SLOT)
+            .expect("opened batch");
+        let (maker_key, _) = Pubkey::find_program_address(
+            &[GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1],
+            &CALLER,
+        );
+        let maker = maker_key.to_bytes();
+        let count = usize::try_from(width).expect("width");
+        let receive = vec![1_u64; count];
+        let deliver = vec![2_u64; count];
+        let mut order_bytes = vec![0_u8; general_order_len_v1(width).expect("order width")];
+        GeneralOrderV1::encode_into(
+            GeneralOrderHeaderV1 {
+                outcome_count: width,
+                nonce: 41,
+                owner_id: maker,
+                market: root.market(),
+                batch_id: batch.batch_id(),
+                generation: root.generation(),
+                max_lots: 2,
+                max_quote_debit_per_lot: 3,
+                valid_until_slot: batch.opening().settlement_close_slot,
+            },
+            &receive,
+            &deliver,
+            GeneralOrderStateV1 {
+                phase: GeneralOrderPhaseV1::Placed,
+                admitted_slot: ADMISSION_SLOT,
+                released_slot: 0,
+            },
+            &mut order_bytes,
+        )
+        .expect("canonical order");
+        let order = GeneralOrderV1::decode(&order_bytes).expect("canonical order decodes");
+        let order_id = order.order_id();
+        let terms = signed_order_terms(&order_bytes, width);
+        assert_eq!(terms.len(), 160 + 16 * count);
+        assert_eq!(&terms[..160], &order_bytes[..160]);
+        assert_eq!(&terms[160..], &order_bytes[192..]);
+
+        // This is the semantic successor the read-only ELF must project.  The
+        // bank below carries only AccountProfile facts; no hand-written output
+        // is trusted as the expected admission.
+        let mut expected_batch = batch;
+        let escrow = expected_batch
+            .admit(
+                order,
+                MakerFundingV1 {
+                    owner_id: maker,
+                    available_quote: order.quote_reserve().expect("quote reserve"),
+                    available_claims: &vec![4; count],
+                },
+                ADMISSION_SLOT,
+            )
+            .expect("semantic admission");
+        assert_eq!(escrow.quote_atoms, 6);
+        assert_eq!(expected_batch.state().order_count, 1);
+
+        let mut root_data = vec![0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + GENERAL_ROOT_BYTES_V2];
+        root_data[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(&root.to_bytes());
+        let mut runtime = BTreeMap::new();
+        runtime.insert(0, root_data);
+        runtime.insert(1, config(width));
+        runtime.insert(2, PRODUCT_RECORD.to_vec());
+        runtime.insert(
+            GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+            local_state(GeneralLocalStateKindV3::Batch, width, &batch.to_bytes()),
+        );
+        // The secondary state is deliberately vacant.  Its future state
+        // window is not part of the signed evidence above.
+        runtime.insert(GENERAL_TERMINAL_STATE_ACCOUNT_V3, Vec::new());
+        runtime.insert(
+            evidence_coordinate(
+                Action::PlaceOrder,
+                GeneralReadonlyEvidenceKindV3::OrderTerms,
+            ),
+            terms,
+        );
+        let controller = ControllerRequestV3 {
+            action: ControllerActionV3::PlaceOrder,
+            // Admission mutates the batch, not the root, so V3 makes this
+            // cursor canonically zero even though the active root is still
+            // independently joined by the AccountProfile image.
+            expected_revision: 0,
+            subject_id: Some(order_id),
+            page_index: 0,
+            execution_index: 0,
+            manifest_order_index: 0,
+            primary_state_bump: 1,
+            secondary_state_bump: 1,
+            result_state_bump: 0,
+        };
+        let bank = place_order_bank(width, root, batch, order, maker, 1, 1);
+        let (ack, _, evidence) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            bank.clone(),
+            runtime.clone(),
+        ))
+        .await;
+        assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_execution_evidence(evidence, Action::PlaceOrder, width);
+        let (detail_ack, _, _) = execute(real_sbf_fixture_v3_chunk(
+            width,
+            controller,
+            bank.clone(),
+            runtime.clone(),
+            1,
+        ))
+        .await;
+        assert_eq!(detail_ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ACTION),
+            u64::from(Action::PlaceOrder as u8)
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::BATCH_POST_ORDER_COUNT),
+            u64::from(expected_batch.state().order_count)
+        );
+        assert_eq!(
+            read_chunk_scalar(detail_ack, 1, scalar::BATCH_POST_QUOTE_RESERVE),
+            expected_batch.state().committed_quote_reserve
+        );
+        assert_eq!(
+            read_chunk_scalar(detail_ack, 1, scalar::ORDER_QUOTE_RESERVE),
+            escrow.quote_atoms
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::CUSTODY_AMOUNT),
+            escrow.quote_atoms
+        );
+        assert_eq!(
+            read_chunk_scalar(detail_ack, 1, scalar::ORDER_POST_PHASE),
+            u64::from(GeneralOrderPhaseV1::Placed.tag())
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::CURRENT_SLOT),
+            ADMISSION_SLOT
+        );
+        assert_eq!(
+            read_chunk_scalar(detail_ack, 1, scalar::ORDER_POST_RELEASED_SLOT),
+            0
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::CLAIMS_POST_MARKET_REVISION),
+            8
+        );
+
+        // The first output page ends before the runtime-width Claims rows.
+        // Read every page that contains an emitted row, so N=258 checks all
+        // 258 exact per-item reserves from the ELF rather than one convenient
+        // prefix item.
+        let mut row_acks = BTreeMap::new();
+        for outcome in 0..width {
+            for coordinate in [
+                GENERAL_HOT_COMMON_SCALARS_V3
+                    + outcome * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
+                    + item_scalar::CLAIMS_SOURCE_MAGNITUDE,
+                GENERAL_HOT_COMMON_SCALARS_V3
+                    + outcome * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
+                    + item_scalar::CLAIMS_DESTINATION_MAGNITUDE,
+            ] {
+                let byte = usize::try_from(coordinate).expect("coordinate") * 8;
+                let page =
+                    u32::try_from(byte / ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2).expect("output page");
+                if !row_acks.contains_key(&page) {
+                    let (row_ack, _, _) = execute(real_sbf_fixture_v3_chunk(
+                        width,
+                        controller,
+                        bank.clone(),
+                        runtime.clone(),
+                        page,
+                    ))
+                    .await;
+                    assert_eq!(row_ack.disposition(), AcceleratorDispositionV2::Accepted);
+                    row_acks.insert(page, row_ack);
+                }
+            }
+        }
+        for outcome in 0..width {
+            let claim = order.claim_reserve(outcome).expect("claim reserve");
+            for coordinate in [
+                GENERAL_HOT_COMMON_SCALARS_V3
+                    + outcome * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
+                    + item_scalar::CLAIMS_SOURCE_MAGNITUDE,
+                GENERAL_HOT_COMMON_SCALARS_V3
+                    + outcome * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
+                    + item_scalar::CLAIMS_DESTINATION_MAGNITUDE,
+            ] {
+                let byte = usize::try_from(coordinate).expect("coordinate") * 8;
+                let page =
+                    u32::try_from(byte / ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2).expect("output page");
+                assert_eq!(
+                    read_chunk_scalar(*row_acks.get(&page).expect("row page"), page, coordinate),
+                    claim,
+                    "outcome {outcome} must escrow its exact reserve"
+                );
+            }
+        }
+
+        // The controller subject, signed image, reconstructed order and child
+        // contexts all meet at this same digest.  These identities sit after
+        // the scalar tail, so retrieve their acknowledged output page too.
+        for (coordinate, expected) in [
+            (identity::CANDIDATE, batch.batch_id()),
+            (identity::OWNER, maker),
+            (identity::ORDER, order_id),
+            (identity::SELECTION_BATCH, batch.batch_id()),
+            (identity::DESTINATION_VAULT_CONTEXT, order_id),
+            (identity::POSITION_ONE_OWNER, order_id),
+            (identity::SETTLEMENT_POSITION_OWNER, order_id),
+        ] {
+            let scalar_bytes =
+                usize::try_from(general_hot_scalar_count_v3(width).expect("scalar count"))
+                    .expect("scalar count")
+                    * 8;
+            let byte = scalar_bytes + usize::try_from(coordinate).expect("identity") * 32;
+            let page =
+                u32::try_from(byte / ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2).expect("identity page");
+            let (identity_ack, _, _) = execute(real_sbf_fixture_v3_chunk(
+                width,
+                controller,
+                bank.clone(),
+                runtime.clone(),
+                page,
+            ))
+            .await;
+            assert_eq!(
+                identity_ack.disposition(),
+                AcceleratorDispositionV2::Accepted
+            );
+            let page_start =
+                usize::try_from(page).expect("page") * ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2;
+            let local = byte
+                .checked_sub(page_start)
+                .expect("identity belongs to page");
+            let first = (ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2 - local).min(32);
+            let mut observed = [0_u8; 32];
+            observed[..first].copy_from_slice(
+                identity_ack
+                    .payload()
+                    .get(local..local + first)
+                    .expect("identity prefix"),
+            );
+            if first < observed.len() {
+                let tail = observed.len() - first;
+                let (tail_ack, _, _) = execute(real_sbf_fixture_v3_chunk(
+                    width,
+                    controller,
+                    bank.clone(),
+                    runtime.clone(),
+                    page.checked_add(1).expect("identity tail page"),
+                ))
+                .await;
+                assert_eq!(tail_ack.disposition(), AcceleratorDispositionV2::Accepted);
+                observed[first..]
+                    .copy_from_slice(tail_ack.payload().get(..tail).expect("identity suffix"));
+            }
+            assert_eq!(observed, expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn real_sbf_submit_candidate_creates_exactly_funded_candidate_at_runtime_widths() {
+    for width in [1_u32, 258] {
+        let config_id = hash(&config(width)).to_bytes();
+        let mut root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
+        let opening = GeneralBatchOpeningV1 {
+            outcome_count: width,
+            sequence: root.next_batch_sequence(),
+            generation: 9,
+            market: root.market(),
+            product_id: product_id(),
+            config_id,
+            price_scale: u64::from(width),
+            collection_close_slot: 11,
+            settlement_close_slot: 31,
+            max_orders: 4,
+        };
+        let open_revision = root.revision();
+        let mut batch = GeneralBatchV1::open(&mut root, opening, open_revision, ADMISSION_SLOT)
+            .expect("opened batch");
+        let close_revision = root.revision();
+        batch
+            .close(&mut root, close_revision)
+            .expect("canonical closed batch");
+        assert_eq!(batch.state().status, BatchStatusV1::Closed);
+
+        // CandidateV2 owns its own masked digest.  The submitted candidate is
+        // then constructed by the semantic owner from that exact image, not
+        // from an independently stated id or escrow amount.
+        let count = usize::try_from(width).expect("test width");
+        let mut prices = vec![0_u64; count];
+        prices[0] = u64::from(width);
+        let mut candidate_body = vec![0_u8; candidate_len(width).expect("candidate width")];
+        let mut header = CandidateHeaderV2 {
+            outcome_count: width,
+            page_count: 1,
+            candidate_coordinate: 1,
+            price_scale: u64::from(width),
+            candidate_id: [0x71; 32],
+            product_id: product_id(),
+            batch_id: batch.batch_id(),
+        };
+        CandidateV2::encode_into(header, &prices, &mut candidate_body).expect("candidate draft");
+        header.candidate_id =
+            general_candidate_identity_v1(&candidate_body).expect("candidate own digest");
+        CandidateV2::encode_into(header, &prices, &mut candidate_body)
+            .expect("canonical candidate image");
+        let candidate = CandidateV2::decode(&candidate_body).expect("candidate image decodes");
+        authenticate_candidate_identity_v1(candidate).expect("candidate identity is canonical");
+
+        let current_slot = batch
+            .opening()
+            .collection_close_slot
+            .checked_add(1)
+            .expect("closed window slot");
+        let expected_work = (u64::from(width) + 2) * CRANK_REWARD_LAMPORTS;
+        let submission = GeneralCandidateV1::submit(
+            batch,
+            candidate,
+            CANDIDATE_PAGE_REVISION,
+            width,
+            CRANK_REWARD_LAMPORTS,
+            SOLVER,
+            expected_work,
+            current_slot,
+        )
+        .expect("exactly funded candidate submission");
+        let submitted_opening = submission.opening();
+        let submitted_state = submission.state();
+        assert_eq!(submitted_opening.work_capacity(), Ok(expected_work));
+        assert_eq!(
+            submitted_state.verification_remaining,
+            (u64::from(width) + 1) * CRANK_REWARD_LAMPORTS
+        );
+        assert_eq!(submitted_state.cleanup_remaining, CRANK_REWARD_LAMPORTS);
+
+        let state_bump = 1_u8;
+        let rent_principal = 99_u64;
+        let bank = submit_candidate_bank(
+            width,
+            root,
+            batch,
+            candidate,
+            submission,
+            state_bump,
+            rent_principal,
+            current_slot,
+        );
+        let mut root_data = vec![0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + GENERAL_ROOT_BYTES_V2];
+        root_data[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(&root.to_bytes());
+        let mut runtime = BTreeMap::new();
+        runtime.insert(0, root_data);
+        runtime.insert(1, config(width));
+        runtime.insert(2, PRODUCT_RECORD.to_vec());
+        // This is the lifecycle-bound create target.  The solver/payer and
+        // RentCredit are separately present in the fixed SubmitCandidate
+        // frame, even though the read-only accelerator only returns the
+        // physical effect image Trading will execute.
+        runtime.insert(GENERAL_PRIMARY_STATE_ACCOUNT_V3, Vec::new());
+        runtime.insert(GENERAL_PRIMARY_PAYER_ACCOUNT_V3, Vec::new());
+        runtime.insert(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3, Vec::new());
+        runtime.insert(
+            evidence_coordinate(
+                Action::SubmitCandidate,
+                GeneralReadonlyEvidenceKindV3::ClosedBatch,
+            ),
+            local_state(GeneralLocalStateKindV3::Batch, width, &batch.to_bytes()),
+        );
+        runtime.insert(
+            evidence_coordinate(
+                Action::SubmitCandidate,
+                GeneralReadonlyEvidenceKindV3::CandidateImage,
+            ),
+            candidate_body.clone(),
+        );
+        runtime.insert(
+            evidence_coordinate(
+                Action::SubmitCandidate,
+                GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+            ),
+            submission.to_bytes().to_vec(),
+        );
+        let controller = ControllerRequestV3 {
+            action: ControllerActionV3::SubmitCandidate,
+            expected_revision: 0,
+            subject_id: Some(header.candidate_id),
+            page_index: 0,
+            execution_index: 0,
+            manifest_order_index: 0,
+            primary_state_bump: state_bump,
+            secondary_state_bump: 0,
+            result_state_bump: 0,
+        };
+
+        let (ack, _, evidence) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            bank.clone(),
+            runtime.clone(),
+        ))
+        .await;
+        assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_execution_evidence(evidence, Action::SubmitCandidate, width);
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ACTION),
+            u64::from(Action::SubmitCandidate as u8)
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::LOCAL_STATE_KIND),
+            u64::from(GeneralLocalStateKindV3::Candidate.tag())
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ONE),
+            u64::from(GeneralCandidateLayoutV1::VERSION)
+        );
+        // The effect writes these as the created GeneralCandidateV1 body and
+        // moves exactly the total work compartment out of the solver/payer.
+        // The final balance is the authenticated lifecycle rent plus that
+        // compartment, so neither an under- nor over-funded candidate can be
+        // represented by the physical effect.
+        let detail_page = 1;
+        let (detail, _, _) = execute(real_sbf_fixture_v3_chunk(
+            width,
+            controller,
+            bank.clone(),
+            runtime.clone(),
+            detail_page,
+        ))
+        .await;
+        assert_eq!(detail.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_eq!(
+            read_chunk_scalar(detail, detail_page, scalar::VERIFY_REVISION_OBSERVATION),
+            u64::from_le_bytes(GeneralCandidateLayoutV1::MAGIC)
+        );
+        assert_eq!(
+            read_chunk_scalar(detail, detail_page, scalar::VERIFY_POST_REVISION),
+            u64::from(GeneralCandidateLayoutV1::PHASE)
+        );
+        assert_eq!(
+            read_chunk_scalar(detail, detail_page, scalar::CANDIDATE_POST_STATUS),
+            u64::from(GeneralCandidateStatusV1::Submitted.tag())
+        );
+        assert_eq!(
+            read_chunk_scalar(
+                detail,
+                detail_page,
+                scalar::CANDIDATE_POST_VERIFICATION_REMAINING,
+            ),
+            submitted_state.verification_remaining
+        );
+        assert_eq!(
+            read_chunk_scalar(
+                detail,
+                detail_page,
+                scalar::CANDIDATE_POST_CLEANUP_REMAINING
+            ),
+            submitted_state.cleanup_remaining
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::SCRATCH_A),
+            expected_work
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::SCRATCH_B),
+            rent_principal + expected_work
+        );
+        for (coordinate, expected) in [
+            (identity::CANDIDATE, header.candidate_id),
+            (identity::BEST_VERIFIED_DIGEST, header.candidate_id),
+            (identity::SELECTION_BATCH, batch.batch_id()),
+            (identity::BENEFICIARY, batch.batch_id()),
+            (identity::OWNER, SOLVER),
+            (identity::PRIMARY_BENEFICIARY, SOLVER),
+        ] {
+            assert_eq!(
+                read_v3_identity(width, controller, bank.clone(), runtime.clone(), coordinate)
+                    .await,
+                expected,
+                "candidate subject and physical state identities must join"
+            );
+        }
+
+        // A different self-authenticating image is still hostile if it is not
+        // the image whose identity, submission record, and controller subject
+        // all join.  The semantic refusal returns a normal typed ack and the
+        // `execute` helper compares every runtime account with its exact
+        // preimage, proving the refused physical transition is atomic.
+        let mut hostile_body = vec![0_u8; candidate_len(width).expect("candidate width")];
+        let mut hostile_header = CandidateHeaderV2 {
+            outcome_count: width,
+            page_count: 1,
+            candidate_coordinate: 2,
+            price_scale: u64::from(width),
+            candidate_id: [0x72; 32],
+            product_id: product_id(),
+            batch_id: batch.batch_id(),
+        };
+        CandidateV2::encode_into(hostile_header, &prices, &mut hostile_body)
+            .expect("hostile candidate draft");
+        hostile_header.candidate_id =
+            general_candidate_identity_v1(&hostile_body).expect("hostile candidate own digest");
+        CandidateV2::encode_into(hostile_header, &prices, &mut hostile_body)
+            .expect("hostile canonical candidate image");
+        let mut hostile_runtime = runtime;
+        hostile_runtime.insert(
+            evidence_coordinate(
+                Action::SubmitCandidate,
+                GeneralReadonlyEvidenceKindV3::CandidateImage,
+            ),
+            hostile_body,
+        );
+        let (refused, _, _) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            bank,
+            hostile_runtime,
+        ))
+        .await;
+        assert_eq!(refused.disposition(), AcceleratorDispositionV2::Refused);
+    }
+}
+
+#[tokio::test]
+async fn real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_runtime_widths() {
+    for width in [1_u32, 258] {
+        let fixture = terminal_fixture(width);
+        for (index, step) in fixture.verify_steps.iter().enumerate() {
+            let page_index = u32::try_from(index).expect("page index");
+            let bank = verify_candidate_bank(width, step.submission_before, page_index, 0);
+            let mut runtime = BTreeMap::new();
+            runtime.insert(1, config(width));
+            runtime.insert(2, PRODUCT_RECORD.to_vec());
+            runtime.insert(
+                GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+                local_state(
+                    GeneralLocalStateKindV3::Candidate,
+                    width,
+                    &step.submission_before.to_bytes(),
+                ),
+            );
+            runtime.insert(
+                GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
+                if index == 0 {
+                    Vec::new()
+                } else {
+                    local_state(
+                        GeneralLocalStateKindV3::Verifier,
+                        width,
+                        &step.verifier_before,
+                    )
+                },
+            );
+            runtime.insert(GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, Vec::new());
+            runtime.insert(GENERAL_VERIFY_PAYER_ACCOUNT_V3, Vec::new());
+            runtime.insert(GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3, Vec::new());
+            runtime.insert(
+                evidence_coordinate(
+                    Action::VerifyCandidateRow,
+                    GeneralReadonlyEvidenceKindV3::ClosedBatch,
+                ),
+                local_state(
+                    GeneralLocalStateKindV3::Batch,
+                    width,
+                    &fixture.batch.to_bytes(),
+                ),
+            );
+            runtime.insert(
+                evidence_coordinate(
+                    Action::VerifyCandidateRow,
+                    GeneralReadonlyEvidenceKindV3::CandidateImage,
+                ),
+                fixture.candidate.clone(),
+            );
+            runtime.insert(
+                evidence_coordinate(
+                    Action::VerifyCandidateRow,
+                    GeneralReadonlyEvidenceKindV3::CandidatePage,
+                ),
+                step.page.clone(),
+            );
+            runtime.insert(
+                evidence_coordinate(
+                    Action::VerifyCandidateRow,
+                    GeneralReadonlyEvidenceKindV3::EscrowedOrder,
+                ),
+                local_state(GeneralLocalStateKindV3::Order, width, &step.order),
+            );
+            runtime.insert(
+                evidence_coordinate(
+                    Action::VerifyCandidateRow,
+                    GeneralReadonlyEvidenceKindV3::SettlementManifest,
+                ),
+                step.manifest.clone(),
+            );
+            let controller = ControllerRequestV3 {
+                action: ControllerActionV3::VerifyCandidateRow,
+                expected_revision: u64::from(page_index),
+                subject_id: Some(fixture.candidate_id),
+                page_index,
+                execution_index: 0,
+                manifest_order_index: 0,
+                primary_state_bump: 1,
+                secondary_state_bump: 1,
+                result_state_bump: 1,
+            };
+            if width == 258 && index == 0 {
+                let without_heap =
+                    real_sbf_fixture_v3(width, controller, bank.clone(), runtime.clone());
+                let mut context = without_heap.test.start_with_context().await;
+                let (processed, _, _) = submit(
+                    &mut context,
+                    without_heap.instruction,
+                    &without_heap.label,
+                    false,
+                    false,
+                )
+                .await
+                .expect("default-heap hostile processes");
+                assert_eq!(
+                    format!("{:?}", processed.result),
+                    format!(
+                        "Err(InstructionError(0, Custom({})))",
+                        GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction as u32
+                    )
+                );
+            }
+            let (ack, _, evidence) = execute(real_sbf_fixture_v3(
+                width,
+                controller,
+                bank.clone(),
+                runtime.clone(),
+            ))
+            .await;
+            assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+            assert_execution_evidence(evidence, Action::VerifyCandidateRow, width);
+            assert_eq!(
+                read_payload_scalar(ack.payload(), scalar::ACTION),
+                u64::from(Action::VerifyCandidateRow as u8)
+            );
+            let detail_page = 1;
+            let (detail, _, _) = execute(real_sbf_fixture_v3_chunk(
+                width,
+                controller,
+                bank.clone(),
+                runtime.clone(),
+                detail_page,
+            ))
+            .await;
+            assert_eq!(detail.disposition(), AcceleratorDispositionV2::Accepted);
+            assert_eq!(
+                read_chunk_scalar(detail, detail_page, scalar::VERIFY_TERMINAL),
+                u64::from(step.complete)
+            );
+            assert_eq!(
+                read_chunk_scalar(detail, detail_page, scalar::VERIFY_POST_REVISION),
+                u64::from(page_index) + 1
+            );
+            assert_eq!(
+                read_chunk_scalar(detail, detail_page, scalar::CANDIDATE_POST_STATUS),
+                u64::from(step.submission_after.state().status.tag())
+            );
+            if step.complete {
+                assert_eq!(step.verifier_after, fixture.verifier);
+                assert_eq!(step.verified_after, fixture.verified);
+                assert_eq!(
+                    step.submission_after.state().status,
+                    GeneralCandidateStatusV1::Verified
+                );
+            }
+
+            let mut hostile_runtime = runtime;
+            let manifest_coordinate = evidence_coordinate(
+                Action::VerifyCandidateRow,
+                GeneralReadonlyEvidenceKindV3::SettlementManifest,
+            );
+            *hostile_runtime
+                .get_mut(&manifest_coordinate)
+                .expect("manifest evidence")
+                .last_mut()
+                .expect("manifest byte") ^= 1;
+            let (refused, _, _) = execute(real_sbf_fixture_v3(
+                width,
+                controller,
+                bank,
+                hostile_runtime,
+            ))
+            .await;
+            assert_eq!(refused.disposition(), AcceleratorDispositionV2::Refused);
+        }
+    }
+}
+
+#[tokio::test]
+async fn real_sbf_close_candidate_conserves_work_escrow_at_runtime_widths() {
+    for width in [1_u32, 258] {
+        let (batch, submission) = submitted_candidate_for_close(width);
+        let opening = submission.opening();
+        let state = submission.state();
+        let current_slot = batch.opening().settlement_close_slot;
+        let bank = close_candidate_bank(width, batch, submission, current_slot);
+        let mut runtime = BTreeMap::new();
+        runtime.insert(1, config(width));
+        runtime.insert(2, PRODUCT_RECORD.to_vec());
+        runtime.insert(
+            GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+            local_state_with_beneficiary(
+                GeneralLocalStateKindV3::Candidate,
+                width,
+                &submission.to_bytes(),
+                opening.solver_id,
+            ),
+        );
+        runtime.insert(GENERAL_PRIMARY_PAYER_ACCOUNT_V3, Vec::new());
+        runtime.insert(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3, Vec::new());
+        runtime.insert(
+            evidence_coordinate(
+                Action::CloseCandidate,
+                GeneralReadonlyEvidenceKindV3::ClosedBatch,
+            ),
+            local_state(GeneralLocalStateKindV3::Batch, width, &batch.to_bytes()),
+        );
+        let controller = ControllerRequestV3 {
+            action: ControllerActionV3::CloseCandidate,
+            expected_revision: 0,
+            subject_id: Some(opening.candidate_id),
+            page_index: 0,
+            execution_index: 0,
+            manifest_order_index: 0,
+            primary_state_bump: 1,
+            secondary_state_bump: 0,
+            result_state_bump: 0,
+        };
+
+        let (ack, _, evidence) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            bank.clone(),
+            runtime.clone(),
+        ))
+        .await;
+        assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_execution_evidence(evidence, Action::CloseCandidate, width);
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::ACTION),
+            u64::from(Action::CloseCandidate as u8)
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::OBSERVED_POSITION_LAMPORTS),
+            99 + state.verification_remaining + state.cleanup_remaining
+        );
+        assert_eq!(
+            read_payload_scalar(ack.payload(), scalar::OBSERVED_ADMISSION_LAMPORTS),
+            300
+        );
+        let detail_page = 1;
+        let (detail, _, _) = execute(real_sbf_fixture_v3_chunk(
+            width,
+            controller,
+            bank.clone(),
+            runtime.clone(),
+            detail_page,
+        ))
+        .await;
+        assert_eq!(detail.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_eq!(
+            read_chunk_scalar(detail, detail_page, scalar::ESCROW_BALANCE_OBSERVATION),
+            400
+        );
+        assert_eq!(
+            read_chunk_scalar(
+                detail,
+                detail_page,
+                scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION,
+            ),
+            state.verification_remaining
+        );
+        assert_eq!(
+            read_chunk_scalar(
+                detail,
+                detail_page,
+                scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION,
+            ),
+            state.cleanup_remaining
+        );
+
+        // A submitted candidate cannot be censored before the immutable
+        // Batch settlement deadline. The refusal is a typed successful ack,
+        // and `execute` proves every physical runtime account retained its
+        // exact preimage.
+        let early_bank = close_candidate_bank(
+            width,
+            batch,
+            submission,
+            current_slot.checked_sub(1).expect("nonzero close slot"),
+        );
+        let (early, _, _) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            early_bank,
+            runtime.clone(),
+        ))
+        .await;
+        assert_eq!(early.disposition(), AcceleratorDispositionV2::Refused);
+
+        // The ClosedBatch carrier must be the occurrence named by the
+        // Candidate. A substituted projected identity cannot authorize the
+        // same physical close, even when the carrier bytes remain valid.
+        let mut substituted_bank = bank;
+        write_identity(
+            &mut substituted_bank,
+            width,
+            identity::SELECTION_BATCH,
+            [0xee; 32],
+        );
+        let (substituted, _, _) = execute(real_sbf_fixture_v3(
+            width,
+            controller,
+            substituted_bank,
+            runtime,
+        ))
+        .await;
+        assert_eq!(substituted.disposition(), AcceleratorDispositionV2::Refused);
     }
 }
 

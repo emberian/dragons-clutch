@@ -35,6 +35,7 @@ import {
   PRODUCT_RECORD_SCHEMA_ID_V2,
   RESULT_DOMAIN_SCHEMA_ID_V2,
 } from './generated/coreFound';
+import { MAX_TX_ACCOUNT_LOCKS_V2 } from './generated/genericFoundingV1';
 import * as Hot from './generated/directInlineV3';
 import {
   ACTIVATION_CACHE_BYTES,
@@ -127,8 +128,7 @@ export type RationalRetireReceiptInspectionV4 = Readonly<{
   childDigest: Uint8Array;
   rootDigest: Uint8Array;
   callerAuthority: string;
-  executionStatus: 'blocked';
-  refusal: string;
+  executionStatus: 'ready';
 }>;
 
 export type RationalRetireReceiptCandidateV4 = Readonly<{
@@ -139,10 +139,10 @@ export type RationalRetireReceiptCandidateV4 = Readonly<{
   wireBytes: Uint8Array;
   requiredSigners: ReadonlyArray<string>;
   loadedAddresses: number;
+  accountLocks: number;
   accountCount: number;
   supportCount: number;
-  executionStatus: 'blocked';
-  refusal: string;
+  executionStatus: 'ready';
 }>;
 
 export type RationalHotRpcV4 = Pick<
@@ -853,8 +853,12 @@ export async function inspectRationalRetireReceiptV4(
     rentCredit: market.rentBeneficiary, rentProgram: credit.program,
     receiptLamports: BigInt(mintAccount.lamports), receiptRentPrincipal: receiptRent, rentCreditBefore: credit.balance,
     familyBytes, familyDigest, childDigest: exactChildDigest, rootDigest: await sha256(rootAccount.data), callerAuthority: caller,
-    executionStatus: 'blocked',
-    refusal: 'EffectV4 compact RetireReceipt dispatch and a checked V4-capable Trading release are not yet live; construction/export is evidence only and wallet signing remains disabled.',
+    // This path reaches here only after the selected CapabilityProgramV4,
+    // every selected artifact, the active Trading program, and the exact ALT
+    // have all been reacquired at one finalized floor. The generic Hot
+    // interpreter admits EffectV4 from that descriptor; there is no browser
+    // override or fallback route.
+    executionStatus: 'ready',
   });
 }
 
@@ -893,10 +897,14 @@ export function buildRationalRetireReceiptCandidateV4(
   if (requiredSigners.length !== 1 || requiredSigners[0] !== inspection.payer) throw new Error('compact RetireReceipt has an unexpected wallet signer set');
   const loadedAddresses = transaction.message.addressTableLookups.reduce((total, lookup) => total + lookup.readonlyIndexes.length + lookup.writableIndexes.length, 0);
   if (loadedAddresses === 0) throw new Error('selected ALT did not contribute to compact RetireReceipt');
+  const accountLocks = transaction.message.staticAccountKeys.length + loadedAddresses;
+  if (accountLocks > MAX_TX_ACCOUNT_LOCKS_V2) {
+    throw new Error(`compact RetireReceipt needs ${accountLocks} unique account locks, above devnet's ${MAX_TX_ACCOUNT_LOCKS_V2}-lock limit`);
+  }
   return Object.freeze({
     transaction, instruction, familyBytes: inspection.familyBytes, outerBytes: outer, wireBytes,
-    requiredSigners, loadedAddresses, accountCount: keys.length, supportCount: inspection.support.length,
-    executionStatus: 'blocked', refusal: inspection.refusal,
+    requiredSigners, loadedAddresses, accountLocks, accountCount: keys.length, supportCount: inspection.support.length,
+    executionStatus: 'ready',
   });
 }
 

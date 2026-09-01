@@ -20,11 +20,11 @@ describe('Registry release presentation', () => {
     expect(html).toContain('exactly 2,360 bytes');
     expect(html).toContain('Drop the file here, or click to choose it');
     expect(html).toContain('Offline fallback · paste the same file as base64');
-    // Steps feed forward and say so: the wallet fills the payer, the plan
-    // fills the cache, and the signing step names the plan it uses.
-    expect(html).toContain('Connect a wallet in step 03 to fill this');
-    expect(html).toContain('build a plan in step 02 to fill this');
-    expect(html).toContain('Sign the walk with a browser wallet');
+    // Steps feed forward and say so: the wallet can fill the payer, while the
+    // active deployment supplies the cache until a green plan derives it.
+    expect(html).toContain('Connect a wallet in step 03, or paste a public address');
+    expect(html).toContain('Activation-cache PDA');
+    expect(html).toContain('Sign or export one role packet');
     // The un-gate is shut on a cold render and says so in the contract's terms.
     expect(html).toContain('closed');
     expect(html).toContain('No activation plan is green against this chain.');
@@ -37,6 +37,14 @@ describe('Registry release presentation', () => {
     expect(html).toContain('No manifest or chain request has been made.');
     expect(html).toContain('No infrastructure snapshot has been reacquired.');
     expect(html).toContain('Registry program');
+    expect(html).toContain('Activation only.');
+    expect(html).toContain('does not deploy or upgrade programs');
+    expect(html).toContain('Filled from the Devnet deployment');
+    expect(html).toContain('Activation compute-unit limit');
+    expect(html).toContain('Reauthentication compute-unit limit');
+    expect(html).toContain('selects the trading cache slot and current deployed program');
+    expect(html).toContain('operator-act');
+    expect(html).not.toContain('current devnet Upgrade cycle');
     // RL finding 3: the Registry program is an ownership boundary, never the
     // Core role's program, and the copy must not reintroduce the conflation.
     expect(html).not.toContain('Registry / Core program');

@@ -12289,7 +12289,24 @@ mod tests {
             fs::read_dir(&report.account_dir)
                 .expect("local account directory")
                 .count(),
-            18
+            19
+        );
+        let succession = plan
+            .infrastructure_succession
+            .as_ref()
+            .expect("checked local plan carries the Registry succession prestate");
+        let buffer = plan
+            .genesis_accounts
+            .get(crate::plan::REGISTRY_SUCCESSION_BUFFER_LABEL_V1)
+            .expect("checked local plan plants exactly one Registry Buffer");
+        assert_eq!(buffer.address, succession.registry_upgrade_buffer);
+        assert_eq!(
+            succession.predecessor_registry_artifact_release_id,
+            plan.registry.artifact_release_id
+        );
+        assert_eq!(
+            succession.predecessor_rent_artifact_release_id,
+            plan.rent_credit.artifact_release_id
         );
         for (ordinal, role) in checked.roles.iter().enumerate() {
             assert_eq!(role.role, CHECKED_ROLE_ORDER_V1[ordinal]);
@@ -12315,7 +12332,9 @@ mod tests {
             crate::campaign::authenticate_checked_campaign_plan(&substituted_record, &loopback)
                 .expect_err("coherently substituted role record must refuse");
         assert!(
-            error.to_string().contains("checked mutable slot pin"),
+            error
+                .to_string()
+                .contains("Registry succession Buffer or plan pin changed"),
             "{error}"
         );
 

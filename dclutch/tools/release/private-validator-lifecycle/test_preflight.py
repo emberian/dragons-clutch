@@ -220,6 +220,14 @@ class OfflinePreflightTests(unittest.TestCase):
         )
         self.assert_refuses("reintroduced an airdrop role")
 
+    def test_administration_requires_distinct_succession_payer_projection(self) -> None:
+        self.mutate(
+            preflight.RUNNER,
+            "CAMPAIGN_ADMINISTRATION_KEY_ROLES = (VALIDATOR_MINT_ROLE, CAMPAIGN_PAYER_ROLE)",
+            "CAMPAIGN_ADMINISTRATION_KEY_ROLES = (VALIDATOR_MINT_ROLE,)",
+        )
+        self.assert_refuses("administration signer projection changed")
+
     def test_missing_supply_partition_join_refuses(self) -> None:
         self.mutate(
             preflight.RUNNER,

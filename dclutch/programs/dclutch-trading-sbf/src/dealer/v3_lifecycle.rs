@@ -494,6 +494,8 @@ mod tests {
                 admission_digest: hash(&admission.to_state_bytes().expect("state")).to_bytes(),
                 claims_program: context.claims_program,
                 post_resource_digest: [14; 32],
+                position_lamports: retirement.claims_request.observed_position_lamports,
+                admission_lamports: retirement.claims_request.observed_admission_lamports,
                 rent_credit_before: 50,
                 rent_credit_after: 350,
             },

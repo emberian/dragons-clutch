@@ -36,6 +36,168 @@ constraint merely to make SBOM generation proceed.
 It is local evidence, not a deployment, and it never signs, submits, funds, or
 publishes anything.
 
+## Successor campaign release pack
+
+A strict checked-candidate run now also emits
+`SUCCESSOR_CAMPAIGN_PACK.json`. This is not another release format and does not
+rebuild an ELF. It is the campaign-facing join over the same all-thirteen-link
+Upgrade gate:
+
+- the exact source revision/tree and immutable Cargo lock set;
+- pinned host, SBF, platform-tools, Solana and target toolchains;
+- the preserved official Node v26.4.0 distribution plus the exact Node/npm
+  member digests used to build the public CLI;
+- all ten shipped ELF/checked-manifest identities and all thirteen frame
+  reports;
+- the execution release set, the exact 144-byte predecessor profile input,
+  and the successor infrastructure profile IDs and bytes;
+- the source-owned compute, frame and packet ceilings;
+- the source-bound SBOM, notices and licence-verifier pointers; and
+- the seven exact role bindings needed by the existing successor runner; and
+- an executed, key-free public CLI → Rust spline compiler → SDK inspection
+  handoff over the canonical degree-2 fixture and all five emitted records.
+
+The directory is the pack and must remain together. Verify it after a copy or
+before a campaign:
+
+```sh
+/absolute/candidate/source/tools/release/successor_campaign_pack.py verify \
+  --pack /absolute/candidate/SUCCESSOR_CAMPAIGN_PACK.json
+```
+
+Turn one authenticated Market input into the existing runner's exact
+`dclutch-local-successor-run-spec-v2` shape with:
+
+```sh
+tools/release/successor_campaign_pack.py materialize-spec \
+  --pack /absolute/candidate/SUCCESSOR_CAMPAIGN_PACK.json \
+  --market /absolute/market.json \
+  --run-root /absolute/new-campaign-run \
+  --record-publication transaction \
+  --rpc-port 31890
+
+cargo run --release --locked --offline \
+  --manifest-path /absolute/candidate/source/tools/local-validator/bootstrap/successor/Cargo.toml \
+  -- run --spec /absolute/new-campaign-run/spec.json \
+  --keypair-seed <64-lowercase-hex>
+```
+
+`materialize-spec` reauthenticates the full gate first, then writes
+root-relocatable ELF selections into canonical absolute campaign paths and
+generates the launcher's existing attestation shape from those selections. It
+derives Resolution's semantic identity from the protocol-owned V4 release
+preimage; it never copies the checked candidate's deliberately `unowned`
+Resolution semantic placeholder into a campaign. A substituted ELF, release,
+program identity, frame report, budget authority, SBOM, or attestation refuses
+before a validator is launched.
+
+After the current-source private lifecycle has executed infrastructure
+succession, bind its Rust-authored finalized-chain lineage back to the exact
+pack that supplied the campaign. This does not reinterpret that document: the
+private-lifecycle supervisor remains its semantic verifier. The pack tool
+rehashes it and requires its source, gate, seven checked artifacts, execution
+release set and V1→V2 profile join to be the ones this pack selected:
+
+```sh
+/absolute/candidate/source/tools/release/successor_campaign_pack.py bind-lineage \
+  --pack /absolute/candidate/SUCCESSOR_CAMPAIGN_PACK.json \
+  --lineage /absolute/campaign-run/infrastructure-lineage.json \
+  --output /absolute/campaign-run/release-pack-lineage.json
+
+/absolute/candidate/source/tools/release/successor_campaign_pack.py \
+  verify-lineage-binding \
+  --pack /absolute/candidate/SUCCESSOR_CAMPAIGN_PACK.json \
+  --binding /absolute/campaign-run/release-pack-lineage.json
+```
+
+After independently building the same frozen source on any two supported
+builders, compare the two fully verified packs and preserve a re-verifiable
+reproduction report:
+
+```sh
+/absolute/left/source/tools/release/successor_campaign_pack.py compare-packs \
+  --left /absolute/left/SUCCESSOR_CAMPAIGN_PACK.json \
+  --right /absolute/right/SUCCESSOR_CAMPAIGN_PACK.json \
+  --output /absolute/new-reproduction.json
+
+/absolute/left/source/tools/release/successor_campaign_pack.py \
+  verify-reproduction \
+  --report /absolute/new-reproduction.json
+```
+
+The comparison requires exact source and lock digests, pinned SBF and Node
+toolchain strings,
+shipped ELF and checked-manifest bytes, release/profile identities, frame and
+budget metadata, compliance inputs, and their source-pinned verifiers to
+match. Absolute work paths, fresh run identifiers, per-run provenance/gate
+hashes, the declared builder label, and the recorded host OS/kernel/C
+toolchain/libc identity are deliberately excluded because they identify the
+independent executions rather than their deterministic outputs. Each pack
+still records and rehashes its source-built host successor binary. The
+cross-builder projection compares that producer's exact source and its
+deterministic Product records, not path- and libc-bearing host executable
+bytes.
+The report retains and rehashes both full pack manifests; verification reruns
+each pack's complete gate before recomputing the comparison.
+
+The final devnet campaign must also traverse the public CLI wrappers, not call
+their Rust child commands by hand. From the exact checked candidate, run:
+
+```sh
+/absolute/candidate/source/tools/release/public_route_campaign.py run \
+  --pack /absolute/candidate/SUCCESSOR_CAMPAIGN_PACK.json \
+  --rpc-url https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --plan /absolute/devnet/plan.json \
+  --session /absolute/devnet/direct-trade-session.json \
+  --direct-journal /absolute/devnet/direct-trade-journal \
+  --producer-journal /absolute/devnet/direct-trade-producer.json \
+  --output-root /absolute/new-public-route-campaign
+
+/absolute/candidate/source/tools/release/public_route_campaign.py verify \
+  --evidence /absolute/new-public-route-campaign/PUBLIC_ROUTE_CAMPAIGN.json
+```
+
+This runner is read-only with respect to devnet and opens no key. It builds the
+Rust producer and TypeScript CLI from the pack's exact archived source, invokes
+`dclutch route release-set` and then `dclutch route direct`, preserves their
+actual JSON stdout reports, and rehashes both outputs. The release-set output
+must be byte-identical to the pack's checked multiprogram, and the Direct route
+must name the pack's checked infrastructure digest. The plan, session, frozen
+lookup journal, source inputs, built callers, command vectors, reports and
+outputs remain joined by `PUBLIC_ROUTE_CAMPAIGN.json`. The finalized producer
+journal additionally binds the exact founding campaign, admitted participant,
+Market input, ticket pair, checked release, private session and public manifest;
+a still-live same-release session from another Market therefore refuses rather
+than masquerading as the intended campaign.
+
+After those read-only public routes are bound to the finalized producer
+journal, the exact archived mutating suffix resumes the remaining authorized
+devnet life from one source-owned plan:
+
+```sh
+/absolute/candidate/source/tools/release/devnet_direct_lifecycle.py run \
+  --plan /absolute/devnet/direct-complete-life-plan.json \
+  --output-root /absolute/new-direct-complete-life
+
+/absolute/candidate/source/tools/release/devnet_direct_lifecycle.py verify \
+  --report /absolute/new-direct-complete-life/DIRECT_COMPLETE_LIFE.json
+```
+
+The suffix hard-refuses an adjacent runner copy, mainnet, a plan or public
+campaign from another checked source/Market/session, non-independent actors,
+or a fee-settlement payer that is also a Market participant. Its durable
+journal is written before each child dispatch and authenticated on resume. The
+Python runner never opens keypair files; the plan names the explicit payer,
+seller and buyer paths passed to the source-pinned Rust children. This is
+devnet evidence only.
+
+Run the focused parser/mutation tests with:
+
+```sh
+python3 -m unittest tools.release.test_successor_campaign_pack
+```
+
 ## Fresh-build rule
 
 Use a new absolute `--work` root for every candidate you intend to admit. The
@@ -112,14 +274,45 @@ contains the host-tool and all sequential SBF child builds:
 
 ```sh
 SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
-  tools/release/checked-release-candidate.sh \
+  /tank/dregg-build/dclutch-source-<commit>/tools/release/checked-release-candidate.sh \
+    --repo /tank/dregg-build/dclutch-source-<commit> \
     --work /tank/dregg-build/dclutch-checked-<commit>-<unique-run> \
-    --commit <commit>
+    --commit <commit> \
+    --predecessor-profile /tank/dregg-build/predecessor-profile.bin \
+    --node /tank/dregg-build/node-v26.4.0-linux-x64/bin/node \
+    --node-archive /tank/dregg-build/node-v26.4.0-linux-x64.tar.xz \
+    --builder hbox
 ```
 
 The runner deliberately does not discover or invoke `swarm-build` itself. That
 keeps the scheduling boundary visible and prevents recursive wrapping. Refuse a
-run on hbox if the outer wrapper is absent; do not silently fall back.
+run on hbox if the outer wrapper is absent; do not silently fall back. The
+resulting summary and campaign pack record `builder=hbox` and
+`builder_scheduler=swarm-build`. Use `--builder persvati` on persvati; the
+default `local` preserves ordinary local invocations. The predecessor profile
+is the exact public 144-byte profile-account value being succeeded, not a key
+or secret. The runner admits only a canonical regular input, copies it into
+`infrastructure/predecessor-profile.bin`, and derives only from that preserved
+copy. Changing it changes the successor profile and therefore cannot count as
+a reproduction.
+
+For the hbox/persvati release pair, both Node inputs must come from
+`https://nodejs.org/dist/v26.4.0/node-v26.4.0-linux-x64.tar.xz`, whose pinned
+SHA-256 is
+`5c4286dcd5bbd5acb1ccc7eb0e088bd5eb1e3affad671ee9364004f8f6a4a431`.
+The runner requires absolute `--node` and `--node-archive` paths, refuses the
+hbox system Node and persvati Bun shim, and uses a source-pinned bounded member
+lister to prove that the archive contains exactly one regular Node and sibling
+npm at their canonical paths. It copies the archive into `toolchain/`, records
+the executing host Rust/C/linker/libc substrate, builds the SDK, CLI and Rust
+producer from the archived source locks, and executes
+`spline-product-handoff-smoke.sh`. The pack verifier independently reopens the
+preserved archive and rehashes the Product build and five output records. The
+supported-builder comparison includes the Node/npm/archive identities, public
+CLI, canonical compiler report, semantic basis, Found coordinates and record
+bytes. The host successor binary remains exact evidence inside each pack, but
+is excluded from the cross-builder projection because absolute build paths and
+the Linux distribution linker/libc are embedded in those helper bytes.
 
 The admitted summary must say `sbf_build_freshness=passed`,
 `sbf_build_freshness_links=13`, `sbf_build_diagnostics_total=0`, and
@@ -129,6 +322,9 @@ The admitted summary must say `sbf_build_freshness=passed`,
 `frame-build-*.log`, the `frame/` reports, `build-diagnostics.txt`, and both
 Cargo lock manifests with the candidate evidence. Preserve every `provenance/`
 descriptor and its referenced frame object as well.
+The same summary must say `node_version=v26.4.0` and
+`spline_product_handoff=passed`; preserve `toolchain/` and `product-handoff/`
+with the rest of the pack.
 
 ## Upgrade gate
 

@@ -28,10 +28,11 @@ use dclutch_market_core_codec::{
 };
 
 use dclutch_product_payoff_v2_codec::{
+    price_gate_v1::verify_price_gate_v1,
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
-        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
-        compile_basis_v3, semantic_basis_preimage_v3,
+        BasisInputV3, BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
@@ -76,6 +77,38 @@ pub const EVALUATOR_RELEASE_ID: [u8; 32] = [0x48; 32];
 #[allow(dead_code)]
 pub const PAYOUT_SCALE: u64 = 1;
 const PROVISIONAL_RESULT_DOMAIN_ID: [u8; 32] = [0x49; 32];
+
+/// Exact degree-2/3 curve inputs accepted by the narrow fixture compiler.
+///
+/// The compiler verifies `price_gate_certificate` against a canonical probe
+/// basis before its digest becomes part of the semantic and finalized basis.
+/// Callers therefore cannot stage a live curve by merely asserting a digest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NarrowSplineBasisInputV3<'a> {
+    /// Cox-de Boor degree; the live profile admits only two or three.
+    pub degree: u8,
+    /// Whether repeated interior knots are part of this Product's profile.
+    pub interior_multiplicity: bool,
+    /// Exact payout partition scale.
+    pub payout_scale: u64,
+    /// Shared positive denominator for every knot numerator.
+    pub knot_denominator: u64,
+    /// Canonical nondecreasing knot numerators.
+    pub knots: &'a [i128],
+    /// Exact failure-region payout partition.
+    pub failure_payouts: &'a [u64],
+    /// Canonical `DCLTPGT1` certificate bytes.
+    pub price_gate_certificate: &'a [u8],
+}
+
+/// Liability-basis family selected at the compiler-shaped entrance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NarrowBasisInputV3<'a> {
+    /// Exact categorical `Q = 1` basis.
+    Categorical,
+    /// Live degree-2/3 spline basis with an admitted price gate.
+    SplineDegree2To3(NarrowSplineBasisInputV3<'a>),
+}
 
 /// Narrow-fixture compilation refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,6 +228,8 @@ pub struct NarrowFixtureV2 {
     pub product_id: [u8; 32],
     /// Semantic categorical-Q=1 liability basis identity.
     pub semantic_basis_id: [u8; 32],
+    /// Exact payout scale persisted by the finalized ProductBasisV3.
+    pub payout_scale: u64,
     /// Canonical Product graph-root record.
     pub product: NarrowRecordV2,
     /// Canonical Product-selected result-domain record.
@@ -236,6 +271,15 @@ impl NarrowFixtureV2 {
 
 /// Compile one canonical Product Runtime V2/LBV2 fixture at a chosen width.
 pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFixtureV2> {
+    compile_narrow_fixture_v3(input, NarrowBasisInputV3::Categorical)
+}
+
+/// Compile one canonical Product Runtime V2/LBV2 fixture with an explicitly
+/// selected ProductBasisV3 family.
+pub fn compile_narrow_fixture_v3(
+    input: NarrowFixtureInputV2,
+    basis_input: NarrowBasisInputV3<'_>,
+) -> Result<NarrowFixtureV2> {
     // Two outcomes are the closed tails either side of the cut vector, so a
     // usable Product needs at least one interior cut.
     if input.outcome_count < 3
@@ -252,25 +296,84 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
     let outcome_width =
         u32::try_from(input.outcome_count).map_err(|_| NarrowFixtureError::Width)?;
     let basis_width = u32::try_from(input.outcome_count).map_err(|_| NarrowFixtureError::Basis)?;
+    let (kind, payout_scale, knot_denominator, knots, failure_payouts, gate_bytes) =
+        match basis_input {
+            NarrowBasisInputV3::Categorical => (
+                BasisKindV3::CategoricalQ1,
+                PAYOUT_SCALE,
+                1,
+                &[][..],
+                &[][..],
+                &[][..],
+            ),
+            NarrowBasisInputV3::SplineDegree2To3(spline) => (
+                BasisKindV3::SplineDegree2To3 {
+                    degree: spline.degree,
+                    interior_multiplicity: spline.interior_multiplicity,
+                },
+                spline.payout_scale,
+                spline.knot_denominator,
+                spline.knots,
+                spline.failure_payouts,
+                spline.price_gate_certificate,
+            ),
+        };
+    let basis_bytes = basis_record_bytes_v3(kind, input.outcome_count, knots.len(), 0)
+        .map_err(|_| NarrowFixtureError::Basis)?;
+    let price_gate_certificate_digest = match basis_input {
+        NarrowBasisInputV3::Categorical => [0_u8; 32],
+        NarrowBasisInputV3::SplineDegree2To3(spline) => {
+            let mut probe = vec![0_u8; basis_bytes];
+            compile_basis_v3(
+                BasisInputV3 {
+                    kind,
+                    product_id: product_id.to_bytes(),
+                    result_domain_id: PROVISIONAL_RESULT_DOMAIN_ID,
+                    coordinate_domain_id: COORDINATE_DOMAIN_ID,
+                    result_unit_id: RESULT_UNIT_ID,
+                    evaluator_release_id: EVALUATOR_RELEASE_ID,
+                    basis_width,
+                    payout_scale,
+                    knot_denominator,
+                    knots,
+                    terms: &[],
+                    failure_payouts,
+                    // The certificate does not depend on its own digest. A
+                    // nonzero probe unlocks decoding; the verified hash below
+                    // is what the staged record actually persists.
+                    price_gate_certificate_digest: [1_u8; 32],
+                },
+                &mut probe,
+            )
+            .map_err(|_| NarrowFixtureError::Basis)?;
+            let basis = ProductBasisV3::decode(&probe).map_err(|_| NarrowFixtureError::Basis)?;
+            verify_price_gate_v1(
+                &basis,
+                knot_denominator,
+                payout_scale,
+                spline.degree,
+                basis_width,
+                gate_bytes,
+            )
+            .map_err(|_| NarrowFixtureError::Basis)?;
+            hash(gate_bytes).to_bytes()
+        }
+    };
     let provisional_basis_input = BasisInputV3 {
-        kind: BasisKindV3::CategoricalQ1,
+        kind,
         product_id: product_id.to_bytes(),
         result_domain_id: PROVISIONAL_RESULT_DOMAIN_ID,
         coordinate_domain_id: COORDINATE_DOMAIN_ID,
         result_unit_id: RESULT_UNIT_ID,
         evaluator_release_id: EVALUATOR_RELEASE_ID,
         basis_width,
-        payout_scale: 1,
-        knot_denominator: 1,
-        knots: &[],
+        payout_scale,
+        knot_denominator,
+        knots,
         terms: &[],
-        failure_payouts: &[],
-        // Exempt by proof: degree 0 and 1 need no price gate,
-        // and a digest offered alongside one is refused.
-        price_gate_certificate_digest: [0_u8; 32],
+        failure_payouts,
+        price_gate_certificate_digest,
     };
-    let basis_bytes = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, input.outcome_count, 0, 0)
-        .map_err(|_| NarrowFixtureError::Basis)?;
     let mut provisional_basis = vec![0_u8; basis_bytes];
     compile_basis_v3(provisional_basis_input, &mut provisional_basis)
         .map_err(|_| NarrowFixtureError::Basis)?;
@@ -473,6 +576,7 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         outcome_count: u32::try_from(input.outcome_count).map_err(|_| NarrowFixtureError::State)?,
         product_id: product_id.to_bytes(),
         semantic_basis_id,
+        payout_scale,
         product,
         result_domain,
         portfolio,

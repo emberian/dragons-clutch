@@ -97,7 +97,7 @@ impl ControllerActionV3 {
         }
     }
 
-    /// Return the preserved V1 action when this is not the new close route.
+    /// Return the exact action selected by this V3 request.
     #[must_use]
     pub const fn legacy(self) -> Option<Action> {
         match self {
@@ -115,7 +115,7 @@ impl ControllerActionV3 {
             Self::SubmitCandidate => Some(Action::SubmitCandidate),
             Self::VerifyCandidateRow => Some(Action::VerifyCandidateRow),
             Self::ReleaseOrder => Some(Action::ReleaseOrder),
-            Self::CloseCandidate => None,
+            Self::CloseCandidate => Some(Action::CloseCandidate),
         }
     }
 
@@ -145,6 +145,7 @@ impl From<Action> for ControllerActionV3 {
             Action::SubmitCandidate => Self::SubmitCandidate,
             Action::VerifyCandidateRow => Self::VerifyCandidateRow,
             Action::ReleaseOrder => Self::ReleaseOrder,
+            Action::CloseCandidate => Self::CloseCandidate,
         }
     }
 }

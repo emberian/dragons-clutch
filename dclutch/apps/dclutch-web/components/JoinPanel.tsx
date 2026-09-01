@@ -8,6 +8,7 @@ import {
   type DirectParticipantReadinessV1,
 } from '@/lib/directParticipant';
 import { SolanaRpcClient } from '@dclutch/sdk/rpc';
+import CommandRunbook from '@/components/operator/CommandRunbook';
 
 /**
  * The joining face of one Market: does the connected wallet hold a Position
@@ -50,15 +51,67 @@ export function joiningClosedForPhaseV1(marketPhase: string): boolean {
   return phase.includes('terminal') || phase.includes('retir');
 }
 
+const DEVNET_GENESIS_HASH_V1 = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+
+export type JoinRunbookV1 = Readonly<
+  | { kind: 'ready'; cluster: 'devnet' | 'owned-loopback'; command: string }
+  | { kind: 'refused'; reason: string }
+>;
+
+function loopbackHostV1(host: string): boolean {
+  if (host === 'localhost' || host === '::1') return true;
+  const octets = host.split('.');
+  return octets.length === 4
+    && octets.every((octet) => /^(0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255)
+    && octets[0] === '127';
+}
+
+function shellSingleQuoteV1(value: string): string {
+  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+}
+
+/** Render the CLI's exact public-devnet or owned-loopback admission boundary. */
+export function joinRunbookV1(endpoint: string): JoinRunbookV1 {
+  let rpc: URL;
+  try {
+    rpc = new URL(endpoint);
+  } catch {
+    return Object.freeze({ kind: 'refused', reason: 'the selected RPC endpoint is not a URL, so no admission command is safe to copy' });
+  }
+  const host = rpc.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  const loopback = loopbackHostV1(host);
+  if (loopback && (rpc.protocol !== 'http:' || rpc.username !== '' || rpc.password !== ''
+      || rpc.port === '' || rpc.pathname !== '/' || rpc.search !== '' || rpc.hash !== ''
+      || host !== '127.0.0.1')) {
+    return Object.freeze({
+      kind: 'refused',
+      reason: 'the selected loopback endpoint must be the credential-free explicit-port form http://127.0.0.1:PORT/',
+    });
+  }
+  const cluster = loopback ? 'owned-loopback' : 'devnet';
+  const acknowledgment = cluster === 'devnet'
+    ? ` \\\n  --i-mean-devnet ${DEVNET_GENESIS_HASH_V1}`
+    : '';
+  const command = `dclutch --rpc ${shellSingleQuoteV1(endpoint)}${acknowledgment} \\
+  --bootstrap-bin \"$SUCCESSOR\" join \\
+  --plan \"$PLAN\" \\
+  --campaign-evidence \"$CAMPAIGN_EVIDENCE\" \\
+  --keypair \"$POSITION_KEYPAIR\" \\
+  --output \"$ADMISSION_REPORT\"`;
+  return Object.freeze({ kind: 'ready', cluster, command });
+}
+
 /** Pure rendering of one wallet's standing on one Market — testable as props → markup. */
 export function JoinStanding({
   readiness,
   marketPhase,
   walletAddress,
+  endpoint,
 }: Readonly<{
   readiness: DirectParticipantReadinessV1;
   marketPhase: string;
   walletAddress: string;
+  endpoint: string;
 }>) {
   if (readiness.status === 'refused') {
     return <p className="market-refusal">Refused: {readiness.reason}</p>;
@@ -77,6 +130,7 @@ export function JoinStanding({
       <p className="direct-status">The trade panel below trades against exactly these accounts.</p>
     </>;
   }
+  const runbook = joinRunbookV1(endpoint);
   return <>
     <p className="direct-status">This wallet is not a participant here yet. Read at finalized slot {readiness.observedSlot}.</p>
     <p className="detail-subhead">Joining creates, at addresses already derived from this Market and your wallet:</p>
@@ -93,13 +147,19 @@ export function JoinStanding({
       ? <p className="market-refusal">This market has already resolved, so joining it now would buy nothing: no further trades or claims are possible on a terminal market.</p>
       : <>
         <p className="detail-subhead">How to join</p>
-        <p className="direct-status">Joining runs through the <code>dclutch</code> command line today. Your own keys sign; the transaction is built and checked by the same code the protocol&apos;s lifecycle tests drive, and nothing is sent until you add <code>--execute</code>. You will need the market&apos;s campaign documents — published alongside a public market&apos;s evidence, or written by your own bootstrap run on a local validator.</p>
-        <pre className="trade-v3-bytes">{`dclutch join \\
-  --plan <campaign plan.json> \\
-  --campaign-evidence <campaign evidence.json> \\
-  --keypair <your keypair.json> \\
-  --output <admission journal.json>
-# preview first; add --execute to admit ${walletAddress}`}</pre>
+        <p className="direct-status">Joining runs through the <code>dclutch</code> command line today. Its Rust child builds and checks the transaction. The first run is read-only planning; <code>--execute</code> is the separate authorization to sign and send. You need the successor binary and the market&apos;s founding plan and evidence.</p>
+        <dl className="detail-facts">
+          <div><dt>Connected address</dt><dd><code>{walletAddress}</code></dd></div>
+          <div><dt>Signing requirement</dt><dd><code>$POSITION_KEYPAIR</code> must derive this exact connected address.</dd></div>
+          <div><dt>Result</dt><dd><code>$ADMISSION_REPORT</code> is the durable report used to resume and verify this admission.</dd></div>
+        </dl>
+        {runbook.kind === 'refused'
+          ? <p className="market-refusal">Runbook refused: {runbook.reason}</p>
+          : <CommandRunbook label="Preview, then authorized admission" command={`${runbook.command}
+
+# Inspect the read-only report. Then rerun the exact command with --execute.
+${runbook.command} \\
+  --execute`} />}
         <p className="direct-status">The browser cannot yet build the admission transaction itself.</p>
       </>}
   </>;
@@ -172,7 +232,7 @@ export default function JoinPanel({
       {inspection.kind === 'refused' && <p className="market-refusal">Refused: {inspection.reason}</p>}
 
       {inspection.kind === 'done' && wallets.address !== null
-        && <JoinStanding readiness={inspection.readiness} marketPhase={marketPhase} walletAddress={wallets.address} />}
+        && <JoinStanding readiness={inspection.readiness} marketPhase={marketPhase} walletAddress={wallets.address} endpoint={endpoint} />}
     </div>
   </section>;
 }

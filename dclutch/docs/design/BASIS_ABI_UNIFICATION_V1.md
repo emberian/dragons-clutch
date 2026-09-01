@@ -1019,3 +1019,21 @@ forever?) and §3.3 with `M-26` (the fee rate).
 `docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` (three gen-1 deficits —
 width 10 vs 16, edge policy, rounding symmetry — that this design does not close
 and does not claim to).*
+
+---
+
+## Correction (2026-08-31, measured): §"zero CU" falsified
+
+The claim at line ~735 — "the hot path gains exactly zero CU," with
+hostile 21 saying it is "asserted by CU measurement" — is half true and
+half never-run. TRUE: `verify_price_gate_v1` never executes on a
+zero-digest basis. FALSE: the unconditional `admit_selection_v3` on the
+shared join (+446 CU) and the rewritten `ProductBasisV3::decode` with
+its price-gate probe (+4,567 CU) run on EVERY trade — and the shared
+function runs twice per transaction (Trading hot_v3.rs:1999, Claims
+sparse_native_transfer_v1.rs:614), so the decode runs 4×. Measured cost
+to the Direct hot path: ~+5,013 of the +6,876 the margin gates absorbed
+at the 2026-08-31 re-pin (e74b5dd8; floors 1,271,552 / 1,269,919).
+The cheap recovery, unchartered: hoist the admission call and digest
+probe to the founding caller (~4,500 CU back). The code comment calling
+that function "founding's join" is the false premise.

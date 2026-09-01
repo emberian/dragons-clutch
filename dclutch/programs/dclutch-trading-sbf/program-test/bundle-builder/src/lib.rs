@@ -37,6 +37,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod admitted;
 pub mod artifacts;
 pub mod bundle;
 pub mod frame;

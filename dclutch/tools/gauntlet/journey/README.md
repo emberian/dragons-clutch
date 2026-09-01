@@ -11,9 +11,9 @@ tools/gauntlet/journey/run-journey.sh --holders 4
 ```
 
 It takes `127.0.0.1:20890` by default and `--rpc-port auto` takes a free
-42-port block instead, so it can run beside a `run.sh --mode full` campaign.
-Two runs that both take the default still contend; coordinate on the wave board
-for that case. `--ledger PATH` gives a concurrent run its own census ledger.
+42-port block instead. `run.sh --mode full` is unavailable at HEAD; coordinate
+with other named validator campaigns on the wave board before taking a port.
+`--ledger PATH` gives a concurrent run its own census ledger.
 
 ## Not a fast lane
 

@@ -38,12 +38,13 @@ use dclutch_fractional_claim_kernel::{
     fractional_selection_config_from_terms_v1, join_fractional_selection_config_v1,
 };
 use dclutch_fractional_claim_operator::{
-    FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4, FRACTIONAL_SELECTED_ACTION_COUNT_V4,
-    FRACTIONAL_SELECTED_ACTIONS_V4, FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4,
-    FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4, FractionalFrameWidthsV4,
-    FractionalSelectedReleaseErrorV4, FractionalSelectedReleaseInputV4,
-    fractional_claims_frame_spec_v4, fractional_selected_release_v4,
-    validate_fractional_selected_release_v4,
+    FRACTIONAL_ACTIVATION_SELECTOR_V1, FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4,
+    FRACTIONAL_SELECTED_ACTION_COUNT_V4, FRACTIONAL_SELECTED_ACTIONS_V4,
+    FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4, FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4,
+    FractionalFrameWidthsV4, FractionalSelectedReleaseErrorV4, FractionalSelectedReleaseInputV4,
+    fractional_activation_request_v1, fractional_claims_frame_spec_v4,
+    fractional_current_release_v4, fractional_selected_release_v4,
+    validate_fractional_current_release_v4, validate_fractional_selected_release_v4,
 };
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -239,6 +240,63 @@ fn the_four_executable_actions_publish_one_action_selected_program_set() {
     assert_eq!(encoded.len(), FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4);
     assert_eq!(encoded[..8], FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4);
     assert_ne!(publication.publication_id(), [0; 32]);
+}
+
+#[test]
+fn the_current_release_appends_activation_without_moving_legacy_action_bytes() {
+    let bytes = encoded_terms();
+    let historical = fractional_selected_release_v4(input(&bytes)).unwrap();
+    let current = fractional_current_release_v4(input(&bytes)).unwrap();
+    validate_fractional_current_release_v4(&current, input(&bytes)).unwrap();
+
+    // The legacy constructor remains the historical four-action wire exactly.
+    assert_eq!(
+        fractional_selected_release_v4(input(&bytes)).unwrap(),
+        historical
+    );
+    let set = CapabilityProgramSetV2::decode(&current.program_set).unwrap();
+    assert_eq!(
+        usize::from(set.entry_count()),
+        FRACTIONAL_SELECTED_ACTION_COUNT_V4 + 1
+    );
+    let activation = set
+        .select_descriptor(&fractional_activation_request_v1())
+        .unwrap();
+    assert_eq!(
+        set.entry(u16::try_from(FRACTIONAL_SELECTED_ACTION_COUNT_V4).unwrap())
+            .unwrap()
+            .selector(),
+        FRACTIONAL_ACTIVATION_SELECTOR_V1
+    );
+    assert_eq!(
+        activation.program().to_bytes(),
+        current.activation.descriptor_id
+    );
+
+    let records = current.publication_records().unwrap();
+    assert_eq!(
+        records.len(),
+        2 + FRACTIONAL_SELECTED_ACTION_COUNT_V4 * 7 + 3
+    );
+    assert_eq!(
+        records[records.len() - 3].label,
+        "activation-account-profile"
+    );
+    assert_eq!(records[records.len() - 2].label, "activation-effect");
+    assert_eq!(records[records.len() - 1].label, "activation-descriptor");
+
+    let mut hostile = current.clone();
+    hostile.activation.effect[0] ^= 1;
+    assert_eq!(
+        validate_fractional_current_release_v4(&hostile, input(&bytes)),
+        Err(FractionalSelectedReleaseErrorV4::Activation)
+    );
+    let mut hostile = current.clone();
+    hostile.selection_config[0] ^= 1;
+    assert_eq!(
+        validate_fractional_current_release_v4(&hostile, input(&bytes)),
+        Err(FractionalSelectedReleaseErrorV4::SelectionConfig)
+    );
 }
 
 #[test]
@@ -739,7 +797,10 @@ fn the_selection_config_contains_no_market_bytes() {
     let config = FractionalSelectionConfigV1::decode(&release.selection_config).unwrap();
     assert_eq!(config.denominator(), DENOMINATOR);
     assert_eq!(config.product_width(), PRODUCT_WIDTH);
-    assert_eq!(config.representation_width(), u32::try_from(MINTS.len()).unwrap());
+    assert_eq!(
+        config.representation_width(),
+        u32::try_from(MINTS.len()).unwrap()
+    );
     assert_eq!(config.token_program().unwrap(), TOKEN_2022_PROGRAM_ID);
     assert_eq!(config.graph_id().unwrap(), GRAPH);
 }

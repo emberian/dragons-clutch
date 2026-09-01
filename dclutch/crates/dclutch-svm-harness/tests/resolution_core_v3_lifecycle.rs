@@ -75,12 +75,14 @@ use dclutch_resolution_codec::{
 use dclutch_resolution_core_v3_operator::{
     Finality, Observation, ObservedAccount, ResolutionActivateFundSnapshotV1,
     ResolutionAdmitTerminalSnapshotV3, ResolutionCloseFundSnapshotV3,
-    ResolutionCreateFundSnapshotV3, ResolutionDirectCloseFundReportV1,
-    ResolutionVerifyFundReadySnapshotV3, build_resolution_activate_fund_v1,
-    build_resolution_admit_terminal_v3, build_resolution_create_fund_v3,
-    build_resolution_direct_close_fund_v1, build_resolution_verify_fund_ready_v3,
-    validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
+    ResolutionCoreOperatorErrorV3, ResolutionCreateFundSnapshotV3,
+    ResolutionDirectCloseFundReportV1, ResolutionVerifyFundReadySnapshotV3,
+    build_resolution_activate_fund_v1, build_resolution_admit_terminal_v3,
+    build_resolution_create_fund_v3, build_resolution_direct_close_fund_v1,
+    build_resolution_verify_fund_ready_v3, validate_resolution_create_fund_report_v3,
+    validate_resolution_verify_fund_ready_report_v3,
 };
+use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
@@ -89,9 +91,8 @@ use dclutch_source_contract::{
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
     SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionRouteV1,
-    SourceResolutionStateV2,
-    SourceSpecV1, StatisticKind, StatisticSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind,
-    WindowSpecV1,
+    SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
+    WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::{Account, AccountSharedData};
@@ -108,7 +109,7 @@ use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 use solana_system_interface::instruction::transfer;
-use solana_transaction::Transaction;
+use solana_transaction::{InstructionError, Transaction, TransactionError};
 use spl_token_interface::state::Mint as SplMint;
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x71; 32]);
@@ -1650,6 +1651,20 @@ async fn close_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
 ) -> ResolutionCloseFundSnapshotV3 {
+    let source_material = required_observed(context, fixture.source_material.raw).await;
+    let source_material_staging = vacant_observed(fixture.source_material.staging);
+    let material = SourceMaterialV3::decode(&source_material.data).expect("Source material");
+    let (recovery_policy, recovery_policy_staging) = if material.recovery_policy().is_some() {
+        (
+            required_observed(context, fixture.recovery_policy.raw).await,
+            vacant_observed(fixture.recovery_policy.staging),
+        )
+    } else {
+        // The on-chain frame pins absent optional policy coordinates by
+        // repeating the already-authenticated Source-material record pair.
+        // Passing an unrelated, valid policy record is still a Record refusal.
+        (source_material.clone(), source_material_staging.clone())
+    };
     ResolutionCloseFundSnapshotV3 {
         market: required_observed(context, fixture.market).await,
         activation_cache: required_observed(context, fixture.activation).await,
@@ -1658,8 +1673,8 @@ async fn close_snapshot(
         core_programdata: required_observed(context, fixture.core_programdata).await,
         resolution_program: required_observed(context, RESOLUTION_PROGRAM_ID).await,
         resolution_programdata: required_observed(context, fixture.resolution_programdata).await,
-        source_material: required_observed(context, fixture.source_material.raw).await,
-        source_material_staging: vacant_observed(fixture.source_material.staging),
+        source_material,
+        source_material_staging,
         capability_manifest: required_observed(context, fixture.capability_manifest.raw).await,
         capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
         source_state: required_observed(context, fixture.source).await,
@@ -1670,8 +1685,8 @@ async fn close_snapshot(
         clock_sysvar: required_observed(context, sysvar::clock::ID).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
         system_program: required_observed(context, system_program::ID).await,
-        recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
-        recovery_policy_staging: vacant_observed(fixture.recovery_policy.staging),
+        recovery_policy,
+        recovery_policy_staging,
     }
 }
 
@@ -2533,6 +2548,81 @@ async fn a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms() {
         "the winner Core commits is the selector the Source's own failure decision carried, not \
          a value this route chose"
     );
+
+    // Failure is a complete terminal route, not a certificate shape that
+    // strands the Resolution fund.  Drive the same permissionless retirement
+    // and DCLRFCQ1 close used by the provider-success arm.  This is deliberately
+    // after Core's independent no-CPI Accept: closing Source before Core has
+    // committed the certificate would destroy the fact Claims authenticates.
+    submit(&mut context, &[begin_retiring_instruction(&fixture)])
+        .await
+        .expect("a failure-terminal Market begins authenticated retirement");
+    let closure_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
+    let payer = context.payer.pubkey();
+    submit(
+        &mut context,
+        &[transfer(&payer, &fixture.closure, closure_rent)],
+    )
+    .await
+    .expect("prepay the failure route's canonical closure receipt");
+
+    let mut wrong_absent_policy_frame = close_snapshot(&mut context, &fixture).await;
+    wrong_absent_policy_frame.recovery_policy =
+        required_observed(&mut context, fixture.recovery_policy.raw).await;
+    wrong_absent_policy_frame.recovery_policy_staging =
+        vacant_observed(fixture.recovery_policy.staging);
+    assert_eq!(
+        build_resolution_direct_close_fund_v1(&wrong_absent_policy_frame)
+            .expect_err("an absent optional policy cannot be replaced by an unrelated record"),
+        ResolutionCoreOperatorErrorV3::Record
+    );
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived failure-route CloseFund");
+
+    let before_readonly_beneficiary = retirement_snapshot(&mut context, &fixture).await;
+    let mut readonly_beneficiary = close.instruction.clone();
+    readonly_beneficiary
+        .accounts
+        .get_mut(15)
+        .expect("DCLRFCQ1 beneficiary coordinate")
+        .is_writable = false;
+    let error = submit(&mut context, &[readonly_beneficiary])
+        .await
+        .expect_err("a readonly refund beneficiary must refuse before close");
+    assert!(
+        matches!(
+            error,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::AccountFrame as u32
+        ),
+        "readonly beneficiary must refuse as Resolution AccountFrame, got {error:?}"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_readonly_beneficiary,
+        "the exact AccountFrame refusal rolls back Source, funding, closure prepayment, certificate, and beneficiary"
+    );
+    submit(&mut context, &[close.instruction.clone()])
+        .await
+        .expect("the failure route closes every Resolution funding row");
+    assert!(observed(&mut context, fixture.source).await.is_none());
+    assert!(observed(&mut context, fixture.funding).await.is_none());
+    let closure = SourceClosureReceiptV3::decode(
+        &observed(&mut context, fixture.closure)
+            .await
+            .expect("failure-route Source closure receipt")
+            .data,
+    )
+    .expect("failure-route Source closure receipt");
+    assert_exhaustive_closure_receipt(closure, &close);
 }
 
 #[tokio::test]

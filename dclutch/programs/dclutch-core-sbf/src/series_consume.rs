@@ -38,7 +38,7 @@ use dclutch_market_core_codec::{
     SeriesFoundingPermitSeedsV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2, authenticate_product_basis_v3,
+    FinalizedRecordFrameV2, authenticate_founding_product_basis_v3,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
@@ -957,7 +957,7 @@ fn authenticate_product_facts<'accounts, 'info>(
     prepared: &PreparedFound,
     rent: &Rent,
 ) -> Result<ProductFacts, CoreSbfError> {
-    let product = authenticate_product_basis_v3(
+    let product = authenticate_founding_product_basis_v3(
         frame.found.registry_program.key,
         rent,
         *prepared.runtime,

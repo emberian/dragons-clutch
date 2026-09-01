@@ -1,7 +1,10 @@
 //! Bundle assembly: the fixed Hot frame, the adoption loop, and the final
 //! instruction and account set.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
+use dclutch_account_profile_contract::{
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
+    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3},
+};
 use dclutch_capability_program_contract::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
@@ -22,6 +25,7 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
     HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
+use dclutch_capability_program_contract::v4::CapabilityProgramV4;
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_program::{
@@ -33,15 +37,32 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     BuilderError, WaistFactsV1,
+    admitted::{
+        AdmittedAotInputV1, AdmittedAuthorityInputV1, DerivedAdmittedAuthoritiesV1,
+        DerivedAdmittedEvidenceV1, derive_admitted_authorities_v1, derive_admitted_evidence_v1,
+    },
     artifacts::{ArtifactSetV1, DerivedArtifactsV1, DerivedRecordV1, derive_artifact_facts},
     frame::{BuiltAccountV1, LogicalFrameV1, data_account, external, pack_frame, program, vacant},
     profile_ops,
     registers::{
-        ContentProjectionKeysV1, EngineInputV1, EngineOutputV1, ObservedAccountV1,
-        SpanWidthInputV1, derive_dynamic_span_widths, run_engine,
+        AdmittedCandidateProjectorV1, ContentProjectionKeysV1, EngineInputV1, EngineOutputV1,
+        ObservedAccountV1, SpanWidthInputV1, derive_dynamic_span_geometry, run_engine,
+        run_engine_with_admitted_candidate,
     },
     routes::{DerivedAuthorityV1, derive_authority},
 };
+use dclutch_execution_strategy_contract::{
+    admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
+    encode_register_bank_into,
+    shadow_digest_v3::{
+        ShadowRuntimeObservationV3, family_request_digest_v3, runtime_observations_digest_v3,
+    },
+    v2::{
+        ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, AuthenticatedScratchPageV2,
+        SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
+    },
+};
+use dclutch_release_set_contract::ArtifactReleaseIdV1;
 
 /// Fixed-frame corpus: the Market, the root, the four Product content records,
 /// and the external deployment identities the fixed Hot frame restates.
@@ -113,6 +134,26 @@ pub struct BuiltBundleV1 {
     /// Authenticated dynamic fixed-span widths this bundle was packed at, one
     /// per span the AccountProfile declares (empty when it declares none).
     pub span_counts: Vec<u32>,
+    /// Sole AccountProfile-owned input-scratch span, when the selected
+    /// admitted strategy transports its input bank through runtime pages.
+    pub transport_span: Option<u16>,
+}
+
+/// A complete admitted-AOT bundle and the derived request transcript that
+/// explains every inserted caller-authority account.
+#[derive(Clone, Debug)]
+pub struct BuiltAdmittedBundleV1 {
+    /// The ordinary bundle with strategy evidence and authorities inserted
+    /// between the fixed frame and runtime suffix.
+    pub bundle: BuiltBundleV1,
+    /// Authenticated Certificate/Admission/ArtifactRelease/deployment chain.
+    pub evidence: DerivedAdmittedEvidenceV1,
+    /// Complete context whose digest every accelerator request carries.
+    pub invocation_context: AdmittedInvocationContextV3,
+    /// Exact context digest.
+    pub invocation_context_digest: dclutch_core_contract::ContentId,
+    /// Complete input bank and one exact request/PDA per canonical chunk.
+    pub admitted_authorities: DerivedAdmittedAuthoritiesV1,
 }
 
 /// One account with its derived rollback classification.
@@ -148,6 +189,21 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+fn decode_execution_account_profile<'a>(
+    schema: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<AccountProfileV2<'a>, BuilderError> {
+    match schema {
+        ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2 => {
+            AccountProfileV2::decode(bytes).map_err(|_| BuilderError::Artifact)
+        }
+        ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3 => AccountProfileV3::decode(bytes)
+            .map(AccountProfileV3::base)
+            .map_err(|_| BuilderError::Artifact),
+        _ => Err(BuilderError::Artifact),
+    }
+}
+
 fn placeholder_key(coordinate: usize) -> Pubkey {
     let mut hasher = Sha256::new();
     hasher.update(b"dclutch-bundle-builder/placeholder/v1");
@@ -162,24 +218,34 @@ fn placeholder_key(coordinate: usize) -> Pubkey {
 /// derivations are the observed keys. Two rounds settle every known family;
 /// four is the refusal bound.
 pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderError> {
+    build_bundle_with_admitted_candidate(input, None)
+}
+
+fn build_bundle_with_admitted_candidate(
+    input: &BundleInputV1<'_>,
+    candidate_projector: Option<&AdmittedCandidateProjectorV1<'_>>,
+) -> Result<BuiltBundleV1, BuilderError> {
     let facts = derive_artifact_facts(input.set, input.waist, input.scenario.family_request)?;
     let profile =
-        AccountProfileV2::decode(input.set.account_profile).map_err(|_| BuilderError::Artifact)?;
+        decode_execution_account_profile(facts.account_profile.schema, input.set.account_profile)?;
     let tail_count = input.scenario.tail_count;
     // The span widths come before the frame exists: they *are* the frame's
     // width. Derived from the artifacts and the family request, exactly as the
     // Hot executor derives them before it expands one account.
-    let span_counts = derive_dynamic_span_widths(&SpanWidthInputV1 {
+    let span_geometry = derive_dynamic_span_geometry(&SpanWidthInputV1 {
         profile,
         request_profile_bytes: input.set.request_profile,
         request_profile_schema: facts.request_profile.schema,
         effect_bytes: input.set.effect,
+        effect_schema: facts.effect.schema,
         strategy_bytes: input.set.strategy,
         waist: input.waist,
         tail_count,
         family_request: input.scenario.family_request,
         clock_slot: input.scenario.clock_slot,
     })?;
+    let span_counts = span_geometry.widths;
+    let transport_span = span_geometry.transport_span;
     let spans = span_counts.as_slice();
     let logical_count = profile_ops::logical_count(profile, tail_count, spans)?;
 
@@ -253,13 +319,14 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
                 );
             }
         }
-        let output = run_engine(&EngineInputV1 {
+        let engine_input = EngineInputV1 {
             profile,
             request_profile_bytes: input.set.request_profile,
             request_profile_schema: facts.request_profile.schema,
             lifecycle_bytes: input.set.lifecycle,
             transition_bytes: input.set.transition,
             effect_bytes: input.set.effect,
+            effect_schema: facts.effect.schema,
             action: facts.action,
             waist: input.waist,
             tail_count,
@@ -274,7 +341,12 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
             content_keys,
             span_counts: spans,
             rent: input.rent,
-        })?;
+        };
+        let output = if candidate_projector.is_some() {
+            run_engine_with_admitted_candidate(&engine_input, candidate_projector)?
+        } else {
+            run_engine(&engine_input)?
+        };
         let mut changed = false;
         for state in &output.lifecycle_states {
             let current = frame
@@ -395,7 +467,444 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
         logical: frame,
         engine,
         span_counts,
+        transport_span,
     })
+}
+
+/// Build the ordinary artifact-derived bundle and insert the complete
+/// admitted-AOT suffix.
+///
+/// [`build_bundle`] remains the byte-for-byte owner of the interpreted/legacy
+/// shape. This function only adds accounts after its fixed 39-account prefix,
+/// so callers that do not supply admitted evidence receive exactly their
+/// previous instruction and account bytes.
+pub fn build_admitted_bundle(
+    input: &BundleInputV1<'_>,
+    admitted: AdmittedAotInputV1<'_>,
+) -> Result<BuiltAdmittedBundleV1, BuilderError> {
+    let bundle = build_bundle(input)?;
+    finish_admitted_bundle(input, admitted, bundle)
+}
+
+/// Build an admitted-AOT bundle whose authenticated accelerator, rather than
+/// the interpreted Transition artifact, owns the candidate register bank.
+///
+/// The projector receives a private copy of the exact post-lifecycle input
+/// bank. It can only affect Effect projection and child-authority derivation;
+/// admitted request chunks, their input-bank digest, and the runtime
+/// observation transcript remain derived from the unmodified preplan bank.
+pub fn build_admitted_bundle_with_candidate_v1(
+    input: &BundleInputV1<'_>,
+    admitted: AdmittedAotInputV1<'_>,
+    candidate_projector: &AdmittedCandidateProjectorV1<'_>,
+) -> Result<BuiltAdmittedBundleV1, BuilderError> {
+    let bundle = build_bundle_with_admitted_candidate(input, Some(candidate_projector))?;
+    finish_admitted_bundle(input, admitted, bundle)
+}
+
+fn finish_admitted_bundle(
+    input: &BundleInputV1<'_>,
+    admitted: AdmittedAotInputV1<'_>,
+    mut bundle: BuiltBundleV1,
+) -> Result<BuiltAdmittedBundleV1, BuilderError> {
+    let evidence = derive_admitted_evidence_v1(input.waist.registry_program, input.set, admitted)?;
+    let descriptor =
+        CapabilityProgramV4::decode(input.set.descriptor).map_err(|_| BuilderError::Artifact)?;
+    let profile = decode_execution_account_profile(
+        bundle.artifacts.account_profile.schema,
+        input.set.account_profile,
+    )?;
+    prepare_admitted_transport_pages(&mut bundle, input, profile)?;
+    let runtime_observations_digest = admitted_runtime_observations_digest(
+        profile,
+        input.scenario.tail_count,
+        &bundle.span_counts,
+        bundle.transport_span,
+        &bundle.logical,
+        ContentProjectionKeysV1 {
+            selected_config: bundle.artifacts.config.digest,
+            product_root: input.fixed.product.digest,
+            portfolio: input.fixed.portfolio.digest,
+            linked_basis: input.fixed.linked_basis.digest,
+        },
+    )?;
+    let artifact_release = ArtifactReleaseIdV1::new(evidence.artifact_release.digest)
+        .map_err(|_| BuilderError::Artifact)?;
+    let invocation_context = AdmittedInvocationContextV3 {
+        release_set: content(input.waist.release_set)?,
+        market: content(input.fixed.market.key.to_bytes())?,
+        root: content(input.fixed.root.key.to_bytes())?,
+        registry_program: content(input.waist.registry_program.to_bytes())?,
+        trading_program: content(input.waist.trading_program.to_bytes())?,
+        accelerator_program: content(evidence.accelerator_program.key.to_bytes())?,
+        capability_program: content(bundle.artifacts.descriptor.digest)?,
+        account_profile: descriptor.account_profile().program(),
+        request_profile: descriptor.request_profile().program(),
+        transition: descriptor.transition().program(),
+        effect: descriptor.effect().program(),
+        lifecycle: descriptor.derivation_policy(),
+        strategy: content(bundle.artifacts.strategy.digest)?,
+        certificate: content(evidence.certificate.digest)?,
+        admission: content(evidence.admission.digest)?,
+        artifact_release,
+        config: content(bundle.artifacts.config.digest)?,
+        product: content(input.fixed.product.digest)?,
+        portfolio: content(input.fixed.portfolio.digest)?,
+        linked_basis: content(input.fixed.linked_basis.digest)?,
+        family_request_digest: family_request_digest_v3(input.scenario.family_request)
+            .map_err(|_| BuilderError::Artifact)?,
+        runtime_observations_digest,
+        root_prestate_digest: content(digest32(&input.fixed.root.account.data))?,
+        selected_action: bundle.artifacts.action,
+        tail_count: input.scenario.tail_count,
+        account_count: u32::try_from(bundle.logical.len()).map_err(|_| BuilderError::Arithmetic)?,
+        scalar_count: u32::try_from(bundle.engine.input_scalars.len())
+            .map_err(|_| BuilderError::Arithmetic)?,
+        identity_count: u32::try_from(bundle.engine.input_identities.len())
+            .map_err(|_| BuilderError::Arithmetic)?,
+    };
+    let invocation_context_digest = admitted_invocation_context_digest_v3(invocation_context)
+        .map_err(|_| BuilderError::Artifact)?;
+    let admitted_authorities = derive_admitted_authorities_v1(AdmittedAuthorityInputV1 {
+        trading_program: input.waist.trading_program,
+        release_set: content(input.waist.release_set)?,
+        market: input.fixed.market.key,
+        root: input.fixed.root.key,
+        strategy_program: content(bundle.artifacts.strategy.digest)?,
+        certificate_program: content(evidence.certificate.digest)?,
+        capability_program: content(bundle.artifacts.descriptor.digest)?,
+        invocation_context: invocation_context_digest,
+        transport: if bundle.transport_span.is_some() {
+            dclutch_execution_strategy_contract::v2::RequestTransportV2::ScratchPages
+        } else {
+            dclutch_execution_strategy_contract::v2::RequestTransportV2::Inline
+        },
+        tail_count: input.scenario.tail_count,
+        scalars: &bundle.engine.input_scalars,
+        identities: &bundle.engine.input_identities,
+    })?;
+    materialize_admitted_transport_pages(
+        &mut bundle,
+        input,
+        profile,
+        invocation_context_digest,
+        &admitted_authorities.input_bank,
+    )?;
+    insert_admitted_suffix(&mut bundle, input, &evidence, &admitted_authorities)?;
+    Ok(BuiltAdmittedBundleV1 {
+        bundle,
+        evidence,
+        invocation_context,
+        invocation_context_digest,
+        admitted_authorities,
+    })
+}
+
+fn content(bytes: [u8; 32]) -> Result<dclutch_core_contract::ContentId, BuilderError> {
+    dclutch_core_contract::ContentId::new(bytes).map_err(|_| BuilderError::Artifact)
+}
+
+fn admitted_runtime_observations_digest(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    spans: &[u32],
+    transport_span: Option<u16>,
+    frame: &LogicalFrameV1,
+    keys: ContentProjectionKeysV1,
+) -> Result<dclutch_core_contract::ContentId, BuilderError> {
+    let observations = observe_frame(profile, tail_count, spans, frame)?;
+    let transport = transport_span_range(profile, spans, transport_span)?;
+    let shadow = observations
+        .iter()
+        .enumerate()
+        .map(|(coordinate, observed)| {
+            let representative =
+                profile_ops::representative(profile, tail_count, spans, coordinate)?;
+            let key = match representative {
+                1 => keys.selected_config,
+                2 => keys.product_root,
+                3 => keys.portfolio,
+                4 => keys.linked_basis,
+                _ => observed.key,
+            };
+            // Authenticated input pages embed this invocation-context digest.
+            // Hashing their exact bytes here would be a cryptographic
+            // self-reference. Their keys and account facts remain in this
+            // transcript; exact page bytes are independently committed by the
+            // request's input-bank digest and page decoder.
+            let data = if transport
+                .as_ref()
+                .is_some_and(|range| range.contains(&coordinate))
+            {
+                [].as_slice()
+            } else {
+                observed.data.as_slice()
+            };
+            Ok(ShadowRuntimeObservationV3 {
+                key,
+                owner: observed.owner,
+                lamports: observed.lamports,
+                data,
+                signer: false,
+                writable: false,
+                executable: observed.executable,
+            })
+        })
+        .collect::<Result<Vec<_>, BuilderError>>()?;
+    runtime_observations_digest_v3(&shadow).map_err(|_| BuilderError::Artifact)
+}
+
+fn transport_span_range(
+    profile: AccountProfileV2<'_>,
+    spans: &[u32],
+    transport_span: Option<u16>,
+) -> Result<Option<core::ops::Range<usize>>, BuilderError> {
+    let Some(transport_span) = transport_span else {
+        return Ok(None);
+    };
+    if !profile.uses_dynamic_fixed_spans()
+        || spans.len() != usize::from(profile.dynamic_fixed_span_count())
+        || transport_span >= profile.dynamic_fixed_span_count()
+    {
+        return Err(BuilderError::Spans("transport-range"));
+    }
+    let span = profile
+        .dynamic_fixed_span(transport_span)
+        .map_err(|_| BuilderError::Spans("transport-range"))?;
+    let prior = spans
+        .get(..usize::from(transport_span))
+        .ok_or(BuilderError::Spans("transport-range"))?
+        .iter()
+        .try_fold(0_usize, |sum, width| {
+            sum.checked_add(usize::try_from(*width).map_err(|_| BuilderError::Arithmetic)?)
+                .ok_or(BuilderError::Arithmetic)
+        })?;
+    let start = usize::from(span.insertion_coordinate())
+        .checked_add(prior)
+        .ok_or(BuilderError::Arithmetic)?;
+    let width = usize::try_from(
+        *spans
+            .get(usize::from(transport_span))
+            .ok_or(BuilderError::Spans("transport-range"))?,
+    )
+    .map_err(|_| BuilderError::Arithmetic)?;
+    Ok(Some(
+        start..start.checked_add(width).ok_or(BuilderError::Arithmetic)?,
+    ))
+}
+
+fn prepare_admitted_transport_pages(
+    bundle: &mut BuiltBundleV1,
+    input: &BundleInputV1<'_>,
+    profile: AccountProfileV2<'_>,
+) -> Result<(), BuilderError> {
+    let Some(range) = transport_span_range(profile, &bundle.span_counts, bundle.transport_span)?
+    else {
+        return Ok(());
+    };
+    let bank_len = bundle
+        .engine
+        .input_scalars
+        .len()
+        .checked_mul(8)
+        .and_then(|value| {
+            bundle
+                .engine
+                .input_identities
+                .len()
+                .checked_mul(32)
+                .and_then(|identities| value.checked_add(identities))
+        })
+        .ok_or(BuilderError::Arithmetic)?;
+    let mut bank = vec![0_u8; bank_len];
+    encode_register_bank_into(
+        &bundle.engine.input_scalars,
+        &bundle.engine.input_identities,
+        &mut bank,
+    )
+    .map_err(|_| BuilderError::Artifact)?;
+    let bank_digest = digest32(&bank);
+    for (page_index, coordinate) in range.enumerate() {
+        let payload_start = page_index
+            .checked_mul(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2)
+            .ok_or(BuilderError::Arithmetic)?;
+        let payload_end = payload_start
+            .checked_add(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2)
+            .map(|end| end.min(bank.len()))
+            .ok_or(BuilderError::Arithmetic)?;
+        if payload_start >= payload_end {
+            return Err(BuilderError::Spans("transport-pages"));
+        }
+        let data_len = SCRATCH_PAGE_HEADER_BYTES_V2
+            .checked_add(payload_end - payload_start)
+            .ok_or(BuilderError::Arithmetic)?;
+        let mut key = Sha256::new();
+        key.update(b"dclutch:bundle-builder:input-scratch-page:v1");
+        key.update(input.waist.release_set);
+        key.update(input.fixed.market.key.as_ref());
+        key.update(input.fixed.root.key.as_ref());
+        key.update(bundle.artifacts.strategy.digest);
+        key.update(bank_digest);
+        key.update(
+            u32::try_from(page_index)
+                .map_err(|_| BuilderError::Arithmetic)?
+                .to_le_bytes(),
+        );
+        let page = data_account(
+            input.rent,
+            Pubkey::new_from_array(key.finalize().into()),
+            input.waist.trading_program,
+            vec![0_u8; data_len],
+        );
+        replace_runtime_account(bundle, coordinate, page)?;
+    }
+    Ok(())
+}
+
+fn materialize_admitted_transport_pages(
+    bundle: &mut BuiltBundleV1,
+    input: &BundleInputV1<'_>,
+    profile: AccountProfileV2<'_>,
+    invocation_context: dclutch_core_contract::ContentId,
+    input_bank: &[u8],
+) -> Result<(), BuilderError> {
+    let Some(range) = transport_span_range(profile, &bundle.span_counts, bundle.transport_span)?
+    else {
+        return Ok(());
+    };
+    let scalar_count =
+        u32::try_from(bundle.engine.input_scalars.len()).map_err(|_| BuilderError::Arithmetic)?;
+    let identity_count = u32::try_from(bundle.engine.input_identities.len())
+        .map_err(|_| BuilderError::Arithmetic)?;
+    let bank_digest = content(digest32(input_bank))?;
+    let strategy = content(bundle.artifacts.strategy.digest)?;
+    for (page_index, coordinate) in range.enumerate() {
+        let payload_start = page_index
+            .checked_mul(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2)
+            .ok_or(BuilderError::Arithmetic)?;
+        let payload_end = payload_start
+            .checked_add(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2)
+            .map(|end| end.min(input_bank.len()))
+            .ok_or(BuilderError::Arithmetic)?;
+        let payload = input_bank
+            .get(payload_start..payload_end)
+            .ok_or(BuilderError::Arithmetic)?;
+        let current = bundle
+            .logical
+            .get(coordinate)
+            .ok_or(BuilderError::Binding(line!()))?
+            .clone();
+        let page = AuthenticatedScratchPageV2::new(
+            ScratchPageKindV2::Input,
+            content(input.waist.trading_program.to_bytes())?,
+            strategy,
+            invocation_context,
+            bank_digest,
+            input.scenario.tail_count,
+            scalar_count,
+            identity_count,
+            u32::try_from(page_index).map_err(|_| BuilderError::Arithmetic)?,
+            payload,
+        )
+        .map_err(|_| BuilderError::Artifact)?;
+        let mut data = vec![0_u8; SCRATCH_PAGE_HEADER_BYTES_V2 + payload.len()];
+        page.encode_into(&mut data)
+            .map_err(|_| BuilderError::Artifact)?;
+        let materialized = data_account(input.rent, current.key, input.waist.trading_program, data);
+        if materialized.account.lamports != current.account.lamports {
+            return Err(BuilderError::Binding(line!()));
+        }
+        replace_runtime_account(bundle, coordinate, materialized)?;
+    }
+    Ok(())
+}
+
+fn replace_runtime_account(
+    bundle: &mut BuiltBundleV1,
+    coordinate: usize,
+    replacement: BuiltAccountV1,
+) -> Result<(), BuilderError> {
+    let old = bundle
+        .logical
+        .get(coordinate)
+        .ok_or(BuilderError::Binding(line!()))?
+        .key;
+    let matching_metas = bundle
+        .hot_instruction
+        .accounts
+        .iter_mut()
+        .filter(|meta| meta.pubkey == old)
+        .collect::<Vec<_>>();
+    if matching_metas.len() != 1 {
+        return Err(BuilderError::Binding(line!()));
+    }
+    matching_metas
+        .into_iter()
+        .next()
+        .ok_or(BuilderError::Binding(line!()))?
+        .pubkey = replacement.key;
+    let install = bundle
+        .accounts
+        .iter_mut()
+        .find(|account| account.key == old)
+        .ok_or(BuilderError::Binding(line!()))?;
+    install.key = replacement.key;
+    install.account = replacement.account.clone();
+    bundle.logical.adopt(coordinate, replacement)
+}
+
+fn insert_admitted_suffix(
+    bundle: &mut BuiltBundleV1,
+    input: &BundleInputV1<'_>,
+    evidence: &DerivedAdmittedEvidenceV1,
+    authorities: &DerivedAdmittedAuthoritiesV1,
+) -> Result<(), BuilderError> {
+    let mut extras = vec![
+        finalized_raw(input.rent, &evidence.certificate),
+        vacant(evidence.certificate.staging),
+        finalized_raw(input.rent, &evidence.admission),
+        vacant(evidence.admission.staging),
+        finalized_raw(input.rent, &evidence.artifact_release),
+        vacant(evidence.artifact_release.staging),
+        evidence.accelerator_program.clone(),
+        evidence.accelerator_programdata.clone(),
+    ];
+    extras.extend(
+        authorities
+            .entries
+            .iter()
+            .map(|entry| vacant(entry.authority)),
+    );
+    let metas = extras
+        .iter()
+        .map(|account| AccountMeta::new_readonly(account.key, false))
+        .collect::<Vec<_>>();
+    bundle.hot_instruction.accounts.splice(
+        HOT_FIXED_ACCOUNT_COUNT_V3..HOT_FIXED_ACCOUNT_COUNT_V3,
+        metas,
+    );
+    for built in extras {
+        if !bundle
+            .accounts
+            .iter()
+            .any(|account| account.key == built.key)
+        {
+            bundle.accounts.push(InstallAccountV1 {
+                key: built.key,
+                account: built.account,
+                snapshot_for_rollback: false,
+            });
+        }
+    }
+    for key in [
+        evidence.accelerator_program.key,
+        evidence.accelerator_programdata.key,
+    ] {
+        if !bundle.externally_installed_keys.contains(&key) {
+            bundle.externally_installed_keys.push(key);
+        }
+    }
+    Ok(())
 }
 
 /// Observe the current frame with per-coordinate profile privileges.
@@ -603,4 +1112,133 @@ fn fixed_hot_frame(
         .into_iter()
         .map(|value| value.ok_or(BuilderError::Profile(line!())))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use dclutch_account_profile_contract::{
+        v2::{
+            AccountPrestateV2, HEADER_BYTES, OPERATION_BYTES, RULE_BYTES,
+            encode::{
+                AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
+                AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
+                AccountRuleInputV2, RegisterGeometryV2, ScalarCoordinateV2,
+                encode_account_profile_v2_atomic,
+            },
+        },
+        v3::{HEADER_BYTES_V3, encode_account_profile_v3_atomic},
+    };
+
+    use super::*;
+
+    fn exact_base_profile() -> Vec<u8> {
+        let rules = [
+            AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, true, false),
+                effect_permissions: AccountEffectPermissionsV2::new(false, true, false),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 64,
+                data_item_stride: 0,
+            },
+            AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, false, false),
+                effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+        ];
+        let operations = [AccountOperationInputV2::ProjectLamports {
+            account: AccountCoordinateV2::fixed(1),
+            destination: ScalarCoordinateV2::common(0),
+        }];
+        let registers = RegisterGeometryV2 {
+            common_scalars: 1,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        };
+        let mut scratch = vec![0_u8; HEADER_BYTES + 2 * RULE_BYTES + OPERATION_BYTES];
+        let mut output = vec![0_u8; scratch.len()];
+        encode_account_profile_v2_atomic(
+            AccountProfileArtifactV2::RuntimeTail,
+            &rules,
+            &[],
+            &operations,
+            &[],
+            registers,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("exact V2 profile");
+        output
+    }
+
+    fn exact_successor_profile(base: &[u8]) -> Vec<u8> {
+        let mut scratch = vec![0_u8; HEADER_BYTES_V3 + base.len()];
+        let mut output = vec![0_u8; scratch.len()];
+        encode_account_profile_v3_atomic(base, &[], &mut scratch, &mut output)
+            .expect("exact V3 profile");
+        output
+    }
+
+    #[test]
+    fn schema_selects_v2_or_full_v3_base_execution_view() {
+        let base = exact_base_profile();
+        let successor = exact_successor_profile(&base);
+        assert_eq!(
+            decode_execution_account_profile(ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2, &base)
+                .expect("V2 execution view")
+                .bytes(),
+            base
+        );
+        assert_eq!(
+            decode_execution_account_profile(ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3, &successor,)
+                .expect("V3 base execution view")
+                .bytes(),
+            base
+        );
+        assert_ne!(successor, base);
+    }
+
+    #[test]
+    fn schema_refuses_unknown_malformed_and_hybrid_profiles() {
+        let base = exact_base_profile();
+        let successor = exact_successor_profile(&base);
+        assert_eq!(
+            decode_execution_account_profile([0x71; 32], &base),
+            Err(BuilderError::Artifact)
+        );
+        assert_eq!(
+            decode_execution_account_profile(ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2, &successor),
+            Err(BuilderError::Artifact)
+        );
+        assert_eq!(
+            decode_execution_account_profile(ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3, &base),
+            Err(BuilderError::Artifact)
+        );
+        let mut malformed = successor;
+        malformed[12] = 1;
+        assert_eq!(
+            decode_execution_account_profile(ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3, &malformed),
+            Err(BuilderError::Artifact)
+        );
+        let mut malformed_base = exact_successor_profile(&base);
+        let embedded_magic = HEADER_BYTES_V3;
+        malformed_base[embedded_magic] ^= 1;
+        assert_eq!(
+            decode_execution_account_profile(ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3, &malformed_base,),
+            Err(BuilderError::Artifact)
+        );
+
+        // The successor never weakens the embedded base profile's prestate.
+        assert_eq!(
+            AccountProfileV2::decode(&base)
+                .expect("exact base")
+                .rule(false, 0)
+                .expect("fixed rule")
+                .prestate(),
+            AccountPrestateV2::Exact
+        );
+    }
 }

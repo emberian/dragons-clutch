@@ -7,7 +7,6 @@
 //! contract, not account or CPI authority; generic Trading remains the only
 //! physical executor and writer.
 
-use crate::effect_artifacts_v3::unauthored_actions;
 use crate::escrow_v1::ActionCustodyTransferV1;
 use dclutch_account_profile_contract::{
     lifecycle_v3::StateLifecyclePolicyV5,
@@ -55,7 +54,7 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_general_codec::{
     Action,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
-    successor_request_v3::ControllerRequestV3,
+    successor_request_v3::{ControllerActionV3, ControllerRequestV3},
 };
 use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
@@ -133,11 +132,94 @@ pub struct GeneralArtifactSelectionV3 {
     pub artifact_release: [u8; 32],
 }
 
+/// Exact controller-request wire generation retained after normalization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralRequestWireV3 {
+    /// Settlement-generation `DCGREQ02` wire.
+    V2,
+    /// Front-half-generation `DCGREQ03` wire.
+    V3,
+}
+
+/// Lossless in-memory request shared by the V2 settlement and V3 front-half wires.
+///
+/// Both wire generations are exactly 64 bytes, but V3 assigns the last byte to
+/// a third, conditionally-created state.  Collapsing V3 into
+/// [`ControllerRequestV2`] discards that byte and makes terminal
+/// `VerifyCandidateRow` impossible to authenticate honestly.  This value is
+/// not a second wire: it preserves every semantic coordinate after the exact
+/// generation-specific hostile decoder has accepted the original bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralDecodedRequestV3 {
+    /// Exact wire generation that hostile-decoded this request.
+    pub wire: GeneralRequestWireV3,
+    /// Legacy General action selected by the descriptor table.
+    pub action: Action,
+    /// Action-selected optimistic revision.
+    pub expected_revision: u64,
+    /// Candidate, batch, order, or other action-selected subject.
+    pub candidate_id: Option<[u8; 32]>,
+    /// Page coordinate when the action declares one.
+    pub page_index: u32,
+    /// Execution coordinate when the action declares one.
+    pub execution_index: u8,
+    /// Manifest order coordinate when the action declares one.
+    pub manifest_order_index: u8,
+    /// Primary state PDA bump witness.
+    pub state_bump: u8,
+    /// Secondary state PDA bump witness.
+    pub terminal_record_bump: u8,
+    /// V3-only conditional result-state PDA bump witness.
+    pub result_state_bump: u8,
+}
+
+impl GeneralDecodedRequestV3 {
+    /// Re-encode the exact generation that produced this normalized request.
+    ///
+    /// This is used at the accelerator boundary to prove the decoded semantic
+    /// value still names the very bytes authenticated from the top-level
+    /// Trading instruction; normalization never becomes a lossy side channel.
+    pub fn to_bytes(self) -> Result<[u8; CONTROLLER_REQUEST_BYTES_V2]> {
+        match self.wire {
+            GeneralRequestWireV3::V2 => {
+                if self.result_state_bump != 0 {
+                    return Err(GeneralArtifactErrorV3::Request);
+                }
+                ControllerRequestV2 {
+                    action: self.action,
+                    expected_revision: self.expected_revision,
+                    candidate_id: self.candidate_id,
+                    page_index: self.page_index,
+                    execution_index: self.execution_index,
+                    manifest_order_index: self.manifest_order_index,
+                    state_bump: self.state_bump,
+                    terminal_record_bump: self.terminal_record_bump,
+                }
+                .to_bytes()
+                .map_err(|_| GeneralArtifactErrorV3::Request)
+            }
+            GeneralRequestWireV3::V3 => ControllerRequestV3 {
+                action: ControllerActionV3::from(self.action),
+                expected_revision: self.expected_revision,
+                subject_id: self.candidate_id,
+                page_index: self.page_index,
+                execution_index: self.execution_index,
+                manifest_order_index: self.manifest_order_index,
+                primary_state_bump: self.state_bump,
+                secondary_state_bump: self.terminal_record_bump,
+                result_state_bump: self.result_state_bump,
+            }
+            .to_bytes()
+            .map_err(|_| GeneralArtifactErrorV3::Request),
+        }
+    }
+}
+
 /// Complete borrowed artifact bundle after every content and geometry join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralArtifactBundleV3<'a> {
     /// Exact decoded family request.
-    pub request: ControllerRequestV2,
+    pub request: GeneralDecodedRequestV3,
     /// Action-selected capability descriptor.
     pub descriptor: CapabilityProgramV4,
     /// Immutable runtime-width General policy.
@@ -219,7 +301,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
     {
         return Err(GeneralArtifactErrorV3::ProgramSet);
     }
-    let request = decode_admission_request(family_request)?;
+    let request = decode_general_request_v3(family_request)?;
     let selected_descriptor = set
         .select_descriptor(family_request)
         .map_err(|_| GeneralArtifactErrorV3::ProgramSet)?;
@@ -386,25 +468,33 @@ pub fn authenticate_general_artifacts_v3<'a>(
     })
 }
 
-/// Hostile-decode one admission request under the grammar its action speaks.
+/// Hostile-decode either admitted General request generation without losing a coordinate.
 ///
-/// The settlement seven carry the V2 request; the GEN-SEVEN actions carry the
-/// width-preserving V3 request, which V2 has no legal encoding for. The V3
-/// value is carried onward in the V2 in-memory shape -- same width, same
-/// selector, subject in the candidate slot, primary and secondary bumps in the
-/// two bump slots -- so every settlement-only consumer keeps its type. The V3
-/// result bump has no V2 slot; it is zero for every action authored so far,
-/// and `VerifyCandidateRow`'s authoring must widen this carrier before it can
-/// land.
-fn decode_admission_request(family_request: &[u8]) -> Result<ControllerRequestV2> {
+/// The seven settlement actions retain their V2 wire.  Front-half actions use
+/// V3.  The selector is safe to inspect before decoding because both schemas
+/// pin it to byte 10 and the selected RequestProfile independently revalidates
+/// the complete generation-specific grammar.
+pub fn decode_general_request_v3(family_request: &[u8]) -> Result<GeneralDecodedRequestV3> {
     let selector = usize::try_from(GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3)
         .map_err(|_| GeneralArtifactErrorV3::Request)?;
     let tag = *family_request
         .get(selector)
         .ok_or(GeneralArtifactErrorV3::Request)?;
     if tag <= Action::Close as u8 {
-        return ControllerRequestV2::decode(family_request)
-            .map_err(|_| GeneralArtifactErrorV3::Request);
+        let request = ControllerRequestV2::decode(family_request)
+            .map_err(|_| GeneralArtifactErrorV3::Request)?;
+        return Ok(GeneralDecodedRequestV3 {
+            wire: GeneralRequestWireV3::V2,
+            action: request.action,
+            expected_revision: request.expected_revision,
+            candidate_id: request.candidate_id,
+            page_index: request.page_index,
+            execution_index: request.execution_index,
+            manifest_order_index: request.manifest_order_index,
+            state_bump: request.state_bump,
+            terminal_record_bump: request.terminal_record_bump,
+            result_state_bump: 0,
+        });
     }
     let request =
         ControllerRequestV3::decode(family_request).map_err(|_| GeneralArtifactErrorV3::Request)?;
@@ -412,10 +502,8 @@ fn decode_admission_request(family_request: &[u8]) -> Result<ControllerRequestV2
         .action
         .legacy()
         .ok_or(GeneralArtifactErrorV3::Request)?;
-    if request.result_state_bump != 0 {
-        return Err(GeneralArtifactErrorV3::Request);
-    }
-    Ok(ControllerRequestV2 {
+    Ok(GeneralDecodedRequestV3 {
+        wire: GeneralRequestWireV3::V3,
         action,
         expected_revision: request.expected_revision,
         candidate_id: request.subject_id,
@@ -424,6 +512,7 @@ fn decode_admission_request(family_request: &[u8]) -> Result<ControllerRequestV2
         manifest_order_index: request.manifest_order_index,
         state_bump: request.primary_state_bump,
         terminal_record_bump: request.secondary_state_bump,
+        result_state_bump: request.result_state_bump,
     })
 }
 
@@ -487,7 +576,7 @@ fn validate_geometry(
     transition: TransitionProgramV3<'_>,
     effect: EffectProgramV3<'_>,
 ) -> Result<()> {
-    validate_hot_account_profile(account)?;
+    validate_hot_account_profile(action, account)?;
     let expected_fixed = general_account_profile_fixed_count_v3(action)
         .map_err(|_| GeneralArtifactErrorV3::Geometry)?;
     if account.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
@@ -561,7 +650,7 @@ fn validate_geometry(
     Ok(())
 }
 
-fn validate_hot_account_profile(account: AccountProfileV2<'_>) -> Result<()> {
+fn validate_hot_account_profile(action: Action, account: AccountProfileV2<'_>) -> Result<()> {
     if usize::from(account.fixed_account_count()) < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 {
         return Err(GeneralArtifactErrorV3::Geometry);
     }
@@ -605,8 +694,20 @@ fn validate_hot_account_profile(account: AccountProfileV2<'_>) -> Result<()> {
                 u16::try_from(coordinate).map_err(|_| GeneralArtifactErrorV3::Geometry)?,
             )
             .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
+        let expected_effect_permissions = if coordinate == HOT_RUNTIME_ROOT_COORDINATE_V3
+            && matches!(action, Action::OpenBatch | Action::CloseBatch)
+        {
+            // These are the only two actions whose semantic transition advances
+            // the General root. The account-profile author grants the root's
+            // data-write bit only to them; admission must accept that exact
+            // action-selected grant rather than imposing the settlement-only
+            // zero permission that predated the collection catalogue.
+            0x04
+        } else {
+            0
+        };
         if rule.privileges() != privileges
-            || rule.effect_permissions() != 0
+            || rule.effect_permissions() != expected_effect_permissions
             || rule.alias_kind()
                 != dclutch_account_profile_contract::v2::AliasKindV2::SelfCoordinate
             || rule.alias_index() != 0
@@ -654,12 +755,13 @@ fn validate_hot_account_profile(account: AccountProfileV2<'_>) -> Result<()> {
 
 fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
     match action {
-        // No artifact was authored for these, so no route table can be correct
-        // for them and none is accepted.
-        unauthored_actions!() => Err(GeneralArtifactErrorV3::Effect),
-        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => {
-            require_route_count(effect, 0)
-        }
+        Action::OpenBatch
+        | Action::CloseBatch
+        | Action::SubmitCandidate
+        | Action::VerifyCandidateRow
+        | Action::CloseCandidate
+        | Action::Consider
+        | Action::Freeze => require_route_count(effect, 0),
         Action::InitializeSettlement => {
             require_route_count(effect, 3)?;
             require_position_route(effect, 0, ProtocolPositionActionV2::Admit)?;
@@ -1099,10 +1201,6 @@ mod tests {
         output
     }
 
-    fn lifecycle_policy() -> Vec<u8> {
-        lifecycle_policy_for(Action::Freeze)
-    }
-
     fn lifecycle_policy_for(action: Action) -> Vec<u8> {
         let bytes = crate::state_artifacts_v3::general_state_lifecycle_bytes_v5(action)
             .expect("lifecycle width");
@@ -1121,8 +1219,7 @@ mod tests {
         output
     }
 
-    fn transition() -> Vec<u8> {
-        let action = Action::Freeze;
+    fn transition_for(action: Action) -> Vec<u8> {
         let (prelude, item, epilogue) =
             crate::transition_artifacts_v3::general_transition_instruction_count_v3(action);
         let mut instructions = vec![
@@ -1141,10 +1238,6 @@ mod tests {
         )
         .expect("successor transition");
         output
-    }
-
-    fn effect() -> Vec<u8> {
-        effect_for(Action::Freeze)
     }
 
     fn effect_for(action: Action) -> Vec<u8> {
@@ -1176,14 +1269,14 @@ mod tests {
         output
     }
 
-    fn program_set(descriptor: [u8; 32]) -> Vec<u8> {
+    fn program_set(action: Action, descriptor: [u8; 32]) -> Vec<u8> {
         use dclutch_capability_program_contract::set_v2::{
             CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
             encode_program_set_v2, encoded_program_set_bytes_v2,
         };
 
         let entry = CapabilityProgramSetEntryV2::new(
-            Action::Freeze as u32,
+            action as u32,
             CapabilityDescriptorReferenceV2::new(
                 id(CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID),
                 id(descriptor),
@@ -1201,13 +1294,17 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
+        fixture_for(Action::Freeze)
+    }
+
+    fn fixture_for(action: Action) -> Fixture {
         use dclutch_capability_program_contract::v4::{ArtifactReferenceV4, CapabilityArtifactsV4};
 
-        let account = account_profile();
-        let lifecycle = lifecycle_policy();
-        let request_profile = general_request_profile_bytes_v1(Action::Freeze).to_vec();
-        let transition = transition();
-        let effect = effect();
+        let account = account_profile_for(action);
+        let lifecycle = lifecycle_policy_for(action);
+        let request_profile = general_request_profile_bytes_v1(action).to_vec();
+        let transition = transition_for(action);
+        let effect = effect_for(action);
         let certificate = ExecutionStrategyCertificateV2::new(
             id(digest(&account)),
             id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
@@ -1277,7 +1374,7 @@ mod tests {
         )
         .expect("descriptor")
         .encode();
-        let set = program_set(digest(&descriptor));
+        let set = program_set(action, digest(&descriptor));
         let config = GeneralConfigV3::new(GeneralConfigV3Input {
             capacity_profile_id: capacity,
             claim_basis_id: [9; 32],
@@ -1295,18 +1392,34 @@ mod tests {
         })
         .expect("legacy config")
         .to_bytes();
-        let request = ControllerRequestV2 {
-            action: Action::Freeze,
-            expected_revision: 7,
-            candidate_id: None,
-            page_index: 0,
-            execution_index: 0,
-            manifest_order_index: 0,
-            state_bump: 42,
-            terminal_record_bump: 0,
-        }
-        .to_bytes()
-        .expect("freeze request");
+        let request = if action == Action::SubmitCandidate {
+            ControllerRequestV3 {
+                action: ControllerActionV3::SubmitCandidate,
+                expected_revision: 0,
+                subject_id: Some([0x31; 32]),
+                page_index: 0,
+                execution_index: 0,
+                manifest_order_index: 0,
+                primary_state_bump: 42,
+                secondary_state_bump: 0,
+                result_state_bump: 0,
+            }
+            .to_bytes()
+            .expect("submit request")
+        } else {
+            ControllerRequestV2 {
+                action,
+                expected_revision: 7,
+                candidate_id: None,
+                page_index: 0,
+                execution_index: 0,
+                manifest_order_index: 0,
+                state_bump: 42,
+                terminal_record_bump: 0,
+            }
+            .to_bytes()
+            .expect("legacy request")
+        };
         Fixture {
             set,
             descriptor,
@@ -1348,6 +1461,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn submit_candidate_artifact_triple_is_admission_joinable_at_runtime_widths() {
+        let fixture = fixture_for(Action::SubmitCandidate);
+        for tail_count in [1_u32, 258] {
+            let bundle = authenticate_general_artifacts_v3(
+                fixture.selection(),
+                fixture.artifacts(),
+                &fixture.request,
+                tail_count,
+            )
+            .expect("SubmitCandidate account/lifecycle/transition/effect triple");
+            assert_eq!(bundle.request.action, Action::SubmitCandidate);
+            assert_eq!(bundle.request.wire, GeneralRequestWireV3::V3);
+            assert_eq!(bundle.tail_count, tail_count);
+        }
+    }
+
+    #[test]
+    fn normalization_preserves_the_v3_result_state_bump_and_original_wire() {
+        let request = ControllerRequestV3 {
+            action: ControllerActionV3::VerifyCandidateRow,
+            expected_revision: 7,
+            subject_id: Some([0x31; 32]),
+            page_index: 2,
+            execution_index: 3,
+            manifest_order_index: 0,
+            primary_state_bump: 41,
+            secondary_state_bump: 42,
+            result_state_bump: 43,
+        };
+        let bytes = request.to_bytes().expect("canonical V3 request");
+        let decoded = decode_general_request_v3(&bytes).expect("lossless normalization");
+        assert_eq!(decoded.wire, GeneralRequestWireV3::V3);
+        assert_eq!(decoded.action, Action::VerifyCandidateRow);
+        assert_eq!(decoded.result_state_bump, 43);
+        assert_eq!(decoded.to_bytes(), Ok(bytes));
+    }
+
+    #[test]
+    fn settlement_normalization_preserves_v2_and_cannot_smuggle_a_result_bump() {
+        let fixture = fixture();
+        let decoded = decode_general_request_v3(&fixture.request).expect("V2 normalization");
+        assert_eq!(decoded.wire, GeneralRequestWireV3::V2);
+        assert_eq!(decoded.result_state_bump, 0);
+        assert_eq!(decoded.to_bytes(), Ok(fixture.request));
+
+        let substituted = GeneralDecodedRequestV3 {
+            result_state_bump: 1,
+            ..decoded
+        };
+        assert_eq!(substituted.to_bytes(), Err(GeneralArtifactErrorV3::Request));
+    }
+
     /// Re-seal a substituted descriptor into a complete, self-consistent graph.
     ///
     /// Substituting one descriptor field moves its digest, so the ProgramSet
@@ -1356,7 +1522,7 @@ mod tests {
     /// never reach the conjunct under test.
     fn resealed(fixture: &Fixture, descriptor: CapabilityProgramV4) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         let encoded = descriptor.encode().to_vec();
-        let set = program_set(digest(&encoded));
+        let set = program_set(Action::Freeze, digest(&encoded));
         let existing = GeneralConfigV3::decode(&fixture.config).expect("fixture config");
         let config = GeneralConfigV3::new(GeneralConfigV3Input {
             capacity_profile_id: existing.capacity_profile_id(),
@@ -1531,7 +1697,7 @@ mod tests {
         )
         .expect("hostile descriptor");
         let hostile_descriptor = descriptor.encode();
-        let hostile_set = program_set(digest(&hostile_descriptor));
+        let hostile_set = program_set(Action::Freeze, digest(&hostile_descriptor));
         let mut hostile_config = GeneralConfigV3::decode(&fixture.config).expect("config");
         hostile_config = GeneralConfigV3::new(GeneralConfigV3Input {
             capacity_profile_id: hostile_config.capacity_profile_id(),

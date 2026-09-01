@@ -217,19 +217,26 @@ fn basis_bytes(
         amplitude: if changed_semantics { 99 } else { 100 },
     }];
     let failure_payouts = [0_u64, 100_u64];
+    let spline_knots = [0_i128, 0, 0, 0, 1, 1, 1, 1];
+    let spline_failure_payouts = [25_u64; 4];
     let (basis_width, payout_scale, knot_denominator, active_knots, active_terms, failure) =
         match kind {
             BasisKindV3::CategoricalQ1 => (4, 1, 1, &[][..], &[][..], &[][..]),
             BasisKindV3::GradedExactComplement => {
                 (2, 100, 1, &knots[..], &terms[..], &failure_payouts[..])
             }
-            // No fixture, because no encoder: `compile_basis_v3` refuses this
-            // kind, so any tuple returned here would produce a record the
-            // codec will not build. A fixture that cannot be compiled is worth
-            // less than a panic naming why.
-            BasisKindV3::SplineDegree2To3 { .. } => {
-                panic!("no runtime basis fixture exists for the spline kind: it has no encoder")
-            }
+            BasisKindV3::SplineDegree2To3 {
+                degree: 3,
+                interior_multiplicity: false,
+            } => (
+                4,
+                100,
+                1,
+                &spline_knots[..],
+                &[][..],
+                &spline_failure_payouts[..],
+            ),
+            BasisKindV3::SplineDegree2To3 { .. } => panic!("unsupported spline fixture"),
         };
     let categorical_width = if changed_semantics && kind == BasisKindV3::CategoricalQ1 {
         5
@@ -249,9 +256,13 @@ fn basis_bytes(
         knots: active_knots,
         terms: active_terms,
         failure_payouts: failure,
-        // Exempt by proof: degree 0 and 1 need no price gate,
-        // and a digest offered alongside one is refused.
-        price_gate_certificate_digest: [0_u8; 32],
+        price_gate_certificate_digest: if matches!(kind, BasisKindV3::SplineDegree2To3 { .. }) {
+            [0x45_u8; 32]
+        } else {
+            // Exempt by proof: degree 0 and 1 need no price gate,
+            // and a digest offered alongside one is refused.
+            [0_u8; 32]
+        },
     };
     let width = basis_record_bytes_v3(
         kind,
@@ -643,9 +654,6 @@ fn authenticate_v3_continuation(runtime: &mut RuntimeV3Backing) -> Result<Runtim
             raw: &basis_raw,
             staging: &basis_staging,
         },
-        // A graded basis is exempt from the price gate by proof, so no
-        // certificate is offered and none is required.
-        None,
     )?;
     let linked_basis_body_digest = content_id(
         hash(
@@ -668,6 +676,47 @@ fn authenticate_v3_continuation(runtime: &mut RuntimeV3Backing) -> Result<Runtim
         linked_basis_staging_writable: authenticated.linked_basis_staging.is_writable,
         linked_basis_body_digest,
     })
+}
+
+fn authenticate_v3_at_founding_without_certificate(runtime: &mut RuntimeV3Backing) -> Result<()> {
+    let product_raw = runtime.product.raw.info();
+    let product_staging = runtime.product.staging.info();
+    let domain_raw = runtime.domain.raw.info();
+    let domain_staging = runtime.domain.staging.info();
+    let portfolio_raw = runtime.portfolio.raw.info();
+    let portfolio_staging = runtime.portfolio.staging.info();
+    let basis_raw = runtime.basis.raw.info();
+    let basis_staging = runtime.basis.staging.info();
+    let authenticated_v2 = authenticate_product_runtime_v2(
+        &REGISTRY,
+        &Rent::default(),
+        runtime.product.coordinate.content_digest,
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: &product_raw,
+                staging: &product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: &domain_raw,
+                staging: &domain_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: &portfolio_raw,
+                staging: &portfolio_staging,
+            },
+        },
+    )?;
+    authenticate_founding_product_basis_v3(
+        &REGISTRY,
+        &Rent::default(),
+        authenticated_v2,
+        FinalizedRecordFrameV2 {
+            raw: &basis_raw,
+            staging: &basis_staging,
+        },
+        None,
+    )
+    .map(|_| ())
 }
 
 fn content_id(bytes: [u8; 32]) -> ContentId {
@@ -775,6 +824,30 @@ fn v3_basis_only_continuation_matches_full_graph_without_redecoding_runtime() {
             full.linked_basis_body_digest
         );
     }
+}
+
+/// The shared reader used by Trading and Claims is a continuation over the
+/// immutable basis digest Core admitted at founding. Before the hoist this
+/// case refused `PriceGateRequired` inside that continuation, proving the
+/// founding-only digest probe still ran on every trade. The paired assertion
+/// keeps the actual founding boundary fail-closed.
+#[test]
+fn spline_price_gate_runs_at_founding_not_on_an_authenticated_continuation() {
+    let spline = BasisKindV3::SplineDegree2To3 {
+        degree: 3,
+        interior_multiplicity: false,
+    };
+    let mut continuation = compiled_runtime_v3(spline, 0x31);
+    let authenticated = authenticate_v3_continuation(&mut continuation)
+        .expect("an already-admitted spline continuation");
+    assert_eq!(authenticated.basis_kind, spline);
+    assert_eq!(authenticated.basis_width, 4);
+
+    let mut founding = compiled_runtime_v3(spline, 0x32);
+    assert_eq!(
+        authenticate_v3_at_founding_without_certificate(&mut founding),
+        Err(Error::PriceGateRequired)
+    );
 }
 
 #[test]

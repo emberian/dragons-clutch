@@ -899,6 +899,9 @@ const FEE_BEARING_FLOOR_CU_V1: u64 = FEE_BEARING_MEASURED_FLOOR_CU_V1 + ATTEMPT_
 /// `docs/design/BASIS_ABI_UNIFICATION_V1.md` says the hot path gains exactly zero
 /// CU, which this sweep falsifies by about 4,500.
 ///
-/// Nothing got cheaper in exchange. The fee-bearing fill still fits: 32/32
-/// executed, and this floor sits 130,081 CU under the ceiling.
-const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_269_919;
+/// At the BASIS founding-hoist correction, both arms got cheaper together as
+/// this file predicted. On the same five ELFs and 32 seeds the fee-bearing
+/// floor moved **1,269,919 -> 1,266,429** (-3,490), while the zero-fee arm read
+/// 1,266,559. Both arms executed 32/32; their 130-CU gap remains less than a
+/// tenth of one bump attempt and the saving is upstream of fee work.
+const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_266_429;

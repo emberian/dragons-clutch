@@ -323,7 +323,8 @@ pub const fn general_action_custody_transfer_v1(action: Action) -> ActionCustody
         | Action::OpenBatch
         | Action::CloseBatch
         | Action::SubmitCandidate
-        | Action::VerifyCandidateRow => ActionCustodyTransferV1::None,
+        | Action::VerifyCandidateRow
+        | Action::CloseCandidate => ActionCustodyTransferV1::None,
     }
 }
 

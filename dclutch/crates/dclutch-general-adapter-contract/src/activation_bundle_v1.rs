@@ -67,7 +67,7 @@ use dclutch_sha256_adapter::digest;
 
 use crate::{
     artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3,
-    release_v3::{GENERAL_ACTIONS_V4, GENERAL_ACTIVATION_SELECTOR_V4, GeneralReleaseProfileV1},
+    release_v3::{GENERAL_ACTIONS_V5, GENERAL_ACTIVATION_SELECTOR_V4, GeneralReleaseProfileV1},
 };
 
 /// Exact activation selector-request width; the selector byte is at 10.
@@ -391,17 +391,54 @@ pub fn build_general_activation_capable_program_set_v1(
     action_descriptor_ids: &[[u8; 32]],
     activation_descriptor_id: [u8; 32],
 ) -> GeneralActivationResultV1<Vec<u8>> {
+    build_general_activation_capable_program_set_for_profile_v1(
+        GeneralReleaseProfileV1::SettlementWithActivation,
+        action_descriptor_ids,
+        activation_descriptor_id,
+    )
+}
+
+/// The exact sixteen-entry current General release set: all fifteen first-class
+/// V5 actions followed by the activation coordinate.
+///
+/// This is append-only beside [`build_general_activation_capable_program_set_v1`]:
+/// the historical seven-action constructor keeps its exact profile and bytes.
+/// The current selected-release compiler uses this constructor so its published
+/// action count, descriptors, selectable set, and family admission all name the
+/// same complete catalogue.
+pub fn build_general_activation_capable_program_set_v2(
+    action_descriptor_ids: &[[u8; 32]],
+    activation_descriptor_id: [u8; 32],
+) -> GeneralActivationResultV1<Vec<u8>> {
+    build_general_activation_capable_program_set_for_profile_v1(
+        GeneralReleaseProfileV1::CompleteV2WithActivation,
+        action_descriptor_ids,
+        activation_descriptor_id,
+    )
+}
+
+fn build_general_activation_capable_program_set_for_profile_v1(
+    profile: GeneralReleaseProfileV1,
+    action_descriptor_ids: &[[u8; 32]],
+    activation_descriptor_id: [u8; 32],
+) -> GeneralActivationResultV1<Vec<u8>> {
     use dclutch_capability_program_contract::set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
         SelectorWidthV2, encode_program_set_v2, encoded_program_set_bytes_v2,
     };
 
-    let profile = GeneralReleaseProfileV1::SettlementWithActivation;
+    if !matches!(
+        profile,
+        GeneralReleaseProfileV1::SettlementWithActivation
+            | GeneralReleaseProfileV1::CompleteV2WithActivation
+    ) {
+        return Err(GeneralActivationBundleErrorV1::ProgramSet);
+    }
     if action_descriptor_ids.len() != profile.action_count() {
         return Err(GeneralActivationBundleErrorV1::ProgramSet);
     }
     let mut entries = Vec::with_capacity(profile.entry_count());
-    for (action, descriptor) in GENERAL_ACTIONS_V4
+    for (action, descriptor) in GENERAL_ACTIONS_V5
         .into_iter()
         .take(profile.action_count())
         .zip(action_descriptor_ids.iter().copied())
@@ -454,7 +491,7 @@ pub fn build_general_activation_capable_program_set_v1(
         return Err(GeneralActivationBundleErrorV1::ProgramSet);
     }
     // And no action request may reach it: every action selects its own V4.
-    for (index, action) in GENERAL_ACTIONS_V4
+    for (index, action) in GENERAL_ACTIONS_V5
         .into_iter()
         .take(profile.action_count())
         .enumerate()
@@ -757,7 +794,10 @@ mod tests {
     /// the activation seam will accept, selecting the bundle this module built.
     #[test]
     fn the_activation_capable_set_selects_the_bundles_own_descriptor() {
-        use dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2;
+        use dclutch_capability_program_contract::set_v2::{
+            CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2, CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2,
+            CapabilityProgramSetV2,
+        };
 
         let (_, bundle) = built();
         let actions: Vec<[u8; 32]> = (0..GeneralReleaseProfileV1::SettlementWithActivation
@@ -810,6 +850,66 @@ mod tests {
             build_general_activation_capable_program_set_v1(
                 &actions,
                 actions.first().copied().expect("first action")
+            )
+            .err(),
+            Some(GeneralActivationBundleErrorV1::ProgramSet)
+        );
+
+        // The current complete constructor is a strict append-only extension:
+        // its first seven encoded entries are byte-for-byte the historical
+        // set, and its activation entry is the same exact reference moved to
+        // the coordinate after all fifteen actions.
+        let complete_actions: Vec<[u8; 32]> = (0
+            ..GeneralReleaseProfileV1::CompleteV2WithActivation.action_count())
+            .map(|index| [u8::try_from(index).expect("action index") + 1; 32])
+            .collect();
+        assert_eq!(
+            complete_actions
+                .get(..actions.len())
+                .expect("legacy prefix"),
+            actions
+        );
+        let complete_bytes = build_general_activation_capable_program_set_v2(
+            &complete_actions,
+            bundle.descriptor_id,
+        )
+        .expect("complete activation-capable set");
+        let complete = CapabilityProgramSetV2::decode(&complete_bytes).expect("complete set");
+        assert_eq!(usize::from(complete.entry_count()), 16);
+        for index in 0..actions.len() {
+            let start = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+                + index * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2;
+            let end = start + CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2;
+            assert_eq!(
+                complete_bytes
+                    .get(start..end)
+                    .expect("complete prefix entry"),
+                set_bytes.get(start..end).expect("legacy prefix entry"),
+                "historical action entry {index} moved"
+            );
+        }
+        let legacy_activation_start = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+            + actions.len() * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2;
+        let complete_activation_start = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+            + complete_actions.len() * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2;
+        assert_eq!(
+            complete_bytes
+                .get(
+                    complete_activation_start
+                        ..complete_activation_start + CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2
+                )
+                .expect("complete activation entry"),
+            set_bytes
+                .get(
+                    legacy_activation_start
+                        ..legacy_activation_start + CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2
+                )
+                .expect("legacy activation entry")
+        );
+        assert_eq!(
+            build_general_activation_capable_program_set_v2(
+                complete_actions.get(..14).expect("short complete"),
+                bundle.descriptor_id,
             )
             .err(),
             Some(GeneralActivationBundleErrorV1::ProgramSet)

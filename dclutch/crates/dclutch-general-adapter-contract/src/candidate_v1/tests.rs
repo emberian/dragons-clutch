@@ -352,9 +352,11 @@ fn verify_all(fixture: &Fixture) -> (Vec<u8>, GeneralCandidateV1) {
         cursor = cursor_output;
         if summary.complete {
             certificate = verified_output;
-            submission
-                .record_verified(fixture.batch, &certificate)
-                .expect("certificate recorded");
+            assert_eq!(
+                submission.state().status,
+                GeneralCandidateStatusV1::Verified,
+                "the terminal verification transition records its own certificate"
+            );
         }
     }
     (certificate, submission)

@@ -748,6 +748,14 @@ impl ClaimsFoundingReceiptV5 {
     pub const fn request(&self) -> ClaimsFoundingRequestV5 {
         self.request
     }
+    /// Borrow the exact embedded request without copying its wide fixed-layout body.
+    ///
+    /// Runtime adapters use this accessor when verifying a receipt in bounded
+    /// stack frames. The value and its semantic ownership remain unchanged.
+    #[must_use]
+    pub const fn request_ref(&self) -> &ClaimsFoundingRequestV5 {
+        &self.request
+    }
     /// Return the digest of exact request bytes.
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest

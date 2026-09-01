@@ -11,7 +11,7 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_general_adapter_contract::{
-    artifacts_v3::{GeneralArtifactBytesV3, GeneralArtifactSelectionV3},
+    artifacts_v3::{GeneralArtifactBytesV3, GeneralArtifactSelectionV3, decode_general_request_v3},
     invocation_v1::{
         GENERAL_INVOCATION_ACCOUNT_METAS_DOMAIN_V1, GENERAL_INVOCATION_ARTIFACT_GRAPH_DOMAIN_V1,
         GENERAL_INVOCATION_LOCK_SET_DOMAIN_V1, GENERAL_INVOCATION_MAX_UNIQUE_LOCKS_V1,
@@ -19,10 +19,7 @@ use dclutch_general_adapter_contract::{
         GeneralInvocationFieldsV1, GeneralInvocationReplayV1, GeneralInvocationV1,
     },
 };
-use dclutch_general_codec::{
-    Action,
-    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
-};
+use dclutch_general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
 use solana_hash::Hash;
 use solana_program::{hash::hashv, instruction::AccountMeta, pubkey::Pubkey};
 
@@ -103,12 +100,14 @@ pub fn build_general_invocation_v1(
     let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(&instruction.data)
         .map_err(|_| GeneralInvocationOperatorErrorV1::Join)?;
     if family_request.len() != CONTROLLER_REQUEST_BYTES_V2
-        || ControllerRequestV2::decode(family_request)
+        || decode_general_request_v3(family_request)
             .map_err(|_| GeneralInvocationOperatorErrorV1::Join)?
             != successor.request
         || successor.request.action != action
         || report.action != action
         || transaction.hot.action != action
+        || successor.heap_frame_bytes != transaction.heap_frame_bytes
+        || successor.heap_frame_bytes != transaction.hot.heap_frame_bytes
     {
         return Err(GeneralInvocationOperatorErrorV1::Join);
     }

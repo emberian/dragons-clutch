@@ -12,12 +12,16 @@ use dclutch_claims_svm::{
         TerminalSettlementRequestV3,
     },
 };
-use dclutch_fractional_claim_kernel::{FractionalExposureTermsV2, divide_exposure_shards_v2};
+use dclutch_fractional_claim_kernel::{
+    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FractionalExposureTermsV2, divide_exposure_shards_v2,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
     FRACTIONAL_ROOT_BYTES_V1, FractionalExposureActionV2, FractionalExposureRequestV2,
-    FractionalRootInputV1, FractionalRootV1,
+    FractionalRootInputV1, FractionalRootInputV2, FractionalRootStateV2, FractionalRootV1,
+    FractionalRootV2,
 };
 
 /// Measured/account-profile bound inherited from Fractional V2 terms.
@@ -193,11 +197,23 @@ impl<'a> FractionalHotCandidateV2<'a> {
             .request
             .bind_terms(input.terms)
             .map_err(|_| FractionalHotErrorV2::IdentityMismatch)?;
-        let root =
-            FractionalRootV1::decode(input.root_bytes).ok_or(FractionalHotErrorV2::RootMismatch)?;
-        if root.input().terms != input.terms.terms_id()
-            || root.input().market != input.terms.market()
-            || root.input().revision != request.input().expected_revision
+        let root = FractionalRootStateV2::decode(input.root_bytes)
+            .ok_or(FractionalHotErrorV2::RootMismatch)?;
+        let identity_matches = match root {
+            // V1 remains a historical terms-root. Its bytes must retain their
+            // exact old meaning; do not reinterpret offset 16 as a config.
+            FractionalRootStateV2::V1(root) => root.input().terms == input.terms.terms_id(),
+            // V2's offset 16 is the manifest-selected market-free config.
+            // Recompute it from the separately authenticated execution terms,
+            // then compare the content identity. Terms themselves are never a
+            // manifest config and cannot be substituted into this comparison.
+            FractionalRootStateV2::V2(root) => {
+                selection_config_id(input.terms)? == root.input().selection_config
+            }
+        };
+        if !identity_matches
+            || root.market() != input.terms.market()
+            || root.revision() != request.input().expected_revision
             || input.token_effects.len() > FRACTIONAL_HOT_MAX_TOKEN_EFFECTS_V2
         {
             return Err(FractionalHotErrorV2::IdentityMismatch);
@@ -217,16 +233,23 @@ impl<'a> FractionalHotCandidateV2<'a> {
             (None, None)
         } else {
             let revision = root
-                .input()
-                .revision
+                .revision()
                 .checked_add(1)
                 .ok_or(FractionalHotErrorV2::Arithmetic)?;
-            let candidate = FractionalRootV1::new(FractionalRootInputV1 {
-                revision,
-                ..root.input()
-            })
-            .ok_or(FractionalHotErrorV2::RootMismatch)?
-            .to_bytes();
+            let candidate = match root {
+                FractionalRootStateV2::V1(root) => FractionalRootV1::new(FractionalRootInputV1 {
+                    revision,
+                    ..root.input()
+                })
+                .ok_or(FractionalHotErrorV2::RootMismatch)?
+                .to_bytes(),
+                FractionalRootStateV2::V2(root) => FractionalRootV2::new(FractionalRootInputV2 {
+                    revision,
+                    ..root.input()
+                })
+                .ok_or(FractionalHotErrorV2::RootMismatch)?
+                .to_bytes(),
+            };
             (Some(revision), Some(candidate))
         };
         Ok(Self {
@@ -235,7 +258,7 @@ impl<'a> FractionalHotCandidateV2<'a> {
             token_effects: input.token_effects,
             claims: input.claims,
             rent_close: input.rent_close,
-            pre_revision: root.input().revision,
+            pre_revision: root.revision(),
             post_revision,
             root_candidate,
         })
@@ -751,6 +774,19 @@ fn digestv(parts: &[&[u8]]) -> [u8; 32] {
         digest.update(part);
     }
     digest.finalize().into()
+}
+
+/// Recompute the one market-free config a V2 root stores from the separately
+/// authenticated market-bound terms record. This delegates the projection to
+/// the kernel, the semantic owner of which execution facts are market-free.
+fn selection_config_id(terms: FractionalExposureTermsV2<'_>) -> Result<[u8; 32]> {
+    let mut bytes = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut bytes,
+    )
+    .map_err(|_| FractionalHotErrorV2::IdentityMismatch)?;
+    Ok(Sha256::digest(bytes).into())
 }
 
 fn is_zero(value: [u8; 32]) -> bool {

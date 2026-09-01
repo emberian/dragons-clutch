@@ -3,14 +3,14 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify` (also wired into `tools/gauntlet` — see `tools/sbom/README.md`).
 
-**58 manifests, 2066 unique dependency rows (1240 cargo, 826 npm), 0 flagged for human review, 67 reviewed and allowed.**
+**58 manifests, 2142 unique dependency rows (1240 cargo, 902 npm), 0 flagged for human review, 67 reviewed and allowed.**
 
 ## Counts by license
 
 | License | Rows |
 |---|---|
-| `MIT` | 765 |
-| `Apache-2.0` | 498 |
+| `MIT` | 840 |
+| `Apache-2.0` | 499 |
 | `MIT OR Apache-2.0` | 333 |
 | `AGPL-3.0-or-later` | 154 |
 | `MIT/Apache-2.0` | 67 |
@@ -1606,6 +1606,10 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `@eslint/js` | 9.39.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@eslint/object-schema` | 2.1.7 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@eslint/plugin-kit` | 0.4.1 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@floating-ui/core` | 1.8.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@floating-ui/dom` | 1.8.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@floating-ui/react-dom` | 2.1.9 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@floating-ui/utils` | 0.2.12 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@humanfs/core` | 0.19.2 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@humanfs/node` | 0.16.8 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@humanfs/types` | 0.15.0 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1694,6 +1698,66 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `@poppinss/colors` | 4.1.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@poppinss/dumper` | 0.6.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@poppinss/exception` | 1.2.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/number` | 1.1.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/primitive` | 1.1.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-accessible-icon` | 1.1.15 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-accordion` | 1.2.20 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-alert-dialog` | 1.1.23 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-arrow` | 1.1.15 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-aspect-ratio` | 1.1.15 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-avatar` | 1.2.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-checkbox` | 1.3.11 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-collapsible` | 1.1.20 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-collection` | 1.1.15 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-compose-refs` | 1.1.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-context` | 1.2.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-context-menu` | 2.3.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-dialog` | 1.1.23 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-direction` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-dismissable-layer` | 1.1.19 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-dropdown-menu` | 2.1.24 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-focus-guards` | 1.1.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-focus-scope` | 1.1.16 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-form` | 0.1.16 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-hover-card` | 1.1.23 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-id` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-label` | 2.1.15 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-menu` | 2.1.24 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-menubar` | 1.1.24 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-navigation-menu` | 1.2.22 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-one-time-password-field` | 0.1.16 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-password-toggle-field` | 0.1.11 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-popover` | 1.1.23 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-popper` | 1.3.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-portal` | 1.1.17 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-presence` | 1.1.10 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-primitive` | 2.1.10 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-progress` | 1.1.16 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-radio-group` | 1.4.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-roving-focus` | 1.1.19 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-scroll-area` | 1.2.18 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-select` | 2.3.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-separator` | 1.1.15 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-slider` | 1.4.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-slot` | 1.3.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-switch` | 1.3.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-tabs` | 1.1.21 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-toast` | 1.2.23 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-toggle` | 1.1.18 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-toggle-group` | 1.1.19 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-toolbar` | 1.1.19 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-tooltip` | 1.2.16 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-callback-ref` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-controllable-state` | 1.2.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-effect-event` | 0.0.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-escape-keydown` | 1.1.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-is-hydrated` | 0.1.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-layout-effect` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-previous` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-rect` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-use-size` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/react-visually-hidden` | 1.2.11 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@radix-ui/rect` | 1.1.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@resvg/resvg-wasm` | 2.4.0 | `MPL-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@rolldown/binding-android-arm-eabi` | 1.2.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@rolldown/binding-android-arm64` | 1.2.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1869,6 +1933,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `ajv-keywords` | 5.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `ansi-styles` | 4.3.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `argparse` | 2.0.1 | `Python-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `aria-hidden` | 1.2.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `aria-query` | 5.3.2 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `array-buffer-byte-length` | 1.0.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `array-includes` | 3.1.9 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1912,7 +1977,9 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `chalk` | 4.1.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `chalk` | 5.6.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `chrome-trace-event` | 1.0.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `class-variance-authority` | 0.7.1 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `client-only` | 0.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `clsx` | 2.1.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `color-convert` | 2.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `color-name` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `commander` | 14.0.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1939,6 +2006,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `define-properties` | 1.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `delay` | 5.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `detect-libc` | 2.1.2 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `detect-node-es` | 1.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `doctrine` | 2.1.0 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `dunder-proto` | 1.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `electron-to-chromium` | 1.5.413 | `ISC` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2013,6 +2081,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `generator-function` | 2.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `gensync` | 1.0.0-beta.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `get-intrinsic` | 1.3.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `get-nonce` | 1.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `get-proto` | 1.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `get-symbol-description` | 1.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `get-tsconfig` | 4.14.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2177,10 +2246,14 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `prop-types` | 15.8.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `punycode` | 2.3.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `queue-microtask` | 1.2.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `radix-ui` | 1.6.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `react` | 19.2.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `react-dom` | 19.2.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `react-is` | 16.13.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `react-remove-scroll` | 2.7.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `react-remove-scroll-bar` | 2.3.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `react-server-dom-webpack` | 19.2.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `react-style-singleton` | 2.2.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `reflect.getprototypeof` | 1.0.10 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `regexp.prototype.flags` | 1.5.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `require-from-string` | 2.0.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2240,6 +2313,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `supports-color` | 7.2.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `supports-color` | 8.1.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `supports-preserve-symlinks-flag` | 1.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `tailwind-merge` | 3.6.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tailwindcss` | 4.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tapable` | 2.3.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `terser` | 5.50.0 | `BSD-2-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2273,6 +2347,8 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `unrs-resolver` | 1.12.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `update-browserslist-db` | 1.3.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `uri-js` | 4.4.1 | `BSD-2-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `use-callback-ref` | 1.3.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `use-sidecar` | 1.1.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `utf-8-validate` | 5.0.10 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `utf-8-validate` | 6.0.6 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `uuid` | 14.0.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2319,7 +2395,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 |---|---|
 | `Cargo.toml` | 834 |
 | `apps/dclutch-web/fixtures/founding/generator/Cargo.toml` | 21 |
-| `apps/dclutch-web/package.json` | 727 |
+| `apps/dclutch-web/package.json` | 803 |
 | `crates/dclutch-svm-harness/Cargo.toml` | 792 |
 | `crates/dclutch-svm-harness/test-programs/pre-market-funding-caller/Cargo.toml` | 165 |
 | `crates/dclutch-svm-harness/test-programs/resolution-receipt-caller/Cargo.toml` | 169 |
@@ -2507,6 +2583,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - borsh-derive 1.8.1 (cargo)
 - borsh-derive-internal 0.10.4 (cargo)
 - borsh-schema-derive-internal 0.10.4 (cargo)
+- class-variance-authority 0.7.1 (npm)
 - detect-libc 2.1.2 (npm)
 - doctrine 2.1.0 (npm)
 - eslint-visitor-keys 3.4.3 (npm)
@@ -3270,6 +3347,10 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @eslint-community/regexpp 4.12.2 (npm)
 - @eslint/eslintrc 3.3.6 (npm)
 - @eslint/js 9.39.4 (npm)
+- @floating-ui/core 1.8.0 (npm)
+- @floating-ui/dom 1.8.0 (npm)
+- @floating-ui/react-dom 2.1.9 (npm)
+- @floating-ui/utils 0.2.12 (npm)
 - @img/colour 1.1.0 (npm)
 - @jridgewell/gen-mapping 0.3.13 (npm)
 - @jridgewell/remapping 2.3.5 (npm)
@@ -3301,6 +3382,66 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @poppinss/colors 4.1.6 (npm)
 - @poppinss/dumper 0.6.5 (npm)
 - @poppinss/exception 1.2.3 (npm)
+- @radix-ui/number 1.1.3 (npm)
+- @radix-ui/primitive 1.1.7 (npm)
+- @radix-ui/react-accessible-icon 1.1.15 (npm)
+- @radix-ui/react-accordion 1.2.20 (npm)
+- @radix-ui/react-alert-dialog 1.1.23 (npm)
+- @radix-ui/react-arrow 1.1.15 (npm)
+- @radix-ui/react-aspect-ratio 1.1.15 (npm)
+- @radix-ui/react-avatar 1.2.6 (npm)
+- @radix-ui/react-checkbox 1.3.11 (npm)
+- @radix-ui/react-collapsible 1.1.20 (npm)
+- @radix-ui/react-collection 1.1.15 (npm)
+- @radix-ui/react-compose-refs 1.1.5 (npm)
+- @radix-ui/react-context 1.2.2 (npm)
+- @radix-ui/react-context-menu 2.3.7 (npm)
+- @radix-ui/react-dialog 1.1.23 (npm)
+- @radix-ui/react-direction 1.1.4 (npm)
+- @radix-ui/react-dismissable-layer 1.1.19 (npm)
+- @radix-ui/react-dropdown-menu 2.1.24 (npm)
+- @radix-ui/react-focus-guards 1.1.6 (npm)
+- @radix-ui/react-focus-scope 1.1.16 (npm)
+- @radix-ui/react-form 0.1.16 (npm)
+- @radix-ui/react-hover-card 1.1.23 (npm)
+- @radix-ui/react-id 1.1.4 (npm)
+- @radix-ui/react-label 2.1.15 (npm)
+- @radix-ui/react-menu 2.1.24 (npm)
+- @radix-ui/react-menubar 1.1.24 (npm)
+- @radix-ui/react-navigation-menu 1.2.22 (npm)
+- @radix-ui/react-one-time-password-field 0.1.16 (npm)
+- @radix-ui/react-password-toggle-field 0.1.11 (npm)
+- @radix-ui/react-popover 1.1.23 (npm)
+- @radix-ui/react-popper 1.3.7 (npm)
+- @radix-ui/react-portal 1.1.17 (npm)
+- @radix-ui/react-presence 1.1.10 (npm)
+- @radix-ui/react-primitive 2.1.10 (npm)
+- @radix-ui/react-progress 1.1.16 (npm)
+- @radix-ui/react-radio-group 1.4.7 (npm)
+- @radix-ui/react-roving-focus 1.1.19 (npm)
+- @radix-ui/react-scroll-area 1.2.18 (npm)
+- @radix-ui/react-select 2.3.7 (npm)
+- @radix-ui/react-separator 1.1.15 (npm)
+- @radix-ui/react-slider 1.4.7 (npm)
+- @radix-ui/react-slot 1.3.3 (npm)
+- @radix-ui/react-switch 1.3.7 (npm)
+- @radix-ui/react-tabs 1.1.21 (npm)
+- @radix-ui/react-toast 1.2.23 (npm)
+- @radix-ui/react-toggle 1.1.18 (npm)
+- @radix-ui/react-toggle-group 1.1.19 (npm)
+- @radix-ui/react-toolbar 1.1.19 (npm)
+- @radix-ui/react-tooltip 1.2.16 (npm)
+- @radix-ui/react-use-callback-ref 1.1.4 (npm)
+- @radix-ui/react-use-controllable-state 1.2.6 (npm)
+- @radix-ui/react-use-effect-event 0.0.5 (npm)
+- @radix-ui/react-use-escape-keydown 1.1.5 (npm)
+- @radix-ui/react-use-is-hydrated 0.1.3 (npm)
+- @radix-ui/react-use-layout-effect 1.1.4 (npm)
+- @radix-ui/react-use-previous 1.1.4 (npm)
+- @radix-ui/react-use-rect 1.1.4 (npm)
+- @radix-ui/react-use-size 1.1.4 (npm)
+- @radix-ui/react-visually-hidden 1.2.11 (npm)
+- @radix-ui/rect 1.1.3 (npm)
 - @rolldown/binding-android-arm-eabi 1.2.6 (npm)
 - @rolldown/binding-android-arm64 1.2.6 (npm)
 - @rolldown/binding-darwin-arm64 1.2.6 (npm)
@@ -3466,6 +3607,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - ansi-styles 4.3.0 (npm)
 - aquamarine 0.6.0 (cargo)
 - archery 1.2.3 (cargo)
+- aria-hidden 1.2.6 (npm)
 - array-buffer-byte-length 1.0.2 (npm)
 - array-includes 3.1.9 (npm)
 - array.prototype.findlast 1.2.5 (npm)
@@ -3510,6 +3652,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - chalk 5.6.2 (npm)
 - chrome-trace-event 1.0.4 (npm)
 - client-only 0.0.1 (npm)
+- clsx 2.1.1 (npm)
 - color-convert 2.0.1 (npm)
 - color-name 1.1.4 (npm)
 - combine 3.8.1 (cargo)
@@ -3541,6 +3684,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - define-data-property 1.1.4 (npm)
 - define-properties 1.2.1 (npm)
 - delay 5.0.0 (npm)
+- detect-node-es 1.1.0 (npm)
 - dlopen2 0.5.0 (cargo)
 - dlopen2_derive 0.3.0 (cargo)
 - downcast 0.11.0 (cargo)
@@ -3615,6 +3759,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - generic-array 0.14.9 (cargo)
 - gensync 1.0.0-beta.2 (npm)
 - get-intrinsic 1.3.0 (npm)
+- get-nonce 1.0.1 (npm)
 - get-proto 1.0.1 (npm)
 - get-symbol-description 1.1.0 (npm)
 - get-tsconfig 4.14.3 (npm)
@@ -3774,11 +3919,15 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - quanta 0.12.6 (cargo)
 - queue-microtask 1.2.3 (npm)
 - radium 0.7.0 (cargo)
+- radix-ui 1.6.7 (npm)
 - raw-cpuid 11.6.0 (cargo)
 - react 19.2.8 (npm)
 - react-dom 19.2.8 (npm)
 - react-is 16.13.1 (npm)
+- react-remove-scroll 2.7.2 (npm)
+- react-remove-scroll-bar 2.3.8 (npm)
 - react-server-dom-webpack 19.2.8 (npm)
+- react-style-singleton 2.2.3 (npm)
 - redox_syscall 0.5.18 (cargo)
 - reflect.getprototypeof 1.0.10 (npm)
 - regexp.prototype.flags 1.5.4 (npm)
@@ -3838,6 +3987,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - supports-preserve-symlinks-flag 1.0.0 (npm)
 - synstructure 0.12.6 (cargo)
 - synstructure 0.13.2 (cargo)
+- tailwind-merge 3.6.0 (npm)
 - tailwindcss 4.2.1 (npm)
 - tap 1.0.1 (cargo)
 - tapable 2.3.3 (npm)
@@ -3887,6 +4037,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - unwrap_none 0.1.2 (cargo)
 - update-browserslist-db 1.3.1 (npm)
 - uriparse 0.6.4 (cargo)
+- use-callback-ref 1.3.3 (npm)
+- use-sidecar 1.1.3 (npm)
 - utf-8-validate 5.0.10 (npm)
 - utf-8-validate 6.0.6 (npm)
 - uuid 14.0.2 (npm)

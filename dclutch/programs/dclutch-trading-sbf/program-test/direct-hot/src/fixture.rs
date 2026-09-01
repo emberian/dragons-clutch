@@ -56,21 +56,46 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
-    DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2, OperationV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
+    ContextV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1,
+    CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2,
+    DelegatedCustodyRequestV2, OperationV1,
 };
 use dclutch_direct_codec::{
     execution_v3::{
-        DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3, DirectExecutionActionV3, encode_header_v3,
+        DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3, DIRECT_REGISTRATION_REQUEST_BYTES_V3,
+        DirectExecutionActionV3, DirectRegistrationRequestV3, DirectSignedParticipantV3,
+        encode_header_v3,
     },
     intent_v2::CompactIntentV2,
     ordinary_effect_artifacts_v3::{
         DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
     },
+    program_set_v4::{
+        encode_direct_program_set_v2_atomic, encoded_direct_program_set_bytes_v4,
+        validate_direct_register_buy_capability_v4, validate_direct_register_sell_capability_v4,
+    },
+    registered_account_artifacts_v4::{
+        DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4,
+        DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4, DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4,
+        DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4, DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4,
+        DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4, DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4,
+        DirectRegisterBuyAccountProfileInputV4,
+    },
+    registered_bundle_v4::{
+        DirectRegisterBuyHotBundleInputV4, DirectRegisterBuyHotBundleV4,
+        DirectRegisterSellHotBundleInputV4, DirectRegisterSellHotBundleV4,
+        build_direct_register_buy_hot_bundle_v4, build_direct_register_sell_hot_bundle_v4,
+    },
+    registered_requests_v4::encode_direct_registration_request_v3_atomic,
+    registered_state_artifacts_v4::DirectRegisteredCreationChildRentWidthsV4,
     successor::{
-        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_FEE_DENOMINATOR_V1, DirectCoordinatesV1,
-        DirectExecutionConfigV1, DirectRootStateV1, MakerReplaySeedsV1,
+        AuthenticatedCompactIntentV2, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
+        DIRECT_FEE_DENOMINATOR_V1, DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_REGISTERED_RECORD_BYTES_V2,
+        DirectCoordinatesV1, DirectExecutionConfigV1, DirectRootStateV1, MakerReplayFirstUseV1,
+        MakerReplayObservationV1, MakerReplaySeedsV1, MakerReplayVacancyV1,
+        RegisteredIntentSeedsV2, RegisteredRecordFirstUseV2, register_intent_v2,
     },
 };
 use dclutch_market_core_codec::{
@@ -120,8 +145,9 @@ use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as Sp
 use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 
 use crate::{
-    DirectHotArtifactFixtureV5, DirectHotDeploymentWidthsV5, DirectHotFixtureErrorV5,
-    build_direct_hot_artifact_fixture_v5, chain::DirectHotInstallAccountV5,
+    DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5, DirectHotArtifactFixtureV5,
+    DirectHotDeploymentWidthsV5, DirectHotFixtureErrorV5, build_direct_hot_artifact_fixture_v5,
+    chain::DirectHotInstallAccountV5,
 };
 
 const GENERATION: u64 = 9;
@@ -337,6 +363,65 @@ pub struct DirectHotChainFixtureV5 {
     pub descriptor_digest: [u8; 32],
 }
 
+/// One same-validator registered-order creation campaign through generic Hot.
+///
+/// The two instructions deliberately share one initial account declaration:
+/// Sell advances the mutable root first, then Buy authenticates that exact
+/// poststate and opens its ordered Custody replay/vault/deposit chain.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectRegisteredCreationChainFixtureV4 {
+    /// Authenticated maker-signed RegisterSell instruction.
+    pub sell_hot_instruction: Instruction,
+    /// Authenticated maker-signed RegisterBuy instruction, rooted after Sell.
+    pub buy_hot_instruction: Instruction,
+    /// Exact distinct seal-materialization fixed prefix for Sell.
+    pub sell_capability_seal_accounts: Vec<AccountMeta>,
+    /// Exact distinct seal-materialization fixed prefix for Buy.
+    pub buy_capability_seal_accounts: Vec<AccountMeta>,
+    /// Seller then buyer signed intent preimages.
+    pub signed_messages: [[u8; 172]; 2],
+    /// Complete initial account declaration shared by both transactions.
+    pub accounts: Vec<DirectHotInstallAccountV5>,
+    /// Release-waist accounts installed by the parent harness.
+    pub externally_installed_keys: Vec<Pubkey>,
+    /// Exact mutable keys protected by transaction rollback.
+    pub rollback_snapshot_keys: Vec<Pubkey>,
+    /// Canonical Core Market.
+    pub market: Pubkey,
+    /// Mutable Direct root advanced from zero to two open maker roots.
+    pub root: Pubkey,
+    /// Canonical Claims aggregate observed for reserve conservation.
+    pub claims_market: Pubkey,
+    /// Seller then buyer Claims Positions.
+    pub claims_positions: [Pubkey; 2],
+    /// Seller then buyer maker-replay PDAs.
+    pub maker_replays: [Pubkey; 2],
+    /// Seller then buyer registered-record PDAs.
+    pub registered_records: [Pubkey; 2],
+    /// Market-lifecycle RentCredit shared by both first-use creations.
+    pub lifecycle_rent_credit: Pubkey,
+    /// RegisterBuy Custody replay opened at revision three.
+    pub custody_replay: Pubkey,
+    /// RegisterBuy TradingPrincipal vault.
+    pub custody_vault: Pubkey,
+    /// Buyer source, seller destination, and fee collateral accounts.
+    pub collateral_accounts: [Pubkey; 3],
+    /// Sell then Buy capability-seal PDAs.
+    pub capability_seals: [Pubkey; 2],
+    /// Exact expected seal bodies, Sell then Buy.
+    pub capability_seal_bytes: [Vec<u8>; 2],
+    /// Exact root bytes after Sell and after Buy.
+    pub root_poststates: [Vec<u8>; 2],
+    /// Exact maker replay bodies after each side's creation.
+    pub maker_poststates: [[u8; DIRECT_MAKER_REPLAY_BYTES_V1]; 2],
+    /// Exact registered-record bodies after each side's creation.
+    pub record_poststates: [[u8; DIRECT_REGISTERED_RECORD_BYTES_V2]; 2],
+    /// Claims reserved by the seller record.
+    pub reserved_claims: u64,
+    /// Collateral reserved in the buyer record and Custody vault.
+    pub reserved_collateral: u64,
+}
+
 /// Stable refusal from executable Direct fixture construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectHotChainFixtureErrorV5 {
@@ -490,6 +575,291 @@ pub fn build_direct_hot_chain_fixture_v5(
     })
 }
 
+/// Build the canonical same-validator RegisterSell then RegisterBuy campaign.
+pub fn build_direct_registered_creation_chain_fixture_v4(
+    input: DirectHotChainInputV5,
+) -> Result<DirectRegisteredCreationChainFixtureV4, DirectHotChainFixtureErrorV5> {
+    validate_input(input)?;
+    let rent = Rent::default();
+    let config_value = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let config = config_value.encode();
+    let product = product_fixture(input, &rent)?;
+    let artifacts = registered_creation_artifacts_v4(input)?;
+    let manifest = capability_manifest_selected(input, artifacts.sell(), &config)?;
+    let state = market_and_claims(input, &product, &manifest, &rent)?;
+    let capability = capability_fixture(input, manifest, state.market)?;
+    let requests =
+        registered_creation_requests_v4(input, &rent, config_value, &state, &product, &capability)?;
+    let custody = registered_buy_custody_v4(input, &rent, &product, &state, &requests)?;
+
+    let mut sell_logical = registered_creation_logical_accounts_v4(
+        input,
+        &rent,
+        artifacts.sell(),
+        &config,
+        &product,
+        &state,
+        &capability,
+        &requests,
+        Some(&custody),
+    )?;
+    let mut buy_logical = registered_creation_logical_accounts_v4(
+        input,
+        &rent,
+        artifacts.buy(),
+        &config,
+        &product,
+        &state,
+        &capability,
+        &requests,
+        Some(&custody),
+    )?;
+    let sell_profile = AccountProfileV2::decode(&artifacts.sell.account_profile)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?;
+    let buy_profile = AccountProfileV2::decode(&artifacts.buy.account_profile)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?;
+    let sell_runtime = pack_runtime(
+        sell_profile,
+        input.geometry.outcome_count(),
+        &mut sell_logical,
+    )?;
+    let buy_runtime = pack_runtime(
+        buy_profile,
+        input.geometry.outcome_count(),
+        &mut buy_logical,
+    )?;
+    let sell_fixed = fixed_hot_accounts_selected(
+        input,
+        &rent,
+        artifacts.sell(),
+        &config,
+        &product,
+        &state,
+        &capability,
+    )?;
+    let buy_fixed = fixed_hot_accounts_selected(
+        input,
+        &rent,
+        artifacts.buy(),
+        &config,
+        &product,
+        &state,
+        &capability,
+    )?;
+    let root_poststates = [
+        registered_root_poststate_bytes_v4(&capability, requests.root_after_sell)?,
+        registered_root_poststate_bytes_v4(&capability, requests.root_after_buy)?,
+    ];
+    let (sell_hot_instruction, sell_capability_seal_accounts) =
+        registered_creation_hot_instruction_v4(
+            input,
+            state.market,
+            &capability.root_bytes,
+            &requests.requests[0],
+            &sell_fixed.accounts,
+            &sell_runtime,
+        )?;
+    let (buy_hot_instruction, buy_capability_seal_accounts) =
+        registered_creation_hot_instruction_v4(
+            input,
+            state.market,
+            &root_poststates[0],
+            &requests.requests[1],
+            &buy_fixed.accounts,
+            &buy_runtime,
+        )?;
+
+    let capability_seals = [sell_fixed.capability_seal, buy_fixed.capability_seal];
+    let capability_seal_bytes = [
+        sell_fixed.capability_seal_bytes.clone(),
+        buy_fixed.capability_seal_bytes.clone(),
+    ];
+    let mut accounts = Vec::new();
+    for candidate in sell_fixed
+        .accounts
+        .into_iter()
+        .chain(sell_runtime.into_iter().skip(5))
+        .chain(buy_fixed.accounts.into_iter())
+        .chain(buy_runtime.into_iter().skip(5))
+    {
+        merge_registered_install_account_v4(&mut accounts, candidate)?;
+    }
+    for candidate in [
+        owned(
+            &rent,
+            state.claims_market,
+            input.claims_program,
+            state.claims_bytes.clone(),
+            true,
+        ),
+        owned(
+            &rent,
+            state.positions[0].0,
+            input.claims_program,
+            state.positions[0].1.clone(),
+            true,
+        ),
+        owned(
+            &rent,
+            state.positions[1].0,
+            input.claims_program,
+            state.positions[1].1.clone(),
+            true,
+        ),
+        owned(
+            &rent,
+            product.collateral_accounts[2],
+            custody.realm.token_program,
+            token_bytes(
+                custody.realm.mint,
+                input.payer,
+                FEE_COLLATERAL_BALANCE,
+                None,
+                0,
+            )?,
+            true,
+        ),
+    ] {
+        merge_registered_install_account_v4(&mut accounts, candidate)?;
+    }
+    let external_candidates = [
+        input.activation_cache,
+        input.registry_program,
+        input.trading_program,
+        input.core_program,
+        input.claims_program,
+        input.custody_program,
+        input.rent_program,
+        input.trading_programdata,
+        input.core_programdata,
+        input.claims_programdata,
+        input.payer,
+        system_program::ID,
+        sysvar::rent::ID,
+        sysvar::instructions::ID,
+        Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
+    ];
+    let externally_installed_keys = external_candidates
+        .into_iter()
+        .filter(|candidate| accounts.iter().any(|value| value.key == *candidate))
+        .collect::<Vec<_>>();
+    let rollback_snapshot_keys = accounts
+        .iter()
+        .filter(|value| value.snapshot_for_rollback)
+        .map(|value| value.key)
+        .collect::<Vec<_>>();
+    let lifecycle_rent_credit = lifecycle_rent_credit(
+        input.rent_program,
+        state.market,
+        input.release_set,
+        input.payer,
+    )?
+    .0;
+    Ok(DirectRegisteredCreationChainFixtureV4 {
+        sell_hot_instruction,
+        buy_hot_instruction,
+        sell_capability_seal_accounts,
+        buy_capability_seal_accounts,
+        signed_messages: [
+            requests.intents[0]
+                .signed_preimage()
+                .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+            requests.intents[1]
+                .signed_preimage()
+                .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+        ],
+        accounts,
+        externally_installed_keys,
+        rollback_snapshot_keys,
+        market: state.market,
+        root: capability.root,
+        claims_market: state.claims_market,
+        claims_positions: [state.positions[0].0, state.positions[1].0],
+        maker_replays: requests.maker_replays,
+        registered_records: requests.records,
+        lifecycle_rent_credit,
+        custody_replay: custody.realm.custody_replay,
+        custody_vault: custody.vault,
+        collateral_accounts: product.collateral_accounts,
+        capability_seals,
+        capability_seal_bytes,
+        root_poststates,
+        maker_poststates: requests.maker_poststates,
+        record_poststates: requests.record_poststates,
+        reserved_claims: requests.reserved_claims,
+        reserved_collateral: requests.reserved_collateral,
+    })
+}
+
+fn registered_creation_hot_instruction_v4(
+    input: DirectHotChainInputV5,
+    market: Pubkey,
+    root_prestate: &[u8],
+    request: &[u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3],
+    fixed: &[ChainAccount],
+    runtime: &[ChainAccount],
+) -> Result<(Instruction, Vec<AccountMeta>), DirectHotChainFixtureErrorV5> {
+    let envelope = HotExecutionEnvelopeV3::new(
+        u32::try_from(request.len()).map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
+        input.release_set,
+        market.to_bytes(),
+        GENERATION,
+        hash(root_prestate).to_bytes(),
+    )
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let mut data = Vec::with_capacity(HOT_EXECUTION_ENVELOPE_BYTES_V3 + request.len());
+    data.extend_from_slice(&envelope.to_bytes());
+    data.extend_from_slice(request);
+    let mut metas = fixed
+        .iter()
+        .map(|value| value.meta.clone())
+        .collect::<Vec<_>>();
+    let seal_accounts = metas.clone();
+    alias_sealed_execution_metas(&mut metas)?;
+    metas.extend(runtime.iter().skip(5).map(|value| value.meta.clone()));
+    Ok((
+        Instruction {
+            program_id: input.trading_program,
+            accounts: metas,
+            data,
+        },
+        seal_accounts,
+    ))
+}
+
+fn registered_root_poststate_bytes_v4(
+    capability: &CapabilityFixture,
+    state: DirectRootStateV1,
+) -> Result<Vec<u8>, DirectHotChainFixtureErrorV5> {
+    let header = capability
+        .root_bytes
+        .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    let mut output = Vec::with_capacity(
+        CAPABILITY_ROOT_HEADER_BYTES_V1
+            + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1,
+    );
+    output.extend_from_slice(header);
+    output.extend_from_slice(&state.encode());
+    Ok(output)
+}
+
+fn merge_registered_install_account_v4(
+    accounts: &mut Vec<DirectHotInstallAccountV5>,
+    candidate: ChainAccount,
+) -> Result<(), DirectHotChainFixtureErrorV5> {
+    if let Some(existing) = accounts.iter_mut().find(|value| value.key == candidate.key) {
+        if existing.account != candidate.account {
+            return Err(DirectHotChainFixtureErrorV5::Profile);
+        }
+        existing.snapshot_for_rollback |= candidate.snapshot;
+    } else {
+        accounts.push(candidate.install());
+    }
+    Ok(())
+}
+
 fn alias_sealed_execution_metas(
     metas: &mut [AccountMeta],
 ) -> Result<(), DirectHotChainFixtureErrorV5> {
@@ -591,6 +961,223 @@ struct CapabilityManifestFixture {
     /// Exactly what the on-chain activation would have recorded in the root:
     /// the canonical bumps of the manifest and config records.
     record_bumps: SelectedRecordBumpsV1,
+}
+
+/// One action-selected Hot closure borrowed from its canonical artifact
+/// producer. The ordinary and registered families share this transport shape;
+/// the concrete bundle types remain the semantic owners of their bytes.
+#[derive(Clone, Copy)]
+struct SelectedHotArtifactsV5<'a> {
+    action: DirectExecutionActionV3,
+    program_set: &'a [u8],
+    program_set_id: [u8; 32],
+    descriptor: &'a [u8],
+    descriptor_id: [u8; 32],
+    account_profile: &'a [u8],
+    lifecycle_policy: &'a [u8],
+    request_profile: &'a [u8],
+    transition: &'a [u8],
+    strategy: &'a [u8],
+    effect: &'a [u8],
+}
+
+fn selected_ordinary_artifacts(
+    artifacts: &DirectHotArtifactFixtureV5,
+) -> SelectedHotArtifactsV5<'_> {
+    SelectedHotArtifactsV5 {
+        action: DirectExecutionActionV3::InlineOrdinary,
+        program_set: &artifacts.program_set,
+        program_set_id: artifacts.program_set_id,
+        descriptor: &artifacts.bundle.descriptor,
+        descriptor_id: artifacts.descriptor_id,
+        account_profile: &artifacts.bundle.account_profile,
+        lifecycle_policy: &artifacts.bundle.lifecycle_policy,
+        request_profile: &artifacts.bundle.request_profile,
+        transition: &artifacts.bundle.transition,
+        strategy: &artifacts.bundle.strategy,
+        effect: &artifacts.bundle.effect,
+    }
+}
+
+struct DirectRegisteredCreationArtifactsV4 {
+    sell: DirectRegisterSellHotBundleV4,
+    buy: DirectRegisterBuyHotBundleV4,
+    program_set: Vec<u8>,
+    program_set_id: [u8; 32],
+}
+
+impl DirectRegisteredCreationArtifactsV4 {
+    fn sell(&self) -> SelectedHotArtifactsV5<'_> {
+        SelectedHotArtifactsV5 {
+            action: DirectExecutionActionV3::RegisterSell,
+            program_set: &self.program_set,
+            program_set_id: self.program_set_id,
+            descriptor: &self.sell.descriptor,
+            descriptor_id: hash(&self.sell.descriptor).to_bytes(),
+            account_profile: &self.sell.account_profile,
+            lifecycle_policy: &self.sell.lifecycle_policy,
+            request_profile: &self.sell.request_profile,
+            transition: &self.sell.transition,
+            strategy: &self.sell.strategy,
+            effect: &self.sell.effect,
+        }
+    }
+
+    fn buy(&self) -> SelectedHotArtifactsV5<'_> {
+        SelectedHotArtifactsV5 {
+            action: DirectExecutionActionV3::RegisterBuy,
+            program_set: &self.program_set,
+            program_set_id: self.program_set_id,
+            descriptor: &self.buy.descriptor,
+            descriptor_id: hash(&self.buy.descriptor).to_bytes(),
+            account_profile: &self.buy.account_profile,
+            lifecycle_policy: &self.buy.lifecycle_policy,
+            request_profile: &self.buy.request_profile,
+            transition: &self.buy.transition,
+            strategy: &self.buy.strategy,
+            effect: &self.buy.effect,
+        }
+    }
+}
+
+fn registered_creation_artifacts_v4(
+    input: DirectHotChainInputV5,
+) -> Result<DirectRegisteredCreationArtifactsV4, DirectHotChainFixtureErrorV5> {
+    let common = registered_creation_common_lengths_v4(input)?;
+    let mut sell_lengths = common[..usize::from(DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4)].to_vec();
+    *sell_lengths
+        .get_mut(usize::from(DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4))
+        .ok_or(DirectHotChainFixtureErrorV5::Profile)? =
+        u32::try_from(SplAccount::LEN).map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    let sell = build_direct_register_sell_hot_bundle_v4(DirectRegisterSellHotBundleInputV4 {
+        account_profile: DirectRegisterBuyAccountProfileInputV4 {
+            logical_data_lengths: &sell_lengths,
+        },
+        capacity_profile: DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5,
+    })
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+
+    let buy_lengths = registered_creation_buy_lengths_v4(input, common)?;
+    let buy = build_direct_register_buy_hot_bundle_v4(DirectRegisterBuyHotBundleInputV4 {
+        account_profile: DirectRegisterBuyAccountProfileInputV4 {
+            logical_data_lengths: &buy_lengths,
+        },
+        child_rent_widths: DirectRegisteredCreationChildRentWidthsV4 {
+            custody_vault: u32::try_from(SplAccount::LEN)
+                .map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
+        },
+        capacity_profile: DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5,
+    })
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+
+    let entries = [
+        validate_direct_register_sell_capability_v4(&sell, DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5)
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+        validate_direct_register_buy_capability_v4(&buy, DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5)
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+    ];
+    let width = encoded_direct_program_set_bytes_v4(entries.len())
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let mut scratch = vec![0_u8; width];
+    let mut program_set = vec![0_u8; width];
+    encode_direct_program_set_v2_atomic(&entries, &mut scratch, &mut program_set)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    Ok(DirectRegisteredCreationArtifactsV4 {
+        sell,
+        buy,
+        program_set_id: hash(&program_set).to_bytes(),
+        program_set,
+    })
+}
+
+fn registered_creation_common_lengths_v4(
+    input: DirectHotChainInputV5,
+) -> Result<[u32; 56], DirectHotChainFixtureErrorV5> {
+    let mut lengths = [0_u32; 56];
+    lengths[0] = u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1)
+        .ok()
+        .and_then(|header| {
+            header.checked_add(
+                u32::try_from(dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1).ok()?,
+            )
+        })
+        .ok_or(DirectHotChainFixtureErrorV5::Input)?;
+    lengths[1] = u32::try_from(dclutch_direct_codec::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[2] =
+        u32::try_from(PRODUCT_RECORD_BYTES_V2).map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[3] = input
+        .geometry
+        .portfolio_record_bytes()
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[4] = u32::try_from(dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[5] = u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[7] = u32::try_from(dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[8] = u32::try_from(DIRECT_REGISTERED_RECORD_BYTES_V2)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    Ok(lengths)
+}
+
+fn registered_creation_buy_lengths_v4(
+    input: DirectHotChainInputV5,
+    mut lengths: [u32; 56],
+) -> Result<[u32; 56], DirectHotChainFixtureErrorV5> {
+    let loader_bytes = u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[10] = loader_bytes;
+    lengths[13] = u32::try_from(dclutch_market_core_codec::STATE_BYTES)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[14] =
+        u32::try_from(dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+            .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[15] = loader_bytes;
+    lengths[16] = loader_bytes;
+    lengths[17] = input.deployment_widths.trading_programdata_bytes;
+    lengths[18] = u32::try_from(dclutch_realm_contract::REALM_BYTES)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[23] = 17;
+    lengths[33] =
+        u32::try_from(CUSTODY_REPLAY_BYTES_V1).map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[34] = u32::try_from(SplMint::LEN).map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[36] = 0;
+    lengths[50] =
+        u32::try_from(SplAccount::LEN).map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[usize::from(DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4)] = loader_bytes;
+    for (account, representative) in [
+        (9_usize, 6_usize),
+        (21, 6),
+        (24, 7),
+        (22, 11),
+        (26, 13),
+        (27, 14),
+        (28, 15),
+        (29, 16),
+        (30, 17),
+        (31, 18),
+        (32, 19),
+        (33, 20),
+        (38, 6),
+        (39, 11),
+        (40, 23),
+        (42, 13),
+        (43, 14),
+        (44, 15),
+        (45, 16),
+        (46, 17),
+        (47, 18),
+        (48, 19),
+        (49, 20),
+        (50, 34),
+        (52, 35),
+        (53, 36),
+        (54, 37),
+    ] {
+        lengths[account] = lengths[representative];
+    }
+    Ok(lengths)
 }
 
 struct RealmFixture {
@@ -985,6 +1572,199 @@ fn direct_request(
     Ok(output)
 }
 
+fn registered_intents(
+    input: DirectHotChainInputV5,
+    market: Pubkey,
+    collateral: [Pubkey; 3],
+) -> [CompactIntentV2; 2] {
+    [
+        CompactIntentV2 {
+            side: 0,
+            lifecycle: 2,
+            outcome: 0,
+            market: market.to_bytes(),
+            generation: GENERATION,
+            nonce: 0,
+            valid_from: input.clock_slot.saturating_sub(1),
+            valid_through: input.clock_slot.saturating_add(4),
+            maximum_fill: input.trade.fill,
+            limit_price: input.trade.execution_price,
+            fee_basis_points: FEE_BPS,
+            collateral_account: collateral[1].to_bytes(),
+        },
+        CompactIntentV2 {
+            side: 1,
+            lifecycle: 2,
+            outcome: 0,
+            market: market.to_bytes(),
+            generation: GENERATION,
+            nonce: 0,
+            valid_from: input.clock_slot.saturating_sub(1),
+            valid_through: input.clock_slot.saturating_add(4),
+            maximum_fill: input.trade.fill,
+            limit_price: input.trade.execution_price,
+            fee_basis_points: FEE_BPS,
+            collateral_account: collateral[0].to_bytes(),
+        },
+    ]
+}
+
+struct RegisteredCreationRequestsV4 {
+    intents: [CompactIntentV2; 2],
+    requests: [[u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3]; 2],
+    maker_replays: [Pubkey; 2],
+    records: [Pubkey; 2],
+    root_after_sell: DirectRootStateV1,
+    root_after_buy: DirectRootStateV1,
+    maker_poststates: [[u8; DIRECT_MAKER_REPLAY_BYTES_V1]; 2],
+    record_poststates: [[u8; DIRECT_REGISTERED_RECORD_BYTES_V2]; 2],
+    reserved_claims: u64,
+    reserved_collateral: u64,
+}
+
+fn registered_creation_requests_v4(
+    input: DirectHotChainInputV5,
+    rent: &Rent,
+    config: DirectExecutionConfigV1,
+    state: &StateFixture,
+    product: &ProductFixture,
+    capability: &CapabilityFixture,
+) -> Result<RegisteredCreationRequestsV4, DirectHotChainFixtureErrorV5> {
+    let intents = registered_intents(input, state.market, product.collateral_accounts);
+    let (rent_credit, _) = lifecycle_rent_credit(
+        input.rent_program,
+        state.market,
+        input.release_set,
+        input.payer,
+    )?;
+    let maker_principal = rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1);
+    let record_principal = rent.minimum_balance(DIRECT_REGISTERED_RECORD_BYTES_V2);
+    if maker_principal == 0 || record_principal == 0 {
+        return Err(DirectHotChainFixtureErrorV5::Encoding);
+    }
+    let mut requests = [[0_u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3]; 2];
+    let mut maker_replays = [Pubkey::default(); 2];
+    let mut records = [Pubkey::default(); 2];
+    let mut maker_poststates = [[0_u8; DIRECT_MAKER_REPLAY_BYTES_V1]; 2];
+    let mut record_poststates = [[0_u8; DIRECT_REGISTERED_RECORD_BYTES_V2]; 2];
+    let mut root = DirectRootStateV1::new();
+    let mut root_after_sell = None;
+    let mut reserved_claims = 0_u64;
+    let mut reserved_collateral = 0_u64;
+    for (index, action) in [
+        DirectExecutionActionV3::RegisterSell,
+        DirectExecutionActionV3::RegisterBuy,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let maker = *input
+            .makers
+            .get(index)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)?;
+        let intent = *intents
+            .get(index)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)?;
+        let authenticated =
+            AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker.to_bytes(), intent)
+                .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        let maker_seeds = MakerReplaySeedsV1::new(
+            DirectCoordinatesV1::new(state.market.to_bytes(), GENERATION)
+                .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+            maker.to_bytes(),
+        )
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        let (maker_replay, maker_bump) =
+            Pubkey::find_program_address(&maker_seeds.as_slices(), &input.trading_program);
+        let record_seeds = RegisteredIntentSeedsV2::new(authenticated)
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        let (record, record_bump) =
+            Pubkey::find_program_address(&record_seeds.as_slices(), &input.trading_program);
+        let created = register_intent_v2(
+            root,
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(maker_bump, 0)),
+            authenticated,
+            config,
+            input.geometry.outcome_count(),
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: input.payer.to_bytes(),
+                rent_principal: maker_principal,
+            }),
+            RegisteredRecordFirstUseV2 {
+                bump: record_bump,
+                observed_lamports: 0,
+                rent_owner: input.payer.to_bytes(),
+                rent_principal: record_principal,
+            },
+        )
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        let request = DirectRegistrationRequestV3 {
+            participant: DirectSignedParticipantV3 {
+                maker: maker.to_bytes(),
+                intent,
+            },
+            maker_rent_credit: rent_credit.to_bytes(),
+            record_rent_credit: rent_credit.to_bytes(),
+            maker_rent_principal: maker_principal,
+            record_rent_principal: record_principal,
+        };
+        encode_direct_registration_request_v3_atomic(
+            action,
+            request,
+            requests
+                .get_mut(index)
+                .ok_or(DirectHotChainFixtureErrorV5::Input)?,
+        )
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        *maker_replays
+            .get_mut(index)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)? = maker_replay;
+        *records
+            .get_mut(index)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)? = record;
+        *maker_poststates
+            .get_mut(index)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)? = created
+            .maker_root
+            .encode()
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        *record_poststates
+            .get_mut(index)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)? = created
+            .record
+            .encode_selected(config, input.geometry.outcome_count())
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        if index == 0 {
+            reserved_claims = created.record.reserved_claims();
+        } else {
+            reserved_collateral = created.record.reserved_collateral();
+        }
+        root = created.root;
+        if index == 0 {
+            root_after_sell = Some(root);
+        }
+    }
+    let root_after_sell = root_after_sell.ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    if root.open_maker_root_count() != 2
+        || root_after_sell.open_maker_root_count() != 1
+        || maker_replays != [capability.seller_maker, capability.buyer_maker]
+    {
+        return Err(DirectHotChainFixtureErrorV5::Encoding);
+    }
+    Ok(RegisteredCreationRequestsV4 {
+        intents,
+        requests,
+        maker_replays,
+        records,
+        root_after_sell,
+        root_after_buy: root,
+        maker_poststates,
+        record_poststates,
+        reserved_claims,
+        reserved_collateral,
+    })
+}
+
 fn capability_fixture(
     input: DirectHotChainInputV5,
     manifest: CapabilityManifestFixture,
@@ -1034,7 +1814,15 @@ fn capability_manifest(
     artifacts: &DirectHotArtifactFixtureV5,
     config: &[u8],
 ) -> Result<CapabilityManifestFixture, DirectHotChainFixtureErrorV5> {
-    let descriptor = CapabilityProgramV4::decode(&artifacts.bundle.descriptor)
+    capability_manifest_selected(input, selected_ordinary_artifacts(artifacts), config)
+}
+
+fn capability_manifest_selected(
+    input: DirectHotChainInputV5,
+    artifacts: SelectedHotArtifactsV5<'_>,
+    config: &[u8],
+) -> Result<CapabilityManifestFixture, DirectHotChainFixtureErrorV5> {
+    let descriptor = CapabilityProgramV4::decode(artifacts.descriptor)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let config_digest = hash(config).to_bytes();
     let amounts = FundingAmountsV1::new(
@@ -1176,6 +1964,225 @@ fn realm_fixture(
         custody_replay_bytes: replay_bytes,
         custody_authority,
     })
+}
+
+struct RegisteredBuyCustodyV4 {
+    realm: RealmFixture,
+    vault: Pubkey,
+    route_authorities: [Pubkey; 3],
+}
+
+fn registered_buy_custody_v4(
+    input: DirectHotChainInputV5,
+    rent: &Rent,
+    product: &ProductFixture,
+    state: &StateFixture,
+    requests: &RegisteredCreationRequestsV4,
+) -> Result<RegisteredBuyCustodyV4, DirectHotChainFixtureErrorV5> {
+    let context = *requests
+        .records
+        .get(1)
+        .ok_or(DirectHotChainFixtureErrorV5::Input)?;
+    let token_program = Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID);
+    let mint = key(0xa4);
+    let realm_bytes = realm_record(product.collateral_accounts)?;
+    let realm = finalized(
+        input.registry_program,
+        REALM_SCHEMA_RELEASE_ID_V1,
+        realm_bytes.to_vec(),
+    );
+    let replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::new(
+            state.market.to_bytes(),
+            input.release_set,
+            CallerRoleV1::Trading,
+            context.to_bytes(),
+        )
+        .as_slices(),
+        &input.custody_program,
+    )
+    .0;
+    let custody_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(state.market.to_bytes(), input.release_set).as_slices(),
+        &input.custody_program,
+    )
+    .0;
+    let vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            state.market.to_bytes(),
+            input.release_set,
+            context.to_bytes(),
+            CompartmentV1::TradingPrincipal,
+        )
+        .as_slices(),
+        &input.custody_program,
+    )
+    .0;
+    let realm_fixture = RealmFixture {
+        realm,
+        mint,
+        token_program,
+        custody_replay: replay,
+        custody_replay_bytes: Vec::new(),
+        custody_authority,
+    };
+    let child_requests = registered_buy_child_requests_v4(
+        input,
+        rent,
+        product,
+        state,
+        requests,
+        &realm_fixture,
+        vault,
+    )?;
+    let mut route_authorities = [Pubkey::default(); 3];
+    for (index, request) in child_requests.iter().enumerate() {
+        let request_digest = hash(request).to_bytes();
+        let seeds = CallerAuthoritySeedsV1::new(
+            core_content(input.release_set)?,
+            state.market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            context.to_bytes(),
+            request_digest,
+        )
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+        *route_authorities
+            .get_mut(index)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)? =
+            Pubkey::find_program_address(&seeds.as_slices(), &input.trading_program).0;
+    }
+    Ok(RegisteredBuyCustodyV4 {
+        realm: realm_fixture,
+        vault,
+        route_authorities,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn registered_buy_child_requests_v4(
+    input: DirectHotChainInputV5,
+    rent: &Rent,
+    product: &ProductFixture,
+    state: &StateFixture,
+    requests: &RegisteredCreationRequestsV4,
+    realm: &RealmFixture,
+    vault: Pubkey,
+) -> Result<[Vec<u8>; 3], DirectHotChainFixtureErrorV5> {
+    let record = *requests
+        .records
+        .get(1)
+        .ok_or(DirectHotChainFixtureErrorV5::Input)?;
+    let intent = *requests
+        .intents
+        .get(1)
+        .ok_or(DirectHotChainFixtureErrorV5::Input)?;
+    let rent_credit = lifecycle_rent_credit(
+        input.rent_program,
+        state.market,
+        input.release_set,
+        input.payer,
+    )?
+    .0;
+    let parent = hash(
+        requests
+            .requests
+            .get(1)
+            .ok_or(DirectHotChainFixtureErrorV5::Input)?,
+    )
+    .to_bytes();
+    let common = |operation: OperationV1, transfer_index: u16| CustodyRequestV1 {
+        operation,
+        caller_role: CallerRoleV1::Trading,
+        source_compartment: CompartmentV1::None,
+        destination_compartment: CompartmentV1::None,
+        release_set: input.release_set,
+        market: state.market.to_bytes(),
+        realm: realm.realm.digest,
+        context: record.to_bytes(),
+        caller_program: input.trading_program.to_bytes(),
+        semantic: ContextV1 {
+            candidate: [0; 32],
+            source_owner: [0; 32],
+            destination_owner: [0; 32],
+            order: record.to_bytes(),
+            parent_request_digest: parent,
+            order_nonce: intent.nonce,
+            generation: GENERATION,
+            page_index: 0,
+            execution_index: intent.outcome,
+            transfer_index,
+        },
+        source: [0; 32],
+        destination: [0; 32],
+        source_vault_context: [0; 32],
+        destination_vault_context: [0; 32],
+        mint: [0; 32],
+        token_program: [0; 32],
+        payer: [0; 32],
+        rent_refund: [0; 32],
+        expected_revision: 0,
+        resulting_revision: 0,
+        amount: 0,
+        rent_lamports: 0,
+    };
+    let initialize = CustodyRequestV1 {
+        payer: input.payer.to_bytes(),
+        rent_refund: rent_credit.to_bytes(),
+        expected_revision: 0,
+        resulting_revision: 1,
+        rent_lamports: rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
+        ..common(OperationV1::InitializeReplay, 0)
+    }
+    .to_bytes()
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+    .to_vec();
+    let open = CustodyRequestV1 {
+        destination_compartment: CompartmentV1::TradingPrincipal,
+        destination: vault.to_bytes(),
+        destination_vault_context: record.to_bytes(),
+        mint: realm.mint.to_bytes(),
+        token_program: realm.token_program.to_bytes(),
+        payer: input.payer.to_bytes(),
+        rent_refund: rent_credit.to_bytes(),
+        expected_revision: 1,
+        resulting_revision: 2,
+        rent_lamports: rent.minimum_balance(SplAccount::LEN),
+        ..common(OperationV1::OpenVault, 1)
+    }
+    .to_bytes()
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+    .to_vec();
+    let deposit = DelegatedCustodyRequestV2 {
+        custody: CustodyRequestV1 {
+            operation: OperationV1::Transfer,
+            source_compartment: CompartmentV1::External,
+            destination_compartment: CompartmentV1::TradingPrincipal,
+            semantic: ContextV1 {
+                source_owner: input.makers[1].to_bytes(),
+                ..common(OperationV1::Transfer, 2).semantic
+            },
+            source: product.collateral_accounts[0].to_bytes(),
+            destination: vault.to_bytes(),
+            destination_vault_context: record.to_bytes(),
+            mint: realm.mint.to_bytes(),
+            token_program: realm.token_program.to_bytes(),
+            expected_revision: 2,
+            resulting_revision: 3,
+            amount: requests.reserved_collateral,
+            ..common(OperationV1::Transfer, 2)
+        },
+        starts_atomic_debit: true,
+        terminal: true,
+        delegate_before: realm.custody_authority.to_bytes(),
+        delegate_after: [0; 32],
+        total_debit: requests.reserved_collateral,
+        allowance_before: requests.reserved_collateral,
+        allowance_after: 0,
+    }
+    .encode()
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+    .to_vec();
+    Ok([initialize, open, deposit])
 }
 
 fn realm_record(
@@ -1748,7 +2755,28 @@ fn fixed_hot_accounts(
     state: &StateFixture,
     capability: &CapabilityFixture,
 ) -> Result<FixedHotAccountsV5, DirectHotChainFixtureErrorV5> {
-    let descriptor = CapabilityProgramV4::decode(&artifacts.bundle.descriptor)
+    fixed_hot_accounts_selected(
+        input,
+        rent,
+        selected_ordinary_artifacts(artifacts),
+        config,
+        product,
+        state,
+        capability,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixed_hot_accounts_selected(
+    input: DirectHotChainInputV5,
+    rent: &Rent,
+    artifacts: SelectedHotArtifactsV5<'_>,
+    config: &[u8],
+    product: &ProductFixture,
+    state: &StateFixture,
+    capability: &CapabilityFixture,
+) -> Result<FixedHotAccountsV5, DirectHotChainFixtureErrorV5> {
+    let descriptor = CapabilityProgramV4::decode(artifacts.descriptor)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut fixed = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
         .map(|index| {
@@ -1800,7 +2828,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-                artifacts.program_set.clone(),
+                artifacts.program_set.to_vec(),
             ),
         ),
         (
@@ -1809,7 +2837,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 CAPABILITY_PROGRAM_SCHEMA_ID_V4,
-                artifacts.bundle.descriptor.to_vec(),
+                artifacts.descriptor.to_vec(),
             ),
         ),
         (
@@ -1827,7 +2855,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 descriptor.account_profile().schema().to_bytes(),
-                artifacts.bundle.account_profile.to_vec(),
+                artifacts.account_profile.to_vec(),
             ),
         ),
         (
@@ -1836,7 +2864,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 descriptor.request_profile().schema().to_bytes(),
-                artifacts.bundle.request_profile.to_vec(),
+                artifacts.request_profile.to_vec(),
             ),
         ),
         (
@@ -1845,7 +2873,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 descriptor.transition().schema().to_bytes(),
-                artifacts.bundle.transition.to_vec(),
+                artifacts.transition.to_vec(),
             ),
         ),
         (
@@ -1854,7 +2882,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 descriptor.effect().schema().to_bytes(),
-                artifacts.bundle.effect.to_vec(),
+                artifacts.effect.to_vec(),
             ),
         ),
         (
@@ -1863,7 +2891,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 descriptor.lifecycle().schema().to_bytes(),
-                artifacts.bundle.lifecycle_policy.to_vec(),
+                artifacts.lifecycle_policy.to_vec(),
             ),
         ),
         (
@@ -1872,7 +2900,7 @@ fn fixed_hot_accounts(
             finalized(
                 input.registry_program,
                 descriptor.strategy().schema().to_bytes(),
-                artifacts.bundle.strategy.to_vec(),
+                artifacts.strategy.to_vec(),
             ),
         ),
     ];
@@ -1888,7 +2916,7 @@ fn fixed_hot_accounts(
     let seal_key = CapabilitySealKeyV1::new(
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         artifacts.descriptor_id,
-        DirectExecutionActionV3::InlineOrdinary as u32,
+        artifacts.action as u32,
         input.trading_semantic_release,
         input.registry_program.to_bytes(),
     )
@@ -2383,6 +3411,242 @@ fn logical_accounts(
     Ok(logical)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn registered_creation_logical_accounts_v4(
+    input: DirectHotChainInputV5,
+    rent: &Rent,
+    artifacts: SelectedHotArtifactsV5<'_>,
+    config: &[u8],
+    product: &ProductFixture,
+    state: &StateFixture,
+    capability: &CapabilityFixture,
+    requests: &RegisteredCreationRequestsV4,
+    custody: Option<&RegisteredBuyCustodyV4>,
+) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
+    let (logical_count, participant) = match artifacts.action {
+        DirectExecutionActionV3::RegisterSell => {
+            (usize::from(DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4), 0)
+        }
+        DirectExecutionActionV3::RegisterBuy => {
+            (usize::from(DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4), 1)
+        }
+        _ => return Err(DirectHotChainFixtureErrorV5::Input),
+    };
+    let mut logical = (0..logical_count)
+        .map(|index| {
+            ordinary(
+                rent,
+                key(u8::try_from(index + 0x70).unwrap_or(0xfc)),
+                system_program::ID,
+                Vec::new(),
+                false,
+                false,
+            )
+        })
+        .collect::<Vec<_>>();
+    let fixed =
+        fixed_hot_accounts_selected(input, rent, artifacts, config, product, state, capability);
+    let fixed = match fixed {
+        Ok(value) => value.accounts,
+        Err(error) => return Err(error),
+    };
+    for (logical_index, fixed_index) in [
+        (0, HOT_ROOT_ACCOUNT_V3),
+        (1, HOT_CONFIG_RAW_ACCOUNT_V3),
+        (2, HOT_PRODUCT_RAW_ACCOUNT_V3),
+        (3, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
+        (4, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
+    ] {
+        set(
+            &mut logical,
+            logical_index,
+            fixed
+                .get(fixed_index)
+                .ok_or(DirectHotChainFixtureErrorV5::Profile)?
+                .clone(),
+        )?;
+    }
+    set(
+        &mut logical,
+        5,
+        vacant(
+            *requests
+                .maker_replays
+                .get(participant)
+                .ok_or(DirectHotChainFixtureErrorV5::Input)?,
+            true,
+        ),
+    )?;
+    set(&mut logical, 6, external_payer(input.payer))?;
+    set(
+        &mut logical,
+        7,
+        lifecycle_rent_credit_account(rent, input, state.market)?,
+    )?;
+    set(
+        &mut logical,
+        8,
+        vacant(
+            *requests
+                .records
+                .get(participant)
+                .ok_or(DirectHotChainFixtureErrorV5::Input)?,
+            true,
+        ),
+    )?;
+    set(&mut logical, 9, external_payer(input.payer))?;
+    set(&mut logical, 10, program(input.rent_program))?;
+    set(&mut logical, 11, program(system_program::ID))?;
+
+    if artifacts.action == DirectExecutionActionV3::RegisterSell {
+        set(
+            &mut logical,
+            usize::from(DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4),
+            owned(
+                rent,
+                product.collateral_accounts[1],
+                Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
+                token_bytes(
+                    key(0xa4),
+                    input.makers[0],
+                    SELLER_COLLATERAL_BALANCE,
+                    None,
+                    0,
+                )?,
+                true,
+            ),
+        )?;
+        return Ok(logical);
+    }
+
+    let custody = custody.ok_or(DirectHotChainFixtureErrorV5::Input)?;
+    for (start, operation, authority) in [
+        (
+            DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4,
+            OperationV1::InitializeReplay,
+            custody.route_authorities[0],
+        ),
+        (
+            DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4,
+            OperationV1::OpenVault,
+            custody.route_authorities[1],
+        ),
+        (
+            DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4,
+            OperationV1::Transfer,
+            custody.route_authorities[2],
+        ),
+    ] {
+        let frame = registered_buy_custody_frame_accounts_v4(
+            input, rent, product, state, requests, custody, operation, authority,
+        )?;
+        for (offset, account) in frame.into_iter().enumerate() {
+            set(
+                &mut logical,
+                usize::from(start)
+                    .checked_add(offset)
+                    .ok_or(DirectHotChainFixtureErrorV5::Profile)?,
+                account,
+            )?;
+        }
+    }
+    set(
+        &mut logical,
+        usize::from(DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4),
+        program(input.custody_program),
+    )?;
+    Ok(logical)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn registered_buy_custody_frame_accounts_v4(
+    input: DirectHotChainInputV5,
+    rent: &Rent,
+    product: &ProductFixture,
+    state: &StateFixture,
+    requests: &RegisteredCreationRequestsV4,
+    custody: &RegisteredBuyCustodyV4,
+    operation: OperationV1,
+    authority: Pubkey,
+) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
+    let spec = CustodyFrameSpecV1::new(operation);
+    let mut output = Vec::with_capacity(usize::from(spec.account_count()));
+    for index in 0..spec.account_count() {
+        let role = spec
+            .account(index)
+            .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?
+            .role();
+        let account = match role {
+            CustodyFrameRoleV1::CallerAuthority => {
+                external_empty(authority, system_program::ID, false, false)
+            }
+            CustodyFrameRoleV1::CoreMarket => owned(
+                rent,
+                state.market,
+                input.core_program,
+                state.core_bytes.clone(),
+                false,
+            ),
+            CustodyFrameRoleV1::ActivationCache => external_data(
+                input.activation_cache,
+                input.registry_program,
+                dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1,
+                false,
+                false,
+            ),
+            CustodyFrameRoleV1::RegistryProgram => program(input.registry_program),
+            CustodyFrameRoleV1::CallerProgram => program(input.trading_program),
+            CustodyFrameRoleV1::CallerProgramData => programdata(
+                input.trading_programdata,
+                input.deployment_widths.trading_programdata_bytes,
+            ),
+            CustodyFrameRoleV1::RealmRecord => finalized_raw(rent, &custody.realm.realm, false),
+            CustodyFrameRoleV1::RealmStaging => vacant(custody.realm.realm.staging, false),
+            CustodyFrameRoleV1::Replay => vacant(custody.realm.custody_replay, true),
+            CustodyFrameRoleV1::Payer => external_payer(input.payer),
+            CustodyFrameRoleV1::SystemProgram => program(system_program::ID),
+            CustodyFrameRoleV1::RentSysvar => {
+                external_data(sysvar::rent::ID, sysvar::ID, 17, false, false)
+            }
+            CustodyFrameRoleV1::Mint => owned(
+                rent,
+                custody.realm.mint,
+                custody.realm.token_program,
+                mint_bytes(mint_supply(input.trade)),
+                false,
+            ),
+            CustodyFrameRoleV1::Vault | CustodyFrameRoleV1::TransferDestination => {
+                vacant(custody.vault, true)
+            }
+            CustodyFrameRoleV1::CustodyAuthority => external_empty(
+                custody.realm.custody_authority,
+                system_program::ID,
+                false,
+                false,
+            ),
+            CustodyFrameRoleV1::TokenProgram => program(custody.realm.token_program),
+            CustodyFrameRoleV1::TransferSource => owned(
+                rent,
+                product.collateral_accounts[0],
+                custody.realm.token_program,
+                token_bytes(
+                    custody.realm.mint,
+                    input.makers[1],
+                    input.trade.source_balance,
+                    Some(custody.realm.custody_authority),
+                    requests.reserved_collateral,
+                )?,
+                true,
+            ),
+            CustodyFrameRoleV1::RentRefund => {
+                lifecycle_rent_credit_account(rent, input, state.market)?
+            }
+        };
+        output.push(account);
+    }
+    Ok(output)
+}
+
 fn pack_runtime(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -2824,6 +4088,63 @@ mod tests {
         );
         assert!(fixture.externally_installed_keys.contains(&input.payer));
         assert!(!fixture.rollback_snapshot_keys.contains(&input.payer));
+    }
+
+    #[test]
+    fn registered_creation_fixture_is_one_ordered_sell_buy_chain() {
+        let input = input();
+        let fixture =
+            build_direct_registered_creation_chain_fixture_v4(input).expect("registered chain");
+        assert_eq!(
+            fixture.sell_hot_instruction.program_id,
+            input.trading_program
+        );
+        assert_eq!(
+            fixture.buy_hot_instruction.program_id,
+            input.trading_program
+        );
+        assert_eq!(
+            fixture.sell_hot_instruction.data.len(),
+            HOT_EXECUTION_ENVELOPE_BYTES_V3 + DIRECT_REGISTRATION_REQUEST_BYTES_V3
+        );
+        assert_eq!(
+            fixture.buy_hot_instruction.data.len(),
+            HOT_EXECUTION_ENVELOPE_BYTES_V3 + DIRECT_REGISTRATION_REQUEST_BYTES_V3
+        );
+        assert_ne!(fixture.capability_seals[0], fixture.capability_seals[1]);
+        assert_ne!(fixture.registered_records[0], fixture.registered_records[1]);
+        assert_ne!(fixture.maker_replays[0], fixture.maker_replays[1]);
+        assert_eq!(
+            fixture.root_poststates[0].len(),
+            CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1
+        );
+        assert_eq!(
+            fixture.root_poststates[0][..CAPABILITY_ROOT_HEADER_BYTES_V1],
+            fixture.root_poststates[1][..CAPABILITY_ROOT_HEADER_BYTES_V1]
+        );
+        assert!(fixture.reserved_claims > 0);
+        assert!(fixture.reserved_collateral > 0);
+        assert!(
+            fixture
+                .accounts
+                .iter()
+                .any(|value| value.key == fixture.custody_replay)
+        );
+        assert!(
+            fixture
+                .accounts
+                .iter()
+                .any(|value| value.key == fixture.custody_vault)
+        );
+        let mut keys = fixture
+            .accounts
+            .iter()
+            .map(|value| value.key)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), fixture.accounts.len());
     }
 
     /// The live RentCredit the adapter authenticates: one credit for the whole

@@ -1,8 +1,10 @@
 'use client';
 
 import Anchor from '@/components/Anchor';
+import ArtifactInput from '@/components/ArtifactInput';
 import ConsoleHeader from '@/components/ConsoleHeader';
-import { FormEvent, useMemo, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   LIVE_DEVNET_OPERATOR_PRESET_V1,
@@ -14,6 +16,8 @@ import {
 } from '@/lib/operatorSurface';
 import {
   CAPABILITY_ACTIONS_V1,
+  capabilityActContractV1,
+  capabilityWorkspaceV1,
   type CapabilityActionV1,
   type CapabilityFamily,
 } from '@/lib/capabilityModel';
@@ -24,15 +28,54 @@ import {
   type UnsignedTransactionChainReportV1,
   type UnsignedTransactionInspectionV1,
 } from '@/lib/walletHandoff';
+import CommandRunbook from '@/components/operator/CommandRunbook';
 
-import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
 type Discovery = Readonly<{ kind: 'idle' | 'loading' | 'error'; message: string }> | Readonly<{ kind: 'ready'; snapshot: OperatorSurfaceSnapshotV1 }>;
-type Packet = Readonly<{ inspection: UnsignedTransactionInspectionV1; report: UnsignedTransactionChainReportV1 }>;
+type Packet = Readonly<{
+  inspection: UnsignedTransactionInspectionV1;
+  report: UnsignedTransactionChainReportV1 | null;
+  endpoint: string;
+  sourceText: string;
+}>;
+export type PacketExportStateV1 = Readonly<{
+  endpoint: string;
+  sourceText: string;
+  report: Pick<UnsignedTransactionChainReportV1, 'missing' | 'nonExecutablePrograms'> | null;
+}>;
+
+export const DIRECT_ROUTE_RUNBOOK_V1 = `dclutch --rpc "$DEVNET_RPC" \\
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
+  --bootstrap-bin "$SUCCESSOR" route release-set \\
+  --plan "$PLAN" --expected-plan-sha256 "$PLAN_SHA256" \\
+  --core-checked "$CORE_CHECKED" --expected-core-checked-sha256 "$CORE_SHA256" \\
+  --claims-checked "$CLAIMS_CHECKED" --expected-claims-checked-sha256 "$CLAIMS_SHA256" \\
+  --trading-checked "$TRADING_CHECKED" --expected-trading-checked-sha256 "$TRADING_SHA256" \\
+  --resolution-checked "$RESOLUTION_CHECKED" --expected-resolution-checked-sha256 "$RESOLUTION_SHA256" \\
+  --custody-checked "$CUSTODY_CHECKED" --expected-custody-checked-sha256 "$CUSTODY_SHA256" \\
+  --output "$CHECKED_EXECUTION_RELEASE"
+
+dclutch --rpc "$DEVNET_RPC" \\
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
+  --bootstrap-bin "$SUCCESSOR" route direct \\
+  --session "$DIRECT_SESSION" \\
+  --checked-execution-release "$CHECKED_EXECUTION_RELEASE" \\
+  --expected-checked-execution-release-sha256 "$CHECKED_EXECUTION_SHA256" \\
+  --registry-checked "$REGISTRY_CHECKED" --expected-registry-checked-sha256 "$REGISTRY_SHA256" \\
+  --rent-checked "$RENT_CHECKED" --expected-rent-checked-sha256 "$RENT_SHA256" \\
+  --output "$DIRECT_ROUTE"`;
 
 function reason(error: unknown): string { return error instanceof Error ? error.message : 'operation refused without a usable reason'; }
 function compact(value: string): string { return value.length > 22 ? `${value.slice(0, 8)}…${value.slice(-7)}` : value; }
+export function packetExportReadyV1(packet: PacketExportStateV1 | null, endpoint: string, sourceText: string): boolean {
+  return packet !== null
+    && packet.endpoint === endpoint
+    && packet.sourceText === sourceText
+    && packet.report !== null
+    && packet.report.missing.length === 0
+    && packet.report.nonExecutablePrograms.length === 0;
+}
 function familyGroups(): ReadonlyArray<Readonly<{ family: CapabilityFamily; actions: ReadonlyArray<CapabilityActionV1> }>> {
   const order: CapabilityFamily[] = ['Release', 'Creation', 'Direct', 'Source', 'Series', 'General', 'Dealer', 'Claims'];
   return order.map((family) => Object.freeze({ family, actions: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.family === family) }));
@@ -45,14 +88,17 @@ export default function OperatorSurface() {
   const [discovery, setDiscovery] = useState<Discovery>({ kind: 'idle', message: 'No chain state has been read.' });
   const [unsignedText, setUnsignedText] = useState('');
   const [packet, setPacket] = useState<Packet | null>(null);
-  const [packetStatus, setPacketStatus] = useState('Paste an unsigned transaction emitted by one accepted workflow.');
-  const [wallet, setWallet] = useState('');
-  const [walletStatus, setWalletStatus] = useState('Optional. This surface never signs or submits.');
-  const wallets = useWalletDirectoryV1();
+  const [packetStatus, setPacketStatus] = useState('No unsigned packet has been inspected.');
+  const [dependencyStatus, setDependencyStatus] = useState('Inspect a packet before reading its dependencies.');
+  const packetOperation = useRef(0);
+  const currentEndpoint = useRef(endpoint);
+  const currentUnsignedText = useRef(unsignedText);
+  useEffect(() => { currentEndpoint.current = endpoint; }, [endpoint]);
+  useEffect(() => { currentUnsignedText.current = unsignedText; }, [unsignedText]);
   const groups = useMemo(() => familyGroups(), []);
   const counts = useMemo(() => ({
-    constructible: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-unsigned' || workflow.implementation === 'browser-wallet').length,
-    request: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'rust-unsigned').length,
+    constructible: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-unsigned' || workflow.implementation === 'browser-message' || workflow.implementation === 'browser-wallet').length,
+    request: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'rust-unsigned' || workflow.implementation === 'operator-artifact' || workflow.implementation === 'operator-campaign').length,
     blocked: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'awaiting-production').length,
   }), []);
 
@@ -62,8 +108,23 @@ export default function OperatorSurface() {
   }
 
   function updateEndpoint(value: string) {
+    packetOperation.current += 1;
     setDeploymentPreset(null);
-    setEndpoint(value.trim());
+    const next = value.trim();
+    currentEndpoint.current = next;
+    setEndpoint(next);
+    setPacket(null);
+    setPacketStatus('Endpoint changed. Inspect the unsigned packet again.');
+    setDependencyStatus('Inspect the packet against this endpoint before exporting it.');
+  }
+
+  function updateUnsignedText(value: string) {
+    packetOperation.current += 1;
+    currentUnsignedText.current = value;
+    setUnsignedText(value);
+    setPacket(null);
+    setPacketStatus('Packet bytes changed. Inspect this exact artifact.');
+    setDependencyStatus('Inspect the packet before reading its dependencies.');
   }
 
   function loadLiveDevnetPreset() {
@@ -88,27 +149,50 @@ export default function OperatorSurface() {
   }
 
   async function inspectPacket(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setPacket(null); setPacketStatus('Reading finalized state…');
+    event.preventDefault();
+    const operation = ++packetOperation.current;
+    const sourceText = unsignedText;
+    const sourceEndpoint = endpoint;
+    setPacket(null); setPacketStatus('Inspecting packet bytes…'); setDependencyStatus('Inspect a packet before reading its dependencies.');
     try {
-      const inspection = await inspectUnsignedTransactionV1(unsignedText);
-      const report = await acquireUnsignedTransactionDependenciesV1(new SolanaRpcClient(endpoint), inspection);
-      setPacket({ inspection, report });
-      setPacketStatus(report.missing.length === 0 && report.nonExecutablePrograms.length === 0
-        ? 'Packet and every dependency reacquired. Nothing was signed or submitted.'
-        : `Refused for execution handoff: ${report.missing.length} missing account(s), ${report.nonExecutablePrograms.length} non-executable program(s).`);
-    } catch (error) { setPacketStatus(`Refused: ${reason(error)}`); }
+      const inspection = await inspectUnsignedTransactionV1(sourceText);
+      if (packetOperation.current !== operation
+          || currentEndpoint.current !== sourceEndpoint
+          || currentUnsignedText.current !== sourceText) return;
+      setPacket({ inspection, report: null, endpoint: sourceEndpoint, sourceText });
+      setPacketStatus(`Unsigned packet inspected · ${inspection.wireBytes} bytes · ${inspection.instructionCount} instruction(s) · ${inspection.requiredSignatures} signature(s) required.`);
+    } catch (error) {
+      if (packetOperation.current === operation) setPacketStatus(`Refused: ${reason(error)}`);
+    }
+  }
+
+  async function reacquirePacketDependencies() {
+    if (packet === null) return;
+    const operation = ++packetOperation.current;
+    const inspected = packet;
+    setPacket({ ...inspected, report: null });
+    setDependencyStatus('Reading every packet dependency at one finalized floor…');
+    try {
+      const report = await acquireUnsignedTransactionDependenciesV1(new SolanaRpcClient(inspected.endpoint), inspected.inspection);
+      if (packetOperation.current !== operation
+          || currentEndpoint.current !== inspected.endpoint
+          || currentUnsignedText.current !== inspected.sourceText) return;
+      setPacket({ ...inspected, report });
+      setDependencyStatus(report.missing.length === 0 && report.nonExecutablePrograms.length === 0
+        ? `Ready to export · ${report.dependencies.length} dependencies reacquired. Nothing was signed or submitted.`
+        : `Refused for export: ${report.missing.length} missing account(s), ${report.nonExecutablePrograms.length} non-executable program(s).`);
+    } catch (error) {
+      if (packetOperation.current !== operation) return;
+      setPacket({ ...inspected, report: null }); setDependencyStatus(`Refused: ${reason(error)}`);
+    }
   }
 
   function downloadPacket() {
-    if (packet === null) return;
+    if (!packetExportReadyV1(packet, endpoint, unsignedText) || packet === null) return;
     const blob = new Blob([packet.inspection.bytes as BlobPart], { type: 'application/octet-stream' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob); link.download = `dclutch-unsigned-${packet.inspection.digestHex.slice(0, 16)}.bin`; link.click();
     URL.revokeObjectURL(link.href);
-  }
-
-  function adoptIdentity(address: string) {
-    setWallet(address); setWalletStatus(`Connected · ${address}`);
   }
 
   return <main className="product-shell operator-shell">
@@ -122,8 +206,27 @@ export default function OperatorSurface() {
       {discovery.kind === 'ready' && <div className="operator-role-grid">{discovery.snapshot.roles.map((role) => <article key={role.role}><span>{role.role}</span><strong>{compact(role.address)}</strong><small>{role.dataBytes} data bytes · owner {compact(role.owner)}</small></article>)}</div>}
     </form>
 
-    <section className="operator-wave"><header><span>02</span><div><h2>Constructor readiness map</h2><p>“Browser unsigned” means a browser constructor exists but still needs its own release preflight. “Browser wallet” means the page can explicitly sign, submit, recover, and verify that named action. “Rust unsigned” means the constructor remains in the operator tooling. “Awaiting production” names a missing execution seam.</p></div></header><div className="operator-family-grid">{groups.map((group) => <article key={group.family}><h3>{group.family}</h3>{group.actions.map((workflow) => <div className="operator-action" key={workflow.id}><span className={`operator-status ${workflow.implementation}`}>{workflow.implementation.replaceAll('-', ' ')}</span><strong>{workflow.action}</strong><p>{workflow.exactBoundary}</p>{workflow.workspace && <Anchor href={workflow.workspace}>{workflow.implementation === 'browser-unsigned' ? 'Open exact preflight' : workflow.implementation === 'browser-wallet' ? 'Open wallet flow' : 'Inspect current boundary'} →</Anchor>}</div>)}</article>)}</div></section>
+    <section className="operator-route-runbook" id="direct-route"><header><span>02</span><div><h2>Export the portable Direct route</h2><p>This is the artifact a maker or taker pastes into a client. Two read-only successor calls produce it; neither command has a key, wallet, signing, or submission capability.</p></div></header><div className="operator-route-contract"><article><span>Inputs</span><strong>Checked releases + frozen Direct session</strong><p>Absolute paths and lowercase SHA-256 from the current release reports: five execution roles, Registry, Rent, and the Direct session whose durable journal proves its lookup table frozen.</p></article><article><span>Authority</span><strong>Finalized devnet reads only</strong><p>The Rust producer reauthenticates devnet, reads the live Registry activation cache, and uses the same finalized Direct planning path as execution. Typed files remain candidates.</p></article><article><span>Result</span><strong>One route + one report</strong><p>The JSON carries the exact 39 named rows, runtime tail, frozen lookup table, and checked infrastructure. Every consuming client reacquires it; copying it grants no authority.</p></article><article><span>If refused</span><strong>Fix the named evidence wall</strong><p>A missing lookup-freeze journal means the Direct session is not ready to publish. A digest or activation mismatch means the supplied release evidence is not the live selected set.</p></article></div><details><summary>Show the exact CLI invocation</summary><p>Set each shell variable to an absolute path or the digest from that artifact’s machine report. Both output paths must be new.</p><CommandRunbook label="Read-only route export" command={DIRECT_ROUTE_RUNBOOK_V1} /></details></section>
 
-    <section className="operator-handoff"><header><span>03</span><div><h2>Inspect and export an unsigned transaction</h2><p>Paste bytes built by an accepted workspace. Signed and oversized packets are rejected.</p></div></header><div className="operator-handoff-grid"><form onSubmit={inspectPacket}><label><span>Unsigned transaction · base64 — exported by another console&apos;s Export button, or by the operator tooling</span><textarea required value={unsignedText} onChange={(event) => setUnsignedText(event.target.value.trim())} /></label><button type="submit">Reacquire packet dependencies</button><p className="direct-status" aria-live="polite">{packetStatus}</p></form><aside><span className="panel-label">External identity boundary</span><h3>{wallet ? compact(wallet) : 'No wallet identity read'}</h3><WalletDirectory directory={wallets} onConnected={adoptIdentity} /><p>{walletStatus}</p>{packet && <><dl><div><dt>SHA-256</dt><dd>{packet.inspection.digestHex.slice(0, 24)}…</dd></div><div><dt>Wire / instructions</dt><dd>{packet.inspection.wireBytes} B / {packet.inspection.instructionCount}</dd></div><div><dt>Signatures required</dt><dd>{packet.inspection.requiredSignatures}</dd></div><div><dt>Resolved accounts</dt><dd>{packet.report.dependencies.length}</dd></div><div><dt>Lookup tables</dt><dd>{packet.inspection.lookupTables.length}</dd></div></dl><button type="button" disabled={packet.report.missing.length > 0 || packet.report.nonExecutablePrograms.length > 0} onClick={downloadPacket}>Download exact unsigned bytes</button></>}</aside></div></section>
+    <section className="operator-wave"><header><span>03</span><div><h2>Constructor readiness map</h2><p>Each entry separates the act from its authority and result. “Operator artifact” is a key-free, read-only CLI export. “Operator campaign” is a journaled Rust workflow with explicit execution authority. “Browser message” asks only for a detached signature. “Browser wallet” is a transaction flow with durable recovery and finalized verification. “Rust unsigned” stays in operator tooling. “Awaiting production” names the exact missing seam.</p></div></header><div className="operator-family-grid">{groups.map((group) => <article key={group.family}><h3>{group.family}</h3>{group.actions.map((workflow) => {
+      const contract = capabilityActContractV1(workflow);
+      const workspace = capabilityWorkspaceV1(workflow, discovery.kind === 'ready' ? discovery.snapshot : null);
+      return <div className="operator-action" key={workflow.id}><span className={`operator-status ${workflow.implementation}`}>{workflow.implementation.replaceAll('-', ' ')}</span><strong>{workflow.action}</strong><p>{workflow.exactBoundary}</p><dl className="operator-action-contract"><div><dt>Authority</dt><dd>{contract.authority}</dd></div><div><dt>Result</dt><dd>{contract.result}</dd></div></dl>{workspace !== null
+        ? <Anchor href={workspace}>{workflow.implementation === 'browser-unsigned' ? 'Open exact preflight' : workflow.implementation === 'browser-message' ? 'Open offer authoring' : workflow.implementation === 'browser-wallet' ? 'Open wallet flow' : workflow.implementation === 'operator-artifact' || workflow.implementation === 'operator-campaign' ? 'Open exact runbook' : 'Inspect current boundary'} →</Anchor>
+        : workflow.workspace === 'market-detail' && <small className="operator-action-remedy">Reacquire one Market above to open its exact participant flow.</small>}</div>;
+    })}</article>)}</div></section>
+
+    <section className="operator-handoff"><header><span>04</span><div><h2>Inspect, reacquire, then export</h2><p>Each act unlocks the next. Signed and oversized packets refuse before any chain read; export stays closed until every dependency is reacquired.</p></div></header><div className="operator-handoff-grid"><form onSubmit={inspectPacket}>
+      <span className="panel-label">01 · inspect bytes</span>
+      <ArtifactInput label="Unsigned transaction" provenance="Exported by an accepted dClutch console or by the operator tooling. Load the exact binary file; base64 is the offline fallback." value={unsignedText} onChange={updateUnsignedText} required />
+      <Button type="submit">Inspect unsigned packet</Button><p className="direct-status" aria-live="polite">{packetStatus}</p>
+    </form><aside><span className="panel-label">02 · reacquire dependencies</span><h3>{packet === null ? 'No packet inspected' : `${packet.inspection.digestHex.slice(0, 12)}…${packet.inspection.digestHex.slice(-8)}`}</h3>
+      {packet === null
+        ? <p>Inspection names the exact accounts, programs, lookup tables, signature count, and full SHA-256 this step will check.</p>
+        : <dl><div><dt>SHA-256</dt><dd className="mono-value">{packet.inspection.digestHex}</dd></div><div><dt>Wire / instructions</dt><dd>{packet.inspection.wireBytes} B / {packet.inspection.instructionCount}</dd></div><div><dt>Signatures required</dt><dd>{packet.inspection.requiredSignatures}</dd></div><div><dt>Lookup tables</dt><dd>{packet.inspection.lookupTables.length}</dd></div>{packet.report && <><div><dt>Resolved accounts</dt><dd>{packet.report.dependencies.length}</dd></div><div><dt>Missing / non-executable</dt><dd>{packet.report.missing.length} / {packet.report.nonExecutablePrograms.length}</dd></div></>}</dl>}
+      <Button type="button" variant="outline" disabled={packet === null} onClick={() => void reacquirePacketDependencies()}>Reacquire packet dependencies</Button><p className="direct-status" aria-live="polite">{dependencyStatus}</p>
+      <Button type="button" disabled={!packetExportReadyV1(packet, endpoint, unsignedText)} onClick={downloadPacket}>Download exact unsigned bytes</Button>
+      <p>No wallet is requested here because this surface neither signs nor submits.</p>
+    </aside></div></section>
   </main>;
 }

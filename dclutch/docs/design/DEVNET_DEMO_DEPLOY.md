@@ -741,9 +741,10 @@ campaign to date has therefore been handed the ExecutionReleaseSet, all seven
 ArtifactRelease bodies, and the Pyth release body as account fixtures — a
 substrate **no cluster has**.
 
-**The change.** `--record-publication transaction` on `prepare` (and the
-matching optional run-spec field, and `--record-publication` on
-`tools/gauntlet/run.sh`) removes those nine from genesis and makes the
+**The historical runner change.** `--record-publication transaction` on
+`prepare` (and the matching optional run-spec field, and `--record-publication`
+on the former `tools/gauntlet/run.sh` campaign) removed those nine from genesis
+and made the
 supervisor publish each through the Registry's permissionless `Begin → Append →
 Finalize` path before Core initialization or activation can read them. Absent
 means `genesis`, so every existing spec is byte-for-byte unchanged.
@@ -761,13 +762,18 @@ content, so moving the writer moves nothing the protocol can observe.
 
 **On-chain result: GREEN.** See [§6.1](#61-result).
 
-**Reproduce:**
+**Historical command (not reproducible through current `run.sh`):**
 
 ```sh
 tools/gauntlet/run.sh --work /private/tmp/da2-gauntlet \
     --commit 90d7688dd9847f4a248415fb65237087882cd61e \
     --record-publication transaction
 ```
+
+At HEAD, `run.sh --mode full` (including its default) intentionally refuses
+before any work or build because no supported top-level planner is complete.
+The command above records the 2026-08-27 evidence procedure; it is not a
+current invocation path.
 
 The mode is folded into `SPEC_INPUT_DIGEST`; without that, switching modes would
 match the previous stamp and silently reuse a campaign that ran the *other*
@@ -891,7 +897,8 @@ rule that a program is not executable until *after* the slot it was deployed in.
 `c5d791e` closed the half that made the first half untestable: **nothing in the
 repository drove it.** No caller supplied a nonzero slot, so every role stayed
 at `0 == 0`, and neither `DeploymentSlotMismatch` nor the not-executable-yet
-rule had ever been exercised once. `tools/gauntlet/run.sh` now assigns distinct
+rule had ever been exercised once. The historical `tools/gauntlet/run.sh`
+campaign assigned distinct
 prime slots per role (11, 13, 17, 19, 23, 29, 31) under
 `--record-publication transaction` — the devnet rehearsal — and only there;
 `genesis` mode is the local install where 0 is the honest answer and stays
@@ -1064,7 +1071,8 @@ a formality:
       1,400,000 CU.
 - [x] Blocker A is fixed and the record bodies carry observed deployment slots.
       (`993a9ec` + `c5d791e`; exercised end to end by
-      `tools/gauntlet/run.sh --record-publication transaction`.)
+      the former `tools/gauntlet/run.sh --record-publication transaction`
+      campaign.)
 - [x] The devnet `PythReleaseV1` row exists. (`devnet_release_v1()`,
       `crates/dclutch-pyth-svm/src/devnet.rs`, minted 2026-08-27 under
       ember's SMOKE-0 deputization at `11f249ff`; the synthetic fixture now

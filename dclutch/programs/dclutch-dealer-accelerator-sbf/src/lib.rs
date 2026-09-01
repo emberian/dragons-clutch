@@ -2,14 +2,14 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Readonly stateless admitted-AOT accelerator for Dealer scenario execution.
+//! Readonly stateless admitted-AOT accelerator for Dealer execution.
 //!
 //! Common Trading authenticates the release, action descriptor, Product,
 //! execution artifacts, exact request, Profile13 account expansion, and input
 //! register bank. This program independently rejoins every Dealer semantic
-//! account through that public view, evaluates the sole scenario-solvency
-//! transition, and returns one canonical candidate-bank chunk. It never writes
-//! an account, invokes a child, or owns protocol state.
+//! account through that public view, evaluates the selected LP-lifecycle or
+//! scenario-solvency transition, and returns one canonical candidate-bank
+//! chunk. It never writes an account, invokes a child, or owns protocol state.
 
 extern crate alloc;
 extern crate std;
@@ -22,7 +22,14 @@ use dclutch_execution_strategy_contract::v2::{
     AcceleratorRequestV2,
 };
 use dclutch_trading_sbf::{
-    dealer::v3_accelerator_accounts::evaluate_authenticated_dealer_scenario_v4,
+    dealer::{
+        v3_accelerator_accounts::evaluate_authenticated_dealer_scenario_v4,
+        v3_equity_operator::DEALER_EQUITY_REQUEST_MAGIC_V3,
+        v3_operator::DEALER_MULTI_LP_REQUEST_MAGIC_V3,
+        v3_trade::{DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_MAGIC_V3},
+        v4_equity_accelerator_accounts::evaluate_authenticated_dealer_equity_v4,
+        v4_lp_accelerator_accounts::evaluate_authenticated_dealer_lp_v4,
+    },
     hot_v3::authenticate_accelerator_invocation_v4,
 };
 use solana_program::{
@@ -149,28 +156,47 @@ pub fn process_instruction(
     let invocation = authenticate_accelerator_invocation_v4(program_id, accounts, instruction_data)
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidInvocation)?;
     let mut candidate = vec![0_u8; bank_bytes];
-    let evaluation = evaluate_authenticated_dealer_scenario_v4(&invocation, &mut candidate);
+    let family_magic = invocation.family_request().get(..8);
+    let selected_action = invocation.selected_action();
+    // Dispatch only after common Hot authenticated the top-level request,
+    // ProgramSet selection and invocation context. Both magic and selected
+    // action must name the same family wire; a cross-family combination is a
+    // semantic refusal rather than an alternate decoder choice.
+    let accepted = if family_magic == Some(DEALER_MULTI_LP_REQUEST_MAGIC_V3.as_slice())
+        && matches!(selected_action, 7 | 8)
+    {
+        evaluate_authenticated_dealer_lp_v4(&invocation, &mut candidate).is_ok()
+    } else if family_magic == Some(DEALER_EQUITY_REQUEST_MAGIC_V3.as_slice())
+        && matches!(selected_action, 1..=6)
+    {
+        evaluate_authenticated_dealer_equity_v4(&invocation, &mut candidate).is_ok()
+    } else if family_magic == Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
+        && selected_action == u32::from(DEALER_SCENARIO_TRADE_ACTION_V3)
+    {
+        evaluate_authenticated_dealer_scenario_v4(&invocation, &mut candidate).is_ok()
+    } else {
+        false
+    };
     let request_digest = content(instruction_data)?;
-    let acknowledgement = match evaluation {
-        Ok(_) => {
-            let bank_digest = content(&candidate)?;
-            let start = usize::try_from(request.chunk_offset())
-                .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-            let remaining = candidate
-                .len()
-                .checked_sub(start)
-                .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-            let payload_bytes = remaining.min(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2);
-            let end = start
-                .checked_add(payload_bytes)
-                .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-            let payload = candidate
-                .get(start..end)
-                .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-            AcceleratorAckV2::accepted(request, request_digest, bank_digest, payload)
-                .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?
-        }
-        Err(_) => AcceleratorAckV2::refused(request, request_digest),
+    let acknowledgement = if accepted {
+        let bank_digest = content(&candidate)?;
+        let start = usize::try_from(request.chunk_offset())
+            .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+        let remaining = candidate
+            .len()
+            .checked_sub(start)
+            .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+        let payload_bytes = remaining.min(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2);
+        let end = start
+            .checked_add(payload_bytes)
+            .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+        let payload = candidate
+            .get(start..end)
+            .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+        AcceleratorAckV2::accepted(request, request_digest, bank_digest, payload)
+            .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?
+    } else {
+        AcceleratorAckV2::refused(request, request_digest)
     };
     let output_bytes = ACCELERATOR_ACK_HEADER_BYTES_V2
         .checked_add(acknowledgement.payload().len())

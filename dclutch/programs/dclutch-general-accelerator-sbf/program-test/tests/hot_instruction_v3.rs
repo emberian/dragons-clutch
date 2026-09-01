@@ -1095,13 +1095,12 @@ fn the_builder_turns_one_finalized_general_snapshot_into_a_complete_hot_instruct
         placeholder_request(action),
         "only the two bump witnesses may differ from the request that was passed in"
     );
-    assert_eq!(report.lifecycle.primary_state, fixture.primary_state);
-    assert_eq!(
-        report.lifecycle.primary_state_bump,
-        fixture.primary_state_bump
-    );
-    assert_eq!(report.lifecycle.terminal_state, None);
-    assert_eq!(report.lifecycle.terminal_state_bump, None);
+    assert_eq!(report.lifecycle.primary.account, fixture.primary_state);
+    assert_eq!(report.lifecycle.primary.bump, fixture.primary_state_bump);
+    assert_eq!(report.lifecycle.primary.account_coordinate, 5);
+    assert!(report.lifecycle.primary.is_materialized);
+    assert_eq!(report.lifecycle.secondary, None);
+    assert_eq!(report.lifecycle.conditional_result, None);
     assert_eq!(report.lifecycle.terminal_coordinate, None);
 
     // The only signer in the whole frame is the lifecycle payer, and the
@@ -1155,13 +1154,15 @@ fn every_general_action_builds_at_the_product_authenticated_width() {
         assert_eq!(report.outcome_count, OUTCOME_COUNT, "{action:?}");
         assert_eq!(report.product_record, fixture.product_record, "{action:?}");
         assert_eq!(
-            report.lifecycle.primary_state, fixture.primary_state,
+            report.lifecycle.primary.account, fixture.primary_state,
             "{action:?}"
         );
         assert_eq!(
-            report.lifecycle.terminal_state, fixture.terminal_state,
+            report.lifecycle.secondary.map(|state| state.account),
+            fixture.terminal_state,
             "{action:?}"
         );
+        assert_eq!(report.lifecycle.conditional_result, None, "{action:?}");
         // The child frame starts where General says it does, and only `Close`
         // consumes a revision into a terminal coordinate.
         assert_eq!(

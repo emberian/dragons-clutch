@@ -8,23 +8,27 @@ const ADDRESS = '7CuJSi6uEyTFD7TUmyiUyszv51b5v1K4tXGXhvC5Y8DU';
 describe('Market detail route', () => {
   const html = renderToStaticMarkup(<MarketDetailWorkspace address={ADDRESS} />);
 
-  it('names the four sections a Market detail owes its reader', () => {
-    expect(html).toContain('What this market is');
-    expect(html).toContain('The money');
-    expect(html).toContain('What it pays out in');
-    expect(html).toContain('What it is allowed to do');
+  it('leads with the four facts a reader needs to decide what to do next', () => {
+    expect(html).toContain('aria-label="Market decision facts"');
+    expect(html).toContain('Status');
+    expect(html).toContain('Collateral held');
+    expect(html).toContain('Leading outcome');
+    expect(html).toContain('Settles');
+    expect(html.split('>—</strong>').length - 1).toBe(4);
+    expect(html).toContain('Connection &amp; provenance');
+    expect(html).toContain('In the protocol&#x27;s own words · identity and immutable content');
+    expect(html).toContain('Where claims sit');
     expect(html).toContain(ADDRESS);
     // The read starts on its own: the address is in the URL and the programs
     // come from the baked deployment, so nothing is asked for first.
     expect(html).toContain('>Reading…</button>');
-    // Renegotiated 2026-08-31: the read section led with a paragraph on how an
-    // account is just bytes until a program says what they mean and how that
-    // program comes from the active deployment. The deployment is now named as
-    // a fact instead of argued for.
-    expect(html).toContain('Reading Devnet.');
+    // The deployment is a terse fact; connection and provenance remain one
+    // disclosure away instead of competing with the market decision.
+    expect(html).toContain('<p>Devnet</p>');
     expect(html).not.toContain('Finalized RPC endpoint');
     expect(html).not.toContain('Registry program · optional');
     expect(html).not.toContain('<input');
+    expect(html).not.toContain('Join this market');
   });
 
   it('carries a provenance chip and an explicit refusal on every section before any read', () => {
@@ -104,9 +108,11 @@ describe('a market the shipped registry names', () => {
     expect(html).not.toContain('broken');
   });
 
-  it('says in words how the question settles', () => {
-    expect(html).toContain('Settles from Pyth');
-    expect(html).toContain('resolves to the source-failure outcome');
+  it('does not mistake editorial settlement design for a live deadline before the market is read', () => {
+    expect(html).toContain('Settles');
+    expect(html).toContain('Not read yet.');
+    expect(html).not.toContain('Settles from Pyth');
+    expect(html).not.toContain('settlement deadline');
   });
 
   /**

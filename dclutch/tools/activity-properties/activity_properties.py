@@ -18,7 +18,7 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RECONCILER_PATH = ROOT / "tools" / "devnet-reconcile" / "reconcile.py"
-REPORT_SCHEMA = "dclutch-activity-lifecycle-property-report-v1"
+REPORT_SCHEMA = "dclutch-activity-lifecycle-property-report-v2"
 
 
 def _load_reconciler() -> Any:
@@ -224,9 +224,9 @@ def _validate_direct(
     mint = reconcile.pubkey(direct["mint"], "Direct mint")
     if any(ref not in accounts or accounts[ref].get("mint") != mint for ref in refs):
         refuse("Direct token roles cross or omit the collateral mint")
-    expected_deltas = (gross - seller_fee, -(gross + buyer_fee), fee_total)
-    if tuple(token_deltas.get(ref) for ref in refs) != expected_deltas:
-        refuse("Direct token movements differ from exact gross and side-floor fees")
+    seller_net = gross - seller_fee
+    if token_deltas != {refs[0]: seller_net, refs[1]: -seller_net}:
+        refuse("Direct Hot token movements differ from exact seller-net first-transaction arithmetic")
     positions = event.get("positions")
     if not isinstance(positions, list) or len(positions) != 2:
         refuse("whole-lifecycle properties require exact seller and buyer Direct Positions")
@@ -245,14 +245,84 @@ def _validate_direct(
     return fee_total, fill, projected
 
 
+def _validate_fee_settlement(
+    event: dict[str, Any],
+    accounts: dict[str, dict[str, Any]],
+    token_deltas: dict[str, int],
+    direct: dict[str, Any],
+    direct_positions: list[dict[str, Any]],
+) -> int:
+    settlement = reconcile.exact_keys(
+        event.get("feeSettlement"),
+        {
+            "generation", "debtor", "makerReplay", "feeAtoms", "sourceToken",
+            "destinationToken", "destinationOwner", "callerAuthority",
+            "callerAuthorityBump", "standingAllowanceAtoms",
+            "custodyExpectedRevision", "custodyResultingRevision", "submissionClass",
+            "capitalizationClass",
+        },
+        set(),
+        f"event {event['id']} Direct fee settlement",
+    )
+    for field in (
+        "generation", "feeAtoms", "callerAuthorityBump", "standingAllowanceAtoms",
+        "custodyExpectedRevision", "custodyResultingRevision",
+    ):
+        reconcile.decimal(settlement[field], f"Direct fee settlement {field}")
+    debtor = reconcile.pubkey(settlement["debtor"], "Direct fee-settlement debtor")
+    reconcile.pubkey(settlement["makerReplay"], "Direct fee-settlement maker replay")
+    reconcile.pubkey(settlement["callerAuthority"], "Direct fee-settlement caller authority")
+    destination_owner = reconcile.pubkey(
+        settlement["destinationOwner"], "Direct fee-settlement destination owner"
+    )
+    fee_atoms = reconcile.decimal(settlement["feeAtoms"], "Direct fee-settlement feeAtoms")
+    allowance = reconcile.decimal(
+        settlement["standingAllowanceAtoms"], "Direct fee-settlement standing allowance"
+    )
+    expected_revision = reconcile.decimal(
+        settlement["custodyExpectedRevision"], "Direct fee-settlement expected revision"
+    )
+    resulting_revision = reconcile.decimal(
+        settlement["custodyResultingRevision"], "Direct fee-settlement resulting revision"
+    )
+    source, destination = settlement["sourceToken"], settlement["destinationToken"]
+    expected_fee = reconcile.decimal(direct["feeRecipientAtoms"], "Direct exact combined fee")
+    fee_payer = accounts[event["feePayer"]]["address"]
+    participant_owners = {row["owner"] for row in direct_positions}
+    if (
+        fee_atoms == 0
+        or reconcile.decimal(
+            settlement["callerAuthorityBump"], "Direct fee-settlement caller authority bump"
+        ) > 255
+        or fee_atoms != expected_fee
+        or allowance < fee_atoms
+        or resulting_revision != expected_revision + 1
+        or source != direct["buyerToken"]
+        or destination != direct["feeRecipientToken"]
+        or debtor != direct_positions[1]["owner"]
+        or fee_payer in participant_owners | {destination_owner}
+        or token_deltas != {source: -fee_atoms, destination: fee_atoms}
+    ):
+        refuse("Direct fee completion changed its exact obligation or was not submitted by a stranger")
+    if settlement["submissionClass"] != "permissionless-state-derived-stranger":
+        refuse("Direct fee completion lost its permissionless state-derived classification")
+    if settlement["capitalizationClass"] != "debtor-collateral-obligation-not-future-revenue-or-hoard":
+        refuse("Direct fee completion claims future-revenue or Hoard capitalization")
+    return fee_atoms
+
+
 def _validate_payout(
     event: dict[str, Any],
     accounts: dict[str, dict[str, Any]],
     token_deltas: dict[str, int],
-) -> tuple[int, dict[str, Any]]:
+) -> tuple[int, dict[str, Any], str]:
     payout = reconcile.exact_keys(
         event.get("payout"),
-        {"hoardToken", "recipientToken", "position", "principalAtoms", "claimsBurnedAtoms", "mint", "principalClass"},
+        {
+            "hoardToken", "recipientToken", "position", "principalAtoms",
+            "claimsBurnedAtoms", "mint", "principalClass", "holder",
+            "holderChargeClass",
+        },
         set(),
         f"event {event['id']} payout facts",
     )
@@ -267,6 +337,15 @@ def _validate_payout(
         refuse("payout token roles cross the collateral mint")
     if token_deltas.get(hoard) != -principal or token_deltas.get(recipient) != principal:
         refuse("payout does not conserve exact Hoard principal")
+    holder = reconcile.pubkey(payout["holder"], "payout holder")
+    fee_payer = accounts[event["feePayer"]]["address"]
+    if (
+        accounts[recipient]["authority"] != holder
+        or fee_payer == holder
+        or payout["holderChargeClass"]
+        != "terminal-holder-is-not-transaction-fee-payer"
+    ):
+        refuse("terminal payout charged or substituted its holder")
     position = _position_transition(event.get("position"), accounts=accounts, label="payout Position", role=None)
     if position["account"] != payout["position"]:
         refuse("payout Position reference differs from its exact transition")
@@ -278,7 +357,7 @@ def _validate_payout(
     after = [int(value) for value in position["post"]["balancesAtoms"]]
     if len(burn_values) != len(before) or any(left - right != burn for left, right, burn in zip(before, after, burn_values, strict=True)):
         refuse("payout claim burns differ from the exact Position debit")
-    return principal, position
+    return principal, position, holder
 
 
 def validate_lifecycle(dossier: Any) -> dict[str, Any]:
@@ -327,11 +406,20 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
     closed_rent_total = 0
     refund_total = 0
     direct_sources: set[str] = set()
+    direct_token_refs: set[str] = set()
+    direct_facts: dict[str, Any] | None = None
+    direct_positions_for_fee: list[dict[str, Any]] | None = None
+    fee_settlement_count = 0
+    fee_completion_payers: set[str] = set()
+    uncharged_terminal_holders: set[str] = set()
     payer_addresses: set[str] = set()
     positions: list[dict[str, Any]] = []
     signatures: list[str] = []
     token_net_after_founding: dict[str, int] = defaultdict(int)
     closed_refs: set[str] = set()
+    retirement_conservation: dict[str, Any] | None = None
+    retirement_fee_payers: set[str] = set()
+    retirement_fee_total = 0
     last_lamports: dict[str, int] = {}
     last_tokens: dict[str, int] = {}
     last_positions: dict[str, dict[str, Any]] = {}
@@ -389,7 +477,7 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
                 "transactionFeeLamports", "computeUnitsConsumed", "lamportDeltas", "tokenDeltas", "sourceSha256",
                 "lamportObservations", "tokenObservations",
             },
-            {"direct", "positions", "position", "certificate", "payout", "retirement"},
+            {"direct", "positions", "feeSettlement", "position", "certificate", "payout", "retirement"},
             f"dossier events[{index}]",
         )
         event_id = reconcile.text(event["id"], f"dossier events[{index}] id")
@@ -442,9 +530,21 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
                 refuse(f"event {event_id} token transition substitutes its typed account identity")
             if event["kind"] != "founding":
                 token_net_after_founding[account["mint"]] += delta
+        if event["kind"] != "founding":
+            event_token_net_by_mint: dict[str, int] = defaultdict(int)
+            for ref, delta in token_deltas.items():
+                event_token_net_by_mint[accounts[ref]["mint"]] += delta
+            if any(total != 0 for total in event_token_net_by_mint.values()):
+                refuse(f"event {event_id} does not conserve each token mint independently")
         if event["kind"] == "direct" and "direct" in event:
-            protocol_fee, _, direct_positions = _validate_direct(event, accounts, token_deltas)
-            protocol_fee_total += protocol_fee
+            _, _, direct_positions = _validate_direct(event, accounts, token_deltas)
+            direct_facts = event["direct"]
+            direct_positions_for_fee = direct_positions
+            direct_token_refs.update({
+                event["direct"]["sellerToken"],
+                event["direct"]["buyerToken"],
+                event["direct"]["feeRecipientToken"],
+            })
             for row in direct_positions:
                 ref = row["account"]
                 if ref in last_positions and last_positions[ref] != row["pre"]:
@@ -454,9 +554,20 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
             direct_sources.add(reconcile.digest(event["sourceSha256"], f"event {event_id} sourceSha256"))
         elif "direct" in event or "positions" in event:
             refuse("Direct economics or paired Positions belong only to the Direct phase")
+        if "feeSettlement" in event:
+            if event["kind"] != "direct" or direct_facts is None or direct_positions_for_fee is None:
+                refuse("Direct fee settlement must follow the exact Hot transaction")
+            protocol_fee_total += _validate_fee_settlement(
+                event, accounts, token_deltas, direct_facts, direct_positions_for_fee
+            )
+            fee_completion_payers.add(accounts[fee_ref]["address"])
+            fee_settlement_count += 1
         if event["kind"] == "payout" and "payout" in event:
-            principal, payout_position = _validate_payout(event, accounts, token_deltas)
+            if event["payout"]["hoardToken"] in direct_token_refs:
+                refuse("payout Hoard token aliases a Direct trading-token role")
+            principal, payout_position, holder = _validate_payout(event, accounts, token_deltas)
             principal_total += principal
+            uncharged_terminal_holders.add(holder)
             ref = payout_position["account"]
             if ref in last_positions and last_positions[ref] != payout_position["pre"]:
                 refuse(f"activity Position history for {ref} is discontinuous")
@@ -465,7 +576,14 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
         elif "payout" in event or "position" in event:
             refuse("payout facts or singular Position belong only to the payout phase")
         if event["kind"] == "retirement":
-            retirement = reconcile.exact_keys(event.get("retirement"), {"stage", "closedAccounts", "refundLamports"}, set(), f"event {event_id} retirement")
+            retirement_fee_payers.add(fee_ref)
+            retirement_fee_total += fee
+            retirement = reconcile.exact_keys(
+                event.get("retirement"),
+                {"stage", "closedAccounts", "refundLamports"},
+                {"conservation"},
+                f"event {event_id} retirement",
+            )
             reconcile.text(retirement["stage"], f"event {event_id} retirement stage")
             event_closed = retirement["closedAccounts"]
             if not isinstance(event_closed, list) or len(event_closed) != len(set(event_closed)):
@@ -487,6 +605,69 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
                 closed_refs.add(ref)
                 closed_rent_total += before
             refund_total += sum(event_refunds.values())
+            if "conservation" in retirement:
+                if retirement_conservation is not None:
+                    refuse("retirement has more than one terminal conservation owner")
+                conservation = reconcile.exact_keys(
+                    retirement["conservation"],
+                    {
+                        "refundBeneficiary", "payer", "classifiedLamports",
+                        "totalTransactionFeesLamports", "terminalRefundWalletLamports",
+                        "beneficiaryClass", "capitalizationClass",
+                    },
+                    set(),
+                    "retirement terminal conservation",
+                )
+                beneficiary = conservation["refundBeneficiary"]
+                payer = conservation["payer"]
+                if (
+                    beneficiary not in accounts
+                    or accounts[beneficiary]["kind"] != "wallet"
+                    or payer not in accounts
+                    or accounts[payer]["kind"] != "wallet"
+                    or payer == beneficiary
+                ):
+                    refuse("retirement changed its distinct payer or creation-fixed beneficiary")
+                classified = reconcile.exact_keys(
+                    conservation["classifiedLamports"],
+                    {
+                        "market", "rentCredit", "claimsRefund", "custodyReplay",
+                        "hoardVaultRent", "expectedRefundDelta", "refundWalletBefore",
+                    },
+                    set(),
+                    "retirement classified lamports",
+                )
+                values = {
+                    field: reconcile.decimal(value, f"retirement classified {field}")
+                    for field, value in classified.items()
+                }
+                expected_refund = values["expectedRefundDelta"]
+                terminal = reconcile.decimal(
+                    conservation["terminalRefundWalletLamports"],
+                    "retirement terminal refund wallet",
+                )
+                reconcile.decimal(
+                    conservation["totalTransactionFeesLamports"],
+                    "retirement transaction fees",
+                )
+                if (
+                    sum(values[field] for field in ("market", "rentCredit", "claimsRefund", "custodyReplay", "hoardVaultRent"))
+                    != expected_refund
+                    or event_refunds != {beneficiary: expected_refund}
+                    or terminal != values["refundWalletBefore"] + expected_refund
+                    or conservation["beneficiaryClass"] != "creation-fixed-refund-wallet"
+                ):
+                    refuse("retirement classified lamports differ from the exact beneficiary refund")
+                if conservation["capitalizationClass"] != "historical-account-lamports-not-future-revenue-or-hoard-principal":
+                    refuse("retirement claims future-revenue or Hoard-principal capitalization")
+                final_beneficiary = final_by_ref.get(beneficiary)
+                if (
+                    final_beneficiary is None
+                    or final_beneficiary["closed"]
+                    or int(final_beneficiary["lamports"]) != terminal
+                ):
+                    refuse("retirement beneficiary differs from its exact terminal poststate")
+                retirement_conservation = conservation
         elif "retirement" in event:
             refuse("retirement facts belong only to retirement transactions")
         fee_total += fee
@@ -504,8 +685,22 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
         refuse("post-founding scaled integer assets are not exactly conserved by mint")
     if closed_rent_total != refund_total:
         refuse("retirement rent removed from closed accounts differs from exact refunds")
+    if retirement_conservation is None:
+        refuse("retirement omitted one terminal classified conservation receipt")
+    if retirement_fee_payers != {retirement_conservation["payer"]}:
+        refuse("retirement transactions changed their distinct fee payer")
+    if (
+        reconcile.decimal(
+            retirement_conservation["totalTransactionFeesLamports"],
+            "retirement conservation fee total",
+        )
+        != retirement_fee_total
+    ):
+        refuse("retirement conservation fee total differs from finalized history")
     if len(direct_sources) != 1:
         refuse("activity dossier lacks one unambiguous Direct semantic-owner digest")
+    if fee_settlement_count != 1:
+        refuse("activity dossier lacks one exact permissionless Direct fee completion")
     source_digests = evidence["sourceDigests"]
     expected_sources = [
         {"event": event["id"], "sha256": event["sourceSha256"]}
@@ -558,6 +753,10 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
         "hoardPrincipalPaidAtoms": principal_total,
         "closedRentLamports": closed_rent_total,
         "refundLamports": refund_total,
+        "feeCompletionPayers": sorted(fee_completion_payers),
+        "unchargedTerminalHolders": sorted(uncharged_terminal_holders),
+        "refundBeneficiary": accounts[retirement_conservation["refundBeneficiary"]]["address"],
+        "retirementPayer": accounts[retirement_conservation["payer"]]["address"],
         "payerAddresses": sorted(payer_addresses),
         "signatures": signatures,
         "directSourceSha256": next(iter(direct_sources)),
@@ -652,6 +851,40 @@ def validate_many(dossiers: list[Any]) -> dict[str, Any]:
         "multiwallet": {
             "status": "holds" if len(results) > 1 else "inapplicable",
             "payerAddresses": sorted(payer_addresses),
+        },
+        "livenessEconomics": {
+            "directFeeCompletion": {
+                "status": "holds",
+                "submissionClass": "permissionless-state-derived-stranger",
+                "capitalizationClass": "debtor-collateral-obligation-not-future-revenue-or-hoard",
+                "payerAddresses": sorted(
+                    address
+                    for result in results
+                    for address in result["feeCompletionPayers"]
+                ),
+            },
+            "retirementRefund": {
+                "status": "holds",
+                "beneficiaryClass": "creation-fixed-refund-wallet",
+                "capitalizationClass": "historical-account-lamports-not-future-revenue-or-hoard-principal",
+                "beneficiaryAddresses": sorted(
+                    result["refundBeneficiary"] for result in results
+                ),
+                "payerAddresses": sorted(result["retirementPayer"] for result in results),
+            },
+            "hoardPrincipal": {
+                "status": "holds",
+                "classification": "collateral-principal-not-fee-bounty-rent-reserve-or-treasury",
+            },
+            "terminalHolderCharge": {
+                "status": "holds",
+                "classification": "terminal-holder-is-not-transaction-fee-payer",
+                "holderAddresses": sorted(
+                    address
+                    for result in results
+                    for address in result["unchargedTerminalHolders"]
+                ),
+            },
         },
     }
     return report

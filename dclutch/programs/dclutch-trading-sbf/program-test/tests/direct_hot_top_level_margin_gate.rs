@@ -413,7 +413,23 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// or gate them on the founding path, and roughly 4,500 CU comes back to the
 /// public route. Until then this route sits 129,948 CU under the ceiling on the
 /// key-independent statistic, against 105,373 when the fee leg landed.
-const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_271_552;
+///
+/// # 2026-08-31, recovered: 1,270,052 -> 1,266,559
+///
+/// The founding-only admission and certificate-digest probe now run only at
+/// Core's permit-committing callers. Trading and Claims still authenticate the
+/// immutable Registry record and all Product joins on every use, but consume
+/// the semantic preimage from the already-decoded `ProductBasisV3` instead of
+/// decoding the same bytes again. The paired fee gate moved by the same amount
+/// to within 3 CU: 1,269,919 -> 1,266,429.
+///
+/// Measured recovery is **3,493 CU**, not the correction note's approximate
+/// 4,500. The remaining cost is the one full canonical basis decode each of the
+/// two independently authenticating programs must still perform; removing that
+/// would weaken per-use authentication rather than hoist a founding conjunct.
+/// The gate keeps its one-search-attempt slack, so the pin is measured floor
+/// 1,266,559 + 1,500.
+const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_268_059;
 
 /// The protocol maximum a transaction may consume.
 const PROTOCOL_CEILING: u64 = 1_400_000;

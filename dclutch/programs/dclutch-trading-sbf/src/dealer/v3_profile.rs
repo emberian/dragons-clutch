@@ -13,21 +13,23 @@ use alloc::{vec, vec::Vec};
 
 #[cfg(not(target_os = "solana"))]
 use dclutch_account_profile_contract::v2::{
-    AccountProfileV2, TrustedEnvironmentV2,
+    AccountPrestateV2, AccountProfileV2, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+    TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-        AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2, AccountRuleInputV2,
-        IdentityCoordinateV2, RegisterGeometryV2,
-        encode_account_profile_with_environment_v2_atomic,
+        AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+        AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+        encode_account_profile_with_authenticated_route_alias_v2_atomic,
     },
 };
 
 use super::{
     v3_hot_artifact::{
         DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3,
-        DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3, DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
-        DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3, DealerCustodyIdentityFieldV3,
-        dealer_current_slot_scalar_register_v3, dealer_custody_identity_register_v3,
+        DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3, DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3,
+        DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3, DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
+        DealerCustodyIdentityFieldV3, dealer_current_slot_scalar_register_v3,
+        dealer_custody_identity_register_v3, dealer_equity_evidence_owner_identity_register_v3,
         dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3,
     },
     v3_multi_lp::MultiLpActionV3,
@@ -36,12 +38,14 @@ use super::{
 const CUSTODY_REPLAY_ACCOUNT_V3: u16 = 8;
 const CUSTODY_SOURCE_ACCOUNT_V3: u16 = 10;
 const CUSTODY_DESTINATION_ACCOUNT_V3: u16 = 11;
+const CUSTODY_ACTIVATION_CACHE_ACCOUNT_V3: u16 = 2;
 const CUSTODY_REGISTRY_ACCOUNT_V3: u16 = 3;
 const CUSTODY_CALLER_PROGRAM_ACCOUNT_V3: u16 = 4;
 const CUSTODY_CALLER_PROGRAMDATA_ACCOUNT_V3: u16 = 5;
 const CUSTODY_TOKEN_PROGRAM_ACCOUNT_V3: u16 = 13;
 
 const CLAIMS_MARKET_ACCOUNT_V3: u16 = 1;
+const CLAIMS_ACTIVATION_CACHE_ACCOUNT_V3: u16 = 12;
 const CLAIMS_BASIS_RECORD_ACCOUNT_V3: u16 = 2;
 const CLAIMS_PRODUCT_RECORD_ACCOUNT_V3: u16 = 4;
 const CLAIMS_PORTFOLIO_RECORD_ACCOUNT_V3: u16 = 8;
@@ -51,6 +55,11 @@ const CLAIMS_CALLER_PROGRAM_ACCOUNT_V3: u16 = 14;
 const CLAIMS_CALLER_PROGRAMDATA_ACCOUNT_V3: u16 = 15;
 const CLAIMS_PROGRAM_ACCOUNT_V3: u16 = 16;
 const CLAIMS_CORE_PROGRAM_ACCOUNT_V3: u16 = 18;
+
+// The shared Hot prefix projects this finalized record through its authenticated
+// content digest rather than pinning one adapter serialization. Claims borrows
+// that same semantic owner at its linked-basis route coordinate.
+const LINKED_BASIS_CONTENT_ACCOUNT_V3: u16 = 4;
 
 /// Stable construction refusal for one exact logical profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +106,7 @@ pub fn dealer_equity_logical_account_count_v3(
         .and_then(|value| value.checked_add(u16::try_from(signed_position_count).ok()?))
         .and_then(|value| value.checked_add(DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3))
         .and_then(|value| value.checked_add(DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3))
+        .and_then(|value| value.checked_add(DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3))
         .ok_or(DealerEquityProfileErrorV3::Geometry)
 }
 
@@ -143,7 +153,12 @@ pub fn encode_dealer_equity_account_profile_v3(
     let custody_program = lp
         .checked_add(1)
         .ok_or(DealerEquityProfileErrorV3::Geometry)?;
-    if custody_program.checked_add(1) != Some(account_count) {
+    let evidence_start = custody_program
+        .checked_add(DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3)
+        .ok_or(DealerEquityProfileErrorV3::Geometry)?;
+    if evidence_start.checked_add(DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3)
+        != Some(account_count)
+    {
         return Err(DealerEquityProfileErrorV3::Geometry);
     }
 
@@ -157,6 +172,7 @@ pub fn encode_dealer_equity_account_profile_v3(
             obligation,
             lp,
             custody_program,
+            evidence_start,
             input.logical_data_lengths,
         )?);
     }
@@ -164,14 +180,19 @@ pub fn encode_dealer_equity_account_profile_v3(
         dealer_custody_identity_register_v3(0, DealerCustodyIdentityFieldV3::CallerProgram)
             .ok_or(DealerEquityProfileErrorV3::Geometry)?;
     let first_custody = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
+    let claims_program = claims_start
+        .checked_add(CLAIMS_PROGRAM_ACCOUNT_V3)
+        .ok_or(DealerEquityProfileErrorV3::Geometry)?;
+    let evidence_owner = dealer_equity_evidence_owner_identity_register_v3(input.action)
+        .ok_or(DealerEquityProfileErrorV3::Geometry)?;
     let operations = [
-        AccountOperationInputV2::ProjectKey {
+        AccountOperationInputV2::RequireKey {
             account: AccountCoordinateV2::fixed(
                 first_custody
                     .checked_add(CUSTODY_CALLER_PROGRAM_ACCOUNT_V3)
                     .ok_or(DealerEquityProfileErrorV3::Geometry)?,
             ),
-            destination: IdentityCoordinateV2::common(trading_identity),
+            expected: IdentityCoordinateV2::common(trading_identity),
         },
         AccountOperationInputV2::RequireOwner {
             account: AccountCoordinateV2::fixed(obligation),
@@ -180,6 +201,10 @@ pub fn encode_dealer_equity_account_profile_v3(
         AccountOperationInputV2::RequireOwner {
             account: AccountCoordinateV2::fixed(lp),
             expected: IdentityCoordinateV2::common(trading_identity),
+        },
+        AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(claims_program),
+            destination: IdentityCoordinateV2::common(evidence_owner),
         },
     ];
     let current_slot = dealer_current_slot_scalar_register_v3(input.action)
@@ -198,7 +223,7 @@ pub fn encode_dealer_equity_account_profile_v3(
         .map_err(|_| DealerEquityProfileErrorV3::Geometry)?,
         item_identity_stride: 0,
     };
-    let bytes = dclutch_account_profile_contract::v2::HEADER_BYTES
+    let bytes = dclutch_account_profile_contract::v2::AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
         .checked_add(
             usize::from(account_count)
                 .checked_mul(dclutch_account_profile_contract::v2::RULE_BYTES)
@@ -214,11 +239,14 @@ pub fn encode_dealer_equity_account_profile_v3(
         .ok_or(DealerEquityProfileErrorV3::Geometry)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_account_profile_with_environment_v2_atomic(
-        AccountProfileArtifactV2::TrustedEnvironment,
+    encode_account_profile_with_authenticated_route_alias_v2_atomic(
         TrustedEnvironmentV2::CurrentSlot {
             destination: current_slot,
         },
+        TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
+            destination: trading_identity,
+        },
+        TrustedBuiltinIdentityV2::None,
         &rules,
         &[],
         &operations,
@@ -249,8 +277,9 @@ fn account_rule(
     obligation: u16,
     lp: u16,
     custody_program: u16,
+    evidence_start: u16,
     lengths: &[u32],
-) -> Result<AccountRuleInputV2, DealerEquityProfileErrorV3> {
+) -> Result<AccountRuleWithPrestateInputV2, DealerEquityProfileErrorV3> {
     let writable = coordinate == 0
         || coordinate == obligation
         || coordinate == lp
@@ -259,20 +288,60 @@ fn account_rule(
     // loader that deployed it owns the record and the Registry activation cache
     // is the sole authority on which program the Custody role selects. This
     // topology states its five other program coordinates the same way, at the
-    // caller-supplied width, because the AccountProfile5 encoder it uses has no
-    // prestate channel to say `opaque` with.
+    // caller-supplied width. Profile11's route-alias prestate is reserved for
+    // later non-owning coordinates; each self representative remains exact.
     let executable = coordinate == custody_program
         || child_executable(action, signed_position_count, coordinate, claims_start)?;
-    let alias = account_alias(action, signed_position_count, coordinate, claims_start)?;
+    let alias = if coordinate >= evidence_start {
+        let evidence = coordinate - evidence_start;
+        if u32::from(evidence) < signed_position_count {
+            AccountAliasInputV2::Fixed(
+                claims_start
+                    .checked_add(DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3)
+                    .and_then(|value| value.checked_add(evidence))
+                    .ok_or(DealerEquityProfileErrorV3::Geometry)?,
+            )
+        } else {
+            AccountAliasInputV2::SelfCoordinate
+        }
+    } else {
+        account_alias(action, signed_position_count, coordinate, claims_start)?
+    };
+    let aliased = alias != AccountAliasInputV2::SelfCoordinate;
+    let variable_data_owner = coordinate == LINKED_BASIS_CONTENT_ACCOUNT_V3;
+    let variable_data_alias = alias == AccountAliasInputV2::Fixed(LINKED_BASIS_CONTENT_ACCOUNT_V3);
     let write_data = coordinate == obligation || coordinate == lp;
-    Ok(AccountRuleInputV2 {
-        privileges: AccountPrivilegesV2::new(false, writable, executable),
-        effect_permissions: AccountEffectPermissionsV2::new(false, false, write_data),
-        alias,
-        data_length: *lengths
-            .get(usize::from(coordinate))
-            .ok_or(DealerEquityProfileErrorV3::DataLengths)?,
-        data_item_stride: 0,
+    Ok(AccountRuleWithPrestateInputV2 {
+        rule: AccountRuleInputV2 {
+            privileges: if aliased {
+                AccountPrivilegesV2::new(false, false, false)
+            } else {
+                AccountPrivilegesV2::new(false, writable, executable)
+            },
+            effect_permissions: if aliased {
+                AccountEffectPermissionsV2::new(false, false, false)
+            } else {
+                AccountEffectPermissionsV2::new(false, false, write_data)
+            },
+            alias,
+            data_length: if aliased {
+                0
+            } else {
+                *lengths
+                    .get(usize::from(coordinate))
+                    .ok_or(DealerEquityProfileErrorV3::DataLengths)?
+            },
+            data_item_stride: 0,
+        },
+        prestate: if variable_data_owner {
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        } else if variable_data_alias {
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+        } else if aliased {
+            AccountPrestateV2::AuthenticatedRouteAlias
+        } else {
+            AccountPrestateV2::Exact
+        },
     })
 }
 
@@ -339,10 +408,38 @@ fn account_alias(
 ) -> Result<AccountAliasInputV2, DealerEquityProfileErrorV3> {
     let first_custody = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
     if let Some(offset) = custody_offset(action, signed_position_count, coordinate, claims_start)? {
-        if coordinate >= first_custody + DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3
-            && matches!(offset, 1 | 2 | 3 | 4 | 5 | 6 | 7 | 9 | 12 | 13)
-        {
-            return Ok(AccountAliasInputV2::Fixed(first_custody + offset));
+        if coordinate >= first_custody + DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 {
+            if matches!(offset, 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 12 | 13) {
+                return Ok(AccountAliasInputV2::Fixed(first_custody + offset));
+            }
+            let claims_count = DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3
+                .checked_add(
+                    u16::try_from(signed_position_count)
+                        .map_err(|_| DealerEquityProfileErrorV3::Geometry)?,
+                )
+                .ok_or(DealerEquityProfileErrorV3::Geometry)?;
+            let later_start = claims_start
+                .checked_add(claims_count)
+                .ok_or(DealerEquityProfileErrorV3::Geometry)?;
+            let route = (coordinate - later_start) / DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 + 1;
+            let endpoint = match (action, route, offset) {
+                (MultiLpActionV3::Add, 1, CUSTODY_DESTINATION_ACCOUNT_V3) => {
+                    Some(CUSTODY_DESTINATION_ACCOUNT_V3)
+                }
+                (MultiLpActionV3::Remove, 1, CUSTODY_SOURCE_ACCOUNT_V3)
+                | (MultiLpActionV3::Remove, 2, CUSTODY_DESTINATION_ACCOUNT_V3) => {
+                    Some(CUSTODY_SOURCE_ACCOUNT_V3)
+                }
+                (MultiLpActionV3::Remove, 2, CUSTODY_SOURCE_ACCOUNT_V3) => {
+                    Some(CUSTODY_DESTINATION_ACCOUNT_V3)
+                }
+                _ => None,
+            };
+            if let Some(representative_offset) = endpoint {
+                return Ok(AccountAliasInputV2::Fixed(
+                    first_custody + representative_offset,
+                ));
+            }
         }
         return Ok(AccountAliasInputV2::SelfCoordinate);
     }
@@ -359,6 +456,9 @@ fn account_alias(
         CLAIMS_PRODUCT_RECORD_ACCOUNT_V3 => Some(2),
         CLAIMS_PORTFOLIO_RECORD_ACCOUNT_V3 => Some(3),
         CLAIMS_CORE_MARKET_ACCOUNT_V3 => Some(first_custody + 1),
+        CLAIMS_ACTIVATION_CACHE_ACCOUNT_V3 => {
+            Some(first_custody + CUSTODY_ACTIVATION_CACHE_ACCOUNT_V3)
+        }
         CLAIMS_REGISTRY_ACCOUNT_V3 => Some(first_custody + CUSTODY_REGISTRY_ACCOUNT_V3),
         CLAIMS_CALLER_PROGRAM_ACCOUNT_V3 => Some(first_custody + CUSTODY_CALLER_PROGRAM_ACCOUNT_V3),
         CLAIMS_CALLER_PROGRAMDATA_ACCOUNT_V3 => {
@@ -418,7 +518,8 @@ fn custody_offset(
 mod tests {
     use super::*;
     use dclutch_account_profile_contract::v2::{
-        AccountProfileV2, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE,
+        AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AccountProfileV2,
+        LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
     };
 
     #[test]
@@ -427,20 +528,26 @@ mod tests {
             for positions in 0..=2 {
                 let count = dealer_equity_logical_account_count_v3(action, positions)
                     .expect("logical geometry");
-                let lengths = vec![0_u32; usize::from(count)];
+                let mut lengths = vec![0_u32; usize::from(count)];
+                *lengths
+                    .get_mut(usize::from(LINKED_BASIS_CONTENT_ACCOUNT_V3))
+                    .expect("linked-basis content coordinate") = 1;
                 let bytes =
                     encode_dealer_equity_account_profile_v3(DealerEquityAccountProfileInputV3 {
                         action,
                         signed_position_count: positions,
                         logical_data_lengths: &lengths,
                     })
-                    .expect("profile");
+                    .unwrap_or_else(|error| {
+                        panic!("{action:?} profile with {positions} positions: {error:?}")
+                    });
                 let profile = AccountProfileV2::decode(&bytes).expect("decode");
                 assert_eq!(profile.fixed_account_count(), count);
                 assert_eq!(
                     profile.artifact_profile(),
-                    TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                    AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                 );
+                assert!(profile.supports_route_alias_packing());
                 assert_ne!(
                     profile.artifact_profile(),
                     LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
@@ -449,6 +556,147 @@ mod tests {
                     profile.trusted_current_slot_scalar(),
                     dealer_current_slot_scalar_register_v3(action)
                 );
+                assert_eq!(
+                    profile.trusted_current_executing_program_identity(),
+                    dealer_custody_identity_register_v3(
+                        0,
+                        DealerCustodyIdentityFieldV3::CallerProgram,
+                    ),
+                );
+                let evidence_start = count - DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3;
+                let claims_start =
+                    DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3;
+                assert_eq!(
+                    profile
+                        .rule(false, LINKED_BASIS_CONTENT_ACCOUNT_V3)
+                        .expect("linked-basis content rule")
+                        .prestate(),
+                    AccountPrestateV2::AdapterAuthenticatedVariableData,
+                );
+                assert_eq!(
+                    profile
+                        .rule(false, claims_start + CLAIMS_BASIS_RECORD_ACCOUNT_V3)
+                        .expect("Claims linked-basis alias rule")
+                        .prestate(),
+                    AccountPrestateV2::AdapterAuthenticatedVariableDataAlias,
+                );
+                assert_eq!(
+                    profile.representative(
+                        0,
+                        usize::from(claims_start + CLAIMS_BASIS_RECORD_ACCOUNT_V3),
+                    ),
+                    Ok(usize::from(LINKED_BASIS_CONTENT_ACCOUNT_V3)),
+                );
+                for (offset, representative) in [
+                    (CLAIMS_PRODUCT_RECORD_ACCOUNT_V3, 2_usize),
+                    (CLAIMS_PORTFOLIO_RECORD_ACCOUNT_V3, 3_usize),
+                ] {
+                    let coordinate = claims_start + offset;
+                    assert_eq!(
+                        profile
+                            .rule(false, coordinate)
+                            .expect("ordinary record alias rule")
+                            .prestate(),
+                        AccountPrestateV2::AuthenticatedRouteAlias,
+                    );
+                    assert_eq!(
+                        profile.representative(0, usize::from(coordinate)),
+                        Ok(representative),
+                    );
+                }
+                let claims_count = DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3
+                    + u16::try_from(positions).expect("small P");
+                let later_start = claims_start + claims_count;
+                let later_routes = match action {
+                    MultiLpActionV3::Add => 1_u16,
+                    MultiLpActionV3::Remove => 2_u16,
+                };
+                for route in 1..=later_routes {
+                    let route_start =
+                        later_start + (route - 1) * DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3;
+                    assert_eq!(
+                        profile.representative(
+                            0,
+                            usize::from(route_start + CUSTODY_REPLAY_ACCOUNT_V3),
+                        ),
+                        Ok(usize::from(
+                            DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + CUSTODY_REPLAY_ACCOUNT_V3,
+                        )),
+                        "{action:?} route {route} reuses the sole replay representative",
+                    );
+                }
+                let first_source =
+                    usize::from(DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + CUSTODY_SOURCE_ACCOUNT_V3);
+                let first_destination = usize::from(
+                    DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + CUSTODY_DESTINATION_ACCOUNT_V3,
+                );
+                match action {
+                    MultiLpActionV3::Add => {
+                        assert_eq!(
+                            profile.representative(
+                                0,
+                                usize::from(later_start + CUSTODY_DESTINATION_ACCOUNT_V3),
+                            ),
+                            Ok(first_destination),
+                        );
+                        assert_eq!(
+                            profile.representative(
+                                0,
+                                usize::from(later_start + CUSTODY_SOURCE_ACCOUNT_V3),
+                            ),
+                            Ok(usize::from(later_start + CUSTODY_SOURCE_ACCOUNT_V3)),
+                        );
+                    }
+                    MultiLpActionV3::Remove => {
+                        assert_eq!(
+                            profile.representative(
+                                0,
+                                usize::from(later_start + CUSTODY_SOURCE_ACCOUNT_V3),
+                            ),
+                            Ok(first_source),
+                        );
+                        assert_eq!(
+                            profile.representative(
+                                0,
+                                usize::from(later_start + CUSTODY_DESTINATION_ACCOUNT_V3),
+                            ),
+                            Ok(usize::from(later_start + CUSTODY_DESTINATION_ACCOUNT_V3)),
+                        );
+                        let third_start = later_start + DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3;
+                        assert_eq!(
+                            profile.representative(
+                                0,
+                                usize::from(third_start + CUSTODY_SOURCE_ACCOUNT_V3),
+                            ),
+                            Ok(first_destination),
+                        );
+                        assert_eq!(
+                            profile.representative(
+                                0,
+                                usize::from(third_start + CUSTODY_DESTINATION_ACCOUNT_V3),
+                            ),
+                            Ok(first_source),
+                        );
+                    }
+                }
+                for evidence in 0..DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3 {
+                    let coordinate = evidence_start + evidence;
+                    let rule = profile.rule(false, coordinate).expect("evidence rule");
+                    assert!(!rule.route_privileges().signer());
+                    assert!(!rule.route_privileges().writable());
+                    assert!(!rule.route_privileges().executable());
+                    let expected = if u32::from(evidence) < positions {
+                        usize::from(
+                            claims_start + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + evidence,
+                        )
+                    } else {
+                        usize::from(coordinate)
+                    };
+                    assert_eq!(
+                        profile.representative(0, usize::from(coordinate)),
+                        Ok(expected)
+                    );
+                }
             }
         }
     }

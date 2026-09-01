@@ -62,6 +62,13 @@ function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+/** Copy a possibly shared view into the exact owned buffer WebCrypto accepts. */
+function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
 function messageView(transaction: VersionedTransaction): VersionedMessageView {
   return transaction.message as unknown as VersionedMessageView;
 }
@@ -85,7 +92,7 @@ export async function inspectUnsignedTransactionV1(base64: string): Promise<Unsi
   }
   requireUnsigned(transaction);
   const message = messageView(transaction);
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', ownedBuffer(bytes)));
   return Object.freeze({
     transaction,
     bytes,
@@ -166,4 +173,261 @@ export async function acquireUnsignedTransactionDependenciesV1(
     missing: Object.freeze(missing),
     nonExecutablePrograms: Object.freeze(nonExecutablePrograms),
   });
+}
+
+export type WalletSignedTransactionV1 = Readonly<{
+  transaction: VersionedTransaction;
+  wireBytes: Uint8Array;
+  signer: string;
+  complete: boolean;
+}>;
+
+/**
+ * The handoff a caller supplies for one explicit signature request.
+ *
+ * `walletStandard` builds this from a Wallet Standard wallet the user chose and
+ * connected; the checks below never trust it, they re-derive the signer and
+ * compare the exact message bytes the wallet was handed.
+ */
+type HandoffWallet = Readonly<{
+  publicKey?: Readonly<{ toBase58(): string }>;
+  connect(): Promise<unknown>;
+  signTransaction?(transaction: VersionedTransaction): Promise<VersionedTransaction>;
+  signMessage?(message: Uint8Array): Promise<Uint8Array>;
+}>;
+
+type MutationAdmissionClient = Pick<SolanaRpcClient, 'assertMutationCluster'>;
+type MutationSubmissionClient = MutationAdmissionClient & Readonly<{
+  sendRawTransaction(
+    bytes: Uint8Array,
+    options?: Readonly<{ maxRetries?: 0 | 3 }>,
+  ): Promise<string>;
+}>;
+
+function handoff(candidate: unknown): HandoffWallet {
+  if (candidate === null || typeof candidate !== 'object' || !('connect' in candidate) || typeof candidate.connect !== 'function') {
+    throw new Error('no connected browser wallet handoff was supplied');
+  }
+  return candidate as HandoffWallet;
+}
+
+function walletAddress(wallet: HandoffWallet): string {
+  const address = wallet.publicKey?.toBase58();
+  if (address === undefined || new PublicKey(address).toBase58() !== address) throw new Error('wallet did not expose one canonical public identity');
+  return address;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * Reacquire a wallet result through its canonical wire representation.
+ *
+ * A browser workspace and a linked SDK can load distinct copies of web3.js;
+ * constructor identity therefore says nothing about whether the returned
+ * packet is a VersionedTransaction. Exact serialization, bounded decode, and
+ * byte-for-byte re-encoding are the portable authority.
+ */
+function canonicalWalletTransactionV1(candidate: unknown): VersionedTransaction {
+  if (candidate === null || typeof candidate !== 'object'
+      || !('serialize' in candidate) || typeof candidate.serialize !== 'function') {
+    throw new Error('wallet did not return one canonical Solana transaction');
+  }
+  let wire: unknown;
+  try { wire = candidate.serialize(); } catch {
+    throw new Error('wallet did not return one canonical Solana transaction');
+  }
+  if (!(wire instanceof Uint8Array) || wire.length === 0 || wire.length > SOLANA_PACKET_BYTES) {
+    throw new Error('wallet did not return one packet-sized Solana transaction');
+  }
+  const exactWire = new Uint8Array(wire);
+  let transaction: VersionedTransaction;
+  try { transaction = VersionedTransaction.deserialize(exactWire); } catch {
+    throw new Error('wallet did not return one canonical Solana transaction');
+  }
+  if (!sameBytes(transaction.serialize(), exactWire)) {
+    throw new Error('wallet did not return one canonical Solana transaction');
+  }
+  return transaction;
+}
+
+/** Request one detached maker signature after a user-triggered wallet action. */
+export async function requestWalletMessageSignatureV1(
+  client: MutationAdmissionClient,
+  candidate: unknown,
+  expectedMaker: string,
+  message: Uint8Array,
+): Promise<Uint8Array> {
+  await client.assertMutationCluster();
+  const wallet = handoff(candidate);
+  if (typeof wallet.signMessage !== 'function') throw new Error('wallet does not expose signMessage');
+  const canonicalMaker = new PublicKey(expectedMaker).toBase58();
+  if (canonicalMaker !== expectedMaker || walletAddress(wallet) !== canonicalMaker) throw new Error('connected wallet is not the expected maker');
+  if (!(message instanceof Uint8Array) || message.length === 0 || message.length > 1_024) throw new Error('maker message has an unsupported exact width');
+  const signature = await wallet.signMessage(new Uint8Array(message));
+  if (!(signature instanceof Uint8Array) || signature.length !== 64 || signature.every((byte) => byte === 0)) throw new Error('wallet returned no exact Ed25519 signature');
+  return new Uint8Array(signature);
+}
+
+/** Request a wallet signature without allowing the wallet to rewrite the v0 message. */
+export async function requestWalletTransactionSignatureV1(
+  client: MutationAdmissionClient,
+  candidate: unknown,
+  transaction: VersionedTransaction,
+  expectedSigner: string,
+): Promise<WalletSignedTransactionV1> {
+  await client.assertMutationCluster();
+  const wallet = handoff(candidate);
+  if (typeof wallet.signTransaction !== 'function') throw new Error('wallet does not expose signTransaction');
+  const canonicalSigner = new PublicKey(expectedSigner).toBase58();
+  if (canonicalSigner !== expectedSigner || walletAddress(wallet) !== canonicalSigner) throw new Error('connected wallet is not the expected transaction signer');
+  requireUnsigned(transaction);
+  const message = messageView(transaction);
+  const signerIndex = message.staticAccountKeys
+    .slice(0, message.header.numRequiredSignatures)
+    .findIndex((key) => key.toBase58() === canonicalSigner);
+  if (signerIndex < 0) throw new Error('connected wallet is not required by this transaction');
+  const before = transaction.message.serialize();
+  const candidateTransaction = VersionedTransaction.deserialize(transaction.serialize());
+  const signed = canonicalWalletTransactionV1(await wallet.signTransaction(candidateTransaction));
+  if (!sameBytes(signed.message.serialize(), before)) throw new Error('wallet rewrote the transaction message');
+  if (signed.signatures.length !== transaction.signatures.length
+      || signed.signatures[signerIndex]?.every((byte) => byte === 0)) {
+    throw new Error('wallet did not add the expected transaction signature');
+  }
+  for (let index = 0; index < signed.signatures.length; index += 1) {
+    if (index !== signerIndex && signed.signatures[index]?.some((byte) => byte !== 0)) {
+      throw new Error('wallet added an unauthorized transaction signature');
+    }
+  }
+  const complete = signed.signatures.every((signature) => signature.some((byte) => byte !== 0));
+  return Object.freeze({ transaction: signed, wireBytes: signed.serialize(), signer: canonicalSigner, complete });
+}
+
+async function verifyEd25519SignatureV1(
+  signer: PublicKey,
+  message: Uint8Array,
+  signature: Uint8Array,
+): Promise<boolean> {
+  try {
+    const key = await crypto.subtle.importKey('raw', ownedBuffer(signer.toBytes()), { name: 'Ed25519' }, false, ['verify']);
+    return crypto.subtle.verify({ name: 'Ed25519' }, key, ownedBuffer(signature), ownedBuffer(message));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Add the fee-payer wallet signature to an exactly ordered two-signer message.
+ *
+ * Provider Execute/Reclaim keeps its operation-scoped resolver readonly, so
+ * the wallet fee payer must occupy signature slot zero and the resolver slot
+ * one. The resolver signature must already authenticate the immutable message;
+ * the wallet may fill only its own still-default slot.
+ */
+export async function requestWalletCosignTransactionV1(
+  client: MutationAdmissionClient,
+  candidate: unknown,
+  transaction: VersionedTransaction,
+  expectedWallet: string,
+  expectedResolver: string,
+): Promise<WalletSignedTransactionV1> {
+  return requestWalletOrderedCosignTransactionV1(
+    client, candidate, transaction, expectedWallet, expectedResolver, false, 'resolver',
+  );
+}
+
+/** Add the wallet signature beside one exact fresh writable update signature. */
+export async function requestWalletSubmitCosignTransactionV1(
+  client: MutationAdmissionClient,
+  candidate: unknown,
+  transaction: VersionedTransaction,
+  expectedWallet: string,
+  expectedUpdate: string,
+): Promise<WalletSignedTransactionV1> {
+  return requestWalletOrderedCosignTransactionV1(
+    client, candidate, transaction, expectedWallet, expectedUpdate, true, 'update',
+  );
+}
+
+async function requestWalletOrderedCosignTransactionV1(
+  client: MutationAdmissionClient,
+  candidate: unknown,
+  transaction: VersionedTransaction,
+  expectedWallet: string,
+  expectedOperationSigner: string,
+  operationSignerWritable: boolean,
+  operationLabel: 'resolver' | 'update',
+): Promise<WalletSignedTransactionV1> {
+  await client.assertMutationCluster();
+  const wallet = handoff(candidate);
+  if (typeof wallet.signTransaction !== 'function') throw new Error('wallet does not expose signTransaction');
+  const walletKey = new PublicKey(expectedWallet);
+  const operationKey = new PublicKey(expectedOperationSigner);
+  if (walletKey.toBase58() !== expectedWallet || operationKey.toBase58() !== expectedOperationSigner
+      || expectedWallet === expectedOperationSigner || walletAddress(wallet) !== expectedWallet) {
+    throw new Error('provider cosign authority or ordering is not exact');
+  }
+  const message = messageView(transaction);
+  if (message.header.numRequiredSignatures !== 2
+      || transaction.signatures.length !== 2
+      || message.staticAccountKeys[0]?.toBase58() !== expectedWallet
+      || message.staticAccountKeys[1]?.toBase58() !== expectedOperationSigner
+      || message.isAccountWritable(1) !== operationSignerWritable) {
+    throw new Error('provider cosign signer ordering changed');
+  }
+  const before = transaction.message.serialize();
+  const walletBefore = transaction.signatures[0];
+  const resolverBefore = transaction.signatures[1];
+  if (walletBefore === undefined || resolverBefore === undefined
+      || walletBefore.some((byte) => byte !== 0)
+      || resolverBefore.every((byte) => byte === 0)
+      || !(await verifyEd25519SignatureV1(operationKey, before, resolverBefore))) {
+    throw new Error(`provider cosign requires one exact ${operationLabel} signature and an empty wallet slot`);
+  }
+  const copy = VersionedTransaction.deserialize(transaction.serialize());
+  const signed = canonicalWalletTransactionV1(await wallet.signTransaction(copy));
+  if (!sameBytes(signed.message.serialize(), before) || signed.signatures.length !== 2) {
+    throw new Error('wallet rewrote the provider transaction message');
+  }
+  const walletAfter = signed.signatures[0];
+  const resolverAfter = signed.signatures[1];
+  if (walletAfter === undefined || resolverAfter === undefined
+      || walletAfter.every((byte) => byte === 0)
+      || !sameBytes(resolverAfter, resolverBefore)
+      || !(await verifyEd25519SignatureV1(walletKey, before, walletAfter))
+      || !(await verifyEd25519SignatureV1(operationKey, before, resolverAfter))) {
+    throw new Error('wallet changed another signature slot or returned an invalid provider cosignature');
+  }
+  return Object.freeze({
+    transaction: signed,
+    wireBytes: signed.serialize(),
+    signer: expectedWallet,
+    complete: true,
+  });
+}
+
+/** Submit only an already complete signed packet after a separate user action. */
+export async function submitSignedTransactionV1(
+  client: MutationSubmissionClient,
+  signedWireBytes: Uint8Array,
+): Promise<string> {
+  if (!(signedWireBytes instanceof Uint8Array) || signedWireBytes.length === 0
+      || signedWireBytes.length > SOLANA_PACKET_BYTES) {
+    throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
+  }
+  const exactWire = new Uint8Array(signedWireBytes);
+  let transaction: VersionedTransaction;
+  try { transaction = VersionedTransaction.deserialize(exactWire); } catch {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
+  if (!sameBytes(transaction.serialize(), exactWire)) {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
+  if (transaction.signatures.length === 0 || transaction.signatures.some((signature) => signature.every((byte) => byte === 0))) {
+    throw new Error('transaction is not fully signed');
+  }
+  await client.assertMutationCluster();
+  return client.sendRawTransaction(exactWire, { maxRetries: 0 });
 }

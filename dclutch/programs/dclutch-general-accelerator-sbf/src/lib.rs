@@ -16,7 +16,11 @@ extern crate std;
 use alloc::{vec, vec::Vec};
 
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3, HotExecutionEnvelopeV3,
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_RUNTIME_CONFIG_COORDINATE_V3,
+    HOT_RUNTIME_PRODUCT_COORDINATE_V3, HotExecutionEnvelopeV3,
+};
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, hot_v3::HOT_RUNTIME_ROOT_COORDINATE_V3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
@@ -32,12 +36,22 @@ use dclutch_execution_strategy_contract::{
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     admitted_accelerator_v3::authenticate_frozen_selection_v3,
+    artifacts_v3::{GeneralDecodedRequestV3, decode_general_request_v3},
+    candidate_v1::{CandidateVerifyRowViewV1, GeneralCandidateV1, candidate_verifier_len_v1},
+    collection_v1::GeneralBatchV1,
     hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
-        general_hot_environment_from_bank_v3, general_hot_scalar_count_v3,
+        GENERAL_HOT_COMMON_IDENTITIES_V3, authenticate_general_close_candidate_v3,
+        general_hot_candidate_bank_len_v3, general_hot_environment_from_bank_v3,
+        general_hot_scalar_count_v3, project_general_cancel_order_candidate_in_place_v3,
+        project_general_close_batch_candidate_in_place_v3,
         project_general_hot_candidate_in_place_v3,
         project_general_initialize_candidate_in_place_v3,
+        project_general_open_batch_candidate_in_place_v3,
+        project_general_place_order_candidate_in_place_v3,
+        project_general_release_order_candidate_in_place_v3,
         project_general_selection_candidate_in_place_v3,
+        project_general_submit_candidate_in_place_v3,
+        project_general_verify_candidate_workspace_v3,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_manifest::SettlementManifestV2,
@@ -50,17 +64,20 @@ use dclutch_general_adapter_contract::{
         evaluate_runtime_settlement_in_place_v2, initialize_runtime_settlement_in_place_v2,
         runtime_settlement_effect_len_v2,
     },
+    runtime_verify::RuntimeCandidateVerifierV2,
     runtime_width::{VerifiedCandidateV2, settlement_cursor_len},
     state_artifacts_v3::{
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
-        general_readonly_evidence_count_v3, general_readonly_evidence_v3,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
+        GeneralReadonlyEvidenceKindV3, general_readonly_evidence_count_v3,
+        general_readonly_evidence_v3,
     },
 };
 use dclutch_general_codec::{
-    Action, SelectionPolicyV1,
-    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
+    Action, SelectionPolicyV1, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2,
 };
 use dclutch_general_config_contract::v3::GeneralConfigV3;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
@@ -252,8 +269,9 @@ pub fn process_instruction(
     // (header 144 + chunk payload 880), which one stack frame carries with
     // room; the frame-diagnostic gate is what checks that claim on every
     // build.
-    let mut output = [0_u8; ACCELERATOR_ACK_HEADER_BYTES_V2
-        + dclutch_execution_strategy_contract::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2];
+    let mut output = [0_u8;
+        ACCELERATOR_ACK_HEADER_BYTES_V2
+            + dclutch_execution_strategy_contract::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2];
     let output = output
         .get_mut(..ack_len)
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
@@ -312,7 +330,7 @@ fn validate_frame(
 
 fn authenticate_top_level(
     accounts: &[AccountInfo<'_>],
-) -> Result<([u8; CONTROLLER_REQUEST_BYTES_V2], ControllerRequestV2), ProgramError> {
+) -> Result<([u8; CONTROLLER_REQUEST_BYTES_V2], GeneralDecodedRequestV3), ProgramError> {
     let instructions = account(accounts, ADMITTED_INSTRUCTIONS_ACCOUNT_V3)?;
     if instructions.key != &solana_instructions_sysvar::ID
         || instructions.owner != &sysvar::ID
@@ -323,6 +341,14 @@ fn authenticate_top_level(
     }
     let index = load_current_index_checked(instructions)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+    if index != 1 {
+        return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+    }
+    let heap_frame = load_instruction_at_checked(0, instructions)
+        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+    if heap_frame != ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1) {
+        return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+    }
     let instruction = load_instruction_at_checked(usize::from(index), instructions)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
     let trading = account(accounts, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3)?;
@@ -334,7 +360,7 @@ fn authenticate_top_level(
     if family.len() != CONTROLLER_REQUEST_BYTES_V2 {
         return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
     }
-    let request = ControllerRequestV2::decode(family)
+    let request = decode_general_request_v3(family)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
     let family_copy = family
         .try_into()
@@ -419,7 +445,7 @@ fn runtime_accounts<'a, 'info>(
 }
 
 fn evaluate_candidate(
-    request: ControllerRequestV2,
+    request: GeneralDecodedRequestV3,
     family_request: &[u8],
     outcome_count: u32,
     runtime: &[AccountInfo<'_>],
@@ -435,20 +461,35 @@ fn evaluate_candidate(
     let environment = general_hot_environment_from_bank_v3(candidate, outcome_count)
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     match request.action {
-        // The accelerator is the read-only evaluator for the SETTLEMENT half.
-        // The collection, escrow and candidate actions have no artifact triple
-        // and no accelerated evaluation; a request naming one is refused here
-        // rather than falling through to an evaluator that would read the wrong
-        // state. They are written out one by one on purpose: a catch-all would
-        // let the next action be added without anyone deciding what this
-        // program does with it.
-        Action::OpenBatch
-        | Action::PlaceOrder
-        | Action::CancelOrder
-        | Action::CloseBatch
-        | Action::SubmitCandidate
-        | Action::VerifyCandidateRow
-        | Action::ReleaseOrder => Err(GeneralAcceleratorSemanticErrorV3::State),
+        Action::OpenBatch => {
+            evaluate_open_batch(request, runtime, outcome_count, environment, candidate)
+        }
+        Action::CloseBatch => {
+            evaluate_close_batch(request, runtime, outcome_count, environment, candidate)
+        }
+        Action::PlaceOrder => {
+            evaluate_place_order(request, runtime, outcome_count, environment, candidate)
+        }
+        Action::CancelOrder => {
+            evaluate_cancel_order(request, runtime, outcome_count, environment, candidate)
+        }
+        Action::ReleaseOrder => {
+            evaluate_release_order(request, runtime, outcome_count, environment, candidate)
+        }
+        Action::SubmitCandidate => {
+            evaluate_submit_candidate(request, runtime, outcome_count, environment, candidate)
+        }
+        Action::VerifyCandidateRow => {
+            evaluate_verify_candidate(request, runtime, outcome_count, candidate)
+        }
+        Action::CloseCandidate => evaluate_close_candidate(
+            request,
+            family_request,
+            runtime,
+            outcome_count,
+            environment,
+            candidate,
+        ),
         Action::Consider | Action::Freeze => {
             evaluate_selection(request, runtime, outcome_count, environment, candidate)
         }
@@ -461,8 +502,381 @@ fn evaluate_candidate(
     }
 }
 
+fn evaluate_close_candidate(
+    request: GeneralDecodedRequestV3,
+    family_request: &[u8],
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    candidate_bank: &[u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let _ = authenticated_general_domain(runtime, environment)?;
+    let candidate_data = data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?;
+    let candidate_state = GeneralLocalStateV3::decode(&candidate_data)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if candidate_state.header().kind != GeneralLocalStateKindV3::Candidate {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let submission = GeneralCandidateV1::decode(candidate_state.body())
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let batch_data = data(
+        runtime,
+        evidence_coordinate(request.action, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+    )?;
+    let batch_state = GeneralLocalStateV3::decode(&batch_data)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if batch_state.header().kind != GeneralLocalStateKindV3::Batch {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let batch = GeneralBatchV1::decode(batch_state.body())
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    authenticate_general_close_candidate_v3(
+        family_request,
+        batch,
+        submission,
+        outcome_count,
+        environment,
+        candidate_bank,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)?;
+    Ok(())
+}
+
+fn evaluate_submit_candidate(
+    request: GeneralDecodedRequestV3,
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let (config, _) = authenticated_general_domain(runtime, environment)?;
+    if !data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?.is_empty() {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let closed_batch = data(
+        runtime,
+        evidence_coordinate(request.action, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+    )?;
+    let batch = GeneralLocalStateV3::decode(&closed_batch)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if batch.header().kind != GeneralLocalStateKindV3::Batch {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let candidate_image = data(
+        runtime,
+        evidence_coordinate(
+            request.action,
+            GeneralReadonlyEvidenceKindV3::CandidateImage,
+        )?,
+    )?;
+    let submitted_candidate = data(
+        runtime,
+        evidence_coordinate(
+            request.action,
+            GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+        )?,
+    )?;
+    let root_coordinate = u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let root_data = data(runtime, root_coordinate)?;
+    let root_tail = root_data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
+    project_general_submit_candidate_in_place_v3(
+        root_tail,
+        batch.body(),
+        config,
+        &candidate_image,
+        &submitted_candidate,
+        outcome_count,
+        environment,
+        request.candidate_id,
+        candidate,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+}
+
+fn evaluate_verify_candidate(
+    request: GeneralDecodedRequestV3,
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    candidate_bank: &mut [u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let _ = authenticated_general_domain(
+        runtime,
+        general_hot_environment_from_bank_v3(candidate_bank, outcome_count)
+            .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?,
+    )?;
+
+    let submission_data = data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?;
+    let submission_state = GeneralLocalStateV3::decode(&submission_data)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if submission_state.header().kind != GeneralLocalStateKindV3::Candidate {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let submission = GeneralCandidateV1::decode(submission_state.body())
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let verifier_len = candidate_verifier_len_v1(submission)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+
+    let verifier_data = data(runtime, GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3)?;
+    let verifier_state = if verifier_data.is_empty() {
+        None
+    } else {
+        let state = GeneralLocalStateV3::decode(&verifier_data)
+            .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+        if state.header().kind != GeneralLocalStateKindV3::Verifier {
+            return Err(GeneralAcceleratorSemanticErrorV3::State);
+        }
+        RuntimeCandidateVerifierV2::decode(state.body())
+            .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+        Some(state)
+    };
+    let cursor_before = verifier_state
+        .as_ref()
+        .map_or([].as_slice(), |state| state.body());
+
+    let result_data = data(runtime, GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3)?;
+    if !result_data.is_empty() {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let verified_before: &[u8] = &[];
+
+    let batch_data = data(
+        runtime,
+        evidence_coordinate(request.action, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+    )?;
+    let batch_state = GeneralLocalStateV3::decode(&batch_data)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if batch_state.header().kind != GeneralLocalStateKindV3::Batch {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let batch = GeneralBatchV1::decode(batch_state.body())
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let candidate_data = data(
+        runtime,
+        evidence_coordinate(
+            request.action,
+            GeneralReadonlyEvidenceKindV3::CandidateImage,
+        )?,
+    )?;
+    let page_data = data(
+        runtime,
+        evidence_coordinate(request.action, GeneralReadonlyEvidenceKindV3::CandidatePage)?,
+    )?;
+    let order_data = data(
+        runtime,
+        evidence_coordinate(request.action, GeneralReadonlyEvidenceKindV3::EscrowedOrder)?,
+    )?;
+    let order_state = GeneralLocalStateV3::decode(&order_data)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if order_state.header().kind != GeneralLocalStateKindV3::Order {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let manifest_data = data(
+        runtime,
+        evidence_coordinate(
+            request.action,
+            GeneralReadonlyEvidenceKindV3::SettlementManifest,
+        )?,
+    )?;
+    let view = CandidateVerifyRowViewV1 {
+        batch,
+        submission,
+        candidate: &candidate_data,
+        page: &page_data,
+        order: order_state.body(),
+        cursor_before,
+        verified_before,
+        expected_page_index: request.page_index,
+        expected_row_index: u32::from(request.execution_index),
+        expected_revision: request.expected_revision,
+    };
+    let mut cursor_workspace = vec![0_u8; verifier_len];
+    project_general_verify_candidate_workspace_v3(
+        view,
+        outcome_count,
+        candidate_bank,
+        &mut cursor_workspace,
+        &manifest_data,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)?;
+    Ok(())
+}
+
+fn evaluate_release_order(
+    request: GeneralDecodedRequestV3,
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let (config, _) = authenticated_general_domain(runtime, environment)?;
+    let primary = data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?;
+    let order = GeneralLocalStateV3::decode(&primary)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if order.header().kind != GeneralLocalStateKindV3::Order {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let root_coordinate = u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let root_data = data(runtime, root_coordinate)?;
+    let root_tail = root_data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
+    project_general_release_order_candidate_in_place_v3(
+        root_tail,
+        order.body(),
+        config,
+        outcome_count,
+        environment,
+        request.candidate_id,
+        candidate,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+}
+
+fn evaluate_cancel_order(
+    request: GeneralDecodedRequestV3,
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let (config, _) = authenticated_general_domain(runtime, environment)?;
+    let primary = data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?;
+    let batch = GeneralLocalStateV3::decode(&primary)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let terminal = data(runtime, GENERAL_TERMINAL_STATE_ACCOUNT_V3)?;
+    let order = GeneralLocalStateV3::decode(&terminal)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if batch.header().kind != GeneralLocalStateKindV3::Batch
+        || order.header().kind != GeneralLocalStateKindV3::Order
+    {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let root_coordinate = u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let root_data = data(runtime, root_coordinate)?;
+    let root_tail = root_data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
+    project_general_cancel_order_candidate_in_place_v3(
+        root_tail,
+        batch.body(),
+        order.body(),
+        config,
+        outcome_count,
+        environment,
+        request.candidate_id,
+        candidate,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+}
+
+fn evaluate_place_order(
+    request: GeneralDecodedRequestV3,
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let (config, _) = authenticated_general_domain(runtime, environment)?;
+    let primary = data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?;
+    let state = GeneralLocalStateV3::decode(&primary)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if state.header().kind != GeneralLocalStateKindV3::Batch
+        || !data(runtime, GENERAL_TERMINAL_STATE_ACCOUNT_V3)?.is_empty()
+    {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let root_coordinate = u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let root_data = data(runtime, root_coordinate)?;
+    let root_tail = root_data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
+    let signed_order_terms = data(
+        runtime,
+        evidence_coordinate(request.action, GeneralReadonlyEvidenceKindV3::OrderTerms)?,
+    )?;
+    project_general_place_order_candidate_in_place_v3(
+        root_tail,
+        state.body(),
+        config,
+        outcome_count,
+        environment,
+        request.candidate_id,
+        &signed_order_terms,
+        candidate,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+}
+
+fn evaluate_close_batch(
+    request: GeneralDecodedRequestV3,
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let (config, _) = authenticated_general_domain(runtime, environment)?;
+    let primary = data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?;
+    let state = GeneralLocalStateV3::decode(&primary)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    if state.header().kind != GeneralLocalStateKindV3::Batch {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let root_coordinate = u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let root_data = data(runtime, root_coordinate)?;
+    let root_tail = root_data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
+    project_general_close_batch_candidate_in_place_v3(
+        root_tail,
+        state.body(),
+        config,
+        outcome_count,
+        environment,
+        request.expected_revision,
+        request.candidate_id,
+        candidate,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+}
+
+fn evaluate_open_batch(
+    request: GeneralDecodedRequestV3,
+    runtime: &[AccountInfo<'_>],
+    outcome_count: u32,
+    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
+    let (config, _) = authenticated_general_domain(runtime, environment)?;
+    if !data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?.is_empty() {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    let root_coordinate = u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let root_data = data(runtime, root_coordinate)?;
+    let root_tail = root_data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
+    project_general_open_batch_candidate_in_place_v3(
+        root_tail,
+        config,
+        outcome_count,
+        environment,
+        request.expected_revision,
+        request.candidate_id,
+        candidate,
+    )
+    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+}
+
 fn evaluate_selection(
-    request: ControllerRequestV2,
+    request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
     environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
@@ -544,7 +958,7 @@ fn evaluate_selection(
 }
 
 fn evaluate_initialize(
-    request: ControllerRequestV2,
+    request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
     environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
@@ -605,7 +1019,7 @@ fn evaluate_initialize(
 }
 
 fn evaluate_settlement(
-    request: ControllerRequestV2,
+    request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
     environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
@@ -710,6 +1124,13 @@ fn authenticated_general_domain(
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     let config_data = data(runtime, config_coordinate)?;
     let config = GeneralConfigV3::decode(&config_data)
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let config_id = hash(&config_data).to_bytes();
+    if config_id != environment.general_config_id {
+        return Err(GeneralAcceleratorSemanticErrorV3::State);
+    }
+    config
+        .require_market(environment.generation, environment.semantic_basis_id)
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     let product_coordinate = u16::try_from(HOT_RUNTIME_PRODUCT_COORDINATE_V3)
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;

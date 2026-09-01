@@ -580,7 +580,6 @@ fn authenticate_root(
         decode_fractional_capability_root_v4(&root_data).ok_or(ClaimsSbfError::Representation)?;
     let header = composite_root.header();
     let root = composite_root.state();
-    let root_input = root.input();
     let (expected_root, expected_root_bump) =
         Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key);
     // The config split, pinned on its own code. The terms account was already
@@ -611,24 +610,30 @@ fn authenticate_root(
         &mut selection_config,
     )
     .map_err(|_| ClaimsSbfError::SelectionConfig)?;
-    if header.selection().config().to_bytes() != digest(&selection_config) {
+    let selected_config = digest(&selection_config);
+    if header.selection().config().to_bytes() != selected_config {
         return Err(ClaimsSbfError::SelectionConfig.into());
     }
+    let state_binding_matches = match (root.terms_v1(), root.selection_config_v2()) {
+        (Some(historical_terms), None) => historical_terms == input.terms,
+        (None, Some(current_config)) => current_config == selected_config,
+        _ => false,
+    };
     drop(terms_data);
     if root_account.key != &expected_root
         || root_account.key.to_bytes() != input.root
         || root_account.owner != trading_program.key
         || header.release_set().to_bytes() != input.release_set
         || header.market() != input.market
-        || root_input.bump != expected_root_bump
-        || root_input.terms != input.terms
-        || root_input.market != input.market
-        || root_input.rent_beneficiary != input.rent_credit
+        || !state_binding_matches
+        || root.bump() != expected_root_bump
+        || root.market() != input.market
+        || root.rent_beneficiary() != input.rent_credit
         // Never `input.expected_revision` on a post-begin act. The root is
         // frozen and the request's revision belongs to the cursor by then, so
         // that comparison is satisfiable for exactly one coordinate and
         // refuses every step after it.
-        || root_input.revision
+        || root.revision()
             != match binding {
                 RootRevisionBindingV3::Request => input.expected_revision,
                 RootRevisionBindingV3::CursorAnchor(anchor) => anchor,

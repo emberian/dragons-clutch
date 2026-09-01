@@ -39,10 +39,12 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, GENERIC_FOUNDING_ACK_BYTES_V1, GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
-    GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
-    GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1,
-    GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingAckV1, GenericFoundingRequestV1,
-    GenericFoundingStageV1, ProjectFoundRequestV2, Request,
+    GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1,
+    GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2,
+    GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
+    GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
+    GenericFoundingAckV1, GenericFoundingRequestV1, GenericFoundingStageV1, ProjectFoundRequestV2,
+    Request,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -263,14 +265,12 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
         accounts: &'accounts [AccountInfo<'info>],
         funding_count: usize,
     ) -> Result<Self, ProgramError> {
-        let found_count = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
-            .checked_add(funding_count)
-            .and_then(|value| value.checked_add(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1))
-            .ok_or(TradingSbfError::Content)?;
         let lock_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3;
         let found_start = lock_start
             .checked_add(PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1)
             .ok_or(TradingSbfError::Content)?;
+        let found_count =
+            select_generic_found_count_v4(accounts.len(), found_start, funding_count)?;
         let realize_start = found_start
             .checked_add(found_count)
             .ok_or(TradingSbfError::Content)?;
@@ -283,12 +283,6 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
         let checkpoint_index = open_start
             .checked_add(GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1)
             .ok_or(TradingSbfError::Content)?;
-        let end = checkpoint_index
-            .checked_add(1)
-            .ok_or(TradingSbfError::Content)?;
-        if accounts.len() != end {
-            return Err(TradingSbfError::Content.into());
-        }
         authenticate_raw_accounts(
             accounts
                 .get(..GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3)
@@ -356,6 +350,40 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
                 .checked_add(CORE_FOUND_PERMIT_SUFFIX)
                 .ok_or(TradingSbfError::Content)?,
         )
+    }
+}
+
+/// Select the legacy or append-only price-gated Found span from the outer
+/// frame's exact total width. A partial extension is never a third shape.
+fn select_generic_found_count_v4(
+    total_accounts: usize,
+    found_start: usize,
+    funding_count: usize,
+) -> Result<usize, ProgramError> {
+    let bare_found_count = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+        .checked_add(funding_count)
+        .and_then(|value| value.checked_add(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1))
+        .ok_or(TradingSbfError::Content)?;
+    let gated_found_count = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+        .checked_add(funding_count)
+        .and_then(|value| {
+            value.checked_add(GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2)
+        })
+        .ok_or(TradingSbfError::Content)?;
+    let total_for = |found_count: usize| {
+        found_start
+            .checked_add(found_count)
+            .and_then(|value| value.checked_add(PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1))
+            .and_then(|value| value.checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V5))
+            .and_then(|value| value.checked_add(GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1))
+            .and_then(|value| value.checked_add(1))
+    };
+    if total_accounts == total_for(bare_found_count).ok_or(TradingSbfError::Content)? {
+        Ok(bare_found_count)
+    } else if total_accounts == total_for(gated_found_count).ok_or(TradingSbfError::Content)? {
+        Ok(gated_found_count)
+    } else {
+        Err(TradingSbfError::Content.into())
     }
 }
 
@@ -1828,6 +1856,24 @@ mod tests {
         // removes five repeated child metas.
         assert_eq!(count(3), 128);
         assert_eq!(count(16), 141);
+        let found_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3
+            + PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1;
+        assert_eq!(
+            select_generic_found_count_v4(count(3), found_start, 3),
+            Ok(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+                + 3
+                + GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1)
+        );
+        assert_eq!(
+            select_generic_found_count_v4(count(3) + 2, found_start, 3),
+            Ok(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+                + 3
+                + GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2)
+        );
+        assert_eq!(
+            select_generic_found_count_v4(count(3) + 1, found_start, 3),
+            Err(TradingSbfError::Content.into())
+        );
         assert_eq!(
             GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3,
             GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 + 1

@@ -17,6 +17,12 @@ export const CLIENT_OPERATION_JOURNAL_OPERATIONS_V1 = Object.freeze([
   'claims-replay-create-v1',
   'wallet-terminal-payout-v3',
   'direct-inline-v3',
+  'source-readiness-v1',
+  'source-provider-v1',
+  'source-provider-submit-v1',
+  'rational-open-v1',
+  'source-terminal-v1',
+  'source-close-fund-v1',
 ] as const);
 
 export type ClientOperationV1 = (typeof CLIENT_OPERATION_JOURNAL_OPERATIONS_V1)[number];

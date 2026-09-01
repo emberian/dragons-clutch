@@ -53,6 +53,7 @@ pub mod rational_lifecycle_v2;
 mod rational_product_v3;
 pub mod rational_representation_v2;
 mod rational_terminal_v3;
+pub mod series_founding_transport_v1;
 pub mod signed_delta_v3;
 pub mod sparse_native_transfer_v1;
 mod terminal_certificate_v3;
@@ -433,6 +434,18 @@ fn process_remaining_instruction(
         return sparse_native_transfer_v1::process(program_id, accounts, instruction_data);
     }
     if instruction_data
+        .get(
+            ..dclutch_claims_svm::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
+                .len(),
+        )
+        == Some(
+            dclutch_claims_svm::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
+                .as_slice(),
+        )
+    {
+        return series_founding_transport_v1::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data
         .get(..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
         == Some(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
     {
@@ -503,6 +516,19 @@ fn process_remaining_instruction(
             .as_slice(),
     ) {
         return fractional_claim_check_v1::process_fractional_compaction(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if instruction_data.get(
+        ..dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
+            .len(),
+    ) == Some(
+        dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
+            .as_slice(),
+    ) {
+        return fractional_claim_check_v1::process_fractional_redemption(
             program_id,
             accounts,
             instruction_data,

@@ -1,0 +1,125 @@
+{
+  "schema": "dclutch-series-permit-expiry-physical-checkpoint-v1",
+  "cluster": "local-private-validator",
+  "source": {
+    "emitterAndConsumerCommit": "fe49fa26",
+    "genesisProgramDataCommit": "2881aa54",
+    "successorRegistrationCommit": "8dc09199"
+  },
+  "validator": {
+    "version": "4.0.2",
+    "expirySlot": 10000,
+    "minimumExecutionSlot": 10001,
+    "realElf": true
+  },
+  "elfSha256": {
+    "core": "bb441c6ca5572ad7a0ffbed66fdc6e6b1d263cc8f7fd8adab6f9631a338263be",
+    "registry": "884da85a8b657aa7d459db6b4d6e35a7465b61f19d6557b2f1705ad17f1735a9",
+    "rent": "18cec4abb1ea43ba21214c645b88966f2f89c90db3f0d2e957f86954e510fc20",
+    "seriesConsumeCaller": "6bcfd7cc447ae37381c88ebb6f94f8ecd483cce6afdd2fb6ba4c8f800a82c7f9"
+  },
+  "fixtureManifestSha256": {
+    "successor": "68fb40b427221e7804ead48913e05d88a1c77f29c5f88e55f8e92e13bf94b8f3",
+    "wrongAddress": "1815d64560d65cdbff3ef12f6e6374feb46841c72c3daa0e57cf2f9b3c70abb9",
+    "sealedPredecessor": "5854d856deda328330dbb2de2e3a02388c8a4c388b7e6e712e8711df6c2aeef4"
+  },
+  "identity": {
+    "coreProgram": "E3M3d7sy8ZKivUGxBexL9wxE7ebqzGWFqkdeFMedCJFS",
+    "coreProgramData": "JUZYd6WGFreUdotvUJU1iUG2oEKodgWjSjVHFwML1yH",
+    "lookupTable": "DS5PLQgsosegff2PFy24Y51MvDi2vhKsp5djiwFEUJM5",
+    "permit": "DgdaCXrCzqeyiyFwCnJfSAeUB2CvkSWWrvaDW3f3Zqhd",
+    "rentCredit": "8t3pRvSH3inUDVvdYq2vwHk1pawcXvu6DMHorWKL496i"
+  },
+  "runs": [
+    {
+      "case": "successor",
+      "disposition": "refunded",
+      "signature": "WtWsJXDbrFmr2XGkdZh8Kh95SqTdbnVJTS9VeKVW5BkRoLEm8sUVZmieMuVpdh4oCxYVGa34c9sXGx8pgvzbKZ1",
+      "finalizedSlot": 10148,
+      "computeUnitsConsumed": 153599,
+      "feeLamports": 75000,
+      "refusalCode": null,
+      "evidencePath": "/tmp/dclutch-series-expiry-fe49fa26-run/successor2-evidence.json",
+      "evidenceSha256": "771b30bda3071afb9240f9ecf849d03c71daac11b0359b23228e80f39f352ceb",
+      "journalPath": "/tmp/dclutch-series-expiry-fe49fa26-run/successor2-journal.json",
+      "journalSha256": "408da971199fe26250048bbc042f4c0354a77c35da7cf127a75de2af3708c744",
+      "assetLedger": {
+        "permitLamportsBefore": 5122560,
+        "permitLamportsAfter": 0,
+        "rentCreditLamportsBefore": 1781760,
+        "rentCreditLamportsAfter": 6904320,
+        "refundLamports": 5122560,
+        "twoAccountLamportsBefore": 6904320,
+        "twoAccountLamportsAfter": 6904320,
+        "conservationExact": true
+      },
+      "rollbackByteExact": null,
+      "transactionFeeOnlyBalanceChange": false
+    },
+    {
+      "case": "wrong-address",
+      "disposition": "refused",
+      "signature": "25YwDs1xjzPzF8VkWeG9TF63uCgeFg4iMhqVxDhKgqCTxequf94jKscu8UVb1T6ixVT4WTepM33ZoD9UsYkRx9mr",
+      "finalizedSlot": 10088,
+      "computeUnitsConsumed": 11438,
+      "feeLamports": 75000,
+      "refusalCode": 12303,
+      "refusalHex": "0x300F",
+      "evidencePath": "/tmp/dclutch-series-expiry-fe49fa26-run/wrong-evidence.json",
+      "evidenceSha256": "8a712fadd64827ca191a06b00e225188f7a26bb5eabf92031e1680dd2c54a178",
+      "journalPath": "/tmp/dclutch-series-expiry-fe49fa26-run/wrong-journal.json",
+      "journalSha256": "fff883330e09b5e52bf2ed4e9e3fd8f87d07b6fa80da0db5b48b604b9152602d",
+      "assetLedger": {
+        "permitLamportsBefore": 5122560,
+        "permitLamportsAfter": 5122560,
+        "rentCreditLamportsBefore": 1781760,
+        "rentCreditLamportsAfter": 1781760,
+        "twoAccountLamportsBefore": 6904320,
+        "twoAccountLamportsAfter": 6904320,
+        "conservationExact": true
+      },
+      "rollbackByteExact": true,
+      "transactionFeeOnlyBalanceChange": true
+    },
+    {
+      "case": "sealed-predecessor",
+      "disposition": "refused",
+      "signature": "4rJP1C1ZUQorqUkqPZbZZXXhgKyamUisa1rhJRGPxirJeBA6E8M8bogB2cfCYCgz6oVrGS8f1Br7Tdt3eTjVWcM7",
+      "finalizedSlot": 10057,
+      "computeUnitsConsumed": 11438,
+      "feeLamports": 75000,
+      "refusalCode": 12303,
+      "refusalHex": "0x300F",
+      "evidencePath": "/tmp/dclutch-series-expiry-fe49fa26-run/sealed-evidence.json",
+      "evidenceSha256": "4156bb7599a7d87e9cc4bb422d0edd68664143bfecadab4a7b7209aef1792cc1",
+      "journalPath": "/tmp/dclutch-series-expiry-fe49fa26-run/sealed-journal.json",
+      "journalSha256": "4eacbd70c0d7904258df4e6fafffab3bcc23a8c4edf1f701187e80d9bfe6b034",
+      "assetLedger": {
+        "permitLamportsBefore": 5122560,
+        "permitLamportsAfter": 5122560,
+        "rentCreditLamportsBefore": 1781760,
+        "rentCreditLamportsAfter": 1781760,
+        "twoAccountLamportsBefore": 6904320,
+        "twoAccountLamportsAfter": 6904320,
+        "conservationExact": true
+      },
+      "rollbackByteExact": true,
+      "transactionFeeOnlyBalanceChange": true
+    }
+  ],
+  "idempotentRerun": {
+    "case": "sealed-predecessor",
+    "submittedTransaction": false,
+    "reportedAlreadyFinalized": true,
+    "evidenceUnchanged": true,
+    "evidenceSha256": "4156bb7599a7d87e9cc4bb422d0edd68664143bfecadab4a7b7209aef1792cc1"
+  },
+  "assertions": {
+    "successorClosedPermit": true,
+    "successorRefundedPermitLamportsAtomExactly": true,
+    "successorTwoAccountConservationExact": true,
+    "hostilesRefusedWithExactInfrastructureCode": true,
+    "hostileProtocolAccountsRolledBackByteExactly": true,
+    "hostileTransactionBalanceChangeWasFeeOnly": true
+  }
+}

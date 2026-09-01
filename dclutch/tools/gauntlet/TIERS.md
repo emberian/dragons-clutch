@@ -12,7 +12,7 @@ Read `DESIGN.md` first. This file is the mechanics.
 tools/gauntlet/
   DESIGN.md              the five principles; read before changing anything
   TIERS.md               this file
-  run.sh                 build -> deploy -> campaign -> census, resumable
+  run.sh                 census report; `--mode full` is an explicit refusal
   blocked.json           NEVER-EXECUTED routes with reason + owning lane
   CU_BUDGETS.json        per-transaction compute budgets; ONE file, ONE owner
   CU_BUDGETS.md          what they catch, what they do not, how to re-pin
@@ -23,11 +23,11 @@ tools/gauntlet/
     check-witnesses.sh   evaluates them against the campaign evidence
 ```
 
-Tier 1's transactions are produced by the transaction-only bootstrap in
-`tools/local-validator/bootstrap/successor/` (owned by the W1d lane; the
-gauntlet consumes it read-only, as a subprocess). The gauntlet owns the build,
-the ELF pinning, the spec, the resumable staging, the witnesses, the census, and
-the report.
+Tier 1's historical transaction producer lives in
+`tools/local-validator/bootstrap/successor/`. It is parked at the retired
+`demo-market` boundary, so `run.sh` does not build or invoke it at HEAD. The
+top-level script owns the static census/report only; named family runners own
+their own build, evidence, witnesses, and validator lifecycle.
 
 ## The three files a tier needs
 
@@ -224,10 +224,10 @@ its build stage's artifact record.
 
 A family lane owns a `run-<family>.sh` that builds its ELFs, runs its campaigns,
 folds the evidence, checks its witnesses and calls `census observe` itself. It
-does NOT add a stage to `run.sh`: `run.sh` owns tier 1 and the census, and a
-shared script every family edits is the numbered-directory race one level down.
-Render the report afterwards with `run.sh --mode census`, which is cheap and
-reads the accumulated ledger.
+does NOT add a stage to `run.sh`: `run.sh` owns the census/report, and a shared
+script every family edits is the numbered-directory race one level down. Render
+the report afterwards with `run.sh --mode census`, which is cheap and reads the
+accumulated ledger.
 
 A family lane may carry more than one census campaign, and has to when its
 campaigns disagree about an address: a census campaign has ONE program map, and
@@ -358,24 +358,14 @@ that in the tier rather than letting the field's name imply otherwise.
 # seconds, no chain: the static census and the report
 tools/gauntlet/run.sh --mode census
 
-# the whole thing: build seven ELFs, bootstrap a fresh localhost ledger by
-# transaction, run tier 1, fold the evidence into the ledger, render the report
+# `full` is unavailable at HEAD: it refuses before any work or build.
 tools/gauntlet/run.sh --mode full
-
-# re-run one stage onward
-tools/gauntlet/run.sh --from campaign
 ```
 
-On hbox, `run.sh` routes every build through `swarm-build` automatically when it
-is on `PATH`. hbox is co-tenant with codex's HOL build; keep waves small.
-
-`--mode full` **used to be a single global slot per machine** and is not any
-more. The launcher was pinned to `127.0.0.1:20890`; the origin is a parameter
-now, so `--rpc-port auto` (or an explicit base) lets N campaigns run at once on
-disjoint 42-port blocks. The default is still 20890, so two runs that both take
-the default still contend. Give each concurrent run its own `--work` root, and
-never kill a `solana-test-validator` whose `--ledger` is not under your own.
-`--mode census` needs no port and may run concurrently.
+`--mode census` needs no port and may run concurrently. `--mode full` remains
+as an explicit, pre-build refusal so old invocations do not silently select a
+different campaign. Run a supported family campaign through its named runner;
+on hbox its runner must use `swarm-build` and respect co-tenant workloads.
 
 A tier that starts a validator inherits two rules from this. It must take its
 origin from the same `--rpc-port`/`$DCLUTCH_GAUNTLET_RPC_PORT` parameter rather

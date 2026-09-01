@@ -67,6 +67,9 @@ pub const DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3: u16 = 2;
 /// `ClaimsProgram` inside its own frame, which is why only Custody was missing
 /// and why the defect stayed invisible.
 pub const DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3: u16 = 1;
+/// Readonly Dealer and LP Claims Positions consumed by equity math even when
+/// the SignedDelta child changes fewer than two Positions.
+pub const DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3: u16 = 2;
 
 /// Transition register holding next obligation revision.
 pub const DEALER_EQUITY_OBLIGATION_REVISION_SCALAR_V3: u16 = 0;
@@ -231,6 +234,16 @@ pub fn dealer_external_delegate_identity_register_v3(action: MultiLpActionV3) ->
         .and_then(|width| CUSTODY_IDENTITY_BASE_V3.checked_add(width))
 }
 
+/// AccountProfile-owned register used only to authenticate the owner of both
+/// trailing Claims Position evidence accounts.
+pub fn dealer_equity_evidence_owner_identity_register_v3(action: MultiLpActionV3) -> Option<u16> {
+    u16::try_from(custody_slot_count(action))
+        .ok()
+        .and_then(|slots| slots.checked_mul(CUSTODY_IDENTITY_STRIDE_V3))
+        .and_then(|width| CUSTODY_IDENTITY_BASE_V3.checked_add(width))
+        .and_then(|width| width.checked_add(u16::from(action == MultiLpActionV3::Add)))
+}
+
 /// AccountProfile5 destination for the trusted current slot.
 pub fn dealer_current_slot_scalar_register_v3(action: MultiLpActionV3) -> Option<u16> {
     u16::try_from(custody_slot_count(action))
@@ -262,8 +275,10 @@ pub fn dealer_equity_identity_count_v3(
 ///
 /// This is an unsigned-operator projection, not a second semantic authority:
 /// every emitted register is copied from the exact request, the canonical
-/// physical plan, or one child request already owned by that plan. Both output
-/// buffers remain byte-for-byte unchanged on every refusal.
+/// physical plan, one child request already owned by that plan, or the
+/// authenticated pre-Transition bank supplied in `scalars`/`identities`.
+/// Registers the canonical Transition does not write are preserved exactly.
+/// Both output buffers remain byte-for-byte unchanged on every refusal.
 #[cfg(not(target_os = "solana"))]
 pub fn project_dealer_equity_hot_registers_v3(
     request: DealerEquityRequestV3<'_>,
@@ -359,8 +374,13 @@ pub fn project_dealer_equity_hot_registers_v3(
         }
     }
 
-    let mut staged_scalars = vec![0_u64; expected_scalars];
-    let mut staged_identities = vec![[0_u8; 32]; expected_identities];
+    // TransitionVM V3 starts from the complete authenticated input bank and
+    // preserves every register it does not write. In particular, the appended
+    // Claims-program identity that owns both Position-evidence accounts is an
+    // AccountProfile output, not a Dealer-request fact. Starting from zero here
+    // would manufacture a different candidate than the interpreted transition.
+    let mut staged_scalars = scalars.to_vec();
+    let mut staged_identities = identities.to_vec();
     set_scalar(
         &mut staged_scalars,
         DEALER_EQUITY_OBLIGATION_REVISION_SCALAR_V3,
@@ -492,6 +512,49 @@ pub fn encode_dealer_equity_effect_program_v3(
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), DealerEquityArtifactErrorV3> {
+    encode_dealer_equity_effect_program_with_claims_witness_v3(
+        action,
+        signed_position_count,
+        custody_templates,
+        true,
+        scratch,
+        output,
+    )
+}
+
+/// Emit the exact V3 base program used only inside the V4 equity successor.
+///
+/// Every legacy V3 byte remains owned by [`encode_dealer_equity_effect_program_v3`].
+/// The successor differs in one fact only: its Claims route does not borrow a
+/// V3 witness because Effect V4 owns the complete SignedDelta suffix as an
+/// authenticated borrowed range.
+#[cfg(not(target_os = "solana"))]
+pub fn encode_dealer_equity_effect_base_for_v4(
+    action: MultiLpActionV3,
+    signed_position_count: u32,
+    custody_templates: &[MultiLpCustodyRequestV3],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DealerEquityArtifactErrorV3> {
+    encode_dealer_equity_effect_program_with_claims_witness_v3(
+        action,
+        signed_position_count,
+        custody_templates,
+        false,
+        scratch,
+        output,
+    )
+}
+
+#[cfg(not(target_os = "solana"))]
+fn encode_dealer_equity_effect_program_with_claims_witness_v3(
+    action: MultiLpActionV3,
+    signed_position_count: u32,
+    custody_templates: &[MultiLpCustodyRequestV3],
+    legacy_claims_witness: bool,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DealerEquityArtifactErrorV3> {
     let slots = custody_slot_count(action);
     if custody_templates.len() != slots || signed_position_count > 2 {
         return Err(DealerEquityArtifactErrorV3::Geometry);
@@ -523,7 +586,8 @@ pub fn encode_dealer_equity_effect_program_v3(
                 role: FixedRole::Claims,
                 kind: RouteKindV3::Once,
                 enable_common_scalar: Some(DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3),
-                witness_range_common_scalar: Some(DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3),
+                witness_range_common_scalar: legacy_claims_witness
+                    .then_some(DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3),
                 receipt_dependency: None,
                 fixed_account_start: account_start,
                 fixed_account_count: claims_accounts,
@@ -590,6 +654,7 @@ pub fn encode_dealer_equity_effect_program_v3(
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
     let fixed_accounts = custody_program_account
         .checked_add(DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3)
+        .and_then(|value| value.checked_add(DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3))
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
     let mut instructions = Vec::with_capacity(
         slots
@@ -942,11 +1007,8 @@ fn scalar_count(action: MultiLpActionV3) -> Result<u16, DealerEquityArtifactErro
 }
 
 fn identity_count(action: MultiLpActionV3) -> Result<u16, DealerEquityArtifactErrorV3> {
-    u16::try_from(custody_slot_count(action))
-        .ok()
-        .and_then(|slots| slots.checked_mul(CUSTODY_IDENTITY_STRIDE_V3))
-        .and_then(|width| CUSTODY_IDENTITY_BASE_V3.checked_add(width))
-        .and_then(|width| width.checked_add(u16::from(action == MultiLpActionV3::Add)))
+    dealer_equity_evidence_owner_identity_register_v3(action)
+        .and_then(|index| index.checked_add(1))
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)
 }
 
@@ -1188,7 +1250,9 @@ mod tests {
                 let claims_program = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3
                     + DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3
                     + CLAIMS_PROGRAM_RELATIVE;
-                let custody_program = count - DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3;
+                let custody_program = count
+                    - DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3
+                    - DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3;
                 let callees = [
                     (FixedRole::Claims, claims_program),
                     (FixedRole::Custody, custody_program),
@@ -1292,7 +1356,7 @@ mod tests {
             .expect("equity account count")
         );
         assert_eq!(program.common_scalar_count(), 26);
-        assert_eq!(program.common_identity_count(), 36);
+        assert_eq!(program.common_identity_count(), 37);
         assert_eq!(program.fixed_operation_count(), 61);
         assert_eq!(program.item_operation_count(), 0);
 
@@ -1327,6 +1391,66 @@ mod tests {
         assert_eq!(
             program.route_template(2).expect("merge template").0,
             encoded(templates[1])
+        );
+    }
+
+    #[test]
+    fn v4_base_clears_only_the_legacy_claims_witness_owner() {
+        let templates = [
+            delegated_template(transfer_template(
+                CompartmentV1::External,
+                CompartmentV1::TradingPrincipal,
+                22,
+            )),
+            canonical_template(transfer_template(
+                CompartmentV1::HoardPrincipal,
+                CompartmentV1::TradingPrincipal,
+                24,
+            )),
+        ];
+        let width =
+            dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Add, 2).expect("artifact width");
+        let mut legacy_scratch = vec![0; width];
+        let mut legacy = vec![0; width];
+        encode_dealer_equity_effect_program_v3(
+            MultiLpActionV3::Add,
+            2,
+            &templates,
+            &mut legacy_scratch,
+            &mut legacy,
+        )
+        .expect("legacy V3");
+        let mut successor_scratch = vec![0; width];
+        let mut successor = vec![0; width];
+        encode_dealer_equity_effect_base_for_v4(
+            MultiLpActionV3::Add,
+            2,
+            &templates,
+            &mut successor_scratch,
+            &mut successor,
+        )
+        .expect("V4 base");
+
+        let legacy_program = ProgramV3::decode(&legacy).expect("legacy decode");
+        let successor_program = ProgramV3::decode(&successor).expect("successor decode");
+        assert!(
+            legacy_program
+                .route(1)
+                .expect("legacy Claims")
+                .borrows_witness()
+        );
+        assert!(
+            !successor_program
+                .route(1)
+                .expect("V4 Claims")
+                .borrows_witness()
+        );
+        let claims = HEADER_BYTES + ROUTE_BYTES;
+        legacy[claims + 3] = successor[claims + 3];
+        legacy[claims + 14..claims + 16].copy_from_slice(&successor[claims + 14..claims + 16]);
+        assert_eq!(
+            legacy, successor,
+            "the successor base may clear only the Claims V3 witness flag/register"
         );
     }
 
@@ -1373,7 +1497,7 @@ mod tests {
             .expect("equity account count")
         );
         assert_eq!(program.common_scalar_count(), 35);
-        assert_eq!(program.common_identity_count(), 52);
+        assert_eq!(program.common_identity_count(), 53);
         assert_eq!(program.fixed_operation_count(), 85);
         assert_eq!(program.route(0).expect("split").fixed_account_start(), 5);
         assert_eq!(program.route(1).expect("Claims").fixed_account_start(), 19);

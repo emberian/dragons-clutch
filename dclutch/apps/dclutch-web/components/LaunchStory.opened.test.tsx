@@ -38,6 +38,9 @@ describe('launch story, once a market is open', () => {
     expect(html).toContain('Enter the live market');
     expect(html).toContain(`q=${MARKET}`);
     expect(html).toContain('Open found transaction →');
+    expect(html).toContain('<strong>YES</strong><span>market open</span>');
+    expect(html).toContain('href="/campaign"');
+    expect(html).toContain('href="/population"');
   });
 
   it('still does not promise resolution or redemption', () => {

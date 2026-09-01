@@ -12,6 +12,19 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# The Token-2022 fixture is reproducible only on the canonical host; the
+# builder refuses anywhere else. Probe that BEFORE the quarter-hour of SBF
+# builds, and exit 2 -- the missing-prerequisite convention the suites tier
+# honours per row -- because on this host the suite has proven nothing,
+# which is not the same verdict as a gate failing.
+if [[ -z "${TOKEN_2022_V11_ELF:-}" \
+   && "$(uname -s)-$(uname -m)" != "Linux-x86_64" ]]; then
+  echo "claims suite DID NOT RUN: the Token-2022 fixture requires canonical" >&2
+  echo "host Linux-x86_64; got $(uname -s)-$(uname -m). Supply a canonical" >&2
+  echo "artifact with TOKEN_2022_V11_ELF, or run on hbox." >&2
+  exit 2
+fi
+
 if [[ -n "${TOKEN_2022_V11_CRATE:-}" ]]; then
   cp -- "$TOKEN_2022_V11_CRATE" "$token_archive"
 else

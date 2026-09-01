@@ -525,10 +525,7 @@ pub fn build_scenario_trade_request_v3(
     set: CapabilityProgramSetV1<'_>,
     output: &mut [u8],
 ) -> Result<UnsignedScenarioTradeRequestV3, ScenarioTradeErrorV3> {
-    validate_projection(chain)?;
-    validate_intent(chain, intent)?;
-    let width =
-        u32::try_from(intent.acquired.len()).map_err(|_| ScenarioTradeErrorV3::WidthMismatch)?;
+    validate_scenario_trade_construction_v3(chain, intent)?;
     if set.selector_offset() != DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV1::U16
     {
@@ -540,6 +537,23 @@ pub fn build_scenario_trade_request_v3(
         .select(&selector)
         .map_err(|_| ScenarioTradeErrorV3::ProgramSelection)?;
 
+    let request_bytes = encode_scenario_trade_request_v3(chain, intent, output)?;
+    Ok(UnsignedScenarioTradeRequestV3 {
+        request_bytes,
+        selected_program,
+    })
+}
+
+/// Encode the one canonical scenario request after its chain projection,
+/// intent, and release selector have been authenticated by the caller.
+#[cfg(not(target_os = "solana"))]
+pub(super) fn encode_scenario_trade_request_v3(
+    chain: ScenarioTradeChainProjectionV3<'_>,
+    intent: ScenarioTradeIntentV3<'_>,
+    output: &mut [u8],
+) -> Result<usize, ScenarioTradeErrorV3> {
+    let width =
+        u32::try_from(intent.acquired.len()).map_err(|_| ScenarioTradeErrorV3::WidthMismatch)?;
     let width_usize = intent.acquired.len();
     let candidate_state_bytes =
         obligation_account_bytes_v3(width).map_err(|_| ScenarioTradeErrorV3::InvalidProjection)?;
@@ -720,10 +734,18 @@ pub fn build_scenario_trade_request_v3(
         &mut authenticated_obligations,
         &mut authenticated_state,
     )?;
-    Ok(UnsignedScenarioTradeRequestV3 {
-        request_bytes: expected,
-        selected_program,
-    })
+    Ok(expected)
+}
+
+/// Authenticate the shared chain projection and economic intent before either
+/// the legacy V1 or schema-bound V2 selector is allowed to choose a release.
+#[cfg(not(target_os = "solana"))]
+pub(super) fn validate_scenario_trade_construction_v3(
+    chain: ScenarioTradeChainProjectionV3<'_>,
+    intent: ScenarioTradeIntentV3<'_>,
+) -> Result<(), ScenarioTradeErrorV3> {
+    validate_projection(chain)?;
+    validate_intent(chain, intent)
 }
 
 /// Rejoin one exact request to current authenticated chain projections.

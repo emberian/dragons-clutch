@@ -40,6 +40,10 @@ use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataV3View, ProgramV3View,
 };
+use dclutch_release_set_contract::{
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+    ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
+};
 use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use dclutch_representation_composition_v3_operator::native_categorical_v1::{
     NativeCategoricalCompositionInputV1, compile_native_categorical_composition_v1,
@@ -357,6 +361,90 @@ fn authenticate_local_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result<
         .ok_or_else(|| Error::new("checked local mutable set omitted every deployment slot"))
 }
 
+fn require_complete_local_succession_v1(state: crate::campaign::StageStateV1) -> Result<()> {
+    match state {
+        crate::campaign::StageStateV1::Complete => Ok(()),
+        crate::campaign::StageStateV1::Absent => Err(Error::new(
+            "Direct localhost observation requires the planned Registry succession to exist",
+        )),
+        crate::campaign::StageStateV1::Partial(detail) => Err(Error::new(format!(
+            "Direct localhost observation requires complete Registry succession: {detail}"
+        ))),
+        crate::campaign::StageStateV1::Conflict(detail) => Err(Error::new(format!(
+            "Direct localhost observation refuses conflicting Registry succession: {detail}"
+        ))),
+    }
+}
+
+/// Select the live Registry pin only after `campaign::succession_state` has
+/// authenticated the complete plan-owned three-write succession.  The
+/// persisted plan remains the predecessor history; this projection changes
+/// only the three facts necessarily created by the Loader write and successor
+/// artifact record.
+fn authenticated_successor_registry_pin_v1(
+    plan: &SuccessorPlan,
+    programdata: &RpcAccount,
+    v2_profile: &RpcAccount,
+) -> Result<ProgramPin> {
+    let succession = plan.infrastructure_succession.as_ref().ok_or_else(|| {
+        Error::new("Direct localhost successor selection omitted its succession plan pin")
+    })?;
+    let core = crate::plan::pubkey(&plan.core.program_id)?;
+    let registry = crate::plan::pubkey(&plan.registry.program_id)?;
+    let rent = crate::plan::pubkey(&plan.rent_credit.program_id)?;
+    let expected_authority = plan
+        .registry
+        .upgrade_authority
+        .as_deref()
+        .map(crate::plan::pubkey)
+        .transpose()?
+        .map(|authority| authority.to_bytes());
+    let programdata_view = ProgramDataV3View::parse(&programdata.data)
+        .map_err(|error| Error::new(format!("successor Registry ProgramData: {error:?}")))?;
+    if programdata.owner != bpf_loader_upgradeable::ID
+        || programdata.executable
+        || programdata_view.deployment_slot() <= plan.registry.deployment_slot
+        || programdata_view.upgrade_authority() != expected_authority
+        || hex(&Sha256::digest(programdata_view.elf())) != plan.registry.live_elf_sha256
+        || succession.registry_candidate_elf_sha256 != plan.registry.checked_candidate_elf_sha256
+    {
+        return Err(Error::new(
+            "successor Registry ProgramData changed its pinned slot direction, authority, or ELF",
+        ));
+    }
+
+    let predecessor_bytes = decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let predecessor = ProtocolInfrastructureProfileV1::decode(&predecessor_bytes)
+        .map_err(|error| Error::new(format!("predecessor infrastructure profile: {error:?}")))?;
+    let successor = ProtocolInfrastructureProfileV2::decode(&v2_profile.data)
+        .map_err(|error| Error::new(format!("successor infrastructure profile: {error:?}")))?;
+    if v2_profile.owner != core
+        || v2_profile.executable
+        || v2_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+        || predecessor.registry().program().to_bytes() != registry.to_bytes()
+        || predecessor.rent().program().to_bytes() != rent.to_bytes()
+        || succession.predecessor_registry_artifact_release_id
+            != hex(predecessor.registry().artifact_release().as_bytes())
+        || succession.predecessor_rent_artifact_release_id
+            != hex(predecessor.rent().artifact_release().as_bytes())
+        || successor.registry().program() != predecessor.registry().program()
+        || successor.rent() != predecessor.rent()
+        || successor.predecessor_registry_artifact() != predecessor.registry().artifact_release()
+        || successor.predecessor_rent_artifact() != predecessor.rent().artifact_release()
+        || successor.registry().artifact_release() == predecessor.registry().artifact_release()
+    {
+        return Err(Error::new(
+            "successor infrastructure profile changed its program or predecessor lineage",
+        ));
+    }
+
+    let mut selected = plan.registry.clone();
+    selected.deployment_slot = programdata_view.deployment_slot();
+    selected.programdata_sha256 = hex(&Sha256::digest(&programdata.data));
+    selected.artifact_release_id = hex(successor.registry().artifact_release().as_bytes());
+    Ok(selected)
+}
+
 pub(crate) fn authenticated_resolution_release_v1(plan: &SuccessorPlan) -> Result<[u8; 32]> {
     decode_hex(&plan.resolution.semantic_release_id)?
         .try_into()
@@ -559,9 +647,26 @@ pub(crate) fn observe_local_market_policy_v1(
         ));
     }
     let plan = read_exact_json_v1::<SuccessorPlan>(plan_path, "successor plan")?;
-    let floor = authenticate_local_plan_v1(&plan, registry)?;
+    let mut floor = authenticate_local_plan_v1(&plan, registry)?;
     let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
-    let observation = observe_policy_v1(&mut rpc, &plan, floor)?;
+    let mut observation_plan = plan.clone();
+    if plan.infrastructure_succession.is_some() {
+        require_complete_local_succession_v1(crate::campaign::succession_state(&mut rpc, &plan)?)?;
+        let registry_programdata = crate::plan::pubkey(&plan.registry.programdata_id)?;
+        let programdata = rpc.account(registry_programdata)?.ok_or_else(|| {
+            Error::new("Registry ProgramData disappeared after authenticated succession")
+        })?;
+        let core = crate::plan::pubkey(&plan.core.program_id)?;
+        let v2_address =
+            Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+        let v2_profile = rpc.account(v2_address)?.ok_or_else(|| {
+            Error::new("V2 infrastructure profile disappeared after authenticated succession")
+        })?;
+        observation_plan.registry =
+            authenticated_successor_registry_pin_v1(&plan, &programdata, &v2_profile)?;
+        floor = floor.max(observation_plan.registry.deployment_slot);
+    }
+    let observation = observe_policy_v1(&mut rpc, &observation_plan, floor)?;
     Ok((plan, observation))
 }
 
@@ -1380,6 +1485,7 @@ mod tests {
         native_close_bundle_v1::DIRECT_NATIVE_CLOSE_SELECTOR_V1,
         retirement_v1::DIRECT_BEGIN_RETIRING_SELECTOR_V1,
     };
+    use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleBindingV1};
 
     fn test_market() -> MarketRunInput {
         let registry = Pubkey::new_from_array([0x41; 32]);
@@ -1779,6 +1885,262 @@ mod tests {
             checked_calls,
             activation_calls,
             rpc_calls,
+        }
+    }
+
+    fn successor_registry_fixture_v1(
+        fixture: &DevnetPlannerFixtureV1,
+        deployment_slot: u64,
+    ) -> (SuccessorPlan, RpcAccount, RpcAccount) {
+        let mut plan = fixture.plan.clone();
+        let predecessor = ProtocolInfrastructureProfileV1::decode(
+            &decode_hex(&plan.infrastructure_profile.body_hex).expect("V1 profile bytes"),
+        )
+        .expect("V1 profile");
+        plan.infrastructure_succession = Some(crate::model::InfrastructureSuccessionPinV1 {
+            schema: crate::plan::INFRASTRUCTURE_SUCCESSION_SCHEMA_V1.into(),
+            registry_upgrade_buffer: Pubkey::new_from_array([0xd0; 32]).to_string(),
+            registry_candidate_elf_sha256: plan.registry.checked_candidate_elf_sha256.clone(),
+            predecessor_registry_artifact_release_id: hex(predecessor
+                .registry()
+                .artifact_release()
+                .as_bytes()),
+            predecessor_rent_artifact_release_id: hex(predecessor
+                .rent()
+                .artifact_release()
+                .as_bytes()),
+        });
+        let candidate =
+            fs::read(&plan.registry.checked_candidate_elf_path).expect("Registry candidate ELF");
+        let programdata = RpcAccount {
+            lamports: 1,
+            owner: bpf_loader_upgradeable::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: crate::plan::loader_programdata_bytes(
+                &candidate,
+                deployment_slot,
+                Some(fixture.retained_authority),
+            ),
+        };
+        let successor_artifact =
+            ArtifactReleaseIdV1::new([0xd1; 32]).expect("successor artifact id");
+        let profile = ProtocolInfrastructureProfileV2::new(
+            ExecutionRoleBindingV1::new(predecessor.registry().program(), successor_artifact),
+            predecessor.rent(),
+            predecessor.registry().artifact_release(),
+            predecessor.rent().artifact_release(),
+        )
+        .expect("V2 profile");
+        let v2_profile = RpcAccount {
+            lamports: 1,
+            owner: crate::plan::pubkey(&plan.core.program_id).expect("Core Program"),
+            executable: false,
+            rent_epoch: 0,
+            data: profile.to_bytes().to_vec(),
+        };
+        (plan, programdata, v2_profile)
+    }
+
+    #[test]
+    fn successor_registry_selection_changes_only_successor_owned_facts() {
+        let fixture = devnet_planner_fixture_v1();
+        let successor_slot = fixture.plan.registry.deployment_slot + 19;
+        let (plan, programdata, v2_profile) =
+            successor_registry_fixture_v1(&fixture, successor_slot);
+        let selected = authenticated_successor_registry_pin_v1(&plan, &programdata, &v2_profile)
+            .expect("authenticated successor Registry pin");
+        assert_eq!(selected.deployment_slot, successor_slot);
+        assert_eq!(
+            selected.programdata_sha256,
+            hex(&Sha256::digest(&programdata.data))
+        );
+        let profile =
+            ProtocolInfrastructureProfileV2::decode(&v2_profile.data).expect("V2 profile");
+        assert_eq!(
+            selected.artifact_release_id,
+            hex(profile.registry().artifact_release().as_bytes())
+        );
+
+        let mut restored = selected.clone();
+        restored.deployment_slot = plan.registry.deployment_slot;
+        restored.programdata_sha256 = plan.registry.programdata_sha256.clone();
+        restored.artifact_release_id = plan.registry.artifact_release_id.clone();
+        assert_eq!(
+            serde_json::to_value(restored).expect("selected Registry pin"),
+            serde_json::to_value(&plan.registry).expect("predecessor Registry pin")
+        );
+
+        let programdata_key =
+            crate::plan::pubkey(&selected.programdata_id).expect("Registry ProgramData");
+        let mut program_body = Vec::with_capacity(LOADER_V3_PROGRAM_BYTES);
+        program_body.extend_from_slice(&2_u32.to_le_bytes());
+        program_body.extend_from_slice(programdata_key.as_ref());
+        let program = RpcAccount {
+            lamports: 1,
+            owner: bpf_loader_upgradeable::ID,
+            executable: true,
+            rent_epoch: 0,
+            data: program_body,
+        };
+        authenticate_live_role_v1("registry", &selected, &program, &programdata)
+            .expect("successor Registry Loader pair");
+
+        let mut wrong_programdata_coordinate = selected.clone();
+        wrong_programdata_coordinate.programdata_id = Pubkey::new_unique().to_string();
+        assert!(
+            authenticate_live_role_v1(
+                "registry",
+                &wrong_programdata_coordinate,
+                &program,
+                &programdata,
+            )
+            .is_err()
+        );
+        let mut wrong_program_coordinate = selected;
+        wrong_program_coordinate.program_id = Pubkey::new_unique().to_string();
+        assert!(
+            authenticate_live_role_v1(
+                "registry",
+                &wrong_program_coordinate,
+                &program,
+                &programdata,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn successor_registry_selection_refuses_each_lineage_or_programdata_substitution() {
+        let fixture = devnet_planner_fixture_v1();
+        let successor_slot = fixture.plan.registry.deployment_slot + 19;
+        let (plan, programdata, v2_profile) =
+            successor_registry_fixture_v1(&fixture, successor_slot);
+
+        let mut hostile_programdata = programdata.clone();
+        hostile_programdata.owner = Pubkey::new_unique();
+        assert!(
+            authenticated_successor_registry_pin_v1(&plan, &hostile_programdata, &v2_profile)
+                .is_err()
+        );
+        let mut hostile_programdata = programdata.clone();
+        hostile_programdata.executable = true;
+        assert!(
+            authenticated_successor_registry_pin_v1(&plan, &hostile_programdata, &v2_profile)
+                .is_err()
+        );
+        for slot in [
+            plan.registry.deployment_slot,
+            plan.registry.deployment_slot.saturating_sub(1),
+        ] {
+            let candidate = fs::read(&plan.registry.checked_candidate_elf_path)
+                .expect("Registry candidate ELF");
+            let hostile_programdata = RpcAccount {
+                data: crate::plan::loader_programdata_bytes(
+                    &candidate,
+                    slot,
+                    Some(fixture.retained_authority),
+                ),
+                ..programdata.clone()
+            };
+            assert!(
+                authenticated_successor_registry_pin_v1(&plan, &hostile_programdata, &v2_profile)
+                    .is_err()
+            );
+        }
+        for (elf, authority) in [
+            (
+                vec![0x7f, b'E', b'L', b'F', 0xfe],
+                fixture.retained_authority,
+            ),
+            (
+                fs::read(&plan.registry.checked_candidate_elf_path)
+                    .expect("Registry candidate ELF"),
+                Pubkey::new_unique(),
+            ),
+        ] {
+            let hostile_programdata = RpcAccount {
+                data: crate::plan::loader_programdata_bytes(&elf, successor_slot, Some(authority)),
+                ..programdata.clone()
+            };
+            assert!(
+                authenticated_successor_registry_pin_v1(&plan, &hostile_programdata, &v2_profile)
+                    .is_err()
+            );
+        }
+
+        let mut hostile_profile = v2_profile.clone();
+        hostile_profile.owner = Pubkey::new_unique();
+        assert!(
+            authenticated_successor_registry_pin_v1(&plan, &programdata, &hostile_profile).is_err()
+        );
+        let mut hostile_profile = v2_profile.clone();
+        hostile_profile.executable = true;
+        assert!(
+            authenticated_successor_registry_pin_v1(&plan, &programdata, &hostile_profile).is_err()
+        );
+
+        let predecessor = ProtocolInfrastructureProfileV1::decode(
+            &decode_hex(&plan.infrastructure_profile.body_hex).expect("V1 profile bytes"),
+        )
+        .expect("V1 profile");
+        let successor = ProtocolInfrastructureProfileV2::decode(&v2_profile.data)
+            .expect("successor profile")
+            .registry()
+            .artifact_release();
+        for profile in [
+            ProtocolInfrastructureProfileV2::new(
+                ExecutionRoleBindingV1::new(
+                    dclutch_release_set_contract::ProgramIdentityV1::new([0xd2; 32])
+                        .expect("different Registry program"),
+                    successor,
+                ),
+                predecessor.rent(),
+                predecessor.registry().artifact_release(),
+                predecessor.rent().artifact_release(),
+            )
+            .expect("wrong Registry program V2"),
+            ProtocolInfrastructureProfileV2::new(
+                ExecutionRoleBindingV1::new(predecessor.registry().program(), successor),
+                predecessor.rent(),
+                ArtifactReleaseIdV1::new([0xd3; 32]).expect("wrong predecessor Registry"),
+                predecessor.rent().artifact_release(),
+            )
+            .expect("wrong predecessor V2"),
+        ] {
+            let hostile_profile = RpcAccount {
+                data: profile.to_bytes().to_vec(),
+                ..v2_profile.clone()
+            };
+            assert!(
+                authenticated_successor_registry_pin_v1(&plan, &programdata, &hostile_profile)
+                    .is_err()
+            );
+        }
+
+        let mut hostile_plan = plan.clone();
+        hostile_plan
+            .infrastructure_succession
+            .as_mut()
+            .expect("succession pin")
+            .registry_candidate_elf_sha256 = hex(&[0xd4; 32]);
+        assert!(
+            authenticated_successor_registry_pin_v1(&hostile_plan, &programdata, &v2_profile,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn planned_local_succession_must_be_complete_before_direct_observation() {
+        assert!(
+            require_complete_local_succession_v1(crate::campaign::StageStateV1::Complete).is_ok()
+        );
+        for state in [
+            crate::campaign::StageStateV1::Absent,
+            crate::campaign::StageStateV1::Partial("successor record missing".into()),
+            crate::campaign::StageStateV1::Conflict("substituted V2".into()),
+        ] {
+            assert!(require_complete_local_succession_v1(state).is_err());
         }
     }
 
@@ -2363,10 +2725,6 @@ mod tests {
         assert_eq!(
             set.entry(4).expect("close-maker selector").selector(),
             DIRECT_CLOSE_MAKER_SELECTOR_V1
-        );
-        assert_eq!(
-            dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1,
-            dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1
         );
     }
 

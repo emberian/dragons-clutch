@@ -96,6 +96,7 @@ use solana_system_interface::instruction::transfer;
 use crate::{
     Error, Result,
     campaign::read_keypair_file,
+    chaos_fault::{self, BoundaryV1},
     cluster::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
     },
@@ -2425,6 +2426,32 @@ struct CheckpointV1 {
     stage_plan: Option<StagePlanV1>,
     receipts: Vec<StageReceiptV1>,
     verified_terminal: bool,
+}
+
+/// Chain-reauthenticated facts handed from the flagship provider lifecycle to
+/// the complete-life campaign.
+///
+/// The receipt bodies remain the flagship driver's own serialized values.  A
+/// campaign may carry them, but it does not get a second DTO in which to
+/// restate their arithmetic or account vectors.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DirectResolutionTerminalEvidenceV1 {
+    pub(crate) input_sha256: String,
+    pub(crate) checkpoint_sha256: String,
+    pub(crate) market: String,
+    pub(crate) source_state: String,
+    pub(crate) source_state_sha256: String,
+    pub(crate) certificate: String,
+    pub(crate) certificate_sha256: String,
+    pub(crate) resolution_program: String,
+    pub(crate) generation: u64,
+    pub(crate) terminal_sequence: u64,
+    pub(crate) selector: u32,
+    pub(crate) attempt_index: u32,
+    pub(crate) route: &'static str,
+    pub(crate) certificate_kind: &'static str,
+    pub(crate) finalized_receipts: Vec<Value>,
 }
 
 struct PreparedStageV1 {
@@ -6818,6 +6845,42 @@ fn send_provider_packet_once(rpc: &mut Rpc, plan: &StagePlanV1) -> Result<()> {
     Ok(())
 }
 
+/// Expose only Core's terminal-accept packet to the owned-loopback crash
+/// campaign. The plan's message digest is its effective intent digest: plan
+/// validation re-derives that message from the exact transfer/action list,
+/// ALT, account frame, blockhash, fee, and prestate before this helper runs.
+fn park_core_terminal_accept_chaos_boundary_v1(
+    expected_cluster: ExpectedClusterV1,
+    checkpoint_path: &Path,
+    plan: &StagePlanV1,
+    boundary: BoundaryV1,
+) -> Result<()> {
+    if !is_core_terminal_accept_chaos_target_v1(expected_cluster, plan.stage) {
+        return Ok(());
+    }
+    plan.validate()?;
+    chaos_fault::park_if_armed_v1(
+        expected_cluster.evidence_label(),
+        "core-terminal-accept",
+        boundary,
+        checkpoint_path,
+        &plan.message_sha256,
+        plan.signed_transaction_sha256
+            .as_deref()
+            .ok_or_else(|| Error::new("Core terminal accept chaos seam omitted packet digest"))?,
+        plan.expected_signature
+            .as_deref()
+            .ok_or_else(|| Error::new("Core terminal accept chaos seam omitted signature"))?,
+    )
+}
+
+const fn is_core_terminal_accept_chaos_target_v1(
+    expected_cluster: ExpectedClusterV1,
+    stage: StageV1,
+) -> bool {
+    matches!(expected_cluster, ExpectedClusterV1::OwnedLoopback) && matches!(stage, StageV1::Accept)
+}
+
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     run_with_expected_cluster(arguments, ExpectedClusterV1::Devnet)
 }
@@ -6969,6 +7032,12 @@ fn run_with_expected_cluster(
                             finalized,
                             expected_cluster,
                         )?;
+                        park_core_terminal_accept_chaos_boundary_v1(
+                            expected_cluster,
+                            &checkpoint_path,
+                            plan,
+                            BoundaryV1::LandedBeforeFinalizationFsync,
+                        )?;
                         plan.phase = DurablePhaseV1::Finalized;
                         plan.finalized = Some(receipt);
                         write_checkpoint(&checkpoint_path, &checkpoint)?;
@@ -6979,6 +7048,12 @@ fn run_with_expected_cluster(
                         return Ok(());
                     }
                     authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
+                    park_core_terminal_accept_chaos_boundary_v1(
+                        expected_cluster,
+                        &checkpoint_path,
+                        plan,
+                        BoundaryV1::DispatchingBeforeSend,
+                    )?;
                     send_provider_packet_once(&mut rpc, plan)?;
                     plan.phase = DurablePhaseV1::Submitted;
                     write_checkpoint(&checkpoint_path, &checkpoint)?;
@@ -6993,6 +7068,12 @@ fn run_with_expected_cluster(
                             plan,
                             finalized,
                             expected_cluster,
+                        )?;
+                        park_core_terminal_accept_chaos_boundary_v1(
+                            expected_cluster,
+                            &checkpoint_path,
+                            plan,
+                            BoundaryV1::LandedBeforeFinalizationFsync,
                         )?;
                         plan.phase = DurablePhaseV1::Finalized;
                         plan.finalized = Some(receipt);
@@ -7029,6 +7110,12 @@ fn run_with_expected_cluster(
                         .stage_plan
                         .as_ref()
                         .ok_or_else(|| Error::new("dispatching provider plan disappeared"))?;
+                    park_core_terminal_accept_chaos_boundary_v1(
+                        expected_cluster,
+                        &checkpoint_path,
+                        plan,
+                        BoundaryV1::DispatchingBeforeSend,
+                    )?;
                     send_provider_packet_once(&mut rpc, plan)?;
                     checkpoint
                         .stage_plan
@@ -7048,6 +7135,12 @@ fn run_with_expected_cluster(
                             plan,
                             finalized,
                             expected_cluster,
+                        )?;
+                        park_core_terminal_accept_chaos_boundary_v1(
+                            expected_cluster,
+                            &checkpoint_path,
+                            plan,
+                            BoundaryV1::LandedBeforeFinalizationFsync,
                         )?;
                         let plan = checkpoint.stage_plan.as_mut().expect("submitted plan");
                         plan.phase = DurablePhaseV1::Finalized;
@@ -7121,6 +7214,107 @@ fn load_checkpoint(
     }
     authenticate_receipt_prefix(&checkpoint, expected_cluster)?;
     Ok(checkpoint)
+}
+
+/// Reopen the exact owned-loopback flagship artifacts and the finalized chain
+/// before handing Resolution facts to a wider lifecycle campaign.
+///
+/// `verifiedTerminal` is not accepted as a shortcut.  This repeats the current
+/// deployment, selected provider release, thirty-three-clause terminal join,
+/// and exact four-receipt checks against a fresh finalized observation.  The
+/// route/attempt fields returned below are decoded from the persisted Source
+/// and certificate rather than asserted by the caller.
+pub(crate) fn authenticate_direct_resolution_terminal_v1(
+    rpc: &mut Rpc,
+    input_path: &Path,
+    checkpoint_path: &Path,
+) -> Result<DirectResolutionTerminalEvidenceV1> {
+    let input_bytes = fs::read(input_path).map_err(|error| {
+        Error::new(format!(
+            "read direct-life Resolution input {}: {error}",
+            input_path.display()
+        ))
+    })?;
+    let input: PlanInputV1 = serde_json::from_slice(&input_bytes)?;
+    let selected = SelectedInputV1::parse(&input, ExpectedClusterV1::OwnedLoopback)?;
+    let input_sha256 = hex(&Sha256::digest(&input_bytes));
+    let checkpoint_bytes = fs::read(checkpoint_path).map_err(|error| {
+        Error::new(format!(
+            "read direct-life Resolution checkpoint {}: {error}",
+            checkpoint_path.display()
+        ))
+    })?;
+    let checkpoint = load_checkpoint(
+        checkpoint_path,
+        &input_sha256,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    if !checkpoint.verified_terminal || checkpoint.stage_plan.is_some() {
+        return Err(Error::new(
+            "direct-life Resolution checkpoint has not reached its exact terminal receipt prefix",
+        ));
+    }
+    require_terminal_receipts(&checkpoint, ExpectedClusterV1::OwnedLoopback)?;
+
+    let snapshot = observe(rpc, &selected, StageV1::Complete, 0)?;
+    if classify(chain_facts(&selected, &snapshot)?)? != StageV1::Complete {
+        return Err(Error::new(
+            "direct-life Resolution chain state no longer classifies as provider lifecycle Complete",
+        ));
+    }
+    authenticate_current_deployments(&selected, &snapshot)?;
+    authenticate_selected_pyth_release(
+        &selected,
+        &snapshot,
+        false,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    verify_terminal(&selected, &snapshot)?;
+
+    let market = selected.account("market")?;
+    let source_state = selected.account("source_state")?;
+    let certificate = selected.account("certificate")?;
+    let resolution_program = selected.account("resolution_program")?;
+    let source_account = snapshot.account(source_state, "terminal Source state")?;
+    let certificate_account = snapshot.account(certificate, "terminal certificate")?;
+    let source = SourceResolutionStateV2::decode(&source_account.data)
+        .map_err(|error| Error::new(format!("terminal Source state: {error:?}")))?;
+    let terminal = source
+        .terminal_projection()
+        .map_err(|error| Error::new(format!("terminal Source projection: {error:?}")))?;
+    let certificate_value = ResolutionCertificateV2::decode(&certificate_account.data)
+        .map_err(|error| Error::new(format!("terminal certificate: {error:?}")))?;
+    if terminal.route() != SourceResolutionRouteV1::Primary
+        || certificate_value.kind != ResolutionCertificateKindV2::ResolutionSuccess
+        || certificate_value.attempt_index != 0
+        || terminal.selector() != certificate_value.selector
+    {
+        return Err(Error::new(
+            "direct-life provider completion was not the exact primary first-attempt terminal",
+        ));
+    }
+    let finalized_receipts = checkpoint
+        .receipts
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<core::result::Result<Vec<_>, _>>()?;
+    Ok(DirectResolutionTerminalEvidenceV1 {
+        input_sha256,
+        checkpoint_sha256: hex(&Sha256::digest(&checkpoint_bytes)),
+        market: market.to_string(),
+        source_state: source_state.to_string(),
+        source_state_sha256: hex(&Sha256::digest(&source_account.data)),
+        certificate: certificate.to_string(),
+        certificate_sha256: hex(&Sha256::digest(&certificate_account.data)),
+        resolution_program: resolution_program.to_string(),
+        generation: selected.generation,
+        terminal_sequence: terminal.terminal_sequence(),
+        selector: terminal.selector(),
+        attempt_index: certificate_value.attempt_index,
+        route: "primary",
+        certificate_kind: "resolution-success",
+        finalized_receipts,
+    })
 }
 
 fn authenticate_receipt_prefix(
@@ -8861,6 +9055,26 @@ mod tests {
             checkpoint_format(ExpectedClusterV1::Devnet),
             checkpoint_format(ExpectedClusterV1::OwnedLoopback)
         );
+    }
+
+    #[test]
+    fn chaos_target_is_only_owned_loopback_core_terminal_accept() {
+        for stage in [
+            StageV1::Submit,
+            StageV1::Execute,
+            StageV1::Accept,
+            StageV1::Reclaim,
+            StageV1::Complete,
+        ] {
+            assert_eq!(
+                is_core_terminal_accept_chaos_target_v1(ExpectedClusterV1::OwnedLoopback, stage,),
+                stage == StageV1::Accept,
+            );
+            assert!(!is_core_terminal_accept_chaos_target_v1(
+                ExpectedClusterV1::Devnet,
+                stage,
+            ));
+        }
     }
 
     #[test]

@@ -92,6 +92,18 @@ It never falls back to the retired immutable journey, because that journey
 still records Direct, payout, and final retirement as gaps and therefore
 cannot prove this lifecycle.
 
+Each executed administration writes
+`runs/seed-NN/infrastructure-lineage.json` before founding. This create-new
+artifact is the chain-derived join from the exact clean source and checked
+release to the seven installed Loader pairs, V1 and V2 infrastructure
+profiles, the forward Registry deployment record, the carried Rent record,
+and the five-role activated execution set. The campaign report attaches its
+path and SHA-256; the Python supervisor reopens every join and refuses a
+substituted profile, record, release, role, or activation. A fresh validator
+has no preexisting Markets to migrate, so the artifact says that explicitly
+instead of claiming a consumer migration. Founding and all later routes start
+after V2 activation and produce their own transaction evidence.
+
 The Pyth boundary is explicit and requires no hosted Pyth API credential. The
 fresh validator loads the pinned Receiver and Router ELF fixtures as truly
 immutable Loader-v3 accounts (`deploymentSlot = 0`, null upgrade authority),

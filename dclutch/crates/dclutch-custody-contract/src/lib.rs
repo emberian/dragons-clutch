@@ -489,6 +489,85 @@ pub struct CustodyRequestV1 {
     pub rent_lamports: u64,
 }
 
+/// One exact normal-Custody edge of the pre-Market SeriesEscrow lifecycle.
+///
+/// This is a classifier result, not a new instruction or persisted fact.  It
+/// recognizes the already-existing [`CustodyRequestV1`] requests emitted by
+/// the Series interpreter so the SVM adapter can authenticate their deliberately
+/// vacant future-Market coordinate without weakening ordinary live-Market
+/// admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PremarketSeriesEscrowTransitionV1 {
+    /// Create the Ticket-scoped replay, revision zero to one.
+    InitializeReplay,
+    /// Open the empty Ticket-scoped SeriesEscrow Vault, revision one to two.
+    OpenVault,
+    /// Lock founder collateral into SeriesEscrow, revision two to three.
+    Lock,
+    /// Return SeriesEscrow collateral after expiry, revision three to four.
+    Refund,
+    /// Close the empty SeriesEscrow Vault, revision four to five.
+    CloseVault,
+    /// Close the terminal replay, revision five to six.
+    CloseReplay,
+}
+
+/// Classify only the six canonical normal-Custody pre-Market SeriesEscrow
+/// requests.
+///
+/// The classification is total over constructed values and introduces no new
+/// authority: the SVM adapter must still authenticate the current Trading
+/// release, caller-authority signature, finalized Realm, replay, Vaults, token
+/// state, and every CPI postcondition.  A request that differs in any Series
+/// discriminator or Ticket/Occurrence scalar join is not selected.
+#[must_use]
+pub fn classify_premarket_series_escrow_v1(
+    request: CustodyRequestV1,
+) -> Option<PremarketSeriesEscrowTransitionV1> {
+    if request.validate().is_err()
+        || request.caller_role != CallerRoleV1::Trading
+        || request.semantic.candidate == [0; 32]
+        || request.context != request.semantic.order
+        || request.semantic.order_nonce != u64::from(request.semantic.execution_index)
+        || request.semantic.generation == 0
+        || request.semantic.page_index != 0
+    {
+        return None;
+    }
+    match (
+        request.operation,
+        request.source_compartment,
+        request.destination_compartment,
+        request.expected_revision,
+        request.resulting_revision,
+        request.semantic.transfer_index,
+    ) {
+        (OperationV1::InitializeReplay, CompartmentV1::None, CompartmentV1::None, 0, 1, 0) => {
+            Some(PremarketSeriesEscrowTransitionV1::InitializeReplay)
+        }
+        (OperationV1::OpenVault, CompartmentV1::None, CompartmentV1::SeriesEscrow, 1, 2, 1) => {
+            Some(PremarketSeriesEscrowTransitionV1::OpenVault)
+        }
+        (OperationV1::Transfer, CompartmentV1::External, CompartmentV1::SeriesEscrow, 2, 3, 2)
+            if request.destination_vault_context == request.context =>
+        {
+            Some(PremarketSeriesEscrowTransitionV1::Lock)
+        }
+        (OperationV1::Transfer, CompartmentV1::SeriesEscrow, CompartmentV1::External, 3, 4, 0)
+            if request.source_vault_context == request.context =>
+        {
+            Some(PremarketSeriesEscrowTransitionV1::Refund)
+        }
+        (OperationV1::CloseVault, CompartmentV1::SeriesEscrow, CompartmentV1::None, 4, 5, 1) => {
+            Some(PremarketSeriesEscrowTransitionV1::CloseVault)
+        }
+        (OperationV1::CloseReplay, CompartmentV1::None, CompartmentV1::None, 5, 6, 2) => {
+            Some(PremarketSeriesEscrowTransitionV1::CloseReplay)
+        }
+        _ => None,
+    }
+}
+
 impl CustodyRequestV1 {
     /// Hostile-decode one exact generated request.
     pub fn decode(input: &[u8]) -> Result<Self> {
@@ -1420,6 +1499,158 @@ mod tests {
         request.expected_revision = 1;
         request.resulting_revision = 2;
         request
+    }
+
+    fn premarket_series_request(transition: PremarketSeriesEscrowTransitionV1) -> CustodyRequestV1 {
+        let mut request = initialize();
+        request.context = id(4);
+        request.semantic.candidate = id(6);
+        request.semantic.order = request.context;
+        request.semantic.order_nonce = 7;
+        request.semantic.generation = 12;
+        request.semantic.page_index = 0;
+        request.semantic.execution_index = 7;
+        request.semantic.transfer_index = 0;
+        match transition {
+            PremarketSeriesEscrowTransitionV1::InitializeReplay => {}
+            PremarketSeriesEscrowTransitionV1::OpenVault => {
+                request.operation = OperationV1::OpenVault;
+                request.destination_compartment = CompartmentV1::SeriesEscrow;
+                request.destination = id(30);
+                request.destination_vault_context = request.context;
+                request.mint = id(31);
+                request.token_program = id(32);
+                request.expected_revision = 1;
+                request.resulting_revision = 2;
+                request.semantic.transfer_index = 1;
+            }
+            PremarketSeriesEscrowTransitionV1::Lock => {
+                request.operation = OperationV1::Transfer;
+                request.source_compartment = CompartmentV1::External;
+                request.destination_compartment = CompartmentV1::SeriesEscrow;
+                request.semantic.source_owner = id(33);
+                request.source = id(34);
+                request.destination = id(30);
+                request.destination_vault_context = request.context;
+                request.mint = id(31);
+                request.token_program = id(32);
+                request.payer = [0; 32];
+                request.rent_refund = [0; 32];
+                request.expected_revision = 2;
+                request.resulting_revision = 3;
+                request.amount = 41;
+                request.rent_lamports = 0;
+                request.semantic.transfer_index = 2;
+            }
+            PremarketSeriesEscrowTransitionV1::Refund => {
+                request.operation = OperationV1::Transfer;
+                request.source_compartment = CompartmentV1::SeriesEscrow;
+                request.destination_compartment = CompartmentV1::External;
+                request.semantic.destination_owner = id(35);
+                request.source = id(30);
+                request.destination = id(36);
+                request.source_vault_context = request.context;
+                request.mint = id(31);
+                request.token_program = id(32);
+                request.payer = [0; 32];
+                request.rent_refund = [0; 32];
+                request.expected_revision = 3;
+                request.resulting_revision = 4;
+                request.amount = 41;
+                request.rent_lamports = 0;
+            }
+            PremarketSeriesEscrowTransitionV1::CloseVault => {
+                request.operation = OperationV1::CloseVault;
+                request.source_compartment = CompartmentV1::SeriesEscrow;
+                request.source = id(30);
+                request.source_vault_context = request.context;
+                request.mint = id(31);
+                request.token_program = id(32);
+                request.payer = [0; 32];
+                request.expected_revision = 4;
+                request.resulting_revision = 5;
+                request.semantic.transfer_index = 1;
+            }
+            PremarketSeriesEscrowTransitionV1::CloseReplay => {
+                request.operation = OperationV1::CloseReplay;
+                request.payer = [0; 32];
+                request.expected_revision = 5;
+                request.resulting_revision = 6;
+                request.semantic.transfer_index = 2;
+            }
+        }
+        request.validate().expect("canonical SeriesEscrow request");
+        request
+    }
+
+    #[test]
+    fn six_exact_premarket_series_escrow_edges_classify() {
+        for transition in [
+            PremarketSeriesEscrowTransitionV1::InitializeReplay,
+            PremarketSeriesEscrowTransitionV1::OpenVault,
+            PremarketSeriesEscrowTransitionV1::Lock,
+            PremarketSeriesEscrowTransitionV1::Refund,
+            PremarketSeriesEscrowTransitionV1::CloseVault,
+            PremarketSeriesEscrowTransitionV1::CloseReplay,
+        ] {
+            assert_eq!(
+                classify_premarket_series_escrow_v1(premarket_series_request(transition)),
+                Some(transition)
+            );
+        }
+    }
+
+    #[test]
+    fn premarket_series_common_scalar_and_authority_joins_are_all_required() {
+        let exact = premarket_series_request(PremarketSeriesEscrowTransitionV1::InitializeReplay);
+        let mut wrong_role = exact;
+        wrong_role.caller_role = CallerRoleV1::Core;
+        let mut wrong_release = exact;
+        wrong_release.release_set = [0; 32];
+        let mut missing_candidate = exact;
+        missing_candidate.semantic.candidate = [0; 32];
+        let mut wrong_order = exact;
+        wrong_order.semantic.order = id(90);
+        let mut wrong_nonce = exact;
+        wrong_nonce.semantic.order_nonce = wrong_nonce.semantic.order_nonce.saturating_add(1);
+        let mut zero_generation = exact;
+        zero_generation.semantic.generation = 0;
+        let mut wrong_page = exact;
+        wrong_page.semantic.page_index = 1;
+        let mut wrong_revision = exact;
+        wrong_revision.expected_revision = 1;
+        wrong_revision.resulting_revision = 2;
+        let mut wrong_index = exact;
+        wrong_index.semantic.transfer_index = 1;
+        for hostile in [
+            wrong_role,
+            wrong_release,
+            missing_candidate,
+            wrong_order,
+            wrong_nonce,
+            zero_generation,
+            wrong_page,
+            wrong_revision,
+            wrong_index,
+        ] {
+            assert_eq!(classify_premarket_series_escrow_v1(hostile), None);
+        }
+    }
+
+    #[test]
+    fn inexact_series_compartments_and_vault_contexts_do_not_classify() {
+        let mut open = premarket_series_request(PremarketSeriesEscrowTransitionV1::OpenVault);
+        open.destination_compartment = CompartmentV1::Settlement;
+        let mut lock = premarket_series_request(PremarketSeriesEscrowTransitionV1::Lock);
+        lock.destination_vault_context = id(91);
+        let mut refund = premarket_series_request(PremarketSeriesEscrowTransitionV1::Refund);
+        refund.source_vault_context = id(92);
+        let mut close = premarket_series_request(PremarketSeriesEscrowTransitionV1::CloseVault);
+        close.source_compartment = CompartmentV1::Settlement;
+        let ordinary = transfer();
+        for hostile in [open, lock, refund, close, ordinary] {
+            assert_eq!(classify_premarket_series_escrow_v1(hostile), None);
+        }
     }
 
     #[test]

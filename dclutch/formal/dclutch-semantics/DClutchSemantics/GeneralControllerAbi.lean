@@ -223,7 +223,7 @@ selector is a protocol fact before it is a Rust one. -/
 inductive Action where
   | consider | freeze | initializeSettlement | collect | materialize | distribute | close
   | openBatch | placeOrder | cancelOrder | closeBatch
-  | submitCandidate | verifyCandidateRow | releaseOrder
+  | submitCandidate | verifyCandidateRow | releaseOrder | closeCandidate
   deriving DecidableEq, Repr
 
 def Action.tag : Action → UInt8
@@ -231,13 +231,15 @@ def Action.tag : Action → UInt8
   | .collect => 3 | .materialize => 4 | .distribute => 5 | .close => 6
   | .openBatch => 7 | .placeOrder => 8 | .cancelOrder => 9 | .closeBatch => 10
   | .submitCandidate => 11 | .verifyCandidateRow => 12 | .releaseOrder => 13
+  | .closeCandidate => 14
 
 def actionOfTag : UInt8 → Option Action
   | 0 => some .consider | 1 => some .freeze | 2 => some .initializeSettlement
   | 3 => some .collect | 4 => some .materialize | 5 => some .distribute
   | 6 => some .close | 7 => some .openBatch | 8 => some .placeOrder
   | 9 => some .cancelOrder | 10 => some .closeBatch | 11 => some .submitCandidate
-  | 12 => some .verifyCandidateRow | 13 => some .releaseOrder | _ => none
+  | 12 => some .verifyCandidateRow | 13 => some .releaseOrder
+  | 14 => some .closeCandidate | _ => none
 
 /-- The tag table is injective and `actionOfTag` inverts it exactly. A selector
 that decoded two actions, or an action no selector could name, would put two

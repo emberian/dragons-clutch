@@ -29,6 +29,12 @@ pub const GENERIC_FOUNDING_ACK_BYTES_V1: usize = 248;
 pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = 26;
 /// Fixed Core accounts after the exact ordered FundingState span.
 pub const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
+/// Extended Core suffix count for a ProductBasisV3 that names `DCLTPGT1`.
+///
+/// The certificate raw/staging pair is appended after the complete legacy
+/// suffix. Every categorical coordinate and the request wire remain unchanged.
+pub const GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2: usize =
+    GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 + 2;
 /// Exact Core final-Open account count.
 pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 21;
 /// Domain for the exact ordered generic FundingState account list.

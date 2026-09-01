@@ -28,12 +28,13 @@ use dclutch_account_profile_contract::{
         },
     },
     v2::{
-        AccountPrestateV2, AccountProfileV2, TrustedEnvironmentV2,
+        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
+        TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
         encode::{
             AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
             AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
             AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-            ScalarCoordinateV2, encode_account_profile_with_lifecycle_v2_atomic,
+            ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
         },
     },
 };
@@ -77,8 +78,16 @@ use super::v3_operator::{
     DEALER_MULTI_LP_REQUEST_VERSION_V3,
 };
 
+#[cfg(not(target_os = "solana"))]
+use dclutch_product_runtime_v2::PORTFOLIO_COEFFICIENT_COUNT_OFFSET;
+
+#[cfg(not(target_os = "solana"))]
+use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+
 /// Common Hot-injected account count: root/config/Product/portfolio/basis.
 pub const DEALER_LP_INJECTED_ACCOUNTS_V3: u16 = 5;
+/// Hot-authenticated linked-basis record coordinate.
+pub const DEALER_LP_LINKED_BASIS_ACCOUNT_V3: u16 = 4;
 /// Canonical obligation account coordinate.
 pub const DEALER_LP_OBLIGATION_ACCOUNT_V3: u16 = 5;
 /// Lifecycle-owned LP state/vacancy coordinate.
@@ -138,8 +147,10 @@ pub const LP_CREATED_SCALAR_V3: u16 = 16;
 pub const LP_CANONICAL_BUMP_SCALAR_V3: u16 = 17;
 /// Lifecycle-owned current historical rent principal.
 pub const LP_LIFECYCLE_RENT_PRINCIPAL_SCALAR_V3: u16 = 18;
+/// Authenticated Product outcome count projected from its finalized Portfolio.
+pub const LP_PRODUCT_OUTCOME_COUNT_SCALAR_V3: u16 = 19;
 /// Exact common scalar bank width.
-pub const DEALER_LP_SCALAR_COUNT_V3: u16 = 19;
+pub const DEALER_LP_SCALAR_COUNT_V3: u16 = 20;
 
 /// Common Hot parent request digest.
 pub const LP_PARENT_REQUEST_DIGEST_IDENTITY_V3: u16 = 0;
@@ -221,7 +232,7 @@ pub const fn dealer_lp_account_count_v3(action: MultiLpRequestActionV3) -> u16 {
     }
 }
 
-/// Encode one exact Profile6 LP lifecycle account projection.
+/// Encode one exact Profile13 LP lifecycle account projection.
 #[cfg(not(target_os = "solana"))]
 pub fn encode_dealer_lp_account_profile_v3(
     input: DealerLpAccountProfileInputV3<'_>,
@@ -247,7 +258,9 @@ pub fn encode_dealer_lp_account_profile_v3(
             DEALER_LP_CLOSE_SYSTEM_ACCOUNT_V3,
         ),
     };
-    if input.logical_data_lengths.get(usize::from(rent_credit)) != Some(&48)
+    let rent_credit_bytes = u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        .map_err(|_| DealerLpArtifactErrorV3::Geometry)?;
+    if input.logical_data_lengths.get(usize::from(rent_credit)) != Some(&rent_credit_bytes)
         || input.logical_data_lengths.get(usize::from(system)) != Some(&0)
         || payer.is_some_and(|coordinate| {
             input.logical_data_lengths.get(usize::from(coordinate)) != Some(&0)
@@ -261,6 +274,7 @@ pub fn encode_dealer_lp_account_profile_v3(
             let payer_coordinate = payer == Some(coordinate);
             let credit = coordinate == rent_credit;
             let executable = coordinate == system;
+            let linked_basis = coordinate == DEALER_LP_LINKED_BASIS_ACCOUNT_V3;
             Ok(AccountRuleWithPrestateInputV2 {
                 rule: AccountRuleInputV2 {
                     privileges: AccountPrivilegesV2::new(
@@ -283,6 +297,20 @@ pub fn encode_dealer_lp_account_profile_v3(
                 },
                 prestate: if state {
                     AccountPrestateV2::LifecycleBound
+                } else if executable {
+                    // A native program account carries a runtime-owned body.
+                    // Dealer consumes only the canonical System identity and
+                    // executable privilege, so claiming an exact zero-byte
+                    // body would describe a hand-synthesized fiction rather
+                    // than the account visible to a real validator.
+                    AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+                } else if linked_basis {
+                    // Shared Hot authenticates the selected linked-basis
+                    // record before account projection and marks this one
+                    // coordinate accordingly. Consume that adapter fact while
+                    // retaining the finalized corpus width as a checked
+                    // minimum; no local data or effect authority is granted.
+                    AccountPrestateV2::AdapterAuthenticatedVariableData
                 } else {
                     AccountPrestateV2::Exact
                 },
@@ -290,6 +318,16 @@ pub fn encode_dealer_lp_account_profile_v3(
         })
         .collect::<Result<Vec<_>, DealerLpArtifactErrorV3>>()?;
     let mut operations = vec![
+        // Fixed-topology LP actions have no outcome-indexed accounts, but
+        // their admitted execution context still binds the independently
+        // authenticated Product width.  Project that fact from the finalized
+        // Portfolio coordinate instead of inventing a dynamic account tail.
+        AccountOperationInputV2::ProjectTailCountU32 {
+            account: AccountCoordinateV2::fixed(3),
+            destination: ScalarCoordinateV2::common(LP_PRODUCT_OUTCOME_COUNT_SCALAR_V3),
+            data_offset: u32::try_from(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)
+                .map_err(|_| DealerLpArtifactErrorV3::Geometry)?,
+        },
         AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(DEALER_LP_OBLIGATION_ACCOUNT_V3),
             destination: IdentityCoordinateV2::common(LP_OBSERVED_OBLIGATION_IDENTITY_V3),
@@ -344,19 +382,24 @@ pub fn encode_dealer_lp_account_profile_v3(
             expected: IdentityCoordinateV2::common(LP_SYSTEM_OWNER_IDENTITY_V3),
         });
     }
-    let bytes = dclutch_account_profile_contract::v2::HEADER_BYTES
+    // Profile13's zero-span form is the canonical fixed topology that admits
+    // lifecycle-bound state and a readonly opaque native-program body in one
+    // semantic owner. No dynamic account coordinates are introduced here.
+    let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
         + usize::from(count) * dclutch_account_profile_contract::v2::RULE_BYTES
         + operations.len() * dclutch_account_profile_contract::v2::OPERATION_BYTES;
     let mut scratch = vec![0; bytes];
     let mut output = vec![0; bytes];
-    encode_account_profile_with_lifecycle_v2_atomic(
+    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
         TrustedEnvironmentV2::CurrentSlot {
             destination: LP_CURRENT_SLOT_SCALAR_V3,
         },
+        TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
+        &[],
         &rules,
         &[],
         &operations,
-        &[],
         RegisterGeometryV2 {
             common_scalars: DEALER_LP_SCALAR_COUNT_V3,
             item_scalar_stride: 0,
@@ -830,9 +873,13 @@ pub fn encode_dealer_lp_effect_v3(
 #[cfg(all(test, not(target_os = "solana")))]
 mod tests {
     use super::*;
+    use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
 
     fn lengths(action: MultiLpRequestActionV3) -> Vec<u32> {
         let mut output = vec![0; usize::from(dealer_lp_account_count_v3(action))];
+        *output
+            .get_mut(usize::from(DEALER_LP_LINKED_BASIS_ACCOUNT_V3))
+            .expect("linked-basis account slot exists") = 64;
         *output
             .get_mut(usize::from(DEALER_LP_OBLIGATION_ACCOUNT_V3))
             .expect("obligation account slot exists") = 208;
@@ -845,7 +892,8 @@ mod tests {
         };
         *output
             .get_mut(usize::from(credit))
-            .expect("rent credit account slot exists") = 48;
+            .expect("rent credit account slot exists") =
+            u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("credit width");
         output
     }
 
@@ -870,6 +918,42 @@ mod tests {
             assert_eq!(
                 profile.trusted_current_slot_scalar(),
                 Some(LP_CURRENT_SLOT_SCALAR_V3)
+            );
+            assert_eq!(
+                profile
+                    .tail_count_projection()
+                    .expect("canonical tail-count projection")
+                    .map(|projection| projection.register()),
+                Some(LP_PRODUCT_OUTCOME_COUNT_SCALAR_V3),
+                "fixed topology still authenticates its Product-width context",
+            );
+            let system = match action {
+                MultiLpRequestActionV3::Open => DEALER_LP_OPEN_SYSTEM_ACCOUNT_V3,
+                MultiLpRequestActionV3::Close => DEALER_LP_CLOSE_SYSTEM_ACCOUNT_V3,
+            };
+            assert_eq!(
+                profile
+                    .physical_account_geometry_with_dynamic_spans(0, &[], usize::from(system),)
+                    .expect("System Program geometry")
+                    .data(),
+                PhysicalAccountDataGeometryV2::Opaque,
+                "native System Program data is runtime-owned, not dataless",
+            );
+            assert_eq!(
+                profile
+                    .physical_account_geometry_with_dynamic_spans(
+                        0,
+                        &[],
+                        usize::from(DEALER_LP_LINKED_BASIS_ACCOUNT_V3),
+                    )
+                    .expect("linked-basis geometry")
+                    .data(),
+                PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable {
+                    minimum_bytes: usize::try_from(
+                        lengths[usize::from(DEALER_LP_LINKED_BASIS_ACCOUNT_V3)],
+                    )
+                    .expect("linked-basis width"),
+                },
             );
         }
         let open = policy
@@ -901,6 +985,31 @@ mod tests {
             Err(DealerLpArtifactErrorV3::Geometry)
         );
         assert_eq!(output, before);
+
+        let mut invented_credit = lengths(MultiLpRequestActionV3::Open);
+        *invented_credit
+            .get_mut(usize::from(DEALER_LP_OPEN_RENT_CREDIT_ACCOUNT_V3))
+            .expect("credit coordinate") = 48;
+        assert_eq!(
+            encode_dealer_lp_account_profile_v3(DealerLpAccountProfileInputV3 {
+                action: MultiLpRequestActionV3::Open,
+                logical_data_lengths: &invented_credit,
+            }),
+            Err(DealerLpArtifactErrorV3::Geometry)
+        );
+
+        let mut invented_system_width = lengths(MultiLpRequestActionV3::Open);
+        *invented_system_width
+            .get_mut(usize::from(DEALER_LP_OPEN_SYSTEM_ACCOUNT_V3))
+            .expect("System coordinate") = 21;
+        assert_eq!(
+            encode_dealer_lp_account_profile_v3(DealerLpAccountProfileInputV3 {
+                action: MultiLpRequestActionV3::Open,
+                logical_data_lengths: &invented_system_width,
+            }),
+            Err(DealerLpArtifactErrorV3::Geometry),
+            "opaque data has no caller-declared width",
+        );
     }
 
     #[test]

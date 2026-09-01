@@ -54,6 +54,17 @@ const OP_WRITE_DATA_U32: u8 = 13;
 const OP_WRITE_DATA_U8_AFFINE: u8 = 14;
 const OP_WRITE_DATA_U16_AFFINE: u8 = 15;
 const OP_WRITE_DATA_U32_AFFINE: u8 = 16;
+const OP_WRITE_DATA_U8_IF: u8 = 17;
+const OP_WRITE_DATA_U16_IF: u8 = 18;
+const OP_WRITE_DATA_U32_IF: u8 = 19;
+const OP_WRITE_SCALAR_IF: u8 = 20;
+const OP_WRITE_IDENTITY_IF: u8 = 21;
+const OP_WRITE_SCALAR_AFFINE_IF: u8 = 22;
+const OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF: u8 = 23;
+const OP_WRITE_SCALAR_THIRD_TAIL_AFFINE: u8 = 24;
+const OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE: u8 = 25;
+const OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE: u8 = 26;
+const OP_WRITE_SCALAR_SECOND_TAIL_AFFINE: u8 = 27;
 
 const MODE_ACCOUNT_A_ITEM: u8 = 1 << 0;
 const MODE_ACCOUNT_B_ITEM: u8 = 1 << 1;
@@ -388,6 +399,9 @@ impl BorrowedWitnessV3 {
 /// One fully register- and item-resolved local effect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolvedEffectV3 {
+    /// A scalar-disabled conditional local write. It has no account, range,
+    /// permission, or commit consequence.
+    Noop,
     /// Conserve lamports between two AccountProfile-authorized coordinates.
     TransferLamports {
         /// Expanded source coordinate.
@@ -716,9 +730,10 @@ impl<'a> ProgramV3<'a> {
     /// The opcode alone decides. `Operation::resolve` maps each opcode to
     /// exactly one `ResolvedEffectV3` variant, and `resolved_data_range`
     /// answers `Some` for exactly the `Write*` variants -- so this counts
-    /// precisely the ordinals the runtime-write overlap refusal will record,
-    /// and it costs `fixed_operations + item_operations` template decodes
-    /// rather than one per ordinal.
+    /// precisely the ordinals the runtime-write overlap refusal may record,
+    /// including scalar-conditional writes whose enable is zero in this
+    /// execution, and it costs `fixed_operations + item_operations` template
+    /// decodes rather than one per ordinal.
     ///
     /// A caller sizing that refusal's scratch bank wants this and not
     /// `item_operations * tail_count + fixed_operations`: a program whose
@@ -1232,6 +1247,17 @@ const fn is_data_write(opcode: u8) -> bool {
             | OP_WRITE_DATA_U8_AFFINE
             | OP_WRITE_DATA_U16_AFFINE
             | OP_WRITE_DATA_U32_AFFINE
+            | OP_WRITE_DATA_U8_IF
+            | OP_WRITE_DATA_U16_IF
+            | OP_WRITE_DATA_U32_IF
+            | OP_WRITE_SCALAR_IF
+            | OP_WRITE_IDENTITY_IF
+            | OP_WRITE_SCALAR_AFFINE_IF
+            | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF
+            | OP_WRITE_SCALAR_THIRD_TAIL_AFFINE
+            | OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE
+            | OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE
+            | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE
     )
 }
 
@@ -1243,6 +1269,12 @@ const fn is_affine_data_write(opcode: u8) -> bool {
             | OP_WRITE_DATA_U8_AFFINE
             | OP_WRITE_DATA_U16_AFFINE
             | OP_WRITE_DATA_U32_AFFINE
+            | OP_WRITE_SCALAR_AFFINE_IF
+            | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF
+            | OP_WRITE_SCALAR_THIRD_TAIL_AFFINE
+            | OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE
+            | OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE
+            | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE
     )
 }
 
@@ -1261,13 +1293,44 @@ const fn is_request_write(opcode: u8) -> bool {
     )
 }
 
+const fn is_conditional_data_write(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        OP_WRITE_DATA_U8_IF
+            | OP_WRITE_DATA_U16_IF
+            | OP_WRITE_DATA_U32_IF
+            | OP_WRITE_SCALAR_IF
+            | OP_WRITE_IDENTITY_IF
+            | OP_WRITE_SCALAR_AFFINE_IF
+            | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF
+    )
+}
+
 const fn write_width_of(opcode: u8) -> u32 {
     match opcode {
-        OP_WRITE_REQUEST_U8 | OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => 1,
-        OP_WRITE_REQUEST_U16 | OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => 2,
-        OP_WRITE_REQUEST_U32 | OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => 4,
-        OP_WRITE_SCALAR | OP_WRITE_SCALAR_AFFINE | OP_WRITE_REQUEST_U64 => 8,
-        OP_WRITE_IDENTITY | OP_WRITE_IDENTITY_AFFINE | OP_WRITE_REQUEST_IDENTITY => 32,
+        OP_WRITE_REQUEST_U8 | OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE | OP_WRITE_DATA_U8_IF => 1,
+        OP_WRITE_REQUEST_U16
+        | OP_WRITE_DATA_U16
+        | OP_WRITE_DATA_U16_AFFINE
+        | OP_WRITE_DATA_U16_IF => 2,
+        OP_WRITE_REQUEST_U32
+        | OP_WRITE_DATA_U32
+        | OP_WRITE_DATA_U32_AFFINE
+        | OP_WRITE_DATA_U32_IF => 4,
+        OP_WRITE_SCALAR
+        | OP_WRITE_SCALAR_AFFINE
+        | OP_WRITE_REQUEST_U64
+        | OP_WRITE_SCALAR_IF
+        | OP_WRITE_SCALAR_AFFINE_IF
+        | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF => 8,
+        OP_WRITE_SCALAR_THIRD_TAIL_AFFINE
+        | OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE
+        | OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE
+        | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE => 8,
+        OP_WRITE_IDENTITY
+        | OP_WRITE_IDENTITY_AFFINE
+        | OP_WRITE_REQUEST_IDENTITY
+        | OP_WRITE_IDENTITY_IF => 32,
         _ => 0,
     }
 }
@@ -1506,7 +1569,10 @@ impl Operation {
         }
         let identity = matches!(
             self.opcode,
-            OP_WRITE_IDENTITY | OP_WRITE_REQUEST_IDENTITY | OP_WRITE_IDENTITY_AFFINE
+            OP_WRITE_IDENTITY
+                | OP_WRITE_REQUEST_IDENTITY
+                | OP_WRITE_IDENTITY_AFFINE
+                | OP_WRITE_IDENTITY_IF
         );
         let scalar = matches!(
             self.opcode,
@@ -1519,6 +1585,16 @@ impl Operation {
                 | OP_WRITE_DATA_U8_AFFINE
                 | OP_WRITE_DATA_U16_AFFINE
                 | OP_WRITE_DATA_U32_AFFINE
+                | OP_WRITE_DATA_U8_IF
+                | OP_WRITE_DATA_U16_IF
+                | OP_WRITE_DATA_U32_IF
+                | OP_WRITE_SCALAR_IF
+                | OP_WRITE_SCALAR_AFFINE_IF
+                | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF
+                | OP_WRITE_SCALAR_THIRD_TAIL_AFFINE
+                | OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE
+                | OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE
+                | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE
                 | OP_REQUIRE_LAMPORTS_EQ
                 | OP_WRITE_REQUEST_U8
                 | OP_WRITE_REQUEST_U16
@@ -1540,6 +1616,16 @@ impl Operation {
                 account_b_item,
                 program.fixed_accounts,
                 program.item_account_stride,
+            )?;
+        } else if self.is_conditional_data_write() {
+            if account_b_item {
+                return Err(Error::NonCanonicalOperation);
+            }
+            validate_coordinate(
+                self.account_b,
+                false,
+                program.common_scalars,
+                program.item_scalar_stride,
             )?;
         } else if self.account_b != 0 || account_b_item {
             return Err(Error::NonCanonicalOperation);
@@ -1609,6 +1695,10 @@ impl Operation {
         is_request_write(self.opcode)
     }
 
+    const fn is_conditional_data_write(self) -> bool {
+        is_conditional_data_write(self.opcode)
+    }
+
     const fn write_width(self) -> u32 {
         write_width_of(self.opcode)
     }
@@ -1648,6 +1738,17 @@ impl Operation {
                 | OP_WRITE_DATA_U8_AFFINE
                 | OP_WRITE_DATA_U16_AFFINE
                 | OP_WRITE_DATA_U32_AFFINE
+                | OP_WRITE_DATA_U8_IF
+                | OP_WRITE_DATA_U16_IF
+                | OP_WRITE_DATA_U32_IF
+                | OP_WRITE_SCALAR_IF
+                | OP_WRITE_IDENTITY_IF
+                | OP_WRITE_SCALAR_AFFINE_IF
+                | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF
+                | OP_WRITE_SCALAR_THIRD_TAIL_AFFINE
+                | OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE
+                | OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE
+                | OP_WRITE_SCALAR_SECOND_TAIL_AFFINE
         )
     }
 
@@ -1659,6 +1760,15 @@ impl Operation {
         scalars: &[u64],
         identities: &[[u8; 32]],
     ) -> Result<ResolvedEffectV3> {
+        if self.is_conditional_data_write()
+            && scalars
+                .get(usize::from(self.account_b))
+                .copied()
+                .ok_or(Error::InvalidCoordinate)?
+                == 0
+        {
+            return Ok(ResolvedEffectV3::Noop);
+        }
         let account_a = expanded_index(
             self.account_a,
             self.mode & MODE_ACCOUNT_A_ITEM != 0,
@@ -1704,19 +1814,46 @@ impl Operation {
                 destination: account_b()?,
                 amount: scalar()?,
             }),
-            OP_WRITE_SCALAR => Ok(ResolvedEffectV3::WriteScalar {
+            OP_WRITE_SCALAR | OP_WRITE_SCALAR_IF => Ok(ResolvedEffectV3::WriteScalar {
                 account: account_a,
                 offset: self.data_offset,
                 value: scalar()?,
             }),
-            OP_WRITE_IDENTITY => Ok(ResolvedEffectV3::WriteIdentity {
+            OP_WRITE_IDENTITY | OP_WRITE_IDENTITY_IF => Ok(ResolvedEffectV3::WriteIdentity {
                 account: account_a,
                 offset: self.data_offset,
                 value: identity()?,
             }),
-            OP_WRITE_SCALAR_AFFINE => Ok(ResolvedEffectV3::WriteScalar {
+            OP_WRITE_SCALAR_AFFINE | OP_WRITE_SCALAR_AFFINE_IF => {
+                Ok(ResolvedEffectV3::WriteScalar {
+                    account: account_a,
+                    offset: self.affine_data_offset(item)?,
+                    value: scalar()?,
+                })
+            }
+            OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF => Ok(ResolvedEffectV3::WriteScalar {
                 account: account_a,
-                offset: self.affine_data_offset(item)?,
+                offset: self.second_tail_affine_data_offset(item, tail_count)?,
+                value: scalar()?,
+            }),
+            OP_WRITE_SCALAR_SECOND_TAIL_AFFINE => Ok(ResolvedEffectV3::WriteScalar {
+                account: account_a,
+                offset: self.second_tail_affine_data_offset(item, tail_count)?,
+                value: scalar()?,
+            }),
+            OP_WRITE_SCALAR_THIRD_TAIL_AFFINE => Ok(ResolvedEffectV3::WriteScalar {
+                account: account_a,
+                offset: self.third_tail_affine_data_offset(item, tail_count)?,
+                value: scalar()?,
+            }),
+            OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE => Ok(ResolvedEffectV3::WriteScalar {
+                account: account_a,
+                offset: self.fourth_tail_affine_data_offset(item, tail_count)?,
+                value: scalar()?,
+            }),
+            OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE => Ok(ResolvedEffectV3::WriteScalar {
+                account: account_a,
+                offset: self.fifth_tail_affine_data_offset(item, tail_count)?,
                 value: scalar()?,
             }),
             OP_WRITE_IDENTITY_AFFINE => Ok(ResolvedEffectV3::WriteIdentity {
@@ -1724,33 +1861,39 @@ impl Operation {
                 offset: self.affine_data_offset(item)?,
                 value: identity()?,
             }),
-            OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => Ok(ResolvedEffectV3::WriteU8 {
-                account: account_a,
-                offset: if self.is_affine_data_write() {
-                    self.affine_data_offset(item)?
-                } else {
-                    self.data_offset
-                },
-                value: u8::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
-            }),
-            OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => Ok(ResolvedEffectV3::WriteU16 {
-                account: account_a,
-                offset: if self.is_affine_data_write() {
-                    self.affine_data_offset(item)?
-                } else {
-                    self.data_offset
-                },
-                value: u16::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
-            }),
-            OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => Ok(ResolvedEffectV3::WriteU32 {
-                account: account_a,
-                offset: if self.is_affine_data_write() {
-                    self.affine_data_offset(item)?
-                } else {
-                    self.data_offset
-                },
-                value: u32::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
-            }),
+            OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE | OP_WRITE_DATA_U8_IF => {
+                Ok(ResolvedEffectV3::WriteU8 {
+                    account: account_a,
+                    offset: if self.is_affine_data_write() {
+                        self.affine_data_offset(item)?
+                    } else {
+                        self.data_offset
+                    },
+                    value: u8::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+                })
+            }
+            OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE | OP_WRITE_DATA_U16_IF => {
+                Ok(ResolvedEffectV3::WriteU16 {
+                    account: account_a,
+                    offset: if self.is_affine_data_write() {
+                        self.affine_data_offset(item)?
+                    } else {
+                        self.data_offset
+                    },
+                    value: u16::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+                })
+            }
+            OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE | OP_WRITE_DATA_U32_IF => {
+                Ok(ResolvedEffectV3::WriteU32 {
+                    account: account_a,
+                    offset: if self.is_affine_data_write() {
+                        self.affine_data_offset(item)?
+                    } else {
+                        self.data_offset
+                    },
+                    value: u32::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+                })
+            }
             OP_REQUIRE_LAMPORTS_EQ => Ok(ResolvedEffectV3::RequireLamportsEq {
                 account: account_a,
                 value: scalar()?,
@@ -1795,6 +1938,69 @@ impl Operation {
     fn affine_data_offset(self, item: Option<u32>) -> Result<u32> {
         let item = item.ok_or(Error::InvalidCoordinate)?;
         let offset = item
+            .checked_mul(self.extra)
+            .and_then(|relative| self.data_offset.checked_add(relative))
+            .ok_or(Error::ArithmeticOverflow)?;
+        offset
+            .checked_add(self.write_width())
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(offset)
+    }
+
+    fn second_tail_affine_data_offset(self, item: Option<u32>, tail_count: u32) -> Result<u32> {
+        let item = item.ok_or(Error::InvalidCoordinate)?;
+        let cell = tail_count
+            .checked_add(item)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let offset = cell
+            .checked_mul(self.extra)
+            .and_then(|relative| self.data_offset.checked_add(relative))
+            .ok_or(Error::ArithmeticOverflow)?;
+        offset
+            .checked_add(self.write_width())
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(offset)
+    }
+
+    fn third_tail_affine_data_offset(self, item: Option<u32>, tail_count: u32) -> Result<u32> {
+        let item = item.ok_or(Error::InvalidCoordinate)?;
+        let cell = tail_count
+            .checked_mul(2)
+            .and_then(|base| base.checked_add(item))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let offset = cell
+            .checked_mul(self.extra)
+            .and_then(|relative| self.data_offset.checked_add(relative))
+            .ok_or(Error::ArithmeticOverflow)?;
+        offset
+            .checked_add(self.write_width())
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(offset)
+    }
+
+    fn fourth_tail_affine_data_offset(self, item: Option<u32>, tail_count: u32) -> Result<u32> {
+        let item = item.ok_or(Error::InvalidCoordinate)?;
+        let cell = tail_count
+            .checked_mul(3)
+            .and_then(|base| base.checked_add(item))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let offset = cell
+            .checked_mul(self.extra)
+            .and_then(|relative| self.data_offset.checked_add(relative))
+            .ok_or(Error::ArithmeticOverflow)?;
+        offset
+            .checked_add(self.write_width())
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(offset)
+    }
+
+    fn fifth_tail_affine_data_offset(self, item: Option<u32>, tail_count: u32) -> Result<u32> {
+        let item = item.ok_or(Error::InvalidCoordinate)?;
+        let cell = tail_count
+            .checked_mul(4)
+            .and_then(|base| base.checked_add(item))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let offset = cell
             .checked_mul(self.extra)
             .and_then(|relative| self.data_offset.checked_add(relative))
             .ok_or(Error::ArithmeticOverflow)?;
@@ -1991,6 +2197,7 @@ pub(super) fn project_effect(
     projection: &mut ProjectionV3<'_>,
 ) -> Result<()> {
     match effect {
+        ResolvedEffectV3::Noop => Ok(()),
         ResolvedEffectV3::TransferLamports {
             source,
             destination,
@@ -2593,7 +2800,7 @@ mod tests {
     fn every_opcode_agrees_on_whether_it_writes_account_data() {
         let bytes = canonical();
         let program = ProgramV3::decode(&bytes).expect("canonical program");
-        let scalars = [0_u64; 5];
+        let scalars = [1_u64, 0, 0, 0, 0];
         let identities = [[0_u8; 32]; 3];
         let aliases = core::array::from_fn::<_, 8, _>(|index| index);
         let mut resolvable = 0_usize;
@@ -2629,7 +2836,7 @@ mod tests {
         // Every declared opcode resolves under this fixture, so the agreement
         // above is over the whole opcode set and not over an accidental
         // handful.
-        assert_eq!(resolvable, 17);
+        assert_eq!(resolvable, 28);
     }
 
     #[test]
@@ -3250,6 +3457,69 @@ mod tests {
             Err(Error::DataOutOfBounds)
         );
         assert_eq!(output_lamports, before_output);
+    }
+
+    #[test]
+    fn second_tail_affine_checks_tail_plus_item_and_base_before_value_access() {
+        let bytes = canonical();
+        let program = ProgramV3::decode(&bytes).expect("coordinate geometry");
+        let operation = Operation {
+            opcode: OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF,
+            mode: MODE_REGISTER_ITEM,
+            account_a: 0,
+            account_b: 0,
+            register: 0,
+            data_offset: 0,
+            extra: 8,
+            route: 0,
+        };
+        assert_eq!(
+            operation.resolve(program, Some(1), u32::MAX, &[1], &[]),
+            Err(Error::ArithmeticOverflow)
+        );
+        let base_overflow = Operation {
+            data_offset: u32::MAX - 7,
+            ..operation
+        };
+        assert_eq!(
+            base_overflow.resolve(program, Some(0), 1, &[1], &[]),
+            Err(Error::ArithmeticOverflow)
+        );
+        assert_eq!(
+            base_overflow.resolve(program, Some(0), 1, &[0], &[]),
+            Ok(ResolvedEffectV3::Noop),
+            "disabled second tail touched overflowing geometry"
+        );
+
+        for opcode in [
+            OP_WRITE_SCALAR_SECOND_TAIL_AFFINE,
+            OP_WRITE_SCALAR_THIRD_TAIL_AFFINE,
+            OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE,
+            OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE,
+        ] {
+            let later = Operation {
+                opcode,
+                mode: MODE_REGISTER_ITEM,
+                account_a: 0,
+                account_b: 0,
+                register: 0,
+                data_offset: 0,
+                extra: 8,
+                route: 0,
+            };
+            assert_eq!(
+                later.resolve(program, Some(0), u32::MAX, &[1], &[]),
+                Err(Error::ArithmeticOverflow)
+            );
+            assert_eq!(
+                Operation {
+                    data_offset: u32::MAX - 7,
+                    ..later
+                }
+                .resolve(program, Some(0), 1, &[1], &[]),
+                Err(Error::ArithmeticOverflow)
+            );
+        }
     }
 
     fn typed_data_program(operations: &[[u8; OPERATION_BYTES]], accounts: u16) -> Vec<u8> {

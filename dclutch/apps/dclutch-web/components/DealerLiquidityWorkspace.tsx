@@ -15,22 +15,19 @@ import { type DealerEquityTransactionPlanV3, compileDealerEquityTransactionV3 } 
 import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@/lib/infrastructure';
 import { SolanaRpcClient } from '@/lib/rpc';
 import {
+  DIRECT_HOT_FIXED_ROLE_LABELS_V3,
+} from '@dclutch/sdk/directHotRouteManifest';
+import {
+  HOT_FIXED_ACCOUNT_COUNT_V3,
+  HOT_ROOT_ACCOUNT_V3,
+} from '@/lib/generated/directInlineV3';
+import {
   type WalletSignedTransactionV1,
   requestWalletTransactionSignatureV1,
 } from '@/lib/walletHandoff';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
-
-const FIXED_ROLES = Object.freeze([
-  'Market', 'Dealer root', 'Manifest raw', 'Manifest staging', 'ProgramSet raw', 'ProgramSet staging',
-  'Descriptor raw', 'Descriptor staging', 'Config raw', 'Config staging', 'AccountProfile raw', 'AccountProfile staging',
-  'RequestProfile raw', 'RequestProfile staging', 'Transition raw', 'Transition staging', 'Effect raw', 'Effect staging',
-  'Lifecycle raw', 'Lifecycle staging', 'Strategy raw', 'Strategy staging', 'Activation cache', 'Core program',
-  'Core ProgramData', 'Trading program', 'Trading ProgramData', 'Registry program', 'Rent sysvar', 'Instructions sysvar',
-  'Product raw', 'Product staging', 'result domain raw', 'result domain staging', 'portfolio raw', 'portfolio staging',
-  'Product basis raw', 'Product basis staging',
-]);
 
 type RouteState = Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; inspection: DealerEquityRouteInspectionV3 }>;
@@ -81,10 +78,15 @@ function parseManifest(text: string, checkedInfrastructure: Uint8Array | null): 
   });
 }
 
-function scaffold(): string {
+export function dealerRouteManifestScaffoldV3(): string {
   return JSON.stringify({
     payer: '',
-    fixedAccounts: FIXED_ROLES.map((role, index) => ({ role, address: '', isSigner: false, isWritable: index === 1 })),
+    fixedAccounts: DIRECT_HOT_FIXED_ROLE_LABELS_V3.map((role, index) => ({
+      role,
+      address: '',
+      isSigner: false,
+      isWritable: index === HOT_ROOT_ACCOUNT_V3,
+    })),
     strategyAccounts: [], runtimeAccounts: [], lookupTables: [],
   }, null, 2);
 }
@@ -95,7 +97,7 @@ function short(value: string): string {
 
 export default function DealerLiquidityWorkspace() {
   const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
-  const [routeText, setRouteText] = useState(scaffold);
+  const [routeText, setRouteText] = useState(dealerRouteManifestScaffoldV3);
   const [requestText, setRequestText] = useState('');
   const [infrastructureText, setInfrastructureText] = useState('');
   const [routeState, setRouteState] = useState<RouteState>({ kind: 'idle', message: 'No Dealer request or chain state has been read.' });
@@ -161,7 +163,7 @@ export default function DealerLiquidityWorkspace() {
 
     <form className="trade-v3-card route-card" onSubmit={(event) => void inspect(event)}>
       <header><span>01</span><div><h2>Authenticate one canonical Dealer request and route</h2><p>The request must come from the Dealer equity constructor. The route map carries coordinates only: it cannot author Market, LP, obligation, Product width, release, revision, or authority.</p></div></header>
-      <div className="trade-v3-route-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Checked infrastructure manifest · base64, optional — <code>infrastructure.checked</code> from the release pipeline, {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()} bytes</span><textarea value={infrastructureText} onChange={(event) => setInfrastructureText(event.target.value.trim())} /></label><label><span>Dealer equity request · base64 — produced by the operator program (<code>crates/dclutch-operator</code>)</span><textarea required spellCheck={false} value={requestText} onChange={(event) => setRequestText(event.target.value.trim())} /></label><label className="route-json"><span>Route manifest (Hot38 + admitted-AOT + runtime) · JSON — from the same operator run; every address in it is reacquired from the chain before use</span><textarea required spellCheck={false} value={routeText} onChange={(event) => setRouteText(event.target.value)} /></label></div>
+      <div className="trade-v3-route-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Checked infrastructure manifest · base64, optional — <code>infrastructure.checked</code> from the release pipeline, {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()} bytes</span><textarea value={infrastructureText} onChange={(event) => setInfrastructureText(event.target.value.trim())} /></label><label><span>Dealer equity request · base64 — produced by the operator program (<code>crates/dclutch-operator</code>)</span><textarea required spellCheck={false} value={requestText} onChange={(event) => setRequestText(event.target.value.trim())} /></label><label className="route-json"><span>Route manifest ({HOT_FIXED_ACCOUNT_COUNT_V3} fixed roles + admitted AOT + runtime) · JSON — from the same operator run; every address in it is reacquired from the chain before use</span><textarea required spellCheck={false} value={routeText} onChange={(event) => setRouteText(event.target.value)} /></label></div>
       <button disabled={routeState.kind === 'loading'}>{routeState.kind === 'loading' ? 'Reading finalized Dealer route…' : 'Authenticate Dealer route'}</button><p className="direct-status" aria-live="polite">{routeState.message}</p>
       {inspection && <div className="trade-v3-evidence"><article><span>Action / Claims frame</span><strong>{inspection.request.action} · P{inspection.request.signedPositionCount}</strong><small>selector {inspection.request.selector}</small></article><article><span>Outcome width / shares</span><strong>{inspection.request.width} / {inspection.request.shares.toString()}</strong><small>Product + request joined</small></article><article><span>LP owner</span><strong>{short(inspection.request.lpOwner)}</strong><small>canonical LP PDA</small></article><article><span>Descriptor → strategy</span><strong>{inspection.selectedProgramDigest.slice(0, 8)}… → {inspection.strategyDigest.slice(0, 8)}…</strong><small>admitted AOT</small></article></div>}
     </form>

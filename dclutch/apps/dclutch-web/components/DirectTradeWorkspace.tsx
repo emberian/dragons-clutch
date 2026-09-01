@@ -16,20 +16,12 @@ import {
 } from '@/lib/directInlineV3';
 import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@/lib/infrastructure';
 import { SolanaRpcClient } from '@/lib/rpc';
+import { DIRECT_HOT_FIXED_ROLE_LABELS_V3 } from '@dclutch/sdk/directHotRouteManifest';
+import { HOT_ROOT_ACCOUNT_V3 } from '@/lib/generated/directInlineV3';
 
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
-const FIXED_ROLES = Object.freeze([
-  'Market', 'Direct root', 'Manifest raw', 'Manifest staging', 'ProgramSet raw', 'ProgramSet staging',
-  'Descriptor raw', 'Descriptor staging', 'Config raw', 'Config staging', 'AccountProfile raw', 'AccountProfile staging',
-  'RequestProfile raw', 'RequestProfile staging', 'Transition raw', 'Transition staging', 'Effect raw', 'Effect staging',
-  'Lifecycle raw', 'Lifecycle staging', 'Strategy raw', 'Strategy staging', 'Activation cache', 'Core program',
-  'Core ProgramData', 'Trading program', 'Trading ProgramData', 'Registry program', 'Rent sysvar', 'Instructions sysvar',
-  'Product raw', 'Product staging', 'result domain raw', 'result domain staging', 'portfolio raw', 'portfolio staging',
-  'Product basis raw', 'Product basis staging', 'Capability seal',
-]);
-
 type ParticipantFields = Readonly<{
   maker: string;
   collateral: string;
@@ -116,7 +108,12 @@ function parseRouteManifest(text: string, checkedInfrastructure: Uint8Array | nu
 function manifestScaffold(): string {
   return JSON.stringify({
     payer: '',
-    fixedAccounts: FIXED_ROLES.map((role, index) => ({ role, address: '', isSigner: false, isWritable: index === 1 })),
+    fixedAccounts: DIRECT_HOT_FIXED_ROLE_LABELS_V3.map((role, index) => ({
+      role,
+      address: '',
+      isSigner: false,
+      isWritable: index === HOT_ROOT_ACCOUNT_V3,
+    })),
     strategyAccounts: [],
     runtimeAccounts: [],
     lookupTables: [],

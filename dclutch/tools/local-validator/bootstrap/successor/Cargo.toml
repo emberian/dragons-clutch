@@ -32,6 +32,7 @@ dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractio
 dclutch-general-adapter-contract = { path = "../../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-codec = { path = "../../../../crates/dclutch-general-codec" }
 dclutch-general-config-contract = { path = "../../../../crates/dclutch-general-config-contract" }
+dclutch-general-successor-operator = { path = "../../../../crates/dclutch-general-successor-operator" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-market-founding-v1-operator = { path = "../../../../crates/dclutch-market-founding-v1-operator" }
 dclutch-market-retirement-v1-operator = { path = "../../../../crates/dclutch-market-retirement-v1-operator" }
@@ -57,7 +58,9 @@ dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec
 dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-series-v3-kernel = { path = "../../../../crates/dclutch-series-v3-kernel" }
 dclutch-source-contract = { path = "../../../../crates/dclutch-source-contract" }
+dclutch-source-readiness-operator = { path = "../../../../crates/dclutch-source-readiness-operator" }
 dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
+dclutch-trading-sbf = { path = "../../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
 dclutch-versioned-message-operator = { path = "../../../../crates/dclutch-versioned-message-operator" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "=1.0.228", features = ["derive"] }

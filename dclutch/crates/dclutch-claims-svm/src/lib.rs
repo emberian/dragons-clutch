@@ -29,6 +29,7 @@ pub mod product_basis_terminal_v3;
 pub mod protocol_position_v2;
 mod request_layout;
 pub mod retirement_checkpoint_handoff_v1;
+pub mod series_founding_transport_v1;
 pub mod signed_delta_v3;
 pub mod sparse_native_transfer_v1;
 pub mod terminal_settlement_v3;

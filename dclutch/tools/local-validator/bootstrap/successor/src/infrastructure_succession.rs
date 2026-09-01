@@ -291,21 +291,21 @@ fn programdata(program: Pubkey) -> Pubkey {
 /// both programs (conjunct 3 requires V2 to name the same two) and pins both
 /// predecessor records by content. Reading it first is what lets this command
 /// take two ids instead of a dozen addresses.
-fn frame_addresses(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<FrameAddressesV1> {
-    let predecessor_profile = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
-        &arguments.core,
-    )
-    .0;
+fn frame_addresses(
+    rpc: &mut Rpc,
+    core: Pubkey,
+    registry_artifact: [u8; 32],
+    rent_artifact: [u8; 32],
+) -> Result<FrameAddressesV1> {
+    let predecessor_profile =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core).0;
     let account = rpc.account(predecessor_profile)?.ok_or_else(|| {
         Error::new(format!(
             "there is no predecessor profile at {predecessor_profile}. Succession without a \
              predecessor is the V1 initialize route's job, not this one."
         ))
     })?;
-    if account.owner != arguments.core
-        || account.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
-    {
+    if account.owner != core || account.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1 {
         return Err(Error::new(format!(
             "the account at {predecessor_profile} is {} bytes owned by {}, not the \
              {PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1} bytes Core owns",
@@ -331,20 +331,25 @@ fn frame_addresses(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<FrameAddres
         predecessor_profile,
         registry_program,
         rent_program,
-        registry_successor: record_pair(registry_program, &arguments.registry_artifact),
-        rent_successor: record_pair(registry_program, &arguments.rent_artifact),
-        registry_predecessor: (pinned_registry != arguments.registry_artifact)
+        registry_successor: record_pair(registry_program, &registry_artifact),
+        rent_successor: record_pair(registry_program, &rent_artifact),
+        registry_predecessor: (pinned_registry != registry_artifact)
             .then(|| record_pair(registry_program, &pinned_registry)),
-        rent_predecessor: (pinned_rent != arguments.rent_artifact)
+        rent_predecessor: (pinned_rent != rent_artifact)
             .then(|| record_pair(registry_program, &pinned_rent)),
     })
 }
 
 /// Read every account at one finalized observation and project the ceremony.
-fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<CoreInfrastructureSuccessionReportV1> {
-    let addresses = frame_addresses(rpc, arguments)?;
-    let fee_payer = fee_payer_address(arguments)?;
-    let core_programdata = programdata(arguments.core);
+fn plan_for_values_v1(
+    rpc: &mut Rpc,
+    core: Pubkey,
+    registry_artifact: [u8; 32],
+    rent_artifact: [u8; 32],
+    fee_payer: Pubkey,
+) -> Result<CoreInfrastructureSuccessionReportV1> {
+    let addresses = frame_addresses(rpc, core, registry_artifact, rent_artifact)?;
+    let core_programdata = programdata(core);
 
     // The live upgrade authority is read out of Core's ProgramData rather than
     // passed in, because it is the key the route will compare against and a
@@ -370,7 +375,7 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<CoreInfrastructureSucc
         fee_payer,
         Pubkey::find_program_address(
             &[dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
-            &arguments.core,
+            &core,
         )
         .0,
         addresses.predecessor_profile,
@@ -479,11 +484,24 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<CoreInfrastructureSucc
         rent_sysvar,
         system_program: system,
     };
-    build_core_infrastructure_succession_v1(arguments.core, &state).map_err(|error| {
+    build_core_infrastructure_succession_v1(core, &state).map_err(|error| {
         Error::new(format!(
             "the succession was refused before it was built: {error:?}"
         ))
     })
+}
+
+/// Build the exact shipped-builder ceremony frame for the bootstrap campaign.
+/// The campaign supplies only chain-derived successor ids and its distinct fee
+/// payer; all moved-ness and consent still come from the predecessor profile.
+pub(crate) fn plan_for_campaign_v1(
+    rpc: &mut Rpc,
+    core: Pubkey,
+    registry_artifact: [u8; 32],
+    rent_artifact: [u8; 32],
+    fee_payer: Pubkey,
+) -> Result<CoreInfrastructureSuccessionReportV1> {
+    plan_for_values_v1(rpc, core, registry_artifact, rent_artifact, fee_payer)
 }
 
 /// Read a Loader V3 ProgramData account's bound upgrade authority.
@@ -510,7 +528,13 @@ fn fee_payer_address(arguments: &ArgumentsV1) -> Result<Pubkey> {
 
 /// Everything both arms do once an authenticated RPC exists.
 fn succeed_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()> {
-    let report = plan(&mut rpc, arguments)?;
+    let report = plan_for_values_v1(
+        &mut rpc,
+        arguments.core,
+        arguments.registry_artifact,
+        arguments.rent_artifact,
+        fee_payer_address(arguments)?,
+    )?;
     self_report(arguments, &report);
 
     // Simulated before any key is opened, on both arms and in both modes.

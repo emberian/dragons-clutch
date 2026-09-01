@@ -16,13 +16,18 @@ pub mod product_graph_observation_v3;
 pub mod provider_finalized_projection_v3;
 
 use dclutch_capability_contract::{
-    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
-    CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerCloseCustodyV2,
-    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
+    CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerCloseCustodyV2, FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
     Identity, Phase, Readiness, Request, Role,
+};
+use dclutch_product_runtime_v2::ResultDomainV2;
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
@@ -232,6 +237,556 @@ pub struct ResolutionVerifyFundReadyReportV3 {
     pub expected_beneficiary_credit_lamports: u64,
     /// Digest of the exact funded role request.
     pub role_request_digest: [u8; 32],
+}
+
+/// Coordinates derivable from the authenticated Core Market before record reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionFundingBaseCoordinatesV3 {
+    /// Release-set-derived Registry activation cache.
+    pub activation_cache: Pubkey,
+    /// Canonical Core ProgramData account.
+    pub core_programdata: Pubkey,
+    /// Canonical Resolution ProgramData account.
+    pub resolution_programdata: Pubkey,
+    /// Finalized SourceMaterialV3 record.
+    pub source_material: Pubkey,
+    /// Vacant SourceMaterialV3 staging cursor.
+    pub source_material_staging: Pubkey,
+    /// Finalized capability-manifest record.
+    pub capability_manifest: Pubkey,
+    /// Vacant capability-manifest staging cursor.
+    pub capability_manifest_staging: Pubkey,
+    /// Canonical Source state.
+    pub source_state: Pubkey,
+    /// Canonical activation receipt.
+    pub activation_receipt: Pubkey,
+    /// Immutable Market rent beneficiary.
+    pub beneficiary: Pubkey,
+    /// Market generation used in every child derivation.
+    pub generation: u64,
+}
+
+/// Coordinates that require the exact Source graph and capability manifest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionFundingDetailCoordinatesV3 {
+    /// Optional finalized recovery-policy record.
+    pub recovery_policy: Option<Pubkey>,
+    /// Optional vacant recovery-policy staging cursor.
+    pub recovery_policy_staging: Option<Pubkey>,
+    /// Canonical Resolution-owned subset ledger.
+    pub funding_ledger: Pubkey,
+    /// Ordered recovery, exhaustion, and failure entry indices.
+    pub funding_entry_indices: [u16; 3],
+}
+
+/// Terminal-admission coordinates selected before the Product root is read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionAdmitTerminalBaseCoordinatesV3 {
+    /// Source/funding/release coordinates selected by the exact Core Market.
+    pub funding: ResolutionFundingBaseCoordinatesV3,
+    /// Finalized Product root selected immutably by the Market.
+    pub product_raw: Pubkey,
+    /// Canonical vacant Product staging cursor.
+    pub product_staging: Pubkey,
+}
+
+/// Remaining terminal-admission coordinates derived from selected record bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionAdmitTerminalDetailCoordinatesV3 {
+    /// Finalized Product-selected ResultDomain record.
+    pub result_domain_raw: Pubkey,
+    /// Canonical vacant ResultDomain staging cursor.
+    pub result_domain_staging: Pubkey,
+    /// Finalized Product-selected Portfolio record.
+    pub portfolio_raw: Pubkey,
+    /// Canonical vacant Portfolio staging cursor.
+    pub portfolio_staging: Pubkey,
+    /// Canonical terminal certificate selected by the exact Source decision.
+    pub certificate: Pubkey,
+    /// Authenticated runtime-width Product outcome count.
+    pub outcome_count: u32,
+    /// Source-owned terminal replay sequence.
+    pub terminal_sequence: u64,
+}
+
+/// Product child coordinates derivable before either child record is read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionAdmitTerminalProductCoordinatesV3 {
+    /// Finalized Product-selected ResultDomain record.
+    pub result_domain_raw: Pubkey,
+    /// Canonical vacant ResultDomain staging cursor.
+    pub result_domain_staging: Pubkey,
+    /// Finalized Product-selected Portfolio record.
+    pub portfolio_raw: Pubkey,
+    /// Canonical vacant Portfolio staging cursor.
+    pub portfolio_staging: Pubkey,
+}
+
+/// Closure coordinates selected only by one admitted Retiring Market and its
+/// canonical Source state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionCloseFundCoordinatesV1 {
+    /// Core-admitted terminal certificate.
+    pub certificate: Pubkey,
+    /// Canonical vacant Source-closure receipt PDA.
+    pub closure_receipt: Pubkey,
+    /// Source-owned terminal replay sequence preserved by the receipt.
+    pub terminal_sequence: u64,
+    /// Closure replay sequence, exactly terminal sequence plus one.
+    pub closure_sequence: u64,
+}
+
+/// Derive the first Source-readiness account frame from one exact Core Market.
+///
+/// This does not claim the records exist. It removes caller choice from the
+/// addresses the exterior must reacquire before the full builders authenticate
+/// their owners, rent, bytes, hashes, releases, and staging vacancies.
+pub fn derive_resolution_funding_base_coordinates_v3(
+    market_key: Pubkey,
+    market_owner: Pubkey,
+    market_executable: bool,
+    market_bytes: &[u8],
+    core_program: Pubkey,
+    registry_program: Pubkey,
+    resolution_program: Pubkey,
+) -> Result<ResolutionFundingBaseCoordinatesV3, ResolutionCoreOperatorErrorV3> {
+    let market =
+        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    if market_owner != core_program
+        || market_executable
+        || market_key.to_bytes() != market.identity.market_id.to_bytes()
+        || registry_program.to_bytes() != market.identity.registry_program.to_bytes()
+        || resolution_program == core_program
+        || resolution_program == registry_program
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Market);
+    }
+    let (source_material, source_material_staging) = finalized_record_coordinates_v3(
+        registry_program,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        market.identity.resolution_policy.to_bytes(),
+    )?;
+    let (capability_manifest, capability_manifest_staging) = finalized_record_coordinates_v3(
+        registry_program,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        market.identity.capability_manifest.to_bytes(),
+    )?;
+    let generation = market.identity.generation;
+    let activation_cache = Pubkey::find_program_address(
+        &[
+            ACTIVATION_PDA_DOMAIN_V1,
+            &market.identity.selected_release_set.to_bytes(),
+        ],
+        &registry_program,
+    )
+    .0;
+    let core_programdata =
+        Pubkey::find_program_address(&[core_program.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let resolution_programdata =
+        Pubkey::find_program_address(&[resolution_program.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let source_state = Pubkey::find_program_address(
+        &[
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            market_key.as_ref(),
+            &generation.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+    let activation_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            market_key.as_ref(),
+            &generation.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+    Ok(ResolutionFundingBaseCoordinatesV3 {
+        activation_cache,
+        core_programdata,
+        resolution_programdata,
+        source_material,
+        source_material_staging,
+        capability_manifest,
+        capability_manifest_staging,
+        source_state,
+        activation_receipt,
+        beneficiary: Pubkey::new_from_array(market.rent_beneficiary.to_bytes()),
+        generation,
+    })
+}
+
+/// Derive the first terminal-admission frame from one exact Core Market.
+///
+/// Product child addresses and the terminal certificate remain unavailable
+/// until their selected bytes have been reacquired and decoded by
+/// [`derive_resolution_admit_terminal_detail_coordinates_v3`].
+pub fn derive_resolution_admit_terminal_base_coordinates_v3(
+    market_key: Pubkey,
+    market_owner: Pubkey,
+    market_executable: bool,
+    market_bytes: &[u8],
+    core_program: Pubkey,
+    registry_program: Pubkey,
+    resolution_program: Pubkey,
+) -> Result<ResolutionAdmitTerminalBaseCoordinatesV3, ResolutionCoreOperatorErrorV3> {
+    let funding = derive_resolution_funding_base_coordinates_v3(
+        market_key,
+        market_owner,
+        market_executable,
+        market_bytes,
+        core_program,
+        registry_program,
+        resolution_program,
+    )?;
+    let market =
+        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    let (product_raw, product_staging) = finalized_record_coordinates_v3(
+        registry_program,
+        PRODUCT_RECORD_SCHEMA_ID_V2,
+        market.identity.product_record.to_bytes(),
+    )?;
+    Ok(ResolutionAdmitTerminalBaseCoordinatesV3 {
+        funding,
+        product_raw,
+        product_staging,
+    })
+}
+
+/// Derive the Product children and terminal certificate without accepting any
+/// caller-authored selector, outcome count, record identity, or sequence.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_resolution_admit_terminal_detail_coordinates_v3(
+    market_key: Pubkey,
+    market_bytes: &[u8],
+    registry_program: Pubkey,
+    resolution_program: Pubkey,
+    source_state_key: Pubkey,
+    source_state_bytes: &[u8],
+    product_raw_bytes: &[u8],
+    result_domain_raw_bytes: &[u8],
+) -> Result<ResolutionAdmitTerminalDetailCoordinatesV3, ResolutionCoreOperatorErrorV3> {
+    let product_coordinates = derive_resolution_admit_terminal_product_coordinates_v3(
+        market_key,
+        market_bytes,
+        registry_program,
+        product_raw_bytes,
+    )?;
+    let market =
+        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    if market_key.to_bytes() != market.identity.market_id.to_bytes()
+        || registry_program.to_bytes() != market.identity.registry_program.to_bytes()
+        || hash(product_raw_bytes).to_bytes() != market.identity.product_record.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let product = ProductRecordV2::decode(product_raw_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    if hash(result_domain_raw_bytes).to_bytes() != product.result_domain_digest().to_bytes() {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let result_domain = ResultDomainV2::decode(result_domain_raw_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    if result_domain.product_id() != product.product_id() {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let outcome_count = result_domain
+        .outcome_count()
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let source = SourceResolutionStateV2::decode(source_state_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+    let expected_source_state = Pubkey::find_program_address(
+        &[
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            market_key.as_ref(),
+            &market.identity.generation.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+    if source_state_key != expected_source_state
+        || source.market() != market_key.to_bytes()
+        || source.generation() != market.identity.generation
+        || source.material_id().to_bytes() != market.identity.resolution_policy.to_bytes()
+        || source.rent_beneficiary() != market.rent_beneficiary.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Terminal);
+    }
+    let decision = source
+        .decision(outcome_count)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+    let kind_tag = match source.phase() {
+        SourceResolutionPhaseV1::Resolved => 1_u8,
+        SourceResolutionPhaseV1::FailureCommitted => 4_u8,
+        _ => return Err(ResolutionCoreOperatorErrorV3::Terminal),
+    };
+    let terminal_sequence = decision.terminal_sequence();
+    let certificate = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            source_state_key.as_ref(),
+            &[kind_tag],
+            &terminal_sequence.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+    Ok(ResolutionAdmitTerminalDetailCoordinatesV3 {
+        result_domain_raw: product_coordinates.result_domain_raw,
+        result_domain_staging: product_coordinates.result_domain_staging,
+        portfolio_raw: product_coordinates.portfolio_raw,
+        portfolio_staging: product_coordinates.portfolio_staging,
+        certificate,
+        outcome_count,
+        terminal_sequence,
+    })
+}
+
+/// Derive the terminal certificate and closure receipt without accepting any
+/// caller-authored certificate, selector, winner, or replay sequence.
+pub fn derive_resolution_close_fund_coordinates_v1(
+    market_key: Pubkey,
+    market_bytes: &[u8],
+    resolution_program: Pubkey,
+    source_state_key: Pubkey,
+    source_state_bytes: &[u8],
+) -> Result<ResolutionCloseFundCoordinatesV1, ResolutionCoreOperatorErrorV3> {
+    let market =
+        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    let expected_source_state = Pubkey::find_program_address(
+        &[
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            market_key.as_ref(),
+            &market.identity.generation.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+    if market_key.to_bytes() != market.identity.market_id.to_bytes()
+        || market.phase != Phase::Retiring
+        || market.readiness != Readiness::Consumed
+        || source_state_key != expected_source_state
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Market);
+    }
+    let source = SourceResolutionStateV2::decode(source_state_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+    if source.market() != market_key.to_bytes()
+        || source.generation() != market.identity.generation
+        || source.material_id().to_bytes() != market.identity.resolution_policy.to_bytes()
+        || source.rent_beneficiary() != market.rent_beneficiary.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Terminal);
+    }
+    let terminal = source
+        .terminal_projection()
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+    if terminal.selector() != market.terminal_winner {
+        return Err(ResolutionCoreOperatorErrorV3::Terminal);
+    }
+    let terminal_sequence = terminal.terminal_sequence();
+    let closure_sequence = terminal_sequence
+        .checked_add(1)
+        .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
+    let certificate = Pubkey::new_from_array(
+        market
+            .terminal_receipt
+            .ok_or(ResolutionCoreOperatorErrorV3::Terminal)?
+            .to_bytes(),
+    );
+    let closure_receipt = Pubkey::find_program_address(
+        &[
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
+            source_state_key.as_ref(),
+            &closure_sequence.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+    Ok(ResolutionCloseFundCoordinatesV1 {
+        certificate,
+        closure_receipt,
+        terminal_sequence,
+        closure_sequence,
+    })
+}
+
+/// Authenticate one finalized Rent sysvar and return the exact Source closure
+/// receipt reserve used by both receipt prepayment and the close builder.
+pub fn source_closure_receipt_rent_lamports_v1(
+    rent_sysvar: &ObservedAccount,
+) -> Result<u64, ResolutionCoreOperatorErrorV3> {
+    if rent_sysvar.key != sysvar::rent::ID
+        || rent_sysvar.owner != sysvar::ID
+        || rent_sysvar.executable
+        || rent_sysvar.observation.finality != Finality::Finalized
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let rent = decode_rent(rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    Ok(rent.minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3))
+}
+
+/// Derive Product child record coordinates from the exact Market-selected root.
+pub fn derive_resolution_admit_terminal_product_coordinates_v3(
+    market_key: Pubkey,
+    market_bytes: &[u8],
+    registry_program: Pubkey,
+    product_raw_bytes: &[u8],
+) -> Result<ResolutionAdmitTerminalProductCoordinatesV3, ResolutionCoreOperatorErrorV3> {
+    let market =
+        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    if market_key.to_bytes() != market.identity.market_id.to_bytes()
+        || registry_program.to_bytes() != market.identity.registry_program.to_bytes()
+        || hash(product_raw_bytes).to_bytes() != market.identity.product_record.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let product = ProductRecordV2::decode(product_raw_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let (result_domain_raw, result_domain_staging) = finalized_record_coordinates_v3(
+        registry_program,
+        RESULT_DOMAIN_SCHEMA_ID_V2,
+        product.result_domain_digest().to_bytes(),
+    )?;
+    let (portfolio_raw, portfolio_staging) = finalized_record_coordinates_v3(
+        registry_program,
+        PORTFOLIO_SCHEMA_ID_V2,
+        product.portfolio_digest().to_bytes(),
+    )?;
+    Ok(ResolutionAdmitTerminalProductCoordinatesV3 {
+        result_domain_raw,
+        result_domain_staging,
+        portfolio_raw,
+        portfolio_staging,
+    })
+}
+
+/// Derive the recovery pair and Resolution funding ledger from exact record bytes.
+///
+/// The private three-entry chooser remains authoritative: callers cannot pass
+/// a mask or indices, and alternate valid entries, order, or release identities
+/// therefore cannot redirect the subset ledger.
+pub fn derive_resolution_funding_detail_coordinates_v3(
+    market_key: Pubkey,
+    market_bytes: &[u8],
+    registry_program: Pubkey,
+    resolution_program: Pubkey,
+    source_material_bytes: &[u8],
+    capability_manifest_bytes: &[u8],
+    recovery_policy_bytes: Option<&[u8]>,
+) -> Result<ResolutionFundingDetailCoordinatesV3, ResolutionCoreOperatorErrorV3> {
+    let market =
+        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    if market_key.to_bytes() != market.identity.market_id.to_bytes()
+        || registry_program.to_bytes() != market.identity.registry_program.to_bytes()
+        || hash(source_material_bytes).to_bytes() != market.identity.resolution_policy.to_bytes()
+        || hash(capability_manifest_bytes).to_bytes()
+            != market.identity.capability_manifest.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let material = SourceMaterialV3::decode(source_material_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    if material.product_record_digest().to_bytes() != market.identity.product_record.to_bytes() {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let manifest = CapabilityManifestV1::decode(capability_manifest_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    let policy = match (material.recovery_policy(), recovery_policy_bytes) {
+        (None, None) => None,
+        (Some(expected), Some(bytes)) if hash(bytes).to_bytes() == expected.to_bytes() => Some(
+            RecoveryPolicyV2::decode(bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?,
+        ),
+        _ => return Err(ResolutionCoreOperatorErrorV3::Record),
+    };
+    let funding_entry_indices = select_resolution_funding_entries(material, policy, manifest)?;
+    let selected_mask = funding_entry_mask(funding_entry_indices)?;
+    let manifest_id = market.identity.capability_manifest.to_bytes();
+    let generation_le = market.identity.generation.to_le_bytes();
+    let selected_mask_le = selected_mask.to_le_bytes();
+    let funding_ledger = Pubkey::find_program_address(
+        &[
+            CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2,
+            resolution_program.as_ref(),
+            market_key.as_ref(),
+            &generation_le,
+            &manifest_id,
+            &selected_mask_le,
+        ],
+        &resolution_program,
+    )
+    .0;
+    let (recovery_policy, recovery_policy_staging) = match material.recovery_policy() {
+        Some(identity) => {
+            let pair = finalized_record_coordinates_v3(
+                registry_program,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
+                identity.to_bytes(),
+            )?;
+            (Some(pair.0), Some(pair.1))
+        }
+        None => (None, None),
+    };
+    Ok(ResolutionFundingDetailCoordinatesV3 {
+        recovery_policy,
+        recovery_policy_staging,
+        funding_ledger,
+        funding_entry_indices,
+    })
+}
+
+/// Derive the optional recovery-policy record selected by exact Source bytes.
+pub fn derive_resolution_recovery_policy_coordinates_v3(
+    market_bytes: &[u8],
+    registry_program: Pubkey,
+    source_material_bytes: &[u8],
+) -> Result<Option<(Pubkey, Pubkey)>, ResolutionCoreOperatorErrorV3> {
+    let market =
+        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    if registry_program.to_bytes() != market.identity.registry_program.to_bytes()
+        || hash(source_material_bytes).to_bytes() != market.identity.resolution_policy.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    let material = SourceMaterialV3::decode(source_material_bytes)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    if material.product_record_digest().to_bytes() != market.identity.product_record.to_bytes() {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    material
+        .recovery_policy()
+        .map(|identity| {
+            finalized_record_coordinates_v3(
+                registry_program,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
+                identity.to_bytes(),
+            )
+        })
+        .transpose()
+}
+
+fn finalized_record_coordinates_v3(
+    registry_program: Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> Result<(Pubkey, Pubkey), ResolutionCoreOperatorErrorV3> {
+    if schema == [0; 32] || digest == [0; 32] {
+        return Err(ResolutionCoreOperatorErrorV3::Record);
+    }
+    Ok((
+        Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+            &registry_program,
+        )
+        .0,
+        Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+            &registry_program,
+        )
+        .0,
+    ))
 }
 
 /// Same-finalized Pending state for the V7 permissionless Resolution activation.
@@ -3684,6 +4239,11 @@ pub fn validate_resolution_close_fund_report_v3(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+    use dclutch_market_core_codec::{MarketIdentity, StateBumpsV1};
     use solana_program::{rent::Rent, sysvar::SysvarSerialize};
     use solana_sdk_ids::sysvar;
 
@@ -3695,6 +4255,98 @@ mod tests {
         let mut bytes = [0_u8; 32];
         bytes[0] = value;
         dclutch_source_contract::ContentId::new(bytes).expect("nonzero Source content ID")
+    }
+
+    fn capability_id(bytes: [u8; 32]) -> CapabilityContentId {
+        CapabilityContentId::new(bytes).expect("nonzero capability content ID")
+    }
+
+    fn readiness_quote() -> FundingQuoteV1 {
+        let absent = CompartmentFundingV1::not_applicable();
+        FundingQuoteV1::new(
+            FundingAmountsV1::new(absent, absent, absent, absent, absent, absent, absent)
+                .expect("zero readiness funding amounts"),
+            None,
+        )
+        .expect("zero readiness quote")
+    }
+
+    fn readiness_entry(kind: u8, config: [u8; 32]) -> CapabilityEntryV1 {
+        CapabilityEntryV1::new(
+            capability_id([kind; 32]),
+            capability_id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
+            capability_id(config),
+            capability_id([21; 32]),
+            capability_id([22; 32]),
+            capability_id([23; 32]),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            readiness_quote(),
+        )
+        .expect("readiness manifest entry")
+    }
+
+    fn readiness_material() -> Vec<u8> {
+        SourceMaterialV3::explicitly_unbounded(
+            source_id(3),
+            source_id(4),
+            source_id(5),
+            source_id(6),
+            None,
+            source_id(7),
+        )
+        .to_bytes()
+        .to_vec()
+    }
+
+    fn readiness_coordinate_fixture(
+        entries: &[CapabilityEntryV1],
+    ) -> (Pubkey, Pubkey, Pubkey, Pubkey, Vec<u8>, Vec<u8>, Vec<u8>) {
+        let market_key = key(1);
+        let core_program = key(8);
+        let registry_program = key(9);
+        let resolution_program = key(10);
+        let material = readiness_material();
+        let mut manifest = vec![0; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(entries, &mut manifest).expect("canonical manifest");
+        let market = CoreState {
+            phase: Phase::Founding,
+            readiness: Readiness::Prepaid,
+            terminal_winner: 0,
+            identity: MarketIdentity {
+                market_id: Identity::new(market_key.to_bytes()).expect("Market"),
+                realm_id: Identity::new([2; 32]).expect("Realm"),
+                product_record: Identity::new(source_id(3).to_bytes()).expect("Product record"),
+                product_id: Identity::new([4; 32]).expect("Product"),
+                resolution_policy: Identity::new(hash(&material).to_bytes())
+                    .expect("Source material"),
+                capability_manifest: Identity::new(hash(&manifest).to_bytes())
+                    .expect("capability manifest"),
+                selected_release_set: Identity::new([6; 32]).expect("release set"),
+                registry_program: Identity::new(registry_program.to_bytes())
+                    .expect("Registry program"),
+                generation: 7,
+            },
+            outstanding_capabilities: 0,
+            principal_cap_sets: u64::MAX,
+            rent_beneficiary: Identity::new([11; 32]).expect("beneficiary"),
+            terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
+        }
+        .encode()
+        .expect("Market")
+        .to_vec();
+        (
+            market_key,
+            core_program,
+            registry_program,
+            resolution_program,
+            market,
+            material,
+            manifest,
+        )
     }
 
     fn set_account(accounts: &mut [AccountMeta], index: usize, value: AccountMeta) {
@@ -4164,6 +4816,159 @@ mod tests {
     fn funding_entry_set_must_be_exactly_three_distinct_rows() {
         assert!(distinct_funding_entries([3, 1, 2]));
         assert!(!distinct_funding_entries([3, 1, 3]));
+    }
+
+    #[test]
+    fn public_funding_coordinates_bind_market_owner_programs_and_exact_records() {
+        let material_id = hash(&readiness_material()).to_bytes();
+        let entries = [
+            readiness_entry(1, [31; 32]),
+            readiness_entry(2, material_id),
+            readiness_entry(3, [33; 32]),
+        ];
+        let (market_key, core, registry, resolution, market, material, manifest) =
+            readiness_coordinate_fixture(&entries);
+        let base = derive_resolution_funding_base_coordinates_v3(
+            market_key, core, false, &market, core, registry, resolution,
+        )
+        .expect("exact Market frame");
+        assert_ne!(base.source_material, base.source_material_staging);
+        assert_eq!(base.generation, 7);
+        assert_eq!(
+            derive_resolution_funding_detail_coordinates_v3(
+                market_key, &market, registry, resolution, &material, &manifest, None,
+            )
+            .expect("exact record frame")
+            .funding_entry_indices,
+            [0, 2, 1]
+        );
+
+        for hostile in [
+            derive_resolution_funding_base_coordinates_v3(
+                key(99),
+                core,
+                false,
+                &market,
+                core,
+                registry,
+                resolution,
+            ),
+            derive_resolution_funding_base_coordinates_v3(
+                market_key,
+                key(99),
+                false,
+                &market,
+                core,
+                registry,
+                resolution,
+            ),
+            derive_resolution_funding_base_coordinates_v3(
+                market_key, core, true, &market, core, registry, resolution,
+            ),
+            derive_resolution_funding_base_coordinates_v3(
+                market_key,
+                core,
+                false,
+                &market,
+                core,
+                key(98),
+                resolution,
+            ),
+            derive_resolution_funding_base_coordinates_v3(
+                market_key, core, false, &market, core, registry, core,
+            ),
+        ] {
+            assert_eq!(hostile, Err(ResolutionCoreOperatorErrorV3::Market));
+        }
+
+        let mut substituted_material = material.clone();
+        *substituted_material.last_mut().expect("material byte") ^= 1;
+        assert_eq!(
+            derive_resolution_funding_detail_coordinates_v3(
+                market_key,
+                &market,
+                registry,
+                resolution,
+                &substituted_material,
+                &manifest,
+                None,
+            ),
+            Err(ResolutionCoreOperatorErrorV3::Record)
+        );
+        let mut substituted_manifest = manifest.clone();
+        *substituted_manifest.last_mut().expect("manifest byte") ^= 1;
+        assert_eq!(
+            derive_resolution_funding_detail_coordinates_v3(
+                market_key,
+                &market,
+                registry,
+                resolution,
+                &material,
+                &substituted_manifest,
+                None,
+            ),
+            Err(ResolutionCoreOperatorErrorV3::Record)
+        );
+    }
+
+    #[test]
+    fn public_funding_coordinates_refuse_alternate_valid_selection_and_order() {
+        let material_id = hash(&readiness_material()).to_bytes();
+        let alternate = [
+            readiness_entry(1, [31; 32]),
+            readiness_entry(2, [32; 32]),
+            readiness_entry(3, material_id),
+            readiness_entry(4, [34; 32]),
+        ];
+        let (market_key, _, registry, resolution, market, material, manifest) =
+            readiness_coordinate_fixture(&alternate);
+        assert_eq!(
+            derive_resolution_funding_detail_coordinates_v3(
+                market_key, &market, registry, resolution, &material, &manifest, None,
+            ),
+            Err(ResolutionCoreOperatorErrorV3::Funding),
+            "a fourth otherwise valid Resolution row cannot become a caller choice"
+        );
+
+        let exact = [
+            readiness_entry(1, [31; 32]),
+            readiness_entry(2, material_id),
+            readiness_entry(3, [33; 32]),
+        ];
+        let (market_key, _, registry, resolution, market, material, _) =
+            readiness_coordinate_fixture(&exact);
+        let reordered = [exact[1], exact[0], exact[2]];
+        let mut reordered_bytes =
+            vec![0; MANIFEST_HEADER_BYTES + reordered.len() * CAPABILITY_ENTRY_BYTES];
+        assert!(CapabilityManifestV1::encode_into(&reordered, &mut reordered_bytes).is_err());
+        assert_eq!(
+            derive_resolution_funding_detail_coordinates_v3(
+                market_key,
+                &market,
+                registry,
+                resolution,
+                &material,
+                &reordered_bytes,
+                None,
+            ),
+            Err(ResolutionCoreOperatorErrorV3::Record),
+            "the Market-bound canonical manifest cannot be reordered at the wrapper"
+        );
+
+        let duplicated_failure = [
+            readiness_entry(1, [31; 32]),
+            readiness_entry(2, material_id),
+            readiness_entry(3, material_id),
+        ];
+        let (market_key, _, registry, resolution, market, material, manifest) =
+            readiness_coordinate_fixture(&duplicated_failure);
+        assert_eq!(
+            derive_resolution_funding_detail_coordinates_v3(
+                market_key, &market, registry, resolution, &material, &manifest, None,
+            ),
+            Err(ResolutionCoreOperatorErrorV3::Funding),
+            "two failure matches remain ambiguous even when both records are valid"
+        );
     }
 
     #[test]

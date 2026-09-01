@@ -44,7 +44,8 @@ use crate::collection_v1::{
 use crate::runtime_verify::{
     RuntimeConsiderRowBuffersV2, RuntimeConsiderRowViewV2, RuntimeManifestBuffersV2,
     RuntimeVerifyErrorV2, evaluate_runtime_consider_row_with_manifest_v2,
-    runtime_manifest_orders_for_row_v2, runtime_verifier_len_v2,
+    evaluate_runtime_consider_row_with_manifest_workspace_v2, runtime_manifest_orders_for_row_v2,
+    runtime_verifier_len_v2,
 };
 use crate::runtime_width::{CandidateV2, PageV2, VerifiedCandidateV2, verified_candidate_len};
 
@@ -81,9 +82,59 @@ const _: () = assert!(
     "GENERAL_VERIFIER_PDA_DOMAIN_V1 must fit one Solana PDA seed"
 );
 
-const CANDIDATE_MAGIC: [u8; 8] = *b"DCGSUB01";
-const VERSION: u16 = 1;
-const CANDIDATE_PHASE: u8 = 22;
+/// Sole byte-layout authority for one canonical candidate submission body.
+pub struct GeneralCandidateLayoutV1;
+
+impl GeneralCandidateLayoutV1 {
+    /// Canonical body magic.
+    pub const MAGIC: [u8; 8] = *b"DCGSUB01";
+    /// Canonical layout version.
+    pub const VERSION: u16 = 1;
+    /// Candidate local-state phase tag.
+    pub const PHASE: u8 = 22;
+    /// Magic field offset.
+    pub const MAGIC_OFFSET: usize = 0;
+    /// Version field offset.
+    pub const VERSION_OFFSET: usize = 8;
+    /// Phase field offset.
+    pub const PHASE_OFFSET: usize = 10;
+    /// Header reserved-byte offset.
+    pub const HEADER_RESERVED_OFFSET: usize = 11;
+    /// Outcome-count field offset.
+    pub const OUTCOME_COUNT_OFFSET: usize = 12;
+    /// Page-count field offset.
+    pub const PAGE_COUNT_OFFSET: usize = 16;
+    /// Status field offset.
+    pub const STATUS_OFFSET: usize = 20;
+    /// Status padding offset.
+    pub const STATUS_RESERVED_OFFSET: usize = 21;
+    /// Page-revision field offset.
+    pub const PAGE_REVISION_OFFSET: usize = 24;
+    /// Candidate-identity field offset.
+    pub const CANDIDATE_ID_OFFSET: usize = 32;
+    /// Batch-identity field offset.
+    pub const BATCH_ID_OFFSET: usize = 64;
+    /// Solver-identity field offset.
+    pub const SOLVER_ID_OFFSET: usize = 96;
+    /// Verified-certificate digest field offset.
+    pub const VERIFIED_DIGEST_OFFSET: usize = 128;
+    /// Submission-slot field offset.
+    pub const SUBMITTED_SLOT_OFFSET: usize = 160;
+    /// Verified-revision field offset.
+    pub const VERIFIED_REVISION_OFFSET: usize = 168;
+    /// Execution-row count field offset.
+    pub const ROW_COUNT_OFFSET: usize = 176;
+    /// Execution-row padding offset.
+    pub const ROW_RESERVED_OFFSET: usize = 180;
+    /// Per-crank reward-rate field offset.
+    pub const REWARD_RATE_OFFSET: usize = 184;
+    /// Remaining verification-compartment field offset.
+    pub const VERIFICATION_REMAINING_OFFSET: usize = 192;
+    /// Remaining cleanup-compartment field offset.
+    pub const CLEANUP_REMAINING_OFFSET: usize = 200;
+    /// Canonical trailing-reserved range offset.
+    pub const TAIL_RESERVED_OFFSET: usize = 208;
+}
 
 const STATUS_SUBMITTED: u8 = 1;
 const STATUS_VERIFIED: u8 = 2;
@@ -429,38 +480,46 @@ impl GeneralCandidateV1 {
         ))
     }
 
-    /// Hostile-decode one exact 192-byte submission record.
+    /// Hostile-decode one exact 224-byte submission record.
     pub fn decode(bytes: &[u8]) -> GeneralCandidateResultV1<Self> {
         if bytes.len() != GENERAL_CANDIDATE_BYTES_V1 {
             return Err(GeneralCandidateErrorV1::InvalidLength);
         }
-        if bytes.get(..8) != Some(CANDIDATE_MAGIC.as_slice())
-            || read_u16(bytes, 8)? != VERSION
-            || read_u8(bytes, 10)? != CANDIDATE_PHASE
-            || read_u8(bytes, 11)? != 0
+        if bytes.get(..8) != Some(GeneralCandidateLayoutV1::MAGIC.as_slice())
+            || read_u16(bytes, GeneralCandidateLayoutV1::VERSION_OFFSET)?
+                != GeneralCandidateLayoutV1::VERSION
+            || read_u8(bytes, GeneralCandidateLayoutV1::PHASE_OFFSET)?
+                != GeneralCandidateLayoutV1::PHASE
+            || read_u8(bytes, GeneralCandidateLayoutV1::HEADER_RESERVED_OFFSET)? != 0
         {
             return Err(GeneralCandidateErrorV1::InvalidHeader);
         }
-        require_zero(bytes, 21, 3)?;
-        require_zero(bytes, 180, 4)?;
-        require_zero(bytes, 208, 16)?;
+        require_zero(bytes, GeneralCandidateLayoutV1::STATUS_RESERVED_OFFSET, 3)?;
+        require_zero(bytes, GeneralCandidateLayoutV1::ROW_RESERVED_OFFSET, 4)?;
+        require_zero(bytes, GeneralCandidateLayoutV1::TAIL_RESERVED_OFFSET, 16)?;
         let opening = GeneralCandidateOpeningV1 {
-            outcome_count: read_u32(bytes, 12)?,
-            page_count: read_u32(bytes, 16)?,
-            page_revision: read_u64(bytes, 24)?,
-            submitted_slot: read_u64(bytes, 160)?,
-            candidate_id: read_array(bytes, 32)?,
-            batch_id: read_array(bytes, 64)?,
-            solver_id: read_array(bytes, 96)?,
-            row_count: read_u32(bytes, 176)?,
-            reward_rate_lamports: read_u64(bytes, 184)?,
+            outcome_count: read_u32(bytes, GeneralCandidateLayoutV1::OUTCOME_COUNT_OFFSET)?,
+            page_count: read_u32(bytes, GeneralCandidateLayoutV1::PAGE_COUNT_OFFSET)?,
+            page_revision: read_u64(bytes, GeneralCandidateLayoutV1::PAGE_REVISION_OFFSET)?,
+            submitted_slot: read_u64(bytes, GeneralCandidateLayoutV1::SUBMITTED_SLOT_OFFSET)?,
+            candidate_id: read_array(bytes, GeneralCandidateLayoutV1::CANDIDATE_ID_OFFSET)?,
+            batch_id: read_array(bytes, GeneralCandidateLayoutV1::BATCH_ID_OFFSET)?,
+            solver_id: read_array(bytes, GeneralCandidateLayoutV1::SOLVER_ID_OFFSET)?,
+            row_count: read_u32(bytes, GeneralCandidateLayoutV1::ROW_COUNT_OFFSET)?,
+            reward_rate_lamports: read_u64(bytes, GeneralCandidateLayoutV1::REWARD_RATE_OFFSET)?,
         };
         let state = GeneralCandidateStateV1 {
-            status: GeneralCandidateStatusV1::decode(read_u8(bytes, 20)?)?,
-            verified_digest: read_array(bytes, 128)?,
-            verified_revision: read_u64(bytes, 168)?,
-            verification_remaining: read_u64(bytes, 192)?,
-            cleanup_remaining: read_u64(bytes, 200)?,
+            status: GeneralCandidateStatusV1::decode(read_u8(
+                bytes,
+                GeneralCandidateLayoutV1::STATUS_OFFSET,
+            )?)?,
+            verified_digest: read_array(bytes, GeneralCandidateLayoutV1::VERIFIED_DIGEST_OFFSET)?,
+            verified_revision: read_u64(bytes, GeneralCandidateLayoutV1::VERIFIED_REVISION_OFFSET)?,
+            verification_remaining: read_u64(
+                bytes,
+                GeneralCandidateLayoutV1::VERIFICATION_REMAINING_OFFSET,
+            )?,
+            cleanup_remaining: read_u64(bytes, GeneralCandidateLayoutV1::CLEANUP_REMAINING_OFFSET)?,
         };
         let value = Self { opening, state };
         value.validate()?;
@@ -471,37 +530,81 @@ impl GeneralCandidateV1 {
     #[must_use]
     pub fn to_bytes(self) -> [u8; GENERAL_CANDIDATE_BYTES_V1] {
         let mut output = [0_u8; GENERAL_CANDIDATE_BYTES_V1];
-        put(&mut output, 0, &CANDIDATE_MAGIC);
-        put(&mut output, 8, &VERSION.to_le_bytes());
-        output[10] = CANDIDATE_PHASE;
-        put(&mut output, 12, &self.opening.outcome_count.to_le_bytes());
-        put(&mut output, 16, &self.opening.page_count.to_le_bytes());
-        output[20] = self.state.status.tag();
-        put(&mut output, 24, &self.opening.page_revision.to_le_bytes());
-        put(&mut output, 32, &self.opening.candidate_id);
-        put(&mut output, 64, &self.opening.batch_id);
-        put(&mut output, 96, &self.opening.solver_id);
-        put(&mut output, 128, &self.state.verified_digest);
-        put(&mut output, 160, &self.opening.submitted_slot.to_le_bytes());
         put(
             &mut output,
-            168,
+            GeneralCandidateLayoutV1::MAGIC_OFFSET,
+            &GeneralCandidateLayoutV1::MAGIC,
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::VERSION_OFFSET,
+            &GeneralCandidateLayoutV1::VERSION.to_le_bytes(),
+        );
+        output[GeneralCandidateLayoutV1::PHASE_OFFSET] = GeneralCandidateLayoutV1::PHASE;
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::OUTCOME_COUNT_OFFSET,
+            &self.opening.outcome_count.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::PAGE_COUNT_OFFSET,
+            &self.opening.page_count.to_le_bytes(),
+        );
+        output[GeneralCandidateLayoutV1::STATUS_OFFSET] = self.state.status.tag();
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::PAGE_REVISION_OFFSET,
+            &self.opening.page_revision.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::CANDIDATE_ID_OFFSET,
+            &self.opening.candidate_id,
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::BATCH_ID_OFFSET,
+            &self.opening.batch_id,
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::SOLVER_ID_OFFSET,
+            &self.opening.solver_id,
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::VERIFIED_DIGEST_OFFSET,
+            &self.state.verified_digest,
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::SUBMITTED_SLOT_OFFSET,
+            &self.opening.submitted_slot.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::VERIFIED_REVISION_OFFSET,
             &self.state.verified_revision.to_le_bytes(),
         );
-        put(&mut output, 176, &self.opening.row_count.to_le_bytes());
         put(
             &mut output,
-            184,
+            GeneralCandidateLayoutV1::ROW_COUNT_OFFSET,
+            &self.opening.row_count.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralCandidateLayoutV1::REWARD_RATE_OFFSET,
             &self.opening.reward_rate_lamports.to_le_bytes(),
         );
         put(
             &mut output,
-            192,
+            GeneralCandidateLayoutV1::VERIFICATION_REMAINING_OFFSET,
             &self.state.verification_remaining.to_le_bytes(),
         );
         put(
             &mut output,
-            200,
+            GeneralCandidateLayoutV1::CLEANUP_REMAINING_OFFSET,
             &self.state.cleanup_remaining.to_le_bytes(),
         );
         output
@@ -656,9 +759,10 @@ pub struct CandidateVerifyRowViewV1<'a> {
     pub page: &'a [u8],
     /// Immutable order record the next row names.
     pub order: &'a [u8],
-    /// All-zero initial or canonical persisted verifier cursor.
+    /// Empty vacant state, all-zero initial state, or canonical persisted
+    /// verifier cursor.
     pub cursor_before: &'a [u8],
-    /// All-zero certificate destination.
+    /// Empty vacant state or one exact all-zero certificate destination.
     pub verified_before: &'a [u8],
     /// Zero-based optimistic page index.
     pub expected_page_index: u32,
@@ -682,6 +786,15 @@ pub struct CandidateVerifyRowBuffersV1<'a> {
     pub manifest_scratch: &'a mut [u8],
     /// Complete manifest chunk; unchanged on refusal.
     pub manifest_output: &'a mut [u8],
+}
+
+enum CandidateVerifyRowExecutionBuffersV1<'a> {
+    StateLast(CandidateVerifyRowBuffersV1<'a>),
+    Workspace {
+        cursor: &'a mut [u8],
+        verified: &'a mut [u8],
+        manifest: &'a mut [u8],
+    },
 }
 
 /// Accepted summary for one candidate verification step.
@@ -739,6 +852,39 @@ pub fn verify_candidate_row_v1(
     view: CandidateVerifyRowViewV1<'_>,
     buffers: CandidateVerifyRowBuffersV1<'_>,
 ) -> GeneralCandidateResultV1<CandidateVerifyRowSummaryV1> {
+    verify_candidate_row_inner_v1(
+        view,
+        CandidateVerifyRowExecutionBuffersV1::StateLast(buffers),
+    )
+}
+
+/// Verify one candidate row directly in non-authoritative accelerator
+/// workspaces.
+///
+/// The authenticated batch/page/order join and all capitalization rules are
+/// identical to [`verify_candidate_row_v1`]. This form omits the state-last
+/// buffer copies and is only suitable when every workspace is discarded on
+/// refusal before any external effect is published.
+pub fn verify_candidate_row_workspace_v1(
+    view: CandidateVerifyRowViewV1<'_>,
+    cursor_workspace: &mut [u8],
+    verified_workspace: &mut [u8],
+    manifest_workspace: &mut [u8],
+) -> GeneralCandidateResultV1<CandidateVerifyRowSummaryV1> {
+    verify_candidate_row_inner_v1(
+        view,
+        CandidateVerifyRowExecutionBuffersV1::Workspace {
+            cursor: cursor_workspace,
+            verified: verified_workspace,
+            manifest: manifest_workspace,
+        },
+    )
+}
+
+fn verify_candidate_row_inner_v1(
+    view: CandidateVerifyRowViewV1<'_>,
+    buffers: CandidateVerifyRowExecutionBuffersV1<'_>,
+) -> GeneralCandidateResultV1<CandidateVerifyRowSummaryV1> {
     if view.submission.state().status != GeneralCandidateStatusV1::Submitted {
         return Err(GeneralCandidateErrorV1::InvalidPhaseTransition);
     }
@@ -761,30 +907,57 @@ pub fn verify_candidate_row_v1(
     let order = GeneralOrderV1::decode(view.order)?;
     let authenticated_order = authenticate_order_execution_v1(view.batch, order, execution)?;
 
-    let summary = evaluate_runtime_consider_row_with_manifest_v2(
-        RuntimeConsiderRowViewV2 {
-            candidate: view.candidate,
-            page: view.page,
-            cursor_before: view.cursor_before,
-            verified_before: view.verified_before,
-            authenticated_order,
-            expected_page_index: view.expected_page_index,
-            expected_row_index: view.expected_row_index,
-            expected_page_revision: view.submission.opening().page_revision,
-            expected_revision: view.expected_revision,
-            max_orders: view.batch.opening().max_orders,
-        },
-        RuntimeConsiderRowBuffersV2 {
-            cursor_scratch: buffers.cursor_scratch,
-            cursor_output: buffers.cursor_output,
-            verified_scratch: buffers.verified_scratch,
-            verified_output: buffers.verified_output,
-        },
-        RuntimeManifestBuffersV2 {
-            manifest_scratch: buffers.manifest_scratch,
-            manifest_output: buffers.manifest_output,
-        },
-    )?;
+    let runtime_view = RuntimeConsiderRowViewV2 {
+        candidate: view.candidate,
+        page: view.page,
+        cursor_before: view.cursor_before,
+        verified_before: view.verified_before,
+        authenticated_order,
+        expected_page_index: view.expected_page_index,
+        expected_row_index: view.expected_row_index,
+        expected_page_revision: view.submission.opening().page_revision,
+        expected_revision: view.expected_revision,
+        max_orders: view.batch.opening().max_orders,
+    };
+    let (summary, verified_result) = match buffers {
+        CandidateVerifyRowExecutionBuffersV1::StateLast(buffers) => {
+            let CandidateVerifyRowBuffersV1 {
+                cursor_scratch,
+                cursor_output,
+                verified_scratch,
+                verified_output,
+                manifest_scratch,
+                manifest_output,
+            } = buffers;
+            let summary = evaluate_runtime_consider_row_with_manifest_v2(
+                runtime_view,
+                RuntimeConsiderRowBuffersV2 {
+                    cursor_scratch,
+                    cursor_output,
+                    verified_scratch,
+                    verified_output: &mut *verified_output,
+                },
+                RuntimeManifestBuffersV2 {
+                    manifest_scratch,
+                    manifest_output,
+                },
+            )?;
+            (summary, &*verified_output)
+        }
+        CandidateVerifyRowExecutionBuffersV1::Workspace {
+            cursor,
+            verified,
+            manifest,
+        } => {
+            let summary = evaluate_runtime_consider_row_with_manifest_workspace_v2(
+                runtime_view,
+                cursor,
+                verified,
+                manifest,
+            )?;
+            (summary, &*verified)
+        }
+    };
     // The evaluator's own terminal test and ours must agree. They are derived
     // independently -- it from the cursor it just advanced, this module from
     // the page geometry it selected the row out of -- so a disagreement means
@@ -799,6 +972,13 @@ pub fn verify_candidate_row_v1(
     }
     let mut submission = view.submission;
     let reward = submission.draw_verification()?;
+    if summary.complete {
+        // The terminal row is the sole producer of the certificate and the
+        // same transition must make the submission name those exact bytes.
+        // Leaving the submission in `Submitted` here made the result account
+        // physically materializable but forever ineligible for Consider.
+        submission.record_verified(view.batch, verified_result)?;
+    }
     submission.validate_capitalization(
         rows_verified
             .checked_add(1)

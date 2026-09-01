@@ -64,6 +64,7 @@ use crate::hot_candidate_v3::{
     scalar,
 };
 use crate::{
+    candidate_v1::GeneralCandidateLayoutV1,
     collection_v1::{
         GENERAL_ORDER_ROW_BASE_V1, GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
         GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1, GENERAL_ORDER_ROW_STRIDE_V1, GeneralBatchLayoutV1,
@@ -71,10 +72,13 @@ use crate::{
     },
     local_state_v3::GeneralLocalStateLayoutV3,
     runtime_selection::RuntimeSelectionLayoutV2,
-    runtime_width::SettlementCursorLayoutV2,
+    runtime_verify::RuntimeVerifierLayoutV2,
+    runtime_width::{SettlementCursorLayoutV2, VerifiedCandidateLayoutV2},
     state_artifacts_v3::{
+        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
-        general_child_account_start_v3,
+        GENERAL_VERIFY_PAYER_ACCOUNT_V3, GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3,
+        GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3, general_child_account_start_v3,
     },
 };
 
@@ -125,11 +129,7 @@ pub struct GeneralEffectRouteFrameV3 {
 #[must_use]
 pub const fn general_effect_route_count_v3(action: Action) -> u16 {
     match action {
-        // The collection and candidate actions have no authored artifact
-        // triple, so they select no route. Every fallible entry point refuses
-        // them by name first -- see `general_effect_program_bytes_v3` -- so a
-        // zero here can never reach an encoder and be mistaken for a shape.
-        unauthored_actions!() => 0,
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => 0,
         // The root-writing pair moves no Claims Position and no Custody vault:
         // its writes are the root tail and the batch record, both local.
         Action::OpenBatch | Action::CloseBatch => 0,
@@ -327,34 +327,10 @@ pub enum GeneralEffectArtifactErrorV3 {
     UnauthoredAction,
 }
 
-/// The two actions whose artifact quadruple has not been authored.
-///
-/// Their tags are Lean-owned and their `CapabilityProgramSetV2` coordinates are
-/// reserved, because a selector is a protocol fact before it is an artifact.
-/// What does not exist yet is a TransitionVM program, a RequestProfile, an
-/// EffectProgram and an AccountProfile for each. Naming them in one place --
-/// and refusing them by name at every fallible entry point -- is what stops a
-/// release being assembled that claims artifacts nobody wrote.
-///
-/// `OpenBatch` and `CloseBatch` left this list with GEN-SEVEN-2 (the
-/// root-writing pair), and `CancelOrder` and `ReleaseOrder` with GEN-SEVEN-3
-/// (the refund half of the order trio: both flip the fixed mutable window the
-/// order-wire repair created and tear the escrow down through the same
-/// five-route suite). Release admission still joins the seven
-/// settlement bundles alone -- there is no partial-count profile, by ADR-0010
-/// SS4's own argument -- so every GEN-SEVEN action is exercised at the
-/// artifact level until all fourteen exist.
-macro_rules! unauthored_actions {
-    () => {
-        Action::SubmitCandidate | Action::VerifyCandidateRow
-    };
-}
-pub(crate) use unauthored_actions;
-
 /// Whether one action's complete V3 artifact triple has been authored.
 #[must_use]
-pub const fn general_action_artifacts_authored_v3(action: Action) -> bool {
-    !matches!(action, unauthored_actions!())
+pub const fn general_action_artifacts_authored_v3(_action: Action) -> bool {
+    true
 }
 
 /// Refuse one action whose artifact triple has not been authored.
@@ -384,7 +360,9 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 /// Return `(fixed, repeated-item)` instruction counts for one action artifact.
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
-        unauthored_actions!() => (0, 0),
+        Action::SubmitCandidate => (23, 0),
+        Action::VerifyCandidateRow => (53, 7),
+        Action::CloseCandidate => (3, 0),
         Action::OpenBatch => (24, 0),
         Action::CloseBatch => (4, 0),
         Action::PlaceOrder => (96, 13),
@@ -401,7 +379,7 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
 /// Return the exact child-template workspace width for one action artifact.
 pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
     match action {
-        unauthored_actions!() => 0,
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => 0,
         Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
@@ -530,7 +508,7 @@ pub fn general_effect_program_bytes_v3(action: Action) -> Result<usize> {
 
 const fn receipt_dependency_count(action: Action) -> usize {
     match action {
-        unauthored_actions!() => 0,
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => 0,
         Action::InitializeSettlement
         | Action::Close
         | Action::PlaceOrder
@@ -563,7 +541,7 @@ const fn receipt_dependency_count(action: Action) -> usize {
 #[must_use]
 pub const fn general_custody_callee_account_count_v3(action: Action) -> u16 {
     match action {
-        unauthored_actions!() => 0,
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => 0,
         Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement
         | Action::Collect
@@ -593,7 +571,7 @@ pub fn general_custody_callee_coordinate_v3(action: Action) -> Result<Option<u16
 pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
     require_authored_action_v3(action)?;
     let suffix = match action {
-        unauthored_actions!() => return Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => 0,
         Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
             POSITION_ADMIT_ACCOUNTS + CUSTODY_INITIALIZE_ACCOUNTS + CUSTODY_OPEN_ACCOUNTS
@@ -716,7 +694,7 @@ fn build_action<'a>(
     routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
 ) -> Result<usize> {
     match action {
-        unauthored_actions!() => Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => Ok(0),
         Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => Ok(0),
         Action::InitializeSettlement => build_initialize(instructions, fixed, templates, routes),
         // The two compartment bytes are NOT restated here. They come from
@@ -1230,6 +1208,166 @@ fn append_general_state_patches(
     fixed: &mut usize,
     item: &mut usize,
 ) -> Result<()> {
+    if action == Action::CloseCandidate {
+        let candidate = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::transfer_lamports(
+                candidate,
+                AccountCoordinateV3::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+                scalar_common(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
+            ),
+        )?;
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::transfer_lamports(
+                candidate,
+                AccountCoordinateV3::fixed(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3),
+                scalar_common(scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION)?,
+            ),
+        )?;
+        return push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::require_lamports_eq(
+                candidate,
+                scalar_common(scalar::PRIMARY_RENT_PRINCIPAL)?,
+            ),
+        );
+    }
+    if action == Action::VerifyCandidateRow {
+        return append_verify_candidate_patches(instructions, fixed, item);
+    }
+    if action == Action::SubmitCandidate {
+        let candidate = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
+        append_local_state_header(instructions, fixed, candidate, false)?;
+        for (offset, coordinate) in [
+            (
+                GeneralCandidateLayoutV1::MAGIC_OFFSET,
+                scalar::VERIFY_REVISION_OBSERVATION,
+            ),
+            (
+                GeneralCandidateLayoutV1::SUBMITTED_SLOT_OFFSET,
+                scalar::CANDIDATE_SUBMITTED_SLOT,
+            ),
+            (
+                GeneralCandidateLayoutV1::PAGE_REVISION_OFFSET,
+                scalar::CANDIDATE_PAGE_REVISION,
+            ),
+            (
+                GeneralCandidateLayoutV1::REWARD_RATE_OFFSET,
+                scalar::CANDIDATE_REWARD_RATE,
+            ),
+            (
+                GeneralCandidateLayoutV1::VERIFICATION_REMAINING_OFFSET,
+                scalar::CANDIDATE_POST_VERIFICATION_REMAINING,
+            ),
+            (
+                GeneralCandidateLayoutV1::CLEANUP_REMAINING_OFFSET,
+                scalar::CANDIDATE_POST_CLEANUP_REMAINING,
+            ),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u64(
+                    candidate,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u16(
+                candidate,
+                state_body_offset(offset_u32(GeneralCandidateLayoutV1::VERSION_OFFSET)?)?,
+                scalar_common(scalar::ONE)?,
+            ),
+        )?;
+        for (offset, coordinate) in [
+            (
+                GeneralCandidateLayoutV1::PHASE_OFFSET,
+                scalar::VERIFY_POST_REVISION,
+            ),
+            (
+                GeneralCandidateLayoutV1::STATUS_OFFSET,
+                scalar::CANDIDATE_POST_STATUS,
+            ),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u8(
+                    candidate,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        for (offset, coordinate) in [
+            (
+                GeneralCandidateLayoutV1::OUTCOME_COUNT_OFFSET,
+                scalar::OUTCOME_COUNT,
+            ),
+            (
+                GeneralCandidateLayoutV1::PAGE_COUNT_OFFSET,
+                scalar::CANDIDATE_PAGE_COUNT,
+            ),
+            (
+                GeneralCandidateLayoutV1::ROW_COUNT_OFFSET,
+                scalar::CANDIDATE_ROW_COUNT,
+            ),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u32(
+                    candidate,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        for (offset, coordinate) in [
+            (
+                GeneralCandidateLayoutV1::CANDIDATE_ID_OFFSET,
+                identity::CANDIDATE,
+            ),
+            (
+                GeneralCandidateLayoutV1::BATCH_ID_OFFSET,
+                identity::SELECTION_BATCH,
+            ),
+            (GeneralCandidateLayoutV1::SOLVER_ID_OFFSET, identity::OWNER),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_identity(
+                    candidate,
+                    state_body_offset(offset_u32(offset)?)?,
+                    identity_common(coordinate)?,
+                ),
+            )?;
+        }
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::transfer_lamports(
+                AccountCoordinateV3::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+                candidate,
+                scalar_common(scalar::SCRATCH_A)?,
+            ),
+        )?;
+        return push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::require_lamports_eq(candidate, scalar_common(scalar::SCRATCH_B)?),
+        );
+    }
     if matches!(action, Action::OpenBatch | Action::CloseBatch) {
         return append_batch_action_patches(action, instructions, fixed);
     }
@@ -1631,6 +1769,457 @@ fn append_general_state_patches(
             state_body_offset(SettlementCursorLayoutV2::inventory_base())?,
             SettlementCursorLayoutV2::inventory_stride(),
             ScalarCoordinateV3::item(scalar_u16(item_scalar::CURSOR_INVENTORY)?),
+        ),
+    )
+}
+
+/// Persist one authenticated verifier step exactly once.
+///
+/// Candidate and Verifier always advance. The raw VerifiedCandidate result is
+/// a terminal-only state: every one of its possible writes is statically
+/// declared but resolves to `Noop` before touching the vacant result account
+/// when `VERIFY_TERMINAL == 0`.
+fn append_verify_candidate_patches(
+    instructions: &mut [EffectInstructionV3],
+    fixed: &mut usize,
+    item: &mut usize,
+) -> Result<()> {
+    let candidate = AccountCoordinateV3::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3);
+    let verifier = AccountCoordinateV3::fixed(GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3);
+    let result = AccountCoordinateV3::fixed(GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3);
+    let payer = AccountCoordinateV3::fixed(GENERAL_VERIFY_PAYER_ACCOUNT_V3);
+    let terminal = scalar_u16(scalar::VERIFY_TERMINAL)?;
+
+    // The submitted Candidate's complete mutable successor. The solver's
+    // immutable opening remains byte-identical; terminal verification records
+    // the exact certificate digest and revision produced in this same step.
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u8(
+            candidate,
+            state_body_offset(offset_u32(GeneralCandidateLayoutV1::STATUS_OFFSET)?)?,
+            scalar_common(scalar::CANDIDATE_POST_STATUS)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_identity(
+            candidate,
+            state_body_offset(offset_u32(
+                GeneralCandidateLayoutV1::VERIFIED_DIGEST_OFFSET,
+            )?)?,
+            identity_common(identity::BEST_VERIFIED_DIGEST)?,
+        ),
+    )?;
+    for (offset, coordinate) in [
+        (
+            GeneralCandidateLayoutV1::VERIFIED_REVISION_OFFSET,
+            scalar::SELECTION_BEST_VERIFIED_REVISION,
+        ),
+        (
+            GeneralCandidateLayoutV1::VERIFICATION_REMAINING_OFFSET,
+            scalar::CANDIDATE_POST_VERIFICATION_REMAINING,
+        ),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64(
+                candidate,
+                state_body_offset(offset_u32(offset)?)?,
+                scalar_common(coordinate)?,
+            ),
+        )?;
+    }
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::transfer_lamports(candidate, payer, scalar_common(scalar::SCRATCH_A)?),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::require_lamports_eq(candidate, scalar_common(scalar::SCRATCH_B)?),
+    )?;
+
+    // Verifier is a resumable local envelope. Its body is the canonical
+    // RuntimeCandidateVerifierV2 wire, not an adapter-specific projection.
+    append_local_state_header(instructions, fixed, verifier, true)?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            verifier,
+            state_body_offset(RuntimeVerifierLayoutV2::magic())?,
+            scalar_common(scalar::CURSOR_MAGIC)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u16(
+            verifier,
+            state_body_offset(RuntimeVerifierLayoutV2::version())?,
+            scalar_common(scalar::RUNTIME_WIDTH_VERSION)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u8(
+            verifier,
+            state_body_offset(RuntimeVerifierLayoutV2::has_current_order())?,
+            scalar_common(scalar::CUSTODY_ACTIVE)?,
+        ),
+    )?;
+    for (offset, coordinate) in [
+        (
+            RuntimeVerifierLayoutV2::outcome_count(),
+            scalar::OUTCOME_COUNT,
+        ),
+        (
+            RuntimeVerifierLayoutV2::page_count(),
+            scalar::CANDIDATE_PAGE_COUNT,
+        ),
+        (
+            RuntimeVerifierLayoutV2::next_page_index(),
+            scalar::VERIFY_POST_PAGE,
+        ),
+        (
+            RuntimeVerifierLayoutV2::next_row_index(),
+            scalar::VERIFY_POST_ROW,
+        ),
+        (
+            RuntimeVerifierLayoutV2::order_count(),
+            scalar::VERIFY_POST_ORDER_COUNT,
+        ),
+        (
+            RuntimeVerifierLayoutV2::candidate_coordinate(),
+            scalar::SELECTION_BEST_CANDIDATE_COORDINATE,
+        ),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u32(
+                verifier,
+                state_body_offset(offset)?,
+                scalar_common(coordinate)?,
+            ),
+        )?;
+    }
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            verifier,
+            state_body_offset(RuntimeVerifierLayoutV2::revision())?,
+            scalar_common(scalar::VERIFY_POST_REVISION)?,
+        ),
+    )?;
+    for (offset, coordinate) in [
+        (RuntimeVerifierLayoutV2::candidate_id(), identity::CANDIDATE),
+        (
+            RuntimeVerifierLayoutV2::product_id(),
+            identity::SELECTION_PRODUCT,
+        ),
+        (
+            RuntimeVerifierLayoutV2::batch_id(),
+            identity::SELECTION_BATCH,
+        ),
+        (RuntimeVerifierLayoutV2::current_order_id(), identity::ORDER),
+        (RuntimeVerifierLayoutV2::current_owner_id(), identity::OWNER),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_identity(
+                verifier,
+                state_body_offset(offset)?,
+                identity_common(coordinate)?,
+            ),
+        )?;
+    }
+    for (offset, coordinate) in [
+        (
+            RuntimeVerifierLayoutV2::price_scale(),
+            scalar::SELECTION_PRICE_SCALE,
+        ),
+        (
+            RuntimeVerifierLayoutV2::filled_lots(),
+            scalar::SELECTION_BEST_FILLED_LOTS,
+        ),
+        (
+            RuntimeVerifierLayoutV2::quote_debit(),
+            scalar::ORDER_QUOTE_RESERVE,
+        ),
+        (
+            RuntimeVerifierLayoutV2::quote_credit(),
+            scalar::QUOTE_QUANTITY,
+        ),
+        (
+            RuntimeVerifierLayoutV2::current_nonce(),
+            scalar::ORDER_NONCE,
+        ),
+        (
+            RuntimeVerifierLayoutV2::current_max_lots(),
+            scalar::ORDER_MAX_LOTS,
+        ),
+        (
+            RuntimeVerifierLayoutV2::current_max_quote_debit_per_lot(),
+            scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT,
+        ),
+        (
+            RuntimeVerifierLayoutV2::current_lots(),
+            scalar::ORDER_VALID_UNTIL_SLOT,
+        ),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64(
+                verifier,
+                state_body_offset(offset)?,
+                scalar_common(coordinate)?,
+            ),
+        )?;
+    }
+    for (offset, coordinate) in [
+        (
+            RuntimeVerifierLayoutV2::current_source_page_index(),
+            scalar::PAGE_INDEX,
+        ),
+        (
+            RuntimeVerifierLayoutV2::current_source_execution_index(),
+            scalar::EXECUTION_INDEX,
+        ),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u32(
+                verifier,
+                state_body_offset(offset)?,
+                scalar_common(coordinate)?,
+            ),
+        )?;
+    }
+
+    let verifier_tails = state_body_offset(RuntimeVerifierLayoutV2::tails_base())?;
+    let tail_stride = RuntimeVerifierLayoutV2::tail_item_stride();
+    push_item(
+        instructions,
+        item,
+        EffectInstructionV3::write_u64_affine(
+            verifier,
+            verifier_tails,
+            tail_stride,
+            ScalarCoordinateV3::item(scalar_u16(item_scalar::QUANTITY)?),
+        ),
+    )?;
+    push_item(
+        instructions,
+        item,
+        EffectInstructionV3::write_u64_second_tail_affine(
+            verifier,
+            verifier_tails,
+            tail_stride,
+            ScalarCoordinateV3::item(scalar_u16(item_scalar::CURSOR_INVENTORY)?),
+        ),
+    )?;
+    push_item(
+        instructions,
+        item,
+        EffectInstructionV3::write_u64_third_tail_affine(
+            verifier,
+            verifier_tails,
+            tail_stride,
+            ScalarCoordinateV3::item(scalar_u16(item_scalar::CLAIMS_AGGREGATE_MAGNITUDE)?),
+        ),
+    )?;
+    push_item(
+        instructions,
+        item,
+        EffectInstructionV3::write_u64_fourth_tail_affine(
+            verifier,
+            verifier_tails,
+            tail_stride,
+            ScalarCoordinateV3::item(scalar_u16(item_scalar::CLAIMS_SOURCE_MAGNITUDE)?),
+        ),
+    )?;
+    push_item(
+        instructions,
+        item,
+        EffectInstructionV3::write_u64_fifth_tail_affine(
+            verifier,
+            verifier_tails,
+            tail_stride,
+            ScalarCoordinateV3::item(scalar_u16(item_scalar::CLAIMS_DESTINATION_MAGNITUDE)?),
+        ),
+    )?;
+
+    // Result is raw VerifiedCandidateV2, created and written only on the
+    // terminal row. Static validation still sees all possible ranges.
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64_if_nonzero(
+            result,
+            VerifiedCandidateLayoutV2::magic(),
+            scalar_common(scalar::SELECTION_MAGIC)?,
+            terminal,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u16_if_nonzero(
+            result,
+            VerifiedCandidateLayoutV2::version(),
+            scalar_common(scalar::RUNTIME_WIDTH_VERSION)?,
+            terminal,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u8_if_nonzero(
+            result,
+            VerifiedCandidateLayoutV2::phase(),
+            scalar_common(scalar::SELECTION_PHASE)?,
+            terminal,
+        ),
+    )?;
+    for (offset, coordinate) in [
+        (
+            VerifiedCandidateLayoutV2::outcome_count(),
+            scalar::OUTCOME_COUNT,
+        ),
+        (
+            VerifiedCandidateLayoutV2::page_count(),
+            scalar::CANDIDATE_PAGE_COUNT,
+        ),
+        (
+            VerifiedCandidateLayoutV2::candidate_coordinate(),
+            scalar::SELECTION_BEST_CANDIDATE_COORDINATE,
+        ),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u32_if_nonzero(
+                result,
+                offset,
+                scalar_common(coordinate)?,
+                terminal,
+            ),
+        )?;
+    }
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64_if_nonzero(
+            result,
+            VerifiedCandidateLayoutV2::revision(),
+            scalar_common(scalar::VERIFY_POST_REVISION)?,
+            terminal,
+        ),
+    )?;
+    for (offset, coordinate) in [
+        (
+            VerifiedCandidateLayoutV2::candidate_id(),
+            identity::CANDIDATE,
+        ),
+        (
+            VerifiedCandidateLayoutV2::product_id(),
+            identity::SELECTION_PRODUCT,
+        ),
+        (
+            VerifiedCandidateLayoutV2::batch_id(),
+            identity::SELECTION_BATCH,
+        ),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_identity_if_nonzero(
+                result,
+                offset,
+                identity_common(coordinate)?,
+                terminal,
+            ),
+        )?;
+    }
+    for (offset, coordinate) in [
+        (
+            VerifiedCandidateLayoutV2::filled_lots(),
+            scalar::SELECTION_BEST_FILLED_LOTS,
+        ),
+        (
+            VerifiedCandidateLayoutV2::quote_debit(),
+            scalar::ORDER_QUOTE_RESERVE,
+        ),
+        (
+            VerifiedCandidateLayoutV2::quote_credit(),
+            scalar::QUOTE_QUANTITY,
+        ),
+        (
+            VerifiedCandidateLayoutV2::price_scale(),
+            scalar::SELECTION_PRICE_SCALE,
+        ),
+    ] {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64_if_nonzero(
+                result,
+                offset,
+                scalar_common(coordinate)?,
+                terminal,
+            ),
+        )?;
+    }
+    let result_tails = VerifiedCandidateLayoutV2::claim_inputs_base();
+    let result_stride = VerifiedCandidateLayoutV2::tail_item_stride();
+    push_item(
+        instructions,
+        item,
+        EffectInstructionV3::write_u64_affine_if_nonzero(
+            result,
+            result_tails,
+            result_stride,
+            ScalarCoordinateV3::item(scalar_u16(item_scalar::CLAIMS_SOURCE_MAGNITUDE)?),
+            terminal,
+        ),
+    )?;
+    push_item(
+        instructions,
+        item,
+        EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+            result,
+            result_tails,
+            result_stride,
+            ScalarCoordinateV3::item(scalar_u16(item_scalar::CLAIMS_DESTINATION_MAGNITUDE)?),
+            terminal,
+        ),
+    )?;
+
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::require_lamports_eq(
+            verifier,
+            scalar_common(scalar::TERMINAL_RENT_PRINCIPAL)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::require_lamports_eq(
+            result,
+            scalar_common(scalar::RESULT_RENT_PRINCIPAL)?,
         ),
     )
 }
@@ -2824,7 +3413,7 @@ fn action_template_compartments(action: Action) -> Result<(CompartmentV1, Compar
 
 const fn route_count(action: Action) -> usize {
     match action {
-        unauthored_actions!() => 0,
+        Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => 0,
         Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => 3,
@@ -2876,6 +3465,8 @@ mod tests {
             Action::Close,
             Action::OpenBatch,
             Action::CloseBatch,
+            Action::SubmitCandidate,
+            Action::VerifyCandidateRow,
             Action::PlaceOrder,
             Action::CancelOrder,
             Action::ReleaseOrder,
@@ -2897,6 +3488,174 @@ mod tests {
             assert_eq!(
                 program.item_scalar_stride(),
                 u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3).expect("item stride")
+            );
+        }
+    }
+
+    #[test]
+    fn submit_candidate_effect_resolves_exact_creation_funding_at_runtime_widths() {
+        let bytes = artifact(Action::SubmitCandidate);
+        let program = ProgramV3::decode(&bytes).expect("SubmitCandidate effect");
+        assert_eq!(program.route_count(), 0);
+        assert_eq!(program.fixed_account_count(), 11);
+        for count in [1_u32, 258] {
+            let mut scalars = vec![
+                0_u64;
+                usize::try_from(
+                    GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+                )
+                .expect("scalar width")
+            ];
+            scalars[usize::try_from(scalar::ONE).expect("version")] = 1;
+            scalars[usize::try_from(scalar::CANDIDATE_POST_STATUS).expect("status")] = 1;
+            scalars[usize::try_from(scalar::OUTCOME_COUNT).expect("outcomes")] = u64::from(count);
+            scalars[usize::try_from(scalar::CANDIDATE_PAGE_COUNT).expect("pages")] =
+                u64::from(count);
+            scalars[usize::try_from(scalar::CANDIDATE_ROW_COUNT).expect("rows")] = u64::from(count);
+            scalars[usize::try_from(scalar::SCRATCH_A).expect("work escrow")] = 777;
+            scalars[usize::try_from(scalar::SCRATCH_B).expect("funded state")] = 1_777;
+            let identities = vec![
+                [0x44_u8; 32];
+                usize::try_from(
+                    GENERAL_HOT_COMMON_IDENTITIES_V3 + count * GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3,
+                )
+                .expect("identity width")
+            ];
+
+            for operation in 0..23_u16 {
+                program
+                    .resolved_fixed_effect(operation, count, &scalars, &identities)
+                    .expect("every fixed effect resolves at the authenticated runtime width");
+            }
+            assert_eq!(
+                program.resolved_fixed_effect(21, count, &scalars, &identities),
+                Ok(
+                    dclutch_effect_kernel::v3::ResolvedEffectV3::TransferLamports {
+                        source: usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+                        destination: usize::from(GENERAL_STATE_ACCOUNT_COORDINATE_V3),
+                        amount: 777,
+                    }
+                ),
+            );
+            assert_eq!(
+                program.resolved_fixed_effect(22, count, &scalars, &identities),
+                Ok(
+                    dclutch_effect_kernel::v3::ResolvedEffectV3::RequireLamportsEq {
+                        account: usize::from(GENERAL_STATE_ACCOUNT_COORDINATE_V3),
+                        value: 1_777,
+                    }
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn verify_effect_persists_five_planar_tails_and_only_terminal_result() {
+        let bytes = artifact(Action::VerifyCandidateRow);
+        let program = ProgramV3::decode(&bytes).expect("VerifyCandidateRow effect");
+        assert_eq!(program.route_count(), 0);
+        assert_eq!(program.fixed_account_count(), 15);
+        assert_eq!(program.fixed_operation_count(), 53);
+        assert_eq!(program.item_operation_count(), 7);
+
+        for count in [1_u32, 258] {
+            let scalar_len = usize::try_from(
+                GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+            )
+            .expect("scalar width");
+            let identity_len = usize::try_from(
+                GENERAL_HOT_COMMON_IDENTITIES_V3 + count * GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3,
+            )
+            .expect("identity width");
+            let mut scalars = vec![0_u64; scalar_len];
+            let identities = vec![[0x44_u8; 32]; identity_len];
+            scalars[usize::try_from(scalar::ONE).expect("one")] = 1;
+            scalars[usize::try_from(scalar::LOCAL_STATE_VERSION).expect("local version")] = 3;
+            scalars[usize::try_from(scalar::LOCAL_STATE_KIND).expect("local kind")] = 5;
+            scalars[usize::try_from(scalar::RUNTIME_WIDTH_VERSION).expect("runtime version")] = 2;
+            scalars[usize::try_from(scalar::OUTCOME_COUNT).expect("outcomes")] = u64::from(count);
+
+            let selected_item = count - 1;
+            let selected_base = usize::try_from(
+                GENERAL_HOT_COMMON_SCALARS_V3 + selected_item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+            )
+            .expect("selected item base");
+            for (coordinate, value) in [
+                (item_scalar::QUANTITY, 11_u64),
+                (item_scalar::CURSOR_INVENTORY, 22),
+                (item_scalar::CLAIMS_AGGREGATE_MAGNITUDE, 33),
+                (item_scalar::CLAIMS_SOURCE_MAGNITUDE, 44),
+                (item_scalar::CLAIMS_DESTINATION_MAGNITUDE, 55),
+            ] {
+                scalars[selected_base + usize::try_from(coordinate).expect("item coordinate")] =
+                    value;
+            }
+
+            // Disabled Result creation is a true no-op: all verifier writes
+            // still resolve, but neither the fixed result header nor either
+            // result tail touches the vacant account.
+            for operation in 0..53_u16 {
+                let resolved = program
+                    .resolved_fixed_effect(operation, count, &scalars, &identities)
+                    .expect("every disabled fixed effect resolves");
+                if (37..=50).contains(&operation) {
+                    assert_eq!(resolved, dclutch_effect_kernel::v3::ResolvedEffectV3::Noop);
+                }
+            }
+            for operation in 0..7_u16 {
+                let resolved = program
+                    .resolved_item_effect(selected_item, operation, count, &scalars, &identities)
+                    .expect("every disabled item effect resolves");
+                if operation >= 5 {
+                    assert_eq!(resolved, dclutch_effect_kernel::v3::ResolvedEffectV3::Noop);
+                }
+            }
+
+            scalars[usize::try_from(scalar::VERIFY_TERMINAL).expect("terminal")] = 1;
+            let verifier_base =
+                GeneralLocalStateLayoutV3::body() + RuntimeVerifierLayoutV2::tails_base();
+            let item_offset = selected_item * RuntimeVerifierLayoutV2::tail_item_stride();
+            for (operation, tail, value) in [
+                (0_u16, 0_u32, 11_u64),
+                (1, 1, 22),
+                (2, 2, 33),
+                (3, 3, 44),
+                (4, 4, 55),
+            ] {
+                assert_eq!(
+                    program.resolved_item_effect(
+                        selected_item,
+                        operation,
+                        count,
+                        &scalars,
+                        &identities,
+                    ),
+                    Ok(dclutch_effect_kernel::v3::ResolvedEffectV3::WriteScalar {
+                        account: usize::from(GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3),
+                        offset: verifier_base
+                            + (tail * count * RuntimeVerifierLayoutV2::tail_item_stride())
+                            + item_offset,
+                        value,
+                    })
+                );
+            }
+            assert_eq!(
+                program.resolved_item_effect(selected_item, 5, count, &scalars, &identities,),
+                Ok(dclutch_effect_kernel::v3::ResolvedEffectV3::WriteScalar {
+                    account: usize::from(GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3),
+                    offset: VerifiedCandidateLayoutV2::claim_inputs_base()
+                        + selected_item * VerifiedCandidateLayoutV2::tail_item_stride(),
+                    value: 44,
+                })
+            );
+            assert_eq!(
+                program.resolved_item_effect(selected_item, 6, count, &scalars, &identities,),
+                Ok(dclutch_effect_kernel::v3::ResolvedEffectV3::WriteScalar {
+                    account: usize::from(GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3),
+                    offset: VerifiedCandidateLayoutV2::claim_inputs_base()
+                        + (count + selected_item) * VerifiedCandidateLayoutV2::tail_item_stride(),
+                    value: 55,
+                })
             );
         }
     }

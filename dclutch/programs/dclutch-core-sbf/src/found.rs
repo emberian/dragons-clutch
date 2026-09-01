@@ -9,7 +9,7 @@ use dclutch_market_core_codec::{
 };
 use dclutch_product_runtime_v2_svm_reader::{
     AuthenticatedProductRuntimeV2, Error as ProductRuntimeReaderError, FinalizedRecordFrameV2,
-    ProductRuntimeFrameV2, authenticate_product_basis_v3,
+    ProductRuntimeFrameV2, authenticate_founding_product_basis_v3,
 };
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -518,7 +518,7 @@ fn authenticate_references(
     let product_id = runtime.product_id.to_bytes();
     let product = project_core_product_v2(*runtime)?;
 
-    let basis = authenticate_product_basis_v3(
+    let basis = authenticate_founding_product_basis_v3(
         registry,
         rent,
         *runtime,

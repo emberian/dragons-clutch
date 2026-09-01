@@ -599,6 +599,8 @@ dependencies = [
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-representation-composition-v3-kernel",
@@ -660,6 +662,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-general-successor-operator"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bincode",
+ "dclutch-capability-program-contract",
+ "dclutch-effect-kernel",
+ "dclutch-general-adapter-contract",
+ "dclutch-general-codec",
+ "dclutch-operator",
+ "dclutch-versioned-message-operator",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-compute-budget-interface",
+ "solana-sdk",
+]
+
+[[package]]
 name = "dclutch-local-successor-bootstrap"
 version = "0.1.0"
 dependencies = [
@@ -681,6 +702,7 @@ dependencies = [
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
+ "dclutch-general-successor-operator",
  "dclutch-market-core-codec",
  "dclutch-market-founding-v1-operator",
  "dclutch-market-retirement-v1-operator",
@@ -706,7 +728,9 @@ dependencies = [
  "dclutch-resolution-core-v3-operator",
  "dclutch-series-v3-kernel",
  "dclutch-source-contract",
+ "dclutch-source-readiness-operator",
  "dclutch-token-svm",
+ "dclutch-trading-sbf",
  "dclutch-versioned-message-operator",
  "reqwest",
  "serde",
@@ -1191,6 +1215,19 @@ version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
  "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-source-readiness-operator"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "dclutch-market-core-codec",
+ "dclutch-resolution-core-v3-operator",
+ "serde",
+ "serde_json",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]

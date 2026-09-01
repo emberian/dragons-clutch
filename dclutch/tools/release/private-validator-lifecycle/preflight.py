@@ -274,7 +274,10 @@ STAGES: tuple[StageContract, ...] = (
         False,
         ("campaign",),
         ("authenticated mutable plan", "funded campaign payer state"),
-        ("core-upgrade-authority through campaign_administration_keypairs",),
+        (
+            "core-upgrade-authority and distinct campaign-payer through "
+            "campaign_administration_keypairs",
+        ),
         "campaign.rs durable transactions",
         ("seven Loader pairs at checked slots", "Registry/Core infrastructure uninitialized"),
         ("Core infrastructure initialized", "five-role release activated"),
@@ -723,7 +726,10 @@ def validate_constants(constants: dict[str, Any]) -> dict[str, Any]:
     expected_roles = ("registry", "rent", "custody", "resolution", "claims", "trading", "core")
     if constants.get("ROLE_ORDER") != expected_roles:
         raise Refusal("checked mutable role order is not the exact seven-program substrate")
-    if constants.get("CAMPAIGN_ADMINISTRATION_KEY_ROLES") != ("core-upgrade-authority",):
+    if constants.get("CAMPAIGN_ADMINISTRATION_KEY_ROLES") != (
+        "core-upgrade-authority",
+        "campaign-payer",
+    ):
         raise Refusal("administration signer projection changed")
     founding_roles = constants.get("CAMPAIGN_FOUNDING_KEY_ROLES")
     required_founding = {

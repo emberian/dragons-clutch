@@ -48,6 +48,7 @@ use crate::{
         CampaignTerminalEvidenceV1, parse_campaign_terminal_evidence_with_expected_cluster_v1,
         read_keypair_file,
     },
+    chaos_fault::{self, BoundaryV1},
     cluster::{ClusterOriginV1, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::pubkey,
@@ -82,6 +83,21 @@ struct ArgumentsV1 {
     journal_dir: PathBuf,
     completion: PathBuf,
     execute: bool,
+}
+
+/// Family-neutral transport inputs for one already-authenticated aggregate
+/// Market retirement campaign. Family exteriors own how the live snapshot and
+/// campaign were authorized; this engine owns only the exact four-operation
+/// journal, signed-packet, resend/poll, and conservation boundaries.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AggregateRetirementTransportV1<'a> {
+    pub(crate) campaign_path: &'a Path,
+    pub(crate) journal_dir: &'a Path,
+    pub(crate) completion: &'a Path,
+    pub(crate) payer: Pubkey,
+    pub(crate) payer_keypair: &'a Path,
+    pub(crate) lookup_table: Pubkey,
+    pub(crate) execute: bool,
 }
 
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
@@ -136,15 +152,124 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         rpc.url(),
     )?;
 
-    operate_v1(&mut rpc, &arguments, &campaign)
+    run_authenticated_aggregate_retirement_v1(
+        &mut rpc,
+        &campaign,
+        AggregateRetirementTransportV1 {
+            campaign_path: &arguments.campaign,
+            journal_dir: &arguments.journal_dir,
+            completion: &arguments.completion,
+            payer: arguments.payer,
+            payer_keypair: &arguments.payer_keypair,
+            lookup_table: arguments.lookup_table,
+            execute: arguments.execute,
+        },
+    )
 }
 
-fn operate_v1(
+/// Advance one exact generic retirement operation. The caller cannot bypass
+/// authentication by handing this function an in-memory projection: the
+/// canonical campaign file, live RPC URL/genesis, payer, frozen lookup table,
+/// and semantic campaign digest are all reauthenticated before any journal or
+/// key is opened.
+pub(crate) fn run_authenticated_aggregate_retirement_v1(
     rpc: &mut Rpc,
-    arguments: &ArgumentsV1,
+    campaign: &AggregateRetirementCampaignV1,
+    transport: AggregateRetirementTransportV1<'_>,
+) -> Result<()> {
+    authenticate_aggregate_retirement_transport_v1(rpc, campaign, transport)?;
+    operate_authenticated_v1(rpc, transport, campaign)
+}
+
+fn authenticate_aggregate_retirement_transport_v1(
+    rpc: &mut Rpc,
+    campaign: &AggregateRetirementCampaignV1,
+    transport: AggregateRetirementTransportV1<'_>,
+) -> Result<()> {
+    authenticate_aggregate_retirement_transport_durable_v1(campaign, transport, rpc.url())?;
+    let genesis_hash = rpc
+        .call("getGenesisHash", &json!([]))?
+        .as_str()
+        .ok_or_else(|| refusal("getGenesisHash returned a non-string"))?
+        .to_owned();
+    if genesis_hash != campaign.genesis_hash {
+        return Err(refusal(
+            "generic retirement transport changed validator genesis",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_aggregate_retirement_transport_durable_v1(
+    campaign: &AggregateRetirementCampaignV1,
+    transport: AggregateRetirementTransportV1<'_>,
+    rpc_url: &str,
+) -> Result<()> {
+    crate::aggregate_retirement_journal::authenticate_aggregate_retirement_campaign_v1(campaign)?;
+    if [
+        transport.campaign_path,
+        transport.journal_dir,
+        transport.completion,
+        transport.payer_keypair,
+    ]
+    .into_iter()
+    .any(|path| !path.is_absolute())
+    {
+        return Err(refusal(
+            "generic retirement transport requires absolute durable paths",
+        ));
+    }
+    let journal_metadata = fs::symlink_metadata(transport.journal_dir).map_err(|error| {
+        Error::new(format!(
+            "retirement journal directory {}: {error}",
+            transport.journal_dir.display()
+        ))
+    })?;
+    if !journal_metadata.file_type().is_dir() {
+        return Err(refusal(
+            "retirement journal directory was not a real directory",
+        ));
+    }
+    let completion_parent = transport
+        .completion
+        .parent()
+        .ok_or_else(|| refusal("retirement completion omitted a parent directory"))?;
+    let completion_parent_metadata = fs::symlink_metadata(completion_parent).map_err(|error| {
+        Error::new(format!(
+            "retirement completion parent {}: {error}",
+            completion_parent.display()
+        ))
+    })?;
+    let durable_paths_alias = transport.campaign_path == transport.completion
+        || AggregateRetirementOperationV1::ORDERED
+            .into_iter()
+            .map(|operation| journal_path_v1(transport.journal_dir, operation))
+            .any(|journal| journal == transport.campaign_path || journal == transport.completion);
+    if !completion_parent_metadata.file_type().is_dir() || durable_paths_alias {
+        return Err(refusal(
+            "retirement campaign, journals, and completion did not have disjoint durable paths",
+        ));
+    }
+    let durable: AggregateRetirementCampaignV1 =
+        read_json_v1(transport.campaign_path, "retirement campaign")?;
+    if &durable != campaign
+        || campaign.payer != transport.payer.to_string()
+        || campaign.lookup_table != transport.lookup_table.to_string()
+        || campaign.rpc_url != rpc_url
+    {
+        return Err(refusal(
+            "generic retirement transport changed its durable campaign, payer, lookup table, or RPC",
+        ));
+    }
+    Ok(())
+}
+
+fn operate_authenticated_v1(
+    rpc: &mut Rpc,
+    transport: AggregateRetirementTransportV1<'_>,
     campaign: &AggregateRetirementCampaignV1,
 ) -> Result<()> {
-    let journals = load_journals_v1(&arguments.journal_dir, campaign)?;
+    let journals = load_journals_v1(transport.journal_dir, campaign)?;
     let known_fees = finalized_fee_total_v1(&journals)?;
     let allow_unreconciled_fee = journals.last().is_some_and(|journal| {
         matches!(
@@ -156,15 +281,15 @@ fn operate_v1(
     let projection = observe_projection_v1(rpc, campaign, 0, known_fees, allow_unreconciled_fee)?;
     match route_aggregate_retirement_v1(campaign, &journals, &projection)? {
         AggregateRetirementRouteV1::Complete => {
-            write_completion_v1(arguments, campaign, &journals, &projection)
+            write_completion_v1(transport, campaign, &journals, &projection)
         }
         AggregateRetirementRouteV1::Plan(operation) => {
             let journal = plan_aggregate_retirement_journal_v1(campaign, operation, &projection)?;
-            let path = journal_path_v1(&arguments.journal_dir, operation);
+            let path = journal_path_v1(transport.journal_dir, operation);
             create_json_v1(&path, &journal, "retirement journal")?;
-            if !arguments.execute {
+            if !transport.execute {
                 return progress_v1(
-                    arguments,
+                    transport,
                     campaign,
                     operation,
                     "planned",
@@ -172,7 +297,7 @@ fn operate_v1(
                     "The next mutation is planned from finalized chain state; no key was read.",
                 );
             }
-            advance_active_v1(rpc, arguments, campaign, journal, projection)
+            advance_active_v1(rpc, transport, campaign, journal, projection)
         }
         AggregateRetirementRouteV1::Recover(operation, recovery) => {
             let journal = journals
@@ -182,29 +307,29 @@ fn operate_v1(
             if journal.operation != operation {
                 return Err(refusal("recovery route changed the active operation"));
             }
-            if !arguments.execute {
+            if !transport.execute {
                 return progress_v1(
-                    arguments,
+                    transport,
                     campaign,
                     operation,
                     journal_phase_text(journal.phase),
-                    Some(&journal_path_v1(&arguments.journal_dir, operation)),
+                    Some(&journal_path_v1(transport.journal_dir, operation)),
                     recovery_message(recovery),
                 );
             }
-            advance_active_v1(rpc, arguments, campaign, journal, projection)
+            advance_active_v1(rpc, transport, campaign, journal, projection)
         }
     }
 }
 
 fn advance_active_v1(
     rpc: &mut Rpc,
-    arguments: &ArgumentsV1,
+    transport: AggregateRetirementTransportV1<'_>,
     campaign: &AggregateRetirementCampaignV1,
     mut journal: AggregateRetirementJournalV1,
     mut projection: AggregateRetirementChainProjectionV1,
 ) -> Result<()> {
-    let path = journal_path_v1(&arguments.journal_dir, journal.operation);
+    let path = journal_path_v1(transport.journal_dir, journal.operation);
     if journal.phase == AggregateRetirementJournalPhaseV1::Planned {
         let next = prepare_aggregate_retirement_journal_v1(campaign, &journal, &projection)?;
         replace_json_v1(&path, &journal, &next, "retirement journal")?;
@@ -217,10 +342,10 @@ fn advance_active_v1(
             ));
         }
         let keypair = Keypair::new_from_array(read_keypair_file(
-            &arguments.payer_keypair,
+            transport.payer_keypair,
             "AggregateRetirement fee payer",
         )?);
-        if keypair.pubkey() != arguments.payer {
+        if keypair.pubkey() != transport.payer {
             return Err(refusal("fee-payer keypair did not name --fee-payer"));
         }
         let table = observe_lookup_table_v1(rpc, campaign, 0)?;
@@ -234,11 +359,11 @@ fn advance_active_v1(
         Rpc::authenticate_signed_v0_packet(
             journal.operation.label(),
             std::slice::from_ref(&instruction),
-            arguments.payer,
+            transport.payer,
             &table,
             &signed,
         )?;
-        let resolved = resolve_packet_keys_v1(&signed, arguments.lookup_table, &table)?;
+        let resolved = resolve_packet_keys_v1(&signed, transport.lookup_table, &table)?;
         let binding = build_aggregate_retirement_packet_binding_v1(
             campaign,
             journal.operation,
@@ -248,6 +373,12 @@ fn advance_active_v1(
         let next = dispatch_aggregate_retirement_journal_v1(campaign, &journal, binding)?;
         replace_json_v1(&path, &journal, &next, "retirement journal")?;
         journal = next;
+        park_finish_chaos_boundary_v1(
+            campaign,
+            &journal,
+            &path,
+            BoundaryV1::DispatchingBeforeSend,
+        )?;
     }
     if journal.phase == AggregateRetirementJournalPhaseV1::Dispatching {
         if let Some(finalized) = poll_finalized_v1(rpc, &journal)? {
@@ -257,7 +388,7 @@ fn advance_active_v1(
                 &finalized.evidence.signature,
             )?;
             replace_json_v1(&path, &journal, &next, "retirement journal")?;
-            return finalize_active_v1(rpc, arguments, campaign, next, finalized, &path);
+            return finalize_active_v1(rpc, transport, campaign, next, finalized, &path);
         }
         let packet = journal
             .packet
@@ -268,7 +399,7 @@ fn advance_active_v1(
         Rpc::authenticate_signed_v0_packet(
             journal.operation.label(),
             std::slice::from_ref(&instruction),
-            arguments.payer,
+            transport.payer,
             &table,
             &packet.signed,
         )?;
@@ -283,10 +414,10 @@ fn advance_active_v1(
     }
     if journal.phase == AggregateRetirementJournalPhaseV1::Submitted {
         if let Some(finalized) = poll_finalized_v1(rpc, &journal)? {
-            return finalize_active_v1(rpc, arguments, campaign, journal, finalized, &path);
+            return finalize_active_v1(rpc, transport, campaign, journal, finalized, &path);
         }
         return progress_v1(
-            arguments,
+            transport,
             campaign,
             journal.operation,
             "submitted",
@@ -299,11 +430,11 @@ fn advance_active_v1(
             rpc,
             campaign,
             projection.finalized_slot,
-            finalized_fee_total_v1(&load_journals_v1(&arguments.journal_dir, campaign)?)?,
+            finalized_fee_total_v1(&load_journals_v1(transport.journal_dir, campaign)?)?,
             false,
         )?;
         return progress_v1(
-            arguments,
+            transport,
             campaign,
             journal.operation,
             "finalized",
@@ -320,7 +451,7 @@ fn advance_active_v1(
 
 fn finalize_active_v1(
     rpc: &mut Rpc,
-    arguments: &ArgumentsV1,
+    transport: AggregateRetirementTransportV1<'_>,
     campaign: &AggregateRetirementCampaignV1,
     journal: AggregateRetirementJournalV1,
     finalized: crate::rpc::FinalizedSignedPacketV1,
@@ -343,7 +474,7 @@ fn finalize_active_v1(
         .evidence
         .compute_units_consumed
         .ok_or_else(|| refusal("finalized retirement omitted compute units"))?;
-    let previous = load_journals_v1(&arguments.journal_dir, campaign)?;
+    let previous = load_journals_v1(transport.journal_dir, campaign)?;
     let prior_fees = finalized_fee_total_v1(&previous)?;
     let projection = observe_projection_v1(
         rpc,
@@ -365,15 +496,21 @@ fn finalize_active_v1(
     };
     let next =
         finalize_aggregate_retirement_journal_v1(campaign, &journal, &projection, finalization)?;
+    park_finish_chaos_boundary_v1(
+        campaign,
+        &journal,
+        path,
+        BoundaryV1::LandedBeforeFinalizationFsync,
+    )?;
     replace_json_v1(path, &journal, &next, "retirement journal")?;
-    let journals = load_journals_v1(&arguments.journal_dir, campaign)?;
+    let journals = load_journals_v1(transport.journal_dir, campaign)?;
     if route_aggregate_retirement_v1(campaign, &journals, &projection)?
         == AggregateRetirementRouteV1::Complete
     {
-        return write_completion_v1(arguments, campaign, &journals, &projection);
+        return write_completion_v1(transport, campaign, &journals, &projection);
     }
     progress_v1(
-        arguments,
+        transport,
         campaign,
         next.operation,
         "finalized",
@@ -585,7 +722,49 @@ fn poll_finalized_v1(
         .ok_or_else(|| refusal("signed journal omitted packet"))?;
     let signature = Signature::from_str(&packet.signed.signature)
         .map_err(|error| Error::new(format!("retirement signature: {error}")))?;
+    if journal.operation == AggregateRetirementOperationV1::Finish
+        && chaos_fault::is_armed_for_v1(
+            journal.operation.label(),
+            BoundaryV1::LandedBeforeFinalizationFsync,
+        )?
+    {
+        for _ in 0..300 {
+            if let Some(finalized) =
+                rpc.finalized_signed_packet(journal.operation.label(), signature, false)?
+            {
+                return Ok(Some(finalized));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+        return Err(refusal(
+            "aggregate-retirement-finish chaos target did not reach finalized history before its fault boundary",
+        ));
+    }
     rpc.finalized_signed_packet(journal.operation.label(), signature, false)
+}
+
+fn park_finish_chaos_boundary_v1(
+    campaign: &AggregateRetirementCampaignV1,
+    journal: &AggregateRetirementJournalV1,
+    path: &Path,
+    boundary: BoundaryV1,
+) -> Result<()> {
+    if journal.operation != AggregateRetirementOperationV1::Finish {
+        return Ok(());
+    }
+    let packet = journal
+        .packet
+        .as_ref()
+        .ok_or_else(|| refusal("aggregate-retirement-finish chaos boundary omitted packet"))?;
+    chaos_fault::park_if_armed_v1(
+        &campaign.cluster,
+        journal.operation.label(),
+        boundary,
+        path,
+        &journal.intent_sha256,
+        &packet.signed.packet_sha256,
+        &packet.signed.signature,
+    )
 }
 
 fn load_journals_v1(
@@ -616,28 +795,28 @@ fn load_journals_v1(
 }
 
 fn write_completion_v1(
-    arguments: &ArgumentsV1,
+    transport: AggregateRetirementTransportV1<'_>,
     campaign: &AggregateRetirementCampaignV1,
     journals: &[AggregateRetirementJournalV1],
     projection: &AggregateRetirementChainProjectionV1,
 ) -> Result<()> {
     let receipt =
         build_aggregate_retirement_conservation_receipt_v1(campaign, journals, projection)?;
-    write_or_authenticate_json_v1(&arguments.completion, &receipt, "retirement completion")?;
+    write_or_authenticate_json_v1(transport.completion, &receipt, "retirement completion")?;
     stdout_v1(json!({
         "schema": PROGRESS_SCHEMA_V1,
         "status": "finalized",
-        "campaign": arguments.campaign.display().to_string(),
+        "campaign": transport.campaign_path.display().to_string(),
         "campaignSha256": campaign.campaign_sha256,
-        "journalDirectory": arguments.journal_dir.display().to_string(),
-        "completion": arguments.completion.display().to_string(),
-        "completionSha256": sha256_hex(&fs::read(&arguments.completion)?),
+        "journalDirectory": transport.journal_dir.display().to_string(),
+        "completion": transport.completion.display().to_string(),
+        "completionSha256": sha256_hex(&fs::read(transport.completion)?),
         "message": "Aggregate retirement finalized through prepare, close-vault, close-replay, and finish; exact rent/refund conservation reverified."
     }))
 }
 
 fn progress_v1(
-    arguments: &ArgumentsV1,
+    transport: AggregateRetirementTransportV1<'_>,
     campaign: &AggregateRetirementCampaignV1,
     operation: AggregateRetirementOperationV1,
     status: &str,
@@ -648,10 +827,10 @@ fn progress_v1(
         "schema": PROGRESS_SCHEMA_V1,
         "status": status,
         "operation": operation,
-        "campaign": arguments.campaign.display().to_string(),
+        "campaign": transport.campaign_path.display().to_string(),
         "campaignSha256": campaign.campaign_sha256,
         "journal": journal.map(|path| path.display().to_string()),
-        "completion": arguments.completion.display().to_string(),
+        "completion": transport.completion.display().to_string(),
         "message": message
     }))
 }
@@ -929,7 +1108,119 @@ fn refusal(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use crate::aggregate_retirement_journal::AggregateRetirementInitialAccountV1;
+    use dclutch_market_core_codec::{
+        AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
+        AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AggregateRetirementSuffixBindingV1,
+        AggregateRetirementSuffixRequestV1,
+    };
+    use dclutch_market_retirement_v1_operator::{
+        CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
+        CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1, CheckpointMarketRetirementReportV1, Finality,
+        Observation,
+    };
+    use solana_program::instruction::{AccountMeta, Instruction};
+    use solana_sdk_ids::system_program;
+
     use super::*;
+
+    fn key(byte: u8) -> Pubkey {
+        Pubkey::new_from_array([byte; 32])
+    }
+
+    fn initial_account_v1(
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+    ) -> AggregateRetirementInitialAccountV1 {
+        AggregateRetirementInitialAccountV1 {
+            key,
+            owner,
+            lamports,
+            executable: false,
+            data,
+        }
+    }
+
+    fn campaign_fixture_v1() -> AggregateRetirementCampaignV1 {
+        let core = key(5);
+        let claims = key(6);
+        let market = key(40);
+        let checkpoint = key(41);
+        let mut accounts = (1..=35)
+            .map(|byte| AccountMeta::new_readonly(key(byte), false))
+            .collect::<Vec<_>>();
+        accounts[0] = AccountMeta::new(market, false);
+        accounts[4] = AccountMeta::new_readonly(core, false);
+        accounts[14] = AccountMeta::new(checkpoint, false);
+        let binding = AggregateRetirementSuffixBindingV1 {
+            market: market.to_bytes(),
+            checkpoint: checkpoint.to_bytes(),
+            bundle_digest: [7; 32],
+            source_receipt_digest: [8; 32],
+        };
+        let suffix = |magic, phase, custody| {
+            AggregateRetirementSuffixRequestV1::new(
+                magic,
+                binding,
+                if magic == AGGREGATE_RETIREMENT_FINISH_MAGIC_V1 {
+                    [0; 32]
+                } else {
+                    [9; 32]
+                },
+                phase,
+                custody,
+            )
+            .expect("retirement suffix")
+            .to_bytes()
+        };
+        let instruction = |data: Vec<u8>| Instruction {
+            program_id: core,
+            accounts: accounts.clone(),
+            data,
+        };
+        let mut close_vault = suffix(AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1, 1, 2).to_vec();
+        close_vault.resize(CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, 0x41);
+        let mut close_replay = suffix(AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, 2, 3).to_vec();
+        close_replay.resize(CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, 0x42);
+        let mut finish = suffix(AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, 3, 4).to_vec();
+        finish.resize(CHECKPOINT_RETIREMENT_FINISH_BYTES_V1, 0x43);
+        let report = CheckpointMarketRetirementReportV1 {
+            prepare: instruction(vec![0x40; CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1]),
+            close_vault: instruction(close_vault),
+            close_replay: instruction(close_replay),
+            finish: instruction(finish),
+            observation: Observation {
+                slot: 9,
+                unix_timestamp: 10,
+                finality: Finality::Finalized,
+            },
+            expected_refund_delta: 150,
+        };
+        build_aggregate_retirement_campaign_v1(
+            AggregateRetirementCampaignInputV1 {
+                genesis_hash: key(90).to_string(),
+                rpc_url: "http://127.0.0.1:43210/".into(),
+                plan_sha256: "11".repeat(32),
+                evidence_sha256: "22".repeat(32),
+                payer: key(80),
+                lookup_table: key(81),
+                lookup_table_sha256: "33".repeat(32),
+                core_program: core,
+                claims_program: claims,
+                market: initial_account_v1(market, core, 10, vec![1]),
+                rent_credit: initial_account_v1(key(42), key(7), 20, vec![2]),
+                checkpoint: initial_account_v1(checkpoint, claims, 30, vec![3]),
+                custody_replay: initial_account_v1(key(43), key(8), 40, vec![4]),
+                hoard_vault: initial_account_v1(key(44), key(8), 50, vec![5]),
+                source_receipt: initial_account_v1(key(45), key(9), 1, vec![6]),
+                refund_wallet: initial_account_v1(key(46), system_program::ID, 1_000, Vec::new()),
+            },
+            &report,
+        )
+        .expect("generic retirement campaign")
+    }
 
     fn argv(root: &str) -> Vec<String> {
         vec![
@@ -1001,5 +1292,78 @@ mod tests {
                 .collect::<Vec<_>>(),
             JOURNAL_NAMES_V1
         );
+    }
+
+    #[test]
+    fn generic_transport_refuses_direct_schema_or_untrusted_durable_projection() {
+        let campaign = campaign_fixture_v1();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "dclutch-generic-retirement-{}-{nonce}",
+            std::process::id()
+        ));
+        let journals = root.join("journals");
+        fs::create_dir(&root).expect("test root");
+        fs::create_dir(&journals).expect("test journals");
+        let campaign_path = root.join("campaign.json");
+        let completion = root.join("completion.json");
+        let payer_keypair = root.join("payer.json");
+        create_json_v1(&campaign_path, &campaign, "test retirement campaign")
+            .expect("durable campaign");
+        let transport = AggregateRetirementTransportV1 {
+            campaign_path: &campaign_path,
+            journal_dir: &journals,
+            completion: &completion,
+            payer: key(80),
+            payer_keypair: &payer_keypair,
+            lookup_table: key(81),
+            execute: false,
+        };
+        authenticate_aggregate_retirement_transport_durable_v1(
+            &campaign,
+            transport,
+            &campaign.rpc_url,
+        )
+        .expect("authenticated generic transport");
+
+        let mut direct_projection = serde_json::to_value(&campaign).expect("campaign value");
+        direct_projection["schema"] = serde_json::Value::String(
+            "dclutch-owned-loopback-terminal-sequence-completion-v1".into(),
+        );
+        fs::write(
+            &campaign_path,
+            serde_json::to_vec_pretty(&direct_projection).expect("direct projection bytes"),
+        )
+        .expect("write hostile direct projection");
+        assert!(
+            authenticate_aggregate_retirement_transport_durable_v1(
+                &campaign,
+                transport,
+                &campaign.rpc_url,
+            )
+            .is_err()
+        );
+
+        direct_projection["schema"] = serde_json::Value::String(campaign.schema.clone());
+        direct_projection["rpcUrl"] = serde_json::Value::String("http://127.0.0.1:9999/".into());
+        fs::write(
+            &campaign_path,
+            serde_json::to_vec_pretty(&direct_projection).expect("untrusted projection bytes"),
+        )
+        .expect("write hostile untrusted projection");
+        assert!(
+            authenticate_aggregate_retirement_transport_durable_v1(
+                &campaign,
+                transport,
+                &campaign.rpc_url,
+            )
+            .is_err()
+        );
+        fs::remove_file(&campaign_path).expect("remove test campaign");
+        fs::remove_dir(&journals).expect("remove test journals");
+        fs::remove_dir(&root).expect("remove test root");
     }
 }

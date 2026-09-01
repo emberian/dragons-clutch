@@ -2,7 +2,7 @@
 
 ```sh
 tools/gauntlet/run.sh --mode census      # seconds: static route census + report
-tools/gauntlet/run.sh --mode full        # the tier-1 campaign on a real validator
+tools/gauntlet/run.sh --mode full        # unavailable; refuses before any build
 tools/gauntlet/hot-cu/run-hot-cu.sh      # the Hot tail's compute, swept over 20 seeds
 ```
 
@@ -23,10 +23,9 @@ other reason, and neither is optional advice.
 
 ## What it is
 
-Every interaction is a real transaction, built by the chain-derived operators,
-submitted to a real `solana-test-validator` running the real ELFs at real
-limits. No genesis-injected protocol state beyond what the transaction-only
-bootstrap legitimately deploys; no native processors; no mock programs.
+Campaign tiers drive real transactions built by the chain-derived operators and
+submitted to a real validator running real ELFs at real limits. No native
+processors or mock programs qualify as campaign evidence.
 
 Alongside the campaign it maintains an **execution census**: a static
 enumeration of every program's public dispatch surface and refusal taxonomy,
@@ -40,9 +39,10 @@ said "this has never been submitted".
 
 ## Outputs
 
-Everything lands under `--work` (default `/private/tmp/dclutch-gauntlet`); the
-shared checkout's `target/` is never used, because parallel lanes share this
-working tree.
+`run.sh --mode census` writes the first three outputs below under `--work`
+(default `/private/tmp/dclutch-gauntlet`). Named family campaigns document
+their own run, ledger, and ELF paths. The shared checkout's `target/` is never
+used, because parallel lanes share this working tree.
 
 | path | what |
 |---|---|
@@ -54,59 +54,26 @@ working tree.
 | `runs/<stamp>/ledger/` | the validator ledger, kept as evidence |
 | `elf/*.so` | the seven SBF artifacts under test, digest-pinned |
 
-## Concurrent runs, on disjoint port blocks
+## Supported top-level mode
 
-This used to say "one run at a time, machine-wide", and it was true: the
-launcher was pinned to `http://127.0.0.1:20890/` and refused to start while
-anything else listened there, so two lanes could not run `--mode full`
-concurrently whatever `--work` roots they passed.
+`run.sh --mode census` is supported. It needs no chain or port and may run
+concurrently.
 
-The origin is a parameter now. It is in no authenticated material — not in the
-keypair derivation, not in a program address, not in a semantic release ID, not
-in an artifact attestation, not in the genesis plan — so moving it moves nothing
-a budget row or a witness reads, and it is deliberately not in the campaign
-stamp: changing it must not cost a 13-minute re-run.
+`run.sh --mode full` is not a campaign at HEAD. Tier 1's localhost Market
+producer was `demo-market`, which is deliberately retired because a standalone
+Registry address cannot authenticate the current Direct facts. The available
+`devnet-market` and `graduation-market` planners require acknowledged inputs and
+fee-policy choices that this runner does not own. Reusing either silently would
+invent a different campaign.
 
-```sh
-tools/gauntlet/run.sh --mode full                    # 20890, as it always was
-tools/gauntlet/run.sh --mode full --rpc-port auto    # a free 42-port block
-tools/gauntlet/run.sh --mode full --rpc-port 31890   # a base you chose
-```
+The `full` spelling remains an explicit refusal so old invocations do not fall
+through to another mode. It exits 1 before resolving a revision, creating the
+work root, checking build tools, or compiling ELFs. Use the family runners under
+`tools/gauntlet/` for their named campaigns; use `run.sh --mode census` to
+render the accumulated execution report.
 
-The launcher derives its whole block from that base — `rpc BASE`,
-`faucet BASE+2`, `gossip BASE+3`, `dynamic BASE+10..BASE+41` — and BASE 20890
-reproduces the historical `20890-20931` block byte for byte, so nothing that
-never asked for a port notices.
-
-`auto` is resolved at the **campaign** stage, not at argument parse: a base
-chosen at parse time is six minutes of SBF builds away from being used, and it
-scans a band below the kernel's ephemeral range, because the ephemeral range is
-the one the kernel also hands to every ordinary outbound connection. Both halves
-are measured — the first parallel attempt drew ephemeral `49952` at parse time
-and found it occupied when it got there.
-
-Two campaigns sharing a `--work` root still collide on everything else in it, so
-give each run its own. And `census observe` is a read-modify-write of one
-`ledger.json` that every family runner defaults to; both runners take an atomic
-lock around the fold, so concurrent campaigns serialise there rather than losing
-each other's observations.
-
-If a port you asked for is occupied, `run.sh` refuses before the launcher's
-sixty-second timeout with
-
-    gauntlet: 127.0.0.1:20890 is occupied. Pass --rpc-port auto to take a free base instead.
-
-Still never kill a `solana-test-validator` whose `--ledger` is not under your
-own `--work` root. A validator started by a campaign is now bound to its
-supervisor's lifetime and dies with it even if the supervisor is SIGKILLed, so
-a leaked one should no longer be something you find.
-
-`--mode census` needs no chain and no port; run it freely and concurrently.
-
-A corollary that cost this lane an hour: **never edit `run.sh` while a run is in
-flight.** Bash reads a script incrementally by byte offset, so an edit mid-run
-shifts what it reads next and it will re-execute or skip a block. Wait for the
-run, or copy the tree.
+`tools/gauntlet/test-run-cli.sh` guards that boundary with hostile build-tool
+stubs and proves the refusal exits 1 without creating its work root.
 
 ## Ownership
 

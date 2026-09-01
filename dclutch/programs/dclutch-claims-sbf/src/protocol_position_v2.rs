@@ -15,13 +15,13 @@ use dclutch_claims_svm::frame_spec_v1::ClaimsFrameSpecV1;
 pub use dclutch_claims_svm::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_ADMISSION_MAGIC_V2,
     PROTOCOL_POSITION_ADMISSION_SEED_V2, PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2,
-    PROTOCOL_POSITION_CLOSE_RECEIPT_MAGIC_V2, PROTOCOL_POSITION_RECEIPT_MAGIC_V2,
-    PROTOCOL_POSITION_REQUEST_BYTES_V2, PROTOCOL_POSITION_REQUEST_MAGIC_V2,
-    PROTOCOL_POSITION_STATE_SEED_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2,
-    ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2,
-    ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionCloseEvidenceV2,
-    ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
-    ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
+    PROTOCOL_POSITION_CLOSE_RECEIPT_MAGIC_V2, PROTOCOL_POSITION_CLOSE_RESOURCE_DOMAIN_V2,
+    PROTOCOL_POSITION_RECEIPT_MAGIC_V2, PROTOCOL_POSITION_REQUEST_BYTES_V2,
+    PROTOCOL_POSITION_REQUEST_MAGIC_V2, PROTOCOL_POSITION_STATE_SEED_V2, ProtocolPositionActionV2,
+    ProtocolPositionAdmissionEvidenceV2, ProtocolPositionAdmissionSeedsV2,
+    ProtocolPositionAdmissionV2, ProtocolPositionClaimsCapabilitySeedsV2,
+    ProtocolPositionCloseEvidenceV2, ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2,
+    ProtocolPositionPresenceV2, ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
 use dclutch_claims_svm::{
     composition_v3::validate_sparse_close_receipt_v3,
@@ -103,8 +103,6 @@ const CLOSE_CLAIMS_PROGRAMDATA: usize = 11;
 const CLOSE_OWNER_IDENTITY: usize = 12;
 const CLOSE_RENT_CREDIT: usize = 13;
 const CLOSE_RENT_PROGRAM: usize = 14;
-
-const CLOSE_RESOURCE_DOMAIN_V2: &[u8] = b"dclutch/claims/protocol-position-close/v2";
 
 /// Stable protocol Position adapter refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -690,18 +688,19 @@ fn execute_close_authenticated(
 
     let rent =
         Rent::from_account_info(accounts.rent).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
+    let position_lamports = accounts.common.position.lamports();
+    let admission_lamports = accounts.common.admission.lamports();
     if rent.minimum_balance(accounts.common.position.data_len()) != request.position_rent_principal
         || rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
             != request.admission_rent_principal
-        || accounts.common.position.lamports() != request.observed_position_lamports
-        || accounts.common.admission.lamports() != request.observed_admission_lamports
+        || position_lamports < request.observed_position_lamports
+        || admission_lamports < request.observed_admission_lamports
     {
         return Err(ProtocolPositionSbfErrorV2::Rent.into());
     }
     let rent_before = accounts.rent_credit.lamports();
-    let total = request
-        .observed_position_lamports
-        .checked_add(request.observed_admission_lamports)
+    let total = position_lamports
+        .checked_add(admission_lamports)
         .ok_or(ProtocolPositionSbfErrorV2::Rent)?;
     let rent_after = rent_before
         .checked_add(total)
@@ -709,7 +708,7 @@ fn execute_close_authenticated(
     let rent_after_bytes = rent_after.to_le_bytes();
     let rent_data_digest = hash(&rent_credit_data).to_bytes();
     let post_resource_digest = hashv(&[
-        CLOSE_RESOURCE_DOMAIN_V2,
+        PROTOCOL_POSITION_CLOSE_RESOURCE_DOMAIN_V2,
         accounts.common.position.key.as_ref(),
         accounts.common.admission.key.as_ref(),
         accounts.rent_credit.key.as_ref(),
@@ -724,6 +723,8 @@ fn execute_close_authenticated(
             admission_digest,
             claims_program: program_id.to_bytes(),
             post_resource_digest,
+            position_lamports,
+            admission_lamports,
             rent_credit_before: rent_before,
             rent_credit_after: rent_after,
         },
@@ -1184,15 +1185,9 @@ fn authenticate_vacancy(
         // close route sweeps the entire balance of both accounts to the
         // Market's rent credit.
         //
-        // The CLOSE site's twin check (`:597-598`) is NOT relaxed here and is
-        // still griefable. It cannot be, alone: close credits the rent account
-        // `rent_before + declared_total` by absolute assignment while zeroing
-        // two accounts that hold the live balance (`close_pair`), and its
-        // receipt's lamport fields are re-derived and whole-struct
-        // equality-checked by trading-sbf
-        // (`programs/dclutch-trading-sbf/src/direct/sell_escrow.rs:497-523`).
-        // Relaxing it means changing what the receipt means, and that is a
-        // two-ELF change.
+        // Close uses the same floor and authenticates its live prestate as the
+        // sole conservation truth. Its receipt therefore includes every
+        // donated lamport instead of assigning a caller-declared subtotal.
         || accounts.position.lamports() < request.observed_position_lamports
         || accounts.admission.lamports() < request.observed_admission_lamports
         || position_width == 0
@@ -1239,6 +1234,11 @@ fn authenticate_admission(
         || admission.generation() != request.generation
         || admission.position_rent_principal() != request.position_rent_principal
         || admission.admission_rent_principal() != request.admission_rent_principal
+        // These are the immutable admitted baselines, not a mutable live
+        // balance assertion. Live donation surplus is authenticated and
+        // conserved separately by `execute_close_authenticated`.
+        || admission.position_lamports() != request.observed_position_lamports
+        || admission.admission_lamports() != request.observed_admission_lamports
         || admission.capability_descriptor() != request.capability_descriptor
         || admission.capability_outcome() != request.capability_outcome
     {

@@ -21,14 +21,41 @@ dclutch --session session.json markets show <market>
 # which walls stand between this market and a Direct trade, by name
 dclutch --session session.json spine --market <market> --keypair me.json
 
-# Direct settlement is bilateral. You can authenticate the route and sign an
-# off-chain intent today; this neither builds nor submits a trade transaction.
-# route.json must be one dclutch-direct-hot-route-manifest-v3 document carrying
-# the exact 39 named fixed rows, runtime rows, sole frozen lookup table, and the
-# complete checked-infrastructure bytes plus their lowercase SHA-256.
-dclutch --session session.json intent sell --route route.json \
-    --outcome 1 --fill 5 --price 400000 --collateral <acct> \
-    --keypair maker.json --out sell-intent.json
+# Produce the chain-authenticated route in two key-free, read-only steps. Every
+# local input is an absolute path pinned by the digest in its release report.
+dclutch --rpc https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --bootstrap-bin /work/dclutch-local-successor-bootstrap \
+  route release-set --plan /work/plan.json --expected-plan-sha256 PLAN_SHA256 \
+  --core-checked /work/core.checked --expected-core-checked-sha256 CORE_SHA256 \
+  --claims-checked /work/claims.checked --expected-claims-checked-sha256 CLAIMS_SHA256 \
+  --trading-checked /work/trading.checked --expected-trading-checked-sha256 TRADING_SHA256 \
+  --resolution-checked /work/resolution.checked --expected-resolution-checked-sha256 RESOLUTION_SHA256 \
+  --custody-checked /work/custody.checked --expected-custody-checked-sha256 CUSTODY_SHA256 \
+  --output /work/checked-execution-release.bin
+
+dclutch --rpc https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --bootstrap-bin /work/dclutch-local-successor-bootstrap \
+  route direct --session /work/direct-session.json \
+  --checked-execution-release /work/checked-execution-release.bin \
+  --expected-checked-execution-release-sha256 CHECKED_EXECUTION_SHA256 \
+  --registry-checked /work/registry.checked --expected-registry-checked-sha256 REGISTRY_SHA256 \
+  --rent-checked /work/rent.checked --expected-rent-checked-sha256 RENT_SHA256 \
+  --output /work/route.json
+
+# The recommended maker path derives fee, generation, collateral destination,
+# start slot, and next nonce from authenticated chain observations. Price is an
+# exact scaled integer; duration and fill behavior are explicit. This signs
+# only the portable ticket and neither builds nor submits a transaction.
+dclutch --session session.json offer sell --route /work/route.json \
+  --maker <maker-address> --outcome 1 --fill 5 --price 400000 \
+  --duration-slots 150 --lifecycle ioc \
+  --keypair /keys/maker.json --out /work/sell-ticket.json
+
+# `intent sell|buy` is the low-level automation surface. It additionally
+# requires explicit collateral, nonce, valid-from, valid-through, and numeric
+# lifecycle 0|1; it emits the same canonical ticket rather than a second DTO.
 
 # buy and sell intentionally refuse before reading a session, route, or key.
 # Keep the signed intent as an off-chain handoff; no public submitter exists yet.
@@ -48,6 +75,49 @@ dclutch --session session.json walk --book walk-book.json \
     --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
 dclutch refusal 0x5000            # any custom code, named via the band registry
+```
+
+## Compile and inspect a spline Product
+
+`product spline` delegates the whole degree-2/3 graph to the Rust production
+compiler. It reads no chain or key and atomically writes five immutable record
+files plus `report.json` into a new directory. The repository carries one
+canonical degree-2 input at
+`docs/operator/examples/spline-product-degree2.json`; its identities are an
+offline example, not published Registry state or a Market.
+
+Set all three shell variables below to absolute canonical paths. The output
+directory must not exist yet.
+
+```sh
+SUCCESSOR=/absolute/path/to/dclutch-local-successor-bootstrap
+INPUT=/absolute/path/to/docs/operator/examples/spline-product-degree2.json
+PRODUCT_GRAPH=/absolute/new/path/spline-product
+
+dclutch --bootstrap-bin "$SUCCESSOR" \
+  --input "$INPUT" --output-dir "$PRODUCT_GRAPH" \
+  product spline
+
+dclutch --report "$PRODUCT_GRAPH/report.json" product inspect
+```
+
+The inspection command rereads the report and its five canonical sibling
+files. The SDK checks every file length and SHA-256, all generated schema IDs,
+the report's basis/gate joins, and all canonical Registry raw/staging PDAs. It
+then prints the exact five record coordinates the Found39 client consumes.
+This remains a local handoff: it does not publish a record, read a chain, load
+a wallet, sign, submit, or claim that Found will accept absent live Registry
+authentication.
+
+A cold-machine smoke runs the public compiler and inspector together and saves
+both machine documents plus a hash-bound handoff report in one new directory:
+
+```sh
+tools/release/spline-product-handoff-smoke.sh \
+  --node /absolute/path/to/node-22.13-or-newer \
+  --cli /absolute/path/to/packages/dclutch-cli/dist/dclutch.mjs \
+  --successor /absolute/path/to/dclutch-local-successor-bootstrap \
+  --work /absolute/new/path/spline-product-smoke
 ```
 
 ## Found a permanent-devnet market
@@ -166,20 +236,39 @@ Review `/work/admission.json`, then rerun the exact same command with
 - Refusals render by NAME (band registry, decision 0007) on every error
   path; a refusal is the protocol working, and this tool says which program
   refused and why instead of printing a bare number.
+- `route release-set` and `route direct` expose the successor's existing
+  key-free, read-only producers; the TypeScript CLI does not reconstruct their
+  release, account, lookup-table, or route facts. Both require the full devnet
+  genesis acknowledgment, and the Rust producer reauthenticates the endpoint.
+  `route release-set` reads the live Registry activation cache and revalidates
+  every caller-pinned checked-release file. `route direct` uses the same
+  finalized `DirectTradePlanningV1` as the executor and refuses until the
+  session's durable journal proves its lookup table frozen. Each child emits a
+  machine report for the exact new output; neither command can read a key or
+  submit a transaction.
 - `--route` is hostile input, not authority. The SDK bounds and scans its
   original UTF-8 before ordinary decoding, refuses duplicate keys at every
   object level, unknown or missing fields, aliases, noncanonical addresses,
   privileges, roles, evidence encodings and digests, then reacquires the whole
-  route from finalized chain state. `intent` receives no route until the
+  route from finalized chain state. The authoring commands receive no route until the
   existing Direct authenticator recognizes the checked outer deployment
-  evidence and exact frozen lookup table. No public route producer is shipped
-  yet; the command does not invent or default one.
+  evidence and exact frozen lookup table. `dclutch route direct` is the public
+  producer; a copied, stale, or substituted output still has no authority.
+- `offer sell` is the participant-facing authoring path. It authenticates the
+  route, seller Claims Position, canonical Direct collateral destination, and
+  maker replay root before opening the explicitly named signer file. It derives
+  the fee, generation, start slot and next nonce from those observations,
+  refuses overselling, and immediately decodes the signed output through the
+  same canonical ticket reader used by a taker. It signs no transaction and
+  does not require or contact a relay. `intent sell|buy` remains available for
+  low-level callers only when every lifecycle, nonce, validity, and collateral
+  field is explicit; it has no guessed nonce or validity defaults.
 - `buy` and `sell` always refuse before context, session, route, key, signature,
   transaction construction, or RPC access. They remain closed until one public
   caller wires a durable journal for the exact packet, authenticates the
   returned `HotExecutionAckV3`, and finalizes all ten writable-account
-  poststates. `spine` remains the read-only market inspection path; `intent`
-  remains an off-chain signed handoff. Neither submits a transaction.
+  poststates. `spine` remains the read-only market inspection path; `offer` and
+  `intent` remain off-chain signed handoffs. Neither submits a transaction.
 - `redeem` checks the market, your position, the receiving token account, the
   winning claim, and the full available quantity at finalized commitment. You
   can pass a completed campaign with `--spec <plan> --payout-evidence

@@ -1107,7 +1107,7 @@ impl<'a> AccountProfileV2<'a> {
                 Err(Error::InvalidDynamicSpan)
             };
         }
-        if self.item_account_stride == 0 || self.item_operations != 0 {
+        if self.item_account_stride == 0 {
             return Err(Error::InvalidDynamicSpan);
         }
         let mut prior_insertion = None;
@@ -2704,6 +2704,27 @@ fn apply_operations_with_dynamic_spans(
         )?;
         fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
     }
+    let mut item = 0_u32;
+    while item < tail_count {
+        let mut operation_index = 0_u16;
+        while operation_index < profile.item_operations {
+            let operation = profile.operation(true, operation_index)?;
+            let account_index =
+                dynamic_runtime_coordinate_for_base(profile, span_counts, operation.account)?;
+            operation.apply(
+                profile,
+                Some(item),
+                tail_count,
+                Some((account_index, profile.rule(false, operation.account)?)),
+                accounts,
+                input_identities,
+                scalars,
+                identities,
+            )?;
+            operation_index = operation_index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
     Ok(())
 }
 
@@ -2762,14 +2783,17 @@ impl Operation {
             return Err(Error::InvalidCoordinate);
         }
         let account_rule = profile.rule(self.account_item, self.account)?;
-        if matches!(
-            account_rule.prestate,
-            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
-                | AccountPrestateV2::AuthenticatedRouteAlias
-        ) {
-            // Route aliases exist only so Effect may select the same already
-            // authenticated physical record in a child frame. AccountProfile
-            // cannot project or require through a second logical authority.
+        if account_rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+            || (account_rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias
+                && self.opcode != OP_PROJECT_LAMPORTS)
+        {
+            // Variable-data aliases and every semantic field access through a
+            // route alias stay forbidden: the representative is the sole data
+            // and identity authority.  The one narrow exception is lamports.
+            // A later privilege-free route alias may observe the complete
+            // already-authenticated representative balance so a FundingV5
+            // close can credit donations without giving the alias lifecycle,
+            // write, key, owner, or data authority.
             return Err(Error::InvalidVariableDataPrestate);
         }
         if account_rule.prestate == AccountPrestateV2::AuthenticatedOpaqueReadonlyData

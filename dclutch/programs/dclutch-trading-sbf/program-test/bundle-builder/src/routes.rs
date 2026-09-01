@@ -22,6 +22,8 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CustodyRequestLayoutV1, DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyRequestLayoutV2,
+    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
+    ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
 };
 use dclutch_effect_kernel::v2::FixedRole;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -50,6 +52,24 @@ pub fn derive_authority(
 ) -> Result<Option<DerivedAuthorityV1>, BuilderError> {
     let request = invocation.request.as_slice();
     let request_digest: [u8; 32] = Sha256::digest(request).into();
+    if invocation.resolved.role == FixedRole::Custody
+        && (request.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
+            || request.get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
+                == Some(PROJECTED_CUSTODY_REQUEST_MAGIC_V1.as_slice()))
+    {
+        let decoded = ProjectedCustodyRequestV1::decode(request)
+            .map_err(|_| BuilderError::UnsupportedRoute)?;
+        if decoded.caller_program != trading_program.to_bytes() {
+            return Err(BuilderError::UnsupportedRoute);
+        }
+        let seeds = ProjectedCustodyCallerSeedsV1::new(decoded, request_digest);
+        let authority = Pubkey::find_program_address(&seeds.as_slices(), &trading_program).0;
+        return Ok(Some(DerivedAuthorityV1 {
+            coordinate: usize::from(invocation.resolved.fixed_account_start),
+            authority,
+            request_digest,
+        }));
+    }
     let (market, context) = match invocation.resolved.role {
         FixedRole::Core | FixedRole::Resolution => return Ok(None),
         FixedRole::Custody => custody_market_and_context(request)?,
@@ -69,6 +89,151 @@ pub fn derive_authority(
         authority,
         request_digest,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use dclutch_custody_contract::{
+        CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
+        ProjectedCustodyRequestV1,
+    };
+    use sha2::{Digest, Sha256};
+    use solana_program::pubkey::Pubkey;
+
+    use super::{BuilderError, PROJECTED_CUSTODY_REQUEST_BYTES_V1, derive_authority};
+    use crate::registers::DerivedInvocationV1;
+    use dclutch_effect_kernel::v3::{
+        ResolvedInvocationV3, ResolvedReceiptDependenciesV3, RouteKindV3,
+    };
+    use dclutch_effect_kernel::v2::FixedRole;
+
+    fn id(byte: u8) -> [u8; 32] {
+        [byte; 32]
+    }
+
+    fn request(trading_program: Pubkey) -> ProjectedCustodyRequestV1 {
+        ProjectedCustodyRequestV1 {
+            operation: ProjectedCustodyOperationV1::AbortSourceAndClose,
+            caller_role: ProjectedCallerRoleV1::TradingCapability,
+            market: id(1),
+            generation: 2,
+            realm: id(3),
+            product_record: id(4),
+            product: id(5),
+            source: id(6),
+            release_set: id(7),
+            projection_receipt_digest: id(8),
+            parent_capability_root: id(9),
+            context_digest: id(10),
+            caller_program: trading_program.to_bytes(),
+            payer: id(12),
+            core_program: id(13),
+            rent_program: id(14),
+            refund_owner: id(15),
+            rent_credit: id(16),
+            hoard_vault: id(17),
+            funding_source_vault: id(18),
+            funding_source_context: id(19),
+            funding_source_compartment: CompartmentV1::SeriesEscrow,
+            mint: id(20),
+            token_program: id(21),
+            collateral_release: id(22),
+            expiry_slot: 23,
+            expected_revision: 3,
+            resulting_revision: 4,
+            amount: 25,
+            state_rent_lamports: 26,
+            vault_rent_lamports: 27,
+            funding_source_replay_revision: 1,
+            funding_source_state_rent_lamports: 29,
+            funding_source_vault_rent_lamports: 30,
+        }
+    }
+
+    fn invocation(bytes: Vec<u8>) -> DerivedInvocationV1 {
+        DerivedInvocationV1 {
+            route: 0,
+            invocation: 0,
+            resolved: ResolvedInvocationV3 {
+                role: FixedRole::Custody,
+                kind: RouteKindV3::Once,
+                item: None,
+                fixed_account_start: 44,
+                fixed_account_count: 11,
+                item_account_start: 0,
+                item_account_count: 0,
+                item_account_stride: 0,
+                repeated_item_count: 0,
+                request_offset: 0,
+                request_len: bytes.len(),
+                borrowed_witness: None,
+                receipt_dependencies: ResolvedReceiptDependenciesV3::empty(),
+                receipt_dependency: None,
+            },
+            request: bytes,
+        }
+    }
+
+    #[test]
+    fn projected_custody_authority_is_exact_and_hostile() {
+        let trading_program = Pubkey::new_from_array(id(11));
+        let bytes = request(trading_program).encode().expect("request");
+        let expected_digest: [u8; 32] = Sha256::digest(bytes).into();
+        let derived = derive_authority(&invocation(bytes.to_vec()), id(7), trading_program)
+            .expect("derive")
+            .expect("authority");
+        let expected_seeds = dclutch_custody_contract::ProjectedCustodyCallerSeedsV1::new(
+            request(trading_program),
+            expected_digest,
+        );
+        assert_eq!(derived.coordinate, 44);
+        assert_eq!(derived.request_digest, expected_digest);
+        assert_eq!(
+            derived.authority,
+            Pubkey::find_program_address(&expected_seeds.as_slices(), &trading_program).0
+        );
+
+        let mut wrong_magic = bytes;
+        wrong_magic[0] ^= 1;
+        assert_eq!(
+            derive_authority(&invocation(wrong_magic.to_vec()), id(7), trading_program),
+            Err(BuilderError::UnsupportedRoute)
+        );
+
+        let mut wrong_reserved_field = bytes;
+        wrong_reserved_field[13] = 1;
+        assert_eq!(
+            derive_authority(
+                &invocation(wrong_reserved_field.to_vec()),
+                id(7),
+                trading_program,
+            ),
+            Err(BuilderError::UnsupportedRoute)
+        );
+
+        let mut changed_digest = bytes;
+        changed_digest[688] ^= 1;
+        let changed = derive_authority(&invocation(changed_digest.to_vec()), id(7), trading_program)
+            .expect("changed request remains canonical")
+            .expect("authority");
+        assert_ne!(changed.request_digest, derived.request_digest);
+        assert_ne!(changed.authority, derived.authority);
+
+        assert_eq!(
+            derive_authority(
+                &invocation(bytes.to_vec()),
+                id(7),
+                Pubkey::new_from_array(id(31)),
+            ),
+            Err(BuilderError::UnsupportedRoute)
+        );
+
+        let truncated = bytes[..PROJECTED_CUSTODY_REQUEST_BYTES_V1 - 1].to_vec();
+        assert_eq!(
+            derive_authority(&invocation(truncated), id(7), trading_program),
+            Err(BuilderError::UnsupportedRoute)
+        );
+    }
 }
 
 /// Read the Custody request's market and context at their layout offsets.

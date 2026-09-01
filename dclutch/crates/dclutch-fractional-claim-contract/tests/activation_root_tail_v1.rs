@@ -28,8 +28,10 @@
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ROOT_BYTES_V1, FRACTIONAL_ROOT_MAGIC_V1, FRACTIONAL_ROOT_MARKET_OFFSET_V1,
     FRACTIONAL_ROOT_RENT_BENEFICIARY_OFFSET_V1, FRACTIONAL_ROOT_RENT_PRINCIPAL_OFFSET_V1,
-    FRACTIONAL_ROOT_REVISION_OFFSET_V1, FRACTIONAL_ROOT_TERMS_OFFSET_V1, FractionalRootInputV1,
-    FractionalRootV1,
+    FRACTIONAL_ROOT_REVISION_OFFSET_V1, FRACTIONAL_ROOT_SCHEMA_ID_V2,
+    FRACTIONAL_ROOT_SCHEMA_PREIMAGE_V2, FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2,
+    FRACTIONAL_ROOT_TERMS_OFFSET_V1, FractionalRootInputV1, FractionalRootInputV2,
+    FractionalRootStateV2, FractionalRootV1, FractionalRootV2,
 };
 
 /// A Market identity, which the activation seam does publish.
@@ -227,4 +229,59 @@ fn a_zero_bump_decodes_and_is_therefore_the_dangerous_one() {
         RENT_PRINCIPAL,
     );
     assert_ne!(FractionalRootV1::decode(&real_bump), Some(decoded));
+}
+
+/// V2 is an append-only replacement for the state grammar, not an
+/// interpretation of an old V1 root with a relabelled field at byte 16.
+#[test]
+fn v2_root_selects_market_free_config_while_v1_bytes_remain_v1() {
+    let v1 = FractionalRootV1::new(FractionalRootInputV1 {
+        bump: 9,
+        terms: [1; 32],
+        market: MARKET,
+        rent_beneficiary: [3; 32],
+        revision: INITIAL_REVISION,
+        historical_rent_principal: RENT_PRINCIPAL,
+    })
+    .expect("V1 root");
+    assert_eq!(FractionalRootV1::decode(&v1.to_bytes()), Some(v1));
+    assert_eq!(FractionalRootV2::decode(&v1.to_bytes()), None);
+    assert_eq!(
+        FractionalRootStateV2::decode(&v1.to_bytes()),
+        Some(FractionalRootStateV2::V1(v1))
+    );
+
+    let v2 = FractionalRootV2::new(FractionalRootInputV2 {
+        bump: 9,
+        selection_config: [0x42; 32],
+        market: MARKET,
+        rent_beneficiary: [3; 32],
+        revision: INITIAL_REVISION,
+        historical_rent_principal: RENT_PRINCIPAL,
+    })
+    .expect("V2 root");
+    let bytes = v2.to_bytes();
+    assert_eq!(
+        &bytes[FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2
+            ..FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2 + 32],
+        &[0x42; 32]
+    );
+    assert_eq!(FractionalRootV1::decode(&bytes), None);
+    assert_eq!(FractionalRootV2::decode(&bytes), Some(v2));
+    assert_eq!(
+        FractionalRootStateV2::decode(&bytes),
+        Some(FractionalRootStateV2::V2(v2))
+    );
+
+    let mut hostile = bytes;
+    hostile[11] = 1;
+    assert_eq!(FractionalRootStateV2::decode(&hostile), None);
+}
+
+#[test]
+fn v2_root_schema_is_pinned_to_its_own_preimage() {
+    use sha2::{Digest as _, Sha256};
+
+    let recomputed: [u8; 32] = Sha256::digest(FRACTIONAL_ROOT_SCHEMA_PREIMAGE_V2).into();
+    assert_eq!(recomputed, FRACTIONAL_ROOT_SCHEMA_ID_V2);
 }

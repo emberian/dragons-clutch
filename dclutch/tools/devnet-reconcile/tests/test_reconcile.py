@@ -263,6 +263,8 @@ def owned_loopback_fixture(root: pathlib.Path):
     seller_position_address, _ = key(87)
     seller_owner, seller_owner_raw = key(88)
     buyer_owner, buyer_owner_raw = key(89)
+    stranger, _ = key(91)
+    buyer_maker_replay, _ = key(92)
     protocol_owner = by_ref["protocol_owner"]["address"]
     seller_pre = position_data(seller_owner_raw, 1, [3000, 0])
     seller_post = position_data(seller_owner_raw, 2, [1000, 0])
@@ -272,7 +274,14 @@ def owned_loopback_fixture(root: pathlib.Path):
     manifest["accounts"].append(
         {"ref": "seller_position", "address": seller_position_address, "kind": "position", "role": "seller-claims-position"}
     )
+    manifest["accounts"].append(
+        {"ref": "stranger", "address": stranger, "kind": "wallet", "role": "fee-settlement-stranger"}
+    )
     direct_event = next(event for event in manifest["events"] if event["kind"] == "direct")
+    direct_event["tokenDeltas"] = [
+        {"account": "seller_token", "atoms": "1990"},
+        {"account": "buyer_token", "atoms": "-1990"},
+    ]
     direct_event["positions"] = [
         {
             "account": "seller_position",
@@ -288,6 +297,12 @@ def owned_loopback_fixture(root: pathlib.Path):
         },
     ]
     payout_event = next(event for event in manifest["events"] if event["kind"] == "payout")
+    payout_event["payout"].update(
+        {
+            "holder": buyer_owner,
+            "holderChargeClass": "terminal-holder-is-not-transaction-fee-payer",
+        }
+    )
     payout_event["position"] = {
         "account": "position",
         "preDataBase64": base64.b64encode(buyer_hot_post).decode(),
@@ -299,6 +314,32 @@ def owned_loopback_fixture(root: pathlib.Path):
         base64.b64encode(buyer_payout_post).decode(),
         "base64",
     ]
+    recipient_ref = by_ref["recipient_token"]
+    recipient_ref["authority"] = buyer_owner
+    recipient_data = token_data(
+        reconcile.b58decode(recipient_ref["mint"], "fixture recipient mint"),
+        buyer_owner_raw,
+        50,
+    )
+    recipient_final = next(
+        row for row in manifest["finalAccounts"] if row["account"] == "recipient_token"
+    )
+    recipient_final["authority"] = buyer_owner
+    recipient_final["dataSha256"] = hashlib.sha256(recipient_data).hexdigest()
+    capture["accounts"][recipient_ref["address"]]["value"]["data"] = [
+        base64.b64encode(recipient_data).decode(),
+        "base64",
+    ]
+    payout_transaction = capture["transactions"][payout_event["signature"]]
+    recipient_index = payout_transaction["transaction"]["message"]["accountKeys"].index(
+        recipient_ref["address"]
+    )
+    for field in ("preTokenBalances", "postTokenBalances"):
+        next(
+            row
+            for row in payout_transaction["meta"][field]
+            if row["accountIndex"] == recipient_index
+        )["owner"] = buyer_owner
     manifest["finalAccounts"].append(
         {
             "account": "seller_position",
@@ -318,6 +359,103 @@ def owned_loopback_fixture(root: pathlib.Path):
     )
     direct_transaction["meta"]["preBalances"].extend([3_000_000, 3_000_000])
     direct_transaction["meta"]["postBalances"].extend([3_000_000, 3_000_000])
+    direct_addresses = direct_transaction["transaction"]["message"]["accountKeys"]
+    mint = by_ref["seller_token"]["mint"]
+    authority = by_ref["seller_token"]["authority"]
+    direct_transaction["meta"]["preTokenBalances"] = [
+        token_balance(direct_addresses.index(by_ref["seller_token"]["address"]), mint, authority, 0),
+        token_balance(direct_addresses.index(by_ref["buyer_token"]["address"]), mint, authority, 5000),
+        token_balance(direct_addresses.index(by_ref["fee_token"]["address"]), mint, authority, 0),
+    ]
+    direct_transaction["meta"]["postTokenBalances"] = [
+        token_balance(direct_addresses.index(by_ref["seller_token"]["address"]), mint, authority, 1990),
+        token_balance(direct_addresses.index(by_ref["buyer_token"]["address"]), mint, authority, 3010),
+        token_balance(direct_addresses.index(by_ref["fee_token"]["address"]), mint, authority, 0),
+    ]
+    settlement = {
+        "id": "event-3b-direct-fee-settlement",
+        "kind": "direct",
+        "operation": "direct-fee-settlement",
+        "predecessor": direct_event["id"],
+        "signature": "signature-direct-fee-settlement",
+        "slot": direct_event["slot"],
+        "feePayer": "stranger",
+        "feeLamports": "5000",
+        "computeUnitsConsumed": "100000",
+        "lamportDeltas": [{"account": "stranger", "lamports": "-5000"}],
+        "tokenDeltas": [
+            {"account": "buyer_token", "atoms": "-20"},
+            {"account": "fee_token", "atoms": "20"},
+        ],
+        "sourcePath": "fixture-journal.json",
+        "sourceSha256": direct_event["sourceSha256"],
+        "feeSettlement": {
+            "generation": "0",
+            "debtor": buyer_owner,
+            "makerReplay": buyer_maker_replay,
+            "feeAtoms": "20",
+            "sourceToken": "buyer_token",
+            "destinationToken": "fee_token",
+            "destinationOwner": authority,
+            "callerAuthority": buyer_maker_replay,
+            "callerAuthorityBump": "1",
+            "standingAllowanceAtoms": "20",
+            "custodyExpectedRevision": "1",
+            "custodyResultingRevision": "2",
+            "submissionClass": "permissionless-state-derived-stranger",
+            "capitalizationClass": "debtor-collateral-obligation-not-future-revenue-or-hoard",
+        },
+    }
+    direct_index = manifest["events"].index(direct_event)
+    manifest["events"].insert(direct_index + 1, settlement)
+    predecessor = None
+    for event in manifest["events"]:
+        event["predecessor"] = predecessor
+        predecessor = event["id"]
+    settlement_changes = {
+        by_ref["buyer_token"]["address"]: (mint, authority, 3010, 2990),
+        by_ref["fee_token"]["address"]: (mint, authority, 0, 20),
+    }
+    capture["transactions"][settlement["signature"]] = transaction(
+        settlement["signature"],
+        int(settlement["slot"]),
+        [stranger, *settlement_changes],
+        {stranger: -5000},
+        settlement_changes,
+    )
+    retirement = next(event for event in manifest["events"] if event["kind"] == "retirement")
+    retirement["retirement"]["stage"] = "finish"
+    retirement["retirement"]["conservation"] = {
+        "refundBeneficiary": "refund",
+        "payer": "payer",
+        "classifiedLamports": {
+            "market": "0",
+            "rentCredit": "0",
+            "claimsRefund": "10000",
+            "custodyReplay": "0",
+            "hoardVaultRent": "0",
+            "expectedRefundDelta": "10000",
+            "refundWalletBefore": "100000",
+        },
+        "totalTransactionFeesLamports": "5000",
+        "terminalRefundWalletLamports": "110000",
+        "beneficiaryClass": "creation-fixed-refund-wallet",
+        "capitalizationClass": "historical-account-lamports-not-future-revenue-or-hoard-principal",
+    }
+    refund_owner, _ = key(93)
+    manifest["finalAccounts"].append(
+        {
+            "account": "refund",
+            "closed": False,
+            "owner": refund_owner,
+            "lamports": "110000",
+            "dataSha256": hashlib.sha256(b"").hexdigest(),
+        }
+    )
+    capture["accounts"][by_ref["refund"]["address"]] = {
+        "contextSlot": "200",
+        "value": rpc_account(refund_owner, 110_000, b""),
+    }
     source = {"schema": "fixture-semantic-owner-journal-v1", "phase": "finalized"}
     source_raw = reconcile.canonical_bytes(source)
     source_sha = hashlib.sha256(source_raw).hexdigest()
@@ -1130,6 +1268,152 @@ class ReconcileTest(unittest.TestCase):
                 [position["post"]["revision"] for position in direct["positions"]],
                 ["2", "2"],
             )
+
+    def test_owned_loopback_fee_completion_is_exact_post_hot_and_noncapitalized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            dossier = reconcile.reconcile_owned_loopback(
+                manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+            )
+            hot_index = next(index for index, event in enumerate(dossier["events"]) if "direct" in event)
+            fee_index = next(index for index, event in enumerate(dossier["events"]) if "feeSettlement" in event)
+            settlement = dossier["events"][fee_index]["feeSettlement"]
+            self.assertGreater(fee_index, hot_index)
+            self.assertEqual(settlement["feeAtoms"], "20")
+            self.assertEqual(settlement["sourceToken"], "buyer_token")
+            self.assertEqual(settlement["destinationToken"], "fee_token")
+            self.assertEqual(
+                settlement["capitalizationClass"],
+                "debtor-collateral-obligation-not-future-revenue-or-hoard",
+            )
+
+    def test_owned_loopback_terminal_holder_is_not_charged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            dossier = reconcile.reconcile_owned_loopback(
+                manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+            )
+            payout = next(event["payout"] for event in dossier["events"] if "payout" in event)
+            self.assertEqual(
+                payout["holderChargeClass"],
+                "terminal-holder-is-not-transaction-fee-payer",
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            payout_event = next(event for event in manifest["events"] if "payout" in event)
+            payout_event["payout"]["holder"] = next(
+                row["address"]
+                for row in manifest["accounts"]
+                if row["ref"] == payout_event["feePayer"]
+            )
+            with self.assertRaisesRegex(reconcile.Refusal, "charged or substituted"):
+                reconcile.reconcile_owned_loopback(
+                    manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+                )
+
+    def test_owned_loopback_fee_completion_substitution_omission_and_reorder_refuse(self):
+        def rechain(manifest):
+            predecessor = None
+            for event in manifest["events"]:
+                event["predecessor"] = predecessor
+                predecessor = event["id"]
+            manifest["sourceSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(
+                    [
+                        {"event": event["id"], "sha256": event["sourceSha256"]}
+                        for event in manifest["events"]
+                    ]
+                )
+            ).hexdigest()
+
+        def fee_event(manifest):
+            return next(event for event in manifest["events"] if "feeSettlement" in event)
+
+        mutations = [
+            (
+                lambda manifest: fee_event(manifest)["feeSettlement"].__setitem__("feeAtoms", "19"),
+                "exact debt",
+            ),
+            (
+                lambda manifest: fee_event(manifest)["feeSettlement"].__setitem__(
+                    "capitalizationClass", "future-fee-revenue"
+                ),
+                "future-revenue or Hoard capitalization",
+            ),
+            (
+                lambda manifest: fee_event(manifest)["feeSettlement"].__setitem__(
+                    "custodyResultingRevision", "3"
+                ),
+                "exact debt",
+            ),
+        ]
+        for mutate, message in mutations:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+                mutate(manifest)
+                with self.assertRaisesRegex(reconcile.Refusal, message):
+                    reconcile.reconcile_owned_loopback(
+                        manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+                    )
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            manifest["events"] = [
+                event for event in manifest["events"] if "feeSettlement" not in event
+            ]
+            rechain(manifest)
+            with self.assertRaisesRegex(reconcile.Refusal, "feeSettlement"):
+                reconcile.reconcile_owned_loopback(
+                    manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            hot_index = next(index for index, event in enumerate(manifest["events"]) if "direct" in event)
+            fee_index = next(index for index, event in enumerate(manifest["events"]) if "feeSettlement" in event)
+            fee = manifest["events"].pop(fee_index)
+            manifest["events"].insert(hot_index, fee)
+            rechain(manifest)
+            with self.assertRaisesRegex(reconcile.Refusal, "post-Hot"):
+                reconcile.reconcile_owned_loopback(
+                    manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+                )
+
+    def test_owned_loopback_retirement_beneficiary_and_capitalization_are_exact(self):
+        mutations = [
+            (
+                lambda conservation: conservation.__setitem__("payer", conservation["refundBeneficiary"]),
+                "distinct payer",
+            ),
+            (
+                lambda conservation: conservation.__setitem__(
+                    "capitalizationClass", "future-fee-revenue"
+                ),
+                "future-revenue or Hoard-principal",
+            ),
+            (
+                lambda conservation: conservation["classifiedLamports"].__setitem__("market", "1"),
+                "classified lamports differ",
+            ),
+            (
+                lambda conservation: conservation.__setitem__("terminalRefundWalletLamports", "109999"),
+                "classified lamports differ",
+            ),
+        ]
+        for mutate, message in mutations:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+                retirement = next(
+                    event["retirement"]
+                    for event in manifest["events"]
+                    if "conservation" in event.get("retirement", {})
+                )
+                mutate(retirement["conservation"])
+                with self.assertRaisesRegex(reconcile.Refusal, message):
+                    reconcile.reconcile_owned_loopback(
+                        manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+                    )
 
     def test_owned_loopback_hot_two_position_omission_alias_order_and_fill_refuse(self):
         def substitute_buyer_geometry(event):

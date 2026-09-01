@@ -270,6 +270,36 @@ inventoried 586 guards and would have failed the gate twice — once `GONE`, onc
 `NEW` — on every rename of a guarded function. A ratchet nobody can live with
 gets switched off, and then it guards nothing.
 
+### checked-caller-excludes-payer
+
+**2 entries.** A class-6 census whose standing question — *does any builder of
+this route place a signing account in this frame?* — has been asked, answered
+YES, and closed in the builder, where the reader cannot see it.
+
+`hazard-signer-census` and `hazard-privilege-pin` both mean *nobody has looked
+yet*. This tag means someone did, and the looking changed the code. It is not an
+acceptance: the finding is real and the pin is genuinely transaction-level. It
+records that the harm this class names has already been made unreachable at the
+only place it could occur.
+
+The bar for using it is the one the two hazard notes set, and it is three parts.
+The route's builders must be enumerated, not assumed. Some builder must actually
+be able to put a privileged account in the frame — if none can, the entry is a
+false positive and belongs in a `benign-` tag instead. And the exclusion must
+exist in code and be held by a test, named here.
+
+The reason it is a tag rather than a departure from the register: the three
+`market.rs` censuses that left on 2026-08-30 paired their census with a
+`meta.pubkey == payer` exclusion **in the same function**, so the reader could
+see both halves. An operator-side builder cannot do that. The census lives in
+the crate that authors the frame and the payer is chosen in the crate that
+sends it, so the two halves are always separated by a crate boundary and no
+proximity-based reader will ever pair them. Departure would require the reader
+to resolve callers across crates, which is the type resolution the
+`hazard-signer-census` note already refuses to fake.
+
+---
+
 ---
 
 ## 2026-08-31 — cohort-9 CLOSEMAKER: six entries, four tags, no new class
@@ -451,3 +481,88 @@ releases the succession selects.
 
 The class's standing reason and standing fix apply unchanged. This file is one
 of the many test files the note already describes.
+
+---
+
+## 2026-08-31 — cohort-9 CLOSE-DRIVER: four restatements fixed, one new tag, three attributed elsewhere
+
+The maker-replay close landed its operator half — a plan builder in
+`dclutch-operator` and the two subcommands that drive it — and the seam went red
+on ten findings. Four were fixed outright, three belong to another lane's file,
+and three are records about this one.
+
+### The four that were fixed, not verdicted
+
+`crates/dclutch-operator/src/direct_close_maker_v1.rs` and
+`tools/local-validator/bootstrap/successor/src/direct_close_maker.rs` each
+restated the raw-record and staging-cursor seed tuples. Both now take the seeds
+from their owner through `RecordKeyV1::raw_record_pda_seeds` /
+`staging_cursor_pda_seeds` and a local `record_address` that places
+`seeds.domain()` rather than naming it — the pattern `964549dd` set in the
+retiring test that morning.
+
+The builder's two bump-bearing derivations went the same way, through a
+`record_address_at_bump` over the same seed material, even though the reader had
+not flagged them: leaving the tuple spelled in two of a file's four derivations
+would have retired the finding without retiring the defect.
+
+### `checked-caller-excludes-payer`, 2 entries
+
+`assemble_plan` in `direct_close_maker_v1.rs` censuses `is_signer` across its
+whole 22-account frame and pins exact writability on every coordinate, so it
+draws both halves of class 6 — exactly as its sibling
+`direct_begin_retiring_v1.rs assemble_plan` does, under `hazard-signer-census`
+and `hazard-privilege-pin`.
+
+This tag exists because the standing question those two tags carry — *does any
+builder of this route place a signing account in this frame?* — has now been
+asked and answered for this route, and the answer changed the code.
+
+**The answer is yes, and it is the obvious way to run the close.** The route's
+on-chain frame check (`direct_close_maker_v1.rs:134` in the Trading program)
+refuses any signer and pins each coordinate's writability, and both are
+transaction-level: a fee payer signs and is written for the fee whatever
+`AccountMeta` it carried. The frame's coordinate 21 is the maker's recorded
+`rent_owner`. So a maker closing their own replay and receiving their own rent —
+the first thing anyone would try — would have refused on chain as
+`CloseMakerFrame`, with nothing in the message to say why.
+
+The sole builder of this route now refuses that before it sends:
+`refuse_payer_in_frame` in the subcommand names the colliding coordinate and
+says to pay from a stranger, held by
+`a_fee_payer_the_frame_already_names_is_refused_before_the_send`.
+
+That is this class's harm statement in negated form, which is what retired the
+three `market.rs` censuses on 2026-08-30. Those could leave the register because
+their exclusion sits in the same function the reader was reading. This one
+cannot: the census is in `dclutch-operator` and the exclusion is in the
+successor bootstrap, two crates apart, and no static reader that pairs them by
+proximity will ever see it. Hence a tag rather than a departure — the finding is
+real, the question is closed, and the closure is not visible from where the
+finding is raised.
+
+Not `hazard-*`, because those mean nobody has looked yet, and recording it that
+way would send the next reader to redo work that is already done and tested.
+
+### `inventory-guard-present`, +1
+
+`direct_close_maker_v1.rs` refuses the unset pubkey in its coordinate closure,
+so it joins the ratchet. One new guard, not one new defect, per that class's own
+note.
+
+### `debt-derivation-restatement`, +3 (PROFILE-3's succession caller)
+
+`tools/local-validator/bootstrap/successor/src/infrastructure_succession.rs`
+restates the infrastructure-profile domain's 1-seed tuple and the record
+contract's raw and staging seeds. The file arrived in `2a10fa4c`, PROFILE-3's
+cut-day caller for the succession ceremony, and its findings are its frame
+rather than this lane's; they surfaced in the same measurement window only
+because both lanes landed against one baseline.
+
+Verdicted with that attribution rather than repaired, because the file has an
+owner who is still working in it. The class's standing fix applies unchanged and
+is now cheap: the accessor pattern this lane just applied twice, four files down
+the same seam, will retire all three.
+
+Baseline edited **by hand**, never `--write`: the FRACCHECK-2 precedent holds,
+and `measured_commit` is left where `--write` last set it.

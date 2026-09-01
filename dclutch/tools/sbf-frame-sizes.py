@@ -40,12 +40,20 @@ tool that silently measures nothing is worse than no tool -- that is the same
 failure shape as a warm target directory reporting zero diagnostics for a crate
 it never recompiled.
 
+The JSON form is deliberately complete rather than a top-N view. It is the
+machine-readable input to `tools/frameguard/frameguard.py`, whose committed
+per-function ratchet catches growth while it is still below the hard wall:
+
+    sbf-frame-sizes.py OBJECT --format json
+
 usage: sbf-frame-sizes.py OBJECT [--bound N] [--top N] [--quiet]
+                          [--format {text,json}]
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import struct
 import sys
 from pathlib import Path
@@ -196,6 +204,12 @@ def main() -> int:
     parser.add_argument("--bound", type=int, default=SBPF_V0_FRAME_BYTES)
     parser.add_argument("--top", type=int, default=8)
     parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="text summary (default) or the complete canonical JSON input",
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="print only the deepest frame and any refusal",
@@ -220,7 +234,23 @@ def main() -> int:
 
     over = [row for row in measured if row[0] >= arguments.bound]
     deepest, deepest_symbol = measured[0]
-    if arguments.quiet:
+    if arguments.format == "json":
+        print(
+            json.dumps(
+                {
+                    "schema": "dclutch-sbf-frame-sizes-v1",
+                    "bound_bytes": arguments.bound,
+                    "frame_count": len(measured),
+                    "frames": [
+                        {"bytes": size, "symbol": symbol}
+                        for size, symbol in sorted(measured, key=lambda row: row[1])
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    elif arguments.quiet:
         print(
             f"  deepest frame {deepest} of {arguments.bound} "
             f"({arguments.bound - deepest} spare)  {deepest_symbol}"

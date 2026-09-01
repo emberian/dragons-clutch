@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import contextlib
 import dataclasses
 import hashlib
@@ -24,6 +25,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import socket
@@ -54,7 +56,11 @@ MIXED_GATE_SCHEMA = "dclutch-checked-upgrade-gate-v2"
 MIXED_GATE_AUTHENTICATOR_RELATIVE_PATH = Path(
     "tools/release/compose-mixed-gate.py"
 )
+CHAOS_CONTRACT_RELATIVE_PATH = Path(
+    "tools/release/private-validator-lifecycle/chaos.py"
+)
 SEED_DOMAIN = b"dclutch/private-validator-lifecycle/named-seed/v1\0"
+CHAOS_SEED_DOMAIN = b"dclutch/private-validator-lifecycle/chaos-seed/v2\0"
 FOUNDING_PARTICIPANT_COMMANDS = (
     "local-mutable-prepare-v1",
     "local-mutable-plan-authenticate-v1",
@@ -69,8 +75,15 @@ PAYOUT_EXECUTE_COMMAND = "local-private-validator-wallet-terminal-payout-v1"
 TERMINAL_SEQUENCE_COMMAND = "local-private-validator-terminal-sequence-v1"
 TERMINAL_RETIREMENT_COMMAND = "local-private-validator-aggregate-retirement-v1"
 DIRECT_PRODUCER_COMMAND = "local-private-validator-direct-trade-produce-v1"
+DIRECT_CAPABILITY_ACTIVATION_COMMAND = (
+    "local-private-validator-direct-capability-activation-v1"
+)
 DIRECT_EXECUTE_COMMAND = "local-private-validator-direct-trade-v1"
 DIRECT_PAYOUT_SCHEDULE_COMMAND = "local-private-validator-direct-payout-schedule-v1"
+DIRECT_FEE_SETTLEMENT_COMMAND = "local-private-validator-direct-fee-settlement-v1"
+DIRECT_TERMINAL_CHILDREN_COMMAND = "local-private-validator-direct-terminal-children-v1"
+USER_POSITION_CLOSE_COMMAND = "local-private-validator-user-position-close-v1"
+DIRECT_CLOSE_MAKER_COMMAND = "local-private-validator-direct-close-maker-v1"
 PROVIDER_CLOSURE_COMMAND = "local-private-validator-pyth-provider-closure-v1"
 ACTIVITY_STAGE_COMMAND = "local-private-validator-activity-stage-completion-v1"
 ACTIVITY_MANIFEST_COMMAND = "local-private-validator-activity-manifest-v1"
@@ -85,10 +98,36 @@ FINAL_EVIDENCE_COMMANDS = (
     LIFECYCLE_SESSION_COMMAND,
     LIFECYCLE_RECEIPT_COMMAND,
 )
-FULL_LIFECYCLE_BLOCKERS = ("exact seventeen-case resumable chaos session",)
+ACTIVITY_DESCRIPTOR_ROLES = (
+    "founding",
+    "participant",
+    "alt",
+    "seal",
+    "direct",
+    "resolution",
+    "payout",
+    "retirement",
+)
+FINAL_LIFECYCLE_DESCRIPTOR_ROLES = (
+    "founding",
+    "participant",
+    "alt",
+    "seal",
+    "direct",
+    "pyth",
+    "resolution",
+    "payout",
+    "retirement",
+    "activity-session",
+    "chaos-session",
+)
 DIRECT_PRODUCER_SCHEMA = "dclutch-owned-loopback-direct-trade-producer-receipt-v1"
 DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v1"
 DIRECT_PAYOUT_SCHEDULE_SCHEMA = "dclutch-owned-loopback-direct-payout-schedule-v1"
+DIRECT_FEE_SETTLEMENT_SCHEMA = "dclutch-direct-fee-settlement-evidence-v1"
+DIRECT_TERMINAL_CHILDREN_SCHEMA = "dclutch-owned-loopback-direct-terminal-children-v1"
+USER_POSITION_CLOSE_SCHEMA = "dclutch-user-position-close-evidence-v1"
+DIRECT_CLOSE_MAKER_SCHEMA = "dclutch-direct-close-maker-evidence-v1"
 PYTH_JOURNAL_SCHEMA = "dclutch-owned-loopback-pyth-prerequisite-transaction-v1"
 RESOLUTION_PRODUCER_SCHEMA = "dclutch-owned-loopback-flagship-resolution-producer-v1"
 RESOLUTION_TABLE_SCHEMA = "dclutch-owned-loopback-flagship-resolution-alt-journal-v3"
@@ -209,7 +248,7 @@ SYSTEM_PROGRAM_ADDRESS = "11111111111111111111111111111111"
 DEVELOPMENT_FEE_RECIPIENT_ROLE = "founding-source-funder"
 PARTICIPANT_ROLE = "participant"
 PARTICIPANT_FIXTURE_SOURCE_ROLE = "direct-buyer"
-CAMPAIGN_ADMINISTRATION_KEY_ROLES = (VALIDATOR_MINT_ROLE,)
+CAMPAIGN_ADMINISTRATION_KEY_ROLES = (VALIDATOR_MINT_ROLE, CAMPAIGN_PAYER_ROLE)
 CAMPAIGN_FOUNDING_KEY_ROLES = (
     CAMPAIGN_PAYER_ROLE,
     "collateral-mint",
@@ -286,6 +325,158 @@ class PayoutTarget:
     claim_index: int
     recipient: str
     quantity_atoms: int
+
+
+CHAOS_ARM_ENV = {
+    "case": "DCLUTCH_CHAOS_FAULT_CASE_V1",
+    "mutation": "DCLUTCH_CHAOS_FAULT_MUTATION_V1",
+    "boundary": "DCLUTCH_CHAOS_FAULT_BOUNDARY_V1",
+    "journal": "DCLUTCH_CHAOS_FAULT_JOURNAL_V1",
+    "receipt": "DCLUTCH_CHAOS_FAULT_RECEIPT_V1",
+}
+CHAOS_FAULT_RECEIPT_SCHEMA = "dclutch-owned-loopback-chaos-fault-boundary-v1"
+
+
+@dataclasses.dataclass
+class ChaosStageSupervisor:
+    """Observe and recover one real successor exterior process death."""
+
+    case_id: str
+    mutation: str
+    boundary: str
+    journal: Path
+    receipt: Path
+    fired: bool = False
+    facts: dict[str, Any] | None = None
+    recovery: dict[str, Any] | None = None
+
+    def retarget(self, journal: Path) -> None:
+        if self.fired:
+            return
+        if not journal.is_absolute():
+            raise Refusal("chaos target journal path must be absolute")
+        self.journal = journal
+
+    def environment(self) -> dict[str, str]:
+        if self.fired:
+            return clean_subprocess_environment()
+        if not self.journal.is_absolute() or not self.receipt.is_absolute():
+            raise Refusal("chaos supervisor paths must be absolute")
+        if self.receipt.exists():
+            raise Refusal("chaos fault receipt path was not absent before execution")
+        environment = clean_subprocess_environment()
+        environment.update(
+            {
+                CHAOS_ARM_ENV["case"]: self.case_id,
+                CHAOS_ARM_ENV["mutation"]: self.mutation,
+                CHAOS_ARM_ENV["boundary"]: self.boundary,
+                CHAOS_ARM_ENV["journal"]: str(self.journal),
+                CHAOS_ARM_ENV["receipt"]: str(self.receipt),
+            }
+        )
+        return environment
+
+    def observe_and_kill(
+        self, child: subprocess.Popen[bytes]
+    ) -> dict[str, Any] | None:
+        while child.poll() is None and not self.receipt.exists():
+            time.sleep(0.02)
+        if not self.receipt.exists():
+            return None
+        receipt_path = canonical_file(self.receipt, "chaos fault receipt")
+        receipt = exact_keys(
+            read_unique_json(receipt_path, "chaos fault receipt"),
+            {
+                "schema",
+                "status",
+                "caseId",
+                "targetMutation",
+                "boundary",
+                "processId",
+                "durablePhase",
+                "journalPath",
+                "journalBeforeKillSha256",
+                "intentSha256",
+                "packetSha256",
+                "signature",
+                "sendCountBeforeKill",
+            },
+            "chaos fault receipt",
+        )
+        expected_send_count = (
+            0 if self.boundary == "dispatching-before-send" else 1
+        )
+        journal = canonical_file(self.journal, "chaos fault journal")
+        if (
+            receipt.get("schema") != CHAOS_FAULT_RECEIPT_SCHEMA
+            or receipt.get("status") != "armed"
+            or receipt.get("caseId") != self.case_id
+            or receipt.get("targetMutation") != self.mutation
+            or receipt.get("boundary") != self.boundary
+            or receipt.get("processId") != child.pid
+            or receipt.get("durablePhase") != "dispatching"
+            or receipt.get("journalPath") != str(journal)
+            or receipt.get("journalBeforeKillSha256") != sha256_file(journal)
+            or receipt.get("sendCountBeforeKill") != expected_send_count
+        ):
+            raise Refusal("chaos fault receipt changed its exact armed boundary facts")
+        for field in ("journalBeforeKillSha256", "intentSha256", "packetSha256"):
+            lowercase_sha256(receipt.get(field), f"chaos fault {field}")
+        canonical_signature(receipt.get("signature"), "chaos fault signature")
+        receipt_sha256 = sha256_file(receipt_path)
+        journal_sha256 = sha256_file(journal)
+        try:
+            os.kill(child.pid, signal.SIGKILL)
+        except ProcessLookupError as error:
+            raise Refusal("chaos exterior escaped before supervisor SIGKILL") from error
+        child.wait(timeout=10)
+        if child.returncode != -signal.SIGKILL:
+            raise Refusal("chaos exterior did not terminate from actual SIGKILL")
+        if sha256_file(journal) != journal_sha256:
+            raise Refusal("chaos journal changed after the killed exterior stopped")
+        self.fired = True
+        self.facts = {
+            "receiptSha256": receipt_sha256,
+            "journalBeforeKillSha256": journal_sha256,
+            "durablePhase": "dispatching",
+            "exitCode": child.returncode,
+            "signal": signal.SIGKILL,
+            "sendCountBeforeKill": expected_send_count,
+            "intentSha256": receipt["intentSha256"],
+            "packetSha256": receipt["packetSha256"],
+            "signature": receipt["signature"],
+        }
+        return self.facts
+
+    def finish_recovery(self) -> dict[str, Any]:
+        if not self.fired or self.facts is None:
+            raise Refusal("chaos supervisor never reached its target mutation")
+        journal = canonical_file(self.journal, "recovered chaos journal")
+        after = sha256_file(journal)
+        if after == self.facts["journalBeforeKillSha256"]:
+            raise Refusal("chaos recovery did not finalize its durable journal")
+        self.recovery = {
+            "journalBeforeRestartSha256": self.facts["journalBeforeKillSha256"],
+            "journalAfterFinalizationSha256": after,
+            "intentSha256": self.facts["intentSha256"],
+            "packetSha256": self.facts["packetSha256"],
+            "signature": self.facts["signature"],
+            "sendCountAfterRestart": (
+                1 if self.boundary == "dispatching-before-send" else 0
+            ),
+            "signingCountAfterRestart": 0,
+        }
+        return self.recovery
+
+
+_ACTIVE_CHAOS_SUPERVISOR: ChaosStageSupervisor | None = None
+
+
+def clean_subprocess_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for variable in CHAOS_ARM_ENV.values():
+        environment.pop(variable, None)
+    return environment
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -718,6 +909,28 @@ def load_mixed_gate_authenticator(paths: Paths) -> Any:
     return module
 
 
+def load_chaos_contract(paths: Paths) -> Any:
+    module_path = canonical_file(
+        paths.repo / CHAOS_CONTRACT_RELATIVE_PATH,
+        "private lifecycle chaos contract",
+    )
+    spec = importlib.util.spec_from_file_location(
+        "dclutch_private_lifecycle_chaos_contract", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise Refusal("private lifecycle chaos contract could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+    for name in ("MATRIX", "TARGET_MUTATIONS", "execute_matrix", "authenticate_case"):
+        if not hasattr(module, name):
+            raise Refusal(f"private lifecycle chaos contract omitted {name}")
+    return module
+
+
 def checked_gate(paths: Paths, commit: str) -> tuple[Path, dict[str, Any], str]:
     gate_path = canonical_file(
         paths.release_root / "CHECKED_UPGRADE_GATE.json", "checked release gate"
@@ -840,6 +1053,7 @@ def command_surface(bootstrap: Path, through: str) -> str:
     if through in ("full", "full-probe"):
         required.extend(
             (
+                DIRECT_CAPABILITY_ACTIVATION_COMMAND,
                 DIRECT_PRODUCER_COMMAND,
                 DIRECT_EXECUTE_COMMAND,
                 DIRECT_PAYOUT_SCHEDULE_COMMAND,
@@ -1325,6 +1539,7 @@ def write_bytes_new(path: Path, data: bytes) -> None:
 def run_stage(
     run: Path, ordinal: int, label: str, argv: Sequence[str]
 ) -> subprocess.CompletedProcess[bytes]:
+    global _ACTIVE_CHAOS_SUPERVISOR
     stage = run / "stages" / f"{ordinal:02d}-{label}"
     stage.mkdir(parents=True, exist_ok=False)
     intent = {
@@ -1335,16 +1550,47 @@ def run_stage(
     }
     write_json_new(stage / "intent.json", intent)
     started = time.monotonic_ns()
+    supervisor = _ACTIVE_CHAOS_SUPERVISOR
     child = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        env=(
+            supervisor.environment()
+            if supervisor is not None and not supervisor.fired
+            else clean_subprocess_environment()
+        ),
     )
     interrupted_error: BaseException | None = None
+    fault_facts: dict[str, Any] | None = None
+    recovery_facts: dict[str, Any] | None = None
     try:
-        stdout, stderr = child.communicate()
+        if supervisor is not None and not supervisor.fired:
+            fault_facts = supervisor.observe_and_kill(child)
+        if fault_facts is None:
+            stdout, stderr = child.communicate()
+        else:
+            fault_stdout, fault_stderr = child.communicate()
+            write_bytes_new(stage / "fault-stdout.bin", fault_stdout)
+            write_bytes_new(stage / "fault-stderr.bin", fault_stderr)
+            recovery = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+                env=clean_subprocess_environment(),
+            )
+            try:
+                stdout, stderr = recovery.communicate()
+            except BaseException:
+                terminate_group(recovery)
+                raise
+            child = recovery
+            if recovery.returncode == 0:
+                recovery_facts = supervisor.finish_recovery()
     except BaseException as error:
         interrupted_error = error
         terminate_group(child)
@@ -1363,6 +1609,8 @@ def run_stage(
         "stdout_sha256": sha256_bytes(result.stdout),
         "stderr_sha256": sha256_bytes(result.stderr),
         "interrupted": interrupted_error is not None,
+        "chaos_fault": fault_facts,
+        "chaos_recovery": recovery_facts,
     }
     write_json_new(stage / "receipt.json", receipt)
     if interrupted_error is not None:
@@ -1477,6 +1725,91 @@ def validator_argv(
         "--dynamic-port-range",
         f"{port + 10}-{port + 41}",
     ]
+
+
+def write_local_validator_profile(
+    paths: Paths,
+    *,
+    ledger: Path,
+    plan: Path,
+    account_dir: str,
+    port: int,
+) -> Path:
+    ledger = canonical_directory(ledger, "live private-validator ledger")
+    plan = canonical_file(plan, "local mutable successor plan")
+    account_root = canonical_directory(account_dir, "local mutable account directory")
+    version = subprocess.run(
+        [str(paths.validator), "--version"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=clean_subprocess_environment(),
+        check=False,
+    )
+    if version.returncode != 0:
+        raise Refusal("solana-test-validator --version failed for its profile")
+    try:
+        version_text = version.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise Refusal("solana-test-validator version was not UTF-8") from error
+    if not version_text or not version_text.isascii():
+        raise Refusal("solana-test-validator version was empty or non-ASCII")
+    programs: list[dict[str, Any]] = [
+        {"name": role}
+        for role in (
+            "registry",
+            "core",
+            "claims",
+            "trading",
+            "resolution",
+            "custody",
+            "rent-credit",
+        )
+    ]
+    programs.extend(
+        [
+            {
+                "name": "pyth-receiver",
+                "program_id": "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+                "programdata_id": "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+                "deployment_slot": 0,
+                "upgrade_authority": None,
+                "programdata_sha256": "63d003102c1bd48be1be24706734813094747eee82edbe066c2042474f64004e",
+                "elf_sha256": "c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64",
+            },
+            {
+                "name": "pyth-router",
+                "program_id": "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+                "programdata_id": "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+                "deployment_slot": 0,
+                "upgrade_authority": None,
+                "programdata_sha256": "04c1327626a93e09c4c833aa43b316f472d697e2fff0e5c029aaf343b83252c4",
+                "elf_sha256": "f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb",
+            },
+        ]
+    )
+    profile = {
+        "schema": "dclutch-successor-local-validator-profile-v1",
+        "launcher_version": "3",
+        "network": {
+            "bind_address": "127.0.0.1",
+            "rpc_url": f"http://127.0.0.1:{port}",
+            "faucet_port": port + 2,
+            "gossip_port": port + 3,
+            "dynamic_port_range": f"{port + 10}-{port + 41}",
+        },
+        "ledger": str(ledger),
+        "account_dir": str(account_root),
+        "genesis_plan": str(plan),
+        "genesis_boundary": "Exact transaction-publication successor genesis; all lifecycle mutations remain transactions.",
+        "key_policy": "Disposable seed-derived loopback keys only; no caller wallet or config is read.",
+        "validator": {"path": str(paths.validator), "version": version_text},
+        "programs": programs,
+        "loader_time_boundary": "Checked dClutch and provider Loader-v3 pairs are bound to the successor plan and finalized capture.",
+    }
+    output = ledger / "dclutch-successor-validator-profile.json"
+    write_json_new(output, profile)
+    return canonical_file(output, "local-validator profile")
 
 
 def require_role_key(report: dict[str, Any], role: str) -> Path:
@@ -3140,6 +3473,8 @@ def run_wallet_payouts(
             "--execute",
         ]
         for attempt in range(MAX_PAYOUT_INVOCATIONS):
+            if index == 0:
+                arm_payout_chaos_target(journal_dir)
             stdout = run_json_stage(
                 run,
                 ordinal,
@@ -3185,6 +3520,369 @@ def run_wallet_payouts(
     return rows, ordinal
 
 
+def authenticate_user_position_close(
+    document: Any,
+    *,
+    direct_evidence: Path,
+    child: dict[str, str],
+    market: str,
+) -> dict[str, Any]:
+    evidence = exact_keys(
+        document,
+        {"schema", "cluster", "phase", "authorizedMutation", "plan", "finalized"},
+        f"{child['role']} Position close evidence",
+    )
+    plan = exact_keys(
+        evidence.get("plan"),
+        {
+            "sourceKind",
+            "sourceSha256",
+            "sourceMarket",
+            "market",
+            "claimsMarket",
+            "position",
+            "admission",
+            "owner",
+            "rentCredit",
+            "requestSha256",
+            "expectedReceiptBase64",
+            "positionLamports",
+            "admissionLamports",
+            "totalCreditLamports",
+            "rentCreditBeforeLamports",
+            "rentCreditAfterLamports",
+            "accountCount",
+            "requiredSigner",
+        },
+        f"{child['role']} Position close plan",
+    )
+    finalized = exact_keys(
+        evidence.get("finalized"),
+        {
+            "signature",
+            "slot",
+            "feeLamports",
+            "computeUnitsConsumed",
+            "receiptBase64",
+            "receiptSha256",
+            "positionClosed",
+            "admissionClosed",
+            "rentCreditAfterLamports",
+            "ownerAfterLamports",
+            "feePayerAfterLamports",
+        },
+        f"{child['role']} Position close finalization",
+    )
+    fact = finalized_fact(finalized, f"{child['role']} Position close")
+    position_lamports = positive_integer(
+        plan.get("positionLamports"), f"{child['role']} Position live lamports"
+    )
+    admission_lamports = positive_integer(
+        plan.get("admissionLamports"), f"{child['role']} admission live lamports"
+    )
+    total = positive_integer(
+        plan.get("totalCreditLamports"), f"{child['role']} close credit"
+    )
+    before = nonnegative_integer(
+        plan.get("rentCreditBeforeLamports"), f"{child['role']} RentCredit before"
+    )
+    after = positive_integer(
+        plan.get("rentCreditAfterLamports"), f"{child['role']} RentCredit after"
+    )
+    try:
+        expected_receipt = base64.b64decode(
+            plan.get("expectedReceiptBase64"), validate=True
+        )
+        receipt = base64.b64decode(finalized.get("receiptBase64"), validate=True)
+    except (TypeError, ValueError) as error:
+        raise Refusal(f"{child['role']} Position close receipt is not base64") from error
+    if (
+        evidence.get("schema") != USER_POSITION_CLOSE_SCHEMA
+        or evidence.get("cluster") != "owned-loopback"
+        or evidence.get("phase") != "finalized"
+        or evidence.get("authorizedMutation") is not True
+        or plan.get("sourceKind") != "direct-terminal"
+        or plan.get("sourceSha256") != sha256_file(direct_evidence)
+        or plan.get("sourceMarket") != market
+        or plan.get("market") != market
+        or plan.get("position") != child["position"]
+        or plan.get("owner") != child["owner"]
+        or plan.get("requiredSigner") != child["owner"]
+        or positive_integer(plan.get("accountCount"), "Position close account count")
+        != 16
+        or total != position_lamports + admission_lamports
+        or after != before + total
+        or finalized.get("positionClosed") is not True
+        or finalized.get("admissionClosed") is not True
+        or finalized.get("rentCreditAfterLamports") != after
+        or receipt != expected_receipt
+        or hashlib.sha256(receipt).hexdigest()
+        != lowercase_sha256(
+            finalized.get("receiptSha256"), f"{child['role']} close receipt digest"
+        )
+    ):
+        raise Refusal(
+            f"{child['role']} Position close changed its authenticated child or live-balance conservation"
+        )
+    for field in ("claimsMarket", "admission", "rentCredit"):
+        canonical_pubkey(plan.get(field), f"{child['role']} Position close {field}")
+    lowercase_sha256(plan.get("requestSha256"), f"{child['role']} close request")
+    nonnegative_integer(finalized.get("ownerAfterLamports"), "Position owner after")
+    nonnegative_integer(finalized.get("feePayerAfterLamports"), "Position payer after")
+    return {"evidence": evidence, "finalized": fact}
+
+
+def run_direct_position_closes(
+    run: Path,
+    paths: Paths,
+    report: dict[str, Any],
+    url: str,
+    plan: Path,
+    market_input: Path,
+    campaign_evidence: Path,
+    direct_evidence: Path,
+    terminal_children: dict[str, Any],
+    market: str,
+    first_ordinal: int,
+) -> tuple[list[dict[str, Any]], int]:
+    root = run / "position-closes"
+    root.mkdir(mode=0o700)
+    payer_key = require_role_key(report, VALIDATOR_MINT_ROLE)
+    payer = canonical_pubkey(
+        key_address(paths.solana, payer_key), "Position close fee payer"
+    )
+    keys = keypairs_by_address(paths, report)
+    ordinal = first_ordinal
+    rows: list[dict[str, Any]] = []
+    for index, child in enumerate(terminal_children["positionChildren"]):
+        evidence_path = root / f"{index:02d}-{child['role']}.json"
+        owner_key = require_keypair(keys, child["owner"], f"{child['role']} Position owner")
+        run_stage(
+            run,
+            ordinal,
+            f"position-close-{index:02d}-{child['role']}",
+            [
+                str(paths.bootstrap),
+                USER_POSITION_CLOSE_COMMAND,
+                "--rpc-url",
+                url,
+                "--direct-evidence",
+                str(direct_evidence),
+                "--plan",
+                str(plan),
+                "--market-input",
+                str(market_input),
+                "--campaign-evidence",
+                str(campaign_evidence),
+                "--position-owner",
+                child["owner"],
+                "--fee-payer",
+                payer,
+                "--position-owner-keypair",
+                str(owner_key),
+                "--fee-payer-keypair",
+                str(payer_key),
+                "--evidence",
+                str(evidence_path),
+                "--execute",
+            ],
+        )
+        ordinal += 1
+        authenticated = authenticate_user_position_close(
+            read_unique_json(evidence_path, f"{child['role']} Position close evidence"),
+            direct_evidence=direct_evidence,
+            child=child,
+            market=market,
+        )
+        rows.append(
+            {
+                "role": child["role"],
+                "owner": child["owner"],
+                "position": child["position"],
+                "evidence": str(evidence_path),
+                "evidence_sha256": sha256_file(evidence_path),
+                "finalized": authenticated["finalized"],
+            }
+        )
+    if [row["role"] for row in rows] != ["seller", "buyer"]:
+        raise Refusal("Direct Position closes changed canonical participant order")
+    return rows, ordinal
+
+
+def authenticate_direct_close_maker(
+    document: Any,
+    *,
+    child: dict[str, str],
+    market: str,
+    direct_evidence: Path,
+    direct_root: str,
+    remaining_roots: int,
+) -> dict[str, Any]:
+    evidence = exact_keys(
+        document,
+        {
+            "schema",
+            "cluster",
+            "market",
+            "generation",
+            "directRoot",
+            "directEvidenceSha256",
+            "makerReplay",
+            "plan",
+            "alreadyClosed",
+            "landed",
+        },
+        "Direct maker close evidence",
+    )
+    plan = exact_keys(
+        evidence.get("plan"),
+        {
+            "maker",
+            "rentOwner",
+            "rentPrincipal",
+            "unclassifiedDonation",
+            "totalCredit",
+            "beneficiaryLamportsAfter",
+            "remainingOpenMakerRoots",
+            "requestDigest",
+            "expectedPostRootDigest",
+            "expectedReceipt",
+        },
+        "Direct maker close plan",
+    )
+    landed = exact_keys(
+        evidence.get("landed"),
+        {"signature", "slot", "computeUnitsConsumed", "feeLamports"},
+        "Direct maker close finalization",
+    )
+    fact = finalized_fact(landed, "Direct maker close")
+    rent = positive_integer(plan.get("rentPrincipal"), "maker replay rent principal")
+    donation = nonnegative_integer(
+        plan.get("unclassifiedDonation"), "maker replay donation"
+    )
+    total = positive_integer(plan.get("totalCredit"), "maker replay total credit")
+    receipt = plan.get("expectedReceipt")
+    direct = read_unique_json(direct_evidence, "Direct finalized evidence for maker close")
+    direct_generation = nonnegative_integer(
+        direct.get("generation"), "Direct finalized generation for maker close"
+    )
+    if (
+        evidence.get("schema") != DIRECT_CLOSE_MAKER_SCHEMA
+        or evidence.get("cluster") != "owned-loopback"
+        or evidence.get("market") != market
+        or evidence.get("generation") != direct_generation
+        or evidence.get("directRoot") != direct_root
+        or evidence.get("directEvidenceSha256") != sha256_file(direct_evidence)
+        or evidence.get("makerReplay") != child["replay"]
+        or plan.get("maker") != child["maker"]
+        or evidence.get("alreadyClosed") is not False
+        or total != rent + donation
+        or plan.get("remainingOpenMakerRoots") != remaining_roots
+        or not isinstance(receipt, str)
+        or not receipt
+        or len(receipt) % 2 != 0
+        or any(character not in "0123456789abcdef" for character in receipt)
+    ):
+        raise Refusal(
+            "Direct maker close changed its authenticated generation, root, child, or conservation"
+        )
+    lowercase_sha256(
+        evidence.get("directEvidenceSha256"), "Direct maker close evidence lineage"
+    )
+    canonical_pubkey(direct_root, "Direct terminal root for maker close")
+    canonical_pubkey(plan.get("rentOwner"), "Direct maker close rent owner")
+    positive_integer(
+        plan.get("beneficiaryLamportsAfter"), "maker close beneficiary poststate"
+    )
+    lowercase_sha256(plan.get("requestDigest"), "Direct maker close request")
+    lowercase_sha256(plan.get("expectedPostRootDigest"), "Direct maker close post-root")
+    return {"evidence": evidence, "finalized": fact}
+
+
+def run_direct_maker_closes(
+    run: Path,
+    paths: Paths,
+    report: dict[str, Any],
+    url: str,
+    plan: Path,
+    market_input: Path,
+    campaign_evidence: Path,
+    market: str,
+    direct_evidence: Path,
+    terminal_children: dict[str, Any],
+    first_ordinal: int,
+) -> tuple[list[dict[str, Any]], int]:
+    canonical_file(direct_evidence, "Direct finalized evidence for maker closes")
+    root = run / "retirement" / "maker-closes"
+    root.mkdir(mode=0o700)
+    payer_key = require_role_key(report, VALIDATOR_MINT_ROLE)
+    initial_roots = terminal_children["openMakerRootCount"]
+    children = terminal_children["makerReplayChildren"]
+    if initial_roots != len(children):
+        raise Refusal("Direct maker root count differs from authenticated child set")
+    ordinal = first_ordinal
+    rows: list[dict[str, Any]] = []
+    for index, child in enumerate(children):
+        evidence_path = root / f"{index:02d}.json"
+        run_stage(
+            run,
+            ordinal,
+            f"maker-close-{index:02d}",
+            [
+                str(paths.bootstrap),
+                DIRECT_CLOSE_MAKER_COMMAND,
+                "--rpc-url",
+                url,
+                "--plan",
+                str(plan),
+                "--market-input",
+                str(market_input),
+                "--campaign-evidence",
+                str(campaign_evidence),
+                "--direct-evidence",
+                str(direct_evidence),
+                "--market",
+                market,
+                "--maker",
+                child["maker"],
+                "--maker-replay",
+                child["replay"],
+                "--entry-index",
+                str(terminal_children["capabilityEntryIndex"]),
+                "--evidence",
+                str(evidence_path),
+                "--execute",
+                "--fee-payer-keypair",
+                str(payer_key),
+            ],
+        )
+        ordinal += 1
+        remaining = initial_roots - index - 1
+        authenticated = authenticate_direct_close_maker(
+            read_unique_json(evidence_path, f"Direct maker close {index}"),
+            child=child,
+            market=market,
+            direct_evidence=direct_evidence,
+            direct_root=terminal_children["directRoot"],
+            remaining_roots=remaining,
+        )
+        rows.append(
+            {
+                "maker": child["maker"],
+                "maker_replay": child["replay"],
+                "remaining_open_maker_roots": remaining,
+                "evidence": str(evidence_path),
+                "evidence_sha256": sha256_file(evidence_path),
+                "finalized": authenticated["finalized"],
+            }
+        )
+    if rows and rows[-1]["remaining_open_maker_roots"] != 0:
+        raise Refusal("Direct maker close sequence did not reach zero roots")
+    if not rows and initial_roots != 0:
+        raise Refusal("Direct maker roots remained without close evidence")
+    return rows, ordinal
+
+
 def run_terminal_retirement(
     run: Path,
     paths: Paths,
@@ -3194,6 +3892,8 @@ def run_terminal_retirement(
     market_input: Path,
     campaign_evidence: Path,
     market: str,
+    direct_evidence: Path,
+    terminal_children: dict[str, Any],
     first_ordinal: int,
 ) -> tuple[dict[str, Any], int]:
     """Advance the terminal prelude, then the four-packet aggregate owner."""
@@ -3238,6 +3938,8 @@ def run_terminal_retirement(
         "--execute",
     ]
     ordinal = first_ordinal
+    maker_closes: list[dict[str, Any]] | None = None
+    direct_begin_path = sequence_journal_dir / "11-direct-begin-retiring.json"
     for attempt in range(MAX_TERMINAL_INVOCATIONS):
         handoff = terminal_sequence_handoff(
             session_path,
@@ -3250,7 +3952,33 @@ def run_terminal_retirement(
             payer=payer,
         )
         if handoff is not None:
+            if maker_closes is None:
+                raise Refusal(
+                    "terminal sequence reached aggregate handoff without closing its authenticated Direct maker roots"
+                )
             break
+        if direct_begin_path.is_file() and maker_closes is None:
+            begin = authenticate_terminal_sequence_journal(
+                read_unique_json(direct_begin_path, "Direct begin-retiring journal"),
+                url=url,
+                label="Direct begin-retiring journal",
+            )
+            if begin["mutation"] != {"kind": "direct-begin-retiring"}:
+                raise Refusal("Direct begin-retiring journal changed mutation")
+            maker_closes, ordinal = run_direct_maker_closes(
+                run,
+                paths,
+                report,
+                url,
+                plan,
+                market_input,
+                campaign_evidence,
+                market,
+                direct_evidence,
+                terminal_children,
+                ordinal,
+            )
+            continue
         run_json_stage(
             run,
             ordinal,
@@ -3346,6 +4074,7 @@ def run_terminal_retirement(
                 "journal_dir": str(aggregate_journal_dir),
                 "completion": str(completion_path),
                 "completion_sha256": sha256_file(completion_path),
+                "maker_closes": maker_closes,
                 "transactions": [*handoff["transactions"], *transactions],
             }, ordinal
     raise Refusal("AggregateRetirement exceeded the bounded four-packet loop")
@@ -3359,6 +4088,7 @@ def run_post_direct_lifecycle(
     plan: Path,
     market_input: Path,
     campaign_evidence: Path,
+    direct: dict[str, Any],
     payout_schedule: Sequence[PayoutTarget],
     first_ordinal: int,
 ) -> tuple[dict[str, Any], int]:
@@ -3388,6 +4118,21 @@ def run_post_direct_lifecycle(
         payout_schedule,
         ordinal,
     )
+    if resolution["market"] != direct.get("market"):
+        raise Refusal("Resolution terminal Market differs from Direct")
+    positions, ordinal = run_direct_position_closes(
+        run,
+        paths,
+        report,
+        url,
+        plan,
+        market_input,
+        campaign_evidence,
+        Path(direct["finalized_evidence"]),
+        direct["terminal_children"],
+        resolution["market"],
+        ordinal,
+    )
     retirement, ordinal = run_terminal_retirement(
         run,
         paths,
@@ -3397,6 +4142,8 @@ def run_post_direct_lifecycle(
         market_input,
         campaign_evidence,
         resolution["market"],
+        Path(direct["finalized_evidence"]),
+        direct["terminal_children"],
         ordinal,
     )
     result = {
@@ -3405,9 +4152,330 @@ def run_post_direct_lifecycle(
         "pyth": pyth,
         "resolution": resolution,
         "payouts": payouts,
+        "position_closes": positions,
         "retirement": retirement,
     }
     result["compute_units"] = post_direct_compute_units(result)
+    return result, ordinal
+
+
+def run_relative_path(run: Path, path: Path, label: str) -> str:
+    source = canonical_file(path, label)
+    root = canonical_directory(run, "lifecycle evidence root")
+    try:
+        relative = source.relative_to(root)
+    except ValueError as error:
+        raise Refusal(f"{label} escaped its lifecycle evidence root") from error
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise Refusal(f"{label} is not one canonical evidence-relative path")
+    return relative.as_posix()
+
+
+def run_activity_stage_wrapper(
+    run: Path,
+    paths: Paths,
+    url: str,
+    stage: str,
+    sources: Sequence[tuple[str, Path]],
+    ordinal: int,
+) -> tuple[Path, int]:
+    if stage not in {"founding", "participant", "direct", "resolution", "payout", "retirement"}:
+        raise Refusal("activity wrapper stage is outside the exact six-stage vocabulary")
+    root = run / "activity"
+    root.mkdir(mode=0o700, exist_ok=True)
+    descriptor = root / f"{stage}-sources.json"
+    write_json_new(
+        descriptor,
+        {
+            "schema": "dclutch-owned-loopback-activity-stage-sources-v1",
+            "stage": stage,
+            "sources": [
+                {
+                    "role": role,
+                    "path": run_relative_path(run, source, f"{stage} {role} source"),
+                }
+                for role, source in sources
+            ],
+        },
+    )
+    output = root / f"{stage}.json"
+    document = run_json_stage(
+        run,
+        ordinal,
+        f"activity-{stage}",
+        [
+            str(paths.bootstrap),
+            ACTIVITY_STAGE_COMMAND,
+            "--rpc-url",
+            url,
+            "--stage",
+            stage,
+            "--evidence-root",
+            str(run),
+            "--source-descriptors",
+            str(descriptor),
+            "--output",
+            str(output),
+        ],
+    )
+    if (
+        read_unique_json(output, f"{stage} activity wrapper") != document
+        or document.get("schema")
+        != "dclutch-owned-loopback-activity-stage-completion-v1"
+        or document.get("stage") != stage
+        or document.get("status") != "finalized"
+    ):
+        raise Refusal(f"{stage} activity wrapper changed its exact completion")
+    return output, ordinal + 1
+
+
+def run_final_activity_evidence(
+    run: Path,
+    paths: Paths,
+    url: str,
+    plan: Path,
+    local_validator_profile: Path,
+    direct: dict[str, Any],
+    post_direct: dict[str, Any],
+    first_ordinal: int,
+) -> tuple[dict[str, Any], int]:
+    root = run / "activity"
+    root.mkdir(mode=0o700)
+    resolution = post_direct["resolution"]
+    payouts = post_direct["payouts"]
+    retirement = post_direct["retirement"]
+    stage_sources: dict[str, list[tuple[str, Path]]] = {
+        "founding": [("campaign", run / "founding.json")],
+        "participant": [("admission", run / "participant.json")],
+        "direct": [
+            ("campaign", canonical_file(run / "founding.json", "founding campaign")),
+            ("evidence", canonical_file(direct["finalized_evidence"], "Direct evidence")),
+            (
+                "fee-settlement",
+                canonical_file(
+                    direct["fee_settlement"]["evidence"],
+                    "Direct fee settlement evidence",
+                ),
+            ),
+        ],
+        "resolution": [
+            ("input", canonical_file(resolution["input"], "Resolution input")),
+            (
+                "checkpoint",
+                canonical_file(resolution["checkpoint"], "Resolution checkpoint"),
+            ),
+        ],
+        "payout": [
+            (
+                "direct-evidence",
+                canonical_file(direct["finalized_evidence"], "Direct evidence"),
+            )
+        ],
+        "retirement": [
+            (
+                "completion",
+                canonical_file(retirement["completion"], "retirement completion"),
+            )
+        ],
+    }
+    for index, payout in enumerate(payouts):
+        stage_sources["payout"].extend(
+            [
+                (
+                    f"input-{index:03d}",
+                    canonical_file(payout["input"], f"payout {index} input"),
+                ),
+                (
+                    f"evidence-{index:03d}",
+                    canonical_file(payout["evidence"], f"payout {index} evidence"),
+                ),
+            ]
+        )
+    ordinal = first_ordinal
+    wrappers: dict[str, Path] = {}
+    for stage in ("founding", "participant", "direct", "resolution", "payout", "retirement"):
+        wrapper, ordinal = run_activity_stage_wrapper(
+            run,
+            paths,
+            url,
+            stage,
+            stage_sources[stage],
+            ordinal,
+        )
+        wrappers[stage] = wrapper
+    stage_descriptors = root / "stage-journal-descriptors.json"
+    descriptor_rows: list[dict[str, str]] = []
+    for stage in ("founding", "participant"):
+        descriptor_rows.append(
+            {
+                "semanticRole": stage,
+                "path": run_relative_path(run, wrappers[stage], f"{stage} wrapper"),
+                "schema": "dclutch-owned-loopback-activity-stage-completion-v1",
+                "completionPointer": "/status",
+            }
+        )
+    for role in ("alt", "seal"):
+        direct_journal = finalized_chaos_target_journal(run, role)
+        descriptor_rows.append(
+            {
+                "semanticRole": role,
+                "path": run_relative_path(run, direct_journal, f"Direct {role} journal"),
+                "schema": "dclutch-owned-loopback-direct-trade-journal-v1",
+                "completionPointer": "/phase",
+            }
+        )
+    for stage in ("direct", "resolution", "payout", "retirement"):
+        descriptor_rows.append(
+            {
+                "semanticRole": stage,
+                "path": run_relative_path(run, wrappers[stage], f"{stage} wrapper"),
+                "schema": "dclutch-owned-loopback-activity-stage-completion-v1",
+                "completionPointer": "/status",
+            }
+        )
+    if tuple(row["semanticRole"] for row in descriptor_rows) != ACTIVITY_DESCRIPTOR_ROLES:
+        raise Refusal("activity descriptors changed their exact eight-stage order")
+    write_json_new(
+        stage_descriptors,
+        {
+            "schema": "dclutch-owned-loopback-stage-journal-descriptors-v1",
+            "journals": descriptor_rows,
+        },
+    )
+    manifest = root / "manifest.json"
+    manifest_document = run_json_stage(
+        run,
+        ordinal,
+        "activity-manifest",
+        [
+            str(paths.bootstrap),
+            ACTIVITY_MANIFEST_COMMAND,
+            "--rpc-url",
+            url,
+            "--plan",
+            str(plan),
+            "--stage-journal-descriptors",
+            str(stage_descriptors),
+            "--output",
+            str(manifest),
+        ],
+    )
+    ordinal += 1
+    if (
+        read_unique_json(manifest, "activity manifest") != manifest_document
+        or manifest_document.get("schema")
+        != "dclutch-owned-loopback-activity-reconcile-manifest-v1"
+    ):
+        raise Refusal("activity manifest changed its semantic-owner schema")
+
+    capture = root / "finalized-capture.json"
+    capture_document = run_json_stage(
+        run,
+        ordinal,
+        "activity-finalized-capture",
+        [
+            str(paths.bootstrap),
+            ACTIVITY_CAPTURE_COMMAND,
+            "--rpc-url",
+            url,
+            "--plan",
+            str(plan),
+            "--activity-manifest",
+            str(manifest),
+            "--stage-journal-descriptors",
+            str(stage_descriptors),
+            "--output",
+            str(capture),
+        ],
+    )
+    ordinal += 1
+    if (
+        read_unique_json(capture, "finalized activity capture") != capture_document
+        or capture_document.get("schema")
+        != "dclutch-owned-loopback-captured-finalized-rpc-v1"
+        or capture_document.get("commitment") != "finalized"
+    ):
+        raise Refusal("finalized activity capture changed schema or commitment")
+
+    provider_closure = root / "pyth-provider-closure.json"
+    provider_document = run_json_stage(
+        run,
+        ordinal,
+        "pyth-provider-closure",
+        [
+            str(paths.bootstrap),
+            PROVIDER_CLOSURE_COMMAND,
+            "--rpc-url",
+            url,
+            "--plan",
+            str(plan),
+            "--local-validator-profile",
+            str(local_validator_profile),
+            "--finalized-capture",
+            str(capture),
+            "--output",
+            str(provider_closure),
+        ],
+    )
+    ordinal += 1
+    if (
+        read_unique_json(provider_closure, "Pyth provider closure") != provider_document
+        or provider_document.get("schema")
+        != "dclutch-owned-loopback-pyth-provider-closure-v1"
+        or provider_document.get("status") != "finalized"
+    ):
+        raise Refusal("Pyth provider closure changed schema or terminal status")
+
+    session = root / "lifecycle-session.json"
+    session_document = run_json_stage(
+        run,
+        ordinal,
+        "activity-lifecycle-session",
+        [
+            str(paths.bootstrap),
+            LIFECYCLE_SESSION_COMMAND,
+            "--rpc-url",
+            url,
+            "--evidence-root",
+            str(run),
+            "--stage-journal-descriptors",
+            str(stage_descriptors),
+            "--output",
+            str(session),
+        ],
+    )
+    ordinal += 1
+    if (
+        read_unique_json(session, "activity lifecycle session") != session_document
+        or session_document.get("schema")
+        != "dclutch-owned-loopback-private-lifecycle-session-v1"
+        or session_document.get("status") != "finalized"
+    ):
+        raise Refusal("activity lifecycle session changed schema or terminal status")
+    result = {
+        "schema": "dclutch-private-validator-final-activity-controller-v1",
+        "status": "finalized",
+        "stage_wrappers": {
+            stage: {
+                "path": str(path),
+                "sha256": sha256_file(path),
+            }
+            for stage, path in wrappers.items()
+        },
+        "stage_descriptors": str(stage_descriptors),
+        "stage_descriptors_sha256": sha256_file(stage_descriptors),
+        "manifest": str(manifest),
+        "manifest_sha256": sha256_file(manifest),
+        "capture": str(capture),
+        "capture_sha256": sha256_file(capture),
+        "provider_closure": str(provider_closure),
+        "provider_closure_sha256": sha256_file(provider_closure),
+        "session": str(session),
+        "session_sha256": sha256_file(session),
+        "local_validator_profile": str(local_validator_profile),
+        "local_validator_profile_sha256": sha256_file(local_validator_profile),
+    }
+    write_json_new(root / "RESULT.json", result)
     return result, ordinal
 
 
@@ -3424,6 +4492,16 @@ def post_direct_compute_units(result: dict[str, Any]) -> dict[str, int]:
         metrics[f"payout-{index:03d}"] = positive_integer(
             payout["finalized"].get("compute_units_consumed"), f"payout {index} CU"
         )
+    for index, close in enumerate(result["position_closes"]):
+        metrics[f"position-close-{index:02d}-{close['role']}"] = positive_integer(
+            close["finalized"].get("compute_units_consumed"),
+            f"Position close {index} CU",
+        )
+    for index, close in enumerate(result["retirement"]["maker_closes"]):
+        metrics[f"maker-close-{index:02d}"] = positive_integer(
+            close["finalized"].get("compute_units_consumed"),
+            f"maker close {index} CU",
+        )
     for index, transaction in enumerate(result["retirement"]["transactions"]):
         metrics[f"retirement-{index:02d}-{transaction['mutation']}"] = positive_integer(
             transaction.get("compute_units_consumed"), f"retirement {index} CU"
@@ -3438,6 +4516,7 @@ def authenticate_direct_producer_receipt(
     market_input: Path,
     campaign_report: Path,
     participant_report: Path,
+    activation: dict[str, Any],
 ) -> tuple[Path, Path, str]:
     receipt = exact_keys(
         document,
@@ -3542,7 +4621,145 @@ def authenticate_direct_producer_receipt(
             "predicted terms, and the chain tests that allowance as an equality"
         )
     market = canonical_pubkey(public.get("market"), "Direct Market")
+    route = public.get("route")
+    fixed = route.get("fixed") if isinstance(route, dict) else None
+    producer_root = (
+        canonical_pubkey(fixed.get("root"), "Direct producer execution root")
+        if isinstance(fixed, dict)
+        else None
+    )
+    if (
+        market != activation.get("market")
+        or producer_root != activation.get("root")
+    ):
+        raise Refusal("Direct producer changed the activated Market or execution root")
     return session_path, root / "direct-trade-finalized.json", market
+
+
+def authenticate_direct_terminal_children(
+    document: Any,
+    receipt_path: Path,
+    *,
+    plan: Path,
+    market_input: Path,
+    campaign_evidence: Path,
+    direct_evidence: Path,
+    market: str,
+    expected_direct_root: str,
+) -> dict[str, Any]:
+    receipt = exact_keys(
+        document,
+        {
+            "schema",
+            "cluster",
+            "planSha256",
+            "marketInputSha256",
+            "campaignEvidenceSha256",
+            "directEvidenceSha256",
+            "directSemanticEvidenceSha256",
+            "market",
+            "claimsMarket",
+            "directRoot",
+            "capabilityEntryIndex",
+            "positionChildren",
+            "openMakerRootCount",
+            "makerReplayChildren",
+            "stateSha256",
+        },
+        "Direct terminal children",
+    )
+    persisted = read_unique_json(receipt_path, "persisted Direct terminal children")
+    if persisted != receipt:
+        raise Refusal("Direct terminal children stdout differs from its durable receipt")
+    direct = read_unique_json(direct_evidence, "Direct finalized evidence")
+    positions = receipt.get("positionChildren")
+    if not isinstance(positions, list) or len(positions) != 2:
+        raise Refusal("Direct terminal projection omitted its exact participant pair")
+    expected_positions = [
+        ("seller", direct.get("sellerOwner"), direct.get("sellerPosition")),
+        ("buyer", direct.get("buyerOwner"), direct.get("buyerPosition")),
+    ]
+    normalized_positions: list[dict[str, str]] = []
+    for index, (raw, expected) in enumerate(
+        zip(positions, expected_positions, strict=True)
+    ):
+        row = exact_keys(raw, {"role", "owner", "position"}, f"Position child {index}")
+        role, owner, position = expected
+        if (
+            row.get("role") != role
+            or row.get("owner") != owner
+            or row.get("position") != position
+        ):
+            raise Refusal("Direct terminal Position child changed authenticated identity")
+        normalized_positions.append(
+            {
+                "role": role,
+                "owner": canonical_pubkey(owner, f"Direct {role} owner"),
+                "position": canonical_pubkey(position, f"Direct {role} Position"),
+            }
+        )
+    if (
+        normalized_positions[0]["owner"] == normalized_positions[1]["owner"]
+        or normalized_positions[0]["position"]
+        == normalized_positions[1]["position"]
+    ):
+        raise Refusal("Direct terminal Position children alias")
+
+    root_count = canonical_decimal(
+        receipt.get("openMakerRootCount"), "Direct open maker root count", positive=False
+    )
+    makers = receipt.get("makerReplayChildren")
+    if not isinstance(makers, list) or len(makers) != root_count or root_count > 2:
+        raise Refusal(
+            "Direct terminal maker replay set is not exhaustive against its root count"
+        )
+    admitted_makers = {row["owner"] for row in normalized_positions}
+    normalized_makers: list[dict[str, str]] = []
+    for index, raw in enumerate(makers):
+        row = exact_keys(raw, {"maker", "replay"}, f"maker replay child {index}")
+        maker = canonical_pubkey(row.get("maker"), f"maker replay child {index} maker")
+        replay = canonical_pubkey(row.get("replay"), f"maker replay child {index} address")
+        if maker not in admitted_makers or any(
+            prior["maker"] == maker or prior["replay"] == replay
+            for prior in normalized_makers
+        ):
+            raise Refusal("Direct terminal maker replay child is foreign or repeated")
+        normalized_makers.append({"maker": maker, "replay": replay})
+
+    entry_index = canonical_decimal(
+        receipt.get("capabilityEntryIndex"), "Direct capability entry index", positive=False
+    )
+    if entry_index > 0xFFFF:
+        raise Refusal("Direct capability entry index exceeds u16")
+    if (
+        receipt.get("schema") != DIRECT_TERMINAL_CHILDREN_SCHEMA
+        or receipt.get("cluster") != "owned-loopback"
+        or receipt.get("planSha256") != sha256_file(plan)
+        or receipt.get("marketInputSha256") != sha256_file(market_input)
+        or receipt.get("campaignEvidenceSha256") != sha256_file(campaign_evidence)
+        or receipt.get("directEvidenceSha256") != sha256_file(direct_evidence)
+        or receipt.get("market") != market
+        or semantic_owner_digest(receipt, "stateSha256", "Direct terminal children")
+        != lowercase_sha256(
+            receipt.get("stateSha256"), "Direct terminal children state digest"
+        )
+    ):
+        raise Refusal("Direct terminal children changed its exact source closure")
+    for field in ("directSemanticEvidenceSha256", "stateSha256"):
+        lowercase_sha256(receipt.get(field), f"Direct terminal children {field}")
+    canonical_pubkey(receipt.get("claimsMarket"), "Direct terminal Claims aggregate")
+    if (
+        canonical_pubkey(receipt.get("directRoot"), "Direct terminal root")
+        != expected_direct_root
+    ):
+        raise Refusal("Direct terminal children changed the activated execution root")
+    return {
+        **receipt,
+        "positionChildren": normalized_positions,
+        "makerReplayChildren": normalized_makers,
+        "capabilityEntryIndex": entry_index,
+        "openMakerRootCount": root_count,
+    }
 
 
 def accepted_direct_payout_schedule(
@@ -3721,9 +4938,407 @@ def accepted_direct_payout_schedule(
     return targets, compute_units, schedule
 
 
+def run_direct_terminal_children(
+    run: Path,
+    paths: Paths,
+    url: str,
+    plan: Path,
+    market_input: Path,
+    campaign_evidence: Path,
+    direct_evidence: Path,
+    market: str,
+    expected_direct_root: str,
+    ordinal: int,
+) -> tuple[dict[str, Any], int]:
+    output = run / "direct" / "direct-terminal-children.json"
+    projected = run_json_stage(
+        run,
+        ordinal,
+        "direct-terminal-children",
+        [
+            str(paths.bootstrap),
+            DIRECT_TERMINAL_CHILDREN_COMMAND,
+            "--rpc-url",
+            url,
+            "--plan",
+            str(plan),
+            "--market-input",
+            str(market_input),
+            "--campaign-evidence",
+            str(campaign_evidence),
+            "--direct-evidence",
+            str(direct_evidence),
+            "--output",
+            str(output),
+        ],
+    )
+    return (
+        authenticate_direct_terminal_children(
+            projected,
+            output,
+            plan=plan,
+            market_input=market_input,
+            campaign_evidence=campaign_evidence,
+            direct_evidence=direct_evidence,
+            market=market,
+            expected_direct_root=expected_direct_root,
+        ),
+        ordinal + 1,
+    )
+
+
+def authenticate_direct_fee_settlement(
+    document: Any,
+    *,
+    manifest: dict[str, Any],
+    market: str,
+    buyer: str,
+    buyer_replay: str,
+) -> dict[str, Any]:
+    evidence = exact_keys(
+        document,
+        {
+            "schema",
+            "cluster",
+            "market",
+            "generation",
+            "maker",
+            "makerReplay",
+            "feeOwed",
+            "feeSource",
+            "feeDestination",
+            "feeDestinationOwner",
+            "standingAllowance",
+            "callerAuthority",
+            "callerAuthorityBump",
+            "custodyExpectedRevision",
+            "custodyResultingRevision",
+            "landed",
+        },
+        "Direct fee settlement evidence",
+    )
+    route = manifest.get("route")
+    custody = route.get("custody") if isinstance(route, dict) else None
+    fill = positive_integer(manifest.get("fill"), "Direct fee fill")
+    price = positive_integer(manifest.get("executionPrice"), "Direct execution price")
+    scale = positive_integer(DIRECT_PRICE_SCALE_V1, "Direct price scale")
+    product = fill * price
+    if product % scale != 0:
+        raise Refusal("Direct fee gross crosses an unnamed rounding boundary")
+    gross = product // scale
+    fee = (gross * DIRECT_FEE_BASIS_POINTS_V1 // FEE_BASIS_POINTS_DENOMINATOR) * 2
+    finalized = finalized_fact(evidence.get("landed"), "Direct fee settlement")
+    if (
+        not isinstance(custody, dict)
+        or evidence.get("schema") != DIRECT_FEE_SETTLEMENT_SCHEMA
+        or evidence.get("cluster") != "owned-loopback"
+        or evidence.get("market") != market
+        or evidence.get("maker") != buyer
+        or evidence.get("makerReplay") != buyer_replay
+        or evidence.get("feeOwed") != fee
+        or evidence.get("feeSource") != custody.get("buyerToken")
+        or evidence.get("feeDestination") != custody.get("feeToken")
+        or evidence.get("feeDestinationOwner") != manifest.get("feeRecipient")
+        or nonnegative_integer(
+            evidence.get("standingAllowance"), "Direct fee standing allowance"
+        )
+        < fee
+        or nonnegative_integer(
+            evidence.get("custodyExpectedRevision"), "Direct fee expected revision"
+        )
+        + 1
+        != nonnegative_integer(
+            evidence.get("custodyResultingRevision"), "Direct fee resulting revision"
+        )
+    ):
+        raise Refusal("Direct fee settlement changed its chain-derived obligation or route")
+    for field in ("makerReplay", "feeSource", "feeDestination", "feeDestinationOwner", "callerAuthority"):
+        canonical_pubkey(evidence.get(field), f"Direct fee settlement {field}")
+    return {"evidence": evidence, "finalized": finalized}
+
+
+def run_direct_fee_settlement(
+    run: Path,
+    paths: Paths,
+    report: dict[str, Any],
+    url: str,
+    public_manifest: Path,
+    children: dict[str, Any],
+    market: str,
+    ordinal: int,
+) -> tuple[dict[str, Any], int]:
+    manifest = read_unique_json(public_manifest, "Direct public manifest")
+    buyer = next(
+        row for row in children["positionChildren"] if row["role"] == "buyer"
+    )["owner"]
+    buyer_replays = [
+        row for row in children["makerReplayChildren"] if row["maker"] == buyer
+    ]
+    if len(buyer_replays) != 1:
+        raise Refusal("Direct fee debtor has no unique authenticated maker replay")
+    evidence_path = run / "direct" / "direct-fee-settlement.json"
+    payer_key = require_role_key(report, VALIDATOR_MINT_ROLE)
+    run_stage(
+        run,
+        ordinal,
+        "direct-fee-settlement",
+        [
+            str(paths.bootstrap),
+            DIRECT_FEE_SETTLEMENT_COMMAND,
+            "--rpc-url",
+            url,
+            "--public-manifest",
+            str(public_manifest),
+            "--maker",
+            buyer,
+            "--evidence",
+            str(evidence_path),
+            "--execute",
+            "--fee-payer-keypair",
+            str(payer_key),
+        ],
+    )
+    authenticated = authenticate_direct_fee_settlement(
+        read_unique_json(evidence_path, "Direct fee settlement evidence"),
+        manifest=manifest,
+        market=market,
+        buyer=buyer,
+        buyer_replay=buyer_replays[0]["replay"],
+    )
+    return {
+        "evidence": str(evidence_path),
+        "evidence_sha256": sha256_file(evidence_path),
+        "finalized": authenticated["finalized"],
+        "debtor": buyer,
+        "maker_replay": buyer_replays[0]["replay"],
+        "fee_owed_atoms": authenticated["evidence"]["feeOwed"],
+    }, ordinal + 1
+
+
+def authenticate_direct_capability_activation(
+    document: Any,
+    *,
+    plan: Path,
+    market_input: Path,
+    campaign_report: Path,
+    expected_market: str,
+) -> dict[str, Any]:
+    """Authenticate the one owned-loopback Direct-root creation receipt.
+
+    Founding deliberately leaves the execution root absent.  This controller
+    owns the join from the immutable founding evidence to the one activation
+    report which creates it, before a Direct producer can inspect that root.
+    """
+    report = exact_keys(
+        document,
+        {
+            "verdict",
+            "facts",
+            "activationSignature",
+            "activationSlot",
+            "feeLamports",
+            "computeUnitsConsumed",
+            "rootLamports",
+            "rootBytes",
+            "rootPhase",
+            "ledgerLamportsAfter",
+            "tableTransactions",
+        },
+        "Direct capability activation report",
+    )
+    facts = exact_keys(
+        report.get("facts"),
+        {
+            "schema",
+            "market",
+            "generation",
+            "entryIndex",
+            "root",
+            "foundingPermitRoot",
+            "fundingLedger",
+            "callerAuthority",
+            "contextSha256",
+            "roleRequestSha256",
+            "activationDeadlineSlot",
+            "observedSlot",
+            "instructionAccounts",
+            "instructionDataBytes",
+        },
+        "Direct capability activation facts",
+    )
+    campaign = read_unique_json(campaign_report, "finalized founding evidence for Direct activation")
+    founding_targets = campaign.get("founding_targets")
+    founding_market = (
+        canonical_pubkey(founding_targets.get("open_market"), "founding campaign open market")
+        if isinstance(founding_targets, dict)
+        else None
+    )
+    if (
+        report.get("verdict") != "ACTIVATED"
+        or facts.get("schema")
+        != "dclutch-local-private-validator-direct-capability-activation-report-v1"
+        or facts.get("market") != expected_market
+        or facts.get("market") != founding_market
+    ):
+        raise Refusal("Direct capability activation changed its loopback schema, verdict, or founding Market")
+    root = canonical_pubkey(facts.get("root"), "Direct capability activation root")
+    canonical_pubkey(facts.get("fundingLedger"), "Direct capability activation funding ledger")
+    canonical_pubkey(facts.get("callerAuthority"), "Direct capability activation caller authority")
+    if facts.get("foundingPermitRoot") is not None:
+        canonical_pubkey(facts.get("foundingPermitRoot"), "Direct capability activation founding permit root")
+    positive_integer(facts.get("generation"), "Direct capability activation generation")
+    entry_index = nonnegative_integer(
+        facts.get("entryIndex"), "Direct capability activation entry index"
+    )
+    if entry_index > 0xFFFF:
+        raise Refusal("Direct capability activation entry index exceeds u16")
+    for field, label in (
+        ("contextSha256", "context"),
+        ("roleRequestSha256", "role request"),
+    ):
+        lowercase_sha256(facts.get(field), f"Direct capability activation {label}")
+    for field, label in (
+        ("activationDeadlineSlot", "deadline slot"),
+        ("observedSlot", "observed slot"),
+        ("instructionAccounts", "instruction account count"),
+        ("instructionDataBytes", "instruction data bytes"),
+    ):
+        positive_integer(facts.get(field), f"Direct capability activation {label}")
+    finalized = {
+        "signature": canonical_signature(
+            report.get("activationSignature"), "Direct capability activation signature"
+        ),
+        "slot": positive_integer(
+            report.get("activationSlot"), "Direct capability activation slot"
+        ),
+        "fee_lamports": positive_integer(
+            report.get("feeLamports"), "Direct capability activation fee"
+        ),
+        "compute_units_consumed": positive_integer(
+            report.get("computeUnitsConsumed"), "Direct capability activation CU"
+        ),
+    }
+    if (
+        positive_integer(report.get("rootLamports"), "Direct capability root lamports") <= 0
+        or positive_integer(report.get("rootBytes"), "Direct capability root bytes") <= 0
+        or report.get("rootPhase") != "Open"
+        or positive_integer(
+            report.get("ledgerLamportsAfter"), "Direct capability funding-ledger poststate"
+        ) <= 0
+    ):
+        raise Refusal("Direct capability activation omitted its live root or funding-ledger poststate")
+    table_rows = report.get("tableTransactions")
+    if not isinstance(table_rows, list) or not table_rows:
+        raise Refusal("Direct capability activation omitted routing-table transactions")
+    tables: list[dict[str, Any]] = []
+    for index, raw in enumerate(table_rows):
+        row = exact_keys(
+            raw,
+            {"label", "signature", "slot"},
+            f"Direct capability activation table transaction {index}",
+        )
+        label = row.get("label")
+        if not isinstance(label, str) or not label:
+            raise Refusal("Direct capability activation table transaction omitted label")
+        tables.append(
+            {
+                "label": label,
+                "signature": canonical_signature(
+                    row.get("signature"), f"Direct capability activation table {index} signature"
+                ),
+                "slot": positive_integer(
+                    row.get("slot"), f"Direct capability activation table {index} slot"
+                ),
+            }
+        )
+    # These inputs are received through explicit CLI SHA-256 pins.  Re-read
+    # them here so the controller's report cannot be joined to a different
+    # immutable input set by a substituted executable.
+    for path, label in (
+        (plan, "plan"),
+        (market_input, "Market input"),
+        (campaign_report, "founding campaign"),
+    ):
+        canonical_file(path, f"Direct capability activation {label}")
+    return {"root": root, "market": expected_market, "finalized": finalized, "tables": tables}
+
+
+def run_direct_capability_activation(
+    run: Path,
+    paths: Paths,
+    report: dict[str, Any],
+    url: str,
+    plan: Path,
+    market_input: Path,
+    campaign_report: Path,
+    ordinal: int,
+) -> tuple[dict[str, Any], int]:
+    activation_path = run / "direct" / "direct-capability-activation.json"
+    payer_key = require_role_key(report, VALIDATOR_MINT_ROLE)
+    payer = canonical_pubkey(
+        key_address(paths.solana, payer_key), "Direct capability activation payer"
+    )
+    activation_stage = run_stage(
+        run,
+        ordinal,
+        "direct-capability-activation",
+        [
+            str(paths.bootstrap),
+            DIRECT_CAPABILITY_ACTIVATION_COMMAND,
+            "--rpc-url",
+            url,
+            "--plan",
+            str(plan),
+            "--expected-plan-sha256",
+            sha256_file(plan),
+            "--market-input",
+            str(market_input),
+            "--expected-market-input-sha256",
+            sha256_file(market_input),
+            "--campaign-report",
+            str(campaign_report),
+            "--expected-campaign-report-sha256",
+            sha256_file(campaign_report),
+            "--payer",
+            payer,
+            "--payer-keypair",
+            str(payer_key),
+            "--output",
+            str(activation_path),
+            "--execute",
+        ],
+    )
+    persisted = canonical_file(activation_path, "Direct capability activation report")
+    if persisted.read_bytes() != activation_stage.stdout:
+        raise Refusal("Direct capability activation stdout differs byte-for-byte from its durable report")
+    campaign = read_unique_json(campaign_report, "finalized founding evidence for activation")
+    targets = campaign.get("founding_targets")
+    if not isinstance(targets, dict):
+        raise Refusal("founding evidence omitted Direct activation Market")
+    market = canonical_pubkey(targets.get("open_market"), "founding campaign open market")
+    authenticated = authenticate_direct_capability_activation(
+        decode_unique_json(
+            activation_stage.stdout.decode("utf-8"), "Direct capability activation stdout"
+        ),
+        plan=plan,
+        market_input=market_input,
+        campaign_report=campaign_report,
+        expected_market=market,
+    )
+    return {
+        "report": str(persisted),
+        "report_sha256": sha256_file(persisted),
+        "root": authenticated["root"],
+        "market": authenticated["market"],
+        "finalized": authenticated["finalized"],
+        "table_transactions": authenticated["tables"],
+    }, ordinal + 1
+
+
 def run_direct_lifecycle(
     run: Path,
     paths: Paths,
+    report: dict[str, Any],
     url: str,
     plan: Path,
     market_input: Path,
@@ -3734,9 +5349,19 @@ def run_direct_lifecycle(
 ) -> tuple[dict[str, Any], tuple[PayoutTarget, ...], int]:
     root = run / "direct"
     root.mkdir(mode=0o700)
+    activation, producer_ordinal = run_direct_capability_activation(
+        run,
+        paths,
+        report,
+        url,
+        plan,
+        market_input,
+        campaign_report,
+        first_ordinal,
+    )
     produced = run_json_stage(
         run,
-        first_ordinal,
+        producer_ordinal,
         "direct-produce",
         [
             str(paths.bootstrap),
@@ -3767,9 +5392,11 @@ def run_direct_lifecycle(
         market_input,
         campaign_report,
         participant_report,
+        activation,
     )
-    ordinal = first_ordinal + 1
+    ordinal = producer_ordinal + 1
     for attempt in range(MAX_DIRECT_INVOCATIONS):
+        arm_direct_chaos_target(root)
         document = run_json_stage(
             run,
             ordinal,
@@ -3820,6 +5447,34 @@ def run_direct_lifecycle(
     targets, compute_units, authenticated_schedule = accepted_direct_payout_schedule(
         schedule_path, evidence_path
     )
+    terminal_children, ordinal = run_direct_terminal_children(
+        run,
+        paths,
+        url,
+        plan,
+        market_input,
+        campaign_report,
+        evidence_path,
+        market,
+        activation["root"],
+        ordinal,
+    )
+    public_path = root / "direct-trade-public.json"
+    fee_settlement, ordinal = run_direct_fee_settlement(
+        run,
+        paths,
+        report,
+        url,
+        public_path,
+        terminal_children,
+        market,
+        ordinal,
+    )
+    compute_units["direct-fee-settlement"] = positive_integer(
+        fee_settlement["finalized"].get("compute_units_consumed"),
+        "Direct fee settlement CU",
+    )
+    children_path = root / "direct-terminal-children.json"
     result = {
         "schema": "dclutch-private-validator-direct-controller-v1",
         "status": "finalized",
@@ -3829,10 +5484,20 @@ def run_direct_lifecycle(
         "private_session_sha256": sha256_file(session_path),
         "finalized_evidence": str(evidence_path),
         "finalized_evidence_sha256": sha256_file(evidence_path),
+        "public_manifest": str(public_path),
+        "public_manifest_sha256": sha256_file(public_path),
         "payout_schedule": str(schedule_path),
         "payout_schedule_sha256": sha256_file(schedule_path),
+        "terminal_children_receipt": str(children_path),
+        "terminal_children_receipt_sha256": sha256_file(children_path),
+        "terminal_children": terminal_children,
+        "capability_activation": activation,
+        "fee_settlement": fee_settlement,
         "market": authenticated_schedule["market"],
-        "compute_units": compute_units,
+        "compute_units": {
+            "direct-capability-activation": activation["finalized"]["compute_units_consumed"],
+            **compute_units,
+        },
     }
     return result, targets, ordinal
 
@@ -3856,6 +5521,515 @@ def checked_mutable_slot_floor(plan_path: Path) -> int:
 def named_seed(index: int) -> tuple[str, str]:
     name = f"seed-{index:02d}"
     return name, hashlib.sha256(SEED_DOMAIN + name.encode()).hexdigest()
+
+
+def chaos_named_seed(index: int) -> tuple[str, str]:
+    if index < 1 or index > 17:
+        raise Refusal("chaos seed index must be in the exact 1..17 matrix")
+    name = f"chaos-{index:02d}"
+    return name, hashlib.sha256(CHAOS_SEED_DOMAIN + name.encode()).hexdigest()
+
+
+@contextlib.contextmanager
+def active_chaos_supervisor(
+    supervisor: ChaosStageSupervisor | None,
+) -> Iterable[None]:
+    global _ACTIVE_CHAOS_SUPERVISOR
+    if _ACTIVE_CHAOS_SUPERVISOR is not None:
+        raise Refusal("nested lifecycle chaos supervisors are forbidden")
+    _ACTIVE_CHAOS_SUPERVISOR = supervisor
+    try:
+        yield
+    finally:
+        _ACTIVE_CHAOS_SUPERVISOR = None
+
+
+def arm_chaos_target_journal(mutation: str, journal: Path) -> None:
+    supervisor = _ACTIVE_CHAOS_SUPERVISOR
+    if (
+        supervisor is not None
+        and not supervisor.fired
+        and supervisor.mutation == mutation
+    ):
+        supervisor.retarget(journal.resolve())
+
+
+def _ordered_journal_prefix(
+    directory: Path, pattern: re.Pattern[str], label: str
+) -> list[Path]:
+    if not directory.is_dir() or directory.is_symlink():
+        raise Refusal(f"{label} directory is not one real directory")
+    rows = sorted(path for path in directory.iterdir() if path.is_file())
+    indexes: list[int] = []
+    for path in rows:
+        match = pattern.fullmatch(path.name)
+        if match is None or path.is_symlink():
+            raise Refusal(f"{label} contains a foreign journal entry")
+        indexes.append(int(match.group(1)))
+    if indexes != list(range(len(rows))):
+        raise Refusal(f"{label} is not one exact ordered journal prefix")
+    return rows
+
+
+def arm_direct_chaos_target(root: Path) -> None:
+    supervisor = _ACTIVE_CHAOS_SUPERVISOR
+    if supervisor is None or supervisor.mutation not in {
+        "lookup-freeze",
+        "capability-seal",
+        "hot",
+    }:
+        return
+    directory = root / "direct-trade-journal"
+    rows = _ordered_journal_prefix(
+        directory,
+        re.compile(r"([0-9]{4})-[a-z0-9-]+\.json"),
+        "Direct action journals",
+    )
+    arm_chaos_target_journal(
+        supervisor.mutation,
+        directory / f"{len(rows):04d}-{supervisor.mutation}.json",
+    )
+
+
+def arm_payout_chaos_target(journal_dir: Path) -> None:
+    supervisor = _ACTIVE_CHAOS_SUPERVISOR
+    if supervisor is None or supervisor.mutation != "wallet-terminal-payout":
+        return
+    rows = _ordered_journal_prefix(
+        journal_dir,
+        re.compile(r"([0-9]{2})-[a-z0-9-]+\.wallet-payout\.json"),
+        "wallet payout journals",
+    )
+    arm_chaos_target_journal(
+        supervisor.mutation,
+        journal_dir / f"{len(rows):02d}-payout.wallet-payout.json",
+    )
+
+
+def initial_chaos_target_journal(run: Path, stage: str) -> Path:
+    fixed = {
+        "founding": run / "founding.json",
+        "participant": run / "participant.json",
+        "resolution": run / "resolution" / "checkpoint.json",
+        "retire": run / "retirement" / "aggregate-journals" / "03-finish.json",
+    }
+    if stage in fixed:
+        return fixed[stage]
+    if stage in {"alt", "seal", "hot"}:
+        mutation = {"alt": "lookup-freeze", "seal": "capability-seal", "hot": "hot"}[
+            stage
+        ]
+        return run / "direct" / "direct-trade-journal" / f"0000-{mutation}.json"
+    if stage == "payout":
+        return run / "payouts" / "000" / "journals" / "00-payout.wallet-payout.json"
+    raise Refusal(f"chaos stage {stage!r} has no durable target journal")
+
+
+def finalized_chaos_target_journal(run: Path, stage: str) -> Path:
+    if stage == "control" or stage == "retire":
+        return canonical_file(
+            run / "retirement" / "aggregate-journals" / "03-finish.json",
+            "aggregate finish chaos target",
+        )
+    if stage == "founding":
+        return canonical_file(run / "founding.json", "founding chaos target")
+    if stage == "participant":
+        return canonical_file(run / "participant.json", "participant chaos target")
+    if stage == "resolution":
+        return canonical_file(
+            run / "resolution" / "checkpoint.json", "Resolution chaos target"
+        )
+    if stage in {"alt", "seal", "hot"}:
+        mutation = {"alt": "lookup-freeze", "seal": "capability-seal", "hot": "hot"}[
+            stage
+        ]
+        rows = list((run / "direct" / "direct-trade-journal").glob(f"*-{mutation}.json"))
+        if len(rows) != 1:
+            raise Refusal(f"final Direct {mutation} journal is not unique")
+        return canonical_file(rows[0], f"final Direct {mutation} journal")
+    if stage == "payout":
+        rows = list((run / "payouts" / "000" / "journals").glob("*-payout.wallet-payout.json"))
+        if len(rows) != 1:
+            raise Refusal("final first-wallet payout journal is not unique")
+        return canonical_file(rows[0], "final first-wallet payout journal")
+    raise Refusal(f"chaos stage {stage!r} has no finalized target journal")
+
+
+def _packet_sha256_from_base64(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > 8192:
+        raise Refusal(f"{label} is not one bounded base64 packet")
+    try:
+        packet = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise Refusal(f"{label} is not canonical base64") from error
+    if base64.b64encode(packet).decode("ascii") != value or not packet:
+        raise Refusal(f"{label} changed canonical base64 encoding")
+    return sha256_bytes(packet)
+
+
+def finalized_chaos_target_facts(stage: str, journal_path: Path) -> dict[str, Any]:
+    document = read_unique_json(journal_path, f"{stage} finalized chaos target")
+    target = document
+    effective_stage = "retire" if stage == "control" else stage
+    if effective_stage == "founding":
+        rows = document.get("foundingSubmissionJournals")
+        if not isinstance(rows, list):
+            raise Refusal("founding chaos evidence omitted submission journals")
+        selected = [row for row in rows if isinstance(row, dict) and row.get("operation") == "dcltgmf3"]
+        if len(selected) != 1:
+            raise Refusal("founding chaos evidence did not contain one DCLTGMF3 journal")
+        target = selected[0]
+        if (
+            target.get("schema") != "dclutch-public-founding-submission-journal-v2"
+            or target.get("cluster") != "owned-loopback"
+        ):
+            raise Refusal("founding chaos target changed journal schema or cluster")
+        intent = target.get("intentSha256")
+        packet = target.get("signedPacketSha256")
+        signature = target.get("expectedSignature")
+        slot = target.get("finalizedSlot")
+    elif effective_stage == "participant":
+        if (
+            target.get("schema")
+            != "dclutch-owned-loopback-user-position-admission-execution-v1"
+            or target.get("cluster") != "owned-loopback"
+        ):
+            raise Refusal("participant chaos target changed schema or cluster")
+        intent = target.get("intentSha256")
+        packet = target.get("signedPacketSha256")
+        signature = target.get("expectedSignature")
+        finalized = target.get("finalized")
+        slot = finalized.get("slot") if isinstance(finalized, dict) else None
+    elif effective_stage in {"alt", "seal", "hot"}:
+        expected_name = {"alt": "lookup-freeze", "seal": "capability-seal", "hot": "hot"}[
+            effective_stage
+        ]
+        if (
+            target.get("schema")
+            != "dclutch-owned-loopback-direct-trade-journal-v1"
+            or target.get("stage") != expected_name
+        ):
+            raise Refusal("Direct chaos target journal changed schema or stage")
+        intent = target.get("intentSha256")
+        packet = _packet_sha256_from_base64(
+            target.get("signedPacketBase64"), "Direct chaos signed packet"
+        )
+        signature = target.get("expectedSignature")
+        slot = target.get("finalizedSlot")
+    elif effective_stage == "resolution":
+        if (
+            document.get("format")
+            != "dclutch-owned-loopback-flagship-resolution-checkpoint-v3"
+            or document.get("verifiedTerminal") is not True
+        ):
+            raise Refusal("Resolution chaos checkpoint changed format or terminal state")
+        rows = document.get("receipts")
+        if not isinstance(rows, list):
+            raise Refusal("Resolution chaos checkpoint omitted receipts")
+        selected = [
+            row
+            for row in rows
+            if isinstance(row, dict) and row.get("stage") == "core-terminal-accept-v1"
+        ]
+        if len(selected) != 1:
+            raise Refusal("Resolution chaos checkpoint omitted one Core terminal accept")
+        target = selected[0]
+        # The terminal checkpoint compacts the immutable message digest after
+        # finalization; the fsynced fault receipt remains its semantic owner.
+        intent = None
+        packet = target.get("signedTransactionSha256")
+        signature = target.get("signature")
+        slot = target.get("slot")
+    elif effective_stage == "payout":
+        if (
+            target.get("schema")
+            != "dclutch-local-private-validator-wallet-terminal-payout-journal-v1"
+            or target.get("stage") != "payout"
+        ):
+            raise Refusal("wallet payout chaos target journal changed schema or stage")
+        intent = target.get("payoutIntentSha256")
+        packet = _packet_sha256_from_base64(
+            target.get("signedPacketBase64"), "wallet payout chaos signed packet"
+        )
+        signature = target.get("expectedSignature")
+        slot = target.get("finalizedSlot")
+    elif effective_stage == "retire":
+        binding = target.get("packet")
+        signed = binding.get("signed") if isinstance(binding, dict) else None
+        finalization = target.get("finalization")
+        if (
+            target.get("schema")
+            != "dclutch-owned-loopback-aggregate-retirement-journal-v1"
+            or target.get("operation") != "finish"
+            or not isinstance(signed, dict)
+        ):
+            raise Refusal("aggregate finish chaos target changed schema, operation, or packet")
+        intent = target.get("intentSha256")
+        packet = signed.get("packetSha256")
+        signature = signed.get("signature")
+        slot = finalization.get("finalizedSlot") if isinstance(finalization, dict) else None
+    else:
+        raise Refusal(f"unsupported finalized chaos target stage {stage}")
+    if effective_stage != "resolution" and target.get("phase") != "finalized":
+        raise Refusal(f"{stage} chaos target did not reach finalized phase")
+    packet = lowercase_sha256(packet, f"{stage} chaos target packet")
+    signature = canonical_signature(signature, f"{stage} chaos target signature")
+    if not isinstance(slot, int) or isinstance(slot, bool) or slot <= 0:
+        raise Refusal(f"{stage} chaos target finalized slot is not positive")
+    if intent is not None:
+        intent = lowercase_sha256(intent, f"{stage} chaos target intent")
+    return {
+        "intentSha256": intent,
+        "packetSha256": packet,
+        "signature": signature,
+        "finalizedSlot": slot,
+        "journalSha256": sha256_file(journal_path),
+    }
+
+
+def chaos_session_identity(
+    *,
+    name: str,
+    seed: str,
+    genesis_hash: str,
+    plan: Path,
+    source_revision: str,
+    checked_release_gate_sha256: str,
+) -> str:
+    material = {
+        "schema": "dclutch-private-lifecycle-chaos-run-identity-v1",
+        "namedSeed": name,
+        "seedSha256": sha256_bytes(bytes.fromhex(seed)),
+        "genesisHash": canonical_pubkey(genesis_hash, "chaos genesis hash"),
+        "planSha256": sha256_file(plan),
+        "sourceRevision": source_revision,
+        "checkedReleaseGateSha256": checked_release_gate_sha256,
+    }
+    return sha256_bytes(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode("ascii")
+    )
+
+
+def build_chaos_case(
+    *,
+    contract: Any,
+    spec: Any,
+    index: int,
+    run: Path,
+    result_path: Path,
+    name: str,
+    genesis_hash: str,
+    session_identity_sha256: str,
+    source_revision: str,
+    checked_release_gate_sha256: str,
+    supervisor: ChaosStageSupervisor | None,
+) -> dict[str, Any]:
+    target = finalized_chaos_target_facts(
+        spec.stage, finalized_chaos_target_journal(run, spec.stage)
+    )
+    if spec.interrupted:
+        if supervisor is None or supervisor.facts is None or supervisor.recovery is None:
+            raise Refusal(f"chaos case {spec.case_id} never observed its exact process death")
+        fault = dict(supervisor.facts)
+        recovery = dict(supervisor.recovery)
+        expected_intent = fault["intentSha256"]
+        for field in ("packetSha256", "signature"):
+            if target[field] != fault[field] or recovery[field] != fault[field]:
+                raise Refusal(f"chaos recovery changed exact target {field}")
+        if target["intentSha256"] is not None and target["intentSha256"] != expected_intent:
+            raise Refusal("chaos recovery changed exact target intent")
+        if recovery["journalAfterFinalizationSha256"] != target["journalSha256"]:
+            raise Refusal("chaos recovery receipt did not name the finalized target journal")
+        recovery.update(
+            {
+                "sameGenesis": True,
+                "sameSessionIdentity": True,
+                "pollCount": 1,
+                "finalizedSlot": target["finalizedSlot"],
+            }
+        )
+        target_intent = expected_intent
+    else:
+        fault = None
+        recovery = None
+        if target["intentSha256"] is None:
+            raise Refusal("uninterrupted control target omitted its immutable intent")
+        target_intent = target["intentSha256"]
+    row: dict[str, Any] = {
+        "schema": contract.CASE_SCHEMA_V1,
+        "caseId": spec.case_id,
+        "stage": spec.stage,
+        "boundary": spec.boundary,
+        "targetMutation": contract.TARGET_MUTATIONS[spec.stage],
+        "status": "finalized",
+        "namedSeed": name,
+        "genesisHash": genesis_hash,
+        "sessionIdentitySha256": session_identity_sha256,
+        "sourceRevision": source_revision,
+        "checkedReleaseGateSha256": checked_release_gate_sha256,
+        "terminalResultSha256": sha256_file(result_path),
+        "completedStages": list(contract.STAGES),
+        "targetIntentSha256": target_intent,
+        "targetPacketSha256": target["packetSha256"],
+        "targetSignature": target["signature"],
+        "targetSigningCount": 1,
+        "targetDistinctSignatureCount": 1,
+        "targetSendCount": 1,
+        "fault": fault,
+        "recovery": recovery,
+        "caseSha256": "0" * 64,
+    }
+    digest_material = dict(row)
+    digest_material.pop("caseSha256")
+    row["caseSha256"] = contract.sha256_bytes(
+        contract.canonical_json_bytes(digest_material)
+    )
+    accepted = contract.authenticate_case(row, spec)
+    if accepted["namedSeed"] != f"chaos-{index:02d}":
+        raise Refusal("chaos case changed its matrix-owned named seed")
+    return accepted
+
+
+def finalize_lifecycle_receipt(
+    *,
+    run: Path,
+    paths: Paths,
+    gate_path: Path,
+    gate_digest: str,
+    source_revision: str,
+    chaos_session_path: Path,
+) -> dict[str, Any]:
+    result = read_unique_json(run / "RESULT.json", "terminal lifecycle run result")
+    activity = result.get("final_activity")
+    post_direct = result.get("post_direct")
+    if not isinstance(activity, dict) or not isinstance(post_direct, dict):
+        raise Refusal("terminal run omitted final activity or post-Direct evidence")
+    local_chaos = run / "CHAOS_SESSION.json"
+    write_bytes_new(local_chaos, canonical_file(chaos_session_path, "chaos session").read_bytes())
+    wrappers = activity.get("stage_wrappers")
+    if not isinstance(wrappers, dict):
+        raise Refusal("final activity controller omitted stage wrappers")
+    wrapper_rows: dict[str, dict[str, str]] = {}
+    for stage in ("founding", "participant", "direct", "resolution", "payout", "retirement"):
+        wrapper = wrappers.get(stage)
+        if not isinstance(wrapper, dict):
+            raise Refusal(f"final activity controller omitted {stage} wrapper")
+        path = canonical_file(wrapper.get("path"), f"{stage} activity wrapper")
+        wrapper_rows[stage] = {
+            "semanticRole": stage,
+            "path": run_relative_path(run, path, f"{stage} activity wrapper"),
+            "schema": "dclutch-owned-loopback-activity-stage-completion-v1",
+            "completionPointer": "/status",
+        }
+    direct_rows: dict[str, dict[str, str]] = {}
+    for role, stage in (("alt", "alt"), ("seal", "seal")):
+        path = finalized_chaos_target_journal(run, stage)
+        direct_rows[role] = {
+            "semanticRole": role,
+            "path": run_relative_path(run, path, f"Direct {role} journal"),
+            "schema": "dclutch-owned-loopback-direct-trade-journal-v1",
+            "completionPointer": "/phase",
+        }
+    pyth = canonical_file(run / "pyth-provisioning.json", "Pyth provisioning evidence")
+    pyth_row = {
+        "semanticRole": "pyth",
+        "path": run_relative_path(run, pyth, "Pyth provisioning evidence"),
+        "schema": "dclutch-private-validator-pyth-provisioning-v1",
+        "completionPointer": "/status",
+    }
+    activity_session = canonical_file(activity["session"], "activity lifecycle session")
+    activity_row = {
+        "semanticRole": "activity-session",
+        "path": run_relative_path(run, activity_session, "activity lifecycle session"),
+        "schema": "dclutch-owned-loopback-private-lifecycle-session-v1",
+        "completionPointer": "/status",
+    }
+    chaos_row = {
+        "semanticRole": "chaos-session",
+        "path": run_relative_path(run, local_chaos, "local chaos session"),
+        "schema": "dclutch-owned-loopback-private-lifecycle-chaos-session-v2",
+        "completionPointer": "/status",
+    }
+    rows = [
+        wrapper_rows["founding"],
+        wrapper_rows["participant"],
+        direct_rows["alt"],
+        direct_rows["seal"],
+        wrapper_rows["direct"],
+        pyth_row,
+        wrapper_rows["resolution"],
+        wrapper_rows["payout"],
+        wrapper_rows["retirement"],
+        activity_row,
+        chaos_row,
+    ]
+    if tuple(row["semanticRole"] for row in rows) != FINAL_LIFECYCLE_DESCRIPTOR_ROLES:
+        raise Refusal("final lifecycle descriptors changed their exact eleven-role order")
+    descriptors = run / "activity" / "final-lifecycle-descriptors.json"
+    write_json_new(
+        descriptors,
+        {
+            "schema": "dclutch-owned-loopback-stage-journal-descriptors-v1",
+            "journals": rows,
+        },
+    )
+    plan = canonical_file(result["plan"], "terminal run plan")
+    capture = canonical_file(activity["capture"], "finalized activity capture")
+    manifest = canonical_file(activity["manifest"], "activity manifest")
+    provider_closure = canonical_file(
+        activity["provider_closure"], "Pyth provider closure"
+    )
+    pyth_facts = canonical_file(post_direct["pyth"]["facts"], "Pyth update facts")
+    output = run / "LIFECYCLE_RECEIPT.json"
+    stages = canonical_directory(run / "stages", "run stage receipts")
+    ordinal = len(list(stages.iterdir())) + 1
+    document = run_json_stage(
+        run,
+        ordinal,
+        "lifecycle-receipt",
+        [
+            str(paths.bootstrap),
+            LIFECYCLE_RECEIPT_COMMAND,
+            "--evidence-root",
+            str(run),
+            "--source-commit",
+            source_revision,
+            "--checked-release-gate-sha256",
+            gate_digest,
+            "--plan",
+            str(plan),
+            "--checked-release-gate",
+            str(gate_path),
+            "--pyth-facts",
+            str(pyth_facts),
+            "--pyth-provider-closure",
+            str(provider_closure),
+            "--finalized-capture",
+            str(capture),
+            "--activity-manifest",
+            str(manifest),
+            "--stage-journal-descriptors",
+            str(descriptors),
+            "--chaos-session",
+            str(local_chaos),
+            "--output",
+            str(output),
+        ],
+    )
+    if (
+        read_unique_json(output, "private lifecycle receipt") != document
+        or document.get("schema")
+        != "dclutch-owned-loopback-reconcile-session-receipt-v1"
+        or document.get("status") != "finalized"
+    ):
+        raise Refusal("private lifecycle receipt changed schema or terminal status")
+    return {
+        "run": run.name,
+        "path": str(output),
+        "sha256": sha256_file(output),
+        "descriptors": str(descriptors),
+        "descriptors_sha256": sha256_file(descriptors),
+    }
 
 
 def key_flags(
@@ -3913,6 +6087,7 @@ def administration_campaign_argv(
     url: str,
     plan: Path,
     evidence: Path,
+    lineage: Path,
     report: dict[str, Any],
 ) -> list[str]:
     return [
@@ -3924,6 +6099,8 @@ def administration_campaign_argv(
         str(plan),
         "--evidence",
         str(evidence),
+        "--infrastructure-lineage-evidence",
+        str(lineage),
         "--through",
         "activation",
         "--execute",
@@ -3961,6 +6138,303 @@ def founding_campaign_argv(
         "--execute",
         *key_flags(report, "campaign_founding_keypairs"),
     ]
+
+
+def _lineage_account(row: Any, label: str) -> dict[str, Any]:
+    account = exact_keys(
+        row,
+        {
+            "address",
+            "owner",
+            "lamports",
+            "executable",
+            "data_len",
+            "data_sha256",
+            "account_sha256",
+        },
+        label,
+    )
+    canonical_pubkey(account["address"], f"{label} address")
+    canonical_pubkey(account["owner"], f"{label} owner")
+    nonnegative_integer(account["lamports"], f"{label} lamports")
+    if not isinstance(account["executable"], bool):
+        raise Refusal(f"{label} executable flag is not boolean")
+    positive_integer(account["data_len"], f"{label} data length")
+    lowercase_sha256(account["data_sha256"], f"{label} data digest")
+    lowercase_sha256(account["account_sha256"], f"{label} account digest")
+    return account
+
+
+def _lineage_release(row: Any, label: str) -> dict[str, Any]:
+    release = exact_keys(
+        row,
+        {
+            "artifactReleaseId",
+            "program",
+            "loaderProgram",
+            "programData",
+            "semanticReleaseId",
+            "elfSha256",
+            "deploymentSlot",
+            "upgradePolicy",
+            "upgradeAuthority",
+        },
+        label,
+    )
+    lowercase_sha256(release["artifactReleaseId"], f"{label} artifact id")
+    canonical_pubkey(release["program"], f"{label} program")
+    canonical_pubkey(release["loaderProgram"], f"{label} loader")
+    canonical_pubkey(release["programData"], f"{label} ProgramData")
+    lowercase_sha256(release["semanticReleaseId"], f"{label} semantic release")
+    lowercase_sha256(release["elfSha256"], f"{label} ELF")
+    positive_integer(release["deploymentSlot"], f"{label} deployment slot")
+    if release["upgradePolicy"] not in {"immutable", "exact-authority"}:
+        raise Refusal(f"{label} has an unsupported upgrade policy")
+    if release["upgradePolicy"] == "exact-authority":
+        canonical_pubkey(release["upgradeAuthority"], f"{label} authority")
+    elif release["upgradeAuthority"] is not None:
+        raise Refusal(f"{label} immutable release named an authority")
+    return release
+
+
+def _lineage_record(row: Any, label: str) -> dict[str, Any]:
+    record = exact_keys(
+        row,
+        {"record", "rawAccount", "stagingAddress", "stagingAbsentAfterFinalize"},
+        label,
+    )
+    release = _lineage_release(record["record"], f"{label} release")
+    raw = _lineage_account(record["rawAccount"], f"{label} raw account")
+    canonical_pubkey(record["stagingAddress"], f"{label} staging address")
+    if record["stagingAbsentAfterFinalize"] is not True:
+        raise Refusal(f"{label} was not one finalized Registry record")
+    if raw["data_sha256"] != release["artifactReleaseId"]:
+        raise Refusal(f"{label} raw bytes do not hash to the artifact identity")
+    return record
+
+
+def authenticate_infrastructure_lineage(
+    path: Path,
+    administration: dict[str, Any],
+    plan: Path,
+) -> dict[str, Any]:
+    """Authenticate the Rust-authored post-succession chain lineage envelope."""
+
+    lineage = exact_keys(
+        read_unique_json(path, "infrastructure lineage evidence"),
+        {
+            "schema",
+            "evidenceLevel",
+            "cluster",
+            "genesisHash",
+            "planSha256",
+            "campaignEvidencePath",
+            "source",
+            "checkedArtifacts",
+            "profiles",
+            "artifactLineage",
+            "activation",
+            "migration",
+        },
+        "infrastructure lineage evidence",
+    )
+    metadata = exact_keys(
+        administration.get("infrastructureLineageEvidence"),
+        {"path", "sha256", "schema"},
+        "administration lineage attachment",
+    )
+    if (
+        lineage["schema"] != "dclutch-current-source-infrastructure-lineage-v1"
+        or lineage["evidenceLevel"] != "local-validator-finalized-chain-state"
+        or lineage["cluster"] != "owned-loopback"
+        or lineage["genesisHash"] != administration.get("genesis_hash")
+        or lineage["planSha256"] != sha256_file(plan)
+        or lineage["campaignEvidencePath"] != administration.get("evidence_output")
+        or metadata["path"] != str(path)
+        or metadata["schema"] != lineage["schema"]
+        or metadata["sha256"] != sha256_file(path)
+    ):
+        raise Refusal("infrastructure lineage changed its campaign, plan, cluster, or attachment")
+    canonical_pubkey(lineage["genesisHash"], "lineage genesis hash")
+    lowercase_sha256(lineage["planSha256"], "lineage plan digest")
+    lowercase_sha256(metadata["sha256"], "lineage artifact digest")
+
+    source = exact_keys(
+        lineage["source"],
+        {
+            "revision",
+            "treeSha256",
+            "checkedReleaseGatePath",
+            "checkedReleaseGateSha256",
+            "checkedLocalMutableSetSha256",
+            "solanaCliVersion",
+        },
+        "lineage source",
+    )
+    if (
+        not isinstance(source["revision"], str)
+        or len(source["revision"]) != 40
+        or any(character not in "0123456789abcdef" for character in source["revision"])
+        or not isinstance(source["checkedReleaseGatePath"], str)
+        or not Path(source["checkedReleaseGatePath"]).is_absolute()
+        or not isinstance(source["solanaCliVersion"], str)
+        or not source["solanaCliVersion"]
+    ):
+        raise Refusal("lineage source identity is not canonical")
+    for field in ("treeSha256", "checkedReleaseGateSha256", "checkedLocalMutableSetSha256"):
+        lowercase_sha256(source[field], f"lineage source {field}")
+
+    checked = lineage["checkedArtifacts"]
+    if not isinstance(checked, list) or [row.get("role") for row in checked if isinstance(row, dict)] != list(ROLE_ORDER):
+        raise Refusal("lineage checked artifacts changed canonical seven-role order")
+    checked_by_role: dict[str, dict[str, Any]] = {}
+    for row in checked:
+        artifact = exact_keys(
+            row,
+            {
+                "role",
+                "program",
+                "programData",
+                "checkedCandidateElfPath",
+                "checkedCandidateElfSha256",
+                "genesisLiveElfSha256",
+                "genesisProgramDataAccountSha256",
+                "genesisDeploymentSlot",
+                "semanticReleaseId",
+            },
+            "lineage checked artifact",
+        )
+        canonical_pubkey(artifact["program"], f"checked {artifact['role']} program")
+        canonical_pubkey(artifact["programData"], f"checked {artifact['role']} ProgramData")
+        positive_integer(artifact["genesisDeploymentSlot"], f"checked {artifact['role']} slot")
+        for field in (
+            "checkedCandidateElfSha256",
+            "genesisLiveElfSha256",
+            "genesisProgramDataAccountSha256",
+            "semanticReleaseId",
+        ):
+            lowercase_sha256(artifact[field], f"checked {artifact['role']} {field}")
+        if artifact["checkedCandidateElfSha256"] != artifact["genesisLiveElfSha256"]:
+            raise Refusal(f"checked {artifact['role']} candidate and genesis ELF differ")
+        checked_by_role[artifact["role"]] = artifact
+
+    profiles = exact_keys(
+        lineage["profiles"],
+        {"predecessorV1", "successorV2", "v1PreservedByteIdentical"},
+        "lineage profiles",
+    )
+    if profiles["v1PreservedByteIdentical"] is not True:
+        raise Refusal("lineage did not preserve V1 byte-identically")
+    v1 = exact_keys(
+        profiles["predecessorV1"],
+        {"address", "account", "registryArtifactReleaseId", "rentArtifactReleaseId"},
+        "lineage V1 profile",
+    )
+    v2 = exact_keys(
+        profiles["successorV2"],
+        {
+            "address",
+            "account",
+            "registryArtifactReleaseId",
+            "rentArtifactReleaseId",
+            "predecessorRegistryArtifactReleaseId",
+            "predecessorRentArtifactReleaseId",
+        },
+        "lineage V2 profile",
+    )
+    for label, profile in (("V1", v1), ("V2", v2)):
+        canonical_pubkey(profile["address"], f"lineage {label} profile")
+        account = _lineage_account(profile["account"], f"lineage {label} profile account")
+        if account["address"] != profile["address"]:
+            raise Refusal(f"lineage {label} profile account address differs")
+        for field in ("registryArtifactReleaseId", "rentArtifactReleaseId"):
+            lowercase_sha256(profile[field], f"lineage {label} {field}")
+    for field in ("predecessorRegistryArtifactReleaseId", "predecessorRentArtifactReleaseId"):
+        lowercase_sha256(v2[field], f"lineage V2 {field}")
+    if (
+        v2["predecessorRegistryArtifactReleaseId"] != v1["registryArtifactReleaseId"]
+        or v2["predecessorRentArtifactReleaseId"] != v1["rentArtifactReleaseId"]
+        or v2["rentArtifactReleaseId"] != v1["rentArtifactReleaseId"]
+        or v2["registryArtifactReleaseId"] == v1["registryArtifactReleaseId"]
+    ):
+        raise Refusal("lineage V2 profile does not join exactly to V1")
+
+    artifacts = exact_keys(
+        lineage["artifactLineage"], {"registry", "rent"}, "lineage artifacts"
+    )
+    registry = exact_keys(
+        artifacts["registry"], {"movedForward", "predecessor", "successor"}, "Registry lineage"
+    )
+    rent = exact_keys(
+        artifacts["rent"], {"carriedForward", "release"}, "Rent lineage"
+    )
+    predecessor = _lineage_record(registry["predecessor"], "predecessor Registry")
+    successor = _lineage_record(registry["successor"], "successor Registry")
+    carried_rent = _lineage_record(rent["release"], "carried Rent")
+    predecessor_release = predecessor["record"]
+    successor_release = successor["record"]
+    rent_release = carried_rent["record"]
+    if (
+        registry["movedForward"] is not True
+        or rent["carriedForward"] is not True
+        or predecessor_release["artifactReleaseId"] != v1["registryArtifactReleaseId"]
+        or successor_release["artifactReleaseId"] != v2["registryArtifactReleaseId"]
+        or rent_release["artifactReleaseId"] != v2["rentArtifactReleaseId"]
+        or predecessor_release["program"] != successor_release["program"]
+        or predecessor_release["programData"] != successor_release["programData"]
+        or predecessor_release["semanticReleaseId"] != successor_release["semanticReleaseId"]
+        or predecessor_release["elfSha256"] != successor_release["elfSha256"]
+        or successor_release["deploymentSlot"] <= predecessor_release["deploymentSlot"]
+        or successor_release["program"] != checked_by_role["registry"]["program"]
+        or rent_release["program"] != checked_by_role["rent"]["program"]
+    ):
+        raise Refusal("lineage artifact transition is not one forward Registry move and carried Rent")
+
+    activation = exact_keys(
+        lineage["activation"],
+        {
+            "releaseSetId",
+            "checkedExecutionReleaseSetId",
+            "checkedMultiprogramEnvelopeSha256",
+            "account",
+            "roles",
+        },
+        "lineage activation",
+    )
+    for field in ("releaseSetId", "checkedExecutionReleaseSetId", "checkedMultiprogramEnvelopeSha256"):
+        lowercase_sha256(activation[field], f"lineage activation {field}")
+    _lineage_account(activation["account"], "lineage activation account")
+    expected_execution_roles = ("core", "claims", "trading", "resolution", "custody")
+    roles = activation["roles"]
+    if not isinstance(roles, list) or [row.get("role") for row in roles if isinstance(row, dict)] != list(expected_execution_roles):
+        raise Refusal("lineage activation changed canonical execution-role order")
+    for row in roles:
+        role = exact_keys(row, {"role", "release"}, "lineage activated role")
+        release = _lineage_release(role["release"], f"activated {role['role']}")
+        checked_role = checked_by_role[role["role"]]
+        if (
+            release["program"] != checked_role["program"]
+            or release["programData"] != checked_role["programData"]
+            or release["semanticReleaseId"] != checked_role["semanticReleaseId"]
+            or release["elfSha256"] != checked_role["checkedCandidateElfSha256"]
+        ):
+            raise Refusal(f"activated {role['role']} differs from its checked source artifact")
+
+    migration = exact_keys(
+        lineage["migration"],
+        {"preexistingMarketsMigrated", "marketsSilentlyRebound", "scope", "consumerRule"},
+        "lineage migration disposition",
+    )
+    if (
+        migration["preexistingMarketsMigrated"] != 0
+        or migration["marketsSilentlyRebound"] is not False
+        or not isinstance(migration["scope"], str)
+        or not migration["scope"]
+        or not isinstance(migration["consumerRule"], str)
+        or not migration["consumerRule"]
+    ):
+        raise Refusal("lineage migration disposition overclaimed fresh-validator evidence")
+    return lineage
 
 
 def authenticate_campaign_completion(
@@ -4160,8 +6634,28 @@ def run_one(
     index: int,
     through: str,
     hold_participant: bool,
+    *,
+    hot_cu_profile: bool = False,
+    name_override: str | None = None,
+    seed_override: str | None = None,
+    chaos_contract: Any | None = None,
+    chaos_spec: Any | None = None,
+    chaos_index: int | None = None,
 ) -> dict[str, Any]:
     name, seed = named_seed(index)
+    if name_override is not None or seed_override is not None:
+        if (
+            name_override is None
+            or seed_override is None
+            or re.fullmatch(r"chaos-[0-9]{2}", name_override) is None
+            or re.fullmatch(r"[0-9a-f]{64}", seed_override) is None
+        ):
+            raise Refusal("chaos run override must be one exact named seed and SHA-256")
+        name, seed = name_override, seed_override
+    if (chaos_contract is None) != (chaos_spec is None) or (
+        chaos_spec is None
+    ) != (chaos_index is None):
+        raise Refusal("chaos run contract, spec, and index must be supplied together")
     run = paths.work / "runs" / name
     run.mkdir(parents=True, exist_ok=False)
     (run / "stages").mkdir()
@@ -4169,28 +6663,31 @@ def run_one(
     url = f"http://127.0.0.1:{port}"
     prepare_work = run / "mutable"
     plan = prepare_work / "plan.json"
+    prepare_argv = [
+        str(paths.bootstrap),
+        "local-mutable-prepare-v1",
+        "--work",
+        str(prepare_work),
+        "--output",
+        str(plan),
+        "--checked-release-gate",
+        str(gate_path),
+        "--expected-checked-release-gate-sha256",
+        gate_digest,
+        "--expected-source-revision",
+        gate["source_revision"],
+        "--expected-source-tree-sha256",
+        gate["source_tree_sha256"],
+        "--seed",
+        seed,
+    ]
+    if hot_cu_profile:
+        prepare_argv.append("--hot-cu-profile")
     prepare = run_stage(
         run,
         1,
         "prepare-mutable",
-        [
-            str(paths.bootstrap),
-            "local-mutable-prepare-v1",
-            "--work",
-            str(prepare_work),
-            "--output",
-            str(plan),
-            "--checked-release-gate",
-            str(gate_path),
-            "--expected-checked-release-gate-sha256",
-            gate_digest,
-            "--expected-source-revision",
-            gate["source_revision"],
-            "--expected-source-tree-sha256",
-            gate["source_tree_sha256"],
-            "--seed",
-            seed,
-        ],
+        prepare_argv,
     )
     report = json.loads(prepare.stdout)
     if report.get("schema") != "dclutch-local-mutable-prepare-report-v1":
@@ -4249,10 +6746,28 @@ def run_one(
             start_new_session=True,
         )
         wait_ready(url, child)
-        if rpc(url, "getGenesisHash") == "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d":
+        genesis_hash = canonical_pubkey(
+            rpc(url, "getGenesisHash"), "fresh private-validator genesis hash"
+        )
+        if genesis_hash == "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d":
             raise Refusal(
                 "fresh private validator reported the mainnet-beta genesis hash"
             )
+        run_session_identity = chaos_session_identity(
+            name=name,
+            seed=seed,
+            genesis_hash=genesis_hash,
+            plan=plan,
+            source_revision=gate["source_revision"],
+            checked_release_gate_sha256=gate_digest,
+        )
+        local_validator_profile = write_local_validator_profile(
+            paths,
+            ledger=ledger,
+            plan=plan,
+            account_dir=report["account_dir"],
+            port=port,
+        )
         funding_poststate = provision_disposable_funding(run, paths, report, url)
         slot_floor = checked_mutable_slot_floor(plan)
         funding_poststate["finalized_slot"] = wait_finalized_slot(
@@ -4271,6 +6786,7 @@ def run_one(
         )
 
         administration = run / "administration.json"
+        infrastructure_lineage = run / "infrastructure-lineage.json"
         run_stage(
             run,
             4,
@@ -4280,14 +6796,23 @@ def run_one(
                 url,
                 plan,
                 administration,
+                infrastructure_lineage,
                 report,
             ),
         )
+        administration_report = read_unique_json(
+            administration, "finalized administration evidence"
+        )
         authenticate_campaign_completion(
-            read_unique_json(administration, "finalized administration evidence"),
+            administration_report,
             "administration",
             plan,
             None,
+        )
+        authenticate_infrastructure_lineage(
+            infrastructure_lineage,
+            administration_report,
+            plan,
         )
 
         market = run / "market.json"
@@ -4490,6 +7015,8 @@ def run_one(
                 "plan": str(plan),
                 "administration_evidence": str(administration),
                 "administration_evidence_sha256": sha256_file(administration),
+                "infrastructure_lineage": str(infrastructure_lineage),
+                "infrastructure_lineage_sha256": sha256_file(infrastructure_lineage),
                 "provisioning_evidence": str(run / "provisioning-poststate.json"),
                 "provisioning_evidence_sha256": sha256_file(
                     run / "provisioning-poststate.json"
@@ -4517,6 +7044,7 @@ def run_one(
         direct, schedule, next_ordinal = run_direct_lifecycle(
             run,
             paths,
+            report,
             url,
             plan,
             market,
@@ -4525,7 +7053,7 @@ def run_one(
             prepare_work / "keys",
             9,
         )
-        post_direct, _next_ordinal = run_post_direct_lifecycle(
+        post_direct, next_ordinal = run_post_direct_lifecycle(
             run,
             paths,
             report,
@@ -4533,7 +7061,18 @@ def run_one(
             plan,
             market,
             evidence,
+            direct,
             schedule,
+            next_ordinal,
+        )
+        final_activity, _next_ordinal = run_final_activity_evidence(
+            run,
+            paths,
+            url,
+            plan,
+            local_validator_profile,
+            direct,
+            post_direct,
             next_ordinal,
         )
         result = {
@@ -4552,6 +7091,8 @@ def run_one(
             "plan": str(plan),
             "administration_evidence": str(administration),
             "administration_evidence_sha256": sha256_file(administration),
+            "infrastructure_lineage": str(infrastructure_lineage),
+            "infrastructure_lineage_sha256": sha256_file(infrastructure_lineage),
             "provisioning_evidence": str(run / "provisioning-poststate.json"),
             "provisioning_evidence_sha256": sha256_file(
                 run / "provisioning-poststate.json"
@@ -4560,9 +7101,40 @@ def run_one(
             "participant_evidence": str(participant),
             "direct": direct,
             "post_direct": post_direct,
+            "final_activity": final_activity,
             "validator_log": str(run / "validator.log"),
         }
-        write_json_new(run / "RESULT.json", result)
+        result_path = run / "RESULT.json"
+        write_json_new(result_path, result)
+        if chaos_spec is not None:
+            if through not in {"full", "full-probe"}:
+                raise Refusal("chaos cases require the complete terminal lifecycle")
+            if rpc(url, "getGenesisHash") != genesis_hash:
+                raise Refusal("chaos exterior restart changed validator genesis")
+            recovered_identity = chaos_session_identity(
+                name=name,
+                seed=seed,
+                genesis_hash=genesis_hash,
+                plan=plan,
+                source_revision=gate["source_revision"],
+                checked_release_gate_sha256=gate_digest,
+            )
+            if recovered_identity != run_session_identity:
+                raise Refusal("chaos exterior restart changed run session identity")
+            case = build_chaos_case(
+                contract=chaos_contract,
+                spec=chaos_spec,
+                index=chaos_index,
+                run=run,
+                result_path=result_path,
+                name=name,
+                genesis_hash=genesis_hash,
+                session_identity_sha256=run_session_identity,
+                source_revision=gate["source_revision"],
+                checked_release_gate_sha256=gate_digest,
+                supervisor=_ACTIVE_CHAOS_SUPERVISOR,
+            )
+            write_json_new(run / "CHAOS_CASE.json", case)
         return result
     finally:
         terminate_group(child)
@@ -4613,7 +7185,7 @@ def compute_unit_report(runs: Sequence[dict[str, Any]]) -> dict[str, dict[str, A
     }
 
 
-def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
+def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool, bool]:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--release-root", required=True)
@@ -4629,6 +7201,7 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
         "--through", choices=("participant", "full-probe", "full"), default="full"
     )
     parser.add_argument("--hold-after-participant", action="store_true")
+    parser.add_argument("--hot-cu-profile", action="store_true")
     args = parser.parse_args(argv)
     if args.hold_after_participant and args.through != "participant":
         raise Refusal("--hold-after-participant requires --through participant")
@@ -4638,15 +7211,12 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
         raise Refusal(
             "the full-lifecycle development probe requires exactly one named seed"
         )
-    if args.through == "full":
-        raise Refusal(
-            "twenty-seed private-validator release evidence is not accepted in this revision; "
-            "missing semantic owners: " + ", ".join(FULL_LIFECYCLE_BLOCKERS)
-        )
     if args.through == "participant" and args.seeds != 1:
         raise Refusal(
             "the founding/participant development probe requires exactly one named seed"
         )
+    if args.hot_cu_profile and args.through != "full-probe":
+        raise Refusal("--hot-cu-profile is diagnostic-only and requires --through full-probe")
     work = Path(args.work)
     if not work.is_absolute() or work.exists() or not work.parent.is_dir():
         raise Refusal(
@@ -4668,11 +7238,17 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
         solana=canonical_file(args.solana, "solana CLI"),
         work=work,
     )
-    return paths, args.seeds, args.through, args.hold_after_participant
+    return (
+        paths,
+        args.seeds,
+        args.through,
+        args.hold_after_participant,
+        args.hot_cu_profile,
+    )
 
 
 def main(argv: Sequence[str]) -> int:
-    paths, seeds, through, hold_participant = parse(argv)
+    paths, seeds, through, hold_participant, hot_cu_profile = parse(argv)
     commit = clean_commit(paths.repo)
     tree = clean_tree(paths.repo)
     preflight_bytes, preflight = run_offline_preflight(paths, commit, tree, through)
@@ -4708,10 +7284,74 @@ def main(argv: Sequence[str]) -> int:
                     index,
                     through,
                     hold_participant,
+                    hot_cu_profile=hot_cu_profile,
                 )
             )
         except Exception as error:
             failures.append({"seed": f"seed-{index:02d}", "error": str(error)})
+    chaos_session: dict[str, Any] | None = None
+    chaos_cases: list[dict[str, Any]] = []
+    lifecycle_receipts: list[dict[str, Any]] = []
+    if through == "full" and len(runs) == seeds:
+        contract = load_chaos_contract(paths)
+        for chaos_index, spec in enumerate(contract.MATRIX, start=1):
+            name, seed = chaos_named_seed(chaos_index)
+            chaos_run = paths.work / "runs" / name
+            supervisor = None
+            if spec.interrupted:
+                supervisor = ChaosStageSupervisor(
+                    case_id=spec.case_id,
+                    mutation=contract.TARGET_MUTATIONS[spec.stage],
+                    boundary=spec.boundary,
+                    journal=initial_chaos_target_journal(chaos_run, spec.stage),
+                    receipt=chaos_run / "CHAOS_FAULT.json",
+                )
+            try:
+                with active_chaos_supervisor(supervisor):
+                    run_one(
+                        paths,
+                        gate_path,
+                        gate,
+                        gate_digest,
+                        seeds + chaos_index,
+                        "full",
+                        False,
+                        name_override=name,
+                        seed_override=seed,
+                        chaos_contract=contract,
+                        chaos_spec=spec,
+                        chaos_index=chaos_index,
+                    )
+                chaos_cases.append(
+                    read_unique_json(chaos_run / "CHAOS_CASE.json", f"{name} chaos case")
+                )
+            except Exception as error:
+                failures.append({"seed": name, "error": str(error)})
+        if len(chaos_cases) == len(contract.MATRIX):
+            chaos_session = contract.build_session(
+                source_revision=commit,
+                source_tree_sha256=gate["source_tree_sha256"],
+                checked_release_gate_sha256=gate_digest,
+                cases=chaos_cases,
+            )
+            contract.write_session_new(paths.work / "CHAOS_SESSION.json", chaos_session)
+            for run_name in [
+                *(f"seed-{index:02d}" for index in range(1, seeds + 1)),
+                *(f"chaos-{index:02d}" for index in range(1, 18)),
+            ]:
+                try:
+                    lifecycle_receipts.append(
+                        finalize_lifecycle_receipt(
+                            run=paths.work / "runs" / run_name,
+                            paths=paths,
+                            gate_path=gate_path,
+                            gate_digest=gate_digest,
+                            source_revision=commit,
+                            chaos_session_path=paths.work / "CHAOS_SESSION.json",
+                        )
+                    )
+                except Exception as error:
+                    failures.append({"seed": run_name, "error": str(error)})
     mean = arithmetic_mean(row["dcltgmf3_compute_units"] for row in runs)
     compute_units = compute_unit_report(runs)
     summary = {
@@ -4756,6 +7396,17 @@ def main(argv: Sequence[str]) -> int:
         "through": through,
         "pass_count": len(runs),
         "fail_count": len(failures),
+        "chaos": (
+            None
+            if chaos_session is None
+            else {
+                "path": str(paths.work / "CHAOS_SESSION.json"),
+                "sha256": sha256_file(paths.work / "CHAOS_SESSION.json"),
+                "session_sha256": chaos_session["sessionSha256"],
+                "case_count": len(chaos_cases),
+            }
+        ),
+        "lifecycle_receipts": lifecycle_receipts,
         "dcltgmf3_compute_units_arithmetic_mean": mean,
         "compute_unit_report": compute_units,
         "runs": runs,
@@ -4765,7 +7416,15 @@ def main(argv: Sequence[str]) -> int:
     }
     write_json_new(paths.work / "SUMMARY.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0 if len(runs) == seeds else 1
+    accepted = len(runs) == seeds and (
+        through != "full"
+        or (
+            chaos_session is not None
+            and len(lifecycle_receipts) == seeds + len(chaos_cases)
+            and not failures
+        )
+    )
+    return 0 if accepted else 1
 
 
 def interrupted(signum: int, _frame: Any) -> None:

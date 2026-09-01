@@ -1,6 +1,6 @@
 //! Controls for the selectable General release.
 //!
-//! Fixed-index reads into the seven-action arrays are what these controls are
+//! Fixed-index reads into the complete action arrays are what these controls are
 //! written in terms of, and the arrays are compile-time sized, so the indexing
 //! lint is disabled here rather than every assertion being restated through
 //! `get`.
@@ -8,7 +8,11 @@
 
 use super::*;
 
+use dclutch_general_adapter_contract::activation_bundle_v1::build_general_activation_capable_program_set_v1;
 use dclutch_general_adapter_contract::artifacts_v3::authenticate_general_artifacts_v3;
+use dclutch_general_adapter_contract::release_v3::{
+    GENERAL_ACTIONS_V3, authenticate_general_program_set_v3,
+};
 
 /// Widths a release selects for the external accounts Profile13 names.
 ///
@@ -62,23 +66,37 @@ fn input() -> GeneralSelectedReleaseInputV1 {
     }
 }
 
-/// The headline: seven actions become one release the family's own verifier
+/// The headline: all fifteen actions become one release the family's own verifier
 /// accepts, named by a publication a Market can select.
 #[test]
-fn the_seven_actions_compile_into_one_release_the_family_verifier_accepts() {
+fn every_current_action_compiles_into_one_release_the_family_verifier_accepts() {
+    for action in GENERAL_ACTIONS_V5 {
+        encode_account_profile(input().external_widths, action)
+            .unwrap_or_else(|error| panic!("{action:?} account profile refused: {error:?}"));
+        encode_lifecycle(input(), action)
+            .unwrap_or_else(|error| panic!("{action:?} lifecycle refused: {error:?}"));
+        encode_transition(action)
+            .unwrap_or_else(|error| panic!("{action:?} transition refused: {error:?}"));
+        encode_effect(action)
+            .unwrap_or_else(|error| panic!("{action:?} effect refused: {error:?}"));
+        canonical_request(action)
+            .unwrap_or_else(|error| panic!("{action:?} request refused: {error:?}"));
+        compile_bundle(input(), action)
+            .unwrap_or_else(|error| panic!("{action:?} bundle refused: {error:?}"));
+    }
     let release = general_selected_release_v1(input()).expect("General release");
 
     assert_eq!(release.bundles.len(), GENERAL_SELECTED_ACTION_COUNT_V1);
-    for (bundle, action) in release.bundles.iter().zip(GENERAL_ACTIONS_V3) {
+    for (bundle, action) in release.bundles.iter().zip(GENERAL_ACTIONS_V5) {
         assert_eq!(bundle.action, action);
         assert!(!bundle.descriptor.is_empty());
         assert!(!bundle.lifecycle_policy.is_empty());
     }
 
-    // `general_selected_release_v1` already ran the seven-action join, so this
+    // `general_selected_release_v1` already ran the complete join, so this
     // is the independent restatement of the claim rather than the claim itself:
     // each action also authenticates on its own against the published set.
-    for action in GENERAL_ACTIONS_V3 {
+    for action in GENERAL_ACTIONS_V5 {
         let index = usize::from(action as u8);
         let request = canonical_request(action).expect("canonical request");
         authenticate_general_artifacts_v3(
@@ -89,6 +107,60 @@ fn the_seven_actions_compile_into_one_release_the_family_verifier_accepts() {
         )
         .expect("action authenticates against the published release");
     }
+}
+
+/// The selected release has one catalogue: V5, with the historical seven as an
+/// exact prefix rather than a second independently authored order.
+#[test]
+fn the_current_catalogue_is_dense_exhaustive_and_preserves_the_historical_prefix() {
+    assert_eq!(
+        GENERAL_ACTIONS_V5
+            .get(..GENERAL_ACTIONS_V3.len())
+            .expect("V3 prefix"),
+        GENERAL_ACTIONS_V3
+    );
+    for (tag, action) in GENERAL_ACTIONS_V5.into_iter().enumerate() {
+        assert_eq!(usize::from(action as u8), tag, "catalogue tag {tag} moved");
+    }
+
+    let release = general_selected_release_v1(input()).expect("current release");
+    assert_eq!(
+        release
+            .bundles
+            .iter()
+            .map(|bundle| bundle.action)
+            .collect::<Vec<_>>(),
+        GENERAL_ACTIONS_V5
+    );
+    let current_identity = digest(&release.program_set);
+    let (_, current_profile) = authenticate_general_program_set_v3(
+        current_identity,
+        current_identity,
+        &release.program_set,
+    )
+    .expect("current set");
+    assert_eq!(
+        current_profile,
+        GeneralReleaseProfileV1::CompleteV2WithActivation
+    );
+
+    let historical = build_general_activation_capable_program_set_v1(
+        release
+            .publication
+            .descriptors
+            .get(..GENERAL_ACTIONS_V3.len())
+            .expect("historical descriptor prefix"),
+        release.activation.descriptor_id,
+    )
+    .expect("historical set remains constructible");
+    let historical_identity = digest(&historical);
+    let (_, historical_profile) =
+        authenticate_general_program_set_v3(historical_identity, historical_identity, &historical)
+            .expect("historical set remains authenticated");
+    assert_eq!(
+        historical_profile,
+        GeneralReleaseProfileV1::SettlementWithActivation
+    );
 }
 
 /// Every publication field is derived; none is a free parameter.
@@ -135,17 +207,17 @@ fn the_publication_satisfies_the_market_selection_hook() {
     // (3) one entry per authored action.
     assert_eq!(
         usize::from(publication.action_count),
-        GENERAL_ACTIONS_V3.len()
+        GENERAL_ACTIONS_V5.len()
     );
     let set = CapabilityProgramSetV2::decode(&release.program_set).expect("set");
     assert_eq!(
         usize::from(set.entry_count()),
-        GENERAL_ACTIONS_V3.len() + 1,
-        "seven actions and the activation coordinate"
+        GENERAL_ACTIONS_V5.len() + 1,
+        "fifteen actions and the activation coordinate"
     );
     assert_eq!(
         general_selected_release_profile_v1(),
-        GeneralReleaseProfileV1::SettlementWithActivation
+        GeneralReleaseProfileV1::CompleteV2WithActivation
     );
     assert_eq!(
         usize::from(set.entry_count()),
@@ -163,7 +235,7 @@ fn the_publication_satisfies_the_market_selection_hook() {
     // (5) and (6) -- the V4 effect envelope and the AdmittedAot disposition --
     // are enforced by `authenticate_general_release_v3`, which the compiler ran
     // before returning. A bundle failing either could not have been published.
-    for action in GENERAL_ACTIONS_V3 {
+    for action in GENERAL_ACTIONS_V5 {
         let index = usize::from(action as u8);
         let strategy = ExecutionStrategyProgramV2::decode(&release.bundles[index].strategy)
             .expect("strategy decodes");
@@ -176,7 +248,7 @@ fn the_publication_satisfies_the_market_selection_hook() {
 fn each_action_selects_its_own_descriptor_and_none_is_shared() {
     let release = general_selected_release_v1(input()).expect("General release");
     let set = CapabilityProgramSetV2::decode(&release.program_set).expect("set");
-    for action in GENERAL_ACTIONS_V3 {
+    for action in GENERAL_ACTIONS_V5 {
         let probe = action_selector_probe(action).expect("probe");
         let selected = set.select_descriptor(&probe).expect("selected descriptor");
         let index = usize::from(action as u8);
@@ -266,6 +338,16 @@ fn a_substituted_bundle_program_set_or_config_refuses() {
     swapped.bundles[3] = canonical.bundles[4].clone();
     assert_eq!(
         validate_general_selected_release_v1(&swapped, input()).err(),
+        Some(GeneralSelectedReleaseErrorV1::Release)
+    );
+
+    // The newly admitted half is not a looser suffix. A valid late-action
+    // bundle substituted at CloseCandidate's coordinate is refused before its
+    // individually well-formed artifacts can be treated as tag 14.
+    let mut swapped_late = canonical.clone();
+    swapped_late.bundles[14] = canonical.bundles[11].clone();
+    assert_eq!(
+        validate_general_selected_release_v1(&swapped_late, input()).err(),
         Some(GeneralSelectedReleaseErrorV1::Release)
     );
 
@@ -486,7 +568,7 @@ fn the_three_activation_records_close_the_triangle_the_seam_authenticates() {
         descriptor.content_id()
     );
 
-    // And the four manifest-joined coordinates are the ones the seven actions
+    // And the four manifest-joined coordinates are the ones all actions
     // publish, because `validate_selection` joins the descriptor to the manifest
     // entry the release's own action descriptors authored.
     let action = CapabilityProgramV4::decode(&release.bundles[0].descriptor).expect("action");
@@ -523,7 +605,7 @@ fn the_published_set_selects_the_activation_descriptor_and_no_action_does() {
         general_activation_descriptor_schema_v1()
     );
 
-    for action in GENERAL_ACTIONS_V3 {
+    for action in GENERAL_ACTIONS_V5 {
         let probe = action_selector_probe(action).expect("probe");
         let action_selected = set.select_descriptor(&probe).expect("action entry");
         assert_ne!(
@@ -605,15 +687,18 @@ fn a_substituted_activation_record_refuses() {
         Some(GeneralSelectedReleaseErrorV1::Publication)
     );
 
-    // And a seven-entry set -- the profile this release used to publish -- no
-    // longer validates, because the eighth coordinate is now part of the
-    // release's identity rather than an optional extra.
+    // And the historical seven-action-plus-activation set remains decodable,
+    // but cannot masquerade as the current fifteen-action release.
     let mut narrowed = canonical.clone();
     narrowed.program_set = build_general_activation_capable_program_set_v1(
-        &canonical.publication.descriptors,
-        [0x61; 32],
+        canonical
+            .publication
+            .descriptors
+            .get(..GENERAL_ACTIONS_V3.len())
+            .expect("historical descriptor prefix"),
+        canonical.activation.descriptor_id,
     )
-    .expect("a set naming a foreign activation descriptor");
+    .expect("historical activation-capable set still encodes");
     assert_eq!(
         validate_general_selected_release_v1(&narrowed, input()).err(),
         Some(GeneralSelectedReleaseErrorV1::ProgramSet)

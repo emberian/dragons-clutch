@@ -1134,6 +1134,36 @@ pub(crate) struct DurableTerminalJournalV1 {
     finalized: Option<DurableFinalizedEvidenceV1>,
 }
 
+/// Reauthenticated Resolution-fund closure facts handed to the complete-life
+/// campaign.
+///
+/// The four refund classes are copied from the persisted V3 receipt only after
+/// their exhaustive sum and the journal's exact finalized packet have both
+/// been checked.  They are evidence about this close, not another accounting
+/// implementation.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DirectResolutionCloseEvidenceV1 {
+    pub(crate) journal_sha256: String,
+    pub(crate) journal_state_sha256: String,
+    pub(crate) market: String,
+    pub(crate) source_state: String,
+    pub(crate) terminal_certificate: String,
+    pub(crate) receipt: String,
+    pub(crate) receipt_sha256: String,
+    pub(crate) beneficiary: String,
+    pub(crate) generation: u64,
+    pub(crate) terminal_sequence: u64,
+    pub(crate) selector: u32,
+    pub(crate) source_refund_lamports: u64,
+    pub(crate) ledger_remaining_native_principal: u64,
+    pub(crate) ledger_rent_lamports: u64,
+    pub(crate) ledger_lamport_surplus: u64,
+    pub(crate) refund_lamports: u64,
+    pub(crate) permissionless: bool,
+    pub(crate) finalized_receipt: Value,
+}
+
 /// In-memory proof that the exact Planned intent was reconstructed by the
 /// stage's semantic owner from a fresh finalized snapshot. It is deliberately
 /// not serializable and cannot be produced by editing or rehashing a journal.
@@ -1866,6 +1896,157 @@ pub(crate) fn read_terminal_journal_v1(path: &Path) -> Result<DurableTerminalJou
     let journal: DurableTerminalJournalV1 = serde_json::from_slice(&source)?;
     authenticate_terminal_journal_v1(&journal)?;
     Ok(journal)
+}
+
+/// Reauthenticate the exact permissionless DCLRFCQ1 close and its exhaustive
+/// Source-closure receipt for a wider Direct lifecycle campaign.
+///
+/// This deliberately reads the typed journal through its semantic owner and
+/// then reopens finalized transaction history.  A file whose phase merely says
+/// `finalized` is not evidence.  The receipt body comes from the journal's
+/// operator-predicted poststate and must still be byte-identical on chain.
+pub(crate) fn authenticate_direct_resolution_close_v1(
+    rpc: &mut Rpc,
+    origin: &ClusterOriginV1,
+    journal_path: &Path,
+    expected_market: Pubkey,
+    expected_receipt: Pubkey,
+) -> Result<DirectResolutionCloseEvidenceV1> {
+    ExpectedClusterV1::OwnedLoopback.authenticate(origin)?;
+    authenticate_terminal_cluster_v1(rpc, origin, ExpectedClusterV1::OwnedLoopback)?;
+    let journal_source = fs::read(journal_path).map_err(|error| {
+        Error::new(format!(
+            "read direct-life Resolution close journal {}: {error}",
+            journal_path.display()
+        ))
+    })?;
+    let journal = read_terminal_journal_v1(journal_path)?;
+    if terminal_journal_cluster_v1(&journal)? != ExpectedClusterV1::OwnedLoopback
+        || journal.rpc_url != origin.redacted_url()
+        || journal.phase != StageJournalPhaseV1::Finalized
+        || journal.intent.mutation
+            != (DurableTerminalMutationV1::Protocol {
+                stage: TerminalStageV1::ResolutionCloseFund,
+            })
+        || !journal.authorized_mutation
+    {
+        return Err(refusal(
+            "direct-life Resolution close was not the exact finalized owned-loopback DCLRFCQ1 journal",
+        ));
+    }
+    // DCLRFCQ1 has no protocol signer. The transaction fee payer may be any
+    // actor and is intentionally absent from the program frame.
+    if journal.intent.accounts.iter().any(|account| account.signer) {
+        return Err(refusal(
+            "direct-life Resolution close carried a protocol signer and was not permissionless",
+        ));
+    }
+    verify_persisted_terminal_finalization_v1(rpc, &journal)?;
+    let finalized = journal
+        .finalized
+        .as_ref()
+        .ok_or_else(|| refusal("direct-life Resolution close omitted finalized evidence"))?;
+    if finalized.slot == 0 || finalized.compute_units_consumed.is_none() {
+        return Err(refusal(
+            "direct-life Resolution close omitted its finalized slot or exact compute units",
+        ));
+    }
+
+    let receipt_key = expected_receipt.to_string();
+    let expected = journal
+        .intent
+        .expected_accounts
+        .get(&receipt_key)
+        .ok_or_else(|| refusal("DCLRFCQ1 journal omitted its Source closure receipt poststate"))?;
+    let persisted = finalized
+        .poststate
+        .get(&receipt_key)
+        .ok_or_else(|| refusal("DCLRFCQ1 finalization omitted its Source closure receipt"))?;
+    let receipt_bytes = BASE64
+        .decode(&expected.data_base64)
+        .map_err(|error| Error::new(format!("Source closure receipt base64: {error}")))?;
+    let receipt_sha256 = sha256_hex(&receipt_bytes);
+    let resolution_program = Pubkey::from_str(&journal.intent.program_id)
+        .map_err(|error| Error::new(format!("DCLRFCQ1 program: {error}")))?;
+    if expected.address != receipt_key
+        || expected.owner != resolution_program.to_string()
+        || expected.executable
+        || expected.data_sha256 != receipt_sha256
+        || persisted.address != receipt_key
+        || persisted.owner != expected.owner
+        || persisted.lamports != expected.lamports_after_fee
+        || persisted.executable
+        || persisted.data_len != receipt_bytes.len()
+        || persisted.data_sha256 != receipt_sha256
+    {
+        return Err(refusal(
+            "DCLRFCQ1 predicted and finalized Source closure receipt poststates differ",
+        ));
+    }
+    let standing = rpc
+        .account(expected_receipt)?
+        .ok_or_else(|| refusal("finalized Source closure receipt disappeared from chain"))?;
+    if standing.owner != resolution_program
+        || standing.lamports != expected.lamports_after_fee
+        || standing.executable
+        || standing.data != receipt_bytes
+    {
+        return Err(refusal(
+            "standing Source closure receipt differs from the finalized DCLRFCQ1 poststate",
+        ));
+    }
+    let receipt = SourceClosureReceiptV3::decode(&receipt_bytes)
+        .map_err(|error| Error::new(format!("Source closure receipt V3: {error:?}")))?;
+    let closure_sequence = receipt
+        .terminal_sequence
+        .checked_add(1)
+        .ok_or_else(|| refusal("Source closure receipt sequence overflowed"))?;
+    let source_state = Pubkey::new_from_array(receipt.source_state);
+    let canonical_receipt = Pubkey::find_program_address(
+        &[
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
+            source_state.as_ref(),
+            &closure_sequence.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+    let exhaustive_refund = receipt
+        .source_refund_lamports
+        .checked_add(receipt.ledger_remaining_native_principal)
+        .and_then(|value| value.checked_add(receipt.ledger_rent_lamports))
+        .and_then(|value| value.checked_add(receipt.ledger_lamport_surplus));
+    if receipt.market != expected_market.to_bytes()
+        || receipt.receipt_account != expected_receipt.to_bytes()
+        || canonical_receipt != expected_receipt
+        || receipt.terminal_certificate == [0; 32]
+        || receipt.beneficiary == [0; 32]
+        || exhaustive_refund != Some(receipt.refund_lamports)
+    {
+        return Err(refusal(
+            "Source closure receipt changed its Market/PDA binding or exhaustive refund classification",
+        ));
+    }
+    Ok(DirectResolutionCloseEvidenceV1 {
+        journal_sha256: sha256_hex(&journal_source),
+        journal_state_sha256: journal.state_sha256.clone(),
+        market: expected_market.to_string(),
+        source_state: source_state.to_string(),
+        terminal_certificate: Pubkey::new_from_array(receipt.terminal_certificate).to_string(),
+        receipt: expected_receipt.to_string(),
+        receipt_sha256,
+        beneficiary: Pubkey::new_from_array(receipt.beneficiary).to_string(),
+        generation: receipt.generation,
+        terminal_sequence: receipt.terminal_sequence,
+        selector: receipt.selector,
+        source_refund_lamports: receipt.source_refund_lamports,
+        ledger_remaining_native_principal: receipt.ledger_remaining_native_principal,
+        ledger_rent_lamports: receipt.ledger_rent_lamports,
+        ledger_lamport_surplus: receipt.ledger_lamport_surplus,
+        refund_lamports: receipt.refund_lamports,
+        permissionless: true,
+        finalized_receipt: serde_json::to_value(finalized)?,
+    })
 }
 
 struct UniqueJsonV1;

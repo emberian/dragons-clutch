@@ -1,10 +1,11 @@
-//! Durable owned-loopback execution of one wallet terminal payout.
+//! Durable cluster-authenticated execution of one wallet terminal payout.
 //!
 //! The public payout input remains owned by `wallet_terminal`; this module only
 //! supplies the private-validator transaction exterior.  Preflight is
 //! read-only and never opens a key.  Execute advances one canonical ALT or
-//! payout action, persisting the exact packet and signature before its sole
-//! `sendTransaction`.  An ambiguous signed phase is permanently poll-only.
+//! payout action, persisting the exact packet and signature before transport.
+//! `Dispatching` recovery polls first and may resend only the exact persisted
+//! packet when its signature is absent; `Submitted` is permanently poll-only.
 
 use std::{
     collections::BTreeSet,
@@ -43,7 +44,7 @@ use solana_sdk::{
 };
 
 use crate::{
-    Error, Result, campaign,
+    Error, Result, campaign, chaos_fault,
     cluster::{ClusterOriginV1, ExpectedClusterV1},
     rpc::{Rpc, WritePolicyV1},
     wallet_terminal::{
@@ -51,11 +52,37 @@ use crate::{
     },
 };
 
-const COMMAND: &str = "local-private-validator-wallet-terminal-payout-v1";
-const JOURNAL_SCHEMA: &str = "dclutch-local-private-validator-wallet-terminal-payout-journal-v1";
-const EVIDENCE_SCHEMA: &str = "dclutch-local-private-validator-wallet-terminal-payout-evidence-v1";
-const PREFLIGHT_SCHEMA: &str =
+pub(crate) const COMMAND_V1: &str = "local-private-validator-wallet-terminal-payout-v1";
+pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-wallet-terminal-payout-v1";
+const JOURNAL_SCHEMA_V1: &str = "dclutch-local-private-validator-wallet-terminal-payout-journal-v1";
+const JOURNAL_SCHEMA_DEVNET_V1: &str = "dclutch-devnet-wallet-terminal-payout-journal-v1";
+const EVIDENCE_SCHEMA_V1: &str =
+    "dclutch-local-private-validator-wallet-terminal-payout-evidence-v1";
+const EVIDENCE_SCHEMA_DEVNET_V1: &str = "dclutch-devnet-wallet-terminal-payout-evidence-v1";
+const PREFLIGHT_SCHEMA_V1: &str =
     "dclutch-local-private-validator-wallet-terminal-payout-preflight-v1";
+const PREFLIGHT_SCHEMA_DEVNET_V1: &str = "dclutch-devnet-wallet-terminal-payout-preflight-v1";
+
+const fn journal_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => JOURNAL_SCHEMA_DEVNET_V1,
+        ExpectedClusterV1::OwnedLoopback => JOURNAL_SCHEMA_V1,
+    }
+}
+
+const fn evidence_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => EVIDENCE_SCHEMA_DEVNET_V1,
+        ExpectedClusterV1::OwnedLoopback => EVIDENCE_SCHEMA_V1,
+    }
+}
+
+const fn preflight_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => PREFLIGHT_SCHEMA_DEVNET_V1,
+        ExpectedClusterV1::OwnedLoopback => PREFLIGHT_SCHEMA_V1,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -71,6 +98,7 @@ enum StageV1 {
 #[serde(rename_all = "kebab-case")]
 enum PhaseV1 {
     Planned,
+    Dispatching,
     SignedNotSubmitted,
     Submitted,
     Finalized,
@@ -78,16 +106,52 @@ enum PhaseV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecoveryActionV1 {
-    SignAndSubmit,
-    PollExactSignature,
+    SignOnceAndPersistDispatching,
+    PollThenResendIdentical,
+    PollOnly,
     AuthenticateFinalized,
 }
 
 const fn recovery_action(phase: PhaseV1) -> RecoveryActionV1 {
     match phase {
-        PhaseV1::Planned => RecoveryActionV1::SignAndSubmit,
-        PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => RecoveryActionV1::PollExactSignature,
+        PhaseV1::Planned => RecoveryActionV1::SignOnceAndPersistDispatching,
+        PhaseV1::Dispatching => RecoveryActionV1::PollThenResendIdentical,
+        PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => RecoveryActionV1::PollOnly,
         PhaseV1::Finalized => RecoveryActionV1::AuthenticateFinalized,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SignaturePresenceV1 {
+    Absent,
+    Pending,
+    Finalized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchRouteV1 {
+    ResendIdentical,
+    PollOnly,
+    AuthenticateFinalized,
+}
+
+fn dispatch_route(phase: PhaseV1, presence: SignaturePresenceV1) -> Result<DispatchRouteV1> {
+    match (phase, presence) {
+        (PhaseV1::Dispatching, SignaturePresenceV1::Absent) => Ok(DispatchRouteV1::ResendIdentical),
+        (
+            PhaseV1::Dispatching | PhaseV1::SignedNotSubmitted | PhaseV1::Submitted,
+            SignaturePresenceV1::Pending,
+        )
+        | (PhaseV1::SignedNotSubmitted | PhaseV1::Submitted, SignaturePresenceV1::Absent) => {
+            Ok(DispatchRouteV1::PollOnly)
+        }
+        (
+            PhaseV1::Dispatching | PhaseV1::SignedNotSubmitted | PhaseV1::Submitted,
+            SignaturePresenceV1::Finalized,
+        ) => Ok(DispatchRouteV1::AuthenticateFinalized),
+        (PhaseV1::Planned | PhaseV1::Finalized, _) => Err(refusal(
+            "wallet payout dispatch routing requires one ambiguous signed phase",
+        )),
     }
 }
 
@@ -183,6 +247,7 @@ struct EvidenceV1 {
 #[derive(Debug)]
 struct ArgumentsV1 {
     origin: ClusterOriginV1,
+    expected_cluster: ExpectedClusterV1,
     input: PathBuf,
     fee_payer: Pubkey,
     fee_payer_keypair: PathBuf,
@@ -211,7 +276,15 @@ struct PlanningV1 {
 }
 
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_arguments(arguments)?;
+    run_for_cluster_v1(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+pub(crate) fn run_devnet_v1(arguments: Vec<String>) -> Result<()> {
+    run_for_cluster_v1(arguments, ExpectedClusterV1::Devnet)
+}
+
+fn run_for_cluster_v1(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_arguments_for_cluster_v1(arguments, expected_cluster)?;
     let policy = if arguments.execute {
         WritePolicyV1::Writes
     } else {
@@ -229,14 +302,14 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         .filter(|journal| journal.phase != PhaseV1::Finalized)
     {
         if !arguments.execute {
-            return stdout_json(&preflight(&planning, Some(&journal)));
+            return stdout_json(&preflight(&arguments, &planning, Some(&journal)));
         }
         let path = journal_path(&arguments.journal_dir, journal.action_index, journal.stage);
         resume_transaction(&mut rpc, &arguments, &planning, &path, &mut journal)?;
         return finish_or_output(&mut rpc, &arguments, &planning, journal);
     }
     if !arguments.execute {
-        return stdout_json(&preflight(&planning, None));
+        return stdout_json(&preflight(&arguments, &planning, None));
     }
     if planning.next_stage == StageV1::LookupActivation {
         let journal = finalize_activation(&arguments, &planning)?;
@@ -254,7 +327,19 @@ pub(crate) fn usage() -> &'static str {
 }
 
 fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
+    parse_arguments_for_cluster_v1(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+pub(crate) fn devnet_usage() -> &'static str {
+    "dclutch-local-successor-bootstrap devnet-wallet-terminal-payout-v1 --rpc-url URL --i-mean-devnet GENESIS_HASH --input ABSOLUTE_JSON --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_JSON --owner-keypair ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY --evidence ABSOLUTE_JSON [--execute]\n\nThe public arm has distinct devnet journal, evidence, and preflight domains. Preflight opens no key. Execute advances exactly one durable ALT or payout action and recovery never re-signs."
+}
+
+fn parse_arguments_for_cluster_v1(
+    arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
+    let mut acknowledgment = None;
     let mut input = None;
     let mut fee_payer = None;
     let mut fee_payer_keypair = None;
@@ -277,21 +362,30 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
         match argument.as_str() {
             "--rpc-url" => rpc_url = Some(value),
+            "--i-mean-devnet" => acknowledgment = Some(value),
             "--input" => input = Some(value),
             "--fee-payer" => fee_payer = Some(value),
             "--fee-payer-keypair" => fee_payer_keypair = Some(value),
             "--owner-keypair" => owner_keypair = Some(value),
             "--journal-dir" => journal_dir = Some(value),
             "--evidence" => evidence = Some(value),
-            _ => return Err(refusal(format!("unknown {COMMAND} argument: {argument}"))),
+            _ => {
+                return Err(refusal(format!(
+                    "unknown {} argument: {argument}",
+                    match expected_cluster {
+                        ExpectedClusterV1::Devnet => COMMAND_DEVNET_V1,
+                        ExpectedClusterV1::OwnedLoopback => COMMAND_V1,
+                    }
+                )));
+            }
         }
     }
     let required = |value: Option<String>, label: &str| {
         value.ok_or_else(|| Error::new(format!("{label} is required")))
     };
     let rpc_url = required(rpc_url, "--rpc-url")?;
-    let origin = ClusterOriginV1::parse(&rpc_url, None)?;
-    ExpectedClusterV1::OwnedLoopback.authenticate(&origin)?;
+    let origin = ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?;
+    expected_cluster.authenticate(&origin)?;
     let fee_payer = required(fee_payer, "--fee-payer")?
         .parse::<Pubkey>()
         .map_err(|error| Error::new(format!("--fee-payer: {error}")))?;
@@ -317,6 +411,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let evidence = absolute_output(required(evidence, "--evidence")?, "--evidence")?;
     Ok(ArgumentsV1 {
         origin,
+        expected_cluster,
         input,
         fee_payer,
         fee_payer_keypair,
@@ -334,7 +429,7 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, journals: &[JournalV1]) -> Resul
         .map_err(|error| Error::new(format!("wallet payout input: {error}")))?;
     if input.lookup_table.is_some() {
         return Err(refusal(
-            "owned-loopback payout input must omit lookupTable; this exterior derives and freezes its sole table",
+            "wallet payout input must omit lookupTable; this exterior derives and freezes its sole table",
         ));
     }
     let selected_without_table = SelectedInputV1::parse(&input, LookupTableRequirementV1::Absent)?;
@@ -390,6 +485,7 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, journals: &[JournalV1]) -> Resul
         .len()
         .div_ceil(EXTEND_ADDRESSES_PER_TRANSACTION_V1);
     let payout_intent_sha256 = payout_intent_sha256(
+        arguments.expected_cluster,
         &input_sha256,
         arguments.fee_payer,
         report.owner,
@@ -409,6 +505,7 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, journals: &[JournalV1]) -> Resul
         }
         authenticate_identity(
             journal,
+            arguments.expected_cluster,
             &input_sha256,
             &payout_intent_sha256,
             arguments.fee_payer,
@@ -571,7 +668,7 @@ fn planned_journal(
         ));
     }
     let mut journal = JournalV1 {
-        schema: JOURNAL_SCHEMA.into(),
+        schema: journal_schema_v1(arguments.expected_cluster).into(),
         input_sha256: planning.input_sha256.clone(),
         payout_intent_sha256: planning.payout_intent_sha256.clone(),
         fee_payer: arguments.fee_payer.to_string(),
@@ -626,21 +723,26 @@ fn resume_transaction(
     authenticate_journal(planning, arguments, journal)?;
     match recovery_action(journal.phase) {
         RecoveryActionV1::AuthenticateFinalized => authenticate_finalized_history(rpc, journal),
-        RecoveryActionV1::PollExactSignature => {
+        RecoveryActionV1::PollOnly => {
+            authenticate_signed_packet_envelope(journal)?;
             let signature = journal
                 .expected_signature
                 .as_deref()
                 .ok_or_else(|| refusal("ambiguous payout journal omitted signature"))?;
-            let Some(history) = finalized_transaction(rpc, signature)? else {
+            let observation = observe_signature(rpc, signature)?;
+            let route = dispatch_route(journal.phase, observation.presence())?;
+            let SignatureObservationV1::Finalized(history) = observation else {
+                debug_assert_eq!(route, DispatchRouteV1::PollOnly);
                 return Err(refusal(format!(
                     "wallet payout transaction {signature} is not finalized; {:?} recovery is exact-signature poll-only and never re-signs or resubmits",
                     journal.phase
                 )));
             };
+            debug_assert_eq!(route, DispatchRouteV1::AuthenticateFinalized);
             finalize_transaction(rpc, planning, journal, &history)?;
             persist_update(path, journal)
         }
-        RecoveryActionV1::SignAndSubmit => {
+        RecoveryActionV1::SignOnceAndPersistDispatching => {
             authenticate_planned_message(planning, arguments, journal)?;
             let current_height = rpc
                 .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
@@ -701,39 +803,108 @@ fn resume_transaction(
                 .ok_or_else(|| refusal("signed payout packet omitted payer signature"))?;
             journal.signed_packet_base64 = Some(BASE64.encode(&packet));
             journal.expected_signature = Some(signature.to_string());
-            journal.phase = PhaseV1::SignedNotSubmitted;
+            journal.phase = PhaseV1::Dispatching;
             persist_update(path, journal)?;
+            resume_transaction(rpc, arguments, planning, path, journal)
+        }
+        RecoveryActionV1::PollThenResendIdentical => {
             authenticate_planned_message(planning, arguments, journal)?;
-            journal.phase = PhaseV1::Submitted;
-            persist_update(path, journal)?;
-            let returned = rpc
-                .call_once(
-                    "sendTransaction",
-                    &json!([BASE64.encode(&packet), {
-                        "encoding":"base64",
-                        "skipPreflight":false,
-                        "preflightCommitment":"finalized",
-                        "maxRetries":0
-                    }]),
-                )?
-                .as_str()
-                .ok_or_else(|| refusal("wallet payout sendTransaction omitted signature"))?
-                .parse::<Signature>()
-                .map_err(|error| {
-                    Error::new(format!("wallet payout returned signature: {error}"))
-                })?;
-            if returned != signature {
-                return Err(refusal(
-                    "wallet payout RPC substituted its returned signature",
-                ));
+            let (packet, signature) = authenticate_signed_packet_envelope(journal)?;
+            let observation = observe_signature(rpc, &signature.to_string())?;
+            match dispatch_route(journal.phase, observation.presence())? {
+                DispatchRouteV1::AuthenticateFinalized => {
+                    let SignatureObservationV1::Finalized(history) = observation else {
+                        unreachable!("finalized route requires finalized history")
+                    };
+                    park_payout_chaos_boundary(
+                        arguments.expected_cluster,
+                        path,
+                        journal,
+                        &packet,
+                        chaos_fault::BoundaryV1::LandedBeforeFinalizationFsync,
+                    )?;
+                    finalize_transaction(rpc, planning, journal, &history)?;
+                    persist_update(path, journal)
+                }
+                DispatchRouteV1::PollOnly => Err(refusal(format!(
+                    "wallet payout transaction {signature} is present but not finalized; Dispatching recovery is now poll-only and cannot resend or re-sign"
+                ))),
+                DispatchRouteV1::ResendIdentical => {
+                    let current_height = rpc
+                        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+                        .as_u64()
+                        .ok_or_else(|| refusal("wallet payout getBlockHeight was not u64"))?;
+                    if current_height
+                        > journal.last_valid_block_height.ok_or_else(|| {
+                            refusal("Dispatching payout omitted block-height validity")
+                        })?
+                    {
+                        return Err(refusal(
+                            "Dispatching payout packet expired while absent; preserve the journal rather than re-signing",
+                        ));
+                    }
+                    park_payout_chaos_boundary(
+                        arguments.expected_cluster,
+                        path,
+                        journal,
+                        &packet,
+                        chaos_fault::BoundaryV1::DispatchingBeforeSend,
+                    )?;
+                    let returned = rpc
+                        .call_once(
+                            "sendTransaction",
+                            &json!([BASE64.encode(&packet), {
+                                "encoding":"base64",
+                                "skipPreflight":false,
+                                "preflightCommitment":"finalized",
+                                "maxRetries":0
+                            }]),
+                        )?
+                        .as_str()
+                        .ok_or_else(|| refusal("wallet payout sendTransaction omitted signature"))?
+                        .parse::<Signature>()
+                        .map_err(|error| {
+                            Error::new(format!("wallet payout returned signature: {error}"))
+                        })?;
+                    if returned != signature {
+                        return Err(refusal(
+                            "wallet payout RPC substituted its returned signature",
+                        ));
+                    }
+                    let landed_armed = arguments.expected_cluster
+                        == ExpectedClusterV1::OwnedLoopback
+                        && journal.stage == StageV1::Payout
+                        && chaos_fault::is_armed_for_v1(
+                            "wallet-terminal-payout",
+                            chaos_fault::BoundaryV1::LandedBeforeFinalizationFsync,
+                        )?;
+                    let history = if landed_armed {
+                        let history = wait_finalized(
+                            rpc,
+                            &signature.to_string(),
+                            arguments.origin.pacing().confirm_timeout,
+                        )?;
+                        park_payout_chaos_boundary(
+                            arguments.expected_cluster,
+                            path,
+                            journal,
+                            &packet,
+                            chaos_fault::BoundaryV1::LandedBeforeFinalizationFsync,
+                        )?;
+                        history
+                    } else {
+                        journal.phase = PhaseV1::Submitted;
+                        persist_update(path, journal)?;
+                        wait_finalized(
+                            rpc,
+                            &signature.to_string(),
+                            arguments.origin.pacing().confirm_timeout,
+                        )?
+                    };
+                    finalize_transaction(rpc, planning, journal, &history)?;
+                    persist_update(path, journal)
+                }
             }
-            let history = wait_finalized(
-                rpc,
-                &signature.to_string(),
-                arguments.origin.pacing().confirm_timeout,
-            )?;
-            finalize_transaction(rpc, planning, journal, &history)?;
-            persist_update(path, journal)
         }
     }
 }
@@ -772,7 +943,7 @@ fn identity_journal(
     stage: StageV1,
 ) -> Result<JournalV1> {
     let mut journal = JournalV1 {
-        schema: JOURNAL_SCHEMA.into(),
+        schema: journal_schema_v1(arguments.expected_cluster).into(),
         input_sha256: planning.input_sha256.clone(),
         payout_intent_sha256: planning.payout_intent_sha256.clone(),
         fee_payer: arguments.fee_payer.to_string(),
@@ -1160,21 +1331,48 @@ fn authenticate_finalized_history(rpc: &mut Rpc, journal: &JournalV1) -> Result<
     Ok(())
 }
 
-fn finalized_transaction(rpc: &mut Rpc, signature: &str) -> Result<Option<Value>> {
+enum SignatureObservationV1 {
+    Absent,
+    Pending,
+    Finalized(Value),
+}
+
+impl SignatureObservationV1 {
+    const fn presence(&self) -> SignaturePresenceV1 {
+        match self {
+            Self::Absent => SignaturePresenceV1::Absent,
+            Self::Pending => SignaturePresenceV1::Pending,
+            Self::Finalized(_) => SignaturePresenceV1::Finalized,
+        }
+    }
+}
+
+fn observe_signature(rpc: &mut Rpc, signature: &str) -> Result<SignatureObservationV1> {
     let statuses = rpc.call(
         "getSignatureStatuses",
         &json!([[signature], {"searchTransactionHistory":true}]),
     )?;
-    let status = statuses
+    let values = statuses
         .get("value")
         .and_then(Value::as_array)
-        .and_then(|values| values.first())
-        .filter(|value| !value.is_null());
-    let Some(status) = status else {
-        return Ok(None);
+        .ok_or_else(|| refusal("wallet payout signature status omitted value array"))?;
+    if values.len() != 1 {
+        return Err(refusal(
+            "wallet payout signature status did not preserve request width",
+        ));
+    }
+    let status = &values[0];
+    if status.is_null() {
+        return Ok(SignatureObservationV1::Absent);
+    }
+    if status.get("err").is_some_and(|value| !value.is_null()) {
+        return Err(refusal(format!(
+            "wallet payout signature {signature} failed: {}",
+            status.get("err").unwrap_or(&Value::Null)
+        )));
     };
     if status.get("confirmationStatus").and_then(Value::as_str) != Some("finalized") {
-        return Ok(None);
+        return Ok(SignatureObservationV1::Pending);
     }
     let history = rpc.call(
         "getTransaction",
@@ -1185,7 +1383,14 @@ fn finalized_transaction(rpc: &mut Rpc, signature: &str) -> Result<Option<Value>
             "finalized wallet payout omitted transaction history",
         ));
     }
-    Ok(Some(history))
+    Ok(SignatureObservationV1::Finalized(history))
+}
+
+fn finalized_transaction(rpc: &mut Rpc, signature: &str) -> Result<Option<Value>> {
+    match observe_signature(rpc, signature)? {
+        SignatureObservationV1::Finalized(history) => Ok(Some(history)),
+        SignatureObservationV1::Absent | SignatureObservationV1::Pending => Ok(None),
+    }
 }
 
 fn wait_finalized(rpc: &mut Rpc, signature: &str, timeout: Duration) -> Result<Value> {
@@ -1368,8 +1573,8 @@ fn publish_evidence(
     journal: &JournalV1,
 ) -> Result<EvidenceV1> {
     let mut evidence = EvidenceV1 {
-        schema: EVIDENCE_SCHEMA.into(),
-        cluster: "owned-loopback".into(),
+        schema: evidence_schema_v1(arguments.expected_cluster).into(),
+        cluster: arguments.expected_cluster.evidence_label().into(),
         input_sha256: journal.input_sha256.clone(),
         payout_intent_sha256: journal.payout_intent_sha256.clone(),
         journal_state_sha256: journal.state_sha256.clone(),
@@ -1424,8 +1629,8 @@ fn authenticate_evidence_value(
     evidence: &EvidenceV1,
 ) -> Result<()> {
     let input_sha256 = sha256_hex(&fs::read(&arguments.input)?);
-    if evidence.schema != EVIDENCE_SCHEMA
-        || evidence.cluster != "owned-loopback"
+    if evidence.schema != evidence_schema_v1(arguments.expected_cluster)
+        || evidence.cluster != arguments.expected_cluster.evidence_label()
         || evidence.fee_payer != arguments.fee_payer.to_string()
         || evidence.input_sha256 != input_sha256
         || evidence.evidence_sha256 != evidence_digest(evidence)?
@@ -1460,10 +1665,10 @@ fn authenticate_evidence_journal<'a>(
     Ok(journal)
 }
 
-fn preflight(planning: &PlanningV1, journal: Option<&JournalV1>) -> Value {
+fn preflight(arguments: &ArgumentsV1, planning: &PlanningV1, journal: Option<&JournalV1>) -> Value {
     json!({
-        "schema": PREFLIGHT_SCHEMA,
-        "cluster": "owned-loopback",
+        "schema": preflight_schema_v1(arguments.expected_cluster),
+        "cluster": arguments.expected_cluster.evidence_label(),
         "mutationPermitted": false,
         "keysOpened": false,
         "inputSha256": planning.input_sha256,
@@ -1475,15 +1680,19 @@ fn preflight(planning: &PlanningV1, journal: Option<&JournalV1>) -> Value {
         "payout": planning.report.payout.to_string(),
         "nextStage": journal.map(|journal| journal.stage).unwrap_or(planning.next_stage),
         "phase": journal.map(|journal| journal.phase),
-        "recovery": journal.filter(|journal| matches!(journal.phase, PhaseV1::SignedNotSubmitted | PhaseV1::Submitted)).map(|journal| json!({
+        "recovery": journal.filter(|journal| matches!(journal.phase, PhaseV1::Dispatching | PhaseV1::SignedNotSubmitted | PhaseV1::Submitted)).map(|journal| json!({
             "signature": journal.expected_signature,
-            "mode": "poll-only"
+            "mode": match journal.phase {
+                PhaseV1::Dispatching => "poll-then-identical-resend-only-if-absent",
+                _ => "poll-only"
+            }
         }))
     })
 }
 
 fn authenticate_identity(
     journal: &JournalV1,
+    expected_cluster: ExpectedClusterV1,
     input_sha256: &str,
     payout_intent_sha256: &str,
     fee_payer: Pubkey,
@@ -1496,7 +1705,7 @@ fn authenticate_identity(
     custody_request_base64: Option<&str>,
     custody_request_sha256: Option<&str>,
 ) -> Result<()> {
-    if journal.schema != JOURNAL_SCHEMA
+    if journal.schema != journal_schema_v1(expected_cluster)
         || journal.input_sha256 != input_sha256
         || journal.payout_intent_sha256 != payout_intent_sha256
         || journal.fee_payer != fee_payer.to_string()
@@ -1519,7 +1728,181 @@ fn authenticate_identity(
             "wallet payout journal identity, Custody request, or state digest changed",
         ));
     }
+    authenticate_phase_envelope(journal)
+}
+
+fn authenticate_phase_envelope(journal: &JournalV1) -> Result<()> {
+    let has_packet = journal.signed_packet_base64.is_some();
+    let has_signature = journal.expected_signature.is_some();
+    let has_any_finalization = journal.finalized_slot.is_some()
+        || journal.transaction_sha256.is_some()
+        || journal.fee_lamports.is_some()
+        || journal.compute_units_consumed.is_some()
+        || journal.return_data_producer.is_some()
+        || journal.return_data_base64.is_some()
+        || !journal.finalized_poststates.is_empty();
+    match journal.phase {
+        PhaseV1::Planned => {
+            if has_packet || has_signature || has_any_finalization {
+                return Err(refusal(
+                    "Planned wallet payout journal carried signed or finalized facts",
+                ));
+            }
+        }
+        PhaseV1::Dispatching | PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => {
+            if !has_packet || !has_signature || has_any_finalization {
+                return Err(refusal(
+                    "ambiguous wallet payout phase did not carry exactly its signed packet envelope",
+                ));
+            }
+        }
+        PhaseV1::Finalized if journal.stage == StageV1::LookupActivation => {
+            if has_packet
+                || has_signature
+                || journal.finalized_slot.is_none()
+                || journal.transaction_sha256.is_some()
+                || journal.fee_lamports.is_some()
+                || journal.compute_units_consumed.is_some()
+                || journal.return_data_producer.is_some()
+                || journal.return_data_base64.is_some()
+                || !journal.finalized_poststates.is_empty()
+            {
+                return Err(refusal(
+                    "lookup activation finalization carried transaction facts",
+                ));
+            }
+        }
+        PhaseV1::Finalized => {
+            if !has_packet
+                || !has_signature
+                || journal.finalized_slot.is_none()
+                || journal.transaction_sha256.is_none()
+                || journal.fee_lamports.is_none()
+                || journal.compute_units_consumed.is_none()
+                || journal.finalized_poststates.is_empty()
+            {
+                return Err(refusal(
+                    "Finalized wallet payout transaction omitted its authenticated envelope",
+                ));
+            }
+        }
+    }
     Ok(())
+}
+
+fn authenticate_signed_packet_envelope(journal: &JournalV1) -> Result<(Vec<u8>, Signature)> {
+    if !matches!(
+        journal.phase,
+        PhaseV1::Dispatching
+            | PhaseV1::SignedNotSubmitted
+            | PhaseV1::Submitted
+            | PhaseV1::Finalized
+    ) || journal.stage == StageV1::LookupActivation
+    {
+        return Err(refusal(
+            "wallet payout signed-packet authentication requires one transaction phase",
+        ));
+    }
+    let encoded = journal
+        .signed_packet_base64
+        .as_deref()
+        .ok_or_else(|| refusal("signed wallet payout journal omitted packet"))?;
+    let packet = BASE64
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("wallet payout packet base64: {error}")))?;
+    if BASE64.encode(&packet) != encoded
+        || Some(packet.len()) != journal.expected_wire_bytes
+        || packet.len() > 1_232
+    {
+        return Err(refusal(
+            "signed wallet payout packet encoding or wire width changed",
+        ));
+    }
+    let transaction: VersionedTransaction = bincode::deserialize(&packet)
+        .map_err(|error| Error::new(format!("wallet payout signed packet: {error}")))?;
+    if bincode::serialize(&transaction)
+        .map_err(|error| Error::new(format!("wallet payout packet reencode: {error}")))?
+        != packet
+    {
+        return Err(refusal("wallet payout signed packet was noncanonical"));
+    }
+    transaction
+        .verify_and_hash_message()
+        .map_err(|error| Error::new(format!("wallet payout packet signatures: {error}")))?;
+    let message_bytes = bincode::serialize(&transaction.message)
+        .map_err(|error| Error::new(format!("wallet payout packet message: {error}")))?;
+    let encoded_message = journal
+        .message_base64
+        .as_deref()
+        .ok_or_else(|| refusal("signed wallet payout journal omitted message"))?;
+    if BASE64.encode(&message_bytes) != encoded_message
+        || journal.message_sha256.as_deref() != Some(sha256_hex(&message_bytes).as_str())
+    {
+        return Err(refusal(
+            "wallet payout signed packet substituted its durable action",
+        ));
+    }
+    let (header, static_keys) = match &transaction.message {
+        VersionedMessage::Legacy(message) => (&message.header, message.account_keys.as_slice()),
+        VersionedMessage::V0(message) => (&message.header, message.account_keys.as_slice()),
+    };
+    let payer = parse_pubkey(&journal.fee_payer, "wallet payout fee payer")?;
+    let owner = parse_pubkey(&journal.owner, "wallet payout owner")?;
+    let expected_signers = if journal.stage == StageV1::Payout && owner != payer {
+        vec![payer, owner]
+    } else {
+        vec![payer]
+    };
+    let required = usize::from(header.num_required_signatures);
+    if required != expected_signers.len()
+        || transaction.signatures.len() != required
+        || static_keys.get(..required) != Some(expected_signers.as_slice())
+    {
+        return Err(refusal(
+            "wallet payout signed packet action authority or signer width changed",
+        ));
+    }
+    let signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .ok_or_else(|| refusal("wallet payout signed packet omitted payer signature"))?;
+    if journal.expected_signature.as_deref() != Some(signature.to_string().as_str()) {
+        return Err(refusal(
+            "wallet payout signed packet expected signature changed",
+        ));
+    }
+    Ok((packet, signature))
+}
+
+fn park_payout_chaos_boundary(
+    expected_cluster: ExpectedClusterV1,
+    journal_path: &Path,
+    journal: &JournalV1,
+    packet: &[u8],
+    boundary: chaos_fault::BoundaryV1,
+) -> Result<()> {
+    if expected_cluster != ExpectedClusterV1::OwnedLoopback || journal.stage != StageV1::Payout {
+        return Ok(());
+    }
+    if journal.phase != PhaseV1::Dispatching {
+        return Err(refusal(
+            "wallet-terminal-payout chaos seam requires durable Dispatching",
+        ));
+    }
+    let signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| refusal("wallet-terminal-payout chaos seam omitted signature"))?;
+    chaos_fault::park_if_armed_v1(
+        "owned-loopback",
+        "wallet-terminal-payout",
+        boundary,
+        journal_path,
+        &journal.payout_intent_sha256,
+        &sha256_hex(packet),
+        signature,
+    )
 }
 
 fn authenticate_journal(
@@ -1529,6 +1912,7 @@ fn authenticate_journal(
 ) -> Result<()> {
     authenticate_identity(
         journal,
+        arguments.expected_cluster,
         &planning.input_sha256,
         &planning.payout_intent_sha256,
         arguments.fee_payer,
@@ -1683,6 +2067,7 @@ fn evidence_digest(evidence: &EvidenceV1) -> Result<String> {
 }
 
 fn payout_intent_sha256(
+    expected_cluster: ExpectedClusterV1,
     input_sha256: &str,
     payer: Pubkey,
     owner: Pubkey,
@@ -1693,7 +2078,12 @@ fn payout_intent_sha256(
     addresses: &[Pubkey],
 ) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"dclutch-owned-loopback-wallet-terminal-payout-intent-v1");
+    digest.update(match expected_cluster {
+        ExpectedClusterV1::Devnet => b"dclutch-devnet-wallet-terminal-payout-intent-v1".as_slice(),
+        ExpectedClusterV1::OwnedLoopback => {
+            b"dclutch-owned-loopback-wallet-terminal-payout-intent-v1".as_slice()
+        }
+    });
     digest.update(input_sha256.as_bytes());
     digest.update(payer.to_bytes());
     digest.update(owner.to_bytes());
@@ -1831,7 +2221,7 @@ mod tests {
 
     fn journal() -> JournalV1 {
         let mut journal = JournalV1 {
-            schema: JOURNAL_SCHEMA.into(),
+            schema: JOURNAL_SCHEMA_V1.into(),
             input_sha256: "11".repeat(32),
             payout_intent_sha256: "22".repeat(32),
             fee_payer: Pubkey::new_unique().to_string(),
@@ -1904,9 +2294,42 @@ mod tests {
         (journal, history)
     }
 
+    fn signed_payout_fixture() -> JournalV1 {
+        let payer = Keypair::new();
+        let owner = Keypair::new();
+        let instruction = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![solana_program::instruction::AccountMeta::new_readonly(
+                owner.pubkey(),
+                true,
+            )],
+            data: vec![7, 8, 9],
+        };
+        let message = VersionedMessage::Legacy(Message::new_with_blockhash(
+            &[instruction],
+            Some(&payer.pubkey()),
+            &Hash::new_unique(),
+        ));
+        let transaction =
+            VersionedTransaction::try_new(message.clone(), &[&payer, &owner]).unwrap();
+        let message_bytes = bincode::serialize(&message).unwrap();
+        let packet = bincode::serialize(&transaction).unwrap();
+        let mut journal = journal();
+        journal.fee_payer = payer.pubkey().to_string();
+        journal.owner = owner.pubkey().to_string();
+        journal.message_base64 = Some(BASE64.encode(&message_bytes));
+        journal.message_sha256 = Some(sha256_hex(&message_bytes));
+        journal.expected_wire_bytes = Some(packet.len());
+        journal.signed_packet_base64 = Some(BASE64.encode(&packet));
+        journal.expected_signature = Some(transaction.signatures[0].to_string());
+        journal.phase = PhaseV1::Dispatching;
+        refresh_state_sha256(&mut journal).unwrap();
+        journal
+    }
+
     fn evidence_for(journal: &JournalV1) -> EvidenceV1 {
         EvidenceV1 {
-            schema: EVIDENCE_SCHEMA.into(),
+            schema: EVIDENCE_SCHEMA_V1.into(),
             cluster: "owned-loopback".into(),
             input_sha256: journal.input_sha256.clone(),
             payout_intent_sha256: journal.payout_intent_sha256.clone(),
@@ -1944,29 +2367,125 @@ mod tests {
 
     #[test]
     fn ambiguous_phases_are_not_planned() {
-        for phase in [PhaseV1::SignedNotSubmitted, PhaseV1::Submitted] {
+        for phase in [
+            PhaseV1::Dispatching,
+            PhaseV1::SignedNotSubmitted,
+            PhaseV1::Submitted,
+        ] {
             let mut journal = journal();
             journal.phase = phase;
             journal.expected_signature = Some(Signature::new_unique().to_string());
             refresh_state_sha256(&mut journal).unwrap();
             assert!(matches!(
                 journal.phase,
-                PhaseV1::SignedNotSubmitted | PhaseV1::Submitted
+                PhaseV1::Dispatching | PhaseV1::SignedNotSubmitted | PhaseV1::Submitted
             ));
             assert!(journal.expected_signature.is_some());
             assert_eq!(
                 recovery_action(journal.phase),
-                RecoveryActionV1::PollExactSignature
+                if phase == PhaseV1::Dispatching {
+                    RecoveryActionV1::PollThenResendIdentical
+                } else {
+                    RecoveryActionV1::PollOnly
+                }
             );
         }
         assert_eq!(
             recovery_action(PhaseV1::Planned),
-            RecoveryActionV1::SignAndSubmit
+            RecoveryActionV1::SignOnceAndPersistDispatching
         );
         assert_eq!(
             recovery_action(PhaseV1::Finalized),
             RecoveryActionV1::AuthenticateFinalized
         );
+    }
+
+    #[test]
+    fn only_dispatching_plus_absent_authorizes_identical_resend() {
+        assert_eq!(
+            dispatch_route(PhaseV1::Dispatching, SignaturePresenceV1::Absent).unwrap(),
+            DispatchRouteV1::ResendIdentical
+        );
+        for presence in [SignaturePresenceV1::Absent, SignaturePresenceV1::Pending] {
+            assert_eq!(
+                dispatch_route(PhaseV1::Submitted, presence).unwrap(),
+                DispatchRouteV1::PollOnly
+            );
+            assert_eq!(
+                dispatch_route(PhaseV1::SignedNotSubmitted, presence).unwrap(),
+                DispatchRouteV1::PollOnly
+            );
+        }
+        assert_eq!(
+            dispatch_route(PhaseV1::Dispatching, SignaturePresenceV1::Pending).unwrap(),
+            DispatchRouteV1::PollOnly
+        );
+        for phase in [
+            PhaseV1::Dispatching,
+            PhaseV1::SignedNotSubmitted,
+            PhaseV1::Submitted,
+        ] {
+            assert_eq!(
+                dispatch_route(phase, SignaturePresenceV1::Finalized).unwrap(),
+                DispatchRouteV1::AuthenticateFinalized
+            );
+        }
+        assert!(dispatch_route(PhaseV1::Planned, SignaturePresenceV1::Absent).is_err());
+        assert!(dispatch_route(PhaseV1::Finalized, SignaturePresenceV1::Finalized).is_err());
+    }
+
+    #[test]
+    fn dispatching_packet_authenticates_action_authority_and_wire_width() {
+        let exact = signed_payout_fixture();
+        assert!(authenticate_phase_envelope(&exact).is_ok());
+        assert!(authenticate_signed_packet_envelope(&exact).is_ok());
+
+        let mut changed_action = exact.clone();
+        let alternate = VersionedMessage::Legacy(Message::new_with_blockhash(
+            &[],
+            Some(&parse_pubkey(&exact.fee_payer, "payer").unwrap()),
+            &Hash::new_unique(),
+        ));
+        let alternate_bytes = bincode::serialize(&alternate).unwrap();
+        changed_action.message_base64 = Some(BASE64.encode(&alternate_bytes));
+        changed_action.message_sha256 = Some(sha256_hex(&alternate_bytes));
+        refresh_state_sha256(&mut changed_action).unwrap();
+        assert!(authenticate_signed_packet_envelope(&changed_action).is_err());
+
+        let mut changed_authority = exact.clone();
+        changed_authority.owner = Pubkey::new_unique().to_string();
+        refresh_state_sha256(&mut changed_authority).unwrap();
+        assert!(authenticate_signed_packet_envelope(&changed_authority).is_err());
+
+        let mut changed_width = exact;
+        changed_width.expected_wire_bytes =
+            changed_width.expected_wire_bytes.map(|value| value + 1);
+        refresh_state_sha256(&mut changed_width).unwrap();
+        assert!(authenticate_signed_packet_envelope(&changed_width).is_err());
+    }
+
+    #[test]
+    fn dispatching_packet_refuses_signature_substitution_and_planned_packet() {
+        let exact = signed_payout_fixture();
+        let mut resigned = exact.clone();
+        let mut transaction: VersionedTransaction = bincode::deserialize(
+            &BASE64
+                .decode(resigned.signed_packet_base64.as_deref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        transaction.signatures[0] = Signature::new_unique();
+        let substituted = bincode::serialize(&transaction).unwrap();
+        resigned.signed_packet_base64 = Some(BASE64.encode(&substituted));
+        resigned.expected_signature = Some(transaction.signatures[0].to_string());
+        refresh_state_sha256(&mut resigned).unwrap();
+        assert!(authenticate_signed_packet_envelope(&resigned).is_err());
+
+        let mut planned_with_packet = exact;
+        planned_with_packet.phase = PhaseV1::Planned;
+        refresh_state_sha256(&mut planned_with_packet).unwrap();
+        assert!(authenticate_phase_envelope(&planned_with_packet).is_err());
+        assert!(authenticate_signed_packet_envelope(&planned_with_packet).is_err());
     }
 
     #[test]
@@ -2033,6 +2552,77 @@ mod tests {
         ])
         .unwrap_err();
         assert!(error.to_string().contains("not loopback"));
+    }
+
+    #[test]
+    fn public_devnet_parser_and_domains_are_distinct_from_loopback() {
+        let root = std::env::temp_dir().join(format!(
+            "dclutch-devnet-wallet-payout-{}-{}",
+            std::process::id(),
+            Pubkey::new_unique()
+        ));
+        fs::create_dir(&root).unwrap();
+        for name in ["input.json", "payer.json", "owner.json"] {
+            fs::write(root.join(name), b"fixture").unwrap();
+        }
+        let arguments = vec![
+            "--rpc-url".into(),
+            "https://api.devnet.solana.com:443/".into(),
+            "--i-mean-devnet".into(),
+            crate::cluster::DEVNET_GENESIS_HASH.into(),
+            "--input".into(),
+            root.join("input.json").display().to_string(),
+            "--fee-payer".into(),
+            Pubkey::new_unique().to_string(),
+            "--fee-payer-keypair".into(),
+            root.join("payer.json").display().to_string(),
+            "--owner-keypair".into(),
+            root.join("owner.json").display().to_string(),
+            "--journal-dir".into(),
+            root.display().to_string(),
+            "--evidence".into(),
+            root.join("evidence.json").display().to_string(),
+        ];
+        let parsed = parse_arguments_for_cluster_v1(arguments.clone(), ExpectedClusterV1::Devnet)
+            .expect("exact devnet payout arm");
+        assert_eq!(parsed.expected_cluster, ExpectedClusterV1::Devnet);
+        assert_ne!(
+            journal_schema_v1(ExpectedClusterV1::Devnet),
+            journal_schema_v1(ExpectedClusterV1::OwnedLoopback)
+        );
+        assert_ne!(
+            evidence_schema_v1(ExpectedClusterV1::Devnet),
+            evidence_schema_v1(ExpectedClusterV1::OwnedLoopback)
+        );
+        assert!(
+            parse_arguments_for_cluster_v1(arguments, ExpectedClusterV1::OwnedLoopback).is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn payout_intent_digest_has_distinct_cluster_domains() {
+        let payer = Pubkey::new_from_array([1; 32]);
+        let owner = Pubkey::new_from_array([2; 32]);
+        let lookup = Pubkey::new_from_array([3; 32]);
+        let addresses = [Pubkey::new_from_array([4; 32])];
+        let digest_for = |cluster| {
+            payout_intent_sha256(
+                cluster,
+                &"5".repeat(64),
+                payer,
+                owner,
+                b"instruction",
+                None,
+                17,
+                lookup,
+                &addresses,
+            )
+        };
+        assert_ne!(
+            digest_for(ExpectedClusterV1::Devnet),
+            digest_for(ExpectedClusterV1::OwnedLoopback)
+        );
     }
 
     #[test]

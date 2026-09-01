@@ -48,6 +48,8 @@
     "abi:dealer-v3:verify": "node scripts/generate-dealer-equity-v3.mjs --check",
     "abi:rational-terminal-v3": "node scripts/generate-rational-terminal-hot-v3.mjs",
     "abi:rational-terminal-v3:verify": "node scripts/generate-rational-terminal-hot-v3.mjs --check",
+    "abi:rational-open-wasm": "node scripts/generate-rational-open-wasm.mjs",
+    "abi:rational-open-wasm:verify": "node scripts/generate-rational-open-wasm.mjs --check",
     "abi:resolution-certificate-v2": "node scripts/generate-resolution-certificate-v2.mjs",
     "abi:resolution-certificate-v2:verify": "node scripts/generate-resolution-certificate-v2.mjs --check",
     "abi:aggregate-retirement": "node scripts/generate-aggregate-retirement-v1.mjs",

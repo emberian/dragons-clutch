@@ -28,7 +28,9 @@ use dclutch_market_core_codec::{
     PROJECT_FOUND_REQUEST_BYTES_V2, PROJECT_FOUND_REQUEST_MAGIC_V2, ProjectFoundRequestV2,
     REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
     SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1,
-    SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1, SeriesPermitExpiryRequestV1,
+    SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
+    SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1,
+    SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
 };
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
@@ -60,6 +62,7 @@ mod retirement_replay_handoff_v1;
 mod series_consume;
 mod series_open;
 mod series_permit_expiry;
+mod series_permit_expiry_precommit_v1;
 
 pub use begin_retiring::BEGIN_RETIRING_ACCOUNT_COUNT_V1;
 pub use execute_provider_v3::{
@@ -79,6 +82,7 @@ pub use series_consume::{
 };
 pub use series_open::SERIES_OPEN_ACCOUNT_COUNT_V1;
 pub use series_permit_expiry::SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1;
+pub use series_permit_expiry_precommit_v1::SERIES_PERMIT_EXPIRY_PRECOMMIT_ACCOUNT_COUNT_V1;
 
 /// Exact instruction prefix shared by all Core actions.
 pub const CORE_REQUEST_PREFIX_BYTES_V1: usize = REQUEST_BYTES;
@@ -414,6 +418,29 @@ pub fn process_instruction(
         INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1 == INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V2,
         "the length dispatch above serves both ceremony versions"
     );
+    if instruction_data.len() >= SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1
+        && instruction_data.get(..SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1.len())
+            == Some(SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request_bytes = instruction_data
+            .get(..SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1)
+            .ok_or(CoreSbfError::Instruction)?;
+        let proof_bytes = instruction_data
+            .get(SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1..)
+            .ok_or(CoreSbfError::Instruction)?;
+        if proof_bytes.len() % 32 != 0 {
+            return Err(CoreSbfError::Instruction.into());
+        }
+        let request = SeriesUnallocatedPermitExpiryRequestV1::decode(request_bytes)
+            .map_err(|_| CoreSbfError::Instruction)?;
+        return series_permit_expiry_precommit_v1::process(
+            program_id,
+            accounts,
+            request,
+            request_bytes,
+            proof_bytes,
+        );
+    }
     if instruction_data.len() >= SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1
         && instruction_data.get(..SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.len())
             == Some(SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.as_slice())

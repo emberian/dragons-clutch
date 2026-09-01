@@ -329,7 +329,7 @@ fn authenticate_release_cache<'a>(
     Ok(activated)
 }
 
-fn authenticate_role_deployment(
+pub(crate) fn authenticate_role_deployment(
     activated: ActivatedExecutionReleaseSetViewV1<'_>,
     role: ExecutionRoleV1,
     program: &ObservedAccount,
@@ -344,7 +344,7 @@ fn authenticate_role_deployment(
         .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)
 }
 
-fn deployment_observation(
+pub(crate) fn deployment_observation(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
     release: ArtifactReleaseV1,

@@ -31,6 +31,9 @@ pub const PROTOCOL_POSITION_ADMISSION_SEED_V2: &[u8] = b"dclutch:protocol-positi
 pub const PROTOCOL_POSITION_STATE_SEED_V2: &[u8] = b"dclutch:lbv2:position";
 /// Canonical Claims-owned rational capability owner PDA seed domain.
 pub const PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2: &[u8] = b"dclutch:rational-claims:v2";
+/// Domain binding both closed accounts and the credited RentCredit poststate.
+pub const PROTOCOL_POSITION_CLOSE_RESOURCE_DOMAIN_V2: &[u8] =
+    b"dclutch/claims/protocol-position-close/v2";
 
 const ACTION_OFFSET: usize = 10;
 const OWNER_KIND_OFFSET: usize = 11;
@@ -828,6 +831,10 @@ pub struct ProtocolPositionCloseEvidenceV2 {
     pub claims_program: [u8; 32],
     /// Digest committing both closed resources and credited RentCredit poststate.
     pub post_resource_digest: [u8; 32],
+    /// Authenticated live Position lamports immediately before close.
+    pub position_lamports: u64,
+    /// Authenticated live admission-record lamports immediately before close.
+    pub admission_lamports: u64,
     /// RentCredit lamports before close.
     pub rent_credit_before: u64,
     /// RentCredit lamports after close.
@@ -873,12 +880,14 @@ impl ProtocolPositionCloseReceiptV2 {
         ] {
             require_nonzero(identity)?;
         }
-        let total = request
-            .observed_position_lamports
-            .checked_add(request.observed_admission_lamports)
+        let total = evidence
+            .position_lamports
+            .checked_add(evidence.admission_lamports)
             .ok_or(ProtocolPositionErrorV2::InvalidRent)?;
         if request.action != ProtocolPositionActionV2::Close
             || request.presence != ProtocolPositionPresenceV2::Existing
+            || evidence.position_lamports < request.observed_position_lamports
+            || evidence.admission_lamports < request.observed_admission_lamports
             || evidence.rent_credit_before.checked_add(total) != Some(evidence.rent_credit_after)
         {
             return Err(ProtocolPositionErrorV2::ReceiptMismatch);
@@ -895,8 +904,8 @@ impl ProtocolPositionCloseReceiptV2 {
             rent_program: request.rent_program,
             claims_program: evidence.claims_program,
             post_resource_digest: evidence.post_resource_digest,
-            position_lamports: request.observed_position_lamports,
-            admission_lamports: request.observed_admission_lamports,
+            position_lamports: evidence.position_lamports,
+            admission_lamports: evidence.admission_lamports,
             rent_credit_before: evidence.rent_credit_before,
             rent_credit_after: evidence.rent_credit_after,
             total_credit: total,
@@ -1025,9 +1034,9 @@ impl ProtocolPositionCloseReceiptV2 {
         request_digest: [u8; 32],
         claims_program: [u8; 32],
     ) -> Result<()> {
-        let total = request
-            .observed_position_lamports
-            .checked_add(request.observed_admission_lamports)
+        let total = self
+            .position_lamports
+            .checked_add(self.admission_lamports)
             .ok_or(ProtocolPositionErrorV2::InvalidRent)?;
         if request.action != ProtocolPositionActionV2::Close
             || self.owner_kind != request.owner_kind
@@ -1039,8 +1048,8 @@ impl ProtocolPositionCloseReceiptV2 {
             || self.rent_credit != request.rent_credit
             || self.rent_program != request.rent_program
             || self.claims_program != claims_program
-            || self.position_lamports != request.observed_position_lamports
-            || self.admission_lamports != request.observed_admission_lamports
+            || self.position_lamports < request.observed_position_lamports
+            || self.admission_lamports < request.observed_admission_lamports
             || self.total_credit != total
             || self.position_revision != request.expected_position_revision
             || self.market_revision != request.expected_market_revision
@@ -1050,6 +1059,36 @@ impl ProtocolPositionCloseReceiptV2 {
         } else {
             Ok(())
         }
+    }
+
+    /// Return authenticated live Position lamports reclaimed by the close.
+    #[must_use]
+    pub const fn position_lamports(self) -> u64 {
+        self.position_lamports
+    }
+
+    /// Return authenticated live admission-record lamports reclaimed by close.
+    #[must_use]
+    pub const fn admission_lamports(self) -> u64 {
+        self.admission_lamports
+    }
+
+    /// Return RentCredit lamports before close.
+    #[must_use]
+    pub const fn rent_credit_before(self) -> u64 {
+        self.rent_credit_before
+    }
+
+    /// Return RentCredit lamports after close.
+    #[must_use]
+    pub const fn rent_credit_after(self) -> u64 {
+        self.rent_credit_after
+    }
+
+    /// Return the exact sum of both reclaimed live balances.
+    #[must_use]
+    pub const fn total_credit(self) -> u64 {
+        self.total_credit
     }
 }
 
@@ -1374,8 +1413,10 @@ mod tests {
                 admission_digest: [15; 32],
                 claims_program: [16; 32],
                 post_resource_digest: [17; 32],
+                position_lamports: 17,
+                admission_lamports: 19,
                 rent_credit_before: 20,
-                rent_credit_after: 45,
+                rent_credit_after: 56,
             },
         )
         .expect("close");
@@ -1388,11 +1429,24 @@ mod tests {
             close.validate_request(request, [99; 32], [16; 32]),
             Err(ProtocolPositionErrorV2::ReceiptMismatch)
         );
+        assert_eq!(close.position_lamports(), 17);
+        assert_eq!(close.admission_lamports(), 19);
+        assert_eq!(close.total_credit(), 36);
+        assert_eq!(close.rent_credit_before(), 20);
+        assert_eq!(close.rent_credit_after(), 56);
 
         let mut bad = bytes;
-        bad[CLOSE_RENT_CREDIT_AFTER_OFFSET] = 44;
+        bad[CLOSE_RENT_CREDIT_AFTER_OFFSET] = 55;
         assert_eq!(
             ProtocolPositionCloseReceiptV2::decode(&bad),
+            Err(ProtocolPositionErrorV2::ReceiptMismatch)
+        );
+
+        let mut understated = request;
+        understated.observed_position_lamports = 18;
+        assert!(understated.to_bytes().is_ok());
+        assert_eq!(
+            close.validate_request(understated, [14; 32], [16; 32]),
             Err(ProtocolPositionErrorV2::ReceiptMismatch)
         );
     }

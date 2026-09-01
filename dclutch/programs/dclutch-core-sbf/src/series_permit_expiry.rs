@@ -13,7 +13,8 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_market_core_codec::{
-    Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
+    Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
+    SeriesPermitExpiryRequestV1,
 };
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_series_v3_kernel::{
@@ -42,33 +43,33 @@ use crate::{
 /// Exact permissionless expiry account count.
 pub const SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1: usize = 25;
 
-struct ExpiryAccounts<'accounts, 'info> {
-    permit: &'accounts AccountInfo<'info>,
-    rent_credit: &'accounts AccountInfo<'info>,
-    rent_program: &'accounts AccountInfo<'info>,
-    infrastructure_profile: &'accounts AccountInfo<'info>,
-    registry_artifact_raw: &'accounts AccountInfo<'info>,
-    registry_artifact_staging: &'accounts AccountInfo<'info>,
-    registry_program: &'accounts AccountInfo<'info>,
-    registry_programdata: &'accounts AccountInfo<'info>,
-    rent_artifact_raw: &'accounts AccountInfo<'info>,
-    rent_artifact_staging: &'accounts AccountInfo<'info>,
-    rent_programdata: &'accounts AccountInfo<'info>,
-    activation_cache: &'accounts AccountInfo<'info>,
-    trading_program: &'accounts AccountInfo<'info>,
-    trading_programdata: &'accounts AccountInfo<'info>,
-    root: &'accounts AccountInfo<'info>,
-    ticket_state: &'accounts AccountInfo<'info>,
-    template_raw: &'accounts AccountInfo<'info>,
-    template_staging: &'accounts AccountInfo<'info>,
-    occurrence_raw: &'accounts AccountInfo<'info>,
-    occurrence_staging: &'accounts AccountInfo<'info>,
-    ticket_raw: &'accounts AccountInfo<'info>,
-    ticket_staging: &'accounts AccountInfo<'info>,
-    clock: &'accounts AccountInfo<'info>,
-    rent: &'accounts AccountInfo<'info>,
-    system: &'accounts AccountInfo<'info>,
-    crank: Option<&'accounts AccountInfo<'info>>,
+pub(crate) struct ExpiryAccounts<'accounts, 'info> {
+    pub(crate) permit: &'accounts AccountInfo<'info>,
+    pub(crate) rent_credit: &'accounts AccountInfo<'info>,
+    pub(crate) rent_program: &'accounts AccountInfo<'info>,
+    pub(crate) infrastructure_profile: &'accounts AccountInfo<'info>,
+    pub(crate) registry_artifact_raw: &'accounts AccountInfo<'info>,
+    pub(crate) registry_artifact_staging: &'accounts AccountInfo<'info>,
+    pub(crate) registry_program: &'accounts AccountInfo<'info>,
+    pub(crate) registry_programdata: &'accounts AccountInfo<'info>,
+    pub(crate) rent_artifact_raw: &'accounts AccountInfo<'info>,
+    pub(crate) rent_artifact_staging: &'accounts AccountInfo<'info>,
+    pub(crate) rent_programdata: &'accounts AccountInfo<'info>,
+    pub(crate) activation_cache: &'accounts AccountInfo<'info>,
+    pub(crate) trading_program: &'accounts AccountInfo<'info>,
+    pub(crate) trading_programdata: &'accounts AccountInfo<'info>,
+    pub(crate) root: &'accounts AccountInfo<'info>,
+    pub(crate) ticket_state: &'accounts AccountInfo<'info>,
+    pub(crate) template_raw: &'accounts AccountInfo<'info>,
+    pub(crate) template_staging: &'accounts AccountInfo<'info>,
+    pub(crate) occurrence_raw: &'accounts AccountInfo<'info>,
+    pub(crate) occurrence_staging: &'accounts AccountInfo<'info>,
+    pub(crate) ticket_raw: &'accounts AccountInfo<'info>,
+    pub(crate) ticket_staging: &'accounts AccountInfo<'info>,
+    pub(crate) clock: &'accounts AccountInfo<'info>,
+    pub(crate) rent: &'accounts AccountInfo<'info>,
+    pub(crate) system: &'accounts AccountInfo<'info>,
+    pub(crate) crank: Option<&'accounts AccountInfo<'info>>,
 }
 
 impl<'accounts, 'info> ExpiryAccounts<'accounts, 'info> {
@@ -77,7 +78,7 @@ impl<'accounts, 'info> ExpiryAccounts<'accounts, 'info> {
     /// The crank recipient is optional by frame length, so every existing
     /// 25-account caller behaves exactly as it did. `require_distinct` runs
     /// over the whole slice, so the recipient cannot alias any of the 25.
-    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
+    pub(crate) fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
         let funded = accounts.len() == SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1 + 1;
         if accounts.len() != SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1 && !funded {
             return Err(CoreSbfError::AccountFrame);
@@ -364,7 +365,7 @@ fn authenticate_replay(
     Ok(())
 }
 
-fn finalized_series_record(
+pub(crate) fn finalized_series_record(
     frame: &ExpiryAccounts<'_, '_>,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
@@ -386,7 +387,7 @@ fn finalized_series_record(
     Ok(bytes.to_vec())
 }
 
-fn authenticate_unallocated_permit(
+pub(crate) fn authenticate_unallocated_permit(
     program_id: &Pubkey,
     frame: &ExpiryAccounts<'_, '_>,
     permit: SeriesFoundingPermitV1,
@@ -431,6 +432,93 @@ fn authenticate_unallocated_permit(
             credit_seeds.domain(),
             &market,
             &generation,
+            credit_bump.as_slice(),
+        ],
+        frame.rent_program.key,
+    )
+    .map_err(|_| CoreSbfError::RentCredit)?;
+    if frame.rent_credit.owner != frame.rent_program.key
+        || frame.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
+        || frame.rent_credit.key != &expected_credit
+        || !rent.is_exempt(frame.rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+    {
+        return Err(CoreSbfError::RentCredit);
+    }
+    Ok(())
+}
+
+/// Authenticate an unallocated permit from finalized Series coordinates only.
+///
+/// The atomic precommit route has no permit body: the account is still an
+/// empty System-owned PDA. Its cycle-free seeds and immutable RentCredit body
+/// are therefore the complete authority. Ordinary V1 expiry continues through
+/// [`authenticate_unallocated_permit`] with its caller-supplied permit body.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_record_derived_unallocated_permit(
+    program_id: &Pubkey,
+    frame: &ExpiryAccounts<'_, '_>,
+    release_set: [u8; 32],
+    market: [u8; 32],
+    generation: u64,
+    ticket_context: [u8; 32],
+    expected_refund_owner: [u8; 32],
+    rent: &Rent,
+) -> Result<u8, CoreSbfError> {
+    let seeds = SeriesFoundingPermitSeedsV1::new(
+        identity(release_set)?,
+        identity(market)?,
+        identity(ticket_context)?,
+    );
+    let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    if frame.permit.key != &expected
+        || frame.permit.owner != &system_program::ID
+        || frame.permit.data_len() != 0
+        || frame.permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+    {
+        return Err(CoreSbfError::Creation);
+    }
+    authenticate_rent_credit_coordinates(
+        frame,
+        expected_refund_owner,
+        market,
+        release_set,
+        generation,
+        rent,
+    )?;
+    Ok(bump)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_rent_credit_coordinates(
+    frame: &ExpiryAccounts<'_, '_>,
+    expected_refund_owner: [u8; 32],
+    market: [u8; 32],
+    release_set: [u8; 32],
+    generation: u64,
+    rent: &Rent,
+) -> Result<(), CoreSbfError> {
+    let credit_data = frame
+        .rent_credit
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::RentCredit)?;
+    let credit =
+        LifecycleRentCreditV2::decode(&credit_data).map_err(|_| CoreSbfError::RentCredit)?;
+    if credit.refund_wallet().to_bytes() != expected_refund_owner
+        || credit.market().to_bytes() != market
+        || credit.release_set().to_bytes() != release_set
+        || credit.generation() != generation
+    {
+        return Err(CoreSbfError::RentCredit);
+    }
+    let credit_seeds = credit.pda_seeds();
+    let credit_bump = [credit_seeds.bump()];
+    let credit_market = credit_seeds.market().to_bytes();
+    let credit_generation = credit_seeds.generation();
+    let expected_credit = Pubkey::create_program_address(
+        &[
+            credit_seeds.domain(),
+            &credit_market,
+            &credit_generation,
             credit_bump.as_slice(),
         ],
         frame.rent_program.key,
@@ -497,14 +585,39 @@ impl ExpirySplitV1 {
 /// `series_permit_expiry_unfunded_refunds_everything` proves the 25-account
 /// frame is unchanged. **Keep the two in step**: the model is spec-only, so a
 /// divergence here goes unnoticed by every build in the tree.
-fn refund(
+pub(crate) fn refund(
     frame: &ExpiryAccounts<'_, '_>,
     permit: SeriesFoundingPermitV1,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
-    let seeds = permit.seeds();
+    refund_with_seeds(frame, permit.seeds(), permit.intent().bump(), rent)
+}
+
+/// Refund a record-derived, still-empty permit without inventing a body.
+pub(crate) fn refund_record_derived(
+    frame: &ExpiryAccounts<'_, '_>,
+    release_set: [u8; 32],
+    market: [u8; 32],
+    ticket_context: [u8; 32],
+    bump: u8,
+    rent: &Rent,
+) -> Result<(), CoreSbfError> {
+    let seeds = SeriesFoundingPermitSeedsV1::new(
+        identity(release_set)?,
+        identity(market)?,
+        identity(ticket_context)?,
+    );
+    refund_with_seeds(frame, seeds, bump, rent)
+}
+
+fn refund_with_seeds(
+    frame: &ExpiryAccounts<'_, '_>,
+    seeds: SeriesFoundingPermitSeedsV1,
+    bump: u8,
+    rent: &Rent,
+) -> Result<(), CoreSbfError> {
     let base = seeds.as_slices();
-    let bump = [permit.intent().bump()];
+    let bump = [bump];
     let signer = [base[0], base[1], base[2], base[3], bump.as_slice()];
     let balance = frame.permit.lamports();
 
@@ -570,7 +683,7 @@ fn refund(
     Ok(())
 }
 
-fn require_expired(
+pub(crate) fn require_expired(
     current_slot: u64,
     retry_through: u64,
     permit_expiry_slot: u64,

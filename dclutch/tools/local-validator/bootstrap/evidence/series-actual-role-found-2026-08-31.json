@@ -1,0 +1,84 @@
+{
+  "schema": "dclutch-series-actual-role-found-checkpoint-v1",
+  "status": "accepted",
+  "evidenceLevel": "real-elf-program-test",
+  "source": {
+    "commit": "7783c31a79843f2134a42ea1ea7c9944e9cc4ab2",
+    "tree": "c24ecb082f58298962b76dedc68b5cbe221e37ab",
+    "foundProgramTestSha256": "fe21a1f2b62300f1835a0ee6bb49e2999c010a042ea206560de37202558f7013",
+    "runnerSha256": "0760f42bb2ee6b3f10bec01643874d01ec5ee2ad3e2300b9482d01fcffdb9205",
+    "consumerSha256": "d6086a7d823fa07f652fe9d4f768957563d9a6421b6affa3b5fbe722cf6c2517"
+  },
+  "builder": {
+    "host": "hbox",
+    "scheduler": "swarm-build",
+    "workRoot": "/tank/dregg-build/series-role-elf-Bg0vPH",
+    "cargoBuildSbf": "4.0.0",
+    "platformTools": "v1.53",
+    "sbfRustc": "1.89.0",
+    "hostRustc": "1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "gate": {
+    "command": "SBF_OUT_DIR=sbf cargo test --manifest-path programs/dclutch-core-sbf/Cargo.toml --test found_program_test series_consume_accepts_258_outcomes_and_commits_found_with_permit -- --nocapture",
+    "testsPassed": 1,
+    "testsFailed": 0,
+    "outcomeCount": 258,
+    "outerComputeUnits": 438753,
+    "coreComputeUnits": 390092,
+    "marketPhaseAfter": "Founding",
+    "marketReadinessAfter": "Prepaid",
+    "foundingPermitCommitted": true
+  },
+  "executables": [
+    {
+      "role": "Core",
+      "file": "dclutch_core_sbf.so",
+      "bytes": 1160216,
+      "sha256": "bb441c6ca5572ad7a0ffbed66fdc6e6b1d263cc8f7fd8adab6f9631a338263be"
+    },
+    {
+      "role": "Registry",
+      "file": "dclutch_registry_sbf.so",
+      "bytes": 234496,
+      "sha256": "884da85a8b657aa7d459db6b4d6e35a7465b61f19d6557b2f1705ad17f1735a9"
+    },
+    {
+      "role": "Rent",
+      "file": "dclutch_rent_sbf.so",
+      "bytes": 142320,
+      "sha256": "18cec4abb1ea43ba21214c645b88966f2f89c90db3f0d2e957f86954e510fc20"
+    },
+    {
+      "role": "Claims",
+      "file": "dclutch_claims_sbf.so",
+      "bytes": 1346416,
+      "sha256": "a317a4ce3d26215c1852a9c0fc6988835e16f8fb8035aeefaa7fff80c62b5cb4"
+    },
+    {
+      "role": "Custody",
+      "file": "dclutch_custody_sbf.so",
+      "bytes": 563608,
+      "sha256": "82647a897f612ac94504ce54275de2bb1aebe2135a9a885083235839713bb73a"
+    },
+    {
+      "role": "Resolution",
+      "file": "dclutch_resolution_proof_sbf.so",
+      "bytes": 805176,
+      "sha256": "550834c298c19e790f652bbf5e1985366fa6aac231033130a865272277c90f4e"
+    },
+    {
+      "role": "SeriesFoundCaller",
+      "file": "dclutch_series_consume_caller_sbf.so",
+      "bytes": 33408,
+      "sha256": "6bcfd7cc447ae37381c88ebb6f94f8ecd483cce6afdd2fb6ba4c8f800a82c7f9"
+    }
+  ],
+  "boundary": {
+    "actualClaimsReleaseBound": true,
+    "actualCustodyReleaseBound": true,
+    "actualResolutionReleaseBound": true,
+    "coreStandInsRemainingForDownstreamRoles": false,
+    "sameValidatorResolutionExecuted": false,
+    "selectedSeriesV5ProfileV3ReleaseAvailable": false
+  }
+}

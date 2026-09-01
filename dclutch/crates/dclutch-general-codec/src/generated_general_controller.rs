@@ -106,6 +106,7 @@ pub(crate) const ACTION_CLOSE_BATCH: u8 = 10;
 pub(crate) const ACTION_SUBMIT_CANDIDATE: u8 = 11;
 pub(crate) const ACTION_VERIFY_CANDIDATE_ROW: u8 = 12;
 pub(crate) const ACTION_RELEASE_ORDER: u8 = 13;
+pub(crate) const ACTION_CLOSE_CANDIDATE: u8 = 14;
 pub(crate) const PHASE_COLLECTING: u8 = 0;
 pub(crate) const PHASE_MATERIALIZING: u8 = 1;
 pub(crate) const PHASE_DISTRIBUTING: u8 = 2;

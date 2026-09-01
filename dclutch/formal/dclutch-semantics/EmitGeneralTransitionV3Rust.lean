@@ -30,6 +30,7 @@ private def rustStem : Action → String
   | .submitCandidate => "SUBMIT_CANDIDATE"
   | .verifyCandidateRow => "VERIFY_CANDIDATE_ROW"
   | .releaseOrder => "RELEASE_ORDER"
+  | .closeCandidate => "CLOSE_CANDIDATE"
 
 private def rustLabel : Action → String
   | .consider => "Consider"
@@ -46,6 +47,7 @@ private def rustLabel : Action → String
   | .submitCandidate => "SubmitCandidate"
   | .verifyCandidateRow => "VerifyCandidateRow"
   | .releaseOrder => "ReleaseOrder"
+  | .closeCandidate => "CloseCandidate"
 
 private def emitProgram (action : Action) : IO Unit := do
   let stem := rustStem action

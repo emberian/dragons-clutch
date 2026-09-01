@@ -17,6 +17,7 @@ mod composition;
 mod exposure_action_v2;
 mod hot_v2;
 mod records;
+mod retirement_v3;
 mod selected_release_v4;
 mod token2022;
 mod topology_v3;
@@ -51,7 +52,8 @@ pub use artifacts_v4::{
     FRACTIONAL_COMMON_IDENTITIES_V4, FRACTIONAL_COMMON_SCALARS_V4,
     FRACTIONAL_HOT_INJECTED_ACCOUNT_COUNT_V4, FractionalSelectedArtifactErrorV4,
     FractionalSelectedBundleInputV4, FractionalSelectedBundleV4, FractionalSelectedProfileInputV4,
-    build_fractional_selected_bundle_v4, validate_fractional_selected_bundle_v4,
+    build_fractional_current_selected_bundle_v4, build_fractional_selected_bundle_v4,
+    validate_fractional_current_selected_bundle_v4, validate_fractional_selected_bundle_v4,
 };
 pub use atomic_v3::{
     build_fractional_atomic_claims_instruction_v3,
@@ -92,14 +94,28 @@ pub use records::{
     FractionalPreparedChainArtifactsV1, authenticate_fractional_chain_artifacts_v1,
     prepare_fractional_chain_artifacts_v1,
 };
+pub use retirement_v3::{
+    FractionalRetirementCoordinateSnapshotV3, FractionalRetirementDeploymentV3,
+    FractionalRetirementDiscoveryV3, FractionalRetirementInstructionPlanV3,
+    FractionalRetirementNextPlanV3, FractionalRetirementRecordV3, FractionalRetirementSnapshotV3,
+    discover_fractional_retirement_next_v3, plan_fractional_retirement_instruction_v3,
+    plan_fractional_retirement_next_v3,
+};
 pub use selected_release_v4::{
-    FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4, FRACTIONAL_SELECTED_ACTION_COUNT_V4,
-    FRACTIONAL_SELECTED_ACTIONS_V4, FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4,
-    FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4, FractionalFrameWidthsV4,
+    FRACTIONAL_ACTIVATION_REQUEST_BYTES_V1, FRACTIONAL_ACTIVATION_REQUEST_MAGIC_V1,
+    FRACTIONAL_ACTIVATION_REQUEST_SCHEMA_ID_V1, FRACTIONAL_ACTIVATION_REQUEST_SCHEMA_PREIMAGE_V1,
+    FRACTIONAL_ACTIVATION_SELECTOR_V1, FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4,
+    FRACTIONAL_SELECTED_ACTION_COUNT_V4, FRACTIONAL_SELECTED_ACTIONS_V4,
+    FRACTIONAL_SELECTED_FUNDING_LEDGER_SLOTS_V1, FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4,
+    FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4, FractionalActivationBundleErrorV1,
+    FractionalActivationBundleInputV1, FractionalCurrentReleaseV4, FractionalFrameWidthsV4,
     FractionalPublicationRecordV1, FractionalSelectedPublicationV4,
-    FractionalSelectedReleaseErrorV4,
-    FractionalSelectedReleaseInputV4, FractionalSelectedReleaseV4, fractional_claims_frame_spec_v4,
-    fractional_selected_release_v4, validate_fractional_selected_release_v4,
+    FractionalSelectedReleaseErrorV4, FractionalSelectedReleaseInputV4,
+    FractionalSelectedReleaseV4, build_fractional_activation_bundle_v1,
+    fractional_activation_request_v1, fractional_claims_frame_spec_v4,
+    fractional_current_release_v4, fractional_selected_release_v4,
+    validate_fractional_activation_bundle_v1, validate_fractional_activation_request_v1,
+    validate_fractional_current_release_v4, validate_fractional_selected_release_v4,
 };
 pub use token2022::{
     FractionalDenominatorExecutionV1, FractionalLifecycleRentClosePlanV2, FractionalMintSnapshotV1,

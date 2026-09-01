@@ -13,10 +13,12 @@ import { found } from './commands/found';
 import { join } from './commands/join';
 import { marketsLs, marketsShow } from './commands/markets';
 import { portfolio } from './commands/portfolio';
+import { productCommand } from './commands/product';
 import { redeem } from './commands/redeem';
 import { refusal } from './commands/refusal';
+import { routeCommand } from './commands/route';
 import { spine } from './commands/spine';
-import { intentCommand, tradeCommand } from './commands/trade';
+import { intentCommand, offerCommand, tradeCommand } from './commands/trade';
 import { walk } from './commands/walk';
 import { fail, STDIO, type Io } from './output';
 
@@ -28,7 +30,11 @@ commands:
   markets ls                       enumerate and decode markets under the Core program
   markets show <address>           one market, in full, at one finalized floor
   portfolio [owner]                indexer-free position rollup (owner defaults to --keypair)
-  intent sell|buy                  authenticate a route and sign one off-chain Direct intent (--out; never submits)
+  offer sell                       derive seller state + nonce and sign one portable sell ticket (--out; never submits)
+  intent sell|buy                  low-level: sign one fully explicit portable Direct intent (--out; never submits)
+  route release-set|direct         produce pinned checked release/Direct route evidence (read-only devnet; no keys)
+  product spline                   compile one canonical degree-2/3 Product graph (key-free; no chain access)
+  product inspect                  verify its report + five files and print the exact Found39 handoff
   buy                              disabled: refuses before context, keys, signing, or RPC access
   sell                             disabled: refuses before context, keys, signing, or RPC access
   spine                            is this market Direct-tradable now, and which walls stand (--market)
@@ -44,6 +50,10 @@ global flags:
   --keypair <path>       Solana JSON keypair; also $DCLUTCH_KEYPAIR (never a default wallet path)
   --json                 machine-readable output where a command supports it
   --dry-run              where supported, build and print without signing or submitting; never enables buy/sell
+  --bootstrap-bin <path> exact Rust successor producer used by route, product, found, join, and redeem
+  --input <json>         canonical spline Product authoring input for product spline
+  --output-dir <path>    new directory for the five compiled Product records and report
+  --report <json>        exact report.json to inspect with its five sibling Product files
   --payout-input <json>  exact Rust payout-plan input for redeem
   --payout-evidence <json>
                          completed campaign evidence paired with --spec
@@ -90,10 +100,30 @@ const FLAG_OPTIONS = {
   'keypair-seed': { type: 'string' },
   'session-out': { type: 'string' },
   'bootstrap-bin': { type: 'string' },
+  input: { type: 'string' },
+  'output-dir': { type: 'string' },
+  report: { type: 'string' },
   'found-operation': { type: 'string' },
   'found-journal': { type: 'string' },
   execute: { type: 'boolean' },
   plan: { type: 'string' },
+  'expected-plan-sha256': { type: 'string' },
+  'core-checked': { type: 'string' },
+  'expected-core-checked-sha256': { type: 'string' },
+  'claims-checked': { type: 'string' },
+  'expected-claims-checked-sha256': { type: 'string' },
+  'trading-checked': { type: 'string' },
+  'expected-trading-checked-sha256': { type: 'string' },
+  'resolution-checked': { type: 'string' },
+  'expected-resolution-checked-sha256': { type: 'string' },
+  'custody-checked': { type: 'string' },
+  'expected-custody-checked-sha256': { type: 'string' },
+  'checked-execution-release': { type: 'string' },
+  'expected-checked-execution-release-sha256': { type: 'string' },
+  'registry-checked': { type: 'string' },
+  'expected-registry-checked-sha256': { type: 'string' },
+  'rent-checked': { type: 'string' },
+  'expected-rent-checked-sha256': { type: 'string' },
   'campaign-evidence': { type: 'string' },
   output: { type: 'string' },
   'fee-payer-keypair': { type: 'string' },
@@ -118,12 +148,14 @@ const FLAG_OPTIONS = {
   take: { type: 'string' },
   out: { type: 'string' },
   outcome: { type: 'string' },
+  maker: { type: 'string' },
   fill: { type: 'string' },
   price: { type: 'string' },
   lifecycle: { type: 'string' },
   nonce: { type: 'string' },
   'valid-from': { type: 'string' },
   'valid-through': { type: 'string' },
+  'duration-slots': { type: 'string' },
   collateral: { type: 'string' },
   'counter-keypair': { type: 'string' },
   'counter-collateral': { type: 'string' },
@@ -172,6 +204,12 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
         return await portfolio(context, io, rest[0], env);
       case 'intent':
         return await intentCommand(context, io, rest[0], env);
+      case 'offer':
+        return await offerCommand(context, io, rest[0], env);
+      case 'route':
+        return await routeCommand(context, io, rest[0], env);
+      case 'product':
+        return await productCommand(context, io, rest[0], env);
       case 'spine':
         return await spine(context, io, rest[0], env);
       case 'redeem':

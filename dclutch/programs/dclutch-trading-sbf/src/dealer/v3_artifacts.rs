@@ -41,11 +41,11 @@ use super::{
     },
     v3_hot_artifact::{
         DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3,
-        DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3, DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3,
-        DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3, DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
-        DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3, dealer_current_slot_scalar_register_v3,
-        dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3,
-        dealer_expiry_scalar_register_v3,
+        DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3, DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3,
+        DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3, DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3,
+        DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3, DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
+        dealer_current_slot_scalar_register_v3, dealer_equity_identity_count_v3,
+        dealer_equity_scalar_count_v3, dealer_expiry_scalar_register_v3,
     },
     v3_multi_lp::MultiLpActionV3,
 };
@@ -477,6 +477,7 @@ pub fn authenticate_dealer_equity_artifacts_v3<'a>(
         // route walk below never sees it -- only the Hot executor's role lookup
         // does.
         .and_then(|value| value.checked_add(DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3))
+        .and_then(|value| value.checked_add(DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3))
         .ok_or(DealerEquityArtifactsErrorV3::Arithmetic)?;
     if effect.fixed_account_count() != expected_fixed_accounts || effect.item_account_stride() != 0
     {

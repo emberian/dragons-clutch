@@ -1,0 +1,24 @@
+// @generated from the authoritative Rust Source-provider owner and WASM artifact; do not edit.
+export const SOURCE_PROVIDER_RECLAIM_INPUT_FORMAT_V1 = 'dclutch-source-provider-reclaim-input-v1' as const;
+export const SOURCE_PROVIDER_PLAN_FORMAT_V1 = 'dclutch-source-provider-plan-v1' as const;
+export const SOURCE_PROVIDER_COORDINATES_INPUT_FORMAT_V1 = 'dclutch-source-provider-reclaim-coordinates-input-v1' as const;
+export const SOURCE_PROVIDER_COORDINATES_FORMAT_V1 = 'dclutch-source-provider-reclaim-coordinates-v1' as const;
+export const SOURCE_PROVIDER_PROGRAM_INPUT_FORMAT_V1 = 'dclutch-source-provider-program-input-v1' as const;
+export const SOURCE_PROVIDER_PROGRAM_FORMAT_V1 = 'dclutch-source-provider-program-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_BASE_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-base-input-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_BASE_FORMAT_V1 = 'dclutch-source-provider-submit-base-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_MATERIAL_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-material-input-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_MATERIAL_FORMAT_V1 = 'dclutch-source-provider-submit-material-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_RECORD_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-record-input-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_RECORD_FORMAT_V1 = 'dclutch-source-provider-submit-record-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_PYTH_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-pyth-input-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_PYTH_FORMAT_V1 = 'dclutch-source-provider-submit-pyth-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_FRESH_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-fresh-input-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_FRESH_FORMAT_V1 = 'dclutch-source-provider-submit-fresh-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-input-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1 = 'dclutch-source-provider-submit-plan-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_POSTSTATE_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-poststate-input-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_POSTSTATE_FORMAT_V1 = 'dclutch-source-provider-submit-poststate-v1' as const;
+export const SOURCE_PROVIDER_SUBMIT_LIFECYCLE_BYTES_V1 = 528 as const;
+export const SOURCE_PROVIDER_WASM_SHA256_V1 = '5417dda9dd14f831e8490e8f6d07c6d7348e2de417445c1c6a524b9c282e82ad' as const;
+export const SOURCE_PROVIDER_WASM_BYTES_V1 = 604558 as const;

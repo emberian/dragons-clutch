@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    path::Path,
     thread,
     time::{Duration, Instant},
 };
@@ -47,9 +48,10 @@ use dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1;
 use dclutch_direct_codec::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
 use dclutch_market_core_codec::{
     Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
-    FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
-    Identity, MarketCoreStateSeedsV2, MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2, Phase,
-    ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness, Request,
+    FOUND_PRICE_GATE_ACCOUNT_COUNT_V3, FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5,
+    GenericFoundingRequestV1, GenericFoundingStageV1, Identity, MarketCoreStateSeedsV2,
+    MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2, PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2,
+    Phase, ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness, Request,
     SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1, StateBumpsV1,
     generic_founding_funding_list_id_v1,
 };
@@ -58,7 +60,8 @@ use dclutch_market_founding_v1_operator::{
     construct_generic_market_founding_plan_v1,
 };
 use dclutch_product_payoff_v2_codec::{
-    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    price_gate_v1::verify_price_gate_v1,
+    registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
         BasisInputV3, BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
@@ -83,7 +86,11 @@ use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_release_set_contract::{
+    CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2,
+    ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
+};
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
@@ -134,7 +141,7 @@ use crate::{
         FundingReadinessRoutedPlanV1, funding_readiness_routing_addresses_v1,
         plan_funding_readiness_from_rpc_v1, plan_funding_readiness_with_routing_from_rpc_v1,
     },
-    model::{AccountEvidence, MarketRunInput, SuccessorPlan, TransactionEvidence},
+    model::{AccountEvidence, MarketRunInput, RecordPair, SuccessorPlan, TransactionEvidence},
     plan::{hex, hex32, pubkey},
     rpc::{FOUNDING_HEAP_FRAME_BYTES, Rpc, RpcAccount, account_evidence, bounded_instructions},
     runtime::{PublishedRecord, decode_hex, publish_product_graph, publish_record, record},
@@ -724,7 +731,36 @@ fn send_durable_founding_v1(
                         "Dispatching founding pre-send projection changed packet or signature",
                     ));
                 }
+                park_dcltgmf3_chaos_boundary_v1(
+                    &current,
+                    crate::chaos_fault::BoundaryV1::DispatchingBeforeSend,
+                )?;
                 let returned = rpc.submit_signed_packet_once(label, &packet, signature, false)?;
+                if crate::chaos_fault::is_armed_for_v1(
+                    "dcltgmf3",
+                    crate::chaos_fault::BoundaryV1::LandedBeforeFinalizationFsync,
+                )? {
+                    let mut landed = false;
+                    for _ in 0..300 {
+                        if rpc
+                            .finalized_signed_packet(label, returned, false)?
+                            .is_some()
+                        {
+                            landed = true;
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                    }
+                    if !landed {
+                        return Err(Error::new(
+                            "DCLTGMF3 chaos target did not reach finalized history before its fault boundary",
+                        ));
+                    }
+                    park_dcltgmf3_chaos_boundary_v1(
+                        &current,
+                        crate::chaos_fault::BoundaryV1::LandedBeforeFinalizationFsync,
+                    )?;
+                }
                 let submitted = submit_founding_submission_v1(
                     &recorder.binding,
                     &current,
@@ -773,6 +809,32 @@ fn send_durable_founding_v1(
             }
         }
     }
+}
+
+fn park_dcltgmf3_chaos_boundary_v1(
+    journal: &FoundingSubmissionJournalV1,
+    boundary: crate::chaos_fault::BoundaryV1,
+) -> Result<()> {
+    if journal.operation != FoundingSubmissionOperationV1::Dcltgmf3 {
+        return Ok(());
+    }
+    let packet_sha256 = journal
+        .signed_packet_sha256
+        .as_deref()
+        .ok_or_else(|| Error::new("DCLTGMF3 chaos boundary omitted packet digest"))?;
+    let signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("DCLTGMF3 chaos boundary omitted signature"))?;
+    crate::chaos_fault::park_if_armed_v1(
+        &journal.cluster,
+        "dcltgmf3",
+        boundary,
+        Path::new(&journal.evidence_path),
+        &journal.intent_sha256,
+        packet_sha256,
+        signature,
+    )
 }
 
 fn finish_durable_founding_v1(
@@ -1740,6 +1802,8 @@ struct MarketRecords {
     /// these bytes, so the founding artifact must be derived from them too.
     manifest_body: Vec<u8>,
     basis: PublishedRecord,
+    price_gate: Option<PublishedRecord>,
+    basis_scale: u64,
     /// The five source-graph records both provider legs authenticate. They are
     /// published with the rest of the graph rather than left to a resolution
     /// campaign, because the Market's `SourceMaterialV2` NAMES them and a
@@ -1864,6 +1928,8 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
     validate_market_input(input)?;
+    let authenticated_plan = authenticated_found_infrastructure_plan_v1(rpc, plan)?;
+    let plan = &authenticated_plan;
     let registry = pubkey(&plan.registry.program_id)?;
     let core = pubkey(&plan.core.program_id)?;
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
@@ -2103,6 +2169,13 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
     ] {
         let account = rpc.required_account(key, label)?;
         accounts.insert(label.into(), account_evidence(key, &account));
+    }
+    if let Some(price_gate) = records.price_gate {
+        let account = rpc.required_account(price_gate.raw, "price-gate certificate record")?;
+        accounts.insert(
+            "price_gate_record".into(),
+            account_evidence(price_gate.raw, &account),
+        );
     }
     if let Some(record) = records.sponsored_push_release {
         let account = rpc.required_account(record.raw, "Pyth sponsored push release record")?;
@@ -2631,6 +2704,8 @@ pub(crate) fn resume_found_market_from_prepared_checkpoint(
             "Prepared suffix resume requires the DCLTCFQ1 checkpoint schema",
         ));
     }
+    let authenticated_plan = authenticated_found_infrastructure_plan_v1(rpc, plan)?;
+    let plan = &authenticated_plan;
     let context = reconstruct_founding_checkpoint_v1(
         rpc,
         plan,
@@ -2712,6 +2787,8 @@ pub(crate) fn resume_found_market_from_checkpoint(
             "custody-staged resume requires the DCLTPCB2 checkpoint schema",
         ));
     }
+    let authenticated_plan = authenticated_found_infrastructure_plan_v1(rpc, plan)?;
+    let plan = &authenticated_plan;
     let context = reconstruct_founding_checkpoint_v1(
         rpc,
         plan,
@@ -2814,6 +2891,8 @@ pub(crate) fn recover_completed_market_from_checkpoint(
             "completed founding recovery requires the DCLTPCB2 checkpoint schema",
         ));
     }
+    let authenticated_plan = authenticated_found_infrastructure_plan_v1(rpc, plan)?;
+    let plan = &authenticated_plan;
     let context = reconstruct_founding_checkpoint_v1(
         rpc,
         plan,
@@ -2935,6 +3014,9 @@ struct CompiledMarketBodiesV1 {
     product: [u8; PRODUCT_RECORD_BYTES_V2],
     domain: Vec<u8>,
     portfolio: Vec<u8>,
+    basis: Vec<u8>,
+    price_gate: Option<Vec<u8>>,
+    basis_scale: u64,
     source: Vec<u8>,
     source_capacity_profile: Vec<u8>,
     manipulation_floor: Vec<u8>,
@@ -2945,6 +3027,78 @@ struct CompiledMarketBodiesV1 {
     manifest: Vec<u8>,
     product_digest: [u8; 32],
     domain_digest: [u8; 32],
+}
+
+struct AuthenticatedMarketBasisV1 {
+    body: Vec<u8>,
+    price_gate: Option<Vec<u8>>,
+    payout_scale: u64,
+}
+
+fn authenticate_market_basis_v1(
+    input: &MarketRunInput,
+    semantic_product_id: ProductContentId,
+    domain_digest: [u8; 32],
+    outcome_count: usize,
+) -> Result<AuthenticatedMarketBasisV1> {
+    let body = decode_hex(&input.linked_basis_hex)?;
+    let basis = ProductBasisV3::decode(&body)
+        .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
+    basis
+        .admit_selection_v3()
+        .map_err(|error| Error::new(format!("ProductBasisV3 admission: {error:?}")))?;
+    let width =
+        u32::try_from(outcome_count).map_err(|_| Error::new("Product outcome width overflow"))?;
+    if semantic_basis_identity_v3(&body)? != product_id(&input.liability_basis_id)?.to_bytes()
+        || basis.product_id() != semantic_product_id.to_bytes()
+        || basis.result_domain_id() != domain_digest
+        || basis.basis_width() != width
+    {
+        return Err(Error::new(
+            "linked liability basis record did not bind the compiled Product graph",
+        ));
+    }
+
+    let offered = decode_hex(&input.price_gate_hex)?;
+    let expected = basis.price_gate_certificate_digest_v3();
+    let price_gate = if expected == [0; 32] {
+        if !offered.is_empty() {
+            return Err(Error::new(
+                "an exempt ProductBasisV3 cannot carry a price-gate record",
+            ));
+        }
+        None
+    } else {
+        if offered.is_empty() || record_identity(&offered) != expected {
+            return Err(Error::new(
+                "curved ProductBasisV3 requires its exact named price-gate record",
+            ));
+        }
+        let degree = match basis.kind() {
+            BasisKindV3::SplineDegree2To3 { degree, .. } => degree,
+            _ => {
+                return Err(Error::new(
+                    "only the spline ProductBasisV3 family may name a price gate",
+                ));
+            }
+        };
+        verify_price_gate_v1(
+            &basis,
+            basis.knot_denominator(),
+            basis.payout_scale(),
+            degree,
+            basis.basis_width(),
+            &offered,
+        )
+        .map_err(|error| Error::new(format!("DCLTPGT1 admission: {error:?}")))?;
+        Some(offered)
+    };
+    let payout_scale = basis.payout_scale();
+    Ok(AuthenticatedMarketBasisV1 {
+        body,
+        price_gate,
+        payout_scale,
+    })
 }
 
 /// Compile one market input's record bodies, with no RPC and no side effects.
@@ -3003,6 +3157,8 @@ fn compile_market_bodies(
     .map_err(|error| Error::new(format!("canonical Product compiler: {error:?}")))?;
     let product_digest: [u8; 32] = Sha256::digest(product).into();
     let domain_digest: [u8; 32] = Sha256::digest(&domain).into();
+    let authenticated_basis =
+        authenticate_market_basis_v1(input, semantic_product_id, domain_digest, outcome_count)?;
 
     let recovery_bytes = decode_hex(&input.recovery_policy_hex)?;
     let recovery_link = if recovery_bytes.is_empty() {
@@ -3088,9 +3244,6 @@ fn compile_market_bodies(
             source_id(&input.failure_policy_release_id)?,
         ),
     };
-    let linked_basis_bytes = decode_hex(&input.linked_basis_hex)?;
-    let basis = ProductBasisV3::decode(&linked_basis_bytes)
-        .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
     let authenticated_floor = match manipulation_floor {
         Some(floor) => Some((
             SourceContentId::new(Sha256::digest(floor.to_bytes()).into())
@@ -3108,7 +3261,7 @@ fn compile_market_bodies(
             capacity,
             authenticated_floor,
             market_collateral_unit,
-            basis.payout_scale(),
+            authenticated_basis.payout_scale,
         )
         .map_err(|error| Error::new(format!("Source principal cap: {error:?}")))?
         .to_sets();
@@ -3204,6 +3357,9 @@ fn compile_market_bodies(
         product,
         domain,
         portfolio,
+        basis: authenticated_basis.body,
+        price_gate: authenticated_basis.price_gate,
+        basis_scale: authenticated_basis.payout_scale,
         source: source.to_vec(),
         source_capacity_profile,
         manipulation_floor,
@@ -3240,11 +3396,6 @@ fn publish_market_records(
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(MarketRecords, ProductContentId)> {
     let source_publication = authenticate_source_publication_v1(input)?;
-    let outcome_count = input
-        .cuts
-        .len()
-        .checked_add(2)
-        .ok_or_else(|| Error::new("Product outcome width overflow"))?;
     let CompiledMarketBodiesV1 {
         compiled,
         semantic_product_id,
@@ -3252,6 +3403,9 @@ fn publish_market_records(
         product,
         domain,
         portfolio,
+        basis: basis_bytes,
+        price_gate: price_gate_bytes,
+        basis_scale,
         source,
         source_capacity_profile,
         manipulation_floor: manipulation_floor_bytes,
@@ -3259,7 +3413,7 @@ fn publish_market_records(
         recovery: recovery_bytes,
         manifest,
         product_digest: _,
-        domain_digest,
+        domain_digest: _,
     } = compile_market_bodies(registry, input, collateral_mint)?;
 
     let hostile_wallet = Some(crate::seed::fresh_probe_address());
@@ -3308,14 +3462,14 @@ fn publish_market_records(
         )?)
     };
     let mut direct: BTreeMap<String, PublishedRecord> = BTreeMap::new();
-    let linked_basis_bytes = decode_hex(&input.linked_basis_hex)?;
-    let native_composition = dclutch_representation_composition_v3_operator::native_categorical_v1::NativeCategoricalCompositionInputV1 {
+    let native_composition = dclutch_representation_composition_v3_operator::native_categorical_v1::NativeBasisCompositionInputV1 {
         market: terminal_market.to_bytes(),
         release_set,
         product_record_bytes: &product_body,
         result_domain_bytes: &domain_body,
         portfolio_bytes: &portfolio_body,
-        product_basis_bytes: &linked_basis_bytes,
+        product_basis_bytes: &basis_bytes,
+        price_gate_bytes: price_gate_bytes.as_deref(),
     };
     if let Some(selected) = &input.selected_capability {
         // The family-neutral closure: its own record list, labels already
@@ -3337,8 +3491,8 @@ fn publish_market_records(
                 ));
             }
         }
-        let native = dclutch_representation_composition_v3_operator::native_categorical_v1::compile_native_categorical_composition_v1(native_composition)
-            .map_err(|error| Error::new(format!("native categorical composition: {error:?}")))?;
+        let native = dclutch_representation_composition_v3_operator::native_categorical_v1::compile_native_basis_composition_v1(native_composition)
+            .map_err(|error| Error::new(format!("native basis composition: {error:?}")))?;
         for (label, target) in [
             "terminal_composition_descriptor_record",
             "terminal_composition_graph_record",
@@ -3364,8 +3518,16 @@ fn publish_market_records(
             }
         }
     } else {
+        let categorical_composition = dclutch_representation_composition_v3_operator::native_categorical_v1::NativeCategoricalCompositionInputV1 {
+            market: native_composition.market,
+            release_set: native_composition.release_set,
+            product_record_bytes: native_composition.product_record_bytes,
+            result_domain_bytes: native_composition.result_domain_bytes,
+            portfolio_bytes: native_composition.portfolio_bytes,
+            product_basis_bytes: native_composition.product_basis_bytes,
+        };
         for record in
-            crate::direct_market::direct_publication_records_v1(input, native_composition)?
+            crate::direct_market::direct_publication_records_v1(input, categorical_composition)?
         {
             let published = publish_record(
                 rpc,
@@ -3478,27 +3640,6 @@ fn publish_market_records(
         )?),
         None => None,
     };
-    // Founding reads the liability basis the Product declares. Both of the
-    // record's links are checked against the graph that was just compiled, so
-    // a basis belonging to a different Product cannot be published as this
-    // Market's.
-    let basis_bytes = linked_basis_bytes;
-    let basis_state = ProductBasisV3::decode(&basis_bytes)
-        .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
-    let outcome_width =
-        u32::try_from(outcome_count).map_err(|_| Error::new("Product outcome width overflow"))?;
-    if semantic_basis_identity_v3(&basis_bytes)?
-        != product_id(&input.liability_basis_id)?.to_bytes()
-        || basis_state.product_id() != semantic_product_id.to_bytes()
-        || basis_state.result_domain_id() != domain_digest
-        || basis_state.basis_width() != outcome_width
-        || basis_state.payout_scale() != 1
-        || basis_state.kind() != BasisKindV3::CategoricalQ1
-    {
-        return Err(Error::new(
-            "linked liability basis record did not bind the compiled Product graph",
-        ));
-    }
     let basis = publish_record(
         rpc,
         registry,
@@ -3508,6 +3649,18 @@ fn publish_market_records(
         None,
         transactions,
     )?;
+    let price_gate = match price_gate_bytes {
+        Some(bytes) => Some(publish_record(
+            rpc,
+            registry,
+            payer,
+            PRICE_GATE_RECORD_SCHEMA_ID_V1,
+            &bytes,
+            None,
+            transactions,
+        )?),
+        None => None,
+    };
     Ok((
         MarketRecords {
             realm,
@@ -3521,6 +3674,8 @@ fn publish_market_records(
             manifest,
             manifest_body,
             basis,
+            price_gate,
+            basis_scale,
             source_spec,
             window_spec,
             statistic_spec,
@@ -4070,6 +4225,215 @@ fn create_real_collateral(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FoundInfrastructureCoordinatesV1 {
+    profile: Pubkey,
+    registry_artifact_id: [u8; 32],
+    registry_raw: Pubkey,
+    registry_staging: Pubkey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FoundInfrastructureSelectionV1 {
+    Predecessor,
+    PlannedSuccessor,
+}
+
+fn checked_found_infrastructure_selection_v1(
+    plan: &SuccessorPlan,
+    successor_profile_observed: bool,
+) -> Result<FoundInfrastructureSelectionV1> {
+    match (
+        plan.infrastructure_succession.is_some(),
+        successor_profile_observed,
+    ) {
+        (false, false) => Ok(FoundInfrastructureSelectionV1::Predecessor),
+        (false, true) => Err(Error::new(
+            "Found refuses an observed V2 infrastructure profile without its authenticated succession plan",
+        )),
+        (true, _) => Ok(FoundInfrastructureSelectionV1::PlannedSuccessor),
+    }
+}
+
+fn checked_successor_found_coordinates_v1(
+    plan: &SuccessorPlan,
+    profile_address: Pubkey,
+    profile_account: &RpcAccount,
+) -> Result<FoundInfrastructureCoordinatesV1> {
+    let succession = plan.infrastructure_succession.as_ref().ok_or_else(|| {
+        Error::new("successor Found infrastructure selection omitted its succession pin")
+    })?;
+    let core = pubkey(&plan.core.program_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let rent = pubkey(&plan.rent_credit.program_id)?;
+    let expected_profile =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+    let predecessor_bytes = decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let predecessor = ProtocolInfrastructureProfileV1::decode(&predecessor_bytes)
+        .map_err(|error| Error::new(format!("Found predecessor infrastructure: {error:?}")))?;
+    let successor = ProtocolInfrastructureProfileV2::decode(&profile_account.data)
+        .map_err(|error| Error::new(format!("Found successor infrastructure: {error:?}")))?;
+    if profile_address != expected_profile
+        || profile_account.owner != core
+        || profile_account.executable
+        || profile_account.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+        || predecessor.registry().program().to_bytes() != registry.to_bytes()
+        || predecessor.rent().program().to_bytes() != rent.to_bytes()
+        || succession.predecessor_registry_artifact_release_id
+            != hex(predecessor.registry().artifact_release().as_bytes())
+        || succession.predecessor_rent_artifact_release_id
+            != hex(predecessor.rent().artifact_release().as_bytes())
+        || successor.registry().program() != predecessor.registry().program()
+        || successor.rent() != predecessor.rent()
+        || successor.predecessor_registry_artifact() != predecessor.registry().artifact_release()
+        || successor.predecessor_rent_artifact() != predecessor.rent().artifact_release()
+        || successor.registry().artifact_release() == predecessor.registry().artifact_release()
+    {
+        return Err(Error::new(
+            "Found successor profile changed its V1 generation, program binding, or exact V2 account authority",
+        ));
+    }
+    let registry_artifact_id = successor.registry().artifact_release().to_bytes();
+    let registry_raw = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &registry_artifact_id,
+        ],
+        &registry,
+    )
+    .0;
+    let registry_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &registry_artifact_id,
+        ],
+        &registry,
+    )
+    .0;
+    Ok(FoundInfrastructureCoordinatesV1 {
+        profile: expected_profile,
+        registry_artifact_id,
+        registry_raw,
+        registry_staging,
+    })
+}
+
+fn checked_successor_found_plan_v1(
+    plan: &SuccessorPlan,
+    profile_account: &RpcAccount,
+    coordinates: FoundInfrastructureCoordinatesV1,
+    registry_raw: Pubkey,
+    registry_raw_account: &RpcAccount,
+    registry_staging: Pubkey,
+    registry_staging_account: Option<&RpcAccount>,
+) -> Result<SuccessorPlan> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let expected_raw = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &coordinates.registry_artifact_id,
+        ],
+        &registry,
+    )
+    .0;
+    let expected_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &coordinates.registry_artifact_id,
+        ],
+        &registry,
+    )
+    .0;
+    let registry_raw_digest: [u8; 32] = Sha256::digest(&registry_raw_account.data).into();
+    if registry_raw != expected_raw
+        || registry_raw != coordinates.registry_raw
+        || registry_staging != expected_staging
+        || registry_staging != coordinates.registry_staging
+        || registry_raw_account.owner != registry
+        || registry_raw_account.executable
+        || registry_raw_digest != coordinates.registry_artifact_id
+        || registry_staging_account.is_some()
+    {
+        return Err(Error::new(
+            "Found successor Registry artifact raw/staging coordinates or finalized body changed",
+        ));
+    }
+
+    let mut selected = plan.clone();
+    selected.infrastructure_profile.address = coordinates.profile.to_string();
+    selected.infrastructure_profile.schema_id = hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2);
+    selected.infrastructure_profile.body_sha256 = hex(&Sha256::digest(&profile_account.data));
+    selected.infrastructure_profile.body_hex = hex(&profile_account.data);
+    selected.infrastructure_profile.registry_artifact_release_id =
+        hex(&coordinates.registry_artifact_id);
+    selected.records.insert(
+        "registry_artifact_release".into(),
+        RecordPair {
+            raw: coordinates.registry_raw.to_string(),
+            staging: coordinates.registry_staging.to_string(),
+            schema_id: hex(&dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1),
+            content_sha256: hex(&coordinates.registry_artifact_id),
+            body_hex: hex(&registry_raw_account.data),
+        },
+    );
+    Ok(selected)
+}
+
+fn authenticated_found_infrastructure_plan_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+) -> Result<SuccessorPlan> {
+    let core = pubkey(&plan.core.program_id)?;
+    let profile =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+    let profile_account = rpc.account(profile)?;
+    if checked_found_infrastructure_selection_v1(plan, profile_account.is_some())?
+        == FoundInfrastructureSelectionV1::Predecessor
+    {
+        return Ok(plan.clone());
+    }
+    match crate::campaign::succession_state(rpc, plan)? {
+        crate::campaign::StageStateV1::Complete => {}
+        crate::campaign::StageStateV1::Absent => {
+            return Err(Error::new(
+                "Found requires the planned Registry succession before selecting V2 infrastructure",
+            ));
+        }
+        crate::campaign::StageStateV1::Partial(detail) => {
+            return Err(Error::new(format!(
+                "Found refuses partially completed Registry succession: {detail}"
+            )));
+        }
+        crate::campaign::StageStateV1::Conflict(detail) => {
+            return Err(Error::new(format!(
+                "Found refuses conflicting Registry succession: {detail}"
+            )));
+        }
+    }
+    let profile_account = profile_account.ok_or_else(|| {
+        Error::new("Found completed succession omitted its successor V2 infrastructure profile")
+    })?;
+    let coordinates = checked_successor_found_coordinates_v1(plan, profile, &profile_account)?;
+    let registry_raw_account = rpc.required_account(
+        coordinates.registry_raw,
+        "successor Registry artifact raw record",
+    )?;
+    let registry_staging_account = rpc.account(coordinates.registry_staging)?;
+    checked_successor_found_plan_v1(
+        plan,
+        &profile_account,
+        coordinates,
+        coordinates.registry_raw,
+        &registry_raw_account,
+        coordinates.registry_staging,
+        registry_staging_account.as_ref(),
+    )
+}
+
 fn found_snapshot_keys(
     plan: &SuccessorPlan,
     payer: Pubkey,
@@ -4080,7 +4444,7 @@ fn found_snapshot_keys(
     let registry_artifact = record(plan, "registry_artifact_release")?;
     let rent_artifact = record(plan, "rent_artifact_release")?;
     let floor = manipulation_floor_pair(pubkey(&plan.registry.program_id)?, records);
-    let keys = vec![
+    let mut keys = vec![
         payer,
         market,
         credit,
@@ -4119,20 +4483,40 @@ fn found_snapshot_keys(
         rent_artifact.1,
         pubkey(&plan.rent_credit.programdata_id)?,
     ];
-    authenticate_found_snapshot_coordinates_v3(&keys, records.manifest.raw)?;
+    if let Some(price_gate) = records.price_gate {
+        keys.push(price_gate.raw);
+        keys.push(price_gate.staging);
+    }
+    authenticate_found_snapshot_coordinates_v3(
+        &keys,
+        records.manifest.raw,
+        records
+            .price_gate
+            .map(|record| (record.raw, record.staging)),
+    )?;
     Ok(keys)
 }
 
 fn authenticate_found_snapshot_coordinates_v3(
     keys: &[Pubkey],
     capability_manifest_raw: Pubkey,
+    price_gate: Option<(Pubkey, Pubkey)>,
 ) -> Result<()> {
-    if keys.len() != FOUND_ACCOUNT_COUNT_V3
+    let expected = if price_gate.is_some() {
+        FOUND_PRICE_GATE_ACCOUNT_COUNT_V3
+    } else {
+        FOUND_ACCOUNT_COUNT_V3
+    };
+    if keys.len() != expected
         || keys.get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3) != Some(&capability_manifest_raw)
         || keys.get(FOUND_RENT_SYSVAR_INDEX_V3) != Some(&sysvar::rent::ID)
+        || price_gate.is_some_and(|(raw, staging)| {
+            keys.get(FOUND_ACCOUNT_COUNT_V3) != Some(&raw)
+                || keys.get(FOUND_ACCOUNT_COUNT_V3 + 1) != Some(&staging)
+        })
     {
         return Err(Error::new(
-            "ordinary Found37 capability-manifest coordinate drifted",
+            "ordinary Found capability-manifest or optional price-gate coordinate drifted",
         ));
     }
     Ok(())
@@ -4148,7 +4532,12 @@ fn ordinary_project_found_snapshot_keys_v2(
 ) -> Result<Vec<Pubkey>> {
     let mut keys = found_snapshot_keys(plan, payer, market, credit, records)?;
     keys.remove(FOUND_RENT_SYSVAR_INDEX_V3);
-    if keys.len() != PROJECT_FOUND_ACCOUNT_COUNT_V2 {
+    let expected = if records.price_gate.is_some() {
+        PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2
+    } else {
+        PROJECT_FOUND_ACCOUNT_COUNT_V2
+    };
+    if keys.len() != expected {
         return Err(Error::new(
             "ordinary ProjectFound36 runtime-sysvar erasure drifted",
         ));
@@ -4321,10 +4710,10 @@ fn found_state<'a>(
     Ok(FoundStateV2 {
         payer: projection.payer,
         market: projection.market,
-        // No price gate: this bootstrap founds no curved market. Every request
-        // it composes carries a zero price-gate certificate digest, and the
-        // curved arm demands a real one.
-        price_gate: None,
+        price_gate: records
+            .price_gate
+            .map(|published| snapshot.finalized_record(rpc, published))
+            .transpose()?,
         rent_credit: snapshot.observation(credit)?,
         rent_program: projection.rent_program,
         realm: projection.realm,
@@ -4696,6 +5085,30 @@ fn selected_founding_controller_masks_v1(
     Ok((selected_index, [resolution_mask, trading_mask]))
 }
 
+/// Convert the founding fixture's collateral reserve into complete-set units.
+///
+/// The reserve policy owns one floor already: the lower half of the minted
+/// collateral remains the founding budget, exactly as it did for categorical
+/// `Q = 1`. ProductBasis owns the conversion from complete sets to collateral,
+/// so that half must be an exact multiple of `Q`; accepting another floor here
+/// would create a second rounding boundary and an unclassified remainder.
+fn founding_quantity_v1(initial_collateral_atoms: u64, basis_scale: u64) -> Result<u64> {
+    let founding_budget = initial_collateral_atoms
+        .checked_div(2)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Error::new("collateral supply cannot fund a founding"))?;
+    let quantity = founding_budget
+        .checked_div(basis_scale)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Error::new("basis scale exceeds the founding collateral reserve"))?;
+    if quantity.checked_mul(basis_scale) != Some(founding_budget) {
+        return Err(Error::new(
+            "founding collateral reserve is not exactly divisible by basis scale",
+        ));
+    }
+    Ok(quantity)
+}
+
 /// Derive one founding's complete coordinate set from the finalized graph.
 ///
 /// The order is forced and acyclic. The Custody vault, replay, and projection
@@ -4916,15 +5329,15 @@ fn derive_founding_coordinates(
     let funding_list_id = generic_founding_funding_list_id_v1(&funding_identities)
         .map_err(|error| Error::new(format!("funding list identity: {error:?}")))?;
 
-    // The complete-set quantity times the basis scale is the Hoard principal.
-    // A categorical Product's payout scale is one, and Core refuses any
-    // artifact whose basis scale differs from the published basis record's.
-    let basis_scale = 1_u64;
-    let quantity = input
-        .initial_collateral_atoms
-        .checked_div(2)
-        .filter(|value| *value > 0)
-        .ok_or_else(|| Error::new("collateral supply cannot fund a founding"))?;
+    // The complete-set quantity times the authenticated basis scale is the
+    // Hoard principal. Core and Claims independently recover this same value
+    // from the finalized ProductBasisV3 record. The reserve policy remains
+    // byte-identical at scale one: exactly the lower half of the fixture
+    // collateral funds founding. At larger scales that same half must divide
+    // exactly, rather than manufacturing a quantity whose principal exceeds
+    // the Mint supply or hiding a remainder at the rounding boundary.
+    let basis_scale = records.basis_scale;
+    let quantity = founding_quantity_v1(input.initial_collateral_atoms, basis_scale)?;
     let principal_cap_sets = records.principal_cap_sets;
     let market_rent = rpc.minimum_balance(STATE_BYTES)?;
     let permit_rent = rpc.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)?;
@@ -8024,9 +8437,14 @@ const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3: usize =
 /// (12), Claims (31), Open (21), and the durable funding checkpoint. The total is
 /// `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + physical_funding_count`.
 const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3: usize = 125;
+/// DCLTGMF3 account-frame revision with an appended DCLTPGT1 raw/staging pair.
+const GENERIC_MARKET_FOUNDING_PRICE_GATE_FIXED_ACCOUNTS_V4: usize =
+    GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + 2;
 const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3: usize = 2;
 const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize = 12;
 const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3: usize = 58;
+const GENERIC_MARKET_FOUNDING_PRICE_GATE_COMPLETE_KEYS_V4: usize =
+    GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 + 2;
 
 /// Stage-1 split founding instruction: Lock, Found, Realize, Claims, permit
 /// escrowed, no Open.
@@ -8046,6 +8464,8 @@ const GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1: usize = 21;
 /// the composed `DCLTGMF3` frame minus its Core Open window, checkpoint last.
 const GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1: usize =
     GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+const GENERIC_FOUND_AND_PERMIT_PRICE_GATE_FIXED_ACCOUNTS_V2: usize =
+    GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1 + 2;
 
 /// The Open caller PDA is the only key unique to the Open window — every other
 /// Open-window key already appears in the Lock, Found, Realize, or Claims
@@ -8053,6 +8473,8 @@ const GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1: usize =
 /// readonly loaded key, and the twelve distinct writable keys are unchanged.
 const GENERIC_FOUND_AND_PERMIT_COMPLETE_KEYS_V1: usize =
     GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 - 1;
+const GENERIC_FOUND_AND_PERMIT_PRICE_GATE_COMPLETE_KEYS_V2: usize =
+    GENERIC_FOUND_AND_PERMIT_COMPLETE_KEYS_V1 + 2;
 
 /// Stage-2 split founding instruction: the commit-last Core Open alone,
 /// consuming the escrowed permit.
@@ -8273,12 +8695,16 @@ fn authenticate_generic_market_founding_lock_census_v3(
     prepared: &PreparedGenericMarketFoundingV3,
 ) -> Result<CompleteLockCensusV1> {
     let instruction = &prepared.instruction;
-    let expected_frame = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
+    let bare_frame = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
         .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3)
         .ok_or_else(|| Error::new("DCLTGMF3 expected frame overflow"))?;
+    let gated_frame = GENERIC_MARKET_FOUNDING_PRICE_GATE_FIXED_ACCOUNTS_V4
+        .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3)
+        .ok_or_else(|| Error::new("gated DCLTGMF3 expected frame overflow"))?;
+    let gated = instruction.accounts.len() == gated_frame;
     if instruction.data.len() != GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3
         || instruction.data.get(..8) != Some(GENERIC_MARKET_FOUNDING_MAGIC_V3.as_slice())
-        || instruction.accounts.len() != expected_frame
+        || (instruction.accounts.len() != bare_frame && !gated)
         || instruction.accounts.iter().any(|meta| meta.is_signer)
         || instruction.accounts.iter().any(|meta| meta.pubkey == payer)
         || exact_instruction_frame_digest_v1(instruction) != prepared.lock_expectation.frame_digest
@@ -8289,11 +8715,17 @@ fn authenticate_generic_market_founding_lock_census_v3(
     }
     let census = compiled_complete_lock_census_v1(payer, instruction)?;
     require_devnet_complete_key_limit_v1(census)?;
-    if census.complete_keys != GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+    let expected_complete = if gated {
+        GENERIC_MARKET_FOUNDING_PRICE_GATE_COMPLETE_KEYS_V4
+    } else {
+        GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+    };
+    let expected_readonly = if gated { 45 } else { 43 };
+    if census.complete_keys != expected_complete
         || census.required_signatures != 1
         || census.static_keys != 3
         || census.loaded_writable != GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3
-        || census.loaded_readonly != 43
+        || census.loaded_readonly != expected_readonly
     {
         return Err(Error::new(format!(
             "DCLTGMF3 compiled lock census refused: {} complete, {} static, {} writable loaded, {} readonly loaded, {} signatures",
@@ -8921,9 +9353,11 @@ fn build_generic_market_founding_v3(
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
+    let gate_extension = if records.price_gate.is_some() { 2 } else { 0 };
     let mut accounts: Vec<AccountMeta> = Vec::with_capacity(
         GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
-            .checked_add(coordinates.funding_ledgers.len())
+            .checked_add(gate_extension)
+            .and_then(|width| width.checked_add(coordinates.funding_ledgers.len()))
             .ok_or_else(|| Error::new("founding frame width overflow"))?,
     );
     let push = |key: Pubkey, writable: bool, accounts: &mut Vec<AccountMeta>| {
@@ -8994,6 +9428,10 @@ fn build_generic_market_founding_v3(
     push(outer.position, true, &mut accounts);
     push(outer.admission, true, &mut accounts);
     push(founder, false, &mut accounts);
+    if let Some(price_gate) = records.price_gate {
+        push(price_gate.raw, false, &mut accounts);
+        push(price_gate.staging, false, &mut accounts);
+    }
 
     // Realize: RealizeAndClose, 12 accounts.
     push(outer.realize_caller, false, &mut accounts);
@@ -9076,14 +9514,15 @@ fn build_generic_market_founding_v3(
     );
 
     let expected = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
-        .checked_add(coordinates.funding_ledgers.len())
+        .checked_add(gate_extension)
+        .and_then(|width| width.checked_add(coordinates.funding_ledgers.len()))
         .ok_or_else(|| Error::new("founding frame width overflow"))?;
     if accounts.len() != expected {
         return Err(Error::new(format!(
             "assembled founding frame did not match its exact width: assembled {}, expected {} ({} fixed + {} funding ledgers)",
             accounts.len(),
             expected,
-            GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3,
+            GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + gate_extension,
             coordinates.funding_ledgers.len(),
         )));
     }
@@ -9254,6 +9693,10 @@ fn build_generic_found_and_permit_v3(
     push(outer.position, true, &mut accounts);
     push(outer.admission, true, &mut accounts);
     push(founder, false, &mut accounts);
+    if let Some(price_gate) = records.price_gate {
+        push(price_gate.raw, false, &mut accounts);
+        push(price_gate.staging, false, &mut accounts);
+    }
 
     // Realize: RealizeAndClose, 12 accounts.
     push(outer.realize_caller, false, &mut accounts);
@@ -9314,15 +9757,17 @@ fn build_generic_found_and_permit_v3(
         &mut accounts,
     );
 
+    let gate_extension = if records.price_gate.is_some() { 2 } else { 0 };
     let expected = GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1
-        .checked_add(coordinates.funding_ledgers.len())
+        .checked_add(gate_extension)
+        .and_then(|width| width.checked_add(coordinates.funding_ledgers.len()))
         .ok_or_else(|| Error::new("DCLTGFP1 frame width overflow"))?;
     if accounts.len() != expected {
         return Err(Error::new(format!(
             "assembled DCLTGFP1 frame did not match its exact width: assembled {}, expected {} ({} fixed + {} funding ledgers)",
             accounts.len(),
             expected,
-            GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1,
+            GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1 + gate_extension,
             coordinates.funding_ledgers.len(),
         )));
     }
@@ -9496,12 +9941,16 @@ fn authenticate_generic_found_and_permit_lock_census_v3(
     prepared: &PreparedGenericMarketFoundingV3,
 ) -> Result<CompleteLockCensusV1> {
     let instruction = &prepared.instruction;
-    let expected_frame = GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1
+    let bare_frame = GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1
         .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3)
         .ok_or_else(|| Error::new("DCLTGFP1 expected frame overflow"))?;
+    let gated_frame = GENERIC_FOUND_AND_PERMIT_PRICE_GATE_FIXED_ACCOUNTS_V2
+        .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3)
+        .ok_or_else(|| Error::new("gated DCLTGFP1 expected frame overflow"))?;
+    let gated = instruction.accounts.len() == gated_frame;
     if instruction.data.len() != GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1
         || instruction.data.get(..8) != Some(GENERIC_FOUND_AND_PERMIT_MAGIC_V1.as_slice())
-        || instruction.accounts.len() != expected_frame
+        || (instruction.accounts.len() != bare_frame && !gated)
         || instruction.accounts.iter().any(|meta| meta.is_signer)
         || instruction.accounts.iter().any(|meta| meta.pubkey == payer)
         || exact_instruction_frame_digest_v1(instruction) != prepared.lock_expectation.frame_digest
@@ -9512,11 +9961,17 @@ fn authenticate_generic_found_and_permit_lock_census_v3(
     }
     let census = compiled_complete_lock_census_v1(payer, instruction)?;
     require_devnet_complete_key_limit_v1(census)?;
-    if census.complete_keys != GENERIC_FOUND_AND_PERMIT_COMPLETE_KEYS_V1
+    let expected_complete = if gated {
+        GENERIC_FOUND_AND_PERMIT_PRICE_GATE_COMPLETE_KEYS_V2
+    } else {
+        GENERIC_FOUND_AND_PERMIT_COMPLETE_KEYS_V1
+    };
+    let expected_readonly = if gated { 44 } else { 42 };
+    if census.complete_keys != expected_complete
         || census.required_signatures != 1
         || census.static_keys != 3
         || census.loaded_writable != GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3
-        || census.loaded_readonly != 42
+        || census.loaded_readonly != expected_readonly
     {
         return Err(Error::new(format!(
             "DCLTGFP1 compiled lock census refused: {} complete, {} static, {} writable loaded, {} readonly loaded, {} signatures",
@@ -12402,6 +12857,7 @@ fn pyth_market_input_base(
         direct_capability: None,
         selected_capability: None,
         linked_basis_hex: hex(&linked_basis),
+        price_gate_hex: String::new(),
     };
     Ok(input)
 }
@@ -12409,6 +12865,528 @@ fn pyth_market_input_base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cubic_price_gate_v1()
+    -> [u8; dclutch_product_payoff_v2_codec::price_gate_v1::PRICE_GATE_REQUEST_BYTES_V1] {
+        use dclutch_product_payoff_v2_codec::price_gate_v1::*;
+
+        let mut gate = [0_u8; PRICE_GATE_REQUEST_BYTES_V1];
+        gate[PRICE_GATE_MAGIC_OFFSET_V1..PRICE_GATE_MAGIC_OFFSET_V1 + 8]
+            .copy_from_slice(&PRICE_GATE_MAGIC_V1);
+        gate[PRICE_GATE_VERSION_OFFSET_V1..PRICE_GATE_VERSION_OFFSET_V1 + 2]
+            .copy_from_slice(&PRICE_GATE_SCHEMA_VERSION_V1.to_le_bytes());
+        gate[PRICE_GATE_PROFILE_OFFSET_V1..PRICE_GATE_PROFILE_OFFSET_V1 + 2]
+            .copy_from_slice(&PRICE_GATE_PROFILE_V1.to_le_bytes());
+        gate[PRICE_GATE_SCALE_OFFSET_V1..PRICE_GATE_SCALE_OFFSET_V1 + 4]
+            .copy_from_slice(&11_u32.to_le_bytes());
+        gate[PRICE_GATE_MASS_OFFSET_V1..PRICE_GATE_MASS_OFFSET_V1 + 8]
+            .copy_from_slice(&1_u64.to_le_bytes());
+        gate[PRICE_GATE_DEGREE_OFFSET_V1] = 3;
+        gate[PRICE_GATE_WIDTH_OFFSET_V1] = 4;
+        gate[PRICE_GATE_ATOM_COUNT_OFFSET_V1] = 1;
+        for (claim, payout) in [1_u64, 4, 4, 2].iter().enumerate() {
+            let offset = PRICE_GATE_PRICES_OFFSET_V1 + claim * 8;
+            gate[offset..offset + 8].copy_from_slice(&payout.to_le_bytes());
+        }
+        gate[PRICE_GATE_WEIGHTS_OFFSET_V1..PRICE_GATE_WEIGHTS_OFFSET_V1 + 8]
+            .copy_from_slice(&1_u64.to_le_bytes());
+        gate[PRICE_GATE_NUMERATORS_OFFSET_V1..PRICE_GATE_NUMERATORS_OFFSET_V1 + 8]
+            .copy_from_slice(&3_i64.to_le_bytes());
+        gate[PRICE_GATE_DENOMINATORS_OFFSET_V1..PRICE_GATE_DENOMINATORS_OFFSET_V1 + 4]
+            .copy_from_slice(&2_u32.to_le_bytes());
+        gate
+    }
+
+    #[test]
+    fn categorical_market_construction_remains_gate_absent_and_byte_identical() {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("deployment widths"),
+        );
+        let input = demo_market_input(registry, direct.compiler()).expect("categorical input");
+        let compiled = compile_market_bodies(registry, &input, Pubkey::new_unique())
+            .expect("categorical market bodies");
+        assert_eq!(
+            compiled.basis,
+            decode_hex(&input.linked_basis_hex).expect("basis")
+        );
+        assert_eq!(compiled.price_gate, None);
+        assert_eq!(compiled.basis_scale, 1);
+    }
+
+    #[test]
+    fn founding_quantity_preserves_scale_one_and_refuses_a_second_rounding_boundary() {
+        assert_eq!(
+            founding_quantity_v1(1_000_000_000, 1).expect("Q=1"),
+            500_000_000
+        );
+        assert_eq!(founding_quantity_v1(198, 11).expect("Q=11"), 9);
+        assert_eq!(
+            founding_quantity_v1(200, 11)
+                .expect_err("nonintegral cubic reserve")
+                .to_string(),
+            "founding collateral reserve is not exactly divisible by basis scale"
+        );
+        assert_eq!(
+            founding_quantity_v1(u64::MAX, u64::MAX)
+                .expect_err("scale larger than reserve")
+                .to_string(),
+            "basis scale exceeds the founding collateral reserve"
+        );
+        assert_eq!(
+            founding_quantity_v1(198, 0)
+                .expect_err("zero scale")
+                .to_string(),
+            "basis scale exceeds the founding collateral reserve"
+        );
+    }
+
+    #[test]
+    fn cubic_market_basis_owns_scale_gate_and_product_links() {
+        use dclutch_product_runtime_v2_operator::spline_basis_v3::{
+            SplineProductCompilationInputV3, compile_spline_product_records_v3,
+            spline_basis_output_bytes_v3,
+        };
+
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("deployment widths"),
+        );
+        let mut input = demo_market_input(registry, direct.compiler()).expect("market input");
+        let gate = cubic_price_gate_v1();
+        let knots = [0_i128, 0, 0, 0, 3, 3, 3, 3];
+        let failure = [0_u64, 0, 0, 11];
+        let cuts = [1_i128, 2];
+        let coefficients = [1_u64; 4];
+        let semantic_product_id = ProductContentId::new([0x31; 32]).expect("Product identity");
+        let spline = SplineProductCompilationInputV3 {
+            product_id: semantic_product_id,
+            coordinate_domain_id: ProductContentId::new([0x32; 32]).expect("coordinate"),
+            result_unit_id: ProductContentId::new([0x33; 32]).expect("unit"),
+            claim_basis_id: ProductContentId::new([0x34; 32]).expect("claim basis"),
+            representation_release_id: ProductContentId::new([0x35; 32]).expect("representation"),
+            mapping_release_id: ProductContentId::new([0x36; 32]).expect("mapping"),
+            cut_denominator: 1,
+            cuts: &cuts,
+            portfolio_denominator: 1,
+            coefficients: &coefficients,
+            evaluator_release_id: ProductContentId::new([0x37; 32]).expect("evaluator"),
+            degree: 3,
+            interior_multiplicity: false,
+            payout_scale: 11,
+            knot_denominator: 1,
+            knots: &knots,
+            failure_payouts: &failure,
+            price_gate_certificate: &gate,
+        };
+        let mut product = [0_u8; PRODUCT_RECORD_BYTES_V2];
+        let mut domain = vec![0_u8; result_domain_record_bytes(2).expect("domain")];
+        let mut portfolio = vec![0_u8; portfolio_record_bytes(4).expect("portfolio")];
+        let mut basis = vec![0_u8; spline_basis_output_bytes_v3(spline).expect("basis width")];
+        let compiled = compile_spline_product_records_v3(
+            registry,
+            spline,
+            &mut product,
+            &mut domain,
+            &mut portfolio,
+            &mut basis,
+        )
+        .expect("compiler-shaped cubic Product");
+        input.liability_basis_id = hex(&compiled.semantic_basis_id.to_bytes());
+        input.linked_basis_hex = hex(&basis);
+        input.price_gate_hex = hex(&gate);
+        let domain_digest: [u8; 32] = Sha256::digest(&domain).into();
+        let admitted = authenticate_market_basis_v1(&input, semantic_product_id, domain_digest, 4)
+            .expect("admitted cubic basis");
+        assert_eq!(admitted.payout_scale, 11);
+        assert_eq!(admitted.body, basis);
+        assert_eq!(admitted.price_gate.as_deref(), Some(gate.as_slice()));
+
+        let mut missing = input.clone();
+        missing.price_gate_hex.clear();
+        assert!(
+            authenticate_market_basis_v1(&missing, semantic_product_id, domain_digest, 4).is_err()
+        );
+        let mut forged = input.clone();
+        let mut forged_gate = gate;
+        forged_gate[dclutch_product_payoff_v2_codec::price_gate_v1::PRICE_GATE_PRICES_OFFSET_V1] ^=
+            1;
+        forged.price_gate_hex = hex(&forged_gate);
+        assert!(
+            authenticate_market_basis_v1(&forged, semantic_product_id, domain_digest, 4).is_err()
+        );
+        let mut scaled = input.clone();
+        let mut scaled_basis = basis.clone();
+        scaled_basis[160..168].copy_from_slice(&12_u64.to_le_bytes());
+        scaled.linked_basis_hex = hex(&scaled_basis);
+        assert!(
+            authenticate_market_basis_v1(&scaled, semantic_product_id, domain_digest, 4).is_err()
+        );
+        assert!(authenticate_market_basis_v1(&input, semantic_product_id, [0x99; 32], 4).is_err());
+        assert!(
+            authenticate_market_basis_v1(
+                &input,
+                ProductContentId::new([0x98; 32]).expect("substituted Product"),
+                domain_digest,
+                4,
+            )
+            .is_err()
+        );
+    }
+
+    struct FoundInfrastructureFixtureV1 {
+        plan: SuccessorPlan,
+        profile_address: Pubkey,
+        profile_account: RpcAccount,
+        coordinates: FoundInfrastructureCoordinatesV1,
+        registry_raw_account: RpcAccount,
+    }
+
+    fn found_infrastructure_fixture_v1() -> FoundInfrastructureFixtureV1 {
+        use crate::model::InfrastructureSuccessionPinV1;
+        use dclutch_release_set_contract::{
+            ArtifactReleaseIdV1, ExecutionRoleBindingV1,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, ProgramIdentityV1,
+        };
+
+        let mut plan = split_founding_fixture_v1().plan;
+        let registry = pubkey(&plan.registry.program_id).expect("Registry program");
+        let rent = pubkey(&plan.rent_credit.program_id).expect("Rent program");
+        let core = pubkey(&plan.core.program_id).expect("Core program");
+        let predecessor_registry =
+            ArtifactReleaseIdV1::new([0xa1; 32]).expect("predecessor Registry artifact");
+        let predecessor_rent =
+            ArtifactReleaseIdV1::new([0xa2; 32]).expect("predecessor Rent artifact");
+        let registry_body = b"successor Registry artifact release fixture".to_vec();
+        let successor_registry_digest: [u8; 32] = Sha256::digest(&registry_body).into();
+        let successor_registry = ArtifactReleaseIdV1::new(successor_registry_digest)
+            .expect("successor Registry artifact");
+        let registry_binding = |artifact| {
+            ExecutionRoleBindingV1::new(
+                ProgramIdentityV1::new(registry.to_bytes()).expect("Registry identity"),
+                artifact,
+            )
+        };
+        let rent_binding = ExecutionRoleBindingV1::new(
+            ProgramIdentityV1::new(rent.to_bytes()).expect("Rent identity"),
+            predecessor_rent,
+        );
+        let predecessor = ProtocolInfrastructureProfileV1::new(
+            registry_binding(predecessor_registry),
+            rent_binding,
+        )
+        .expect("predecessor infrastructure profile");
+        let successor = ProtocolInfrastructureProfileV2::new(
+            registry_binding(successor_registry),
+            rent_binding,
+            predecessor_registry,
+            predecessor_rent,
+        )
+        .expect("successor infrastructure profile");
+        let predecessor_bytes = predecessor.to_bytes();
+        let profile_address =
+            Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+        let profile_account = RpcAccount {
+            lamports: 1,
+            owner: core,
+            executable: false,
+            rent_epoch: 0,
+            data: successor.to_bytes().to_vec(),
+        };
+        plan.infrastructure_profile.address =
+            Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core)
+                .0
+                .to_string();
+        plan.infrastructure_profile.schema_id = hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1);
+        plan.infrastructure_profile.body_sha256 = hex(&Sha256::digest(predecessor_bytes));
+        plan.infrastructure_profile.body_hex = hex(&predecessor_bytes);
+        plan.infrastructure_profile.registry_artifact_release_id =
+            hex(predecessor_registry.as_bytes());
+        plan.infrastructure_profile.rent_artifact_release_id = hex(predecessor_rent.as_bytes());
+        plan.infrastructure_succession = Some(InfrastructureSuccessionPinV1 {
+            schema: "dclutch-local-infrastructure-succession-pin-v1".into(),
+            registry_upgrade_buffer: Pubkey::new_unique().to_string(),
+            registry_candidate_elf_sha256: hex(&[0xb1; 32]),
+            predecessor_registry_artifact_release_id: hex(predecessor_registry.as_bytes()),
+            predecessor_rent_artifact_release_id: hex(predecessor_rent.as_bytes()),
+        });
+        let coordinates =
+            checked_successor_found_coordinates_v1(&plan, profile_address, &profile_account)
+                .expect("successor Found coordinates");
+        let registry_raw_account = RpcAccount {
+            lamports: 1,
+            owner: registry,
+            executable: false,
+            rent_epoch: 0,
+            data: registry_body,
+        };
+        FoundInfrastructureFixtureV1 {
+            plan,
+            profile_address,
+            profile_account,
+            coordinates,
+            registry_raw_account,
+        }
+    }
+
+    #[test]
+    fn found_infrastructure_selection_is_atomic_and_predecessor_is_exact() {
+        let predecessor = split_founding_fixture_v1().plan;
+        assert_eq!(
+            checked_found_infrastructure_selection_v1(&predecessor, false)
+                .expect("genuinely absent succession"),
+            FoundInfrastructureSelectionV1::Predecessor
+        );
+        assert!(
+            checked_found_infrastructure_selection_v1(&predecessor, true).is_err(),
+            "an observed V2 profile cannot fall back to the predecessor"
+        );
+        let before = serde_json::to_value(&predecessor).expect("predecessor JSON");
+        let byte_identical = predecessor.clone();
+        assert_eq!(
+            serde_json::to_value(byte_identical).expect("selected predecessor JSON"),
+            before
+        );
+
+        let fixture = found_infrastructure_fixture_v1();
+        let rent_before = serde_json::to_value(
+            fixture
+                .plan
+                .records
+                .get("rent_artifact_release")
+                .expect("Rent record"),
+        )
+        .expect("Rent record JSON");
+        let selected = checked_successor_found_plan_v1(
+            &fixture.plan,
+            &fixture.profile_account,
+            fixture.coordinates,
+            fixture.coordinates.registry_raw,
+            &fixture.registry_raw_account,
+            fixture.coordinates.registry_staging,
+            None,
+        )
+        .expect("atomic successor selection");
+        assert_eq!(
+            selected.infrastructure_profile.address,
+            fixture.profile_address.to_string()
+        );
+        assert_eq!(
+            selected.infrastructure_profile.schema_id,
+            hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2)
+        );
+        assert_eq!(
+            selected.infrastructure_profile.registry_artifact_release_id,
+            hex(&fixture.coordinates.registry_artifact_id)
+        );
+        assert_eq!(
+            selected
+                .records
+                .get("registry_artifact_release")
+                .expect("selected Registry record")
+                .raw,
+            fixture.coordinates.registry_raw.to_string()
+        );
+        assert_eq!(
+            selected.infrastructure_profile.rent_artifact_release_id,
+            fixture.plan.infrastructure_profile.rent_artifact_release_id
+        );
+        assert_eq!(
+            serde_json::to_value(
+                selected
+                    .records
+                    .get("rent_artifact_release")
+                    .expect("selected Rent record")
+            )
+            .expect("selected Rent record JSON"),
+            rent_before,
+            "Registry succession must not rewrite Rent"
+        );
+    }
+
+    #[test]
+    fn found_successor_profile_refuses_cross_generation_and_account_substitution() {
+        use dclutch_release_set_contract::{
+            ArtifactReleaseIdV1, ExecutionRoleBindingV1, ProgramIdentityV1,
+        };
+
+        let fixture = found_infrastructure_fixture_v1();
+        let predecessor = ProtocolInfrastructureProfileV1::decode(
+            &decode_hex(&fixture.plan.infrastructure_profile.body_hex).expect("predecessor body"),
+        )
+        .expect("predecessor profile");
+        let successor = ProtocolInfrastructureProfileV2::decode(&fixture.profile_account.data)
+            .expect("successor profile");
+
+        let cross_generation = ProtocolInfrastructureProfileV2::new(
+            successor.registry(),
+            predecessor.rent(),
+            ArtifactReleaseIdV1::new([0xc1; 32]).expect("foreign predecessor"),
+            predecessor.rent().artifact_release(),
+        )
+        .expect("cross-generation profile")
+        .to_bytes();
+        let mut account = fixture.profile_account.clone();
+        account.data = cross_generation.to_vec();
+        assert!(
+            checked_successor_found_coordinates_v1(
+                &fixture.plan,
+                fixture.profile_address,
+                &account
+            )
+            .is_err()
+        );
+
+        let foreign_rent = ExecutionRoleBindingV1::new(
+            ProgramIdentityV1::new(predecessor.rent().program().to_bytes()).expect("Rent program"),
+            ArtifactReleaseIdV1::new([0xc2; 32]).expect("foreign Rent artifact"),
+        );
+        account.data = ProtocolInfrastructureProfileV2::new(
+            successor.registry(),
+            foreign_rent,
+            predecessor.registry().artifact_release(),
+            predecessor.rent().artifact_release(),
+        )
+        .expect("cross-generation Rent profile")
+        .to_bytes()
+        .to_vec();
+        assert!(
+            checked_successor_found_coordinates_v1(
+                &fixture.plan,
+                fixture.profile_address,
+                &account
+            )
+            .is_err()
+        );
+
+        for data in [
+            fixture.profile_account.data[..PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2 - 1].to_vec(),
+            {
+                let mut extended = fixture.profile_account.data.clone();
+                extended.push(0);
+                extended
+            },
+        ] {
+            account = fixture.profile_account.clone();
+            account.data = data;
+            assert!(
+                checked_successor_found_coordinates_v1(
+                    &fixture.plan,
+                    fixture.profile_address,
+                    &account
+                )
+                .is_err(),
+                "non-canonical V2 profile width must refuse"
+            );
+        }
+
+        assert!(
+            checked_successor_found_coordinates_v1(
+                &fixture.plan,
+                Pubkey::new_unique(),
+                &fixture.profile_account
+            )
+            .is_err(),
+            "substituted profile PDA must refuse"
+        );
+        for account in [
+            RpcAccount {
+                owner: Pubkey::new_unique(),
+                ..fixture.profile_account.clone()
+            },
+            RpcAccount {
+                executable: true,
+                ..fixture.profile_account.clone()
+            },
+        ] {
+            assert!(
+                checked_successor_found_coordinates_v1(
+                    &fixture.plan,
+                    fixture.profile_address,
+                    &account
+                )
+                .is_err(),
+                "substituted profile authority must refuse"
+            );
+        }
+    }
+
+    #[test]
+    fn found_successor_record_refuses_raw_and_staging_substitution() {
+        let fixture = found_infrastructure_fixture_v1();
+        for (raw, staging) in [
+            (Pubkey::new_unique(), fixture.coordinates.registry_staging),
+            (fixture.coordinates.registry_raw, Pubkey::new_unique()),
+        ] {
+            assert!(
+                checked_successor_found_plan_v1(
+                    &fixture.plan,
+                    &fixture.profile_account,
+                    fixture.coordinates,
+                    raw,
+                    &fixture.registry_raw_account,
+                    staging,
+                    None,
+                )
+                .is_err(),
+                "substituted raw/staging coordinate must refuse"
+            );
+        }
+
+        let mut wrong_body = fixture.registry_raw_account.clone();
+        wrong_body.data[0] ^= 1;
+        let wrong_accounts = [
+            wrong_body,
+            RpcAccount {
+                owner: Pubkey::new_unique(),
+                ..fixture.registry_raw_account.clone()
+            },
+            RpcAccount {
+                executable: true,
+                ..fixture.registry_raw_account.clone()
+            },
+        ];
+        for account in &wrong_accounts {
+            assert!(
+                checked_successor_found_plan_v1(
+                    &fixture.plan,
+                    &fixture.profile_account,
+                    fixture.coordinates,
+                    fixture.coordinates.registry_raw,
+                    account,
+                    fixture.coordinates.registry_staging,
+                    None,
+                )
+                .is_err(),
+                "substituted finalized raw record must refuse"
+            );
+        }
+        let unexpected_staging = RpcAccount {
+            lamports: 1,
+            owner: pubkey(&fixture.plan.registry.program_id).expect("Registry program"),
+            executable: false,
+            rent_epoch: 0,
+            data: vec![1],
+        };
+        assert!(
+            checked_successor_found_plan_v1(
+                &fixture.plan,
+                &fixture.profile_account,
+                fixture.coordinates,
+                fixture.coordinates.registry_raw,
+                &fixture.registry_raw_account,
+                fixture.coordinates.registry_staging,
+                Some(&unexpected_staging),
+            )
+            .is_err(),
+            "a live staging cursor must refuse finalized selection"
+        );
+    }
 
     #[test]
     fn ordinary_found_snapshot_pins_manifest_and_runtime_rent_coordinates() {
@@ -12418,16 +13396,30 @@ mod tests {
             .collect::<Vec<_>>();
         keys[FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3] = manifest;
         keys[FOUND_RENT_SYSVAR_INDEX_V3] = sysvar::rent::ID;
-        authenticate_found_snapshot_coordinates_v3(&keys, manifest)
+        authenticate_found_snapshot_coordinates_v3(&keys, manifest, None)
             .expect("canonical Found37 coordinates");
 
         let mut wrong_rent = keys.clone();
         wrong_rent[FOUND_RENT_SYSVAR_INDEX_V3] = Pubkey::new_unique();
-        assert!(authenticate_found_snapshot_coordinates_v3(&wrong_rent, manifest).is_err());
+        assert!(authenticate_found_snapshot_coordinates_v3(&wrong_rent, manifest, None).is_err());
 
         let mut missing_rent = keys;
         missing_rent.remove(FOUND_RENT_SYSVAR_INDEX_V3);
-        assert!(authenticate_found_snapshot_coordinates_v3(&missing_rent, manifest).is_err());
+        assert!(authenticate_found_snapshot_coordinates_v3(&missing_rent, manifest, None).is_err());
+
+        let gate = (Pubkey::new_unique(), Pubkey::new_unique());
+        let mut gated = vec![Pubkey::new_unique(); FOUND_ACCOUNT_COUNT_V3];
+        gated[FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3] = manifest;
+        gated[FOUND_RENT_SYSVAR_INDEX_V3] = sysvar::rent::ID;
+        gated.extend([gate.0, gate.1]);
+        authenticate_found_snapshot_coordinates_v3(&gated, manifest, Some(gate))
+            .expect("canonical Found39 coordinates");
+        let mut swapped = gated.clone();
+        swapped.swap(FOUND_ACCOUNT_COUNT_V3, FOUND_ACCOUNT_COUNT_V3 + 1);
+        assert!(
+            authenticate_found_snapshot_coordinates_v3(&swapped, manifest, Some(gate)).is_err()
+        );
+        assert!(authenticate_found_snapshot_coordinates_v3(&gated, manifest, None).is_err());
     }
 
     fn sponsored_price_update_for_test() -> Vec<u8> {
@@ -13042,6 +14034,7 @@ mod tests {
             },
             checked_upgrade_set: None,
             checked_local_mutable_set: None,
+            infrastructure_succession: None,
             infrastructure_profile: InfrastructureProfilePin {
                 address: Pubkey::new_unique().to_string(),
                 schema_id: String::new(),
@@ -13069,6 +14062,8 @@ mod tests {
             manifest: published(0x6c),
             manifest_body: Vec::new(),
             basis: published(0x6e),
+            price_gate: None,
+            basis_scale: 1,
             source_spec: published(0x70),
             window_spec: published(0x72),
             statistic_spec: published(0x74),
@@ -13412,6 +14407,97 @@ mod tests {
         assert_eq!(
             composed_census.loaded_readonly - stage1_census.loaded_readonly,
             1
+        );
+    }
+
+    #[test]
+    fn cubic_gate_pair_extends_both_generic_frames_without_moving_legacy_accounts() {
+        let mut fixture = split_founding_fixture_v1();
+        let bare_composed = build_generic_market_founding_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("bare composed frame");
+        let bare_stage1 = build_generic_found_and_permit_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("bare stage-1 frame");
+        let gate = PublishedRecord {
+            schema: PRICE_GATE_RECORD_SCHEMA_ID_V1,
+            digest: [0x9a; 32],
+            raw: Pubkey::new_unique(),
+            staging: Pubkey::new_unique(),
+        };
+        fixture.records.price_gate = Some(gate);
+        fixture.records.basis_scale = 11;
+        let composed = build_generic_market_founding_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("gated composed frame");
+        let stage1 = build_generic_found_and_permit_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("gated stage-1 frame");
+        assert_eq!(
+            composed.instruction.accounts.len(),
+            GENERIC_MARKET_FOUNDING_PRICE_GATE_FIXED_ACCOUNTS_V4
+                + GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3
+        );
+        assert_eq!(
+            stage1.instruction.accounts.len(),
+            GENERIC_FOUND_AND_PERMIT_PRICE_GATE_FIXED_ACCOUNTS_V2
+                + GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3
+        );
+        for (instruction, bare) in [
+            (&composed.instruction, &bare_composed.instruction),
+            (&stage1.instruction, &bare_stage1.instruction),
+        ] {
+            let raw = instruction
+                .accounts
+                .iter()
+                .position(|meta| meta.pubkey == gate.raw)
+                .expect("gate raw");
+            assert_eq!(instruction.accounts[raw + 1].pubkey, gate.staging);
+            assert!(!instruction.accounts[raw].is_writable);
+            assert!(!instruction.accounts[raw + 1].is_writable);
+            let mut stripped = instruction.accounts.clone();
+            stripped.drain(raw..raw + 2);
+            assert_eq!(stripped, bare.accounts);
+        }
+        assert_eq!(
+            authenticate_generic_market_founding_lock_census_v3(fixture.payer, &composed)
+                .expect("gated composed census")
+                .complete_keys,
+            GENERIC_MARKET_FOUNDING_PRICE_GATE_COMPLETE_KEYS_V4
+        );
+        assert_eq!(
+            authenticate_generic_found_and_permit_lock_census_v3(fixture.payer, &stage1)
+                .expect("gated stage-1 census")
+                .complete_keys,
+            GENERIC_FOUND_AND_PERMIT_PRICE_GATE_COMPLETE_KEYS_V2
         );
     }
 

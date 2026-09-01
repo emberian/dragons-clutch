@@ -12,7 +12,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
-    v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
+    v3::{ResolvedInvocationV3, RouteKindV3},
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -57,9 +57,8 @@ pub struct CustodyCompositionParentV3 {
 #[allow(clippy::too_many_arguments)]
 pub fn preflight_custody_route_v3<'info>(
     program_id: &Pubkey,
-    effect: ProgramV3<'_>,
+    successor_account_count: usize,
     invocation: ResolvedInvocationV3,
-    tail_count: u32,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     frame: &mut Vec<AccountInfo<'info>>,
@@ -73,9 +72,8 @@ pub fn preflight_custody_route_v3<'info>(
 ) -> Result<u8, ProgramError> {
     let prepared = prepare(
         program_id,
-        effect,
+        successor_account_count,
         invocation,
-        tail_count,
         effect_accounts,
         request_bank,
         frame,
@@ -90,11 +88,10 @@ pub fn preflight_custody_route_v3<'info>(
 #[allow(clippy::too_many_arguments)]
 pub fn execute_custody_route_v3<'info>(
     program_id: &Pubkey,
-    effect: ProgramV3<'_>,
+    successor_account_count: usize,
     route_index: u16,
     invocation_index: u32,
     invocation: ResolvedInvocationV3,
-    tail_count: u32,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     prior_receipt: Option<&[u8]>,
@@ -111,9 +108,8 @@ pub fn execute_custody_route_v3<'info>(
     // either back.
     let prepared = prepare(
         program_id,
-        effect,
+        successor_account_count,
         invocation,
-        tail_count,
         effect_accounts,
         request_bank,
         &mut buffers.accounts,
@@ -217,9 +213,8 @@ impl CustodyRequestKindV3 {
 #[allow(clippy::too_many_arguments)]
 fn prepare<'a, 'info>(
     program_id: &Pubkey,
-    effect: ProgramV3<'_>,
+    successor_account_count: usize,
     invocation: ResolvedInvocationV3,
-    tail_count: u32,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &'a [u8],
     frame: &mut Vec<AccountInfo<'info>>,
@@ -231,10 +226,7 @@ fn prepare<'a, 'info>(
     if !custody_program.executable
         || custody_program.is_signer
         || custody_program.is_writable
-        || effect
-            .account_count(tail_count)
-            .map_err(|_| TradingSbfError::Content)?
-            != effect_accounts.len()
+        || successor_account_count != effect_accounts.len()
     {
         return Err(TradingSbfError::Content.into());
     }

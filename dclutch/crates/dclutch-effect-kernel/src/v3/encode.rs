@@ -8,11 +8,15 @@
 use super::{
     Error, FixedRole, HEADER_BYTES, MAGIC, MODE_ACCOUNT_A_ITEM, MODE_ACCOUNT_B_ITEM,
     MODE_REGISTER_ITEM, MODE_REQUEST_ITEM, OP_REQUIRE_LAMPORTS_EQ, OP_TRANSFER_LAMPORTS,
-    OP_WRITE_DATA_U8, OP_WRITE_DATA_U8_AFFINE, OP_WRITE_DATA_U16, OP_WRITE_DATA_U16_AFFINE,
-    OP_WRITE_DATA_U32, OP_WRITE_DATA_U32_AFFINE, OP_WRITE_IDENTITY, OP_WRITE_IDENTITY_AFFINE,
+    OP_WRITE_DATA_U8, OP_WRITE_DATA_U8_AFFINE, OP_WRITE_DATA_U8_IF, OP_WRITE_DATA_U16,
+    OP_WRITE_DATA_U16_AFFINE, OP_WRITE_DATA_U16_IF, OP_WRITE_DATA_U32, OP_WRITE_DATA_U32_AFFINE,
+    OP_WRITE_DATA_U32_IF, OP_WRITE_IDENTITY, OP_WRITE_IDENTITY_AFFINE, OP_WRITE_IDENTITY_IF,
     OP_WRITE_REQUEST_IDENTITY, OP_WRITE_REQUEST_U8, OP_WRITE_REQUEST_U16, OP_WRITE_REQUEST_U32,
-    OP_WRITE_REQUEST_U64, OP_WRITE_SCALAR, OP_WRITE_SCALAR_AFFINE, OPERATION_BYTES, ProgramV3,
-    RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES, RouteKindV3, RouteReceiptDependencyV3, VERSION,
+    OP_WRITE_REQUEST_U64, OP_WRITE_SCALAR, OP_WRITE_SCALAR_AFFINE, OP_WRITE_SCALAR_AFFINE_IF,
+    OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE, OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE, OP_WRITE_SCALAR_IF,
+    OP_WRITE_SCALAR_SECOND_TAIL_AFFINE, OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF,
+    OP_WRITE_SCALAR_THIRD_TAIL_AFFINE, OPERATION_BYTES, ProgramV3, RECEIPT_DEPENDENCY_BYTES,
+    ROUTE_BYTES, RouteKindV3, RouteReceiptDependencyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item coordinate space.
@@ -158,6 +162,7 @@ pub struct EffectInstructionV3 {
     opcode: u8,
     account_a: AccountCoordinateV3,
     account_b: Option<AccountCoordinateV3>,
+    enable_common_scalar: Option<u16>,
     scalar: Option<ScalarCoordinateV3>,
     identity: Option<IdentityCoordinateV3>,
     data_offset: u32,
@@ -210,6 +215,135 @@ impl EffectInstructionV3 {
         Self::scalar(OP_WRITE_SCALAR_AFFINE, account, None, value, base, stride)
     }
 
+    /// Conditionally write a common scalar as little-endian `u64` account
+    /// data when the selected common enable scalar is nonzero.
+    pub const fn write_u64_if_nonzero(
+        account: AccountCoordinateV3,
+        offset: u32,
+        value: ScalarCoordinateV3,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self::conditional_scalar(
+            OP_WRITE_SCALAR_IF,
+            account,
+            value,
+            offset,
+            0,
+            enable_common_scalar,
+        )
+    }
+
+    /// Conditionally write an item scalar at `base + item * stride` in a
+    /// fixed account when the selected common enable scalar is nonzero.
+    pub const fn write_u64_affine_if_nonzero(
+        account: AccountCoordinateV3,
+        base: u32,
+        stride: u32,
+        value: ScalarCoordinateV3,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self::conditional_scalar(
+            OP_WRITE_SCALAR_AFFINE_IF,
+            account,
+            value,
+            base,
+            stride,
+            enable_common_scalar,
+        )
+    }
+
+    /// Conditionally write an item scalar into the second of two adjacent
+    /// runtime tails at `base + (tail_count + item) * stride` in a fixed
+    /// account when the selected common enable scalar is nonzero.
+    pub const fn write_u64_second_tail_affine_if_nonzero(
+        account: AccountCoordinateV3,
+        base: u32,
+        stride: u32,
+        value: ScalarCoordinateV3,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self::conditional_scalar(
+            OP_WRITE_SCALAR_SECOND_TAIL_AFFINE_IF,
+            account,
+            value,
+            base,
+            stride,
+            enable_common_scalar,
+        )
+    }
+
+    /// Write an item scalar into the second of planar runtime tails at
+    /// `base + (tail_count + item) * stride` in a fixed account.
+    pub const fn write_u64_second_tail_affine(
+        account: AccountCoordinateV3,
+        base: u32,
+        stride: u32,
+        value: ScalarCoordinateV3,
+    ) -> Self {
+        Self::scalar(
+            OP_WRITE_SCALAR_SECOND_TAIL_AFFINE,
+            account,
+            None,
+            value,
+            base,
+            stride,
+        )
+    }
+
+    /// Write an item scalar into the third of five planar runtime tails at
+    /// `base + (2 * tail_count + item) * stride` in a fixed account.
+    pub const fn write_u64_third_tail_affine(
+        account: AccountCoordinateV3,
+        base: u32,
+        stride: u32,
+        value: ScalarCoordinateV3,
+    ) -> Self {
+        Self::scalar(
+            OP_WRITE_SCALAR_THIRD_TAIL_AFFINE,
+            account,
+            None,
+            value,
+            base,
+            stride,
+        )
+    }
+
+    /// Write an item scalar into the fourth of five planar runtime tails at
+    /// `base + (3 * tail_count + item) * stride` in a fixed account.
+    pub const fn write_u64_fourth_tail_affine(
+        account: AccountCoordinateV3,
+        base: u32,
+        stride: u32,
+        value: ScalarCoordinateV3,
+    ) -> Self {
+        Self::scalar(
+            OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE,
+            account,
+            None,
+            value,
+            base,
+            stride,
+        )
+    }
+
+    /// Write an item scalar into the fifth of five planar runtime tails at
+    /// `base + (4 * tail_count + item) * stride` in a fixed account.
+    pub const fn write_u64_fifth_tail_affine(
+        account: AccountCoordinateV3,
+        base: u32,
+        stride: u32,
+        value: ScalarCoordinateV3,
+    ) -> Self {
+        Self::scalar(
+            OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE,
+            account,
+            None,
+            value,
+            base,
+            stride,
+        )
+    }
+
     /// Write one scalar narrowed to `u8` account data.
     pub const fn write_u8(
         account: AccountCoordinateV3,
@@ -217,6 +351,24 @@ impl EffectInstructionV3 {
         value: ScalarCoordinateV3,
     ) -> Self {
         Self::scalar(OP_WRITE_DATA_U8, account, None, value, offset, 0)
+    }
+
+    /// Conditionally write one scalar narrowed to `u8` account data when the
+    /// selected common enable scalar is nonzero.
+    pub const fn write_u8_if_nonzero(
+        account: AccountCoordinateV3,
+        offset: u32,
+        value: ScalarCoordinateV3,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self::conditional_scalar(
+            OP_WRITE_DATA_U8_IF,
+            account,
+            value,
+            offset,
+            0,
+            enable_common_scalar,
+        )
     }
 
     /// Write one scalar narrowed to little-endian `u16` account data.
@@ -228,6 +380,24 @@ impl EffectInstructionV3 {
         Self::scalar(OP_WRITE_DATA_U16, account, None, value, offset, 0)
     }
 
+    /// Conditionally write one scalar narrowed to little-endian `u16`
+    /// account data when the selected common enable scalar is nonzero.
+    pub const fn write_u16_if_nonzero(
+        account: AccountCoordinateV3,
+        offset: u32,
+        value: ScalarCoordinateV3,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self::conditional_scalar(
+            OP_WRITE_DATA_U16_IF,
+            account,
+            value,
+            offset,
+            0,
+            enable_common_scalar,
+        )
+    }
+
     /// Write one scalar narrowed to little-endian `u32` account data.
     pub const fn write_u32(
         account: AccountCoordinateV3,
@@ -235,6 +405,24 @@ impl EffectInstructionV3 {
         value: ScalarCoordinateV3,
     ) -> Self {
         Self::scalar(OP_WRITE_DATA_U32, account, None, value, offset, 0)
+    }
+
+    /// Conditionally write one scalar narrowed to little-endian `u32`
+    /// account data when the selected common enable scalar is nonzero.
+    pub const fn write_u32_if_nonzero(
+        account: AccountCoordinateV3,
+        offset: u32,
+        value: ScalarCoordinateV3,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self::conditional_scalar(
+            OP_WRITE_DATA_U32_IF,
+            account,
+            value,
+            offset,
+            0,
+            enable_common_scalar,
+        )
     }
 
     /// Write one narrowed `u8` at `base + item * stride` in a fixed account.
@@ -274,6 +462,23 @@ impl EffectInstructionV3 {
         value: IdentityCoordinateV3,
     ) -> Self {
         Self::identity(OP_WRITE_IDENTITY, account, value, offset, 0)
+    }
+
+    /// Conditionally write one exact identity into account data when the
+    /// selected common enable scalar is nonzero.
+    pub const fn write_identity_if_nonzero(
+        account: AccountCoordinateV3,
+        offset: u32,
+        value: IdentityCoordinateV3,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self::conditional_identity(
+            OP_WRITE_IDENTITY_IF,
+            account,
+            value,
+            offset,
+            enable_common_scalar,
+        )
     }
 
     /// Write one identity at `base + item * stride` in a fixed account.
@@ -337,6 +542,7 @@ impl EffectInstructionV3 {
             opcode: OP_WRITE_REQUEST_IDENTITY,
             account_a: AccountCoordinateV3::fixed(0),
             account_b: None,
+            enable_common_scalar: None,
             scalar: None,
             identity: Some(value),
             data_offset: offset,
@@ -358,6 +564,29 @@ impl EffectInstructionV3 {
             opcode,
             account_a,
             account_b,
+            enable_common_scalar: None,
+            scalar: Some(scalar),
+            identity: None,
+            data_offset,
+            extra,
+            route: 0,
+            request_space: None,
+        }
+    }
+
+    const fn conditional_scalar(
+        opcode: u8,
+        account: AccountCoordinateV3,
+        scalar: ScalarCoordinateV3,
+        data_offset: u32,
+        extra: u32,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self {
+            opcode,
+            account_a: account,
+            account_b: None,
+            enable_common_scalar: Some(enable_common_scalar),
             scalar: Some(scalar),
             identity: None,
             data_offset,
@@ -378,10 +607,32 @@ impl EffectInstructionV3 {
             opcode,
             account_a: account,
             account_b: None,
+            enable_common_scalar: None,
             scalar: None,
             identity: Some(identity),
             data_offset,
             extra,
+            route: 0,
+            request_space: None,
+        }
+    }
+
+    const fn conditional_identity(
+        opcode: u8,
+        account: AccountCoordinateV3,
+        identity: IdentityCoordinateV3,
+        data_offset: u32,
+        enable_common_scalar: u16,
+    ) -> Self {
+        Self {
+            opcode,
+            account_a: account,
+            account_b: None,
+            enable_common_scalar: Some(enable_common_scalar),
+            scalar: None,
+            identity: Some(identity),
+            data_offset,
+            extra: 0,
             route: 0,
             request_space: None,
         }
@@ -398,6 +649,7 @@ impl EffectInstructionV3 {
             opcode,
             account_a: AccountCoordinateV3::fixed(0),
             account_b: None,
+            enable_common_scalar: None,
             scalar: Some(value),
             identity: None,
             data_offset: offset,
@@ -673,12 +925,19 @@ fn encode_instruction(
     if instruction.account_a.space == CoordinateSpaceV3::Item {
         mode |= MODE_ACCOUNT_A_ITEM;
     }
+    if instruction.account_b.is_some() && instruction.enable_common_scalar.is_some() {
+        return Err(Error::NonCanonicalOperation);
+    }
     if instruction
         .account_b
         .is_some_and(|account| account.space == CoordinateSpaceV3::Item)
     {
         mode |= MODE_ACCOUNT_B_ITEM;
     }
+    let account_b = instruction
+        .enable_common_scalar
+        .or_else(|| instruction.account_b.map(|account| account.index))
+        .unwrap_or(0);
     let (register_space, register) = match (instruction.scalar, instruction.identity) {
         (Some(value), None) => (value.space, value.index),
         (None, Some(value)) => (value.space, value.index),
@@ -697,7 +956,7 @@ fn encode_instruction(
     write_byte(output, add(offset, 1)?, mode)?;
     for (local, value) in [
         (2, instruction.account_a.index),
-        (4, instruction.account_b.map_or(0, |account| account.index)),
+        (4, account_b),
         (6, register),
         (16, instruction.route),
     ] {
@@ -734,6 +993,1195 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::v2::{AccountInput, AccountPermission};
+    use crate::v3::{ProjectionV3, ResolvedEffectV3, project_atomic};
+
+    fn conditional_program() -> std::vec::Vec<u8> {
+        let fixed = [
+            EffectInstructionV3::write_u8_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                0,
+                ScalarCoordinateV3::common(0),
+                4,
+            ),
+            EffectInstructionV3::write_u16_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                1,
+                ScalarCoordinateV3::common(1),
+                4,
+            ),
+            EffectInstructionV3::write_u32_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                3,
+                ScalarCoordinateV3::common(2),
+                4,
+            ),
+            EffectInstructionV3::write_u64_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                7,
+                ScalarCoordinateV3::common(3),
+                4,
+            ),
+            EffectInstructionV3::write_identity_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                15,
+                IdentityCoordinateV3::common(0),
+                4,
+            ),
+        ];
+        let item = [EffectInstructionV3::write_u64_affine_if_nonzero(
+            AccountCoordinateV3::fixed(0),
+            47,
+            8,
+            ScalarCoordinateV3::item(0),
+            4,
+        )];
+        let width = HEADER_BYTES + (fixed.len() + item.len()) * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 5,
+                item_scalar_stride: 1,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &[],
+            &fixed,
+            &item,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("conditional program");
+        output
+    }
+
+    fn two_tail_program(
+        first_account: AccountCoordinateV3,
+        first_base: u32,
+        second_account: AccountCoordinateV3,
+        second_base: u32,
+        stride: u32,
+    ) -> std::vec::Vec<u8> {
+        let item = [
+            EffectInstructionV3::write_u64_affine(
+                first_account,
+                first_base,
+                stride,
+                ScalarCoordinateV3::item(0),
+            ),
+            EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+                second_account,
+                second_base,
+                stride,
+                ScalarCoordinateV3::item(0),
+                0,
+            ),
+        ];
+        let width = HEADER_BYTES + item.len() * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 2,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &item,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("two-tail program");
+        output
+    }
+
+    fn second_tail_only_program() -> std::vec::Vec<u8> {
+        let item = [
+            EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                0,
+                8,
+                ScalarCoordinateV3::item(0),
+                0,
+            ),
+        ];
+        let width = HEADER_BYTES + OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &item,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("second-tail-only program");
+        output
+    }
+
+    fn five_tail_program() -> std::vec::Vec<u8> {
+        let account = AccountCoordinateV3::fixed(0);
+        let value = ScalarCoordinateV3::item(0);
+        let item = [
+            EffectInstructionV3::write_u64_affine(account, 0, 8, value),
+            EffectInstructionV3::write_u64_second_tail_affine(account, 0, 8, value),
+            EffectInstructionV3::write_u64_third_tail_affine(account, 0, 8, value),
+            EffectInstructionV3::write_u64_fourth_tail_affine(account, 0, 8, value),
+            EffectInstructionV3::write_u64_fifth_tail_affine(account, 0, 8, value),
+        ];
+        let width = HEADER_BYTES + item.len() * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &item,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("five-tail program");
+        output
+    }
+
+    #[test]
+    fn conditional_writes_preserve_old_wire_and_encode_one_common_enable() {
+        let old = [EffectInstructionV3::write_u64(
+            AccountCoordinateV3::fixed(0),
+            7,
+            ScalarCoordinateV3::common(0),
+        )];
+        let width = HEADER_BYTES + OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &old,
+            &[],
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("old write");
+        let mut expected = std::vec![0_u8; width];
+        expected[..4].copy_from_slice(&MAGIC);
+        expected[4] = VERSION;
+        expected[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        expected[12..14].copy_from_slice(&1_u16.to_le_bytes());
+        expected[16..18].copy_from_slice(&1_u16.to_le_bytes());
+        expected[HEADER_BYTES] = OP_WRITE_SCALAR;
+        expected[HEADER_BYTES + 8..HEADER_BYTES + 12].copy_from_slice(&7_u32.to_le_bytes());
+        assert_eq!(encoded, expected, "predecessor opcode bytes changed");
+
+        let encoded = conditional_program();
+        for (ordinal, opcode) in [
+            OP_WRITE_DATA_U8_IF,
+            OP_WRITE_DATA_U16_IF,
+            OP_WRITE_DATA_U32_IF,
+            OP_WRITE_SCALAR_IF,
+            OP_WRITE_IDENTITY_IF,
+            OP_WRITE_SCALAR_AFFINE_IF,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let start = HEADER_BYTES + ordinal * OPERATION_BYTES;
+            assert_eq!(encoded[start], opcode);
+            assert_eq!(&encoded[start + 4..start + 6], &4_u16.to_le_bytes());
+            assert_eq!(&encoded[start + 16..start + 24], &[0_u8; 8]);
+        }
+        assert_eq!(
+            encoded[HEADER_BYTES + 5 * OPERATION_BYTES + 1],
+            MODE_REGISTER_ITEM
+        );
+    }
+
+    #[test]
+    fn conditional_writes_omit_vacant_state_and_enforce_enabled_hostiles() {
+        let encoded = conditional_program();
+        let program = ProgramV3::decode(&encoded).expect("conditional decode");
+        assert_eq!(program.data_write_operation_count(2), Ok(7));
+        let mut scalars = [255, u16::MAX as u64, u32::MAX as u64, 9, 0, 11, 12];
+        let identities = [[0x5a; 32]];
+        assert_eq!(
+            program.resolved_fixed_effect(0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::Noop)
+        );
+        assert_eq!(
+            program.resolved_item_effect(1, 0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::Noop)
+        );
+        let vacant = [AccountInput {
+            lamports: 0,
+            data_len: 0,
+        }];
+        let read_only = [AccountPermission::read_only()];
+        let aliases = [0_usize];
+        let mut scratch_lamports = [91_u64];
+        let mut output_lamports = [92_u64];
+        project_atomic(
+            program,
+            2,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &identities,
+                aliases: &aliases,
+                accounts: &vacant,
+                permissions: &read_only,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+        )
+        .expect("disabled write never touches vacant result");
+        assert_eq!(output_lamports, [0]);
+
+        scalars[4] = 1;
+        assert_eq!(
+            program.resolved_fixed_effect(0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteU8 {
+                account: 0,
+                offset: 0,
+                value: u8::MAX,
+            })
+        );
+        assert_eq!(
+            program.resolved_item_effect(1, 0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 55,
+                value: 12,
+            })
+        );
+        output_lamports = [77];
+        assert_eq!(
+            project_atomic(
+                program,
+                2,
+                ProjectionV3 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    aliases: &aliases,
+                    accounts: &vacant,
+                    permissions: &read_only,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::PermissionDenied)
+        );
+        assert_eq!(output_lamports, [77], "refusal exposed partial output");
+
+        let writable = [AccountPermission::new(false, false, true)];
+        assert_eq!(
+            project_atomic(
+                program,
+                2,
+                ProjectionV3 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    aliases: &aliases,
+                    accounts: &vacant,
+                    permissions: &writable,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::DataOutOfBounds)
+        );
+
+        scalars[0] = u64::from(u8::MAX) + 1;
+        assert_eq!(
+            program.resolved_fixed_effect(0, 2, &scalars, &identities),
+            Err(Error::NarrowingOverflow)
+        );
+        scalars[4] = 0;
+        assert_eq!(
+            program.resolved_fixed_effect(0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::Noop),
+            "disabled write narrowed a value it must not read"
+        );
+    }
+
+    #[test]
+    fn conditional_writes_refuse_enable_geometry_and_possible_overlaps() {
+        let instruction = [EffectInstructionV3::write_u8_if_nonzero(
+            AccountCoordinateV3::fixed(0),
+            0,
+            ScalarCoordinateV3::common(0),
+            1,
+        )];
+        let width = HEADER_BYTES + OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0xa5_u8; width];
+        let before = output.clone();
+        assert_eq!(
+            encode_effect_program_v3_atomic(
+                EffectGeometryV3 {
+                    fixed_accounts: 1,
+                    item_account_stride: 0,
+                    common_scalars: 1,
+                    item_scalar_stride: 0,
+                    common_identities: 0,
+                    item_identity_stride: 0,
+                },
+                &[],
+                &instruction,
+                &[],
+                &mut scratch,
+                &mut output,
+            ),
+            Err(Error::InvalidCoordinate)
+        );
+        assert_eq!(output, before, "hostile enable changed encoder output");
+
+        let overlap = [
+            EffectInstructionV3::write_u8_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                0,
+                ScalarCoordinateV3::common(0),
+                1,
+            ),
+            EffectInstructionV3::write_u16(
+                AccountCoordinateV3::fixed(0),
+                0,
+                ScalarCoordinateV3::common(0),
+            ),
+        ];
+        let overlap_width = HEADER_BYTES + overlap.len() * OPERATION_BYTES;
+        let mut overlap_scratch = std::vec![0_u8; overlap_width];
+        let mut overlap_output = std::vec![0_u8; overlap_width];
+        assert_eq!(
+            encode_effect_program_v3_atomic(
+                EffectGeometryV3 {
+                    fixed_accounts: 1,
+                    item_account_stride: 0,
+                    common_scalars: 2,
+                    item_scalar_stride: 0,
+                    common_identities: 0,
+                    item_identity_stride: 0,
+                },
+                &[],
+                &overlap,
+                &[],
+                &mut overlap_scratch,
+                &mut overlap_output,
+            ),
+            Err(Error::OverlappingWrites),
+            "static overlap ignored a possibly enabled write"
+        );
+
+        let mut hostile = conditional_program();
+        let affine = HEADER_BYTES + 5 * OPERATION_BYTES;
+        hostile[affine + 1] |= MODE_ACCOUNT_B_ITEM;
+        assert_eq!(
+            ProgramV3::decode(&hostile),
+            Err(Error::NonCanonicalOperation)
+        );
+
+        let mut hostile = conditional_program();
+        hostile[HEADER_BYTES + 6..HEADER_BYTES + 8].copy_from_slice(&5_u16.to_le_bytes());
+        assert_eq!(ProgramV3::decode(&hostile), Err(Error::InvalidCoordinate));
+    }
+
+    #[test]
+    fn enabled_conditional_write_refuses_dynamic_alias_overlap_atomically() {
+        let fixed = [
+            EffectInstructionV3::write_u64_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                0,
+                ScalarCoordinateV3::common(0),
+                1,
+            ),
+            EffectInstructionV3::write_u64(
+                AccountCoordinateV3::fixed(1),
+                0,
+                ScalarCoordinateV3::common(0),
+            ),
+        ];
+        let width = HEADER_BYTES + fixed.len() * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 2,
+                item_account_stride: 0,
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &fixed,
+            &[],
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("structurally disjoint writes");
+        let program = ProgramV3::decode(&encoded).expect("alias program");
+        let accounts = [
+            AccountInput {
+                lamports: 1,
+                data_len: 8,
+            },
+            AccountInput {
+                lamports: 1,
+                data_len: 8,
+            },
+        ];
+        let permissions = [
+            AccountPermission::new(false, false, true),
+            AccountPermission::new(false, false, true),
+        ];
+        let aliases = [0_usize, 0];
+        let mut scratch_lamports = [0_u64; 2];
+        let mut output_lamports = [88_u64; 2];
+        let before = output_lamports;
+        assert_eq!(
+            project_atomic(
+                program,
+                0,
+                ProjectionV3 {
+                    scalars: &[7, 1],
+                    identities: &[],
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::OverlappingWrites)
+        );
+        assert_eq!(output_lamports, before);
+
+        project_atomic(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &[7, 0],
+                identities: &[],
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+        )
+        .expect("disabled write has no alias range");
+    }
+
+    #[test]
+    fn second_tail_affine_is_exact_at_zero_one_and_258_items() {
+        let encoded = two_tail_program(
+            AccountCoordinateV3::fixed(0),
+            0,
+            AccountCoordinateV3::fixed(0),
+            0,
+            8,
+        );
+        let program = ProgramV3::decode(&encoded).expect("two tails");
+        assert_eq!(program.data_write_operation_count(0), Ok(0));
+        assert_eq!(program.data_write_operation_count(1), Ok(2));
+        assert_eq!(program.data_write_operation_count(258), Ok(516));
+
+        let aliases = [0_usize, 1];
+        let vacant = [
+            AccountInput {
+                lamports: 0,
+                data_len: 0,
+            },
+            AccountInput {
+                lamports: 0,
+                data_len: 0,
+            },
+        ];
+        let read_only = [AccountPermission::read_only(); 2];
+        let mut scratch_lamports = [7_u64; 2];
+        let mut output_lamports = [8_u64; 2];
+        project_atomic(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &[1],
+                identities: &[],
+                aliases: &aliases,
+                accounts: &vacant,
+                permissions: &read_only,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+        )
+        .expect("zero items execute no affine writes");
+
+        let disabled = [0_u64, 44];
+        assert_eq!(
+            program.resolved_item_effect(0, 1, 1, &disabled, &[]),
+            Ok(ResolvedEffectV3::Noop)
+        );
+        project_atomic(
+            program,
+            1,
+            ProjectionV3 {
+                scalars: &disabled,
+                identities: &[],
+                aliases: &aliases,
+                accounts: &vacant,
+                permissions: &read_only,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+        )
+        .expect_err("the unconditional first tail still reaches vacant data");
+
+        let enabled = [1_u64, 44];
+        assert_eq!(
+            program.resolved_item_effect(0, 0, 1, &enabled, &[]),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 0,
+                value: 44,
+            })
+        );
+        assert_eq!(
+            program.resolved_item_effect(0, 1, 1, &enabled, &[]),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 8,
+                value: 44,
+            })
+        );
+
+        let mut large_scalars = std::vec![0_u64; 259];
+        large_scalars[0] = 1;
+        large_scalars[258] = 0x258;
+        assert_eq!(
+            program.resolved_item_effect(257, 0, 258, &large_scalars, &[]),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 2_056,
+                value: 0x258,
+            })
+        );
+        assert_eq!(
+            program.resolved_item_effect(257, 1, 258, &large_scalars, &[]),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 4_120,
+                value: 0x258,
+            })
+        );
+    }
+
+    #[test]
+    fn disabled_second_tail_leaves_its_vacant_result_coordinate_untouched() {
+        let encoded = second_tail_only_program();
+        let program = ProgramV3::decode(&encoded).expect("second tail");
+        let aliases = [0_usize];
+        let vacant = [AccountInput {
+            lamports: 0,
+            data_len: 0,
+        }];
+        let mut scratch_lamports = [71_u64];
+        let mut output_lamports = [72_u64];
+        project_atomic(
+            program,
+            1,
+            ProjectionV3 {
+                scalars: &[0, u64::MAX],
+                identities: &[],
+                aliases: &aliases,
+                accounts: &vacant,
+                permissions: &[AccountPermission::read_only()],
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+        )
+        .expect("disabled second tail");
+        assert_eq!(output_lamports, [0]);
+
+        output_lamports = [72];
+        assert_eq!(
+            project_atomic(
+                program,
+                1,
+                ProjectionV3 {
+                    scalars: &[1, 9],
+                    identities: &[],
+                    aliases: &aliases,
+                    accounts: &vacant,
+                    permissions: &[AccountPermission::read_only()],
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::PermissionDenied)
+        );
+        assert_eq!(output_lamports, [72]);
+    }
+
+    #[test]
+    fn second_tail_affine_refuses_wrong_spaces_stride_and_runtime_overlap() {
+        let wrong_fixed = [
+            EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                0,
+                8,
+                ScalarCoordinateV3::item(0),
+                0,
+            ),
+        ];
+        let wrong_account = [
+            EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+                AccountCoordinateV3::item(0),
+                0,
+                8,
+                ScalarCoordinateV3::item(0),
+                0,
+            ),
+        ];
+        let wrong_value = [
+            EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+                AccountCoordinateV3::fixed(0),
+                0,
+                8,
+                ScalarCoordinateV3::common(0),
+                0,
+            ),
+        ];
+        for (fixed, item) in [
+            (wrong_fixed.as_slice(), &[][..]),
+            (&[][..], wrong_account.as_slice()),
+            (&[][..], wrong_value.as_slice()),
+        ] {
+            let width = HEADER_BYTES + (fixed.len() + item.len()) * OPERATION_BYTES;
+            let mut scratch = std::vec![0_u8; width];
+            let mut output = std::vec![0xa5_u8; width];
+            let before = output.clone();
+            assert_eq!(
+                encode_effect_program_v3_atomic(
+                    EffectGeometryV3 {
+                        fixed_accounts: 1,
+                        item_account_stride: 1,
+                        common_scalars: 1,
+                        item_scalar_stride: 1,
+                        common_identities: 0,
+                        item_identity_stride: 0,
+                    },
+                    &[],
+                    fixed,
+                    item,
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(Error::NonCanonicalOperation)
+            );
+            assert_eq!(output, before);
+        }
+        for stride in [0_u32, 7] {
+            let item = [
+                EffectInstructionV3::write_u64_second_tail_affine_if_nonzero(
+                    AccountCoordinateV3::fixed(0),
+                    0,
+                    stride,
+                    ScalarCoordinateV3::item(0),
+                    0,
+                ),
+            ];
+            let width = HEADER_BYTES + OPERATION_BYTES;
+            let mut scratch = std::vec![0_u8; width];
+            let mut output = std::vec![0_u8; width];
+            assert_eq!(
+                encode_effect_program_v3_atomic(
+                    EffectGeometryV3 {
+                        fixed_accounts: 1,
+                        item_account_stride: 0,
+                        common_scalars: 1,
+                        item_scalar_stride: 1,
+                        common_identities: 0,
+                        item_identity_stride: 0,
+                    },
+                    &[],
+                    &[],
+                    &item,
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(Error::NonCanonicalOperation)
+            );
+        }
+
+        let canonical = second_tail_only_program();
+        let mut hostile = canonical.clone();
+        hostile[HEADER_BYTES + 1] |= MODE_ACCOUNT_B_ITEM;
+        assert_eq!(
+            ProgramV3::decode(&hostile),
+            Err(Error::NonCanonicalOperation)
+        );
+        let mut hostile = canonical.clone();
+        hostile[HEADER_BYTES + 4..HEADER_BYTES + 6].copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(ProgramV3::decode(&hostile), Err(Error::InvalidCoordinate));
+        let mut hostile = canonical;
+        hostile[HEADER_BYTES + 6..HEADER_BYTES + 8].copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(ProgramV3::decode(&hostile), Err(Error::InvalidCoordinate));
+
+        let encoded = two_tail_program(
+            AccountCoordinateV3::fixed(0),
+            8,
+            AccountCoordinateV3::fixed(0),
+            0,
+            8,
+        );
+        let program = ProgramV3::decode(&encoded).expect("runtime overlap program");
+        let accounts = [
+            AccountInput {
+                lamports: 1,
+                data_len: 24,
+            },
+            AccountInput {
+                lamports: 1,
+                data_len: 24,
+            },
+        ];
+        let permissions = [AccountPermission::new(false, false, true); 2];
+        let aliases = [0_usize, 1];
+        let mut scratch_lamports = [0_u64; 2];
+        let mut output_lamports = [77_u64; 2];
+        let before = output_lamports;
+        assert_eq!(
+            project_atomic(
+                program,
+                1,
+                ProjectionV3 {
+                    scalars: &[1, 5],
+                    identities: &[],
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::OverlappingWrites)
+        );
+        assert_eq!(output_lamports, before);
+
+        project_atomic(
+            program,
+            1,
+            ProjectionV3 {
+                scalars: &[0, 5],
+                identities: &[],
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+        )
+        .expect("disabled second tail has no overlapping range");
+
+        let aliased = two_tail_program(
+            AccountCoordinateV3::fixed(0),
+            8,
+            AccountCoordinateV3::fixed(1),
+            0,
+            8,
+        );
+        let program = ProgramV3::decode(&aliased).expect("alias overlap program");
+        assert_eq!(
+            project_atomic(
+                program,
+                1,
+                ProjectionV3 {
+                    scalars: &[1, 5],
+                    identities: &[],
+                    aliases: &[0, 0],
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::OverlappingWrites)
+        );
+    }
+
+    #[test]
+    fn five_planar_tails_are_exact_at_zero_one_and_258_items() {
+        let encoded = five_tail_program();
+        let program = ProgramV3::decode(&encoded).expect("five planar tails");
+        assert_eq!(program.data_write_operation_count(0), Ok(0));
+        assert_eq!(program.data_write_operation_count(1), Ok(5));
+        assert_eq!(program.data_write_operation_count(258), Ok(1_290));
+        for (ordinal, opcode) in [
+            OP_WRITE_SCALAR_AFFINE,
+            OP_WRITE_SCALAR_SECOND_TAIL_AFFINE,
+            OP_WRITE_SCALAR_THIRD_TAIL_AFFINE,
+            OP_WRITE_SCALAR_FOURTH_TAIL_AFFINE,
+            OP_WRITE_SCALAR_FIFTH_TAIL_AFFINE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(encoded[HEADER_BYTES + ordinal * OPERATION_BYTES], opcode);
+        }
+
+        let mut scratch_lamports = [7_u64];
+        let mut output_lamports = [8_u64];
+        project_atomic(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &[1],
+                identities: &[],
+                aliases: &[0],
+                accounts: &[AccountInput {
+                    lamports: 0,
+                    data_len: 0,
+                }],
+                permissions: &[AccountPermission::read_only()],
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                requests: &mut [],
+            },
+        )
+        .expect("zero items touch no plane");
+
+        for (operation, offset) in [0_u32, 8, 16, 24, 32].into_iter().enumerate() {
+            assert_eq!(
+                program.resolved_item_effect(
+                    0,
+                    u16::try_from(operation).expect("small"),
+                    1,
+                    &[1, 44],
+                    &[],
+                ),
+                Ok(ResolvedEffectV3::WriteScalar {
+                    account: 0,
+                    offset,
+                    value: 44,
+                })
+            );
+        }
+
+        let mut scalars = std::vec![0_u64; 259];
+        scalars[0] = 1;
+        scalars[258] = 0x258;
+        for (operation, offset) in [2_056_u32, 4_120, 6_184, 8_248, 10_312]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                program.resolved_item_effect(
+                    257,
+                    u16::try_from(operation).expect("small"),
+                    258,
+                    &scalars,
+                    &[],
+                ),
+                Ok(ResolvedEffectV3::WriteScalar {
+                    account: 0,
+                    offset,
+                    value: 0x258,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn later_planar_tails_refuse_wrong_geometry_permission_and_overlap_atomically() {
+        let account = AccountCoordinateV3::fixed(0);
+        let item_value = ScalarCoordinateV3::item(0);
+        let fixed_hostiles = [
+            EffectInstructionV3::write_u64_second_tail_affine(account, 0, 8, item_value),
+            EffectInstructionV3::write_u64_third_tail_affine(account, 0, 8, item_value),
+            EffectInstructionV3::write_u64_fourth_tail_affine(account, 0, 8, item_value),
+            EffectInstructionV3::write_u64_fifth_tail_affine(account, 0, 8, item_value),
+        ];
+        for instruction in fixed_hostiles {
+            let width = HEADER_BYTES + OPERATION_BYTES;
+            let mut scratch = std::vec![0_u8; width];
+            let mut output = std::vec![0xa5_u8; width];
+            let before = output.clone();
+            assert_eq!(
+                encode_effect_program_v3_atomic(
+                    EffectGeometryV3 {
+                        fixed_accounts: 1,
+                        item_account_stride: 0,
+                        common_scalars: 1,
+                        item_scalar_stride: 1,
+                        common_identities: 0,
+                        item_identity_stride: 0,
+                    },
+                    &[],
+                    &[instruction],
+                    &[],
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(Error::NonCanonicalOperation)
+            );
+            assert_eq!(output, before);
+        }
+        for instruction in [
+            EffectInstructionV3::write_u64_third_tail_affine(
+                AccountCoordinateV3::item(0),
+                0,
+                8,
+                item_value,
+            ),
+            EffectInstructionV3::write_u64_fourth_tail_affine(
+                account,
+                0,
+                8,
+                ScalarCoordinateV3::common(0),
+            ),
+            EffectInstructionV3::write_u64_fifth_tail_affine(account, 0, 0, item_value),
+            EffectInstructionV3::write_u64_fifth_tail_affine(account, 0, 7, item_value),
+            EffectInstructionV3::write_u64_second_tail_affine(account, 0, 0, item_value),
+        ] {
+            let width = HEADER_BYTES + OPERATION_BYTES;
+            let mut scratch = std::vec![0_u8; width];
+            let mut output = std::vec![0_u8; width];
+            assert_eq!(
+                encode_effect_program_v3_atomic(
+                    EffectGeometryV3 {
+                        fixed_accounts: 1,
+                        item_account_stride: 1,
+                        common_scalars: 1,
+                        item_scalar_stride: 1,
+                        common_identities: 0,
+                        item_identity_stride: 0,
+                    },
+                    &[],
+                    &[],
+                    &[instruction],
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(Error::NonCanonicalOperation)
+            );
+        }
+
+        let encode_overlap = |third_base: u32, fifth: bool| {
+            let later = if fifth {
+                EffectInstructionV3::write_u64_fifth_tail_affine(account, 0, 8, item_value)
+            } else {
+                EffectInstructionV3::write_u64_fourth_tail_affine(account, 0, 8, item_value)
+            };
+            let item = [
+                EffectInstructionV3::write_u64_third_tail_affine(
+                    account, third_base, 8, item_value,
+                ),
+                later,
+            ];
+            let width = HEADER_BYTES + item.len() * OPERATION_BYTES;
+            let mut scratch = std::vec![0_u8; width];
+            let mut output = std::vec![0_u8; width];
+            encode_effect_program_v3_atomic(
+                EffectGeometryV3 {
+                    fixed_accounts: 1,
+                    item_account_stride: 0,
+                    common_scalars: 1,
+                    item_scalar_stride: 1,
+                    common_identities: 0,
+                    item_identity_stride: 0,
+                },
+                &[],
+                &[],
+                &item,
+                &mut scratch,
+                &mut output,
+            )
+            .expect("runtime overlap program");
+            output
+        };
+        for encoded in [encode_overlap(8, false), encode_overlap(16, true)] {
+            let program = ProgramV3::decode(&encoded).expect("overlap decode");
+            let mut scratch_lamports = [0_u64];
+            let mut output_lamports = [77_u64];
+            assert_eq!(
+                project_atomic(
+                    program,
+                    1,
+                    ProjectionV3 {
+                        scalars: &[1, 5],
+                        identities: &[],
+                        aliases: &[0],
+                        accounts: &[AccountInput {
+                            lamports: 1,
+                            data_len: 40,
+                        }],
+                        permissions: &[AccountPermission::new(false, false, true)],
+                        scratch_lamports: &mut scratch_lamports,
+                        output_lamports: &mut output_lamports,
+                        requests: &mut [],
+                    },
+                ),
+                Err(Error::OverlappingWrites)
+            );
+            assert_eq!(output_lamports, [77]);
+        }
+
+        let alias_operations = [
+            EffectInstructionV3::write_u64_third_tail_affine(
+                AccountCoordinateV3::fixed(0),
+                8,
+                8,
+                item_value,
+            ),
+            EffectInstructionV3::write_u64_fourth_tail_affine(
+                AccountCoordinateV3::fixed(1),
+                0,
+                8,
+                item_value,
+            ),
+        ];
+        let alias_width = HEADER_BYTES + alias_operations.len() * OPERATION_BYTES;
+        let mut alias_scratch = std::vec![0_u8; alias_width];
+        let mut alias_bytes = std::vec![0_u8; alias_width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 2,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &alias_operations,
+            &mut alias_scratch,
+            &mut alias_bytes,
+        )
+        .expect("structurally disjoint later planes");
+        let alias_program = ProgramV3::decode(&alias_bytes).expect("alias program");
+        let aliased_accounts = [
+            AccountInput {
+                lamports: 1,
+                data_len: 40,
+            },
+            AccountInput {
+                lamports: 1,
+                data_len: 40,
+            },
+        ];
+        let aliased_permissions = [AccountPermission::new(false, false, true); 2];
+        let mut alias_scratch_lamports = [0_u64; 2];
+        let mut alias_output_lamports = [81_u64; 2];
+        assert_eq!(
+            project_atomic(
+                alias_program,
+                1,
+                ProjectionV3 {
+                    scalars: &[1, 5],
+                    identities: &[],
+                    aliases: &[0, 0],
+                    accounts: &aliased_accounts,
+                    permissions: &aliased_permissions,
+                    scratch_lamports: &mut alias_scratch_lamports,
+                    output_lamports: &mut alias_output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::OverlappingWrites)
+        );
+        assert_eq!(alias_output_lamports, [81; 2]);
+
+        let fifth_only = [EffectInstructionV3::write_u64_fifth_tail_affine(
+            account, 0, 8, item_value,
+        )];
+        let width = HEADER_BYTES + OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &fifth_only,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("fifth plane");
+        let program = ProgramV3::decode(&output).expect("fifth decode");
+        let mut scratch_lamports = [0_u64];
+        let mut output_lamports = [91_u64];
+        assert_eq!(
+            project_atomic(
+                program,
+                1,
+                ProjectionV3 {
+                    scalars: &[1, 5],
+                    identities: &[],
+                    aliases: &[0],
+                    accounts: &[AccountInput {
+                        lamports: 0,
+                        data_len: 0,
+                    }],
+                    permissions: &[AccountPermission::read_only()],
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut [],
+                },
+            ),
+            Err(Error::PermissionDenied)
+        );
+        assert_eq!(output_lamports, [91]);
+
+        let mut hostile = five_tail_program();
+        let third = HEADER_BYTES + 2 * OPERATION_BYTES;
+        hostile[third + 6..third + 8].copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(ProgramV3::decode(&hostile), Err(Error::InvalidCoordinate));
+    }
 
     #[test]
     fn typed_encoder_round_trips_routes_writes_and_preserves_output() {

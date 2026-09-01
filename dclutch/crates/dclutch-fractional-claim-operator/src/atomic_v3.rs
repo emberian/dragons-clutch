@@ -36,7 +36,9 @@ use dclutch_fractional_claim_contract::{
     FractionalExposureActionV2, FractionalExposureRequestV2,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsV2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsV2, encode_fractional_selection_config_v1,
+    fractional_selection_config_from_terms_v1,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -96,16 +98,25 @@ pub fn build_fractional_atomic_claims_instruction_v3(
     )
     .0;
     let header = root.header();
-    let root_input = root.state().input();
+    let root_state = root.state();
+    let selection_config = selection_config_id(terms)?;
     let (expected_root, expected_bump) =
         Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program);
-    if root_input.terms != input.terms
-        || root_input.market != input.market
-        || root_input.revision != input.expected_revision
-        || root_input.bump != expected_bump
+    let root_identity_matches = match root_state {
+        dclutch_fractional_claim_contract::FractionalRootStateV2::V1(root) => {
+            root.input().terms == input.terms
+        }
+        dclutch_fractional_claim_contract::FractionalRootStateV2::V2(root) => {
+            root.input().selection_config == selection_config
+        }
+    };
+    if !root_identity_matches
+        || root_state.market() != input.market
+        || root_state.revision() != input.expected_revision
+        || root_state.bump() != expected_bump
         || header.release_set().to_bytes() != input.release_set
         || header.market() != input.market
-        || header.selection().config().to_bytes() != input.terms
+        || header.selection().config().to_bytes() != selection_config
         || meta(accounts, 0)?.pubkey != expected_authority
         || meta(accounts, MARKET)?.pubkey != expected_market
         || meta(accounts, FRACTIONAL_ATOMIC_ROOT_V3)?.pubkey != expected_root
@@ -271,7 +282,8 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
     )
     .0;
     let header = root.header();
-    let root_input = root.state().input();
+    let root_state = root.state();
+    let selection_config = selection_config_id(terms)?;
     let (expected_root, expected_bump) =
         Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program);
     let reserve_position = Pubkey::find_program_address(
@@ -281,13 +293,21 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
         &claims_program,
     )
     .0;
-    if root_input.terms != input.terms
-        || root_input.market != input.market
-        || root_input.revision != input.expected_revision
-        || root_input.bump != expected_bump
+    let root_identity_matches = match root_state {
+        dclutch_fractional_claim_contract::FractionalRootStateV2::V1(root) => {
+            root.input().terms == input.terms
+        }
+        dclutch_fractional_claim_contract::FractionalRootStateV2::V2(root) => {
+            root.input().selection_config == selection_config
+        }
+    };
+    if !root_identity_matches
+        || root_state.market() != input.market
+        || root_state.revision() != input.expected_revision
+        || root_state.bump() != expected_bump
         || header.release_set().to_bytes() != input.release_set
         || header.market() != input.market
-        || header.selection().config().to_bytes() != input.terms
+        || header.selection().config().to_bytes() != selection_config
         || meta(accounts, 0)?.pubkey != expected_authority
         || meta(accounts, MARKET)?.pubkey != expected_market
         || meta(accounts, POSITION_0)?.pubkey != reserve_position
@@ -421,6 +441,22 @@ fn require_record_pair(
     }
 }
 
+/// Recompute the sole market-free config a current capability header selects.
+///
+/// Terms remain the separate market-bound execution record. Comparing their
+/// digest to `header.selection().config()` was the pre-split fixed point and
+/// would accept a header that named execution terms instead of the manifest
+/// config.
+fn selection_config_id(terms: FractionalExposureTermsV2<'_>) -> Result<[u8; 32]> {
+    let mut bytes = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut bytes,
+    )
+    .map_err(|_| Error::Claims)?;
+    Ok(hash(&bytes).to_bytes())
+}
+
 fn meta(accounts: &[AccountMeta], index: usize) -> Result<&AccountMeta> {
     accounts.get(index).ok_or(Error::Claims)
 }
@@ -526,6 +562,22 @@ mod tests {
         )
         .expect("encode terms");
         let terms_id = hash(&terms_bytes).to_bytes();
+        let selection_config = selection_config_id(
+            FractionalExposureTermsV2::decode(
+                &terms_bytes,
+                FractionalExposureTermsAdmissionV2 {
+                    selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+                    finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+                    selected_terms_id: terms_id,
+                    finalized_terms_id: terms_id,
+                    recomputed_terms_digest: terms_id,
+                    finalized_terms_digest: terms_id,
+                    record_authenticated: true,
+                },
+            )
+            .expect("terms"),
+        )
+        .expect("selection config");
         let request = FractionalExposureRequestV2::new(
             FractionalExposureActionV2::Wrap,
             FractionalExposureRequestInputV2 {
@@ -554,7 +606,7 @@ mod tests {
             ContentId::new(id(24)).expect("manifest"),
             ContentId::new(id(25)).expect("kind"),
             ContentId::new(id(26)).expect("release"),
-            ContentId::new(terms_id).expect("terms config"),
+            ContentId::new(selection_config).expect("selection config"),
         )
         .expect("selection");
         let header = CapabilityRootHeaderV1::new(

@@ -77,6 +77,7 @@ pub const DIRECT_EMPTY_ACTION_REQUEST_BYTES_V3: usize = DIRECT_EXECUTION_REQUEST
 /// stronger.
 pub const DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3: &[DirectExecutionActionV3] = &[
     DirectExecutionActionV3::InlineOrdinary,
+    DirectExecutionActionV3::RegisterSell,
     DirectExecutionActionV3::RegisterBuy,
 ];
 
@@ -84,7 +85,7 @@ pub const DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3: &[DirectExecutionActio
 ///
 /// # Which of these can execute
 ///
-/// Two of the fourteen have a complete artifact set, and
+/// Three of the fourteen have a complete artifact set, and
 /// [`DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3`] is the checked list.
 /// Every other selector below decodes a request and selects nothing: no
 /// AccountProfile, no LifecycleV5, no EffectV4, no descriptor. A request codec
@@ -790,16 +791,16 @@ mod tests {
 
     /// A selector is not an action, and the gap is a fact worth checking.
     ///
-    /// Twelve of the fourteen decode a request and select no artifact set. That
+    /// Eleven of the fourteen decode a request and select no artifact set. That
     /// distinction had no name in the tree, so an inventory could read the enum
     /// and conclude the family was fourteen-fourteenths built. Both halves are
     /// pinned here: the enum is exhaustive against `EVERY_ACTION` by decoding
-    /// each discriminant, and the executable subset is exactly two.
+    /// each discriminant, and the executable subset is exactly three.
     ///
-    /// When a lane authors one of the twelve it must add it here, which is the
+    /// When a lane authors one of the eleven it must add it here, which is the
     /// point: the ruling on the enum is where it will be read at that moment.
     #[test]
-    fn twelve_of_fourteen_selectors_select_no_artifact_set() {
+    fn eleven_of_fourteen_selectors_select_no_artifact_set() {
         for (ordinal, action) in EVERY_ACTION.iter().enumerate() {
             let value = u32::try_from(ordinal + 1).expect("discriminant");
             assert_eq!(*action as u32, value, "canonical ascending order");
@@ -816,7 +817,7 @@ mod tests {
             Err(DirectExecutionRequestErrorV3::UnknownAction),
             "EVERY_ACTION is not exhaustive"
         );
-        assert_eq!(DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3.len(), 2);
+        assert_eq!(DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3.len(), 3);
         for action in DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3 {
             assert!(
                 EVERY_ACTION.contains(action),
@@ -828,7 +829,7 @@ mod tests {
                 .iter()
                 .filter(|action| !DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3.contains(action))
                 .count(),
-            12,
+            11,
             "the count of unbuilt actions moved; the enum's ruling must move with it"
         );
     }

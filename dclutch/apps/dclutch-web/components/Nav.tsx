@@ -24,29 +24,31 @@ import { docsIndexHrefV1 } from '@/lib/flags';
  * reachable only by typing a URL.
  */
 
-const PRODUCT_ITEMS = [
-  { href: '/live', label: 'Live' },
+type ProductItem = Readonly<{
+  href: string;
+  label: string;
+  aliases?: readonly string[];
+}>;
+
+const PRODUCT_ITEMS: readonly ProductItem[] = [
+  { href: '/live', label: 'Live', aliases: ['/campaign', '/population', '/smoke', '/bounty'] },
   { href: '/markets', label: 'Markets' },
   { href: '/pulse', label: 'Pulse' },
   { href: '/activity', label: 'Activity' },
   { href: '/create', label: 'Design' },
-  { href: '/portfolio', label: 'Portfolio' },
+  { href: '/portfolio', label: 'Portfolio', aliases: ['/redeem'] },
   { href: '/explorer', label: 'Explorer' },
 ] as const;
 
 /** Every operator-console route. Any of these lights the Console entry. */
 export const CONSOLE_PATHS: readonly string[] = [
-  '/campaign',
   '/console',
-  '/direct',
   '/found',
   '/general',
   '/liquidity',
   '/local',
   '/operate',
-  '/population',
   '/product-v2',
-  '/redeem',
   '/release',
   '/resolution',
   '/trade',
@@ -67,16 +69,19 @@ export default function Nav({
     <header className="product-nav">
       <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav aria-label="Primary navigation">
-        {PRODUCT_ITEMS.map((item) => (
+        {PRODUCT_ITEMS.map((item) => {
+          const active = item.href === current || (current !== undefined && item.aliases?.includes(current) === true);
+          return (
           <Anchor
             key={item.href}
-            className={item.href === current ? 'active' : undefined}
+            className={active ? 'active' : undefined}
             href={item.href}
-            aria-current={item.href === current ? 'page' : undefined}
+            aria-current={active ? 'page' : undefined}
           >
             {item.label}
           </Anchor>
-        ))}
+          );
+        })}
         <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
         <Anchor className={consoleActive ? 'active' : undefined} href="/console" aria-current={consoleActive ? 'page' : undefined}>Console</Anchor>
       </nav>

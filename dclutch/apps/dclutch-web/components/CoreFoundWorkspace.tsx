@@ -8,6 +8,15 @@ import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from 
 import { CORE_FOUND_ACCOUNT_LABELS_V3, CORE_FOUND_ACCOUNT_ROLES_V3 } from '@/lib/generated/coreFound';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 import { SolanaRpcClient } from '@/lib/rpc';
+import {
+  DerivedProvenance,
+  EndpointField,
+  OperatorRefusal,
+  PubkeyField,
+  U64Field,
+} from '@/components/operator/OperatorFields';
+import { assignFoundRefusalV1 } from '@/components/operator/foundRefusals';
+import CommandRunbook from '@/components/operator/CommandRunbook';
 
 type AddressField = Exclude<keyof CoreFoundInputV2, 'generation' | 'lookupTable'>;
 type AddressValues = Record<AddressField, string>;
@@ -15,21 +24,62 @@ type BuildState =
   | Readonly<{ kind: 'idle' | 'loading' | 'error'; message: string }>
   | Readonly<{ kind: 'ready'; plan: CoreFoundPlanV2; rentBase64: string | null; foundBase64: string | null }>;
 
-const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string }>> = Object.freeze([
-  { field: 'payer', label: 'Payer' },
-  { field: 'registryProgram', label: 'Registry program' },
-  { field: 'activationCache', label: 'Release activation cache' },
-  { field: 'refundWallet', label: 'Immutable rent refund wallet' },
-  { field: 'realmRecord', label: 'Realm raw record' },
-  { field: 'productRecord', label: 'Product Runtime V2 raw' },
-  { field: 'resultDomainRecord', label: 'Result domain raw' },
-  { field: 'portfolioRecord', label: 'Portfolio raw' },
-  { field: 'linkedBasisRecord', label: 'Linked basis raw' },
-  { field: 'sourceMaterialRecord', label: 'SourceMaterialV3 raw' },
-  { field: 'sourceSpecRecord', label: 'Source spec raw' },
-  { field: 'capacityProfileRecord', label: 'Source capacity profile raw' },
-  { field: 'manipulationFloorRecord', label: 'Manipulation floor raw' },
-  { field: 'capabilityManifestRecord', label: 'Capability manifest raw' },
+export const CURRENT_FOUND_RUNBOOK_V1 = `dclutch --rpc "$DEVNET_RPC" \\
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
+  --bootstrap-bin "$SUCCESSOR" found \\
+  --found-operation "$FOUND_OPERATION" \\
+  --found-journal "$FOUND_JOURNAL"
+
+# Review the authored Market input and read-only journal, then authorize the
+# exact same operation. Rerun this line unchanged after an interruption.
+dclutch --rpc "$DEVNET_RPC" \\
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
+  --bootstrap-bin "$SUCCESSOR" found \\
+  --found-operation "$FOUND_OPERATION" \\
+  --found-journal "$FOUND_JOURNAL" \\
+  --session-out "$CLI_SESSION" --execute`;
+
+/**
+ * Every address this console asks for, with the one concrete sentence saying
+ * where it comes from.
+ *
+ * OPERATOR_FORMS_V1 §0, which is `ArtifactInput`'s own rule generalised: "if a
+ * console asks you to paste something and you don't know where it comes from,
+ * that's a bug in the console." Fourteen addresses arrived here with a label
+ * and nothing else.
+ *
+ * `derivable` marks the five the SDK already CHECKS a join for and could
+ * therefore compute -- see the note each one carries. Closing those needs a
+ * chain read this console does not make before submit, so §3.2 records them
+ * rather than smuggling a new RPC dependency into a forms pass.
+ */
+const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string; group: 'authority' | 'deployment' | 'records'; provenance: string }>> = Object.freeze([
+  { field: 'payer', label: 'Payer', group: 'authority',
+    provenance: 'The wallet that funds both packets and signs them elsewhere. It must be a plain System-owned wallet holding no account data.' },
+  { field: 'refundWallet', label: 'Immutable rent refund wallet', group: 'authority',
+    provenance: 'Embedded once in the Market-bound RentCredit and immutable afterwards, so rent returns here rather than to the payer. Often the payer, and it does not have to be.' },
+  { field: 'registryProgram', label: 'Registry program', group: 'deployment', provenance: '' },
+  { field: 'activationCache', label: 'Release activation cache', group: 'deployment', provenance: '' },
+  { field: 'realmRecord', label: 'Realm raw record', group: 'records',
+    provenance: 'The finalized Registry raw record holding this market\u2019s Realm. Its address is the PDA of the Realm schema and the record\u2019s own content digest.' },
+  { field: 'productRecord', label: 'Product Runtime V2 raw', group: 'records',
+    provenance: 'The finalized record holding the Product Runtime V2 root this market pays by. It names the result domain and the portfolio below.' },
+  { field: 'resultDomainRecord', label: 'Result domain raw', group: 'records',
+    provenance: 'The result domain the Product root selects, at the Product record\u2019s bytes 48..80. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'portfolioRecord', label: 'Portfolio raw', group: 'records',
+    provenance: 'The portfolio the Product root selects, at the Product record\u2019s bytes 80..112. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'linkedBasisRecord', label: 'Linked basis raw', group: 'records',
+    provenance: 'A graded basis record. It is authenticated for PDA, owner and rent and placed in the Found37 frame \u2014 and unlike the other nine, none of its bytes are joined to the semantic graph.' },
+  { field: 'sourceMaterialRecord', label: 'SourceMaterialV3 raw', group: 'records',
+    provenance: 'The SourceMaterialV3 record. It names the Product digest, the source spec, and the manipulation floor, so three of the fields below are answers it already contains.' },
+  { field: 'sourceSpecRecord', label: 'Source spec raw', group: 'records',
+    provenance: 'The source spec SourceMaterialV3 selects, at its bytes 48..80. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'capacityProfileRecord', label: 'Source capacity profile raw', group: 'records',
+    provenance: 'The capacity profile the source spec selects, at its bytes 144..176. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'manipulationFloorRecord', label: 'Manipulation floor raw', group: 'records',
+    provenance: 'The manipulation floor SourceMaterialV3 selects, at its bytes 208..240. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'capabilityManifestRecord', label: 'Capability manifest raw', group: 'records',
+    provenance: 'The capability manifest this market founds with. Its dependency graph must terminate; a cycle is refused.' },
 ]);
 
 function emptyAddresses(): AddressValues {
@@ -100,10 +150,48 @@ export default function CoreFoundWorkspace() {
   }
 
   const ready = state.kind === 'ready' ? state : null;
-  return <main className="product-shell direct-workspace found-workspace">
-    <ConsoleHeader path="/found" title="Legacy founding inspector" purpose="Inspect the older partial Found37 packet pair. It cannot open a current devnet market." />
+  /**
+   * OPERATOR_FORMS_V1 §6. Sixteen fields shared one `aria-live` line, and the
+   * ten record refusals named their field by POSITION while the screen named
+   * it by role. This routes the refusal to the field that owns it; anything
+   * whose owner is ambiguous stays at form level rather than being guessed.
+   */
+  const refusal = state.kind === 'error' ? assignFoundRefusalV1(state.message) : null;
+  const refusalFor = (field: string) => refusal !== null && refusal.field === field ? refusal : null;
 
-    <section className="market-heading found-heading"><div><h1>Inspect legacy<br />founding.</h1></div><p>An older, partial packet pair. It carries none of the finalized prestates or the compact atomic opening the current source requires, so it cannot open a current devnet market. Use the operator campaign for current founding.</p></section>
+  function addressField(entry: (typeof ADDRESS_FIELDS)[number]) {
+    const routed = refusalFor(entry.field);
+    const derived = entry.field === 'registryProgram' ? deployment.programs.registry
+      : entry.field === 'activationCache' ? deployment.activationCache ?? '' : null;
+    return <div className="operator-field-slot" key={entry.field}>
+      <PubkeyField
+        label={entry.label}
+        value={effective[entry.field]}
+        onChange={(next) => update(entry.field, next)}
+        required
+        provenance={derived === null
+          ? entry.provenance
+          : <DerivedProvenance
+            derived={derived === '' ? null : derived}
+            value={effective[entry.field]}
+            source="the deployment this browser is pointed at"
+            absent={entry.field === 'registryProgram'
+              ? 'Pick a cluster in the header to fill this, or paste the Registry program address.'
+              : 'Pick a cluster in the header to fill this, or paste the activation cache this release derives.'} />}
+      />
+      {routed === null ? null : <OperatorRefusal remedy={routed.remedy} detail={routed.detail} />}
+    </div>;
+  }
+
+  const group = (name: 'authority' | 'deployment' | 'records') => ADDRESS_FIELDS.filter((entry) => entry.group === name);
+  return <main className="product-shell direct-workspace found-workspace">
+    <ConsoleHeader path="/found" title="Found a market" purpose="Run the current journaled devnet founding campaign. The legacy packet inspector remains below for diagnosis only." />
+
+    <section className="market-heading found-heading"><div><h1>Found, then<br />admit.</h1></div><p>One operation document drives current Market founding and first-participant admission. Preparation is read-only. Execution is explicit, journaled before any key-owning child runs, and resumes only that same operation.</p></section>
+
+    <section className="found-current-campaign" id="current-founding"><header className="direct-card-heading"><span>Current</span><div><h2>Found one current devnet Market</h2><p>The CLI delegates every authored request, signature, transaction, and poststate report to the current Rust successor. The browser neither reconstructs its frame nor asks for a wallet.</p></div></header><div className="found-current-contract"><article><span>Input</span><strong>One operation document</strong><p>A <code>dclutch-devnet-market-participant-operation-v1</code> names the checked plan, Market producer arguments, evidence outputs, and explicit key files used only by their owning Rust children.</p></article><article><span>Authority</span><strong>Preview first; execute explicitly</strong><p>The first command is read-only. <code>--execute</code> records devnet authorization in the durable journal before the campaign can read a signing key or submit.</p></article><article><span>Result</span><strong>Market + first participant + session</strong><p>Founding, compact opening, and admission emit machine reports. The optional CLI session then feeds discovery, route export, joining, portfolio, offer, and redemption commands.</p></article><article><span>Recovery</span><strong>Rerun the same operation and journal</strong><p>Each stage rereads its exact chain checkpoint. A submitted child report is reconciled; the driver does not start over against a different plan or Market.</p></article></div><details><summary>Show preview and execute commands</summary><p>Set every shell variable to an absolute path. Review the operation document and preview outputs before adding <code>--execute</code>.</p><CommandRunbook label="Preview, then authorized execution" command={CURRENT_FOUND_RUNBOOK_V1} /></details></section>
+
+    <details className="found-legacy-inspector"><summary>Open the legacy Found37 packet inspector</summary><p>This older two-packet reader is useful for diagnosing record and release joins. It cannot perform the current atomic opening and is not the founding path above.</p>
 
     <section className="found-boundaries" aria-label="Construction boundaries">
       <article><span>01</span><strong>Select execution</strong><p>The activation cache must select immutable Core, Registry, and Rent artifacts whose Loader observations still match.</p></article>
@@ -113,10 +201,48 @@ export default function CoreFoundWorkspace() {
 
     <form className="direct-card found-form" onSubmit={construct}>
       <header className="direct-card-heading"><span>01</span><div><h2>Chain authority and record coordinates</h2><p>No program, balance, Product, or release identity is supplied here. Every address is reauthenticated against the chain.</p></div></header>
-      <div className="direct-form-grid found-control-grid"><label><span>Finalized RPC endpoint</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Market generation</span><input required inputMode="numeric" value={generation} onChange={(event) => setGeneration(event.target.value.trim())} /></label></div>
-      <div className="direct-form-grid found-record-grid">{ADDRESS_FIELDS.map(({ field, label }) => <label key={field}><span>{label}</span><input required spellCheck={false} value={effective[field]} onChange={(event) => update(field, event.target.value)} /></label>)}</div>
+      <fieldset className="operator-act">
+        <legend>The chain this founds against</legend>
+        <div className="operator-act-grid">
+          <div className="operator-field-slot">
+            <EndpointField label="Finalized RPC endpoint" value={endpoint} onChange={setEndpoint} required
+              provenance={<DerivedProvenance derived={deployment.endpoint === '' ? null : deployment.endpoint} value={endpoint}
+                source="the cluster picked in the header"
+                absent="Pick a cluster in the header, or paste the endpoint to read finalized state from." />} />
+            {refusalFor('endpoint') === null ? null : <OperatorRefusal remedy={refusalFor('endpoint')!.remedy} detail={refusalFor('endpoint')!.detail} />}
+          </div>
+          <div className="operator-field-slot">
+            <U64Field label="Market generation" value={generation} onChange={setGeneration} noun="generation" min={1n} required
+              provenance="Which generation of this market is being founded. The first is 1; a later one reuses the same records under a new lifecycle." />
+            {refusalFor('generation') === null ? null : <OperatorRefusal remedy={refusalFor('generation')!.remedy} detail={refusalFor('generation')!.detail} />}
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset className="operator-act">
+        <legend>Who pays, and who is refunded</legend>
+        <div className="operator-act-grid">{group('authority').map(addressField)}</div>
+      </fieldset>
+
+      <fieldset className="operator-act">
+        <legend>The deployment this founds against</legend>
+        <p>Both arrive filled from the cluster picked in the header. An edit overrides them and says so.</p>
+        <div className="operator-act-grid">{group('deployment').map(addressField)}</div>
+      </fieldset>
+
+      <fieldset className="operator-act">
+        <legend>The ten finalized records this market is built from</legend>
+        <p>Every one is a Registry raw record, reauthenticated against the chain for owner, PDA, rent and exact ABI. Five of them are values another record on this list already names — those say so, and stay typed until this console reads that record before submitting.</p>
+        <div className="operator-act-grid">{group('records').map(addressField)}</div>
+      </fieldset>
+
       <button type="submit" disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reacquiring Found37 authority…' : 'Construct unsigned lifecycle + Found transactions'}</button>
-      <p className="direct-status" aria-live="polite">{state.kind === 'ready' ? `Accepted at finalized slot ${state.plan.observedSlot}. Both transactions remain unsigned and unsubmitted.` : state.message}</p>
+      {refusal !== null && refusal.routed
+        ? <p className="direct-status" aria-live="polite">This construction refused at one field. Its remedy is with that field, above.</p>
+        : <p className="direct-status" aria-live="polite">{state.kind === 'ready' ? `Accepted at finalized slot ${state.plan.observedSlot}. Both transactions remain unsigned and unsubmitted.` : state.message}</p>}
+      {refusal !== null && !refusal.routed
+        ? <OperatorRefusal remedy={refusal.remedy} detail={refusal.detail} />
+        : null}
     </form>
 
     {ready === null ? <section className="direct-card found-empty"><div className="radar"><span /></div><div><p className="eyebrow">No inferred authority</p><h2>Construction stops at the first broken join.</h2><p>Missing records, stale ELF bytes, mutable infrastructure, same-width Product substitution, account aliases, insufficient rent, and packet overflow are refusals, not warnings. No signing or submission here.</p></div></section> : <>
@@ -147,5 +273,6 @@ export default function CoreFoundWorkspace() {
         <ol>{ready.plan.accountAddresses.map((address, index) => <li key={address}><span>{index.toString().padStart(2, '0')}</span><strong>{CORE_FOUND_ACCOUNT_LABELS_V3[index]}</strong><code>{address}</code><small>{accountRole(index)}</small></li>)}</ol>
       </section>
     </>}
+    </details>
   </main>;
 }

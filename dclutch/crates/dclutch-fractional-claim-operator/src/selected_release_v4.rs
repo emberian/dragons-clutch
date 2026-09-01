@@ -27,7 +27,16 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+use dclutch_capability_activation_codec::{
+    ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationTailFieldV1,
+    activation_account_profile_schema_v1, activation_descriptor_schema_v1,
+    activation_effect_schema_v1, build_activation_bundle_v1, validate_activation_bundle_v1,
+};
 use dclutch_capability_program_contract::{
+    activation_registers_v2::{
+        ACTIVATION_CONFIG_IDENTITY_V2, ACTIVATION_CONTEXT_IDENTITY_V2,
+        ACTIVATION_MARKET_IDENTITY_V2,
+    },
     set_v2::{
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
         CapabilityProgramSetEntryV2, CapabilityProgramSetV2, SelectorWidthV2,
@@ -52,29 +61,36 @@ use dclutch_claims_svm::{
         TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
     },
 };
+use dclutch_core_contract::ContentId;
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
     FRACTIONAL_ATOMIC_SIGNED_DELTA_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_TERMS_RAW_V3,
     FRACTIONAL_ATOMIC_TERMS_STAGING_V3, FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_RAW_V3,
     FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_STAGING_V3, FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3,
-    FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2,
-    FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
-    FRACTIONAL_TERMINAL_ACTOR_V3, FRACTIONAL_TERMINAL_ROOT_V3, FRACTIONAL_TERMINAL_SHARD_MINT_V3,
+    FRACTIONAL_CAPABILITY_KIND_ID_V1, FRACTIONAL_CAPABILITY_ROOT_BYTES_V4,
+    FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2, FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2,
+    FRACTIONAL_ROOT_BYTES_V1, FRACTIONAL_ROOT_MARKET_OFFSET_V1,
+    FRACTIONAL_ROOT_RENT_BENEFICIARY_OFFSET_V1, FRACTIONAL_ROOT_RENT_PRINCIPAL_OFFSET_V1,
+    FRACTIONAL_ROOT_SCHEMA_ID_V2, FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2,
+    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ACTOR_V3,
+    FRACTIONAL_TERMINAL_ROOT_V3, FRACTIONAL_TERMINAL_SHARD_MINT_V3,
     FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, FRACTIONAL_TERMINAL_TERMS_RAW_V3,
     FRACTIONAL_TERMINAL_TERMS_STAGING_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
     FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalExposureActionV2,
+    FractionalRootInputV2, fractional_root_creation_tail_v2,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FractionalExposureTermsV2, FractionalSelectionConfigV1,
-    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
-    join_fractional_selection_config_v1,
+    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
+    FractionalExposureTermsV2, FractionalSelectionConfigV1, encode_fractional_selection_config_v1,
+    fractional_selection_config_from_terms_v1, join_fractional_selection_config_v1,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
     FractionalClaimsAccountRuleV1, FractionalSelectedBundleInputV4, FractionalSelectedBundleV4,
-    FractionalSelectedProfileInputV4, build_fractional_selected_bundle_v4,
+    FractionalSelectedProfileInputV4, build_fractional_current_selected_bundle_v4,
+    build_fractional_selected_bundle_v4, validate_fractional_current_selected_bundle_v4,
     validate_fractional_selected_bundle_v4,
 };
 
@@ -93,6 +109,52 @@ pub const FRACTIONAL_SELECTED_ACTIONS_V4: [FractionalExposureActionV2;
     FractionalExposureActionV2::WholeUnwrap,
     FractionalExposureActionV2::TerminalRedeem,
     FractionalExposureActionV2::TerminalZeroBurn,
+];
+
+/// Reserved selector that reaches the sole Fractional root activation
+/// descriptor. No historical exposure action uses this byte.
+pub const FRACTIONAL_ACTIVATION_SELECTOR_V1: u32 = 255;
+/// Exact activation selector-request width.
+pub const FRACTIONAL_ACTIVATION_REQUEST_BYTES_V1: usize = 16;
+/// Domain-separating activation selector-request magic.
+pub const FRACTIONAL_ACTIVATION_REQUEST_MAGIC_V1: [u8; 8] = *b"DCFRACT1";
+/// Activation selector-request schema preimage.
+pub const FRACTIONAL_ACTIVATION_REQUEST_SCHEMA_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/fractional-activation-request-v1";
+/// SHA-256 of [`FRACTIONAL_ACTIVATION_REQUEST_SCHEMA_PREIMAGE_V1`].
+pub const FRACTIONAL_ACTIVATION_REQUEST_SCHEMA_ID_V1: [u8; 32] = [
+    0x5b, 0xac, 0x28, 0xad, 0x53, 0x99, 0x7f, 0xae, 0xdb, 0x69, 0xf9, 0x3a, 0xd5, 0x32, 0xa2, 0x33,
+    0x7d, 0x5c, 0x7e, 0x63, 0xb9, 0xf3, 0x54, 0xb7, 0x98, 0x58, 0x61, 0x87, 0x6d, 0x02, 0x46, 0xbd,
+];
+
+/// The one funding-ledger row a current Fractional activation projects.
+///
+/// Chain-derived: Fractional currently has one selected capability entry and
+/// therefore one pre-paid root-rent row. A wider funding shape needs a
+/// deliberately wider family activation profile, not an unchecked argument.
+pub const FRACTIONAL_SELECTED_FUNDING_LEDGER_SLOTS_V1: u16 = 1;
+
+/// Exact current activation tail fields, in ascending, disjoint root order.
+///
+/// The generic activation codec owns the bump expression and the rent quote;
+/// this family merely names the V2 seam coordinates the state decoder needs.
+pub const FRACTIONAL_ACTIVATION_TAIL_FIELDS_V1: [ActivationTailFieldV1; 5] = [
+    ActivationTailFieldV1::RootBumpWord { offset: 8 },
+    ActivationTailFieldV1::SeamIdentity {
+        offset: FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2 as u32,
+        register: ACTIVATION_CONFIG_IDENTITY_V2,
+    },
+    ActivationTailFieldV1::SeamIdentity {
+        offset: FRACTIONAL_ROOT_MARKET_OFFSET_V1 as u32,
+        register: ACTIVATION_MARKET_IDENTITY_V2,
+    },
+    ActivationTailFieldV1::SeamIdentity {
+        offset: FRACTIONAL_ROOT_RENT_BENEFICIARY_OFFSET_V1 as u32,
+        register: ACTIVATION_CONTEXT_IDENTITY_V2,
+    },
+    ActivationTailFieldV1::RentQuoteWord {
+        offset: FRACTIONAL_ROOT_RENT_PRINCIPAL_OFFSET_V1 as u32,
+    },
 ];
 
 /// The widest representation a published Fractional capability may name.
@@ -343,6 +405,24 @@ pub struct FractionalSelectedReleaseV4 {
     pub publication: FractionalSelectedPublicationV4,
 }
 
+/// The append-only current Fractional release: four historical V4 action
+/// artifacts plus the one V1 activation coordinate that creates their V2 root.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FractionalCurrentReleaseV4 {
+    /// Current V2-root action bundles in canonical action order.
+    pub bundles: Vec<FractionalSelectedBundleV4>,
+    /// Exact market-free config the current actions and activation inherit.
+    pub selection_config: Vec<u8>,
+    /// SHA-256 identity of `selection_config`.
+    pub selection_config_id: [u8; 32],
+    /// Family-neutral activation artifacts specialized to the Fractional V2 tail.
+    pub activation: ActivationBundleV1,
+    /// Exact five-entry current ProgramSetV2 bytes.
+    pub program_set: Vec<u8>,
+    /// SHA-256 identity of the current activation-capable program set.
+    pub program_set_id: [u8; 32],
+}
+
 /// Stable selected-release refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FractionalSelectedReleaseErrorV4 {
@@ -369,6 +449,166 @@ pub enum FractionalSelectedReleaseErrorV4 {
     SelectionConfig,
     /// Publication identities or scalars were not exact.
     Publication,
+    /// The append-only current activation descriptor/profile/effect refused.
+    Activation,
+}
+
+/// Complete input for the current activation-capable Fractional release.
+#[derive(Clone, Copy, Debug)]
+pub struct FractionalActivationBundleInputV1<'a> {
+    /// One current V4 action descriptor from the selected release.
+    ///
+    /// All selected action descriptors must agree on inherited coordinates;
+    /// this constructor reads them from this exact byte body instead of
+    /// restating a second source of truth.
+    pub action_descriptor: &'a [u8],
+}
+
+/// Stable Fractional activation construction or validation refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalActivationBundleErrorV1 {
+    /// The supplied action descriptor did not decode as CapabilityProgramV4.
+    ActionDescriptor,
+    /// The action did not name the current Fractional V2 root schema and width.
+    ForeignRoot,
+    /// The family creation oracle or its declared seam coverage refused.
+    CreationTail,
+    /// Activation selector request bytes were not canonical.
+    Request,
+    /// The generic activation codec refused the derived template.
+    Template(ActivationBundleErrorV1),
+}
+
+/// Encode the sole canonical Fractional activation selector request.
+#[must_use]
+pub fn fractional_activation_request_v1() -> [u8; FRACTIONAL_ACTIVATION_REQUEST_BYTES_V1] {
+    let mut output = [0_u8; FRACTIONAL_ACTIVATION_REQUEST_BYTES_V1];
+    output[..8].copy_from_slice(&FRACTIONAL_ACTIVATION_REQUEST_MAGIC_V1);
+    output[8..10].copy_from_slice(&1_u16.to_le_bytes());
+    output[FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2] = u8::MAX;
+    output
+}
+
+/// Hostile-check one Fractional activation selector request.
+pub fn validate_fractional_activation_request_v1(
+    bytes: &[u8],
+) -> core::result::Result<(), FractionalActivationBundleErrorV1> {
+    if bytes != fractional_activation_request_v1() {
+        return Err(FractionalActivationBundleErrorV1::Request);
+    }
+    Ok(())
+}
+
+/// Build the canonical V2-root activation descriptor/profile/effect bundle.
+///
+/// The generic codec remains the sole semantic owner of activation artifacts.
+/// This wrapper derives a Fractional V2 root tail from its creation oracle and
+/// supplies the family-specific seam field contract; it never writes an
+/// activation effect, profile, or transition itself.
+pub fn build_fractional_activation_bundle_v1(
+    input: FractionalActivationBundleInputV1<'_>,
+) -> core::result::Result<ActivationBundleV1, FractionalActivationBundleErrorV1> {
+    let (template, tail) = fractional_activation_template_v1(input)?;
+    build_activation_bundle_v1(template.as_input(&tail))
+        .map_err(FractionalActivationBundleErrorV1::Template)
+}
+
+/// Rejoin one activation bundle to its inherited current action descriptor.
+pub fn validate_fractional_activation_bundle_v1(
+    bundle: &ActivationBundleV1,
+    input: FractionalActivationBundleInputV1<'_>,
+) -> core::result::Result<(), FractionalActivationBundleErrorV1> {
+    let (template, tail) = fractional_activation_template_v1(input)?;
+    validate_activation_bundle_v1(bundle, template.as_input(&tail))
+        .map_err(FractionalActivationBundleErrorV1::Template)
+}
+
+#[derive(Clone, Copy)]
+struct FractionalActivationInheritedV1 {
+    kind: ContentId,
+    config_schema: ContentId,
+    root_schema: ContentId,
+    derivation_policy: ContentId,
+    capacity_profile: ContentId,
+    root_state_bytes: u32,
+    request_schema: ContentId,
+}
+
+impl FractionalActivationInheritedV1 {
+    fn as_input<'a>(self, tail: &'a [u8]) -> ActivationBundleInputV1<'a> {
+        ActivationBundleInputV1 {
+            kind: self.kind,
+            config_schema: self.config_schema,
+            request_schema: self.request_schema,
+            root_schema: self.root_schema,
+            derivation_policy: self.derivation_policy,
+            capacity_profile: self.capacity_profile,
+            root_state_bytes: self.root_state_bytes,
+            constant_root_tail: tail,
+            seam_fields: &FRACTIONAL_ACTIVATION_TAIL_FIELDS_V1,
+            funding_ledger_slot_count: FRACTIONAL_SELECTED_FUNDING_LEDGER_SLOTS_V1,
+        }
+    }
+}
+
+fn fractional_activation_template_v1(
+    input: FractionalActivationBundleInputV1<'_>,
+) -> core::result::Result<
+    (
+        FractionalActivationInheritedV1,
+        [u8; FRACTIONAL_ROOT_BYTES_V1],
+    ),
+    FractionalActivationBundleErrorV1,
+> {
+    let action = CapabilityProgramV4::decode(input.action_descriptor)
+        .map_err(|_| FractionalActivationBundleErrorV1::ActionDescriptor)?;
+    if action.kind().to_bytes() != FRACTIONAL_CAPABILITY_KIND_ID_V1
+        || action.config_schema().to_bytes() != FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1
+        || action.root_schema().to_bytes() != FRACTIONAL_ROOT_SCHEMA_ID_V2
+        || action.root_state_bytes()
+            != u32::try_from(FRACTIONAL_ROOT_BYTES_V1)
+                .map_err(|_| FractionalActivationBundleErrorV1::ForeignRoot)?
+    {
+        return Err(FractionalActivationBundleErrorV1::ForeignRoot);
+    }
+    let mut tail = fractional_root_creation_tail_v2(FractionalRootInputV2 {
+        bump: 0,
+        selection_config: [0x11; 32],
+        market: [0x22; 32],
+        rent_beneficiary: [0x33; 32],
+        revision: 1,
+        historical_rent_principal: 1,
+    })
+    .ok_or(FractionalActivationBundleErrorV1::CreationTail)?;
+    // The bump field retains the V2 header word (version plus a blank bump),
+    // which `RootBumpWord` reads as its family-authored base. Every other seam
+    // field is blanked, proving it has exactly one runtime author.
+    for field in FRACTIONAL_ACTIVATION_TAIL_FIELDS_V1 {
+        if matches!(field, ActivationTailFieldV1::RootBumpWord { .. }) {
+            continue;
+        }
+        let start = usize::try_from(field.offset())
+            .map_err(|_| FractionalActivationBundleErrorV1::CreationTail)?;
+        let end = start
+            .checked_add(field.width())
+            .ok_or(FractionalActivationBundleErrorV1::CreationTail)?;
+        tail.get_mut(start..end)
+            .ok_or(FractionalActivationBundleErrorV1::CreationTail)?
+            .fill(0);
+    }
+    Ok((
+        FractionalActivationInheritedV1 {
+            kind: action.kind(),
+            config_schema: action.config_schema(),
+            root_schema: action.root_schema(),
+            derivation_policy: action.derivation_policy(),
+            capacity_profile: action.capacity_profile(),
+            root_state_bytes: action.root_state_bytes(),
+            request_schema: ContentId::new(FRACTIONAL_ACTIVATION_REQUEST_SCHEMA_ID_V1)
+                .map_err(|_| FractionalActivationBundleErrorV1::CreationTail)?,
+        },
+        tail,
+    ))
 }
 
 /// Derive the exact public Claims child frame one action will actually demand.
@@ -474,6 +714,155 @@ pub fn fractional_selected_release_v4(
     };
     validate_fractional_selected_release_v4(&release, input)?;
     Ok(release)
+}
+
+/// Compile the current activation-capable Fractional release.
+///
+/// [`fractional_selected_release_v4`] remains the historical four-action
+/// constructor and retains its exact program-set bytes. This constructor is
+/// append-only: it keeps those four artifacts and appends the reserved
+/// activation selector under the V1 descriptor schema the Trading seam admits.
+pub fn fractional_current_release_v4(
+    input: FractionalSelectedReleaseInputV4<'_>,
+) -> Result<FractionalCurrentReleaseV4, FractionalSelectedReleaseErrorV4> {
+    let widths = input.widths.checked()?;
+    if input.capacity_profile == [0; 32]
+        || input.terms.terms_id() == [0; 32]
+        || input.terms.market() == [0; 32]
+        || input.terms.release_set() == [0; 32]
+        || input.terms.denominator() <= 1
+        || input.terms.product_width() == 0
+        || input.terms.representation_width() == 0
+    {
+        return Err(FractionalSelectedReleaseErrorV4::Terms);
+    }
+    if input.terms.representation_width() > FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4 {
+        return Err(FractionalSelectedReleaseErrorV4::Unsettleable);
+    }
+    let mut bundles = Vec::with_capacity(FRACTIONAL_SELECTED_ACTION_COUNT_V4);
+    let mut descriptors = [[0_u8; 32]; FRACTIONAL_SELECTED_ACTION_COUNT_V4];
+    for (slot, action) in descriptors
+        .iter_mut()
+        .zip(FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied())
+    {
+        let frame = fractional_claims_frame_spec_v4(action, input.terms, widths)?;
+        let bundle = build_fractional_current_selected_bundle_v4(FractionalSelectedBundleInputV4 {
+            action,
+            capacity_profile: input.capacity_profile,
+            profile: widths.profile(),
+            claims_frame: &frame,
+        })
+        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        *slot = digest(&bundle.descriptor);
+        bundles.push(bundle);
+    }
+    let first = bundles
+        .first()
+        .ok_or(FractionalSelectedReleaseErrorV4::Activation)?;
+    let activation = build_fractional_activation_bundle_v1(FractionalActivationBundleInputV1 {
+        action_descriptor: &first.descriptor,
+    })
+    .map_err(|_| FractionalSelectedReleaseErrorV4::Activation)?;
+    let entries = current_program_set_entries(&descriptors, activation.descriptor_id)?;
+    let width = encoded_program_set_bytes_v2(entries.len())
+        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+    let mut program_set = vec![0_u8; width];
+    encode_program_set_v2(
+        u32::try_from(FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2)
+            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?,
+        SelectorWidthV2::U8,
+        &entries,
+        &mut program_set,
+    )
+    .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+    let selection_config = selection_config_bytes(input.terms)?;
+    let release = FractionalCurrentReleaseV4 {
+        program_set_id: digest(&program_set),
+        selection_config_id: digest(&selection_config),
+        selection_config,
+        bundles,
+        activation,
+        program_set,
+    };
+    validate_fractional_current_release_v4(&release, input)?;
+    Ok(release)
+}
+
+/// Hostile-rejoin the current activation-capable release.
+pub fn validate_fractional_current_release_v4(
+    release: &FractionalCurrentReleaseV4,
+    input: FractionalSelectedReleaseInputV4<'_>,
+) -> Result<(), FractionalSelectedReleaseErrorV4> {
+    let widths = input.widths.checked()?;
+    let expected_config = selection_config_bytes(input.terms)?;
+    if release.selection_config != expected_config
+        || release.selection_config_id != digest(&release.selection_config)
+    {
+        return Err(FractionalSelectedReleaseErrorV4::SelectionConfig);
+    }
+    join_fractional_selection_config_v1(
+        FractionalSelectionConfigV1::decode(&release.selection_config)
+            .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?,
+        input.terms,
+    )
+    .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
+    if release.bundles.len() != FRACTIONAL_SELECTED_ACTION_COUNT_V4 {
+        return Err(FractionalSelectedReleaseErrorV4::Bundle);
+    }
+    let first = release
+        .bundles
+        .first()
+        .ok_or(FractionalSelectedReleaseErrorV4::Activation)?;
+    validate_fractional_activation_bundle_v1(
+        &release.activation,
+        FractionalActivationBundleInputV1 {
+            action_descriptor: &first.descriptor,
+        },
+    )
+    .map_err(|_| FractionalSelectedReleaseErrorV4::Activation)?;
+    if release.program_set_id != digest(&release.program_set) {
+        return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
+    }
+    let set = CapabilityProgramSetV2::decode(&release.program_set)
+        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+    let mut descriptors = [[0_u8; 32]; FRACTIONAL_SELECTED_ACTION_COUNT_V4];
+    for ((slot, action), bundle) in descriptors
+        .iter_mut()
+        .zip(FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied())
+        .zip(&release.bundles)
+    {
+        let frame = fractional_claims_frame_spec_v4(action, input.terms, widths)?;
+        let accounts =
+            u16::try_from(frame.len()).map_err(|_| FractionalSelectedReleaseErrorV4::Frame)?;
+        if bundle.action != action {
+            return Err(FractionalSelectedReleaseErrorV4::Bundle);
+        }
+        validate_fractional_current_selected_bundle_v4(bundle, input.capacity_profile, accounts)
+            .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        *slot = digest(&bundle.descriptor);
+    }
+    let expected = current_program_set_entries(&descriptors, release.activation.descriptor_id)?;
+    if usize::from(set.entry_count()) != expected.len() {
+        return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
+    }
+    for (index, entry) in expected.iter().copied().enumerate() {
+        if set
+            .entry(u16::try_from(index).map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?)
+            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?
+            != entry
+        {
+            return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
+        }
+    }
+    let selected = set
+        .select_descriptor(&fractional_activation_request_v1())
+        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+    if selected.schema().to_bytes() != activation_descriptor_schema_v1()
+        || selected.program().to_bytes() != release.activation.descriptor_id
+    {
+        return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
+    }
+    Ok(())
 }
 
 /// Hostile-decode and rebind one complete selected Fractional release.
@@ -722,6 +1111,123 @@ impl FractionalSelectedReleaseV4 {
     }
 }
 
+impl FractionalCurrentReleaseV4 {
+    /// Enumerate every current record the Registry must finalize.
+    ///
+    /// The historical action record closure stays untouched. The three
+    /// activation records are appended because the activation transition is
+    /// embedded in its descriptor and therefore has no fourth Record owner.
+    pub fn publication_records(
+        &self,
+    ) -> Result<Vec<FractionalPublicationRecordV1<'_>>, FractionalSelectedReleaseErrorV4> {
+        let set = CapabilityProgramSetV2::decode(&self.program_set)
+            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        let first = CapabilityProgramV4::decode(
+            &self
+                .bundles
+                .first()
+                .ok_or(FractionalSelectedReleaseErrorV4::Bundle)?
+                .descriptor,
+        )
+        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        let mut records = Vec::with_capacity(5 + FRACTIONAL_SELECTED_ACTION_COUNT_V4 * 7);
+        records.push(FractionalPublicationRecordV1 {
+            label: "program-set",
+            schema: CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            body: &self.program_set,
+        });
+        records.push(FractionalPublicationRecordV1 {
+            label: "selection-config",
+            schema: first.config_schema().to_bytes(),
+            body: &self.selection_config,
+        });
+        for (index, bundle) in self.bundles.iter().enumerate() {
+            let entry = set
+                .entry(
+                    u16::try_from(index)
+                        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?,
+                )
+                .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+            let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
+                .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+            let artifacts = descriptor.artifacts();
+            for (label, schema, body) in [
+                (
+                    "descriptor",
+                    entry.descriptor().schema().to_bytes(),
+                    bundle.descriptor.as_slice(),
+                ),
+                (
+                    "account-profile",
+                    artifacts.account_profile.schema().to_bytes(),
+                    bundle.account_profile.as_slice(),
+                ),
+                (
+                    "lifecycle-policy",
+                    artifacts.lifecycle.schema().to_bytes(),
+                    bundle.lifecycle_policy.as_slice(),
+                ),
+                (
+                    "request-profile",
+                    artifacts.request_profile.schema().to_bytes(),
+                    bundle.request_profile.as_slice(),
+                ),
+                (
+                    "strategy",
+                    artifacts.strategy.schema().to_bytes(),
+                    bundle.strategy.as_slice(),
+                ),
+                (
+                    "transition",
+                    artifacts.transition.schema().to_bytes(),
+                    bundle.transition.as_slice(),
+                ),
+                (
+                    "effect",
+                    artifacts.effect.schema().to_bytes(),
+                    bundle.effect.as_slice(),
+                ),
+            ] {
+                records.push(FractionalPublicationRecordV1 {
+                    label,
+                    schema,
+                    body,
+                });
+            }
+        }
+        let activation_entry = set
+            .entry(
+                u16::try_from(FRACTIONAL_SELECTED_ACTION_COUNT_V4)
+                    .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?,
+            )
+            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        for (label, schema, body) in [
+            (
+                "activation-account-profile",
+                activation_account_profile_schema_v1(),
+                self.activation.account_profile.as_slice(),
+            ),
+            (
+                "activation-effect",
+                activation_effect_schema_v1(),
+                self.activation.effect.as_slice(),
+            ),
+            (
+                "activation-descriptor",
+                activation_entry.descriptor().schema().to_bytes(),
+                self.activation.descriptor.as_slice(),
+            ),
+        ] {
+            records.push(FractionalPublicationRecordV1 {
+                label,
+                schema,
+                body,
+            });
+        }
+        Ok(records)
+    }
+}
+
 fn program_set_entries(
     descriptors: &[[u8; 32]; FRACTIONAL_SELECTED_ACTION_COUNT_V4],
 ) -> Result<
@@ -751,6 +1257,26 @@ fn program_set_entries(
             CapabilityDescriptorReferenceV2::new(schema, content(descriptor)?),
         );
     }
+    Ok(entries)
+}
+
+fn current_program_set_entries(
+    descriptors: &[[u8; 32]; FRACTIONAL_SELECTED_ACTION_COUNT_V4],
+    activation_descriptor: [u8; 32],
+) -> Result<
+    [CapabilityProgramSetEntryV2; FRACTIONAL_SELECTED_ACTION_COUNT_V4 + 1],
+    FractionalSelectedReleaseErrorV4,
+> {
+    let actions = program_set_entries(descriptors)?;
+    let mut entries = [actions[0]; FRACTIONAL_SELECTED_ACTION_COUNT_V4 + 1];
+    entries[..FRACTIONAL_SELECTED_ACTION_COUNT_V4].copy_from_slice(&actions);
+    entries[FRACTIONAL_SELECTED_ACTION_COUNT_V4] = CapabilityProgramSetEntryV2::new(
+        FRACTIONAL_ACTIVATION_SELECTOR_V1,
+        CapabilityDescriptorReferenceV2::new(
+            content(activation_descriptor_schema_v1())?,
+            content(activation_descriptor)?,
+        ),
+    );
     Ok(entries)
 }
 

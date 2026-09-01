@@ -12,6 +12,7 @@ import {
   publicCutTransactionHrefV1,
   type PublicCutActivityStepV1,
 } from '@/lib/publicCutStaging';
+import { MAX_TX_ACCOUNT_LOCKS_V2 } from '@/lib/generated/genericFoundingV1';
 
 // Steps 01-03 are the chain that works today; a reader can do all three. 04 and
 // 05 are written in the future tense on purpose -- they are a later release, and
@@ -55,9 +56,9 @@ export default function LaunchStory() {
       <aside className="launch-scoreboard" aria-label="Launch facts">
         <div className="launch-network"><span>NETWORK</span><strong>DEVNET</strong><small>FREE TEST SOL · NO REAL VALUE</small></div>
         <div className="launch-stats">
-          <article><strong>7</strong><span>programs</span></article>
-          <article><strong>64</strong><span>lock cap</span></article>
-          <article><strong>0.50%</strong><span>per side</span></article>
+          <article><strong>{PROTOCOL_ROLES_V1.length}</strong><span>programs</span></article>
+          <article><strong>{MAX_TX_ACCOUNT_LOCKS_V2}</strong><span>lock cap</span></article>
+          <article><strong>{opened ? 'YES' : 'NO'}</strong><span>market open</span></article>
         </div>
         <div className="launch-terminal">
           <span>release / current</span>
@@ -87,8 +88,8 @@ export default function LaunchStory() {
       <article className="launch-card launch-card-wide">
         <p className="eyebrow">What changed</p>
         <h2>{opened ? 'Found, join and trade fit devnet now.' : 'Deployed, not yet open.'}</h2>
-        <p>{opened ? 'Founding a market stays inside Solana\'s 64-account limit. A trade is a portable ticket your own wallet signs. Resolving a market and redeeming winning claims are not open yet — when they are, they run on this same public market.' : 'The seven programs are live on devnet and you can read them yourself. No market is open on them yet. When one opens, this page links to it and to its transactions.'}</p>
-        <div className="launch-tags"><span>≤64 accounts</span><span>sponsored Pyth</span><span>portable Direct tickets</span><span>full collateral</span></div>
+        <p>{opened ? `Founding a market stays inside Solana's ${MAX_TX_ACCOUNT_LOCKS_V2}-account limit. A trade is a portable ticket your own wallet signs. Resolving a market and redeeming winning claims are not open yet — when they are, they run on this same public market.` : `${PROTOCOL_ROLES_V1.length} programs are live on devnet and readable now. No market is open on them yet. When one opens, this page links to it and to its transactions.`}</p>
+        <div className="launch-tags"><span>≤{MAX_TX_ACCOUNT_LOCKS_V2} accounts</span><span>sponsored Pyth</span><span>portable Direct tickets</span><span>full collateral</span></div>
       </article>
 
       <article className="launch-card launch-card-acid">
@@ -100,7 +101,7 @@ export default function LaunchStory() {
     </section>
 
     <section className="launch-programs launch-shot">
-      <header><div><p className="eyebrow">The deployed substrate</p><h2>Seven programs. Familiar addresses.</h2></div><Anchor className="launch-secondary" href="/release">Open release view</Anchor></header>
+      <header><div><p className="eyebrow">The deployed substrate</p><h2>{PROTOCOL_ROLES_V1.length} programs. Familiar addresses.</h2></div><Anchor className="launch-secondary" href="/release">Open release view</Anchor></header>
       <div className="launch-program-grid">
         {PROTOCOL_ROLES_V1.map((role) => <article key={role}>
           <span>{role}</span>
@@ -117,6 +118,8 @@ export default function LaunchStory() {
         <Anchor className="launch-primary" href={marketHref}>{opened ? 'Open the market' : 'Explore markets'} <span>↗</span></Anchor>
         <Anchor className="launch-secondary" href="/trade">See how a trade is built</Anchor>
         <Anchor className="launch-secondary" href="/smoke">Read the public run</Anchor>
+        <Anchor className="launch-secondary" href="/campaign">Read one rehearsal lifecycle</Anchor>
+        <Anchor className="launch-secondary" href="/population">Explore the simulated population</Anchor>
       </div>
       <p className="launch-fineprint">Public Solana devnet preview. Test assets have no monetary value. This is low-assurance software under active development, not a financial product.</p>
     </section>

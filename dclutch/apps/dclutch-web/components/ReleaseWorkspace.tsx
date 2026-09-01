@@ -2,6 +2,13 @@
 
 import ArtifactInput from '@/components/ArtifactInput';
 import ConsoleHeader from '@/components/ConsoleHeader';
+import {
+  DerivedProvenance,
+  EndpointField,
+  EnumField,
+  PubkeyField,
+  U64Field,
+} from '@/components/operator/OperatorFields';
 import { FormEvent, useState } from 'react';
 
 import {
@@ -28,7 +35,7 @@ import {
 import { releaseUngateV1 } from '@/lib/releaseUngate';
 import { SolanaRpcClient } from '@/lib/rpc';
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
-import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
+import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : 'unknown release refusal'; }
 function compact(value: string): string { return value.length > 20 ? `${value.slice(0, 9)}…${value.slice(-7)}` : value; }
@@ -69,8 +76,8 @@ function ActivationResult({ plan }: Readonly<{ plan: RegistryActivationPlanV1 }>
     </div>
     {plan.mode === 'complete'
       ? <p className="direct-status">Every role is already admitted. Re-sending any packet is idempotent on chain and still pays that role&apos;s full ELF hash, so a cheapest walk-up sends none of them.</p>
-      : <p className="direct-status">Send the {plan.remainingRoles.length} packet{plan.remainingRoles.length === 1 ? '' : 's'} whose role is not yet admitted, in any order. Each is separately signed and separately submitted.</p>}
-    <p className="direct-refusal"><strong>No signing, submission, deployment, or account mutation occurred.</strong> The payer signature remains an external boundary and the finalized blockhash will expire.</p>
+      : <p className="direct-status">Export the {plan.remainingRoles.length} packet{plan.remainingRoles.length === 1 ? '' : 's'} whose role is not yet admitted, in any order. Each is signed separately for an external submitter.</p>}
+    <p className="direct-refusal"><strong>Building this plan did not sign or submit a packet.</strong> It did not deploy code or mutate an account. The finalized blockhash will expire.</p>
   </div>;
 }
 
@@ -111,6 +118,7 @@ function InfrastructureResult({ report }: Readonly<{ report: ProtocolInfrastruct
 }
 
 export default function ReleaseWorkspace() {
+  const deployment = useDeploymentV1();
   const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint); const [registry, setRegistry] = useDeploymentFieldV1((d) => d.programs.registry); const [payer, setPayer] = useState('');
   const [multiprogram, setMultiprogram] = useState(''); const [manifests, setManifests] = useState(blankManifests);
   const [activationCompute, setActivationCompute] = useState(String(REGISTRY_MAX_COMPUTE_UNITS)); const [activationStatus, setActivationStatus] = useState('No manifest or chain request has been made.'); const [activation, setActivation] = useState<RegistryActivationPlanV1 | null>(null);
@@ -176,30 +184,32 @@ export default function ReleaseWorkspace() {
   }
 
   const gate = releaseUngateV1(activation, wallets.address);
+  const derivedCache = activation?.cache ?? deployment.activationCache;
+  const cacheSource = activation === null ? `the ${deployment.label} deployment` : 'the green activation plan in step 02';
 
   return <main className="product-shell direct-workspace release-workspace">
     <ConsoleHeader path="/release" title="Release activation" purpose="Activate already-installed checked artifacts against the Registry. Does not update program code." />
-    <section className="direct-refusal"><strong>Do not use this page for the current devnet Upgrade cycle.</strong> It activates checked artifacts that are already installed; it does not update program code. The current Upgrade and opening cycle is still in progress.</section>
-    <section className="market-heading"><div><h1>Release activation.</h1><p>A checked release is the evidence bundle the release pipeline produces to prove which code a deployment runs. Drop that bundle’s files here: they are checked against the Registry and the code loaded on chain, and the activation packets are built only when every identity agrees.</p></div></section>
-    <section className="direct-card"><div className="direct-card-heading"><span>01</span><div><h2>The chain, the Registry, and who pays</h2><p>Everything here is checked against this chain. The payer is a public key whose signature stays outside this page.</p></div></div><div className="direct-form-grid">
-      <label><span>Finalized RPC endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /><small className="feed-forward">The chain to activate against — your local validator by default.</small></label>
-      <label><span>Registry program address</span><input required value={registry} onChange={(event) => setRegistry(event.target.value.trim())} /><small className="feed-forward">Already deployed on the chain — from your deployment plan (<code>plan.json</code>, written by the bootstrap producer).</small></label>
-      <label><span>Fee payer public key</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /><small className="feed-forward">{payer !== '' && payer === wallets.address ? <><strong>Filled from the wallet connected in step 03.</strong> You can still paste a different address.</> : 'Connect a wallet in step 03 to fill this, or paste an address whose keypair you hold elsewhere.'}</small></label>
-    </div></section>
+    <section className="market-resolution"><strong>Activation only.</strong> This page activates checked artifacts already installed on the selected chain. It does not deploy or upgrade programs.</section>
+    <section className="market-heading"><div><h1>Release activation.</h1><p>Load the six files produced by <code>checked-release-candidate.sh</code>. Preflight compares them with finalized Registry records and current Loader accounts.</p></div></section>
+    <section className="direct-card"><div className="direct-card-heading"><span>01</span><div><h2>The chain, the Registry, and who pays</h2><p>These three fields are shared by every act below.</p></div></div><fieldset className="operator-act"><legend>Release authority</legend><div className="operator-act-grid">
+      <EndpointField label="Finalized RPC endpoint" value={endpoint} onChange={setEndpoint} required provenance={<DerivedProvenance derived={deployment.endpoint} value={endpoint} source="the cluster picked in the header" absent="Pick a cluster in the header, or paste an endpoint." />} />
+      <PubkeyField label="Registry program" value={registry} onChange={setRegistry} required identify={(address) => address === deployment.programs.registry ? `${deployment.label} Registry` : null} provenance={<DerivedProvenance derived={deployment.programs.registry} value={registry} source={`the ${deployment.label} deployment`} absent="Pick a cluster in the header, or paste the Registry program." />} />
+      <PubkeyField label="Fee payer" value={payer} onChange={setPayer} required identify={(address) => address === wallets.address ? 'the connected wallet' : null} provenance={<DerivedProvenance derived={wallets.address} value={payer} source="the wallet connected in step 03" absent="Connect a wallet in step 03, or paste a public address whose key remains elsewhere." />} />
+    </div></fieldset></section>
     <form className="direct-card" onSubmit={buildActivation}><div className="direct-card-heading"><span>02</span><div><h2>Load the checked build and derive the activation walk</h2><p>All six files come out of one run of the checked-release pipeline (<code>tools/release/checked-release-candidate.sh</code>). Each role becomes one ten-account action, and activation admits one role per transaction, so a full walk is five separate packets, not one.</p></div></div>
       <ArtifactInput label="Checked multiprogram" provenance="multiprogram.checked in the pipeline's output — the five-role evidence set, exactly 1,592 bytes." value={multiprogram} onChange={setMultiprogram} required expectedBytes={CHECKED_MULTIPROGRAM_BYTES} />
       <div className="artifact-grid">{REGISTRY_ROLES.map((name) => <ArtifactInput key={name} label={`${name} · complete checked release`} provenance={`evidence/${name}/checked.bin in the same pipeline run.`} value={manifests[name]} onChange={(next) => setManifests((current) => ({ ...current, [name]: next }))} required />)}</div>
-      <div className="direct-form-grid"><label><span>Activation compute-unit limit</span><input inputMode="numeric" value={activationCompute} onChange={(event) => setActivationCompute(event.target.value.trim())} /></label></div>
+      <fieldset className="operator-act"><legend>Packet budget</legend><div className="operator-act-grid"><U64Field label="Activation compute-unit limit" value={activationCompute} onChange={setActivationCompute} noun="compute units" min={BigInt(1)} max={BigInt(REGISTRY_MAX_COMPUTE_UNITS)} required provenance="Applied to each role packet. It budgets execution; it does not change instruction semantics." /></div></fieldset>
       <button type="submit">Reacquire finalized authority &amp; build activation</button><p className="direct-status" aria-live="polite">{activationStatus}</p>{activation && <ActivationResult plan={activation} />}
     </form>
-    <section className="direct-card"><div className="direct-card-heading"><span>03</span><div><h2>Sign the walk with a browser wallet</h2><p>Connecting reads identity only. Signing opens for one reason: the plan built in step 02 went green against this chain and the connected wallet is the fee payer it declares. Each role is a separate explicit request, and there is no submit path.</p></div></div>
+    <section className="direct-card"><div className="direct-card-heading"><span>03</span><div><h2>Sign or export one role packet</h2><p>Unsigned export is always explicit. Signing opens only when the green plan names the connected wallet as fee payer. There is no submit path.</p></div></div>
       <WalletDirectory directory={wallets} onConnected={adoptIdentity} />
       <div className="signing-grid">
         <article><span>Wallet identity</span><strong>{wallets.address ?? 'not connected'}</strong><p>{walletStatus}</p></article>
         <article><span>Signing gate</span><strong data-testid="ungate-state">{gate.open ? 'open' : 'closed'}</strong><p data-testid="ungate-reason">{gate.reason}</p></article>
       </div>
       {activation === null
-        ? <p className="direct-refusal">No activation plan has gone green against this chain, so there is nothing a signature could mean here. Build one in step 02 first.</p>
+        ? null
         : <><p className="feed-forward"><strong>Using the plan built in step 02</strong> — {activation.packets.length} packets against cache {compact(activation.cache)}. Rebuilding the plan replaces these.</p>
           <div className="registered-state-grid release-role-grid">
           {activation.packets.map((packet) => <article className="registered-state-card" key={packet.role}>
@@ -213,11 +223,11 @@ export default function ReleaseWorkspace() {
       <p className="direct-refusal"><strong>There is no submit path here, signed or unsigned.</strong> A signed packet leaves this application as bytes for an external submitter, and the finalized blockhash it was compiled against will expire.</p>
     </section>
     <form className="direct-card" onSubmit={buildReauthentication}><div className="direct-card-heading"><span>04</span><div><h2>Reauthenticate one active role</h2><p>The Registry-owned cache selects the role and artifact. That cache, the Registry executable, and the role’s currently deployed code are reacquired before the read-only three-account action is constructed.</p></div></div>
-      <div className="direct-form-grid"><label><span>Activation cache PDA</span><input required value={cache} onChange={(event) => setCache(event.target.value.trim())} /><small className="feed-forward">{activation !== null && cache === activation.cache ? <><strong>Derived by the plan in step 02.</strong> You can paste a different cache address.</> : activation !== null ? <>Manually set — step 02 derived {compact(activation.cache)}.</> : 'A finalized record on the chain — build a plan in step 02 to fill this, or paste its address.'}</small></label><label><span>Execution role</span><select value={role} onChange={(event) => setRole(event.target.value as RegistryRole)}>{REGISTRY_ROLES.map((name) => <option value={name} key={name}>{name}</option>)}</select></label><label><span>Reauthentication compute-unit limit</span><input inputMode="numeric" value={reauthCompute} onChange={(event) => setReauthCompute(event.target.value.trim())} /></label></div>
+      <fieldset className="operator-act"><legend>Reauthentication act</legend><div className="operator-act-grid"><PubkeyField label="Activation-cache PDA" value={cache} onChange={setCache} required provenance={<DerivedProvenance derived={derivedCache} value={cache} source={cacheSource} absent="Build an activation plan in step 02, select a deployment with a cache hint, or paste the cache address." />} /><EnumField label="Execution role" value={role} onChange={(next) => setRole(next as RegistryRole)} choices={REGISTRY_ROLES} describe={(choice) => `selects the ${choice} cache slot and current deployed program`} /><U64Field label="Reauthentication compute-unit limit" value={reauthCompute} onChange={setReauthCompute} noun="compute units" min={BigInt(1)} max={BigInt(REGISTRY_MAX_COMPUTE_UNITS)} required provenance="Budgets the single read-only packet." /></div></fieldset>
       <button type="submit">Reacquire current deployment &amp; build reauthentication</button><p className="direct-status" aria-live="polite">{reauthStatus}</p>{reauth && <ReauthenticationResult plan={reauth} />}
     </form>
     <form className="direct-card" onSubmit={inspectInfrastructure}><div className="direct-card-heading"><span>05</span><div><h2>Inspect immutable protocol infrastructure</h2><p>The activation cache selects Core, and Core derives one immutable profile selecting the Registry and Rent programs. All three current deployments are reacquired; mutable, stale, substituted, and partially joined state are refused.</p></div></div>
-      <div className="direct-form-grid"><label><span>Activation cache PDA</span><input required value={cache} onChange={(event) => setCache(event.target.value.trim())} /><small className="feed-forward">{activation !== null && cache === activation.cache ? <><strong>Derived by the plan in step 02.</strong> Shared with step 04.</> : 'Shared with step 04 — a finalized record on the chain, fetched by address.'}</small></label></div>
+      <fieldset className="operator-act"><legend>Infrastructure act</legend><div className="operator-act-grid"><PubkeyField label="Activation-cache PDA" value={cache} onChange={setCache} required provenance={<DerivedProvenance derived={derivedCache} value={cache} source={cacheSource} absent="Build an activation plan in step 02, select a deployment with a cache hint, or paste the cache address." />} /></div></fieldset>
       <ArtifactInput label="Checked infrastructure manifest · optional" provenance={`infrastructure.checked in the pipeline's output — exactly ${CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()} bytes. Without it the chain can only be reported internally consistent, never recognized.`} value={infrastructureManifest} onChange={setInfrastructureManifest} expectedBytes={CHECKED_INFRASTRUCTURE_BYTES_V1} />
       <button type="submit">Reacquire &amp; inspect immutable chain</button><p className="direct-status" aria-live="polite">{infrastructureStatus}</p>{infrastructure && <InfrastructureResult report={infrastructure} />}
     </form>

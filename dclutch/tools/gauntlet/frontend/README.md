@@ -30,13 +30,12 @@ or set `PLAYWRIGHT_MODULE`.
 ## The whole pass
 
 ```sh
-# 1. a campaign, in your OWN work root. The pinned 20890 origin is a single
-#    global slot; claim it on the board and hold it only while this runs.
-tools/gauntlet/run.sh --work /private/tmp/<yours> --mode full --keep-runs
-RUN="$(cat /private/tmp/<yours>/last-run)"
+# 1. Run a supported named family campaign in your OWN work root, or use its
+#    completed work root. `run.sh --mode full` is unavailable at HEAD and
+#    refuses before creating one. The campaign's README names its own runner.
+RUN="<the completed family campaign run directory>"
 
-# 2. resume the ledger on a port of your own, and RELEASE 20890.
-#    A post-campaign ledger needs no launcher, so it needs no pinned origin.
+# 2. resume the ledger on a port of your own.
 tools/gauntlet/frontend/resume-validator.sh "$RUN/ledger" 21890 &
 
 # 3. serve the app

@@ -22,6 +22,8 @@ pub mod encode_v1;
 pub mod lifecycle_v3;
 /// Runtime-tail account and register projection profiles.
 pub mod v2;
+/// Funding-bound successor over one exact V2 account profile.
+pub mod v3;
 
 #[rustfmt::skip]
 #[allow(missing_docs)]

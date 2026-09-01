@@ -49,9 +49,10 @@ use dclutch_direct_codec::{
         authenticate_direct_artifacts_v4,
     },
     execution_v3::{
+        DIRECT_EMPTY_ACTION_REQUEST_BYTES_V3, DIRECT_REGISTERED_CANCEL_REQUEST_BYTES_V3,
         DIRECT_REGISTRATION_REQUEST_BYTES_V3, DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
         DirectExecutionActionV3, DirectExecutionRequestV3, DirectRegistrationRequestV3,
-        encode_header_v3, native_signature_count_v3,
+        DirectSignedTerminalRequestV3, encode_header_v3, native_signature_count_v3,
     },
     native_evidence_v3::{
         DIRECT_NATIVE_EVIDENCE_BYTES_V3, DirectNativeEvidenceContainerV3,
@@ -59,7 +60,11 @@ use dclutch_direct_codec::{
         encode_direct_headerless_registry_native_evidence_many_v4_atomic,
         encode_direct_native_evidence_many_v3_atomic, encode_direct_native_evidence_v3_atomic,
     },
-    registered_requests_v4::encode_direct_registration_request_v3_atomic,
+    registered_requests_v4::{
+        encode_direct_empty_action_request_v3_atomic,
+        encode_direct_registered_cancel_request_v3_atomic,
+        encode_direct_registration_request_v3_atomic,
+    },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
@@ -791,6 +796,47 @@ pub fn build_direct_registration_hot_v4(
     encode_direct_registration_request_v3_atomic(action, request, &mut encoded)
         .map_err(|_| Error::EconomicMismatch)?;
     build_direct_hot_request_v4(state, &encoded, core::slice::from_ref(&signature))
+}
+
+/// Build one maker-authorized registered cancellation through generic Hot.
+///
+/// The Product graph in `state` is the sole outcome-count authority used to
+/// hostile-decode the signed intent. The caller supplies only the canonical
+/// signed terminal body and detached Ed25519 signature; this function emits no
+/// legacy registered-controller instruction and does not sign or submit.
+pub fn build_direct_registered_cancel_hot_v4(
+    state: &DirectHotStateV4,
+    request: DirectSignedTerminalRequestV3,
+    signature: [u8; 64],
+) -> Result<DirectHotReportV4, Error> {
+    if signature.iter().all(|byte| *byte == 0) {
+        return Err(Error::ZeroIdentity);
+    }
+    let outcome_count = authenticate_product_graph(state)?.outcome_count;
+    let mut encoded = [0_u8; DIRECT_REGISTERED_CANCEL_REQUEST_BYTES_V3];
+    encode_direct_registered_cancel_request_v3_atomic(request, outcome_count, &mut encoded)
+        .map_err(|_| Error::EconomicMismatch)?;
+    build_direct_hot_request_v4(state, &encoded, core::slice::from_ref(&signature))
+}
+
+/// Build one permissionless registered expiry through generic Hot.
+///
+/// Expiry has an empty family body and therefore emits no Ed25519 evidence.
+/// The selected lifecycle program remains the semantic owner of the live slot
+/// boundary; an early transaction is built faithfully and refuses onchain
+/// without mutating the registered record or its collateral/rent accounts.
+pub fn build_direct_registered_expire_hot_v4(
+    state: &DirectHotStateV4,
+) -> Result<DirectHotReportV4, Error> {
+    let outcome_count = authenticate_product_graph(state)?.outcome_count;
+    let mut encoded = [0_u8; DIRECT_EMPTY_ACTION_REQUEST_BYTES_V3];
+    encode_direct_empty_action_request_v3_atomic(
+        DirectExecutionActionV3::ExpireRegistered,
+        outcome_count,
+        &mut encoded,
+    )
+    .map_err(|_| Error::EconomicMismatch)?;
+    build_direct_hot_request_v4(state, &encoded, &[])
 }
 
 /// Complete chain-authenticated selection needed before a Direct route may
@@ -2871,6 +2917,143 @@ mod tests {
                 seller.signature,
             ),
             Err(Error::EconomicMismatch)
+        );
+    }
+
+    #[test]
+    fn registered_terminal_exteriors_bind_native_slices_and_unsigned_expiry() {
+        let seller = intent(0, 1);
+        let mut registered_intent = seller.intent;
+        registered_intent.lifecycle = 2;
+        let terminal = DirectSignedTerminalRequestV3 {
+            maker: seller.maker.to_bytes(),
+            intent: registered_intent,
+        };
+
+        let mut cancel = [0_u8; DIRECT_REGISTERED_CANCEL_REQUEST_BYTES_V3];
+        encode_direct_registered_cancel_request_v3_atomic(terminal, 70_001, &mut cancel)
+            .expect("registered cancel request");
+        let envelope = HotExecutionEnvelopeV3::new(
+            u32::try_from(cancel.len()).expect("cancel width"),
+            [1; 32],
+            [7; 32],
+            9,
+            [2; 32],
+        )
+        .expect("cancel envelope");
+        let mut cancel_hot = envelope.to_bytes().to_vec();
+        cancel_hot.extend_from_slice(&cancel);
+        let native = native_ed25519_instruction_many(
+            DirectNativeEvidenceContainerV3::TradingHot,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
+            &cancel_hot,
+            DirectExecutionActionV3::CancelRegistered,
+            70_001,
+            core::slice::from_ref(&seller.signature),
+        )
+        .expect("cancel native evidence");
+        assert_eq!(native.program_id, ed25519_program::ID);
+        assert!(native.accounts.is_empty());
+        assert_eq!(native.data.first().copied(), Some(1));
+        assert_eq!(native.data.len(), 80);
+        assert_eq!(read_test_u16(&native.data, 2 + 4), 160);
+        assert_eq!(read_test_u16(&native.data, 2 + 6), 3);
+        assert_eq!(read_test_u16(&native.data, 2 + 8), 192);
+        assert_eq!(read_test_u16(&native.data, 2 + 10), 172);
+        assert_eq!(read_test_u16(&native.data, 2 + 12), 3);
+
+        // The signature descriptors bind the action-selected request. Turning
+        // the exact Cancel bytes into Expire under them refuses atomically.
+        let mut substituted = cancel_hot.clone();
+        *substituted
+            .get_mut(HOT_FAMILY_REQUEST_OFFSET_V3 + 12)
+            .expect("selector byte") = DirectExecutionActionV3::ExpireRegistered as u8;
+        assert_eq!(
+            native_ed25519_instruction_many(
+                DirectNativeEvidenceContainerV3::TradingHot,
+                DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
+                &substituted,
+                DirectExecutionActionV3::CancelRegistered,
+                70_001,
+                core::slice::from_ref(&seller.signature),
+            ),
+            Err(Error::ArtifactMismatch)
+        );
+
+        let mut expire = [0_u8; DIRECT_EMPTY_ACTION_REQUEST_BYTES_V3];
+        encode_direct_empty_action_request_v3_atomic(
+            DirectExecutionActionV3::ExpireRegistered,
+            70_001,
+            &mut expire,
+        )
+        .expect("registered expiry request");
+        let envelope = HotExecutionEnvelopeV3::new(
+            u32::try_from(expire.len()).expect("expiry width"),
+            [1; 32],
+            [7; 32],
+            9,
+            [2; 32],
+        )
+        .expect("expiry envelope");
+        let mut expire_hot = envelope.to_bytes().to_vec();
+        expire_hot.extend_from_slice(&expire);
+        let trading = Instruction {
+            program_id: key(199),
+            accounts: Vec::new(),
+            data: expire_hot.clone(),
+        };
+        let unsigned = vec![
+            ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1),
+            ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+            trading.clone(),
+        ];
+        assert_eq!(
+            validate_direct_hot_instruction_sequence_v4(
+                DirectExecutionActionV3::ExpireRegistered,
+                70_001,
+                &expire_hot,
+                &unsigned,
+            ),
+            Ok(())
+        );
+        let mut smuggled = unsigned;
+        smuggled.insert(2, native);
+        assert_eq!(
+            validate_direct_hot_instruction_sequence_v4(
+                DirectExecutionActionV3::ExpireRegistered,
+                70_001,
+                &expire_hot,
+                &smuggled,
+            ),
+            Err(DirectInlineTransactionErrorV3::InstructionSequence)
+        );
+
+        let (state, _) = hot38_state();
+        assert_eq!(
+            build_direct_registered_cancel_hot_v4(&state, terminal, [0; 64]),
+            Err(Error::ZeroIdentity)
+        );
+        let mut malformed = terminal;
+        malformed.intent.lifecycle = 1;
+        let mut malformed_bytes = [0_u8; DIRECT_REGISTERED_CANCEL_REQUEST_BYTES_V3];
+        assert!(
+            encode_direct_registered_cancel_request_v3_atomic(
+                malformed,
+                70_001,
+                &mut malformed_bytes,
+            )
+            .is_err()
+        );
+        // `hot38_state` deliberately does not carry a finalized Product graph.
+        // Both nonzero terminal exteriors must stop at that semantic owner,
+        // before either can borrow its otherwise valid InlineOrdinary family.
+        assert_eq!(
+            build_direct_registered_cancel_hot_v4(&state, terminal, seller.signature),
+            Err(Error::ProductGraphMismatch)
+        );
+        assert_eq!(
+            build_direct_registered_expire_hot_v4(&state),
+            Err(Error::ProductGraphMismatch)
         );
     }
 

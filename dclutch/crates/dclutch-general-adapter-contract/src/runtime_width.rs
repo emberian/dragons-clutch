@@ -215,6 +215,26 @@ pub struct CandidateHeaderV2 {
     pub batch_id: [u8; 32],
 }
 
+/// Sole fixed-header byte-layout authority for [`CandidateV2`].
+pub struct CandidateLayoutV2;
+
+impl CandidateLayoutV2 {
+    /// Outcome-count field offset.
+    pub const OUTCOME_COUNT: usize = 12;
+    /// Page-count field offset.
+    pub const PAGE_COUNT: usize = 16;
+    /// Candidate-coordinate field offset.
+    pub const CANDIDATE_COORDINATE: usize = 20;
+    /// Exact price-scale field offset.
+    pub const PRICE_SCALE: usize = 24;
+    /// Candidate-identity field offset.
+    pub const CANDIDATE_ID: usize = 32;
+    /// Product-identity field offset.
+    pub const PRODUCT_ID: usize = 64;
+    /// Batch-identity field offset.
+    pub const BATCH_ID: usize = 96;
+}
+
 /// Borrowed Candidate record with an exact `u64` simplex tail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CandidateV2<'a> {
@@ -232,13 +252,13 @@ impl<'a> CandidateV2<'a> {
             CANDIDATE_PHASE,
         )?;
         let header = CandidateHeaderV2 {
-            outcome_count: u32_at(bytes, 12)?,
-            page_count: u32_at(bytes, 16)?,
-            candidate_coordinate: u32_at(bytes, 20)?,
-            price_scale: u64_at(bytes, 24)?,
-            candidate_id: array32_at(bytes, 32)?,
-            product_id: array32_at(bytes, 64)?,
-            batch_id: array32_at(bytes, 96)?,
+            outcome_count: u32_at(bytes, CandidateLayoutV2::OUTCOME_COUNT)?,
+            page_count: u32_at(bytes, CandidateLayoutV2::PAGE_COUNT)?,
+            candidate_coordinate: u32_at(bytes, CandidateLayoutV2::CANDIDATE_COORDINATE)?,
+            price_scale: u64_at(bytes, CandidateLayoutV2::PRICE_SCALE)?,
+            candidate_id: array32_at(bytes, CandidateLayoutV2::CANDIDATE_ID)?,
+            product_id: array32_at(bytes, CandidateLayoutV2::PRODUCT_ID)?,
+            batch_id: array32_at(bytes, CandidateLayoutV2::BATCH_ID)?,
         };
         exact_width(bytes, candidate_len(header.outcome_count)?)?;
         validate_candidate_header(header)?;
@@ -278,13 +298,37 @@ impl<'a> CandidateV2<'a> {
         }
         output.fill(0);
         write_header(output, &CANDIDATE_MAGIC, CANDIDATE_PHASE)?;
-        put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.page_count)?;
-        put_u32(output, 20, header_value.candidate_coordinate)?;
-        put_u64(output, 24, header_value.price_scale)?;
-        put(output, 32, &header_value.candidate_id)?;
-        put(output, 64, &header_value.product_id)?;
-        put(output, 96, &header_value.batch_id)?;
+        put_u32(
+            output,
+            CandidateLayoutV2::OUTCOME_COUNT,
+            header_value.outcome_count,
+        )?;
+        put_u32(
+            output,
+            CandidateLayoutV2::PAGE_COUNT,
+            header_value.page_count,
+        )?;
+        put_u32(
+            output,
+            CandidateLayoutV2::CANDIDATE_COORDINATE,
+            header_value.candidate_coordinate,
+        )?;
+        put_u64(
+            output,
+            CandidateLayoutV2::PRICE_SCALE,
+            header_value.price_scale,
+        )?;
+        put(
+            output,
+            CandidateLayoutV2::CANDIDATE_ID,
+            &header_value.candidate_id,
+        )?;
+        put(
+            output,
+            CandidateLayoutV2::PRODUCT_ID,
+            &header_value.product_id,
+        )?;
+        put(output, CandidateLayoutV2::BATCH_ID, &header_value.batch_id)?;
         for (index, value) in prices.iter().enumerate() {
             put_u64(
                 output,
@@ -756,6 +800,91 @@ pub struct VerifiedCandidateHeaderV2 {
     pub quote_credit: u64,
     /// Nonzero price denominator inherited from the Candidate simplex.
     pub price_scale: u64,
+}
+
+/// Sole fixed-header and tail byte-layout authority for [`VerifiedCandidateV2`].
+pub struct VerifiedCandidateLayoutV2;
+
+impl VerifiedCandidateLayoutV2 {
+    /// Magic field offset.
+    pub const fn magic() -> u32 {
+        0
+    }
+
+    /// Version field offset.
+    pub const fn version() -> u32 {
+        8
+    }
+
+    /// Phase field offset.
+    pub const fn phase() -> u32 {
+        10
+    }
+
+    /// Outcome-count field offset.
+    pub const fn outcome_count() -> u32 {
+        12
+    }
+
+    /// Page-count field offset.
+    pub const fn page_count() -> u32 {
+        16
+    }
+
+    /// Candidate-coordinate field offset.
+    pub const fn candidate_coordinate() -> u32 {
+        20
+    }
+
+    /// Terminal verifier revision offset.
+    pub const fn revision() -> u32 {
+        24
+    }
+
+    /// Candidate identity offset.
+    pub const fn candidate_id() -> u32 {
+        32
+    }
+
+    /// Product identity offset.
+    pub const fn product_id() -> u32 {
+        64
+    }
+
+    /// Batch identity offset.
+    pub const fn batch_id() -> u32 {
+        96
+    }
+
+    /// Filled-lots aggregate offset.
+    pub const fn filled_lots() -> u32 {
+        128
+    }
+
+    /// Quote-debit aggregate offset.
+    pub const fn quote_debit() -> u32 {
+        136
+    }
+
+    /// Quote-credit aggregate offset.
+    pub const fn quote_credit() -> u32 {
+        144
+    }
+
+    /// Price-scale offset.
+    pub const fn price_scale() -> u32 {
+        152
+    }
+
+    /// First claim-input tail byte.
+    pub const fn claim_inputs_base() -> u32 {
+        160
+    }
+
+    /// Width of one tail item.
+    pub const fn tail_item_stride() -> u32 {
+        8
+    }
 }
 
 /// Borrowed verified-candidate certificate with runtime input and output tails.

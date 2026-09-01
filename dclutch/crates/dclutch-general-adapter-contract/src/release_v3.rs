@@ -18,9 +18,9 @@
 //! the wrong shape: an open table admits a descriptor nobody enumerated, and
 //! the whole argument for a program SET rather than a permissive descriptor is
 //! that the reachable programs are named in advance. Instead the entry count
-//! selects one of four NAMED PROFILES, each an exact table with a role per
+//! selects one of six NAMED PROFILES, each an exact table with a role per
 //! coordinate. A release is still a closed enumeration; what changed is that
-//! there are now four legal enumerations instead of one, and adding a fifth is
+//! there are now six legal enumerations instead of one, and adding another is
 //! a visible edit here rather than a silent consequence of publishing a longer
 //! set.
 //!
@@ -29,7 +29,9 @@
 //! | [`GeneralReleaseProfileV1::SettlementOnly`] | 7 | the seven settlement actions; what shipped before this |
 //! | [`GeneralReleaseProfileV1::SettlementWithActivation`] | 8 | the same, plus the activation descriptor -- ADR-0006 §8 item 7 |
 //! | [`GeneralReleaseProfileV1::Complete`] | 14 | every action, once the collection and candidate artifacts exist |
-//! | [`GeneralReleaseProfileV1::CompleteWithActivation`] | 15 | both |
+//! | [`GeneralReleaseProfileV1::CompleteWithActivation`] | 15 | the legacy fourteen actions plus activation |
+//! | [`GeneralReleaseProfileV1::CompleteV2`] | 15 | all fifteen first-class actions, including CloseCandidate |
+//! | [`GeneralReleaseProfileV1::CompleteV2WithActivation`] | 16 | all fifteen actions plus activation |
 
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
@@ -50,6 +52,10 @@ pub const GENERAL_ACTION_PROGRAM_COUNT_V3: usize = 7;
 
 /// Number of exact action-selected programs in a complete General release.
 pub const GENERAL_ACTION_PROGRAM_COUNT_V4: usize = 14;
+
+/// Number of exact action-selected programs after CloseCandidate became the
+/// first-class tag-14 catalogue entry.
+pub const GENERAL_ACTION_PROGRAM_COUNT_V5: usize = 15;
 
 /// Canonical strictly increasing General action order for the settlement half.
 ///
@@ -85,6 +91,28 @@ pub const GENERAL_ACTIONS_V4: [Action; GENERAL_ACTION_PROGRAM_COUNT_V4] = [
     Action::ReleaseOrder,
 ];
 
+/// Canonical strictly increasing order of every current General action.
+///
+/// V4 remains frozen because its fourteen-entry ProgramSet identities are
+/// historical content. V5 is its exact append-only extension.
+pub const GENERAL_ACTIONS_V5: [Action; GENERAL_ACTION_PROGRAM_COUNT_V5] = [
+    Action::Consider,
+    Action::Freeze,
+    Action::InitializeSettlement,
+    Action::Collect,
+    Action::Materialize,
+    Action::Distribute,
+    Action::Close,
+    Action::OpenBatch,
+    Action::PlaceOrder,
+    Action::CancelOrder,
+    Action::CloseBatch,
+    Action::SubmitCandidate,
+    Action::VerifyCandidateRow,
+    Action::ReleaseOrder,
+    Action::CloseCandidate,
+];
+
 /// Selector reserved for the activation descriptor's set coordinate.
 ///
 /// It is deliberately outside the action tag space and outside what any
@@ -108,6 +136,10 @@ pub enum GeneralReleaseProfileV1 {
     Complete,
     /// Every action plus the activation descriptor.
     CompleteWithActivation,
+    /// Every current action, including first-class CloseCandidate.
+    CompleteV2,
+    /// Every current action plus the activation descriptor.
+    CompleteV2WithActivation,
 }
 
 impl GeneralReleaseProfileV1 {
@@ -117,7 +149,13 @@ impl GeneralReleaseProfileV1 {
             GENERAL_ACTION_PROGRAM_COUNT_V3 => Ok(Self::SettlementOnly),
             8 => Ok(Self::SettlementWithActivation),
             GENERAL_ACTION_PROGRAM_COUNT_V4 => Ok(Self::Complete),
+            // Fifteen is ambiguous on count alone: the last selector says
+            // whether this is legacy CompleteWithActivation (255) or current
+            // CompleteV2 (CloseCandidate tag 14). The hostile set decoder
+            // resolves it below; this count-only compatibility API preserves
+            // the historical answer.
             15 => Ok(Self::CompleteWithActivation),
+            16 => Ok(Self::CompleteV2WithActivation),
             _ => Err(GeneralReleaseErrorV3::ProgramSet),
         }
     }
@@ -130,6 +168,7 @@ impl GeneralReleaseProfileV1 {
                 GENERAL_ACTION_PROGRAM_COUNT_V3
             }
             Self::Complete | Self::CompleteWithActivation => GENERAL_ACTION_PROGRAM_COUNT_V4,
+            Self::CompleteV2 | Self::CompleteV2WithActivation => GENERAL_ACTION_PROGRAM_COUNT_V5,
         }
     }
 
@@ -138,7 +177,9 @@ impl GeneralReleaseProfileV1 {
     pub const fn has_activation_entry(self) -> bool {
         matches!(
             self,
-            Self::SettlementWithActivation | Self::CompleteWithActivation
+            Self::SettlementWithActivation
+                | Self::CompleteWithActivation
+                | Self::CompleteV2WithActivation
         )
     }
 
@@ -160,15 +201,15 @@ pub struct GeneralActionArtifactsV3<'a> {
     pub artifacts: GeneralArtifactBytesV3<'a>,
 }
 
-/// Complete exact seven-action release input.
+/// Complete exact current-catalogue release input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralArtifactReleaseBytesV3<'a> {
     /// ProgramSet selected by the capability release and GeneralConfigV3.
     pub program_set: &'a [u8],
     /// Immutable GeneralConfigV3 shared by every action descriptor.
     pub config: &'a [u8],
-    /// Exact action bundles in [`GENERAL_ACTIONS_V3`] order.
-    pub actions: [GeneralActionArtifactsV3<'a>; GENERAL_ACTION_PROGRAM_COUNT_V3],
+    /// Exact action bundles in [`GENERAL_ACTIONS_V5`] order.
+    pub actions: [GeneralActionArtifactsV3<'a>; GENERAL_ACTION_PROGRAM_COUNT_V5],
 }
 
 /// Accepted release summary. The artifact bytes remain content-addressed by
@@ -180,7 +221,7 @@ pub struct GeneralArtifactReleaseV3 {
     /// Immutable GeneralConfigV3 identity.
     pub config: ContentId,
     /// Exact descriptor identities in canonical action order.
-    pub descriptors: [ContentId; GENERAL_ACTION_PROGRAM_COUNT_V3],
+    pub descriptors: [ContentId; GENERAL_ACTION_PROGRAM_COUNT_V5],
     /// Product-authenticated runtime outcome width used during admission.
     pub tail_count: u32,
 }
@@ -220,7 +261,21 @@ pub fn authenticate_general_program_set_v3<'a>(
         bytes,
     )
     .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?;
-    let profile = GeneralReleaseProfileV1::from_entry_count(usize::from(set.entry_count()))?;
+    let entry_count = usize::from(set.entry_count());
+    let profile = if entry_count == GENERAL_ACTION_PROGRAM_COUNT_V5 {
+        let last = set
+            .entry(u16::try_from(entry_count - 1).map_err(|_| GeneralReleaseErrorV3::ProgramSet)?)
+            .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?;
+        if last.selector() == u32::from(Action::CloseCandidate as u8) {
+            GeneralReleaseProfileV1::CompleteV2
+        } else if last.selector() == GENERAL_ACTIVATION_SELECTOR_V4 {
+            GeneralReleaseProfileV1::CompleteWithActivation
+        } else {
+            return Err(GeneralReleaseErrorV3::ProgramSet);
+        }
+    } else {
+        GeneralReleaseProfileV1::from_entry_count(entry_count)?
+    };
     if set.selector_offset() != crate::artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV2::U8
     {
@@ -233,7 +288,7 @@ pub fn authenticate_general_program_set_v3<'a>(
             .entry(u16::try_from(index).map_err(|_| GeneralReleaseErrorV3::ProgramSet)?)
             .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?;
         if index < action_count {
-            if entry.selector() != u32::from(GENERAL_ACTIONS_V4[index] as u8) {
+            if entry.selector() != u32::from(GENERAL_ACTIONS_V5[index] as u8) {
                 return Err(GeneralReleaseErrorV3::ProgramSet);
             }
             if entry.descriptor().schema().to_bytes() != CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID {
@@ -272,9 +327,9 @@ pub fn authenticate_general_program_set_v3<'a>(
     Ok((set, profile))
 }
 
-/// Join every action-selected descriptor and finalized artifact in one pass.
+/// Join every current action-selected descriptor and finalized artifact in one pass.
 ///
-/// The seven supplied requests are admission witnesses only. Live execution
+/// The fifteen supplied requests are admission witnesses only. Live execution
 /// re-runs the selected RequestProfile against the actual family request.
 pub fn authenticate_general_release_v3(
     selection: GeneralArtifactSelectionV3,
@@ -288,14 +343,11 @@ pub fn authenticate_general_release_v3(
         program_set_digest,
         release.program_set,
     )?;
-    // Hot release admission joins the SEVEN settlement bundles and nothing
-    // else. The wider profiles are legal sets, and they are not yet admissible
-    // releases: the collection and candidate actions have no authored artifact
-    // triple, so there is nothing for this function to join at those
-    // coordinates, and admitting them unvalidated would be worse than refusing.
-    // The activation coordinate is validated at the set level and joined by the
-    // activation route, which owns a different schema.
-    if profile.action_count() != GENERAL_ACTION_PROGRAM_COUNT_V3 {
+    // Current Hot release admission joins the complete V5 catalogue. Historical
+    // seven-action ProgramSets remain valid inputs to the set authenticator
+    // above, but they cannot masquerade as a current complete release by
+    // supplying only a prefix of the action artifacts.
+    if profile.action_count() != GENERAL_ACTION_PROGRAM_COUNT_V5 {
         return Err(GeneralReleaseErrorV3::UnjoinedProfile);
     }
     if selection.config != config_digest {
@@ -303,11 +355,11 @@ pub fn authenticate_general_release_v3(
     }
     let mut descriptors = [ContentId::new([1; 32])
         .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?;
-        GENERAL_ACTION_PROGRAM_COUNT_V3];
+        GENERAL_ACTION_PROGRAM_COUNT_V5];
     let mut index = 0_usize;
-    while index < GENERAL_ACTION_PROGRAM_COUNT_V3 {
+    while index < GENERAL_ACTION_PROGRAM_COUNT_V5 {
         let action_artifacts = release.actions[index];
-        let expected_action = GENERAL_ACTIONS_V3[index];
+        let expected_action = GENERAL_ACTIONS_V5[index];
         if action_artifacts.action != expected_action
             || action_artifacts.artifacts.program_set != release.program_set
             || action_artifacts.artifacts.config != release.config
@@ -365,7 +417,7 @@ mod tests {
         };
 
         let mut entries = Vec::new();
-        for action in GENERAL_ACTIONS_V4.into_iter().take(profile.action_count()) {
+        for action in GENERAL_ACTIONS_V5.into_iter().take(profile.action_count()) {
             let byte = (action as u8).checked_add(1).expect("bounded action");
             entries.push(CapabilityProgramSetEntryV2::new(
                 u32::from(action as u8),
@@ -487,6 +539,8 @@ mod tests {
             GeneralReleaseProfileV1::SettlementWithActivation,
             GeneralReleaseProfileV1::Complete,
             GeneralReleaseProfileV1::CompleteWithActivation,
+            GeneralReleaseProfileV1::CompleteV2,
+            GeneralReleaseProfileV1::CompleteV2WithActivation,
         ] {
             let bytes = profiled_set(profile);
             let identity = digest(&bytes);
@@ -502,7 +556,7 @@ mod tests {
         // counts that sit between them -- which is exactly what a `>=` rule
         // would have admitted, each one a table with an unenumerated
         // coordinate.
-        for count in [0_usize, 1, 6, 9, 10, 13, 16, 20] {
+        for count in [0_usize, 1, 6, 9, 10, 13, 17, 20] {
             assert_eq!(
                 GeneralReleaseProfileV1::from_entry_count(count).err(),
                 Some(GeneralReleaseErrorV3::ProgramSet),
@@ -567,18 +621,16 @@ mod tests {
         // seal and the ProgramSet identity -- without ever being dispatchable.
         assert!(u32::from(u8::MAX) == GENERAL_ACTIVATION_SELECTOR_V4);
         assert!(dclutch_general_codec::ControllerRequestV1::decode(&[0xff; 64]).is_err());
-        for action in GENERAL_ACTIONS_V4 {
+        for action in GENERAL_ACTIONS_V5 {
             assert_ne!(u32::from(action as u8), GENERAL_ACTIVATION_SELECTOR_V4);
         }
     }
 
     #[test]
-    fn a_wider_profile_is_a_legal_set_and_not_yet_an_admissible_release() {
-        // The relaxation lands ahead of the artifacts, deliberately: GEN-HOT's
-        // bundle and ADR-0006 §8 item 7's activation entry both need the RULE,
-        // and the collection and candidate actions need artifact triples nobody
-        // has authored. A release naming those coordinates is refused with a
-        // name that says which of the two is missing.
+    fn the_historical_fourteen_action_profile_remains_a_legal_named_set() {
+        // V4 content identities remain decodable even though current release
+        // admission joins the append-only V5 catalogue. Compatibility is a
+        // named profile, never an `at least fourteen` rule.
         let bytes = profiled_set(GeneralReleaseProfileV1::Complete);
         let identity = digest(&bytes);
         let (_, profile) = authenticate_general_program_set_v3(identity, identity, &bytes)
@@ -587,27 +639,9 @@ mod tests {
         assert!(profile.action_count() > GENERAL_ACTION_PROGRAM_COUNT_V3);
     }
 
-    /// **The seven triples are ONE unit for release admission, not seven.**
-    ///
-    /// GEN-ESCROW's evidence document lists eleven sites "in dependency order",
-    /// which reads as an order you can walk one action at a time — author
-    /// `OpenBatch` everywhere, exercise it, then the next. The profile table
-    /// this module owns says otherwise, and it is worth deciding rather than
-    /// rediscovering: `from_entry_count` maps a set to exactly one of four
-    /// profiles, whose action counts are 7 and 14 and nothing else. **There is
-    /// no eight-action profile**, so a release carrying one authored collection
-    /// or candidate triple has no legal set to be published in.
-    ///
-    /// The consequence is a scheduling fact, not a defect. An eighth triple can
-    /// be authored and unit-tested, and it cannot be joined, admitted, reached
-    /// through the accelerator, or executed by the campaign — which is exactly
-    /// the "parked, not landed" state the STRUCT-CAMP doctrine names and this
-    /// cycle has already paid for twice. Either all seven land together, or
-    /// ADR-0010 §4 gains a fifth profile, and that record already says such an
-    /// addition "is a visible edit, not a consequence of publishing a longer
-    /// set" — so it is an authority decision, not a lane's to take.
+    /// Every release width is named; no partial prefix is admitted implicitly.
     #[test]
-    fn there_is_no_profile_between_the_seven_settlement_triples_and_all_fourteen() {
+    fn unnamed_intermediate_counts_refuse_and_v5_is_an_explicit_profile() {
         // Every count a partial authoring would produce, refused by the table.
         for count in [9_usize, 10, 11, 12, 13] {
             assert_eq!(
@@ -623,12 +657,14 @@ mod tests {
         assert_eq!(eight, GeneralReleaseProfileV1::SettlementWithActivation);
         assert_eq!(eight.action_count(), GENERAL_ACTION_PROGRAM_COUNT_V3);
         assert!(eight.has_activation_entry());
-        // The only two action counts any profile declares.
+        // The only three action counts any profile declares.
         let counts: std::vec::Vec<usize> = [
             GeneralReleaseProfileV1::SettlementOnly,
             GeneralReleaseProfileV1::SettlementWithActivation,
             GeneralReleaseProfileV1::Complete,
             GeneralReleaseProfileV1::CompleteWithActivation,
+            GeneralReleaseProfileV1::CompleteV2,
+            GeneralReleaseProfileV1::CompleteV2WithActivation,
         ]
         .into_iter()
         .map(GeneralReleaseProfileV1::action_count)
@@ -640,13 +676,18 @@ mod tests {
                 GENERAL_ACTION_PROGRAM_COUNT_V3,
                 GENERAL_ACTION_PROGRAM_COUNT_V4,
                 GENERAL_ACTION_PROGRAM_COUNT_V4,
+                GENERAL_ACTION_PROGRAM_COUNT_V5,
+                GENERAL_ACTION_PROGRAM_COUNT_V5,
             ],
         );
-        // And admission joins the narrow count alone, so `Complete` stays a
-        // legal set and an inadmissible release until all seven are authored.
+        // V4 and V5 are distinct append-only catalogue widths.
         assert_eq!(
             GENERAL_ACTION_PROGRAM_COUNT_V4 - GENERAL_ACTION_PROGRAM_COUNT_V3,
             7
+        );
+        assert_eq!(
+            GENERAL_ACTION_PROGRAM_COUNT_V5 - GENERAL_ACTION_PROGRAM_COUNT_V4,
+            1
         );
     }
 }
