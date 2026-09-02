@@ -9,8 +9,8 @@ use dclutch_account_profile_contract::{
             LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
             LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3,
             LifecyclePlanInputV3, LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3,
-            LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
-            encode_lifecycle_policy_v5_atomic,
+            LifecycleRefundSourceInputV3, LifecycleRegisterCoordinateV3, LifecycleSeedInputV3,
+            encode_lifecycle_policy_v4_atomic, encode_lifecycle_policy_v5_atomic,
         },
     },
     v2::{
@@ -249,6 +249,7 @@ fn policy(quotes: &[LifecycleCurrentRentQuoteInputV5]) -> Vec<u8> {
         rent_credit: None,
         principal: None,
         beneficiary: None,
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let protected = [None];
@@ -497,6 +498,7 @@ fn assert_failed_policy_encode(quotes: &[LifecycleCurrentRentQuoteInputV5], expe
         rent_credit: None,
         principal: None,
         beneficiary: None,
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let width = HEADER_BYTES
@@ -580,6 +582,7 @@ fn current_rent_destination_cannot_alias_lifecycle_protected_output() {
         rent_credit: Some(LifecycleAccountCoordinateV3::fixed(2)),
         principal: Some(LifecycleRegisterCoordinateV3::common(1)),
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(0)),
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let protected = [Some(LifecycleProtectedOutputsInputV3 {
@@ -689,6 +692,7 @@ fn v5_is_distinct_from_v4_and_reserved_bytes_are_hostile_decoded() {
         rent_credit: None,
         principal: None,
         beneficiary: None,
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let width =

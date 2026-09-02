@@ -86,17 +86,8 @@ pub const OPEN_CAPABILITY_LIFECYCLE_POLICY_BYTES_V5: usize = LIFECYCLE_HEADER_BY
 pub fn encode_open_capability_lifecycle_policy_v5() -> Result<Vec<u8>> {
     let mut scratch = vec![0_u8; OPEN_CAPABILITY_LIFECYCLE_POLICY_BYTES_V5];
     let mut output = vec![0_u8; OPEN_CAPABILITY_LIFECYCLE_POLICY_BYTES_V5];
-    encode_lifecycle_policy_v5_atomic(
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &mut scratch,
-        &mut output,
-    )
-    .map_err(Error::LifecycleArtifact)?;
+    encode_lifecycle_policy_v5_atomic(&[], &[], &[], &[], &[], &[], &mut scratch, &mut output)
+        .map_err(Error::LifecycleArtifact)?;
     Ok(output)
 }
 
@@ -155,8 +146,8 @@ mod tests {
             ACTION_PLAN_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-                encode_lifecycle_policy_v5_atomic,
+                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+                LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
             },
         };
 
@@ -180,6 +171,7 @@ mod tests {
             rent_credit: None,
             principal: None,
             beneficiary: None,
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         }];
         let width = LIFECYCLE_HEADER_BYTES

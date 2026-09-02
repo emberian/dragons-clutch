@@ -15,11 +15,12 @@ use dclutch_account_profile_contract::{
     AccountObservationV1,
     lifecycle_v3::{
         AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, AuthenticatedRentQuoteV5,
-        CoordinateScopeV3, LifecycleContextV3, LifecycleOperationV3,
-        LifecycleProtectedRegisterBuffersV3, LifecycleRegisterKindV3, LifecycleRegisterTargetV3,
-        LifecycleRegistersV3, LifecycleRentQuoteBuffersV5, LifecycleSeedInputValueV3,
-        PlannedObservationsV3, StateLifecyclePlanV3, StateLifecyclePolicyV5,
-        ValidatedProfileJoinV3, plan_lifecycle_with_protected_outputs_atomic,
+        CloseStatePlanV3, CoordinateScopeV3, LifecycleContextV3, LifecycleOperationV3,
+        LifecycleProtectedRegisterBuffersV3, LifecycleRefundSourceV3, LifecycleRegisterKindV3,
+        LifecycleRegisterTargetV3, LifecycleRegistersV3, LifecycleRentQuoteBuffersV5,
+        LifecycleSeedInputValueV3, PlannedObservationsV3, StateLifecyclePlanV3,
+        StateLifecyclePolicyV5, ValidatedProfileJoinV3,
+        plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
         AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2, RouteAccountPrivilegesV2,
@@ -6470,6 +6471,13 @@ fn direct_inline_participant_v3(
                 account.lamports(),
             )),
             Some(MakerReplayFirstUseV1 {
+                // A maker replay root is the MARKET's shared structure, and
+                // this route deliberately admits a stranger as the payer of one
+                // fill. `rent_owner` is a payout target for the permissionless
+                // maker close, so adopting a `Payer` plan's identity here would
+                // hand that stranger the rent of something the market depends
+                // on. `validate_create` refuses such a plan; this is the site
+                // whose consequence says why it must.
                 rent_owner: plan.beneficiary,
                 rent_principal: plan.historical_rent_principal,
             }),
@@ -10386,6 +10394,30 @@ fn invoke_funding_signed_v5(
         .map_err(|_| TradingSbfError::Commit.into())
 }
 
+/// Whether a Close plan's recorded refund identity is admissible at the
+/// mutation boundary.
+///
+/// This used to be `authenticated_credit.beneficiary == plan.beneficiary`, and
+/// under a `Credit` plan it still is: a market-shared state's refund identity
+/// is knowable from the credit at close time, so the boundary re-derives it and
+/// refuses a plan naming anyone else.
+///
+/// A `Payer` plan's identity is not re-derivable here -- the payer funded the
+/// state in some earlier transaction and is not an account of this one. The
+/// kernel took that identity from the closing state's OWN bytes, an
+/// AccountProfile projection rather than caller input, so what this boundary
+/// can still own is that a create actually recorded one. The offset those bytes
+/// live at belongs to the family, and the family's artifacts check it there.
+fn closing_refund_identity_admitted_v3(
+    plan: CloseStatePlanV3,
+    credit_beneficiary: [u8; 32],
+) -> bool {
+    match plan.refund_source {
+        LifecycleRefundSourceV3::Credit => credit_beneficiary == plan.beneficiary,
+        LifecycleRefundSourceV3::Payer => plan.beneficiary != [0; 32],
+    }
+}
+
 fn apply_lifecycle_closes_v3(
     program_id: &Pubkey,
     lifecycle_owner_program: &AccountInfo<'_>,
@@ -10427,7 +10459,7 @@ fn apply_lifecycle_closes_v3(
                 != usize::try_from(plan.source_data_bytes).map_err(|_| TradingSbfError::Commit)?
             || state.lamports() != plan.source_before
             || credit.lamports() != plan.rent_credit_before
-            || authenticated_credit.beneficiary != plan.beneficiary
+            || !closing_refund_identity_admitted_v3(plan, authenticated_credit.beneficiary)
         {
             return Err(TradingSbfError::Commit.into());
         }
@@ -17030,7 +17062,8 @@ mod tests {
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5,
                 LifecycleGuardInputV3, LifecycleOperationInputV3, LifecyclePlanInputV3,
-                LifecycleRecipeInputV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+                LifecycleRecipeInputV3, LifecycleRefundSourceInputV3, LifecycleSeedInputV3,
+                encode_lifecycle_policy_v5_atomic,
             },
         };
 
@@ -17060,6 +17093,7 @@ mod tests {
             rent_credit: None,
             principal: None,
             beneficiary: None,
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         }];
         let mut scratch = [0_u8; WIDTH];
@@ -18221,6 +18255,7 @@ mod tests {
                 payer: [2; 32],
                 rent_credit: [3; 32],
                 beneficiary: [4; 32],
+                refund_source: LifecycleRefundSourceV3::Credit,
                 target_data_bytes: 144,
                 historical_rent_principal: 30,
                 state_before: 5,
@@ -18269,6 +18304,7 @@ mod tests {
                 state: [1; 32],
                 rent_credit: [2; 32],
                 beneficiary: [3; 32],
+                refund_source: LifecycleRefundSourceV3::Credit,
                 source_data_bytes: 144,
                 historical_rent_principal: 30,
                 source_before: 37,
@@ -18326,6 +18362,7 @@ mod tests {
             payer: [4; 32],
             rent_credit: [2; 32],
             beneficiary: [3; 32],
+            refund_source: LifecycleRefundSourceV3::Credit,
             target_data_bytes: 144,
             historical_rent_principal: 30,
             state_before: 0,
@@ -18743,6 +18780,7 @@ mod tests {
                     payer: [0x12; 32],
                     rent_credit: [0x13; 32],
                     beneficiary: [0x14; 32],
+                    refund_source: LifecycleRefundSourceV3::Credit,
                     target_data_bytes: 64,
                     historical_rent_principal: 1,
                     state_before: 0,

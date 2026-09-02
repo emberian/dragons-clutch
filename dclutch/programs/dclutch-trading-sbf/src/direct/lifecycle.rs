@@ -6,7 +6,8 @@
 //! operation selected by the accepted Direct transition.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
+    AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3, LifecycleRefundSourceV3,
+    StateLifecyclePlanV3,
 };
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_direct_codec::successor::{
@@ -47,6 +48,7 @@ pub fn validate_registered_record_close_lifecycle_v3(
             state,
             rent_credit,
             beneficiary,
+            refund_source,
             source_data_bytes,
             historical_rent_principal,
             source_before,
@@ -58,6 +60,12 @@ pub fn validate_registered_record_close_lifecycle_v3(
             && rent_credit != [0; 32]
             && rent_credit != record
             && beneficiary == close.rent_owner
+            // Direct's registered records are the MARKET's rent, and this says
+            // so where the plan is read rather than leaving it to whoever last
+            // edited the policy. A record whose plan declared `Payer` would put
+            // one submitter's key into `rent_owner`, and the close would then
+            // hand it a record the market paid for.
+            && refund_source == LifecycleRefundSourceV3::Credit
             && usize::try_from(source_data_bytes).ok()
                 == Some(DIRECT_REGISTERED_RECORD_BYTES_V2)
             && historical_rent_principal == close.rent_principal
@@ -185,6 +193,7 @@ fn validate_create(
             state_before,
             state_after,
             payer_debit,
+            refund_source,
             bump,
             ..
         }) if state == expected_state
@@ -194,6 +203,12 @@ fn validate_create(
             && rent_credit != state
             && payer != rent_credit
             && beneficiary == expected_beneficiary
+            // Symmetric with the close, and this is the site the maker replay
+            // root's rent depends on: `hot_v3` adopts this plan's beneficiary
+            // as `MakerReplayFirstUseV1::rent_owner`, and a maker root is a
+            // shared structure of the market whose route deliberately admits a
+            // stranger as the payer of one fill.
+            && refund_source == LifecycleRefundSourceV3::Credit
             && usize::try_from(target_data_bytes).ok() == Some(expected_data_bytes)
             && historical_rent_principal == expected_principal
             && state_before == creation.observed_lamports

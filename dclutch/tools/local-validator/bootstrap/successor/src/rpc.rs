@@ -414,6 +414,41 @@ pub(crate) struct Rpc {
     /// equality read a stale replica and refused a rollback that had in fact
     /// rolled back). Every single-account read waits this floor out.
     read_floor: u64,
+    /// Every wall-clock read this connection asked for and did not get.
+    ///
+    /// Kept on the connection rather than threaded through each caller
+    /// because the connection is what knows: a report writer drains this at
+    /// sealing and states the absences rather than inheriting a silence.
+    unread_block_times: Vec<NonAuthoritativeBlockTimeV1>,
+}
+
+/// One wall-clock read that is BOOKKEEPING, never authority.
+///
+/// After a transaction finalizes, its authority is its signature, its packet
+/// and its poststates; a wall-clock lookup adds none of those. A public
+/// endpoint legitimately refuses `getBlockTime` for a slot it does not serve,
+/// and a SKIPPED slot has no block at all and answers `-32004 Block not
+/// available` forever -- so a retry is not a repair and a hard failure is not
+/// a diagnosis. Cohort-13 lost a finalized two-hour founding's whole evidence
+/// block to exactly that on 2026-09-02.
+///
+/// A read that cannot be authority may not be fatal. This carries the absence
+/// and the endpoint's own words to the report instead.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct NonAuthoritativeBlockTimeV1 {
+    pub(crate) slot: u64,
+    /// Present exactly when the endpoint served the lookup.
+    pub(crate) unix_timestamp: Option<i64>,
+    /// The endpoint's exact refusal, present exactly when the lookup failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) unavailable: Option<String>,
+}
+
+impl NonAuthoritativeBlockTimeV1 {
+    pub(crate) fn is_unread(&self) -> bool {
+        self.unix_timestamp.is_none()
+    }
 }
 
 /// What one submit+confirm attempt found.
@@ -518,6 +553,7 @@ impl Rpc {
             policy,
             last_call: None,
             read_floor: 0,
+            unread_block_times: Vec::new(),
         })
     }
 
@@ -960,10 +996,66 @@ impl Rpc {
         Ok((observation, observed))
     }
 
+    /// The authoritative wall-clock read: a caller whose semantics depend on
+    /// the clock (a resolution window, a retirement deadline) must fail when
+    /// the chain will not answer.
     pub(crate) fn block_time(&mut self, slot: u64) -> Result<i64> {
         self.call("getBlockTime", &json!([slot]))?
             .as_i64()
             .ok_or_else(|| Error::new("getBlockTime result was not an integer"))
+    }
+
+    /// The bookkeeping wall-clock read, for a site whose plan does not consume
+    /// the clock. Never returns an error; the absence is recorded on this
+    /// connection and restated in the run's report.
+    ///
+    /// Use this ONLY where a positive control proves no consumer reads the
+    /// value. Reaching for it to quiet a failing authoritative read converts a
+    /// refusal into a silence, which is the failure this exists to end.
+    pub(crate) fn non_authoritative_block_time(
+        &mut self,
+        slot: u64,
+    ) -> NonAuthoritativeBlockTimeV1 {
+        let observed = match self.call("getBlockTime", &json!([slot])) {
+            Ok(value) => match value.as_i64() {
+                Some(unix_timestamp) => NonAuthoritativeBlockTimeV1 {
+                    slot,
+                    unix_timestamp: Some(unix_timestamp),
+                    unavailable: None,
+                },
+                None => NonAuthoritativeBlockTimeV1 {
+                    slot,
+                    unix_timestamp: None,
+                    unavailable: Some("getBlockTime result was not an integer".to_owned()),
+                },
+            },
+            Err(error) => NonAuthoritativeBlockTimeV1 {
+                slot,
+                unix_timestamp: None,
+                unavailable: Some(error.to_string()),
+            },
+        };
+        if observed.is_unread() {
+            eprintln!(
+                "campaign: getBlockTime {slot} is unavailable ({}); the finalized signatures and \
+                 poststates are this run's authority, so the read is recorded absent and the run \
+                 continues",
+                observed.unavailable.as_deref().unwrap_or("no detail")
+            );
+            if !self
+                .unread_block_times
+                .iter()
+                .any(|existing| existing.slot == slot)
+            {
+                self.unread_block_times.push(observed.clone());
+            }
+        }
+        observed
+    }
+
+    /// Every wall-clock read this connection asked for and did not get.
+    pub(crate) fn unread_block_times(&self) -> &[NonAuthoritativeBlockTimeV1] {
+        &self.unread_block_times
     }
 
     pub(crate) fn finalized_slot(&mut self) -> Result<u64> {

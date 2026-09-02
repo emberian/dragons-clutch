@@ -15,10 +15,10 @@ use super::{
     PROTECTED_OUTPUT_BYTES, PROTECTED_OUTPUT_COUNT_OFFSET, QUOTE_ACTION_OFFSET,
     QUOTE_EXACT_DATA_LEN_OFFSET, QUOTE_SCALAR_DESTINATION_OFFSET, QUOTE_SCOPE_EVERY_ACTION_V5,
     QUOTE_SCOPE_OFFSET, QUOTE_SCOPE_ONE_ACTION_V5, RECIPE_BYTES, RECIPE_COUNT_OFFSET,
-    SCHEMA_VERSION_OFFSET, SCOPE_FIXED, SCOPE_ITEM, SEED_BYTES, SEED_CANONICAL_BUMP,
-    SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE, SEED_COUNT_OFFSET, SEED_ITEM_IDENTITY,
-    SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL, SUCCESSOR_ARTIFACT_PROFILE,
-    StateLifecyclePolicyV3, VERSION,
+    REFUND_SOURCE_CREDIT, REFUND_SOURCE_PAYER, SCHEMA_VERSION_OFFSET, SCOPE_FIXED, SCOPE_ITEM,
+    SEED_BYTES, SEED_CANONICAL_BUMP, SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE,
+    SEED_COUNT_OFFSET, SEED_ITEM_IDENTITY, SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL,
+    SUCCESSOR_ARTIFACT_PROFILE, StateLifecyclePolicyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item lifecycle coordinate.
@@ -179,8 +179,25 @@ pub struct LifecyclePlanInputV3 {
     pub principal: Option<LifecycleRegisterCoordinateV3>,
     /// Immutable RentCredit-beneficiary identity; required for Create and Close.
     pub beneficiary: Option<LifecycleRegisterCoordinateV3>,
+    /// Whose rent the managed state carries.
+    pub refund_source: LifecycleRefundSourceInputV3,
     /// Mandatory plan enable guard.
     pub guard: LifecycleGuardInputV3,
+}
+
+/// Declared refund identity for one lifecycle plan.
+///
+/// See [`super::LifecycleRefundSourceV3`] for what the two answers mean and why
+/// a per-owner position cannot share a Market-scoped credit's single wallet.
+/// `Credit` encodes as zero, so a plan that does not think about this question
+/// encodes exactly the bytes it always did.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LifecycleRefundSourceInputV3 {
+    /// The permanent RentCredit's immutable refund wallet.
+    #[default]
+    Credit,
+    /// The create payer the plan names and the profile may debit.
+    Payer,
 }
 
 /// Lifecycle-owned output destinations for one AuthenticateOrCreate plan.
@@ -594,8 +611,13 @@ fn encode_plan(plan: LifecyclePlanInputV3, output: &mut [u8], offset: usize) -> 
         LifecycleOperationInputV3::Close => PLAN_CLOSE,
         LifecycleOperationInputV3::AuthenticateOrCreate => PLAN_AUTHENTICATE_OR_CREATE,
     };
+    let refund_source = match plan.refund_source {
+        LifecycleRefundSourceInputV3::Credit => REFUND_SOURCE_CREDIT,
+        LifecycleRefundSourceInputV3::Payer => REFUND_SOURCE_PAYER,
+    };
     write(output, offset, &plan.action.to_le_bytes())?;
     write_byte(output, add(offset, 4)?, operation)?;
+    write_byte(output, add(offset, 5)?, refund_source)?;
     write(output, add(offset, 6)?, &plan.recipe.to_le_bytes())?;
     encode_optional_account(plan.payer, output, add(offset, 8)?)?;
     encode_optional_account(plan.rent_credit, output, add(offset, 12)?)?;
@@ -684,6 +706,7 @@ mod tests {
             rent_credit: None,
             principal: None,
             beneficiary: None,
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::ScalarEq {
                 source: LifecycleRegisterCoordinateV3::common(1),
                 expected: 9,
@@ -739,6 +762,7 @@ mod tests {
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(2)),
             principal: Some(LifecycleRegisterCoordinateV3::common(1)),
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(0)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         }];
         let protected = [Some(LifecycleProtectedOutputsInputV3 {

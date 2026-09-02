@@ -8,8 +8,8 @@ use dclutch_account_profile_contract::{
         encode::{
             LifecycleAccountCoordinateV3, LifecycleGuardInputV3,
             LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3,
-            LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
-            LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
+            LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+            LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
         },
     },
     v2::{
@@ -388,6 +388,7 @@ fn encode_lifecycle() -> Result<Vec<u8>, FractionalArtifactCompilerErrorV1> {
             principal: retire.then_some(LifecycleRegisterCoordinateV3::common(S_ROOT_PRINCIPAL)),
             beneficiary: retire
                 .then_some(LifecycleRegisterCoordinateV3::common(I_ROOT_BENEFICIARY)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         }
     });

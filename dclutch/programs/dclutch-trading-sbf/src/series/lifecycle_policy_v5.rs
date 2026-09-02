@@ -52,8 +52,8 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     StateLifecyclePolicyV5,
     encode::{
         LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
-        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+        LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_capability_program_contract::{
@@ -185,6 +185,7 @@ pub fn encode_series_consume_state_lifecycle_v5_atomic(
         rent_credit: None,
         principal: None,
         beneficiary: None,
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     encode_lifecycle_policy_v5_atomic(&recipes, &seeds, &plans, &[None], &[], &[], scratch, output)
@@ -252,6 +253,7 @@ pub fn encode_series_close_state_lifecycle_v5_atomic(
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(
             SERIES_CLOSE_BENEFICIARY_IDENTITY_V5,
         )),
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     encode_lifecycle_policy_v5_atomic(&recipes, &seeds, &plans, &[None], &[], &[], scratch, output)

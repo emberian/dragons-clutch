@@ -2,8 +2,8 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
     encode::{
         LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-        encode_lifecycle_policy_v5_atomic,
+        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::{
@@ -166,6 +166,7 @@ fn encode_lifecycle_fixture(root_data_bytes: u32) -> Vec<u8> {
         rent_credit: None,
         principal: None,
         beneficiary: None,
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let width =

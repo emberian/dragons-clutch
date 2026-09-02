@@ -1,4 +1,4 @@
-//! Create a General capability root on an owned loopback validator, from the
+//! Create a General capability root on an authenticated cluster, from the
 //! PUBLISHED release rather than from a fixture.
 //!
 //! One Core-signed, permissionless transaction: Core's capability route
@@ -47,8 +47,24 @@
 //! same bytes — which is what distinguishes an activation of General from a
 //! coincidence of widths.
 //!
-//! Loopback only, and it refuses every external origin. Idempotent: a live
-//! Trading-owned root at the derived coordinate reports `already-active`.
+//! # One cluster value, two independent checks
+//!
+//! This route used to be loopback-only, and it was loopback-only twice: the
+//! campaign evidence was parsed under `OwnedLoopback` and the origin was
+//! authenticated against `OwnedLoopback`, four lines apart. Those are two
+//! genuinely independent facts — one about the document, one about the
+//! endpoint — and a devnet arm that satisfied only one of them would accept a
+//! loopback campaign report against a devnet chain, or the reverse.
+//!
+//! So the cluster is a VALUE, taken once by [`run_owned_loopback`] or
+//! [`run_devnet`] and threaded into both checks and into the report's own
+//! schema. There is no flag that reaches one check and not the other, because
+//! there is no flag: the arm is chosen by which command was typed, and the two
+//! checks read the same variable. The acknowledgment is admissible only on the
+//! devnet arm, and on the loopback arm it is an unknown flag by name.
+//!
+//! Idempotent: a live Trading-owned root at the derived coordinate reports
+//! `already-active`.
 
 use std::path::PathBuf;
 
@@ -101,8 +117,21 @@ use crate::{
 
 pub(crate) const GENERAL_CAPABILITY_ACTIVATION_COMMAND_V1: &str =
     "local-private-validator-general-capability-activation-v1";
+pub(crate) const DEVNET_GENERAL_CAPABILITY_ACTIVATION_COMMAND_V1: &str =
+    "devnet-general-capability-activation-v1";
 
-const REPORT_SCHEMA_V1: &str = "dclutch-owned-loopback-general-capability-activation-report-v1";
+const OWNED_LOOPBACK_REPORT_SCHEMA_V1: &str =
+    "dclutch-owned-loopback-general-capability-activation-report-v1";
+const DEVNET_REPORT_SCHEMA_V1: &str = "dclutch-devnet-general-capability-activation-report-v1";
+
+/// The report's schema is a function of the cluster, so a devnet report can
+/// never be read as loopback evidence by a consumer that only checks schema.
+const fn report_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => DEVNET_REPORT_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback => OWNED_LOOPBACK_REPORT_SCHEMA_V1,
+    }
+}
 
 /// Domain separating this activation's caller-authority context from every
 /// other family's. Core treats the context as an opaque PDA seed, so the only
@@ -129,6 +158,11 @@ pub(crate) fn usage() -> &'static str {
      --rpc-url http://127.0.0.1:PORT/ \
      --plan ABSOLUTE_JSON --campaign-report ABSOLUTE_JSON \
      --payer-keypair ABSOLUTE_DISPOSABLE_JSON \
+     --output ABSOLUTE_NEW_JSON [--execute]\n  \
+     dclutch-local-successor-bootstrap devnet-general-capability-activation-v1 \
+     --rpc-url URL --i-mean-devnet GENESIS_HASH \
+     --plan ABSOLUTE_JSON --campaign-report ABSOLUTE_JSON \
+     --payer-keypair ABSOLUTE_DISPOSABLE_JSON \
      --output ABSOLUTE_NEW_JSON [--execute]"
 }
 
@@ -139,14 +173,21 @@ struct ArgumentsV1 {
     payer_keypair: PathBuf,
     output: PathBuf,
     execute: bool,
+    /// The cluster BOTH the campaign evidence and the origin are checked
+    /// against. One field, because they are one decision stated once.
+    expected: ExpectedClusterV1,
+    /// Present only on the devnet arm; the loopback arm refuses the flag by
+    /// name rather than ignoring it.
+    acknowledgment: Option<String>,
 }
 
-fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
+fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
     let mut plan = None;
     let mut campaign_report = None;
     let mut payer_keypair = None;
     let mut output = None;
+    let mut acknowledgment = None;
     let mut execute = false;
     let mut iterator = arguments.into_iter();
     while let Some(flag) = iterator.next() {
@@ -163,6 +204,9 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--campaign-report" => &mut campaign_report,
             "--payer-keypair" => &mut payer_keypair,
             "--output" => &mut output,
+            crate::cluster::DEVNET_ACKNOWLEDGMENT_FLAG if expected == ExpectedClusterV1::Devnet => {
+                &mut acknowledgment
+            }
             other => return Err(refusal("input/unknown-flag", other)),
         };
         if slot.replace(value).is_some() {
@@ -179,6 +223,8 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         payer_keypair: PathBuf::from(required(payer_keypair, "--payer-keypair")?),
         output: PathBuf::from(required(output, "--output")?),
         execute,
+        expected,
+        acknowledgment,
     })
 }
 
@@ -273,8 +319,52 @@ fn read_record(
     Ok(account.data)
 }
 
-pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_arguments(arguments)?;
+/// Activate a General capability on an owned loopback validator.
+pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run_with_cluster_v1(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+/// Activate a General capability on acknowledged devnet.
+///
+/// Same route, same derivations, same refusals. What changes is one value,
+/// and it changes BOTH of the two independent cluster checks below.
+pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
+    run_with_cluster_v1(arguments, ExpectedClusterV1::Devnet)
+}
+
+/// This route's two independent cluster checks, in one place, over one value.
+///
+/// The first says the DOCUMENT is this cluster's; the second says the ENDPOINT
+/// is. Neither implies the other — a devnet endpoint will happily serve a run
+/// whose campaign report was produced on a loopback validator — and both read
+/// the same `arguments.expected`, which the command name chose and no flag can
+/// reach.
+///
+/// It is a function rather than eight inline lines so that a test can drive
+/// exactly this. A test that instead re-derived the two checks from
+/// `ExpectedClusterV1` would prove the enum works and say nothing about
+/// whether this route consults it twice, which is the whole claim.
+fn authenticate_cluster_v1(
+    arguments: &ArgumentsV1,
+    campaign_bytes: &[u8],
+) -> Result<(campaign::CampaignTerminalEvidenceV1, ClusterOriginV1)> {
+    // ENDPOINT FIRST, and the order is deliberate. `ClusterOriginV1::parse` is
+    // the rail that makes accidental mainnet impossible; it costs nothing and
+    // it should run before this route reads a document that may be sixteen
+    // megabytes. It also means the two refusals are DISTINGUISHABLE from
+    // outside: a wrong endpoint is named as a wrong endpoint instead of being
+    // shadowed by whatever the document happens to be missing.
+    let origin = ClusterOriginV1::parse(&arguments.rpc_url, arguments.acknowledgment.as_deref())?;
+    arguments.expected.authenticate(&origin)?;
+    let evidence = campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
+        campaign_bytes,
+        arguments.expected,
+    )?;
+    Ok((evidence, origin))
+}
+
+fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_arguments(arguments, expected)?;
     if arguments.output.exists() {
         return Err(refusal(
             "output/exists",
@@ -285,15 +375,18 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         .map_err(|error| refusal("input/unreadable", format!("plan: {error}")))?;
     let campaign_bytes = std::fs::read(&arguments.campaign_report)
         .map_err(|error| refusal("input/unreadable", format!("campaign report: {error}")))?;
+    // Both cluster checks BEFORE the plan is decoded, for the same reason the
+    // endpoint check comes before the document check inside them: they are the
+    // cheapest thing here and one of them is the accidental-mainnet rail. With
+    // the decode first, a plan this route could not read made both refusals
+    // unreachable -- which is not a safety hole, since nothing has connected
+    // yet, but it did mean the two refusals a caller most needs to see were
+    // shadowed by the third. Measured by running the binary, not reasoned:
+    // every arm reported `successor plan: missing field schema` for a loopback
+    // URL, a devnet URL and a foreign campaign report alike.
+    let (evidence, origin) = authenticate_cluster_v1(&arguments, &campaign_bytes)?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)
         .map_err(|error| Error::new(format!("successor plan: {error}")))?;
-    let evidence = campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
-        &campaign_bytes,
-        ExpectedClusterV1::OwnedLoopback,
-    )?;
-
-    let origin = ClusterOriginV1::parse(&arguments.rpc_url, None)?;
-    ExpectedClusterV1::OwnedLoopback.authenticate(&origin)?;
     let mut rpc = Rpc::connect_cluster(
         &origin,
         if arguments.execute {
@@ -602,7 +695,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             let state = GeneralRootV2::decode(tail)
                 .map_err(|error| Error::new(format!("live root tail: {error:?}")))?;
             let report = json!({
-                "schema": REPORT_SCHEMA_V1,
+                "schema": report_schema_v1(arguments.expected),
                 "verdict": "already-active",
                 "market": market.to_string(),
                 "root": root.to_string(),
@@ -775,9 +868,9 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     };
 
     let facts = json!({
-        "schema": REPORT_SCHEMA_V1,
-        "cluster": "loopback",
-        "rpcUrl": origin.url(),
+        "schema": report_schema_v1(arguments.expected),
+        "cluster": arguments.expected.evidence_label(),
+        "rpcUrl": origin.redacted_url(),
         "planSha256": sha256_hex(&plan_bytes),
         "campaignReportSha256": sha256_hex(&campaign_bytes),
         "market": market.to_string(),
@@ -1090,5 +1183,158 @@ mod tests {
             dclutch_direct_codec::activation_bundle_v1::direct_activation_request_v1().as_slice(),
             "two families must not present the same activation request bytes"
         );
+    }
+
+    // ---------------- the devnet arm, and its two independent checks
+
+    /// A campaign report carrying only the three fields the cluster gate reads.
+    ///
+    /// Deliberately incomplete: a report that clears the gate then refuses on
+    /// `genesis_hash`, which is how these tests tell "passed the cluster check"
+    /// apart from "passed everything" without building a whole campaign.
+    fn cluster_labelled_report(label: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "schema": "dclutch-successor-campaign-report-v1",
+            "cluster": label,
+            "mode": "execute",
+        }))
+        .expect("report fixture")
+    }
+
+    fn cluster_arguments(expected: ExpectedClusterV1) -> ArgumentsV1 {
+        let (rpc_url, acknowledgment) = match expected {
+            ExpectedClusterV1::Devnet => (
+                "https://api.devnet.solana.com/".to_owned(),
+                Some(crate::cluster::DEVNET_GENESIS_HASH.to_owned()),
+            ),
+            ExpectedClusterV1::OwnedLoopback => ("http://127.0.0.1:8899/".to_owned(), None),
+        };
+        ArgumentsV1 {
+            rpc_url,
+            plan: PathBuf::from("/plan.json"),
+            campaign_report: PathBuf::from("/campaign.json"),
+            payer_keypair: PathBuf::from("/payer.json"),
+            output: PathBuf::from("/out.json"),
+            execute: false,
+            expected,
+            acknowledgment,
+        }
+    }
+
+    /// **The claim this arm exists to make**, driven through the route's own
+    /// `authenticate_cluster_v1` rather than re-derived from the enum.
+    ///
+    /// Four cells per arm. The endpoint axis is varied by swapping the
+    /// arguments' own origin; the document axis by swapping the report's
+    /// label. A hardcoded cluster in EITHER check turns two of the eight cells
+    /// green that must be red — measured: pinning the evidence parse to
+    /// `OwnedLoopback` fails this test on the devnet arm's own-report cell.
+    #[test]
+    fn each_arm_takes_both_the_document_check_and_the_endpoint_check() {
+        for (arm, own_label, foreign_label) in [
+            (ExpectedClusterV1::Devnet, "devnet", "loopback"),
+            (ExpectedClusterV1::OwnedLoopback, "loopback", "devnet"),
+        ] {
+            let own_origin = cluster_arguments(arm);
+            let foreign_origin = cluster_arguments(match arm {
+                ExpectedClusterV1::Devnet => ExpectedClusterV1::OwnedLoopback,
+                ExpectedClusterV1::OwnedLoopback => ExpectedClusterV1::Devnet,
+            });
+            // The foreign origin under this arm's expectation: same endpoint
+            // shape as the other cluster, still checked against `arm`.
+            let crossed = ArgumentsV1 {
+                expected: arm,
+                ..foreign_origin
+            };
+
+            // Own document, own endpoint: clears both gates and refuses later,
+            // on the field this fixture omits on purpose.
+            let admitted =
+                authenticate_cluster_v1(&own_origin, &cluster_labelled_report(own_label))
+                    .expect_err("the fixture omits genesis_hash on purpose");
+            assert!(
+                admitted.0.contains("omitted genesis_hash"),
+                "{arm:?} must clear both cluster gates for its own pair: {}",
+                admitted.0
+            );
+
+            // Foreign document, own endpoint.
+            let document =
+                authenticate_cluster_v1(&own_origin, &cluster_labelled_report(foreign_label))
+                    .expect_err("a foreign cluster's report is non-consumable");
+            assert!(
+                document.0.contains("non-consumable"),
+                "{arm:?} must refuse a {foreign_label} report: {}",
+                document.0
+            );
+
+            // Own document, foreign endpoint.
+            let endpoint = authenticate_cluster_v1(&crossed, &cluster_labelled_report(own_label))
+                .expect_err("a foreign endpoint is refused");
+            assert!(
+                endpoint.0.contains("refuses loopback")
+                    || endpoint.0.contains("refuses every external origin")
+                    || endpoint
+                        .0
+                        .contains(crate::cluster::DEVNET_ACKNOWLEDGMENT_FLAG),
+                "{arm:?} must refuse the other cluster's endpoint: {}",
+                endpoint.0
+            );
+        }
+    }
+
+    /// The acknowledgment is a devnet-arm flag. On the loopback arm it is an
+    /// unknown flag BY NAME rather than a value quietly accepted and ignored —
+    /// which is the shape that lets someone believe they targeted devnet.
+    #[test]
+    fn the_acknowledgment_is_admissible_only_on_the_devnet_arm() {
+        let arguments = || {
+            vec![
+                "--rpc-url".to_owned(),
+                "https://api.devnet.solana.com/".to_owned(),
+                "--plan".to_owned(),
+                "/plan.json".to_owned(),
+                "--campaign-report".to_owned(),
+                "/campaign.json".to_owned(),
+                "--payer-keypair".to_owned(),
+                "/payer.json".to_owned(),
+                "--output".to_owned(),
+                "/out.json".to_owned(),
+                crate::cluster::DEVNET_ACKNOWLEDGMENT_FLAG.to_owned(),
+                crate::cluster::DEVNET_GENESIS_HASH.to_owned(),
+            ]
+        };
+        let devnet = parse_arguments(arguments(), ExpectedClusterV1::Devnet)
+            .expect("the devnet arm takes the acknowledgment");
+        assert_eq!(
+            devnet.acknowledgment.as_deref(),
+            Some(crate::cluster::DEVNET_GENESIS_HASH)
+        );
+        assert_eq!(devnet.expected, ExpectedClusterV1::Devnet);
+        let refusal = match parse_arguments(arguments(), ExpectedClusterV1::OwnedLoopback) {
+            Err(error) => error,
+            Ok(_) => panic!("the loopback arm has no acknowledgment"),
+        };
+        assert!(
+            refusal.0.contains("input/unknown-flag")
+                && refusal
+                    .0
+                    .contains(crate::cluster::DEVNET_ACKNOWLEDGMENT_FLAG),
+            "{}",
+            refusal.0
+        );
+    }
+
+    /// Two clusters, two report schemas. A consumer that authenticates only the
+    /// schema string therefore cannot read a devnet activation as loopback
+    /// evidence, or the reverse.
+    #[test]
+    fn the_report_schema_is_a_function_of_the_cluster() {
+        assert_ne!(
+            report_schema_v1(ExpectedClusterV1::Devnet),
+            report_schema_v1(ExpectedClusterV1::OwnedLoopback)
+        );
+        assert!(report_schema_v1(ExpectedClusterV1::Devnet).contains("devnet"));
+        assert!(report_schema_v1(ExpectedClusterV1::OwnedLoopback).contains("owned-loopback"));
     }
 }

@@ -2,7 +2,8 @@ use super::{
     buy_escrow::*, complementary::*, inline::*, lifecycle::*, physical::*, sell_escrow::*,
 };
 use dclutch_account_profile_contract::lifecycle_v3::{
-    AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
+    AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3, LifecycleRefundSourceV3,
+    StateLifecyclePlanV3,
 };
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
@@ -1172,6 +1173,7 @@ fn state_create_plan(
         payer: id(payer_byte),
         rent_credit: id(payer_byte + 1),
         beneficiary,
+        refund_source: LifecycleRefundSourceV3::Credit,
         target_data_bytes: u32::try_from(data_bytes).expect("state bytes"),
         historical_rent_principal: principal,
         state_before: creation.observed_lamports,
@@ -1193,6 +1195,7 @@ fn record_close_lifecycle(
         state,
         rent_credit: id(85),
         beneficiary: close.rent_owner,
+        refund_source: LifecycleRefundSourceV3::Credit,
         source_data_bytes: u32::try_from(DIRECT_REGISTERED_RECORD_BYTES_V2).expect("record bytes"),
         historical_rent_principal: close.rent_principal,
         source_before: close.total_rent_credit,
@@ -2225,6 +2228,7 @@ fn maker_lifecycle_plan(
             payer: id(88),
             rent_credit: id(89),
             beneficiary: first_use.rent_owner,
+            refund_source: LifecycleRefundSourceV3::Credit,
             target_data_bytes: u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker bytes"),
             historical_rent_principal: first_use.rent_principal,
             state_before: creation.observed_lamports,

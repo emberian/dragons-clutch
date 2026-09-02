@@ -2067,3 +2067,208 @@ mod release_finalization_corpus {
         }
     }
 }
+
+/// The Registry's finalization observation, replayed over the ONE deployment
+/// this protocol actually has on a public chain.
+///
+/// `release_finalization_corpus` above proves the partition against twelve
+/// Lean-decided vectors built from `[0x11; 32]`-shaped identities. That is the
+/// right instrument for the rule and the wrong one for the question an operator
+/// asks on deploy day, which is whether THESE bytes at THIS address on devnet
+/// will be admitted -- a question that has been answered by hand, from a CLI
+/// summary line, every time it has been asked.
+///
+/// So the facts below are transcribed once, from the finalized ProgramData
+/// image of the General accelerator deployed to devnet on 2026-09-02
+/// (`docs/evidence/GENERAL_ACCELERATOR_DEVNET_2026_09_02.md`), and every
+/// assertion here is the program's own `authenticate_deployment` and its own
+/// `release_deployment_refusal_v1` over them. Nothing about the rule is
+/// restated; only one real observation is turned into accounts.
+///
+/// What this DOES NOT prove: that a devnet Registry has finalized this record.
+/// No deployed Registry carries this code -- cohort-12 and cohort-13 both
+/// predate `90a8563f` -- so the on-chain half is cohort-14's, and the runbook
+/// step in the evidence doc is where it is claimed.
+#[cfg(test)]
+mod devnet_general_accelerator_observation {
+    extern crate std;
+
+    use dclutch_core_contract::ContentId;
+    use dclutch_registry_contract::{
+        ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    };
+    use dclutch_release_set_contract::ProgramIdentityV1;
+    use solana_program::program_error::ProgramError;
+    use solana_sdk_ids::bpf_loader_upgradeable;
+
+    use crate::RegistryError;
+
+    /// `8pgnyNvgdue7Jc8aw75BGWoghsKGevWJvFom8omUWvQY`.
+    const PROGRAM: [u8; 32] = [
+        0x74, 0x39, 0x19, 0xa4, 0xd4, 0x0e, 0x02, 0x98, 0x91, 0x8e, 0xbf, 0xbd, 0x83, 0xb2, 0xab,
+        0x58, 0x77, 0x95, 0x49, 0xf1, 0xcd, 0x43, 0x11, 0xa3, 0x9a, 0xcf, 0x9d, 0x13, 0x84, 0xcd,
+        0xdd, 0x81,
+    ];
+    /// `HcxFzWKaFzrVVnvgx6BWuNbo278pgpYY5CrxyVe67Sxb`, the derived ProgramData.
+    const PROGRAMDATA: [u8; 32] = [
+        0xf6, 0xf0, 0xcc, 0xd3, 0x01, 0x0f, 0x87, 0xe5, 0x28, 0x97, 0x94, 0x14, 0x51, 0xc7, 0x8b,
+        0x04, 0x6e, 0x22, 0xe2, 0x61, 0xc6, 0x07, 0x66, 0x02, 0x7e, 0x0a, 0x7d, 0xd1, 0x7f, 0x60,
+        0xfb, 0x7c,
+    ];
+    /// `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP`, the deployer, read out of
+    /// the ProgramData header's authority slot rather than off the CLI.
+    const AUTHORITY: [u8; 32] = [
+        0x3b, 0x65, 0xa9, 0x3a, 0x66, 0x53, 0x46, 0x99, 0x3e, 0x31, 0xfd, 0x6e, 0xd5, 0x27, 0x7a,
+        0x98, 0x14, 0xc3, 0x7f, 0x43, 0x07, 0x6c, 0x36, 0x33, 0x72, 0xc8, 0xa1, 0x04, 0x1d, 0xf3,
+        0x7a, 0xde,
+    ];
+    /// SHA-256 of the observed ELF tail, which for this deployment carries no
+    /// padding and therefore equals the built artifact's own digest.
+    const ELF_DIGEST: [u8; 32] = [
+        0x61, 0xb2, 0xd7, 0x3d, 0x44, 0xf2, 0x47, 0x00, 0x51, 0xb4, 0x0e, 0x39, 0xcd, 0xa1, 0xd3,
+        0x1a, 0x5f, 0x67, 0x67, 0x94, 0x29, 0xea, 0xcd, 0x54, 0x48, 0xd5, 0xe5, 0xac, 0x58, 0x3b,
+        0x74, 0xae,
+    ];
+    /// `0x1d52b2fe`, from bytes 4..12 of the ProgramData header.
+    const DEPLOYMENT_SLOT: u64 = 491_959_038;
+
+    fn release(
+        elf_digest: [u8; 32],
+        deployment_slot: u64,
+        authority: Option<[u8; 32]>,
+    ) -> ArtifactReleaseV1 {
+        ArtifactReleaseV1::new(
+            ProgramIdentityV1::new(PROGRAM).expect("program identity"),
+            ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
+            PROGRAMDATA,
+            // The semantic release identity is an operator-stated fact and is
+            // not one of `authenticate_deployment`'s eight conjuncts, so it is
+            // varied nowhere here. The accelerator having no protocol-owned
+            // semantic identity of its own is named as debt in the evidence doc.
+            ContentId::new(ELF_DIGEST).expect("semantic release"),
+            elf_digest,
+            deployment_slot,
+            match authority {
+                Some(_) => ArtifactUpgradePolicyV1::ExactAuthority,
+                None => ArtifactUpgradePolicyV1::Immutable,
+            },
+            authority,
+        )
+        .expect("canonical release")
+    }
+
+    fn observation(
+        program: [u8; 32],
+        elf_digest: [u8; 32],
+        deployment_slot: u64,
+        authority: Option<[u8; 32]>,
+    ) -> DeploymentObservationV1 {
+        DeploymentObservationV1::new(
+            program,
+            bpf_loader_upgradeable::ID.to_bytes(),
+            true,
+            PROGRAMDATA,
+            bpf_loader_upgradeable::ID.to_bytes(),
+            false,
+            PROGRAMDATA,
+            bpf_loader_upgradeable::ID.to_bytes(),
+            deployment_slot,
+            elf_digest,
+            authority,
+        )
+        .expect("canonical observation")
+    }
+
+    fn outcome(
+        release: ArtifactReleaseV1,
+        observed: DeploymentObservationV1,
+    ) -> Result<(), ProgramError> {
+        release
+            .authenticate_deployment(observed)
+            .map_err(super::release_deployment_refusal_v1)
+    }
+
+    /// The two transcribed addresses are checked against each other by a
+    /// different author before anything else is claimed about them.
+    ///
+    /// A mistyped `PROGRAM` would otherwise make every test below a test of
+    /// two consistent inventions -- and one was mistyped while this module was
+    /// being written. `find_program_address` is the Loader's own derivation and
+    /// it does not know what these bytes were supposed to be.
+    #[test]
+    fn the_transcribed_program_derives_the_transcribed_programdata() {
+        assert_eq!(
+            solana_program::pubkey::Pubkey::find_program_address(
+                &[PROGRAM.as_slice()],
+                &bpf_loader_upgradeable::ID,
+            )
+            .0
+            .to_bytes(),
+            PROGRAMDATA,
+        );
+    }
+
+    /// The live devnet accelerator is ADMITTED by the exact code a `Finalize`
+    /// runs, with the record's slot and authority taken from the header this
+    /// deployment really carries.
+    #[test]
+    fn the_live_devnet_accelerator_is_admitted_at_finalization() {
+        outcome(
+            release(ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+            observation(PROGRAM, ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+        )
+        .expect("the deployed General accelerator authenticates its own record");
+    }
+
+    /// And each substitution refuses BY ITS OWN NAME, which is the property
+    /// that makes the three codes worth having: an operator reads a remedy.
+    ///
+    /// The `ExactAuthority` slot arm is the one this deployment can actually
+    /// reach -- the deployer still holds the authority, so a redeploy is a
+    /// thing that can happen -- and it is `ReleaseSuperseded`, not a mystery.
+    #[test]
+    fn every_substitution_of_the_live_deployment_refuses_by_its_own_name() {
+        let custom = |code: RegistryError| ProgramError::Custom(code as u32);
+
+        // The record names a program that is not the one observed.
+        assert_eq!(
+            outcome(
+                release(ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+                observation(PROGRAMDATA, ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+            ),
+            Err(custom(RegistryError::ArtifactReleaseNotDeployed)),
+        );
+
+        // The substrate moved forward under the authority the record names.
+        assert_eq!(
+            outcome(
+                release(ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+                observation(PROGRAM, ELF_DIGEST, DEPLOYMENT_SLOT + 1, Some(AUTHORITY)),
+            ),
+            Err(custom(RegistryError::ReleaseSuperseded)),
+        );
+
+        // One byte of the ELF digest.
+        let mut other_digest = ELF_DIGEST;
+        other_digest[0] ^= 0x01;
+        assert_eq!(
+            outcome(
+                release(ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+                observation(PROGRAM, other_digest, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+            ),
+            Err(custom(RegistryError::ArtifactReleaseElfMismatch)),
+        );
+
+        // A record claiming this accelerator is immutable. It is not: an
+        // omitted upgrade-authority flag would mint exactly this record, and
+        // the devnet General compiler refuses that flag's absence for this
+        // reason.
+        assert_eq!(
+            outcome(
+                release(ELF_DIGEST, DEPLOYMENT_SLOT, None),
+                observation(PROGRAM, ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
+            ),
+            Err(custom(RegistryError::ArtifactReleaseElfMismatch)),
+        );
+    }
+}

@@ -165,6 +165,16 @@ struct TerminalExecutionV1 {
     market: Option<TerminalMarketEvidenceV1>,
     local_participant_fixture_liquidity:
         Option<crate::market::LocalParticipantFixtureLiquidityEvidenceV1>,
+    /// The recovery-to-complete step's evidence, present exactly when
+    /// `recovered_finalized_founding` is set. Absent on every report a normal
+    /// founding writes, so those stay byte-identical.
+    #[serde(default)]
+    recovery_to_complete: Option<crate::market::RecoveryToCompleteEvidenceV1>,
+    /// Post-finalization wall-clock reads the endpoint refused. Bookkeeping,
+    /// never authority: a founding's authority is its finalized signatures and
+    /// poststates. Emitted only when the run actually lost one.
+    #[serde(default)]
+    unread_block_times: Vec<crate::rpc::NonAuthoritativeBlockTimeV1>,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +209,100 @@ struct TerminalMarketEvidenceV1 {
     accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
     founding_custody_context: String,
     direct_selected_manifest_entry_index: u16,
+}
+
+/// Authenticate the repair a crash-recovered report claims for itself.
+///
+/// This is what lets the refusal above stop being unconditional. It is
+/// deliberately an OFFLINE check of internal agreement, not a second chain
+/// read: the consumer re-reads and re-authenticates every account from
+/// finalized state anyway, and what it cannot otherwise tell is whether the
+/// `execution` block in front of it was produced by the recovery step or typed
+/// by a hand. So every row here has to be corroborated by another part of the
+/// same report -- the six signatures by the transaction projection, the
+/// reconstructed labels by the account projection, each poststate disposition
+/// by an operation that genuinely comes later in the founding's own order.
+fn authenticate_recovery_to_complete_v1(
+    recovery: &crate::market::RecoveryToCompleteEvidenceV1,
+    transactions: &[TerminalTransactionEvidenceV1],
+    market: &TerminalMarketEvidenceV1,
+) -> Result<()> {
+    use crate::market::founding_submission_journal::FoundingSubmissionOperationV1 as Operation;
+
+    if recovery.schema != crate::market::RECOVERY_TO_COMPLETE_SCHEMA_V1 {
+        return Err(Error::new(
+            "recovery-to-complete evidence is not dclutch-successor-founding-recovery-to-complete-v1",
+        ));
+    }
+    hex32(&recovery.checkpoint_sha256)?;
+    if recovery.journals.len() != Operation::ORDER.len()
+        || recovery
+            .journals
+            .iter()
+            .zip(Operation::ORDER)
+            .any(|(row, expected)| row.operation != expected)
+    {
+        return Err(Error::new(
+            "recovery-to-complete evidence is not the founding's exact canonical journal set in order",
+        ));
+    }
+    let signatures = transactions
+        .iter()
+        .map(|row| row.signature.as_str())
+        .collect::<BTreeSet<_>>();
+    for (index, row) in recovery.journals.iter().enumerate() {
+        hex32(&row.state_sha256)?;
+        hex32(&row.finalized_poststates_sha256)?;
+        if solana_sdk::signature::Signature::from_str(&row.signature).is_err()
+            || !signatures.contains(row.signature.as_str())
+        {
+            return Err(Error::new(format!(
+                "recovery-to-complete named a {} signature its own transaction projection does not carry",
+                row.operation.label()
+            )));
+        }
+        if row.poststates.is_empty() {
+            return Err(Error::new(format!(
+                "recovery-to-complete recorded no poststate disposition for {}",
+                row.operation.label()
+            )));
+        }
+        let later = &Operation::ORDER[index + 1..];
+        let mut addresses = BTreeSet::new();
+        for poststate in &row.poststates {
+            pubkey(&poststate.address)?;
+            if !addresses.insert(poststate.address.as_str()) {
+                return Err(Error::new(format!(
+                    "recovery-to-complete repeated a {} poststate address",
+                    row.operation.label()
+                )));
+            }
+            let admitted = poststate.disposition == "unchanged"
+                || later.iter().any(|operation| {
+                    poststate.disposition == format!("advanced-by-{}", operation.label())
+                        || poststate.disposition == format!("consumed-by-{}", operation.label())
+                });
+            if !admitted {
+                return Err(Error::new(format!(
+                    "recovery-to-complete gave {} poststate {} the disposition {}, which names no later founding stage",
+                    row.operation.label(),
+                    poststate.address,
+                    poststate.disposition
+                )));
+            }
+        }
+    }
+    if recovery.reconstructed_account_labels.is_empty()
+        || recovery
+            .reconstructed_account_labels
+            .iter()
+            .any(|label| !market.accounts.contains_key(label))
+    {
+        return Err(Error::new(
+            "recovery-to-complete named an account label the reconstructed execution.market does not carry",
+        ));
+    }
+    Ok(())
 }
 
 fn authenticate_local_participant_fixture_evidence_v1(
@@ -373,10 +477,33 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
             "campaign report does not carry completed execution",
         ));
     }
-    if execution.recovered_finalized_founding {
-        return Err(Error::new(
-            "crash-recovered founding evidence is non-consumable; a separate recovery-to-complete step must reconstruct and authenticate execution.market before terminal use",
-        ));
+    let recovery_to_complete = match (
+        execution.recovered_finalized_founding,
+        execution.recovery_to_complete.clone(),
+    ) {
+        // The refusal this repair was written against, kept word for word. It
+        // is what an UNREPAIRED crash-recovered report still gets.
+        (true, None) => {
+            return Err(Error::new(
+                "crash-recovered founding evidence is non-consumable; a separate recovery-to-complete step must reconstruct and authenticate execution.market before terminal use",
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(Error::new(
+                "campaign report carries recovery-to-complete evidence without declaring a recovered finalized founding",
+            ));
+        }
+        (false, None) => None,
+        (true, Some(recovery)) => Some(recovery),
+    };
+    // Bookkeeping the run lost, restated here so an absence is a stated fact
+    // rather than a silence. It is never authority and never a refusal.
+    for unread in &execution.unread_block_times {
+        if unread.unix_timestamp.is_some() || unread.unavailable.is_none() {
+            return Err(Error::new(
+                "campaign report recorded a wall-clock read as unavailable while also carrying its value",
+            ));
+        }
     }
     if execution.transactions.len() > 4_096 {
         return Err(Error::new(
@@ -417,6 +544,9 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
     let market = execution
         .market
         .ok_or_else(|| Error::new("campaign report omitted execution.market"))?;
+    if let Some(recovery) = &recovery_to_complete {
+        authenticate_recovery_to_complete_v1(recovery, &execution.transactions, &market)?;
+    }
     authenticate_local_participant_fixture_evidence_v1(
         expected_cluster,
         execution.local_participant_fixture_liquidity.as_ref(),
@@ -817,6 +947,15 @@ pub(crate) struct CampaignArgsV1 {
     /// plan and live-substrate preflight has been fsynced.
     pub(crate) keypairs: BTreeMap<String, PathBuf>,
     pub(crate) execute: bool,
+    /// Ask for the recovery-to-complete step by name.
+    ///
+    /// The reconstruction it enables is the only route from a founding that
+    /// LANDED and whose driver then died to a report a terminal consumer can
+    /// use. It is a mode rather than an automatic fallback for two reasons: an
+    /// unmarked resume must not be able to emit a report that reads like a
+    /// fresh founding, and the operator asking for a repair should have said
+    /// that is what they are doing.
+    pub(crate) recover_finalized_founding: bool,
     pub(crate) through: StageV1,
 }
 
@@ -1445,6 +1584,9 @@ fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
 }
 
 struct PriorCampaignEvidenceV1 {
+    /// Whether the file on disk already has an `execution` block at all. The
+    /// recovery-to-complete step refuses to run over one.
+    carries_execution: bool,
     checkpoint: Option<crate::market::MarketExecutionCheckpointV1>,
     founding_submission_journals: BTreeMap<
         crate::market::founding_submission_journal::FoundingSubmissionOperationV1,
@@ -1464,6 +1606,7 @@ fn load_prior_campaign_evidence(
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PriorCampaignEvidenceV1 {
+                carries_execution: false,
                 checkpoint: None,
                 founding_submission_journals: BTreeMap::new(),
                 terminal_consumable_source: None,
@@ -1531,7 +1674,11 @@ fn load_prior_campaign_evidence(
             let execution: TerminalExecutionV1 = serde_json::from_value(execution.clone())
                 .map_err(|error| Error::new(format!("prior campaign execution: {error}")))?;
             if execution.completed
-                && !execution.recovered_finalized_founding
+                // A repaired crash-recovery IS terminal-consumable; only an
+                // unrepaired one is not, and the canonical parser below is the
+                // authority on which this is.
+                && (!execution.recovered_finalized_founding
+                    || execution.recovery_to_complete.is_some())
                 && execution.market.is_some()
                 && prior.get("cluster").and_then(Value::as_str) == Some("devnet")
                 && prior.get("mode").and_then(Value::as_str) == Some("execute")
@@ -1547,6 +1694,7 @@ fn load_prior_campaign_evidence(
         }
     };
     Ok(PriorCampaignEvidenceV1 {
+        carries_execution: prior.get("execution").is_some(),
         checkpoint,
         founding_submission_journals,
         terminal_consumable_source,
@@ -3550,6 +3698,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     }
     let prior = match &args.evidence_path {
         None => PriorCampaignEvidenceV1 {
+            carries_execution: false,
             checkpoint: None,
             founding_submission_journals: BTreeMap::new(),
             terminal_consumable_source: None,
@@ -3562,6 +3711,11 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             &args.origin.redacted_url(),
         )?,
     };
+    if args.recover_finalized_founding && prior.carries_execution {
+        return Err(Error::new(
+            "recovery-to-complete refuses a campaign report that already carries execution; the repair is for a founding whose evidence has no execution block, and it never overwrites one",
+        ));
+    }
     if let Some(source) = prior.terminal_consumable_source {
         eprintln!(
             "campaign: exact terminal-consumable completion already exists; preserved byte-for-byte"
@@ -3799,6 +3953,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                 &states,
                 args.through,
                 None,
+                args.recover_finalized_founding,
                 &mut |_| Ok(()),
                 None,
             )?
@@ -3812,11 +3967,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                     )));
                 }
             }
-            CampaignExecutionEvidenceV1 {
-                transactions: Vec::new(),
-                market: None,
-                recovered_finalized_founding: false,
-            }
+            CampaignExecutionEvidenceV1::new(Vec::new(), None, None)
         };
         report["execution"] = json!({
             "completed": true,
@@ -3824,6 +3975,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "transactions": execution.transactions,
             "market": execution.market,
         });
+        write_recovery_and_unread_clocks_v1(&mut report, &execution, &rpc)?;
         if let Some(lineage_path) = args.infrastructure_lineage_path.as_deref() {
             let campaign_evidence_path = args.evidence_path.as_deref().ok_or_else(|| {
                 Error::new("standalone infrastructure lineage omitted its campaign evidence path")
@@ -3906,11 +4058,19 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::SignOnce
                 | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch => None,
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::Complete => {
+                    // The WHOLE journal set, because an earlier stage's
+                    // completion account is honestly absent exactly when a
+                    // later stage's own journal names it.
+                    let successors = founding_submission_journals
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>();
                     crate::market::authenticate_completed_founding_submission_v1(
                         &mut rpc,
                         operation.label(),
                         &binding,
                         &journal,
+                        &successors,
                     )?;
                     completed_locally = true;
                     None
@@ -3961,11 +4121,16 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                         .collect::<Vec<_>>(),
                 )?;
                 write_evidence_atomically(evidence_path, &report)?;
+                let successors = founding_submission_journals
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
                 crate::market::authenticate_completed_founding_submission_v1(
                     &mut rpc,
                     operation.label(),
                     &binding,
                     &journal,
+                    &successors,
                 )?;
                 completed_locally = true;
                 action = crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::Complete;
@@ -4241,6 +4406,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             &states,
             args.through,
             compatible_checkpoint.as_ref(),
+            args.recover_finalized_founding,
             &mut checkpoint,
             recorder.as_mut(),
         )?
@@ -4277,6 +4443,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         "transactions": execution.transactions,
         "market": execution.market,
     });
+    write_recovery_and_unread_clocks_v1(&mut report, &execution, &rpc)?;
     if let Some(receipt) = local_participant_fixture_liquidity {
         report["execution"]["localParticipantFixtureLiquidity"] = receipt;
     }
@@ -4286,6 +4453,25 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
     stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+/// Attach the two blocks a run only writes when it has something to say.
+///
+/// Both are omitted when there is nothing to record, so an ordinary founding's
+/// report is byte-identical to the one it wrote before either existed.
+fn write_recovery_and_unread_clocks_v1(
+    report: &mut Value,
+    execution: &CampaignExecutionEvidenceV1,
+    rpc: &Rpc,
+) -> Result<()> {
+    if let Some(recovery) = &execution.recovery_to_complete {
+        report["execution"]["recoveryToComplete"] = serde_json::to_value(recovery)?;
+    }
+    let unread = rpc.unread_block_times();
+    if !unread.is_empty() {
+        report["execution"]["unreadBlockTimes"] = serde_json::to_value(unread)?;
+    }
     Ok(())
 }
 
@@ -4329,7 +4515,29 @@ fn authenticate_founding_dispatch_ready_v1(
 pub(crate) struct CampaignExecutionEvidenceV1 {
     pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
     pub(crate) market: Option<crate::market::MarketExecutionEvidence>,
+    /// The report's `recoveredFinalizedFounding`. Never written as a literal:
+    /// the flag is DEFINED as "the recovery-to-complete step produced its
+    /// evidence", so the two cannot drift apart and a recovery that could not
+    /// say what it read cannot quietly present itself as a normal founding.
+    /// This was a literal `false` at both of its assignment sites for as long
+    /// as the field existed, and cohort-13 is what that cost.
     pub(crate) recovered_finalized_founding: bool,
+    pub(crate) recovery_to_complete: Option<crate::market::RecoveryToCompleteEvidenceV1>,
+}
+
+impl CampaignExecutionEvidenceV1 {
+    fn new(
+        transactions: Vec<crate::model::TransactionEvidence>,
+        market: Option<crate::market::MarketExecutionEvidence>,
+        recovery_to_complete: Option<crate::market::RecoveryToCompleteEvidenceV1>,
+    ) -> Self {
+        Self {
+            recovered_finalized_founding: recovery_to_complete.is_some(),
+            transactions,
+            market,
+            recovery_to_complete,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4544,6 +4752,7 @@ fn execute_stages(
     states: &[(StageV1, StageStateV1)],
     through: StageV1,
     compatible_checkpoint: Option<&crate::market::MarketExecutionCheckpointV1>,
+    recover_finalized_founding: bool,
     checkpoint: &mut dyn FnMut(&crate::market::MarketExecutionCheckpointV1) -> Result<()>,
     mut submission_recorder: Option<&mut crate::market::FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<CampaignExecutionEvidenceV1> {
@@ -4568,7 +4777,7 @@ fn execute_stages(
     }
     let mut transactions = Vec::new();
     let mut market_evidence = None;
-    let recovered_finalized_founding = false;
+    let mut recovery_to_complete = None;
     for (stage, state) in states {
         if *stage > through {
             break;
@@ -4604,7 +4813,15 @@ fn execute_stages(
                         "the chain proves this founding complete, but no compatible durable DCLTPCB2 checkpoint can reconstruct caller-consumable Market evidence",
                     )
                 })?;
-                market_evidence = Some(crate::market::recover_completed_market_from_checkpoint(
+                // Reconstructing caller-consumable evidence for a founding the
+                // chain already reads Complete IS the recovery-to-complete
+                // step, and it must be asked for rather than fallen into.
+                if !recover_finalized_founding {
+                    return Err(Error::new(
+                        "this founding is already Complete on chain, so rebuilding its caller-consumable Market evidence is the recovery-to-complete step; ask for it by name with --recover-finalized-founding",
+                    ));
+                }
+                let (evidence, recovery) = crate::market::recover_completed_market_from_checkpoint(
                     rpc,
                     plan,
                     input,
@@ -4614,7 +4831,9 @@ fn execute_stages(
                     &mut transactions,
                     saved,
                     submission_recorder.as_deref_mut(),
-                )?);
+                )?;
+                market_evidence = Some(evidence);
+                recovery_to_complete = Some(recovery);
                 eprintln!(
                     "campaign stage founding: reconstructed exact Open poststate from durable DCLTPCB2 checkpoint"
                 );
@@ -4757,11 +4976,16 @@ fn execute_stages(
         "campaign: {} transactions submitted this run",
         transactions.len()
     );
-    Ok(CampaignExecutionEvidenceV1 {
+    if recover_finalized_founding && recovery_to_complete.is_none() {
+        return Err(Error::new(
+            "--recover-finalized-founding was supplied but this run never reached the recovery-to-complete step; the founding stage is not Complete on chain",
+        ));
+    }
+    Ok(CampaignExecutionEvidenceV1::new(
         transactions,
-        market: market_evidence,
-        recovered_finalized_founding,
-    })
+        market_evidence,
+        recovery_to_complete,
+    ))
 }
 
 /// The acknowledgment text the usage line prints.
@@ -6231,5 +6455,398 @@ mod tests {
             deployment_source: String::new(),
             programdata_sha256: String::new(),
         }
+    }
+
+    /// Every boolean the campaign report's READERS declare must have at least
+    /// one producer that computes it.
+    ///
+    /// This is the cheap grep the cohort-13 lane named, made a test. The
+    /// pattern it catches has now cost this project three cohorts: a consumer,
+    /// a schema field and a refusal all get built and reviewed, and the
+    /// producer never does, because the failure path exercises all three and
+    /// the success path exercises none. `recoveredFinalizedFounding` had a
+    /// schema field, two serialization sites and a refusal quoting its own
+    /// owed repair -- and both of its only two assignment sites wrote the
+    /// literal `false`, so the refusal it guarded was unreachable and the
+    /// repair it named did not exist. Cohort-13's founding landed, its driver
+    /// died on an unrelated RPC read, and the report could not say so.
+    ///
+    /// A field that is legitimately constant is not a bug, but it must SAY it
+    /// is, here, with the reason. Silence is the failure mode.
+    const LITERAL_ONLY_BY_DESIGN_V1: &[(&str, &str)] = &[(
+        "completed",
+        "the emitter writes `\"completed\": true` because a report is only \
+         written once its execution finished; the reader exists to refuse a \
+         FOREIGN or hand-written report that claims otherwise, and there is no \
+         run of this driver that would produce false",
+    )];
+
+    /// Which of `schema_source`'s reader booleans can never vary at runtime.
+    ///
+    /// A field varies if some site COMPUTES it, or if its literal sites do not
+    /// all write the same value -- `transaction_metadata_available` is `true`
+    /// on the finalized-packet path and `false` on the airdrop-confirm path,
+    /// which is production by branch and not the pattern this hunts. What it
+    /// hunts is a field every one of whose sites writes the SAME literal:
+    /// then the reader's refusal is unreachable and the producer is missing.
+    ///
+    /// Quoted keys are deliberately not sites.
+    /// `"recoveredFinalizedFounding": execution.recovered_finalized_founding`
+    /// is the report projecting the field back out, and reading it as a
+    /// producer is exactly what would have made the old grep look green.
+    fn reader_booleans_without_a_computing_producer_v1(
+        schema_source: &str,
+        producer_sources: &[String],
+    ) -> Vec<String> {
+        let mut fields = Vec::new();
+        let mut deserializes = false;
+        let mut inside = false;
+        for line in schema_source.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("#[derive") && trimmed.contains("Deserialize") {
+                deserializes = true;
+                continue;
+            }
+            if !inside && trimmed.starts_with("#[") {
+                continue;
+            }
+            if !inside && trimmed.contains("struct ") && trimmed.ends_with('{') {
+                inside = deserializes;
+                deserializes = false;
+                continue;
+            }
+            if !inside {
+                deserializes = false;
+                continue;
+            }
+            if trimmed == "}" {
+                inside = false;
+                continue;
+            }
+            if let Some(name) = trimmed
+                .strip_suffix(": bool,")
+                .map(|head| head.rsplit(' ').next().unwrap_or(head))
+            {
+                if !name.is_empty() && !fields.contains(&name.to_owned()) {
+                    fields.push(name.to_owned());
+                }
+            }
+        }
+        assert!(
+            !fields.is_empty(),
+            "the schema scanner found no reader booleans at all, so it is measuring nothing"
+        );
+        fields
+            .into_iter()
+            .filter(|field| {
+                let mut computed = false;
+                let mut literals = BTreeSet::new();
+                for source in producer_sources {
+                    for line in source.lines() {
+                        match boolean_site_v1(line, field) {
+                            Some(None) => computed = true,
+                            Some(Some(value)) => {
+                                literals.insert(value);
+                            }
+                            None => {}
+                        }
+                    }
+                }
+                !computed && literals.len() < 2
+            })
+            .collect()
+    }
+
+    /// `None` for no site on this line, `Some(None)` for a computed one, and
+    /// `Some(Some(literal))` for a `true`/`false`.
+    fn boolean_site_v1(line: &str, field: &str) -> Option<Option<bool>> {
+        // A trailing comment is not part of the value, and a doc line is not a
+        // site at all. Without this, `field: false, // why` reads as computed.
+        let line = line.split("//").next().unwrap_or(line);
+        for (index, _) in line.match_indices(field) {
+            let before = line[..index].chars().next_back();
+            if before.is_some_and(|value| {
+                value == '"' || value == '.' || value.is_alphanumeric() || value == '_'
+            }) {
+                continue;
+            }
+            let rest = line[index + field.len()..].trim_start();
+            let Some(value) = rest
+                .strip_prefix(':')
+                .or_else(|| rest.strip_prefix('='))
+                .filter(|value| !value.starts_with('='))
+                .map(str::trim)
+            else {
+                continue;
+            };
+            let value = value.trim_end_matches([',', ';', ')']).trim();
+            if value.is_empty() || value == "bool" || value.starts_with("Option<bool>") {
+                continue;
+            }
+            return Some(match value {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            });
+        }
+        None
+    }
+
+    fn crate_sources_v1() -> Vec<String> {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        for entry in std::fs::read_dir(&directory).expect("successor src directory") {
+            let path = entry.expect("successor source entry").path();
+            if path.extension().is_some_and(|value| value == "rs") {
+                sources.push(std::fs::read_to_string(&path).expect("successor source"));
+            }
+        }
+        sources
+    }
+
+    #[test]
+    fn every_campaign_report_boolean_a_reader_declares_has_a_producer_that_computes_it() {
+        let schema = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/campaign.rs"),
+        )
+        .expect("campaign schema source");
+        let exempt = LITERAL_ONLY_BY_DESIGN_V1
+            .iter()
+            .map(|(field, _)| *field)
+            .collect::<BTreeSet<_>>();
+        let unproduced =
+            reader_booleans_without_a_computing_producer_v1(&schema, &crate_sources_v1())
+                .into_iter()
+                .filter(|field| !exempt.contains(field.as_str()))
+                .collect::<Vec<_>>();
+        assert!(
+            unproduced.is_empty(),
+            "these campaign-report booleans have a reader and no producer that computes them: {}. \
+             Either give each one a real assignment site, or add it to \
+             LITERAL_ONLY_BY_DESIGN_V1 with the reason it can never vary.",
+            unproduced.join(", ")
+        );
+    }
+
+    #[test]
+    fn the_boolean_producer_detector_is_red_on_a_field_written_only_as_a_literal() {
+        let schema = "#[derive(Deserialize)]\n\
+                      struct FixtureV1 {\n\
+                      \x20   repaired: bool,\n\
+                      \x20   observed: bool,\n\
+                      \x20   served: bool,\n\
+                      }\n";
+        // `repaired` is the cohort-13 shape exactly: a declaration, one
+        // literal assignment, a refusal that reads it, and a serialization
+        // site that projects it back out. The two controls are the shapes that
+        // must NOT be named -- a computed site, and two literal sites that
+        // disagree, which is production by branch.
+        let producers = vec![
+            "        repaired: false,\n\
+             \x20       \"repaired\": execution.repaired,\n\
+             \x20       if execution.repaired { return Err(refusal); }\n\
+             \x20       observed: metadata.is_some(),\n\
+             \x20       served: true,\n\
+             \x20       served: false,\n"
+                .to_owned(),
+        ];
+        assert_eq!(
+            reader_booleans_without_a_computing_producer_v1(schema, &producers),
+            vec!["repaired".to_owned()],
+            "the detector must name only the boolean no site can make vary"
+        );
+    }
+
+    /// The six canonical operations as the journal SERIALIZES them, beside
+    /// the same six as the driver LABELS them. They differ for the three
+    /// founding legs, and a disposition names the label.
+    const RECOVERY_OPERATIONS_V1: [(&str, &str); 6] = [
+        ("dcltcfq1", "DCLTCFQ1"),
+        ("dcltpcb2", "DCLTPCB2"),
+        ("dcltgmf3", "DCLTGMF3"),
+        ("core-funding-create-v1", "core-funding-create-v1"),
+        (
+            "resolution-funding-activate-v1",
+            "resolution-funding-activate-v1",
+        ),
+        ("core-funding-accept-v1", "core-funding-accept-v1"),
+    ];
+
+    fn recovery_signature_v1(seed: u8) -> String {
+        solana_sdk::signature::Signature::from([seed; 64]).to_string()
+    }
+
+    /// A crash-recovered report and the repair it claims, both well formed.
+    fn recovered_report_v1(path: &Path) -> Value {
+        let mut report = terminal_consumable_report(path, checkpoint_value());
+        let market_account = report["execution"]["market"]["accounts"]["founding_market"].clone();
+        report["execution"]["recoveredFinalizedFounding"] = json!(true);
+        report["execution"]["transactions"] = json!(
+            (0..RECOVERY_OPERATIONS_V1.len())
+                .map(|index| json!({
+                    "label": RECOVERY_OPERATIONS_V1[index].1,
+                    "signature": recovery_signature_v1(u8::try_from(index).expect("row index") + 1),
+                    "slot": 1,
+                    "transaction_metadata_available": true,
+                    "fee_lamports": 5000,
+                    "fee_only_balance_change": false,
+                    "compute_units_consumed": 1,
+                    "error": Value::Null,
+                    "logs": [],
+                }))
+                .collect::<Vec<_>>()
+        );
+        report["execution"]["recoveryToComplete"] = json!({
+            "schema": crate::market::RECOVERY_TO_COMPLETE_SCHEMA_V1,
+            "checkpointSha256": "66".repeat(32),
+            "journals": (0..RECOVERY_OPERATIONS_V1.len())
+                .map(|index| json!({
+                    "operation": RECOVERY_OPERATIONS_V1[index].0,
+                    "signature": recovery_signature_v1(u8::try_from(index).expect("row index") + 1),
+                    "finalizedSlot": 1,
+                    "stateSha256": "77".repeat(32),
+                    "finalizedPoststatesSha256": "88".repeat(32),
+                    "poststates": [{
+                        "address": market_account["address"],
+                        "disposition": if index + 1 == RECOVERY_OPERATIONS_V1.len() {
+                            "unchanged".to_owned()
+                        } else {
+                            format!("consumed-by-{}", RECOVERY_OPERATIONS_V1[index + 1].1)
+                        },
+                    }],
+                }))
+                .collect::<Vec<_>>(),
+            "reconstructedAccountLabels": ["founding_market"],
+        });
+        report
+    }
+
+    fn recovery_refusal_v1(report: &Value) -> String {
+        parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(report).expect("recovery report JSON"),
+        )
+        .expect_err("this recovery-to-complete shape must refuse")
+        .0
+    }
+
+    /// The refusal cohort-13 hit, and the repair that lifts it.
+    ///
+    /// `campaign.rs` has refused crash-recovered founding evidence since the
+    /// flag existed, naming its own owed repair -- *"a separate
+    /// recovery-to-complete step must reconstruct and authenticate
+    /// execution.market before terminal use"*. That step now exists, so the
+    /// refusal has to be able to tell a report it repaired from one it did
+    /// not, and this is the pair of cases that says which is which.
+    #[test]
+    fn an_unrepaired_crash_recovery_refuses_and_a_repaired_one_is_consumable() {
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-campaign-recovery-{}.json",
+            Pubkey::new_unique()
+        ));
+        let repaired = recovered_report_v1(&path);
+        let evidence = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&repaired).expect("repaired report JSON"),
+        )
+        .expect("an authenticated recovery-to-complete report is terminal-consumable");
+        assert!(evidence.accounts.contains_key("founding_market"));
+
+        let mut unrepaired = repaired.clone();
+        unrepaired["execution"]
+            .as_object_mut()
+            .expect("execution object")
+            .remove("recoveryToComplete");
+        assert!(
+            recovery_refusal_v1(&unrepaired)
+                .contains("a separate recovery-to-complete step must reconstruct"),
+            "the unrepaired refusal must still be the one that names the repair"
+        );
+
+        let mut undeclared = repaired.clone();
+        undeclared["execution"]["recoveredFinalizedFounding"] = json!(false);
+        assert!(
+            recovery_refusal_v1(&undeclared)
+                .contains("without declaring a recovered finalized founding"),
+            "repair evidence without the flag is a report disagreeing with itself"
+        );
+
+        // The reconstruction must agree with the journal, and every one of
+        // these is a disagreement the consumer can see without a chain read.
+        let mut foreign_signature = repaired.clone();
+        foreign_signature["execution"]["recoveryToComplete"]["journals"][2]["signature"] =
+            json!(recovery_signature_v1(200));
+        assert!(
+            recovery_refusal_v1(&foreign_signature)
+                .contains("signature its own transaction projection does not carry"),
+            "a reconstructed signature no transaction row carries is not evidence"
+        );
+
+        let mut backwards = repaired.clone();
+        backwards["execution"]["recoveryToComplete"]["journals"][1]["poststates"][0]["disposition"] =
+            json!("consumed-by-DCLTCFQ1");
+        assert!(
+            recovery_refusal_v1(&backwards).contains("which names no later founding stage"),
+            "only a LATER stage can have consumed an earlier stage's poststate"
+        );
+
+        let mut short_set = repaired.clone();
+        short_set["execution"]["recoveryToComplete"]["journals"]
+            .as_array_mut()
+            .expect("journal rows")
+            .pop();
+        assert!(
+            recovery_refusal_v1(&short_set)
+                .contains("not the founding's exact canonical journal set in order"),
+            "a partial journal set cannot authenticate a whole founding"
+        );
+
+        let mut foreign_label = repaired.clone();
+        foreign_label["execution"]["recoveryToComplete"]["reconstructedAccountLabels"] =
+            json!(["founding_market", "not_in_this_market"]);
+        assert!(
+            recovery_refusal_v1(&foreign_label)
+                .contains("account label the reconstructed execution.market does not carry"),
+            "the repair may not claim accounts the Market projection does not hold"
+        );
+
+        let mut wrong_schema = repaired;
+        wrong_schema["execution"]["recoveryToComplete"]["schema"] = json!("something-else-v1");
+        assert!(
+            recovery_refusal_v1(&wrong_schema)
+                .contains("dclutch-successor-founding-recovery-to-complete-v1"),
+            "the repair block is a named schema, not an arbitrary object"
+        );
+    }
+
+    /// A wall-clock read the endpoint refused is recorded, not fatal -- and a
+    /// row that claims both a value and an absence is still a refusal.
+    #[test]
+    fn a_recorded_unread_block_time_is_carried_and_a_contradictory_one_refuses() {
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-campaign-unread-clock-{}.json",
+            Pubkey::new_unique()
+        ));
+        let mut report = terminal_consumable_report(&path, checkpoint_value());
+        report["execution"]["unreadBlockTimes"] = json!([{
+            "slot": 491_963_417_u64,
+            "unixTimestamp": Value::Null,
+            "unavailable": "getBlockTime RPC error: code -32004 message Block not available",
+        }]);
+        parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&report).expect("unread clock report JSON"),
+        )
+        .expect("a founding's authority is its signatures and poststates, not a wall clock");
+
+        report["execution"]["unreadBlockTimes"][0]["unixTimestamp"] = json!(1_756_000_000_i64);
+        let refusal = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&report).expect("contradictory clock report JSON"),
+        )
+        .expect_err("a row cannot be both served and unavailable");
+        assert!(
+            refusal
+                .0
+                .contains("unavailable while also carrying its value"),
+            "{}",
+            refusal.0
+        );
     }
 }

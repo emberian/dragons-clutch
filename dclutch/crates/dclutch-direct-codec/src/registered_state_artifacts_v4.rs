@@ -18,8 +18,8 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     encode::{
         LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
         LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3, LifecyclePlanInputV3,
-        LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
-        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+        LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+        LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
@@ -325,6 +325,7 @@ fn plan(
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity(
             beneficiary_observation,
         )?)),
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     })
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     thread,
     time::{Duration, Instant},
@@ -169,7 +169,7 @@ use founding_submission_journal::{
 /// `dclutch-successor-validator` verifies before it starts, and the launcher
 /// loads the receiver and router ELFs beside it, so the bytes here and the
 /// programs on the chain come from one pinned set.
-const FIXTURE_PRICE_UPDATE: &[u8] =
+pub(crate) const FIXTURE_PRICE_UPDATE: &[u8] =
     include_bytes!("../../../../../fixtures/pyth/local-upgraded-2026-08-22/price-update.account");
 
 /// The demo Market's terminal window width, in seconds.
@@ -319,7 +319,7 @@ pub(crate) const FUNDING_READINESS_RECOVERY_PAYLOAD_SCHEMA_V1: &str =
 /// adapter lets each split founding send advance its embedded journal without
 /// giving `market.rs` a second file format or lock implementation.
 pub(crate) struct FoundingSubmissionRecorderV1<'a> {
-    binding: FoundingSubmissionBindingV1,
+    pub(crate) binding: FoundingSubmissionBindingV1,
     journals: &'a mut BTreeMap<FoundingSubmissionOperationV1, FoundingSubmissionJournalV1>,
     persist: &'a mut dyn FnMut(&[FoundingSubmissionJournalV1]) -> Result<()>,
 }
@@ -344,6 +344,15 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
         operation: FoundingSubmissionOperationV1,
     ) -> Option<&FoundingSubmissionJournalV1> {
         self.journals.get(&operation)
+    }
+
+    /// Every journal this founding has written, in canonical operation order.
+    ///
+    /// A completion re-authentication needs the WHOLE set, not one row: an
+    /// earlier stage's completion account is only honestly absent when a later
+    /// stage's own journal names it.
+    pub(crate) fn ordered(&self) -> Vec<FoundingSubmissionJournalV1> {
+        self.journals.values().cloned().collect()
     }
 
     fn write(&mut self, journal: FoundingSubmissionJournalV1) -> Result<()> {
@@ -802,11 +811,13 @@ fn send_durable_founding_v1(
             }
             FoundingSubmissionRecoveryV1::Complete => {
                 authenticate_completion(rpc)?;
+                let successors = recorder.ordered();
                 return authenticate_completed_founding_submission_v1(
                     rpc,
                     label,
                     &recorder.binding,
                     &current,
+                    &successors,
                 );
             }
         }
@@ -1069,8 +1080,15 @@ fn finalize_existing_founding_submission_v1(
     match founding_submission_recovery_v1(&recorder.binding, &current)? {
         FoundingSubmissionRecoveryV1::Complete => {
             authenticate_completion(rpc)?;
-            authenticate_completed_founding_submission_v1(rpc, label, &recorder.binding, &current)
-                .map(Some)
+            let successors = recorder.ordered();
+            authenticate_completed_founding_submission_v1(
+                rpc,
+                label,
+                &recorder.binding,
+                &current,
+                &successors,
+            )
+            .map(Some)
         }
         FoundingSubmissionRecoveryV1::ResendIdenticalPacket
         | FoundingSubmissionRecoveryV1::PollOnly => {
@@ -1129,13 +1147,317 @@ fn capture_founding_poststates_v1(
         .collect()
 }
 
+/// The recovery-to-complete step's schema name.
+pub(crate) const RECOVERY_TO_COMPLETE_SCHEMA_V1: &str =
+    "dclutch-successor-founding-recovery-to-complete-v1";
+
+/// The separate recovery-to-complete step's own evidence.
+///
+/// `campaign.rs` has refused a report whose founding was recovered after a
+/// crash for as long as the flag has existed, and its refusal names the owed
+/// repair in its own words: *"a separate recovery-to-complete step must
+/// reconstruct and authenticate execution.market before terminal use"*. This
+/// is that step's output. It exists so the refusal can tell an UNREPAIRED
+/// crash-recovered report -- still non-consumable, and the only thing the flag
+/// used to be able to mean -- from a repaired one, without the consumer having
+/// to trust a boolean.
+///
+/// Every row here is a fact the step read, not a fact it decided: the six
+/// finalized signatures its own transaction projection must also carry, the
+/// journal state digests the founding wrote at the time, and one disposition
+/// per recorded poststate saying whether the chain still holds it unchanged,
+/// a later stage advanced it, or a later stage consumed it.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RecoveryToCompleteEvidenceV1 {
+    pub(crate) schema: String,
+    /// The durable DCLTPCB2 checkpoint the reconstruction started from.
+    pub(crate) checkpoint_sha256: String,
+    /// One row per founding submission journal, in canonical operation order.
+    pub(crate) journals: Vec<RecoveredFoundingJournalV1>,
+    /// The account labels the reconstructed `execution.market` carries.
+    pub(crate) reconstructed_account_labels: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RecoveredFoundingJournalV1 {
+    pub(crate) operation: FoundingSubmissionOperationV1,
+    pub(crate) signature: String,
+    pub(crate) finalized_slot: u64,
+    pub(crate) state_sha256: String,
+    pub(crate) finalized_poststates_sha256: String,
+    pub(crate) poststates: Vec<RecordedPoststateDispositionV1>,
+}
+
+/// Build the recovery-to-complete step's evidence from the journal set and
+/// the chain, refusing by name when any reconstructed fact disagrees.
+pub(crate) fn recovery_to_complete_evidence_v1(
+    rpc: &mut Rpc,
+    recorder: &FoundingSubmissionRecorderV1<'_>,
+    checkpoint: &MarketExecutionCheckpointV1,
+    market: &MarketExecutionEvidence,
+) -> Result<RecoveryToCompleteEvidenceV1> {
+    let journals = recorder.ordered();
+    authenticate_bound_founding_submission_prefix_v1(&recorder.binding, &journals)?;
+    if journals.len() != FoundingSubmissionOperationV1::ORDER.len() {
+        return Err(Error::new(format!(
+            "recovery-to-complete requires the founding's whole {}-operation journal set; this report carries {}",
+            FoundingSubmissionOperationV1::ORDER.len(),
+            journals.len()
+        )));
+    }
+    let mut rows = Vec::with_capacity(journals.len());
+    for journal in &journals {
+        if journal.phase != FoundingSubmissionPhaseV1::Finalized {
+            return Err(Error::new(format!(
+                "recovery-to-complete found {} at {}, and only a Finalized founding has evidence to recover",
+                journal.operation.label(),
+                serde_json::to_string(&journal.phase)?
+            )));
+        }
+        let poststates = authenticate_recorded_founding_poststates_v1(
+            rpc,
+            &recorder.binding,
+            journal,
+            &journals,
+        )?;
+        rows.push(RecoveredFoundingJournalV1 {
+            operation: journal.operation,
+            signature: journal.expected_signature.clone().ok_or_else(|| {
+                Error::new(format!(
+                    "recovery-to-complete found {} Finalized with no signature",
+                    journal.operation.label()
+                ))
+            })?,
+            finalized_slot: journal.finalized_slot.ok_or_else(|| {
+                Error::new(format!(
+                    "recovery-to-complete found {} Finalized with no slot",
+                    journal.operation.label()
+                ))
+            })?,
+            state_sha256: journal.state_sha256.clone(),
+            finalized_poststates_sha256: journal.finalized_poststates_sha256.clone().ok_or_else(
+                || {
+                    Error::new(format!(
+                        "recovery-to-complete found {} Finalized with no poststate digest",
+                        journal.operation.label()
+                    ))
+                },
+            )?,
+            poststates,
+        });
+    }
+    if market.accounts.is_empty() {
+        return Err(Error::new(
+            "recovery-to-complete reconstructed no Market accounts",
+        ));
+    }
+    Ok(RecoveryToCompleteEvidenceV1 {
+        schema: RECOVERY_TO_COMPLETE_SCHEMA_V1.to_owned(),
+        checkpoint_sha256: hex(&Sha256::digest(serde_json::to_vec(checkpoint)?)),
+        journals: rows,
+        reconstructed_account_labels: market.accounts.keys().cloned().collect(),
+    })
+}
+
+/// The first later founding stage whose own journal accounts for this address.
+///
+/// `consumed` narrows it to a stage that names the account and does not leave
+/// it among its own completion accounts -- which is exactly the record that
+/// says the account's absence now is this founding's own doing. Cohort-13's
+/// DCLTCFQ1 Trading Pending ledger is the worked example: DCLTCFQ1 completes
+/// it, DCLTPCB2 names it as a prestate and completes something else, so the
+/// vacancy is a pass by the record and not evidence of tampering.
+///
+/// The prestate and completion lists are the stage's CONTRACT, not its account
+/// list, so this alone is not enough -- see
+/// [`later_founding_stage_writing_v1`], which asks the stage's own signed
+/// message.
+fn later_founding_stage_naming_v1(
+    address: &str,
+    later: &[&FoundingSubmissionJournalV1],
+    consumed: bool,
+) -> Option<FoundingSubmissionOperationV1> {
+    later
+        .iter()
+        .copied()
+        .find(|successor| {
+            let retained = successor
+                .completion_accounts
+                .iter()
+                .any(|value| value == address);
+            let named = retained
+                || successor
+                    .prestate_accounts
+                    .iter()
+                    .any(|value| value == address);
+            named && (!consumed || !retained)
+        })
+        .map(|successor| successor.operation)
+}
+
+/// Every account one journal's own signed message LOCKS WRITABLE.
+///
+/// The journal's contract lists are curated: DCLTGMF3 consumes DCLTPCB2's
+/// `founding_source_replay` and names it in neither its prestate nor its
+/// completion set, so a rule reading only those lists refuses a founding that
+/// did exactly what it was supposed to (measured against cohort-13's own
+/// journals, 2026-09-02). The message is the authority for what a transaction
+/// could write; it is immutable, digest-pinned in the journal, and its loaded
+/// addresses resolve through routing tables this founding itself FROZE. So
+/// this is a fact the founding signed rather than an inference about it.
+fn founding_message_writable_accounts_v1(
+    rpc: &mut Rpc,
+    journal: &FoundingSubmissionJournalV1,
+) -> Result<BTreeSet<Pubkey>> {
+    let bytes = BASE64
+        .decode(&journal.message_base64)
+        .map_err(|error| Error::new(format!("founding journal message base64: {error}")))?;
+    let message: VersionedMessage = bincode::deserialize(&bytes)
+        .map_err(|error| Error::new(format!("founding journal message: {error}")))?;
+    let header = message.header();
+    let statics = message.static_account_keys();
+    let signers = usize::from(header.num_required_signatures);
+    let readonly_signed = usize::from(header.num_readonly_signed_accounts);
+    let readonly_unsigned = usize::from(header.num_readonly_unsigned_accounts);
+    let mut writable = BTreeSet::new();
+    for (index, key) in statics.iter().enumerate() {
+        let is_writable = if index < signers {
+            index < signers.saturating_sub(readonly_signed)
+        } else {
+            index < statics.len().saturating_sub(readonly_unsigned)
+        };
+        if is_writable {
+            writable.insert(*key);
+        }
+    }
+    for lookup in message.address_table_lookups().unwrap_or_default() {
+        let account = rpc.required_account(lookup.account_key, "founding routing table")?;
+        let table = AddressLookupTable::deserialize(&account.data)
+            .map_err(|_| Error::new("founding routing table bytes were invalid"))?;
+        for index in &lookup.writable_indexes {
+            let key = table
+                .addresses
+                .get(usize::from(*index))
+                .ok_or_else(|| Error::new("founding routing table index is out of range"))?;
+            writable.insert(*key);
+        }
+    }
+    Ok(writable)
+}
+
+/// The first later founding stage that LOCKED this address writable.
+fn later_founding_stage_writing_v1(
+    rpc: &mut Rpc,
+    address: Pubkey,
+    later: &[&FoundingSubmissionJournalV1],
+) -> Result<Option<FoundingSubmissionOperationV1>> {
+    for successor in later {
+        if founding_message_writable_accounts_v1(rpc, successor)?.contains(&address) {
+            return Ok(Some(successor.operation));
+        }
+    }
+    Ok(None)
+}
+
+/// What the chain now says about one poststate the journal recorded, and the
+/// journal-held reason it may honestly differ.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RecordedPoststateDispositionV1 {
+    pub(crate) address: String,
+    /// `unchanged`, `advanced-by-<operation>`, or `consumed-by-<operation>`.
+    pub(crate) disposition: String,
+}
+
+/// Re-authenticate a Finalized journal's completion poststates against THE
+/// RECORD, not against a live re-read.
+///
+/// `capture_founding_poststates_v1` is right at capture time and wrong at
+/// recovery time, and the difference cost cohort-13 a landed founding's whole
+/// evidence block on 2026-09-02: it calls `required_account` over every
+/// completion account, and a founding's own later stages CONSUME earlier
+/// stages' completion accounts by design -- DCLTCFQ1's Trading Pending ledger
+/// `Q9zc5g4f…` is a prestate of DCLTPCB2 and a completion account of nothing
+/// after it. So a COMPLETED founding could never be resumed: the resume
+/// demanded a prestate the run it was resuming had destroyed on purpose.
+///
+/// The journal already holds what the account was at the adjacent transition
+/// -- owner, lamports, data length and both digests -- and
+/// `authenticate_founding_submission_v1` has already pinned that record to the
+/// journal's state digest. So the question here is not "is the account still
+/// there" but "does every difference from the record have a named later owner
+/// in this same journal set". An absence with one is a pass BY THAT RECORD; an
+/// absence without one is still a refusal, and so is an unexplained change.
+pub(crate) fn authenticate_recorded_founding_poststates_v1(
+    rpc: &mut Rpc,
+    binding: &FoundingSubmissionBindingV1,
+    journal: &FoundingSubmissionJournalV1,
+    successors: &[FoundingSubmissionJournalV1],
+) -> Result<Vec<RecordedPoststateDispositionV1>> {
+    let recorded = founding_submission_finalized_poststates_v1(binding, journal)?;
+    let mut later = Vec::new();
+    for successor in successors {
+        if successor.operation <= journal.operation {
+            continue;
+        }
+        if successor.phase != FoundingSubmissionPhaseV1::Finalized {
+            continue;
+        }
+        authenticate_founding_submission_v1(binding, successor)?;
+        later.push(successor);
+    }
+    let mut dispositions = Vec::with_capacity(recorded.len());
+    for row in &recorded {
+        let address = row
+            .address
+            .parse::<Pubkey>()
+            .map_err(|error| Error::new(format!("recorded founding poststate: {error}")))?;
+        let disposition = match rpc.account(address)? {
+            Some(account) if &account_evidence(address, &account) == row => "unchanged".to_owned(),
+            Some(_) => {
+                let owner = match later_founding_stage_naming_v1(&row.address, &later, false) {
+                    Some(operation) => Some(operation),
+                    None => later_founding_stage_writing_v1(rpc, address, &later)?,
+                }
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "founding finalized poststate {address} changed and no later {} stage names or writes it",
+                        journal.operation.label()
+                    ))
+                })?;
+                format!("advanced-by-{}", owner.label())
+            }
+            None => {
+                let owner = match later_founding_stage_naming_v1(&row.address, &later, true) {
+                    Some(operation) => Some(operation),
+                    None => later_founding_stage_writing_v1(rpc, address, &later)?,
+                }
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "founding finalized poststate {address} is vacant and no later {} stage consumed it",
+                        journal.operation.label()
+                    ))
+                })?;
+                format!("consumed-by-{}", owner.label())
+            }
+        };
+        dispositions.push(RecordedPoststateDispositionV1 {
+            address: row.address.clone(),
+            disposition,
+        });
+    }
+    Ok(dispositions)
+}
+
 pub(crate) fn authenticate_completed_founding_submission_v1(
     rpc: &mut Rpc,
     label: &str,
     binding: &FoundingSubmissionBindingV1,
     journal: &FoundingSubmissionJournalV1,
+    successors: &[FoundingSubmissionJournalV1],
 ) -> Result<TransactionEvidence> {
-    let expected_poststates = founding_submission_finalized_poststates_v1(binding, journal)?;
     let signature = journal
         .expected_signature
         .as_deref()
@@ -1155,12 +1477,7 @@ pub(crate) fn authenticate_completed_founding_submission_v1(
             "persisted finalized founding slot, packet, fee, or compute units changed from chain",
         ));
     }
-    let observed_poststates = capture_founding_poststates_v1(rpc, journal)?;
-    if observed_poststates != expected_poststates {
-        return Err(Error::new(
-            "finalized founding poststates changed from chain-derived evidence",
-        ));
-    }
+    authenticate_recorded_founding_poststates_v1(rpc, binding, journal, successors)?;
     Ok(finalized.evidence)
 }
 
@@ -2887,7 +3204,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
-) -> Result<MarketExecutionEvidence> {
+) -> Result<(MarketExecutionEvidence, RecoveryToCompleteEvidenceV1)> {
     if checkpoint.schema != DCLTPCB2_CHECKPOINT_SCHEMA_V1 {
         return Err(Error::new(
             "completed founding recovery requires the DCLTPCB2 checkpoint schema",
@@ -2993,13 +3310,25 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         &routing_table_keys,
         submission_recorder.as_deref_mut(),
     )?;
-    Ok(MarketExecutionEvidence {
+    let evidence = MarketExecutionEvidence {
         completed,
         accounts,
         founding_custody_context: checkpoint.founding_custody_context.clone(),
         direct_selected_manifest_entry_index: checkpoint.direct_selected_manifest_entry_index,
         local_participant_fixture_liquidity: checkpoint.local_participant_fixture_liquidity.clone(),
-    })
+    };
+    // The reconstruction is not finished until it can say what it read. A
+    // recovery that cannot produce its own evidence is a recovery nobody can
+    // check, which is the state this whole step exists to end.
+    let recovery = recovery_to_complete_evidence_v1(
+        rpc,
+        submission_recorder
+            .as_deref()
+            .ok_or_else(|| Error::new("recovery-to-complete omitted its journal owner"))?,
+        checkpoint,
+        &evidence,
+    )?;
+    Ok((evidence, recovery))
 }
 
 /// Every record body one market input compiles to, before anything touches a
@@ -10608,6 +10937,9 @@ fn execute_funding_readiness_suffix_v1(
     let FundingReadinessRoutedPlanV1 {
         plan: current,
         routing_tables,
+        // Bookkeeping only, and this plan has no clock consumer: the absence
+        // is recorded on the connection and restated in the run's report.
+        observation_block_time: _,
     } = plan_funding_readiness_with_routing_from_rpc_v1(
         rpc,
         plan,
@@ -10683,6 +11015,9 @@ fn execute_funding_readiness_suffix_v1(
     let FundingReadinessRoutedPlanV1 {
         plan: current,
         routing_tables,
+        // Bookkeeping only, and this plan has no clock consumer: the absence
+        // is recorded on the connection and restated in the run's report.
+        observation_block_time: _,
     } = plan_funding_readiness_with_routing_from_rpc_v1(
         rpc,
         plan,
@@ -10761,6 +11096,9 @@ fn execute_funding_readiness_suffix_v1(
     let FundingReadinessRoutedPlanV1 {
         plan: current,
         routing_tables,
+        // Bookkeeping only, and this plan has no clock consumer: the absence
+        // is recorded on the connection and restated in the run's report.
+        observation_block_time: _,
     } = plan_funding_readiness_with_routing_from_rpc_v1(
         rpc,
         plan,
@@ -15948,6 +16286,95 @@ mod tests {
             )
             .is_err(),
             "fixture liquidity must not leak into founding principal or grow by one atom"
+        );
+    }
+
+    /// The rule that lets a COMPLETED founding be resumed at all.
+    ///
+    /// The topology is cohort-13's, transcribed from its own journals
+    /// (`~/jobs/dclutch-cohort13-20260902/market/campaign-open.json`,
+    /// 2026-09-02): `Q9zc5g4f…` is the Trading Pending ledger DCLTCFQ1
+    /// completes, DCLTPCB2 names it as a prestate and does NOT retain it, and
+    /// on chain it is vacant. Before this rule the resume called
+    /// `required_account` on it and refused a landed founding by name.
+    ///
+    /// The controls matter as much as the case: an address no later stage
+    /// names must still refuse, and an address a later stage RETAINS must not
+    /// be reported consumed.
+    #[test]
+    fn a_vacant_poststate_is_a_pass_only_when_a_later_stage_consumed_it() {
+        use crate::market::founding_submission_journal::{
+            FoundingSubmissionJournalV1, FoundingSubmissionOperationV1,
+        };
+
+        const PENDING_LEDGER: &str = "Q9zc5g4fqVt84215uXg1XqkZ6kYxRwKkyTRwPiuZsBp";
+        const FUNDING_LEDGER: &str = "9VDSCch4JXG3oL3CCFMVX4iypuDeY8fsW5yVAKxEPyCV";
+        const NOBODY: &str = "So11111111111111111111111111111111111111112";
+
+        fn journal(
+            operation: FoundingSubmissionOperationV1,
+            prestate: &[&str],
+            completion: &[&str],
+        ) -> FoundingSubmissionJournalV1 {
+            let mut row = serde_json::from_str::<FoundingSubmissionJournalV1>(
+                &serde_json::to_string(&serde_json::json!({
+                    "schema": "x", "cluster": "devnet", "genesisHash": "g",
+                    "evidencePath": "p", "rpcUrl": "u", "planSha256": "00".repeat(32),
+                    "marketSha256": "00".repeat(32), "payer": NOBODY,
+                    "operation": "dcltcfq1", "phase": "finalized",
+                    "messageBase64": "", "messageSha256": "00".repeat(32),
+                    "lastValidBlockHeight": 1, "exactFeeLamports": 5000,
+                    "exactUniqueMessageAccounts": 1, "expectedSigners": [],
+                    "resolvedAccountsSha256": "00".repeat(32),
+                    "prestateAccounts": prestate, "prestateSha256": "00".repeat(32),
+                    "completionAccounts": completion,
+                    "completionContractSha256": "00".repeat(32),
+                    "recoveryPayloadBase64": "", "recoveryPayloadSha256": "00".repeat(32),
+                    "expectedWireBytes": 1, "intentSha256": "00".repeat(32),
+                    "signedPacketBase64": null, "signedPacketSha256": null,
+                    "expectedSignature": null, "finalizedSlot": null,
+                    "transactionSha256": null, "feeLamports": null,
+                    "computeUnitsConsumed": null, "finalizedPoststates": [],
+                    "finalizedPoststatesSha256": null, "stateSha256": "00".repeat(32),
+                }))
+                .expect("journal fixture JSON"),
+            )
+            .expect("journal fixture");
+            row.operation = operation;
+            row
+        }
+
+        let dcltpcb2 = journal(
+            FoundingSubmissionOperationV1::Dcltpcb2,
+            &[PENDING_LEDGER, FUNDING_LEDGER],
+            &[FUNDING_LEDGER],
+        );
+        let later = [&dcltpcb2];
+
+        assert_eq!(
+            super::later_founding_stage_naming_v1(PENDING_LEDGER, &later, true),
+            Some(FoundingSubmissionOperationV1::Dcltpcb2),
+            "DCLTPCB2 reads DCLTCFQ1's Pending ledger and does not retain it: that is consumption"
+        );
+        assert_eq!(
+            super::later_founding_stage_naming_v1(FUNDING_LEDGER, &later, true),
+            None,
+            "an account a later stage RETAINS was not consumed, and a vacancy there is a refusal"
+        );
+        assert_eq!(
+            super::later_founding_stage_naming_v1(FUNDING_LEDGER, &later, false),
+            Some(FoundingSubmissionOperationV1::Dcltpcb2),
+            "a retained account is still NAMED, so a changed one has a later owner"
+        );
+        assert_eq!(
+            super::later_founding_stage_naming_v1(NOBODY, &later, false),
+            None,
+            "an address no later stage names has no explanation, changed or vacant"
+        );
+        assert_eq!(
+            super::later_founding_stage_naming_v1(PENDING_LEDGER, &[], true),
+            None,
+            "the LAST stage has no successor, so its own poststates must still be live"
         );
     }
 }

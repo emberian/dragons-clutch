@@ -17,7 +17,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     encode::{
         LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
         LifecycleOperationInputV3, LifecyclePlanInputV3, LifecycleRecipeInputV3,
-        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+        LifecycleRefundSourceInputV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
 
@@ -44,6 +44,7 @@ fn policy_with_quote() -> Vec<u8> {
         rent_credit: None,
         principal: None,
         beneficiary: None,
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let quotes = [LifecycleCurrentRentQuoteInputV5 {

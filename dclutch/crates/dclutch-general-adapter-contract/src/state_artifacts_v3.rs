@@ -13,8 +13,9 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     encode::{
         LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
         LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3, LifecyclePlanInputV3,
-        LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
-        encode_lifecycle_policy_v4_atomic, encode_lifecycle_policy_v5_atomic,
+        LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+        LifecycleRegisterCoordinateV3, encode_lifecycle_policy_v4_atomic,
+        encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_claims_svm::{
@@ -479,6 +480,7 @@ fn encode_primary(
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
             identity::PRIMARY_BENEFICIARY_OBSERVATION,
         )?)),
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let protected = [Some(primary_protected()?)];
@@ -579,6 +581,7 @@ fn encode_verify_candidate_row(
             rent_credit: None,
             principal: None,
             beneficiary: None,
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         },
         LifecyclePlanInputV3 {
@@ -597,6 +600,7 @@ fn encode_verify_candidate_row(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::RESULT_BENEFICIARY_OBSERVATION,
             )?)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::ScalarEq {
                 source: LifecycleRegisterCoordinateV3::common(scalar_u16(scalar::VERIFY_TERMINAL)?),
                 expected: 1,
@@ -618,6 +622,7 @@ fn encode_verify_candidate_row(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::TERMINAL_BENEFICIARY_OBSERVATION,
             )?)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         },
     ];
@@ -706,6 +711,7 @@ fn encode_close_candidate(
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
             identity::PRIMARY_BENEFICIARY_OBSERVATION,
         )?)),
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     // A Close plan consumes authenticated observations and emits no lifecycle
@@ -806,6 +812,7 @@ fn encode_close(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::PRIMARY_BENEFICIARY_OBSERVATION,
             )?)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         },
         LifecyclePlanInputV3 {
@@ -824,6 +831,7 @@ fn encode_close(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::TERMINAL_BENEFICIARY_OBSERVATION,
             )?)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         },
     ];
@@ -908,6 +916,7 @@ fn encode_batch_and_order(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::PRIMARY_BENEFICIARY_OBSERVATION,
             )?)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         },
         LifecyclePlanInputV3 {
@@ -926,6 +935,7 @@ fn encode_batch_and_order(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::TERMINAL_BENEFICIARY_OBSERVATION,
             )?)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         },
     ];

@@ -252,7 +252,7 @@ Three further corroborations, all read off chain:
 | found record | `5W9QNVVXLK9grA2NzhCsuzsPNFvcwdPCAMxN5QvDkAJc` | 400 B `DCLTGFQ1`, Registry-owned |
 | lock record | `AvEEKXTscWkjzwgvK8umFQu3Sbn56NaVenVEi42W3n9u` | 768 B `DCLPCQ01`, Registry-owned |
 | collateral Mint | `Ejswx4ypMm1SohutytuJrvzCHhD2VqGwZMRewYvSB1qu` | 82 B, Token-2022 |
-| Direct capability root | `2dGxuxe5LGdckG9r3co9u57MbMzoT5xJJTipUysgA261` | **vacant — correct, activation creates it** |
+| Direct FOUNDING-PERMIT root | `2dGxuxe5LGdckG9r3co9u57MbMzoT5xJJTipUysgA261` | vacant — **permanently, by design; see the correction below** |
 
 And all six founding submission journals read `phase = finalized`, `dcltgmf3`
 among them, plus `core-funding-create-v1`, `resolution-funding-activate-v1` and
@@ -463,8 +463,9 @@ Owned, in priority order:
 4. **`ledger-census` needs `--declared-class-delta`** so L8 can ever be judged
    outside the journey harness (§6b).
 5. **Cohort-14 for General**: `a517d27c`'s inline input transport is in Trading,
-   which cohort-13 predates by nineteen minutes — and separately, there is no
-   devnet General market compiler at all.
+   which cohort-13 predates by nineteen minutes. (This item also read "there is
+   no devnet General market compiler at all" — true when written, **no longer
+   true**; see the correction at the end of this file.)
 
 Devnet evidence. Not mainnet evidence.
 
@@ -551,3 +552,262 @@ greppable.
 Both earlier instances were closed within a day of being named, which is the
 reason to name this one precisely rather than to describe it as "the founding
 failed".
+
+## Correction: `2dGxuxe5…` is the founding-permit root, not the activation root
+
+This file first named `2dGxuxe5LGdckG9r3co9u57MbMzoT5xJJTipUysgA261` as "the Direct
+capability root, vacant — correct, activation creates it". **That is wrong, and
+the error is worth recording because the vacancy it reported is uninformative.**
+
+The web lane, deriving from the Market's own capability manifest entry 0 under
+the Trading program, got a different address — `4GzDzNxj248uBkNLxKN2ffVzZ6cFZy158mVCeLec6ufz`
+— and refused to let two authorities disagree about a derived address. Both are
+vacant today, so nothing on any surface is currently false; but exactly one is
+what activation creates, and shipping the other means a wall that turns FALSE the
+moment activation lands, which is worse than the wall we have.
+
+The code answers it directly, `direct_capability_activation.rs:296`:
+
+> Not to be confused with the founding checkpoint's `direct_capability_root`,
+> which is the **FOUNDING-PERMIT namespace address and at which no account can
+> ever exist**. This is the address activation creates and the address the
+> terminal sequence means.
+
+So `2dGxuxe5…` is cohort-13's founding-permit root. It is vacant permanently, by
+construction, and its vacancy is evidence of nothing.
+
+**Positive control, from the one cohort that actually activated.** Cohort-12:
+
+| | address |
+| --- | --- |
+| founding checkpoint `direct_capability_root` | `8TfFY4236bjxW8N17jqfP1rcU4eNyNNBSUc69awgmEyL` |
+| the root activation actually created | `88jJTMmUGr4tB92SwAVpNnQ5CYnWYsg19cu3ULgrZmd4` |
+
+Different addresses — and cohort-12's own activation report names them separately,
+`foundingPermitRoot` and `root`. Three independent sources agree.
+
+The activation root is `direct_execution_root_v1(trading, release_set, market,
+generation, entry_index, manifest_body)`: `find_program_address` over a
+`CapabilityRootHeaderV1` built from the release set, the Market, the generation
+and a `CapabilityExecutionSelectionV1` carrying the entry index,
+`sha256(manifest_body)` and the entry's kind, release and config ids — under the
+**Trading** program. The browser's spine uses the same authors, which is why the
+two must land on one address; the remaining way to differ is an input, and
+**generation is the trap**: this Market is generation **2**, and the founding
+record beside it is generation 1.
+
+**The lesson, which is AGENTS.md's probe rule one level up.** *"A probe measures
+what it touches, not what you meant."* I had the right instrument — a chain read
+of an account — pointed at the wrong account, and the reading was confidently
+reported. What caught it was not a better probe but a SECOND AUTHOR deriving the
+same fact independently and refusing to reconcile by preference. When activation
+lands, the account at the manifest-derived address becomes occupied, and that is
+the cross-check that closes this for free.
+
+### The settled activation root, with the inputs that decide it
+
+Confirmed by the web lane off the live spine, and the generation confirmed a
+second time from the Market's raw bytes rather than from the spine's own answer:
+
+| input | value |
+| --- | --- |
+| trading program | `HkNhMJrERGko9mFXKq6UaL8qu2QnzqJx1hwJ5U8AVUHZ` |
+| generation | **2** (`generation@272`, read twice by two instruments) |
+| release set | `82a969ddbcd1782aab65016632742e4dd956978dc5e3a8f0ba0f853e0c13c62c` (`releaseSet@208`) |
+| entry index | 0 |
+| manifest record | `2hN3F4vsarGvDgjdmwfrtjDZrEwxeB6xN83VSFNwgdU5` |
+| program set id | `c6d185d8e675c5bc62f27084e08dcaa8237338be7d158606ead819c86f92f9f2` |
+| config id | `456733e9fc75fe614df2f3d689431c6422bbe0ea6678b0b3d3762efec01a19ce` |
+| **activation root** | **`4GzDzNxj248uBkNLxKN2ffVzZ6cFZy158mVCeLec6ufz`** |
+
+Every one of these is read off the Market itself or the manifest that Market
+names — none is taken from a campaign report.
+
+**The pending cross-check, stated before it is run so it cannot be reinterpreted
+afterwards:** when the recovery step lands and activation executes, the account
+at `4GzDzNxj…` must become **occupied**. If it is still vacant, the two
+derivations disagreed for a reason we have not found, and the correct action is
+to stop rather than to report a successful activation.
+
+### Why the first check looked fine, which is the reusable part
+
+Verifying that `2dGxuxe5…` was vacant was a TRUE observation that meant nothing,
+and from outside there is no way to tell a vacancy that is guaranteed by
+construction from a vacancy that reports work not yet done. They log identically.
+
+What made it decidable was not a better read of that account but **an activated
+cohort to compare against** — cohort-12, whose checkpoint field and whose actual
+activation root are different addresses, and whose own report names them
+separately. That is the same lesson as *absent signal needs a positive control*,
+sharpened: the control has to be a case where the thing DID fire, or a
+permanently-dead instrument and a correctly-quiet one are indistinguishable.
+
+### A third author, and the route is no longer the unknown
+
+The Direct lane landed `canonical_activation_creates_the_direct_root_through_real_core_and_trading`
+(`5b2565ad`, `programs/dclutch-core-sbf/tests/capability_close_alias_program_test.rs`):
+the same frame `devnet-direct-capability-activation-v1` builds —
+`CapabilityRouteLayoutV1::new(1, 18)`, 35 accounts, the selection taken from the
+manifest entry, **the root derived from that selection's header seeds** — run on
+real Core, Trading and Registry ELFs from a vacant root and a Pending ledger.
+329,736 CU. The root is created Trading-owned, its bytes exactly
+`CapabilityRootHeaderV1 || DirectRootStateV1::new()`, the ledger reaches Active
+with zero rent remaining, and `outstanding_capabilities` goes 0 → 1.
+
+So three independent authors now agree on where the activation root comes from —
+the activation driver, the browser's trade spine, and a program test on real
+ELFs — and all three take it from the manifest selection, none from the founding
+checkpoint's permit field.
+
+**What that changes for cohort-13:** the route is no longer an unknown, and the
+remaining blocker is narrowed to exactly one thing — the campaign report's
+missing `execution` block. When the recovery-to-complete step supplies it, the
+instruction the activation then builds is one this repository has executed end to
+end on real bytes.
+
+## The five routing tables, read back by address — the `dc07c73a` freeze holds
+
+Recorded as pending earlier in this file because `routing-readback.py` reads
+`evidence["execution"]`, which the report lacks. It does not have to: the
+addresses are recoverable from the founding's own ALT transactions, which is the
+discipline `8fda79bf` established anyway — **read by address, never by scan**,
+because `getProgramAccounts` over the ALT program answers an *absence* on devnet
+rather than a refusal.
+
+Re-read at observation slot **491,972,453**, every one owned by the Address
+Lookup Table program, not executable, authority **None**, `deactivation_slot`
+`18446744073709551615` (`u64::MAX`), last extended strictly before the
+observation:
+
+| table | label (by creation order and width) | last extended | addresses |
+| --- | --- | ---: | ---: |
+| `GgCA8HGhfArdD6KubXgYmvc1F6vs5NLHSHdmYZePoMKQ` | Found37 | 491,960,315 | 35 |
+| `7TctGEa6EBQAeAHZhBtMGdbEhar4UnxaJFwGWnY84aF5` | DCLTCFQ1 | 491,961,265 | 45 |
+| `7Xqw7YBnedX4wYUBkiZeKBpNuMZvYjjnmk653MLuBpSq` | DCLTCF1A | 491,961,512 | 15 |
+| `3439rxEAeXQ4U9DZKDCD1s7ys4BwF6AcWZ9qRLu6iygL` | DCLTPCB2 | 491,961,772 | 56 |
+| `8DjFdk2J5BQVjVw76xYkHsjL8ACWJD3A7BmdTwKJS72w` | DCLTGMF3 | 491,962,871 | 62 |
+
+**All five frozen.** The address counts are 35 / 45 / 15 / 56 / 62 — cohort-12's
+five tables to the address, which is an independent check that the same five
+tables were built for the same five frames.
+
+### The instrument was broken and reported an absence
+
+Worth writing down because it nearly became a finding. The first scan reported
+**zero** ALT accounts, and it had a clean bill of health: 192 `getTransaction`
+calls, 0 failures. The failure was in the PARSE, not the fetch — under
+`jsonParsed` encoding a recognised instruction carries `parsed` and **no**
+`accounts` array, so `ix.get("accounts")` was empty for every ALT instruction and
+the loop skipped all of them. A count of program ids across the same
+transactions showed 23 ALT instructions in a 60-transaction sample, which is what
+exposed it; re-reading with raw `json` encoding, where instructions carry
+`accounts` as indices, found all five immediately.
+
+**"0 failed" was true and reassuring and measured the wrong stage.** The rule
+this earns: when an instrument reports an absence, the health check must cover
+the step that could produce a false absence — here parsing — and not just the
+step that is easiest to count. A positive control (does this scan find ANY of the
+thing, anywhere?) would have caught it in one run.
+
+## Correction: the devnet General path exists now, and only the Trading bytes still block OpenBatch
+
+This file recorded, and this lane reported, that General could not run on devnet
+because there was **no devnet General market compiler at all** and because
+`general_capability_activation.rs` refused every non-loopback origin. Both were
+true when measured. **Both are now closed**, by the General lane, within hours —
+and closed by exactly the work this lane's report named as owed.
+
+| what was named as missing | what exists now |
+| --- | --- |
+| a devnet General market compiler | `general_devnet_market.rs::devnet_general_market_input` and `attach_devnet_general_capability_v1`, reached from the `devnet-general-market` command (`main.rs:1043`) |
+| a devnet arm for capability activation | `general_capability_activation.rs::run_devnet` → `run_with_cluster_v1(_, ExpectedClusterV1::Devnet)` |
+| the four deployment identities read rather than projected | the accelerator is deployed on devnet, and its release id is derived through `plan::release_facts` from the program, slot and digest the chain carries, not transcribed |
+
+So the claim to carry forward is narrower and should be stated exactly:
+**cohort-13 cannot run OpenBatch because its TRADING BYTES predate `a517d27c`**,
+whose inline input transport lives in `programs/dclutch-trading-sbf`. That
+blocker is a property of this cohort's deployed artifacts and no tooling closes
+it. A cohort deployed from a commit at or after `a517d27c` now has both halves.
+
+One correction the General lane made to itself is worth reading beside this,
+because it is the same shape as this file's activation-root error: it expected
+that swapping the accelerator would move an entry's `release_id` and leave
+`config_id` alone, since `GeneralConfigV3` carries no deployment field. It does
+not — the config binds `program_set_id`, the program set is downstream of the
+certificate naming the accelerator, so one flipped bit of the artifact release
+moves the whole entry. **The run corrected the test.** An expectation written
+from the struct's fields rather than from the derivation's closure was wrong in
+the direction that would have looked like a passing test.
+
+## Addendum: the recovery step exists now, gets six stages further, and stops on the same shape
+
+`00793136` — *"recovery: the founding that landed can finally say so, and the
+flag that could not"* — built the producer this file recorded as missing, and it
+works. Run against cohort-13's own report and chain, all six stages read
+`already complete`, the poststate re-authentication passes, and the run reaches
+the Open acknowledgement. **The flag is no longer written at all: it is DEFINED
+as `recovery_to_complete.is_some()`, so a recovery that cannot say what it read
+cannot present itself as a normal founding** — which is a better repair than the
+one this file asked for.
+
+It then refuses:
+
+```
+Error: Error("Open changed a Pending controller funding ledger while consuming its checkpoint")
+```
+
+`market.rs:12468`, the loop closing `authenticate_open_market_poststate_v1`. It
+reads the funding ledgers **live** and requires them to still equal their
+**Pending** bytes. This founding's own journals, in finalized-slot order:
+
+| # | operation | finalized slot |
+| --- | --- | ---: |
+| 2 | `dcltgmf3` — the Open | 491,963,072 |
+| 3 | `core-funding-create-v1` | 491,963,194 |
+| 4 | `resolution-funding-activate-v1` | 491,963,281 |
+| 5 | `core-funding-accept-v1` | 491,963,396 |
+
+**Three finalized stages run after Open and exist precisely to move those ledgers
+off Pending.** So the verifier reads live state for a fact three later stages of
+the same founding superseded by design — which is `00793136`'s own point 2
+verbatim, one verifier over and not swept.
+
+The enclosing function was swept so the fix can be scoped in one pass: of its
+eight checks, seven are facts no later stage can move (Market state, permit
+vacancy, Position and admission allocation, Hoard principal, source closure,
+replay revision, checkpoint consumption). **The funding-ledger loop is the whole
+defect in that function.**
+
+### The class, and why nothing caught it
+
+`00793136` added a detector for booleans with no varying producer. **A boundary
+invariant evaluated against LIVE state has no detector**, and it has now bitten
+twice in one file within one commit.
+
+The reason is structural and worth keeping: **the reconstruction path is the only
+caller that runs these authenticators long after the boundary they describe.**
+Every other caller runs them while live state and boundary state still coincide,
+so the defect is invisible until something recovers. Nothing was wrong with the
+tests; there was no caller that could fail.
+
+Note also what the check is right about. Open must not change a Pending ledger
+*while consuming its checkpoint* — a real invariant about ONE transaction. The
+defect is the evaluation point, not the sentence, so the repair is to compare
+against what the journal recorded and require every live difference to have a
+named later owner, exactly as `00793136` did for poststates. Deleting the check
+would be the wrong fix.
+
+### And a hazard found while proving the refusal spent nothing
+
+It spent nothing — balances unmoved to the lamport. But three copies of
+`campaign-open.json` now differ, and **the copy written by the first refused
+resume has `founding_targets` NULL**. A refused run rewrites the evidence file.
+
+That is AGENTS.md's own rule under Project conduct: *"A failed generator must
+leave the last accepted output byte-for-byte intact."* The campaign driver
+writes its evidence before the authentication that can refuse. The current file
+is healthy only because the recovery run restored the field before refusing —
+luck, not design, and `founding_targets` names the Open Market the whole
+recovery is for. The repair is the pattern this repository already documents and
+its cut tool already follows: temporary file on the same filesystem, producer
+exits zero, validate the shape, replace atomically.

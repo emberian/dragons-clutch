@@ -6485,6 +6485,19 @@ mod lp_lifecycle {
         }
     }
 
+    /// The market's rent sponsor: the RentCredit's one immutable refund
+    /// wallet, and nobody's LP owner.
+    ///
+    /// This campaign used to stage the credit with the FIRST LP owner's own
+    /// key, and that is the only reason a per-owner Open ever passed. The
+    /// kernel made every created state's refund identity the credit's wallet,
+    /// and the Open requires that identity to equal the position's owner
+    /// (operation 12), so one key played both parts and a family whose request
+    /// type is `MultiLp` looked like it admitted many owners while admitting
+    /// exactly one per generation. Staging a sponsor who is nobody's owner is
+    /// what makes the second Open below evidence rather than a coincidence.
+    const MARKET_RENT_SPONSOR: Pubkey = Pubkey::new_from_array([0x5b; 32]);
+
     fn lifecycle_credit(
         scenario: &super::Scenario,
         beneficiary: Pubkey,
@@ -7500,14 +7513,21 @@ mod lp_lifecycle {
             }
             Err(BuilderError::Projection("hostile-equity-candidate"))
         };
-        assert!(matches!(
-            build_admitted_bundle_with_candidate_v1(
-                &bundle_input,
-                campaign.equity_admitted(expected_selector),
-                &hostile_candidate,
-            ),
-            Err(BuilderError::Projection("admitted-candidate"))
-        ));
+        // Name what came back. A bare `matches!` here reports only that the
+        // hostile did not land where it was aimed, which is exactly the
+        // question when the builder refuses somewhere earlier for its own
+        // reasons.
+        match build_admitted_bundle_with_candidate_v1(
+            &bundle_input,
+            campaign.equity_admitted(expected_selector),
+            &hostile_candidate,
+        ) {
+            Err(BuilderError::Projection("admitted-candidate")) => {}
+            Err(other) => {
+                panic!("hostile equity candidate refused as {other:?}, not at admission")
+            }
+            Ok(_) => panic!("hostile equity candidate was admitted"),
+        }
         let honest_candidate = |scalars: &mut [u64], identities: &mut [[u8; 32]]| {
             project_dealer_equity_hot_registers_v3(
                 decoded,
@@ -7937,14 +7957,21 @@ mod lp_lifecycle {
             }
             Err(BuilderError::Projection("hostile-scenario-candidate"))
         };
-        assert!(matches!(
-            build_admitted_bundle_with_candidate_v1(
-                &bundle_input,
-                campaign.scenario_admitted(),
-                &hostile_candidate,
-            ),
-            Err(BuilderError::Projection("admitted-candidate"))
-        ));
+        // Name what came back. A bare `matches!` here reports only that the
+        // hostile did not land where it was aimed, which is exactly the
+        // question when the builder refuses somewhere earlier for its own
+        // reasons.
+        match build_admitted_bundle_with_candidate_v1(
+            &bundle_input,
+            campaign.scenario_admitted(),
+            &hostile_candidate,
+        ) {
+            Err(BuilderError::Projection("admitted-candidate")) => {}
+            Err(other) => {
+                panic!("hostile scenario candidate refused as {other:?}, not at admission")
+            }
+            Ok(_) => panic!("hostile scenario candidate was admitted"),
+        }
         let honest_candidate = |scalars: &mut [u64], identities: &mut [[u8; 32]]| {
             if scalars.len() != semantic.candidate_scalars.len()
                 || identities.len() != semantic.candidate_identities.len()
@@ -8375,7 +8402,8 @@ mod lp_lifecycle {
                 rent_epoch: 0,
             }),
         );
-        let (credit, credit_state) = lifecycle_credit(&scenario, lp_owner.pubkey());
+        let (credit, credit_state) = lifecycle_credit(&scenario, MARKET_RENT_SPONSOR);
+        assert_ne!(MARKET_RENT_SPONSOR, lp_owner.pubkey());
         let credit_account =
             super::data_account(scenario.waist.registry, credit_state.to_bytes().to_vec());
         context.set_account(&credit, &AccountSharedData::from(credit_account.clone()));
@@ -8402,6 +8430,13 @@ mod lp_lifecycle {
         .expect("submit LP Open");
         assert!(opened.result.is_ok(), "LP Open: {:?}", opened.result);
         let opened_lp = chain_account(&mut context, lp_position).await;
+        assert_eq!(
+            DealerLpPositionV3::decode(&opened_lp.data)
+                .expect("opened LP")
+                .rent_refund,
+            lp_owner.pubkey().to_bytes(),
+            "the position's rent follows the owner who paid it, not the market's sponsor"
+        );
 
         let collateral =
             first_equity_collateral(&scenario, &campaign, lp_owner.pubkey(), 0xf4, 100, 10);
@@ -8684,11 +8719,22 @@ mod lp_lifecycle {
             second_opened.result
         );
         let second_opened_lp = chain_account(&mut context, second_position).await;
+        let second_decoded =
+            DealerLpPositionV3::decode(&second_opened_lp.data).expect("second opened LP");
+        assert_eq!(second_decoded.equity_shares, 0);
+        // The whole point of the second owner: one Market-scoped RentCredit,
+        // one immutable sponsor wallet, and two positions whose rent belongs to
+        // two different people.
+        assert_ne!(second_lp.pubkey(), lp_owner.pubkey());
+        assert_eq!(second_decoded.lp_owner, second_lp.pubkey().to_bytes());
+        assert_eq!(second_decoded.rent_refund, second_lp.pubkey().to_bytes());
         assert_eq!(
-            DealerLpPositionV3::decode(&second_opened_lp.data)
-                .expect("second opened LP")
-                .equity_shares,
-            0
+            LifecycleRentCreditV2::decode(&chain_account(&mut context, credit).await.data)
+                .expect("market RentCredit")
+                .refund_wallet()
+                .to_bytes(),
+            MARKET_RENT_SPONSOR.to_bytes(),
+            "and the credit still names the one sponsor it always did"
         );
 
         let add_slot = context
@@ -9421,7 +9467,8 @@ mod lp_lifecycle {
                 rent_epoch: 0,
             }),
         );
-        let (credit, credit_state) = lifecycle_credit(&scenario, lp_owner.pubkey());
+        let (credit, credit_state) = lifecycle_credit(&scenario, MARKET_RENT_SPONSOR);
+        assert_ne!(MARKET_RENT_SPONSOR, lp_owner.pubkey());
         assert_eq!(
             credit, campaign.rent_credit,
             "Core and lifecycle select the same canonical RentCredit account",

@@ -241,7 +241,10 @@ def main : IO Unit := do
   IO.println s!"pub const SPLINE_KNOTS_OFFSET_V2: usize = {knotsOffset};"
   IO.println s!"pub const SPLINE_KNOT_BYTES_V2: usize = {knotBytes};"
   IO.println s!"pub const SPLINE_REFUSAL_BUFFER_V2: usize = {requestBytes + 1};"
-  IO.println s!"pub const SPLINE_MAGIC_V2: [u8; 8] = {rustBytes requestMagic};"
+  -- The family magic is declared once, by the ramp emitter. This is the same
+  -- eight bytes and always was; it is a reference now rather than a second
+  -- declaration of one wire value.
+  IO.println "pub const SPLINE_MAGIC_V2: [u8; 8] = crate::generated::BASIS_REQUEST_MAGIC_V2;"
   IO.println s!"pub const SPLINE_AGREEMENT_CASES_V2: [SplineAgreementCaseV2; {agreementRequests.length}] = ["
   let mut index := 0
   for candidate in agreementRequests do

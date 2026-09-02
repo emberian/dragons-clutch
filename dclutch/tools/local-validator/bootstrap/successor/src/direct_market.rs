@@ -689,6 +689,23 @@ fn direct_root_rent_minimum_v1(rent_sysvar: &[u8]) -> Result<u64> {
 }
 
 impl DirectDevnetPolicyObservationV1 {
+    /// One offline observation, for compilers that must be tested without a
+    /// cluster. `DirectMarketCompilerOwnedV1::for_test` is the same
+    /// affordance one level up; this is the family-neutral one, and it exists
+    /// because a family compiler's PURE half — everything after the two
+    /// observations — is the part a test can actually pin.
+    #[cfg(test)]
+    pub(crate) fn for_test(finalized_slot: u64) -> Self {
+        let rent = Rent::default();
+        Self {
+            finalized_slot,
+            root_rent_minimum_lamports: rent.minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1),
+            rent,
+            deployment: DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        }
+    }
+
     /// Exact Rent quote for one capability-root width from this snapshot.
     pub(crate) fn root_rent_minimum_for_width_v1(&self, root_bytes: usize) -> Result<u64> {
         let minimum = self.rent.minimum_balance(root_bytes);

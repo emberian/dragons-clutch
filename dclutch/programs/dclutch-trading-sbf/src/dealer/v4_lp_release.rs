@@ -19,7 +19,8 @@ use dclutch_account_profile_contract::{
             LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
             LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3,
             LifecyclePlanInputV3, LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3,
-            LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+            LifecycleRefundSourceInputV3, LifecycleRegisterCoordinateV3, LifecycleSeedInputV3,
+            encode_lifecycle_policy_v5_atomic,
         },
     },
     v2::{AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
@@ -147,6 +148,16 @@ pub fn encode_dealer_lp_lifecycle_v5(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(
                 LP_OBSERVED_REFUND_IDENTITY_V3,
             )),
+            // An LP position is one owner's own account. Its PDA is seeded by
+            // `LP_OWNER_IDENTITY_V3`, its Open debits that owner, the Effect
+            // grammar requires the lifecycle beneficiary output to equal the
+            // owner (operation 12), and the immutable identity binding below
+            // says offset 152 holds the owner. Four authors already agreed the
+            // refund is the owner's; only the kernel dissented, because the
+            // Market-scoped RentCredit names one wallet per generation and the
+            // kernel handed that wallet to every state it created. That is why
+            // the family admitted exactly one LP owner per generation.
+            refund_source: LifecycleRefundSourceInputV3::Payer,
             guard: LifecycleGuardInputV3::Always,
         },
         LifecyclePlanInputV3 {
@@ -161,6 +172,11 @@ pub fn encode_dealer_lp_lifecycle_v5(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(
                 LP_OBSERVED_REFUND_IDENTITY_V3,
             )),
+            // Symmetric with the Open: the AccountProfile projects the closing
+            // position's own bytes at offset 152 into this register, so the
+            // close reads back the create's recorded answer instead of
+            // re-deriving one the create never used.
+            refund_source: LifecycleRefundSourceInputV3::Payer,
             guard: LifecycleGuardInputV3::Always,
         },
     ];

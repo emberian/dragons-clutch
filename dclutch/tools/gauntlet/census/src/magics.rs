@@ -122,15 +122,46 @@ fn render(bytes: &[u8]) -> String {
     }
 }
 
-/// The literal behind `*b"...."`, `b"...."`, or a plain byte-string const.
-fn byte_string(expr: &Expr) -> Option<Vec<u8>> {
+/// The eight bytes behind a magic declaration, in either idiom the tree uses.
+///
+/// `*b"DCLTDRS1"` is what a HAND-WRITTEN magic looks like. A Lean-EMITTED one is
+/// a hex array -- `[0x44, 0x43, 0x4c, 0x54, ...]` -- because an emitter prints
+/// bytes and not text, and every magic this repository has moved to a Lean owner
+/// takes that form.
+///
+/// Reading only the first idiom made this gate blind to 51 of the 278 declared
+/// magics, and the hole GREW with every layout that gained a Lean owner: a gate
+/// that goes blind in proportion to how much of the tree is properly authored is
+/// pointed the wrong way. Hidden inside that blindness was a real collision.
+///
+/// One parser reads both, so a magic is counted by what it declares and not by
+/// which backend happened to write it down.
+fn magic_bytes(expr: &Expr) -> Option<Vec<u8>> {
     match expr {
-        // `*b"DCLTDRS1"` -- the idiom the tree uses.
-        Expr::Unary(unary) if matches!(unary.op, UnOp::Deref(_)) => byte_string(&unary.expr),
+        // `*b"DCLTDRS1"` -- the hand-written idiom.
+        Expr::Unary(unary) if matches!(unary.op, UnOp::Deref(_)) => magic_bytes(&unary.expr),
+        Expr::Group(group) => magic_bytes(&group.expr),
+        Expr::Paren(paren) => magic_bytes(&paren.expr),
         Expr::Lit(literal) => match &literal.lit {
             syn::Lit::ByteStr(bytes) => Some(bytes.value()),
             _ => None,
         },
+        // `[0x44, 0x43, ...]` -- the emitted idiom. Every element must be an
+        // integer literal that fits in a `u8`; anything computed, negative or
+        // referential is not a declaration this gate can read, and is skipped
+        // rather than guessed at. `[0; 8]` is a `Repeat` and stays out: a zero
+        // filler is a placeholder, not a wire discriminant.
+        Expr::Array(array) => array
+            .elems
+            .iter()
+            .map(|element| match element {
+                Expr::Lit(literal) => match &literal.lit {
+                    syn::Lit::Int(int) => int.base10_parse::<u8>().ok(),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect(),
         _ => None,
     }
 }
@@ -178,7 +209,7 @@ fn collect(
                 }
             }
             Item::Const(konst) if is_eight_byte_array(&konst.ty) => {
-                let Some(bytes) = byte_string(&konst.expr) else {
+                let Some(bytes) = magic_bytes(&konst.expr) else {
                     continue;
                 };
                 if bytes.len() != 8 {
@@ -559,14 +590,24 @@ mod tests {
         assert_eq!(summary.distinct, 1);
     }
 
-    /// The parser must take `*b"..."` and must not take a differently-sized or
+    /// The parser must take BOTH idioms -- the hand-written `*b"..."` and the
+    /// emitted hex array -- and must not take a differently-sized or
     /// differently-typed constant that happens to sit next to one.
+    ///
+    /// The hex-array case is the one this gate was blind to. `EMITTED_MAGIC_V1`
+    /// below is `DCLTEMIT` written the way a Lean emitter writes it, and it must
+    /// arrive at the same rendered value as a byte string would, because the
+    /// whole point is that a magic is one object however it is spelled.
     #[test]
-    fn only_eight_byte_byte_string_constants_are_swept() {
+    fn both_magic_idioms_are_swept_and_nothing_else_is() {
         let source = r#"
             pub const GOOD_MAGIC_V1: [u8; 8] = *b"DCLTGOOD";
+            pub const EMITTED_MAGIC_V1: [u8; 8] =
+                [0x44, 0x43, 0x4c, 0x54, 0x45, 0x4d, 0x49, 0x54];
             pub const SHORT_MAGIC: [u8; 4] = *b"DCLT";
+            pub const SHORT_EMITTED: [u8; 4] = [0x44, 0x43, 0x4c, 0x54];
             pub const NOT_BYTES: [u8; 8] = [0; 8];
+            pub const COMPUTED: [u8; 8] = [BASE, 1, 2, 3, 4, 5, 6, 7];
             pub const WIDTH: usize = 8;
             mod inner {
                 pub const NESTED_MAGIC_V1: [u8; 8] = *b"DCLTNEST";
@@ -576,8 +617,38 @@ mod tests {
         let mut found = Vec::new();
         collect(&parsed.items, "p", "a.rs", source, &mut found);
         let names: Vec<&str> = found.iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names, ["GOOD_MAGIC_V1", "NESTED_MAGIC_V1"]);
+        assert_eq!(
+            names,
+            ["GOOD_MAGIC_V1", "EMITTED_MAGIC_V1", "NESTED_MAGIC_V1"]
+        );
         assert_eq!(found[0].value, "DCLTGOOD");
-        assert_eq!(found[1].value, "DCLTNEST", "a magic inside a module counts");
+        assert_eq!(
+            found[1].value, "DCLTEMIT",
+            "an emitted hex array renders exactly as its byte-string twin would"
+        );
+        assert_eq!(found[2].value, "DCLTNEST", "a magic inside a module counts");
+    }
+
+    /// A hand-written magic and an emitted one carrying the SAME bytes are one
+    /// collision, not two declarations the gate never compares. This is the
+    /// shape of the defect the blind spot was hiding.
+    #[test]
+    fn a_byte_string_and_a_hex_array_collide_with_each_other() {
+        let source = r#"
+            pub const WRITTEN_MAGIC_V1: [u8; 8] = *b"DCLTSAME";
+            pub const EMITTED_MAGIC_V1: [u8; 8] =
+                [0x44, 0x43, 0x4c, 0x54, 0x53, 0x41, 0x4d, 0x45];
+        "#;
+        let parsed = syn::parse_file(source).expect("parses");
+        let mut found = Vec::new();
+        collect(&parsed.items, "p", "a.rs", source, &mut found);
+        let (problems, summary) = check(&found, &[]);
+        assert_eq!(summary.distinct, 1, "both declare the same wire value");
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].contains("DCLTSAME"),
+            "the collision names the value: {}",
+            problems[0]
+        );
     }
 }

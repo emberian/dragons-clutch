@@ -890,8 +890,8 @@ mod tests {
             ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-                encode_lifecycle_policy_v5_atomic,
+                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+                LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
             },
         };
         let bytes = HEADER_BYTES
@@ -921,6 +921,7 @@ mod tests {
             rent_credit: None,
             principal: None,
             beneficiary: None,
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         }];
         encode_lifecycle_policy_v5_atomic(

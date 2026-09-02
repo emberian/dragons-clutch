@@ -24,7 +24,8 @@ use dclutch_account_profile_contract::{
             LifecycleAccountCoordinateV3, LifecycleGuardInputV3,
             LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3,
             LifecyclePlanInputV3, LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3,
-            LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
+            LifecycleRefundSourceInputV3, LifecycleRegisterCoordinateV3, LifecycleSeedInputV3,
+            encode_lifecycle_policy_v4_atomic,
         },
     },
     v2::{
@@ -464,6 +465,14 @@ pub fn encode_dealer_lp_lifecycle_v3(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(
                 LP_OBSERVED_REFUND_IDENTITY_V3,
             )),
+            // An LP position is one owner's own account: its PDA is seeded by
+            // `LP_OWNER_IDENTITY_V3` and its Open debits that owner. The rent
+            // is theirs, and the Effect grammar already says so -- operation 12
+            // requires the lifecycle's beneficiary output to equal the owner.
+            // Under `Credit` that made the Market-scoped RentCredit's single
+            // refund wallet the only admissible owner per generation, so the
+            // family admitted one LP and refused the second.
+            refund_source: LifecycleRefundSourceInputV3::Payer,
             guard: LifecycleGuardInputV3::Always,
         },
         LifecyclePlanInputV3 {
@@ -480,6 +489,12 @@ pub fn encode_dealer_lp_lifecycle_v3(
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(
                 LP_OBSERVED_REFUND_IDENTITY_V3,
             )),
+            // Symmetric with the Open. `LP_OBSERVED_REFUND_IDENTITY_V3` is the
+            // AccountProfile projection of the position's own bytes at offset
+            // 152, which the Open wrote from this same lifecycle output, so the
+            // close reads back the create's recorded answer rather than
+            // re-deriving one the create never used.
+            refund_source: LifecycleRefundSourceInputV3::Payer,
             guard: LifecycleGuardInputV3::Always,
         },
     ];

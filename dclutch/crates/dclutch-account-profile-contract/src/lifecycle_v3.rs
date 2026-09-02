@@ -135,6 +135,9 @@ const SOURCE_ITEM: u8 = 1;
 const GUARD_ALWAYS: u8 = 0;
 const GUARD_SCALAR_EQ: u8 = 1;
 
+const REFUND_SOURCE_CREDIT: u8 = 0;
+const REFUND_SOURCE_PAYER: u8 = 1;
+
 const PROTECTED_OUTPUT_NONE: u8 = 0;
 const PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE: u8 = 1;
 
@@ -407,6 +410,53 @@ pub enum LifecycleOperationV3 {
     AuthenticateOrCreate,
 }
 
+/// Whose rent a lifecycle-managed state carries.
+///
+/// A state's refund identity is a property OF THE STATE, not of the
+/// transaction that happened to create it, and the two answers this tree
+/// needs are different economics rather than different spellings:
+///
+/// - `Credit` -- the state is a shared structure of the MARKET, so its rent
+///   belongs to the market's immutable RentCredit wallet. Direct's maker
+///   replay root is the type case: that route deliberately admits a stranger
+///   as the payer of one fill, and if the rent followed whoever paid, the
+///   stranger would walk away owning the rent of something the market depends
+///   on (`direct_trade_producer.rs::maker_root_rent_beneficiary_v1`, where the
+///   distinction was measured on a landed fill on 2026-08-31).
+/// - `Payer` -- the state is one participant's own position, keyed by their
+///   identity, so its rent belongs to the payer who funded it. The Dealer
+///   multi-LP position is the type case: its PDA is seeded by the LP owner and
+///   its Open debits that owner, while a Market-scoped RentCredit can name
+///   exactly ONE wallet per generation. That is why a family whose request
+///   type is literally `MultiLp` admitted exactly one LP owner per generation
+///   and refused the first honest second one.
+///
+/// The tag is the plan's declaration; the kernel proves the named party is one
+/// the plan's own funding admits -- the authenticated credit's immutable
+/// wallet, or the account the plan names as payer and the AccountProfile grants
+/// `DEBIT_LAMPORTS`. Nothing else is nameable, so a family cannot declare a
+/// refund identity its funding never touches.
+///
+/// `Credit` is zero, so every policy encoded before this distinction existed
+/// keeps its exact bytes and its exact meaning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LifecycleRefundSourceV3 {
+    /// The permanent RentCredit's immutable refund wallet.
+    Credit,
+    /// The create payer the plan names and the profile may debit.
+    Payer,
+}
+
+impl LifecycleRefundSourceV3 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            REFUND_SOURCE_CREDIT => Ok(Self::Credit),
+            REFUND_SOURCE_PAYER => Ok(Self::Payer),
+            _ => Err(Error::UnknownTag),
+        }
+    }
+}
+
 impl LifecycleOperationV3 {
     fn decode(value: u8) -> Result<Self> {
         match value {
@@ -439,6 +489,7 @@ struct ActionPlanV3 {
     rent_credit: Option<AccountCoordinateV3>,
     principal: Option<RegisterSourceV3>,
     beneficiary: Option<RegisterSourceV3>,
+    refund_source: LifecycleRefundSourceV3,
     guard: PlanGuardV3,
 }
 
@@ -2086,7 +2137,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             })
             .ok_or(Error::InvalidLength)?;
         let operation = LifecycleOperationV3::decode(read_u8(self.bytes, offset + 4)?)?;
-        require_zero(self.bytes, offset + 5, 1)?;
+        let refund_source = LifecycleRefundSourceV3::decode(read_u8(self.bytes, offset + 5)?)?;
         let recipe = read_u16(self.bytes, offset + 6)?;
         let payer = decode_optional_account(self.bytes, offset + 8)?;
         let rent_credit = decode_optional_account(self.bytes, offset + 12)?;
@@ -2118,10 +2169,15 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         };
         match operation {
             LifecycleOperationV3::Authenticate => {
+                // An Authenticate moves no rent and names no funding, so it has
+                // no refund identity to declare. Zero is the only canonical
+                // spelling, which is exactly what this byte held before it
+                // carried a tag.
                 if payer.is_some()
                     || rent_credit.is_some()
                     || principal.is_some()
                     || beneficiary.is_some()
+                    || refund_source != LifecycleRefundSourceV3::Credit
                 {
                     return Err(Error::NonCanonicalReserved);
                 }
@@ -2163,6 +2219,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             rent_credit,
             principal,
             beneficiary,
+            refund_source,
             guard,
         })
     }
@@ -2798,6 +2855,17 @@ pub struct CreateStatePlanV3 {
     pub rent_credit: [u8; 32],
     /// Immutable beneficiary decoded from RentCredit and projected by AccountProfile.
     pub beneficiary: [u8; 32],
+    /// On whose authority the beneficiary above is named.
+    ///
+    /// A reader of this plan needs it: `beneficiary` alone cannot say whether
+    /// it is the market's immutable wallet or the funding payer, and a
+    /// consumer that assumes one and gets the other misdirects rent. The
+    /// Trading commit for a Close mirrors this to decide whether it may
+    /// re-derive the identity from the credit; Direct's maker replay root
+    /// requires `Credit` before it will adopt the identity as its
+    /// `rent_owner`, because that root is the market's and not one fill
+    /// payer's.
+    pub refund_source: LifecycleRefundSourceV3,
     /// Exact affine target data width.
     pub target_data_bytes: u32,
     /// Historical rent principal persisted by the created state.
@@ -2823,6 +2891,17 @@ pub struct CloseStatePlanV3 {
     pub rent_credit: [u8; 32],
     /// Immutable authenticated beneficiary.
     pub beneficiary: [u8; 32],
+    /// On whose authority the beneficiary above is named.
+    ///
+    /// A reader of this plan needs it: `beneficiary` alone cannot say whether
+    /// it is the market's immutable wallet or the funding payer, and a
+    /// consumer that assumes one and gets the other misdirects rent. The
+    /// Trading commit for a Close mirrors this to decide whether it may
+    /// re-derive the identity from the credit; Direct's maker replay root
+    /// requires `Credit` before it will adopt the identity as its
+    /// `rent_owner`, because that root is the market's and not one fill
+    /// payer's.
+    pub refund_source: LifecycleRefundSourceV3,
     /// Exact state bytes the adapter must zero before resize/assign.
     pub source_data_bytes: u32,
     /// Persisted historical rent principal, not a fee or bounty.
@@ -3222,11 +3301,9 @@ fn plan_create(
         payer_coordinate,
         EFFECT_PERMISSION_DEBIT_LAMPORTS,
     )?;
-    let credit = if lifecycle_owns_values {
-        authenticate_credit_account(context, credit_account)?
-    } else {
-        authenticate_credit(selected, context, credit_account)?
-    };
+    // The credit ACCOUNT is authenticated here. WHO the refund belongs to is
+    // decided below, after the funding this create actually performs is known.
+    let credit = authenticate_credit_account(context, credit_account)?;
     if payer.key == state.key
         || credit_account.key == state.key
         || payer.key == credit_account.key
@@ -3259,11 +3336,43 @@ fn plan_create(
         .lamports
         .checked_sub(payer_debit)
         .ok_or(Error::InvalidFunding)?;
+    // The plan declares whose rent this state carries, and the only nameable
+    // parties are the two this create authenticated: the credit's immutable
+    // wallet, and the payer the profile grants DEBIT_LAMPORTS. This was
+    // unconditionally `credit.beneficiary`, which is right for market-shared
+    // state and wrong for a per-owner position -- the Market-scoped credit
+    // names one wallet per generation, so a per-owner family could admit one
+    // owner per generation and no more.
+    let beneficiary = match selected.refund_source {
+        LifecycleRefundSourceV3::Credit => credit.beneficiary,
+        LifecycleRefundSourceV3::Payer => *payer.key,
+    };
+    if beneficiary == [0; 32] {
+        return Err(Error::InvalidRent);
+    }
+    // When the caller owns the observation registers, the declared beneficiary
+    // must name the funding's answer. This is the equality `authenticate_credit`
+    // used to make against the credit alone, moved to where the funding is known
+    // and generalized from "the credit's wallet" to "whoever this plan says
+    // pays". Under a `Credit` plan it is byte-for-byte the old check.
+    if !lifecycle_owns_values {
+        let declared = identity_register(
+            context.account_profile,
+            context.tail_count,
+            context.item_index,
+            context.registers,
+            selected.beneficiary.ok_or(Error::InvalidRent)?,
+        )?;
+        if declared != beneficiary {
+            return Err(Error::InvalidRent);
+        }
+    }
     Ok(StateLifecyclePlanV3::Create(CreateStatePlanV3 {
         state: *state.key,
         payer: *payer.key,
         rent_credit: credit.key,
-        beneficiary: credit.beneficiary,
+        beneficiary,
+        refund_source: selected.refund_source,
         target_data_bytes: data_bytes,
         historical_rent_principal: principal,
         state_before: state.lamports,
@@ -3300,7 +3409,8 @@ fn plan_close(
         credit_coordinate,
         EFFECT_PERMISSION_CREDIT_LAMPORTS,
     )?;
-    let credit = authenticate_credit(selected, context, credit_account)?;
+    let credit = authenticate_credit_account(context, credit_account)?;
+    let beneficiary = closing_refund_identity(selected, context, credit)?;
     if credit_account.key == state.key || !credit_account.writable || credit_account.executable {
         return Err(Error::InvalidFunding);
     }
@@ -3321,7 +3431,8 @@ fn plan_close(
     Ok(StateLifecyclePlanV3::Close(CloseStatePlanV3 {
         state: *state.key,
         rent_credit: credit.key,
-        beneficiary: credit.beneficiary,
+        beneficiary,
+        refund_source: selected.refund_source,
         source_data_bytes: data_bytes,
         historical_rent_principal: principal,
         source_before: state.lamports,
@@ -3332,23 +3443,46 @@ fn plan_close(
     }))
 }
 
-fn authenticate_credit(
+/// The refund identity a close is owed to, projected from the closing state.
+///
+/// A Close names no payer -- the funding question was settled by the create,
+/// which wrote its answer into the state. The declared register is that answer
+/// read back: for every family that uses this path it is an AccountProfile
+/// projection of the closing account's own bytes, and the create's immutable
+/// identity bindings are what keep those bytes honest.
+///
+/// A `Credit` plan additionally re-derives the answer -- the market's wallet is
+/// still knowable at close time -- which is the exact equality this kernel has
+/// always made. A `Payer` plan cannot: the payer is long gone, so the stored
+/// identity is the only authority, and the kernel requires only that it exists.
+/// The family that reads the plan is where a stored identity meets the record
+/// that must agree with it (`validate_registered_record_close_lifecycle_v3`
+/// requires `beneficiary == close.rent_owner`).
+fn closing_refund_identity(
     selected: ActionPlanV3,
     context: LifecycleContextV3<'_>,
-    account: AccountObservationV1<'_>,
-) -> Result<AuthenticatedRentCreditV3> {
-    let credit = authenticate_credit_account(context, account)?;
-    let beneficiary = identity_register(
+    credit: AuthenticatedRentCreditV3,
+) -> Result<[u8; 32]> {
+    let declared = identity_register(
         context.account_profile,
         context.tail_count,
         context.item_index,
         context.registers,
         selected.beneficiary.ok_or(Error::InvalidRent)?,
     )?;
-    if credit.beneficiary != beneficiary {
-        return Err(Error::InvalidRent);
+    match selected.refund_source {
+        LifecycleRefundSourceV3::Credit => {
+            if credit.beneficiary != declared {
+                return Err(Error::InvalidRent);
+            }
+        }
+        LifecycleRefundSourceV3::Payer => {
+            if declared == [0; 32] {
+                return Err(Error::InvalidRent);
+            }
+        }
     }
-    Ok(credit)
+    Ok(declared)
 }
 
 fn authenticate_credit_account(
@@ -3406,9 +3540,18 @@ fn validate_protected_values(
     }
     let (created, principal, beneficiary) = match plan {
         StateLifecyclePlanV3::Authenticate(value) => {
+            // The live state already carries the create's recorded answer. A
+            // `Credit` plan re-derives it, which is the equality this arm has
+            // always made; a `Payer` plan cannot -- the payer is not an account
+            // of this invocation -- so the stored identity stands on the
+            // create's binding and only its existence is checked here.
+            let refund_admitted = match selected.refund_source {
+                LifecycleRefundSourceV3::Credit => beneficiary_observation == credit.beneficiary,
+                LifecycleRefundSourceV3::Payer => beneficiary_observation != [0; 32],
+            };
             if bump_observation != u64::from(value.bump)
                 || principal_observation == 0
-                || beneficiary_observation != credit.beneficiary
+                || !refund_admitted
                 || state.lamports < principal_observation
                 || state.lamports < current.lamports
             {
@@ -4178,6 +4321,7 @@ mod tests {
             rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
             principal: Some(encode::LifecycleRegisterCoordinateV3::common(1)),
             beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+            refund_source: encode::LifecycleRefundSourceInputV3::Credit,
             guard: encode::LifecycleGuardInputV3::Always,
         }];
         let policy_width = HEADER_BYTES
@@ -4206,6 +4350,7 @@ mod tests {
             rent_credit: None,
             principal: None,
             beneficiary: None,
+            refund_source: encode::LifecycleRefundSourceInputV3::Credit,
             guard: encode::LifecycleGuardInputV3::Always,
         }];
         let mut unbound_scratch = vec![0_u8; policy_width];
@@ -4325,6 +4470,7 @@ mod tests {
                 rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
                 principal: Some(encode::LifecycleRegisterCoordinateV3::common(1)),
                 beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+                refund_source: encode::LifecycleRefundSourceInputV3::Credit,
                 guard: encode::LifecycleGuardInputV3::ScalarEq {
                     source: encode::LifecycleRegisterCoordinateV3::common(2),
                     expected,
@@ -4551,6 +4697,7 @@ mod tests {
             rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
             principal: Some(encode::LifecycleRegisterCoordinateV3::common(1)),
             beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+            refund_source: encode::LifecycleRefundSourceInputV3::Credit,
             guard: encode::LifecycleGuardInputV3::Always,
         }];
         let protected = [Some(encode::LifecycleProtectedOutputsInputV3 {
@@ -4708,7 +4855,8 @@ mod tests {
             data_bytes: 152,
             lamports: 100,
         };
-        let exercise = |state_owner: [u8; 32],
+        let exercise = |selected: SelectedLifecycleV3<'_>,
+                        state_owner: [u8; 32],
                         state_lamports: u64,
                         state_data: &[u8],
                         scalar_output: &mut [u64; 5],
@@ -4781,7 +4929,14 @@ mod tests {
         let mut create_scalars = [77; 5];
         let mut create_identities = [[77; 32]; 5];
         assert!(matches!(
-            exercise(SYSTEM, 5, &[], &mut create_scalars, &mut create_identities),
+            exercise(
+                selected,
+                SYSTEM,
+                5,
+                &[],
+                &mut create_scalars,
+                &mut create_identities
+            ),
             Ok(StateLifecyclePlanV3::Create(_))
         ));
         assert_eq!(create_scalars, [0, 0, 1, 242, 100]);
@@ -4799,6 +4954,7 @@ mod tests {
         let mut authenticate_identities = [[88; 32]; 5];
         assert!(matches!(
             exercise(
+                selected,
                 TRADING,
                 100,
                 &live,
@@ -4820,6 +4976,7 @@ mod tests {
         let hostile_identities_before = hostile_identities;
         assert_eq!(
             exercise(
+                selected,
                 TRADING,
                 100,
                 &live,
@@ -4835,6 +4992,7 @@ mod tests {
         live[48..80].fill(0x99);
         assert_eq!(
             exercise(
+                selected,
                 TRADING,
                 100,
                 &live,
@@ -4842,6 +5000,106 @@ mod tests {
                 &mut hostile_identities
             ),
             Err(Error::IdentityMismatch)
+        );
+        assert_eq!(hostile_scalars, hostile_scalars_before);
+        assert_eq!(hostile_identities, hostile_identities_before);
+
+        // THE OTHER ARM. One byte of the plan record -- the refund-source tag --
+        // says this state's rent is the PAYER's rather than the market's, and
+        // nothing else about the policy, the profile, the accounts or the
+        // registers changes. The protected create then writes the payer into
+        // the beneficiary output, and the authenticate accepts the stored
+        // identity the create recorded instead of re-deriving the credit's.
+        //
+        // This is the shape the Dealer multi-LP Open runs: a position keyed by
+        // its owner, whose Effect grammar requires the lifecycle beneficiary
+        // output to equal that owner. Under the market arm the output is the
+        // Market RentCredit's single wallet, which can equal exactly one
+        // owner's key per generation.
+        let mut owned_bytes = policy_bytes.clone();
+        let refund_offset = HEADER_BYTES + RECIPE_BYTES + 3 * SEED_BYTES + 5;
+        *owned_bytes.get_mut(refund_offset).expect("refund tag") = REFUND_SOURCE_PAYER;
+        let owned = StateLifecyclePolicyV4::decode_selected(POLICY_ID, POLICY_ID, &owned_bytes)
+            .expect("payer-refunded policy decode");
+        owned
+            .validate_account_profile(profile)
+            .expect("static profile join");
+        let owned_selected = owned.action_plan(1, 0).expect("payer-refunded selected");
+
+        let mut owned_create_scalars = [77; 5];
+        let mut owned_create_identities = [[77; 32]; 5];
+        assert!(matches!(
+            exercise(
+                owned_selected,
+                SYSTEM,
+                5,
+                &[],
+                &mut owned_create_scalars,
+                &mut owned_create_identities
+            ),
+            Ok(StateLifecyclePlanV3::Create(_))
+        ));
+        assert_eq!(owned_create_scalars, [0, 0, 1, 242, 100]);
+        assert_eq!(
+            owned_create_identities,
+            [[0; 32], payer, state, TRADING, payer_owner]
+        );
+
+        let mut owned_live = [0_u8; 152];
+        owned_live[..8].copy_from_slice(&242_u64.to_le_bytes());
+        owned_live[8..16].copy_from_slice(&100_u64.to_le_bytes());
+        owned_live[16..48].copy_from_slice(&payer);
+        owned_live[48..80].copy_from_slice(&payer_owner);
+        let mut owned_authenticate_scalars = [88; 5];
+        let mut owned_authenticate_identities = [[88; 32]; 5];
+        assert!(matches!(
+            exercise(
+                owned_selected,
+                TRADING,
+                100,
+                &owned_live,
+                &mut owned_authenticate_scalars,
+                &mut owned_authenticate_identities
+            ),
+            Ok(StateLifecyclePlanV3::Authenticate(_))
+        ));
+        assert_eq!(owned_authenticate_scalars, [242, 100, 0, 242, 100]);
+        assert_eq!(
+            owned_authenticate_identities,
+            [payer, payer, state, TRADING, payer_owner]
+        );
+
+        // A state that recorded no refund identity at all is not authenticable
+        // under either arm: the market arm has a wallet to disagree with, and
+        // the owned arm has only existence to require.
+        owned_live[16..48].fill(0);
+        assert_eq!(
+            exercise(
+                owned_selected,
+                TRADING,
+                100,
+                &owned_live,
+                &mut hostile_scalars,
+                &mut hostile_identities
+            ),
+            Err(Error::InvalidRent)
+        );
+        assert_eq!(hostile_scalars, hostile_scalars_before);
+        assert_eq!(hostile_identities, hostile_identities_before);
+
+        // And the market arm still refuses the payer's own key in that slot,
+        // which is what makes the tag load-bearing rather than decorative.
+        owned_live[16..48].copy_from_slice(&payer);
+        assert_eq!(
+            exercise(
+                selected,
+                TRADING,
+                100,
+                &owned_live,
+                &mut hostile_scalars,
+                &mut hostile_identities
+            ),
+            Err(Error::InvalidRent)
         );
         assert_eq!(hostile_scalars, hostile_scalars_before);
         assert_eq!(hostile_identities, hostile_identities_before);
@@ -5071,6 +5329,27 @@ mod tests {
         put(&mut plan, 26, &index.to_le_bytes());
         put(&mut plan, 28, &expected.to_le_bytes());
         plan
+    }
+
+    /// The same policy with the per-item record's create and close declaring
+    /// that their rent follows the payer rather than the market's wallet.
+    fn payer_refunded_policy_bytes() -> Vec<u8> {
+        let mut output = policy_bytes();
+        let base = HEADER_BYTES + 2 * RECIPE_BYTES + 12 * SEED_BYTES;
+        for index in [2_usize, 4] {
+            let offset = base + index * ACTION_PLAN_BYTES;
+            *output.get_mut(offset + 5).expect("refund tag") = REFUND_SOURCE_PAYER;
+        }
+        output
+    }
+
+    /// The fixture registers with one chosen declared refund identity.
+    fn registers_declaring(identity: [u8; 32]) -> (Vec<u64>, Vec<[u8; 32]>) {
+        let (scalars, mut identities) = registers();
+        *identities
+            .get_mut(1)
+            .expect("declared beneficiary register") = identity;
+        (scalars, identities)
     }
 
     fn policy_bytes() -> Vec<u8> {
@@ -5380,6 +5659,7 @@ mod tests {
                 payer: [0x42; 32],
                 rent_credit: [0x43; 32],
                 beneficiary: [0x22; 32],
+                refund_source: LifecycleRefundSourceV3::Credit,
                 target_data_bytes: 148,
                 historical_rent_principal: 100,
                 state_before: 20,
@@ -5390,6 +5670,187 @@ mod tests {
             })
         );
         assert_eq!(plan.effective_state_data_bytes(), 148);
+    }
+
+    /// A per-owner state's rent follows the payer, and names nobody else.
+    ///
+    /// The Market-scoped RentCredit holds ONE immutable refund wallet for a
+    /// whole market generation. That is the right answer for state the market
+    /// shares and the wrong answer for state one participant owns: a family
+    /// keyed per owner could admit exactly one owner per generation, because
+    /// the kernel forced every created state's refund identity to be that one
+    /// wallet. This is the other arm -- the plan declares that its rent follows
+    /// the payer the profile debits, and the kernel then admits the payer and
+    /// refuses everyone else, the market's own sponsor wallet included.
+    ///
+    /// Both arms are held here on ONE fixture, so the difference between them
+    /// is a single wire byte and not a different world.
+    #[test]
+    fn payer_refunded_states_name_the_funding_and_refuse_every_stranger() {
+        const PAYER: [u8; 32] = [0x42; 32];
+        const SPONSOR: [u8; 32] = [0x22; 32];
+        const STRANGER: [u8; 32] = [0x77; 32];
+
+        let profile_bytes = account_profile_bytes();
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("profile");
+        let credit = AuthenticatedRentCreditV3 {
+            key: [0x43; 32],
+            beneficiary: SPONSOR,
+            lamports: 7,
+        };
+
+        let create = |policy_bytes: &[u8], declared: [u8; 32]| {
+            let policy =
+                StateLifecyclePolicyV3::decode_selected(POLICY_ID, POLICY_ID, policy_bytes)
+                    .expect("policy");
+            policy.validate_account_profile(profile).expect("geometry");
+            let (scalars, identities) = registers_declaring(declared);
+            let accounts = create_accounts();
+            plan_lifecycle(
+                policy.action_plan(3, 0).expect("create"),
+                LifecycleContextV3 {
+                    account_profile: profile,
+                    tail_count: 3,
+                    item_index: Some(2),
+                    accounts: PlannedObservationsV3::observed(&accounts),
+                    registers: LifecycleRegistersV3 {
+                        scalars: &scalars,
+                        identities: &identities,
+                    },
+                    trading_program: TRADING,
+                    system_program: SYSTEM,
+                    adapter_derived_pda: [0x52; 32],
+                    rent_credit: Some(credit),
+                    current_rent_minimum: Some(AuthenticatedRentMinimumV3 {
+                        data_bytes: 148,
+                        lamports: 100,
+                    }),
+                },
+            )
+        };
+
+        let close = |policy_bytes: &[u8], declared: [u8; 32]| {
+            let policy =
+                StateLifecyclePolicyV3::decode_selected(POLICY_ID, POLICY_ID, policy_bytes)
+                    .expect("policy");
+            let (scalars, identities) = registers_declaring(declared);
+            let mut accounts = create_accounts();
+            accounts[6] = AccountObservationV1::new(
+                &[0x52; 32],
+                &TRADING,
+                135,
+                &CLOSED_STATE_DATA,
+                false,
+                true,
+                false,
+            );
+            plan_lifecycle(
+                policy.action_plan(5, 0).expect("close"),
+                LifecycleContextV3 {
+                    account_profile: profile,
+                    tail_count: 3,
+                    item_index: Some(2),
+                    accounts: PlannedObservationsV3::observed(&accounts),
+                    registers: LifecycleRegistersV3 {
+                        scalars: &scalars,
+                        identities: &identities,
+                    },
+                    trading_program: TRADING,
+                    system_program: SYSTEM,
+                    adapter_derived_pda: [0x52; 32],
+                    rent_credit: Some(credit),
+                    current_rent_minimum: None,
+                },
+            )
+        };
+
+        let market = policy_bytes();
+        let owned = payer_refunded_policy_bytes();
+        // One byte apart, and only in the two plans that were retagged.
+        assert_eq!(market.len(), owned.len());
+        assert_eq!(
+            market
+                .iter()
+                .zip(owned.iter())
+                .filter(|(left, right)| left != right)
+                .count(),
+            2
+        );
+
+        // The market arm is unchanged: the credit's wallet is the only
+        // admissible refund identity, and the payer is a stranger to it.
+        assert_eq!(
+            create(&market, SPONSOR).map(|plan| match plan {
+                StateLifecyclePlanV3::Create(value) => value.beneficiary,
+                _ => panic!("create"),
+            }),
+            Ok(SPONSOR)
+        );
+        assert_eq!(create(&market, PAYER), Err(Error::InvalidRent));
+        assert_eq!(create(&market, STRANGER), Err(Error::InvalidRent));
+
+        // The owned arm admits the payer -- the account this plan names and the
+        // AccountProfile grants DEBIT_LAMPORTS -- and refuses the market's own
+        // sponsor wallet exactly as hard as it refuses an unrelated key.
+        let planned = create(&owned, PAYER).expect("payer-refunded create");
+        assert_eq!(
+            planned,
+            StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+                state: [0x52; 32],
+                payer: PAYER,
+                rent_credit: [0x43; 32],
+                beneficiary: PAYER,
+                refund_source: LifecycleRefundSourceV3::Payer,
+                target_data_bytes: 148,
+                historical_rent_principal: 100,
+                state_before: 20,
+                state_after: 100,
+                payer_debit: 80,
+                payer_after: 920,
+                bump: 242,
+            })
+        );
+        assert_eq!(create(&owned, SPONSOR), Err(Error::InvalidRent));
+        assert_eq!(create(&owned, STRANGER), Err(Error::InvalidRent));
+
+        // The close reads the create's recorded answer back out of the state.
+        // Under the market arm the kernel re-derives it from the credit, which
+        // it can still see; under the owned arm the payer is not an account of
+        // this invocation, so the stored identity is the authority and the
+        // kernel requires only that the create actually recorded one.
+        assert_eq!(
+            close(&market, SPONSOR).map(|plan| match plan {
+                StateLifecyclePlanV3::Close(value) => value.beneficiary,
+                _ => panic!("close"),
+            }),
+            Ok(SPONSOR)
+        );
+        assert_eq!(close(&market, PAYER), Err(Error::InvalidRent));
+        assert_eq!(
+            close(&owned, PAYER).map(|plan| match plan {
+                StateLifecyclePlanV3::Close(value) => value.beneficiary,
+                _ => panic!("close"),
+            }),
+            Ok(PAYER)
+        );
+        assert_eq!(close(&owned, [0; 32]), Err(Error::InvalidRent));
+
+        // The tag is wire, and the wire is exhaustive. An Authenticate moves no
+        // rent and may not declare a refund identity at all; an unknown tag is
+        // an unknown tag and never a silently accepted zero.
+        let base = HEADER_BYTES + 2 * RECIPE_BYTES + 12 * SEED_BYTES;
+        let mut authenticate_declares = policy_bytes();
+        authenticate_declares[base + 5] = REFUND_SOURCE_PAYER;
+        assert_eq!(
+            StateLifecyclePolicyV3::decode_selected(POLICY_ID, POLICY_ID, &authenticate_declares),
+            Err(Error::NonCanonicalReserved)
+        );
+        let mut unknown_tag = policy_bytes();
+        unknown_tag[base + 2 * ACTION_PLAN_BYTES + 5] = 2;
+        assert_eq!(
+            StateLifecyclePolicyV3::decode_selected(POLICY_ID, POLICY_ID, &unknown_tag),
+            Err(Error::UnknownTag)
+        );
     }
 
     #[test]
@@ -5439,6 +5900,7 @@ mod tests {
                 state: [0x52; 32],
                 rent_credit: [0x43; 32],
                 beneficiary: [0x22; 32],
+                refund_source: LifecycleRefundSourceV3::Credit,
                 source_data_bytes: 148,
                 historical_rent_principal: 100,
                 source_before: 135,
@@ -5564,6 +6026,7 @@ mod tests {
                 rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
                 principal: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
                 beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+                refund_source: encode::LifecycleRefundSourceInputV3::Credit,
                 guard: encode::LifecycleGuardInputV3::Always,
             }];
             let width = HEADER_BYTES + RECIPE_BYTES + SEED_BYTES + ACTION_PLAN_BYTES;
@@ -5613,6 +6076,7 @@ mod tests {
             rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
             principal: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
             beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+            refund_source: encode::LifecycleRefundSourceInputV3::Credit,
             guard: encode::LifecycleGuardInputV3::Always,
         }];
         let mut item_scratch = vec![0_u8; policy_bytes.len()];

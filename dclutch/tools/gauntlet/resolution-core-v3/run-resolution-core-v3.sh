@@ -65,11 +65,18 @@ build() {
 # `process_commit_deadline_failure` and built green anyway. An artifact the
 # toolchain calls potentially-undefined has no business entering a campaign.
 diagnostics=0
+# SIX, because the campaign reads six. `5dc77408` gave this campaign five REAL
+# execution roles and `c346a650` a market carrying a Direct root, which put
+# Trading and Claims in the bank; the list here stayed at four, so the tier only
+# ran for whoever already had those two ELFs lying around in the work directory
+# from some other lane. From a clean `--work` it failed at `artifacts()`.
 for manifest in \
     programs/dclutch-core-sbf/Cargo.toml \
     programs/dclutch-custody-sbf/Cargo.toml \
     programs/dclutch-registry-sbf/Cargo.toml \
-    programs/dclutch-resolution-proof-sbf/Cargo.toml
+    programs/dclutch-resolution-proof-sbf/Cargo.toml \
+    programs/dclutch-trading-sbf/Cargo.toml \
+    programs/dclutch-claims-sbf/Cargo.toml
 do
     log="$work/build-$(basename "$(dirname "$manifest")").log"
     build "$manifest" > "$log" || { tail -n 40 "$log" >&2; exit 1; }
@@ -82,6 +89,33 @@ if [ "$diagnostics" -ne 0 ]; then
     echo "  campaign on artifacts the toolchain calls potentially-undefined." >&2
     exit 1
 fi
+
+# AND THE LIST IS READ BACK FROM THE CAMPAIGN, so it cannot drift silently a
+# second time. `artifacts()` names every ELF it reads as a literal; each one
+# must be in the out-dir after the builds above. The count is checked first,
+# because a pattern that matched nothing would make this guard pass by finding
+# no requirement at all -- an absent signal and a disconnected instrument log
+# identically otherwise.
+campaign="crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs"
+required="$(grep -o 'directory\.join("[a-z0-9_]*\.so")' "$campaign" \
+    | sed -e 's/.*join("//' -e 's/")$//' | sort -u)"
+required_count="$(printf '%s\n' "$required" | grep -c '\.so$' || true)"
+if [ "$required_count" -ne 6 ]; then
+    echo "resolution-core-v3: read $required_count ELF names out of $campaign, expected 6." >&2
+    echo "  Either the campaign's artifact list moved, or this reader stopped seeing it." >&2
+    exit 1
+fi
+missing=0
+for elf in $required; do
+    [ -f "$sbf_out/$elf" ] && continue
+    echo "resolution-core-v3: the campaign reads $elf and this runner did not build it." >&2
+    missing=$((missing + 1))
+done
+if [ "$missing" -ne 0 ]; then
+    echo "resolution-core-v3: $missing artifact(s) the campaign reads are missing from $sbf_out." >&2
+    exit 1
+fi
+printf '  campaign reads %s artifacts, all present\n' "$required_count"
 
 evidence_dir="$work/evidence"
 rm -rf "$evidence_dir"

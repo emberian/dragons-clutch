@@ -3281,3 +3281,45 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   producer, journal-based poststate comparison, non-fatal post-finalization reads, and the detector (a schema bool with only
   literal-false writers fails a test). Deadline: slot 492,460,566, ~55 h. Fallback: a second founding on the sealed plan.
 - Evidence: `docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md`. Cuts: `41dd93143`.
+
+### Lane map delta — 2026-09-03 (resumed 12:50 EDT)
+- **The rent RULING above is REFUTED and corrected:** "the refund follows the debit" unconditionally is a theft vector —
+  a maker replay root is a shared structure of the market and the same route admits a stranger as payer (measured 2026-08-31
+  incident at direct_trade_producer.rs::maker_root_rent_beneficiary_v1); the `payer_debit > 0` conditional adds a griefing
+  vector (one donated lamport refuses an owner's Open forever). Landed instead (DEALER `d190297d`, `648fad0a`, `5fc108bd`,
+  `c60f853b`, frame rows `fa6fa482`, `7e8f6448`): **whose rent a state carries is a per-plan DECLARATION** — action-plan
+  byte five `REFUND_SOURCE_CREDIT = 0 / PAYER = 1` (zero keeps every prior policy's bytes) — the kernel proves the named party
+  is one the plan's funding admits; Direct requires `Credit` at both plan readers; Dealer LP declares `Payer`. Two more
+  authors of the old law found by landing it (`apply_lifecycle_closes_v3` re-ran the equality at the mutation boundary;
+  `direct::lifecycle` never said whose authority). **LP Open #1 → hostile Add → honest Add → LP Open #2 (671,787 CU, second
+  owner) → second Add all COMMIT** with a real sponsor. Campaign 30/1; the last wall is the trade leg's V3 RequestProfile
+  (borrowed-witness) unimplemented in the off-chain bundle engine (`registers.rs:802`). Lock frame move (70 → 64) unstarted.
+- RECOVERY (`00793136`): `campaign --founding-only --execute --recover-finalized-founding` — six journal rows re-authenticated,
+  one disposition per recorded poststate, a vacant account a later stage consumed is a pass by that record;
+  `recoveredFinalizedFounding` is DEFINED as `recovery_to_complete.is_some()`; the boolean-producer detector landed and names
+  the field. **Live: six stages further, then the same shape one verifier over** — `authenticate_open_market_poststate_v1`'s
+  funding-ledger loop (market.rs:12468) reads ledgers LIVE against their Pending bytes while journals 3/4/5 exist to move them
+  → RECOVERY-2 **`ac3d503c213dc2142`** (the comparison, not the order; siblings :6182/:6312; the detector this class lacks;
+  atomic report writes — a refused run rewrote campaign-open.json). **Deadline slot 492,460,566; ~43 h at 12:48 EDT.**
+- COHORT-13 lane closed (~550k) holding per `~/jobs/dclutch-cohort13-20260902/HOLD_STATE.md`; nothing spent since founding
+  (deployer 32.4739, payer 1.6634). Activation root settled `4GzDzNxj…` (its `2dGxuxe5…` was the founding-PERMIT namespace,
+  vacant by construction — caught by the web lane's second derivation).
+- GENERAL-DEVNET closed (`66e300f3` accelerator deployed on devnet `8pgnyNvgd…` slot 491,959,038, 1.918 SOL; `325123e9`,
+  `d9b5036d` `devnet-general-market` — only ONE of the four lab facts had an author to read (the accelerator release);
+  compiler/toolchain/translation-validation became authenticated file inputs, owed; `a34bfb7b`, `a06f60bf` activation's
+  devnet arm as a cluster VALUE). Finding: the accelerator identity is a seed of the Market PDA. OpenBatch on chain is
+  cohort-14's (Trading with a517d27c); the accelerator's release belongs in `prepare` beside the seven roles'.
+- DIRECT closed (`5b2565ad` **the Direct root founded through ActivateCapability on real Core/Trading/Registry, 329,736 CU**;
+  `5ace0cc8` the Trading-caller provider route was unsatisfiable by schema (set_v2/V4 vs V1/V3) — fixed with a membership
+  conjunct, reachable and not yet run; the forwarding wall is not a wall — common-Hot IS the forwarding; `60e26cf5` the
+  six-ELF runner; `9efc24cf` the fee-band hostile).
+- EMISSION closed (`c65d5cca` two TS modules Lean-owned — the terminal action byte had THREE authors; `b209be56`, `52bbd463`,
+  `c131407b`, `77dad158` the four layouts owned, coreFound 39 → 82/95; `a1cb5217` four modules were outside the Lean lib root;
+  `d0c0990f` the magic census reads emitted magics: 258 → 395 declared, **four collisions hidden not one** — `DCLTLBV2` is one
+  family with two profiles (adjudicated as shared, not re-lettered); still red: `DCLTDMR1`, `d5e005d1…` (test-local
+  re-declarations), `DCLTSTV3` (two record kinds on one value — a real wire question) → genref still blocked;
+  `513f0d8e` request_profiles freshness was formatting).
+- Housekeeping on resume: 20 working-tree files were stale pre-commit copies of a517d27c's parent (the commit-patch hazard
+  67058c86 fixed) — restored to HEAD; nine real uncommitted edits remain (dealer-codec scenario_*, hot_v3.rs, ledger.rs,
+  capability_seal_close.rs, relayed.rs) — owners unknown, left in place.
+- Cuts: `348935fc2`, `877541ed3`.

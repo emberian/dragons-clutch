@@ -261,7 +261,15 @@ def main : IO Unit := do
   IO.println s!"pub const RAMP_COORDINATE_DENOMINATOR_OFFSET_V2: usize = {coordinateDenominatorOffset};"
   IO.println s!"pub const RAMP_RESERVED_OFFSET_V2: usize = {reservedOffset};"
   IO.println s!"pub const RAMP_RESERVED_BYTES_V2: usize = {reservedBytes};"
-  IO.println s!"pub const RAMP_MAGIC_V2: [u8; 8] = {rustBytes requestMagic};"
+  -- ONE declaration of the family magic. The ramp and the spline are two
+  -- profiles of one request record, so this emitter and the spline's used to
+  -- print the same eight bytes under two names -- and the uniqueness census
+  -- read that as two claimants of `DCLTLBV2` the moment it learned to see
+  -- emitted magics at all. Nothing dispatches on the magic; the profile tag at
+  -- `RAMP_PROFILE_OFFSET_V2` does, which is
+  -- `the_families_share_a_magic_and_differ_by_profile`.
+  IO.println s!"pub const BASIS_REQUEST_MAGIC_V2: [u8; 8] = {rustBytes requestMagic};"
+  IO.println "pub const RAMP_MAGIC_V2: [u8; 8] = BASIS_REQUEST_MAGIC_V2;"
   IO.println s!"pub const AGREEMENT_CASES_V2: [AgreementCaseV2; {agreementRequests.length}] = ["
   for indexed in agreementRequests.zipIdx do
     emitAgreement indexed.2 indexed.1

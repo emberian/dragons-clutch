@@ -691,8 +691,9 @@ pub(super) mod tests {
             ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
-                LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+                LifecycleRegisterCoordinateV3, LifecycleSeedInputV3,
+                encode_lifecycle_policy_v5_atomic,
             },
         };
 
@@ -720,6 +721,7 @@ pub(super) mod tests {
                 rent_credit: None,
                 principal: None,
                 beneficiary: None,
+                refund_source: LifecycleRefundSourceInputV3::Credit,
                 guard: LifecycleGuardInputV3::Always,
             },
             Some(credit) => LifecyclePlanInputV3 {
@@ -730,6 +732,7 @@ pub(super) mod tests {
                 rent_credit: Some(LifecycleAccountCoordinateV3::fixed(credit)),
                 principal: Some(LifecycleRegisterCoordinateV3::common(0)),
                 beneficiary: Some(LifecycleRegisterCoordinateV3::common(0)),
+                refund_source: LifecycleRefundSourceInputV3::Credit,
                 guard: LifecycleGuardInputV3::Always,
             },
         }];

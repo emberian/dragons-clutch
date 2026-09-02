@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "f264b2535d548243e0ec203c006b34983c3df8f6",
+  "commit": "c60f853beff0ee761a090e5d32c8071a3d598ac0",
   "link_count": 12,
   "links": [
     {
@@ -9206,7 +9206,7 @@
         },
         {
           "frames_bytes": [
-            2176
+            2112
           ],
           "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow27prepare_buy_escrow_terminal17h<hash>E"
         },
@@ -9254,7 +9254,7 @@
         },
         {
           "frames_bytes": [
-            2112
+            768
           ],
           "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow21prepare_sell_close_v217h<hash>E"
         },
@@ -9611,7 +9611,7 @@
         },
         {
           "frames_bytes": [
-            2240
+            2176
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v320prepare_lifecycle_v417h<hash>E"
         },

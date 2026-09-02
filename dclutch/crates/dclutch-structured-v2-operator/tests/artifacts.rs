@@ -24,15 +24,15 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     RECIPE_BYTES, SEED_BYTES,
     encode::{
         LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-        encode_lifecycle_policy_v5_atomic,
+        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_bearer_v2_operator::{
-    Error as BearerOperatorError, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+    Error as BearerOperatorError, RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
+    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3,
-    RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3,
-    RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
+    RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
     RationalOpenCapabilityProgramSetInputV3, RationalOpenCapabilityProgramSetInputV6,
     RationalOpenSelectedBundleInputV6, RationalOpenSelectedHotBundleInputV3,
     RationalOpenStructuredHotBundleInputV3, RationalOpenStructuredSelectedBundleInputV6,
@@ -63,12 +63,12 @@ use dclutch_request_profile_contract::{
     HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES, MAX_BYTES as REQUEST_PROFILE_MAX_BYTES,
     OPERATION_BYTES as REQUEST_PROFILE_OPERATION_BYTES, RequestProfileV1,
 };
+use dclutch_structured_v2_kernel::{
+    STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
+};
 use dclutch_structured_v2_operator::{
     STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, StructuredDescriptorAuthorityV2,
     StructuredRepresentationDescriptorV2, decode_derived_structured_descriptor_v2,
-};
-use dclutch_structured_v2_kernel::{
-    STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
 };
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
@@ -140,6 +140,7 @@ fn lifecycle_policy() -> Vec<u8> {
         rent_credit: None,
         principal: None,
         beneficiary: None,
+        refund_source: LifecycleRefundSourceInputV3::Credit,
         guard: LifecycleGuardInputV3::Always,
     }];
     let width = LIFECYCLE_HEADER_BYTES
@@ -269,7 +270,9 @@ fn the_structured_ceiling_is_provisionally_below_the_artifact_ceiling_it_cites()
     // units and transaction bytes that only a run can measure. When they
     // execute, this constant rises to the lower of six and what executed; until
     // then it stays at three and this test says why.
-    assert!(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2 <= RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3);
+    assert!(
+        STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2 <= RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3
+    );
     assert_eq!(RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3, 6);
     assert_eq!(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, 3);
 }
@@ -521,8 +524,14 @@ fn every_structured_artifact_is_byte_identical_across_two_markets() {
         let a = build(first, first_behavior);
         let b = build(second, second_behavior);
 
-        assert_eq!(a.representation_outcome_count, b.representation_outcome_count);
-        assert_eq!(a.token_behavior_selection, b.token_behavior_selection, "config");
+        assert_eq!(
+            a.representation_outcome_count,
+            b.representation_outcome_count
+        );
+        assert_eq!(
+            a.token_behavior_selection, b.token_behavior_selection,
+            "config"
+        );
         assert_eq!(a.account_profile, b.account_profile, "account_profile");
         assert_eq!(a.request_profile, b.request_profile, "request_profile");
         assert_eq!(a.lifecycle_policy, b.lifecycle_policy, "lifecycle_policy");
@@ -590,7 +599,10 @@ fn the_terminal_redeem_artifacts_are_byte_identical_across_two_markets() {
     let a = build(first_behavior);
     let b = build(second_behavior);
 
-    assert_eq!(a.token_behavior_selection, b.token_behavior_selection, "config");
+    assert_eq!(
+        a.token_behavior_selection, b.token_behavior_selection,
+        "config"
+    );
     assert_eq!(a.account_profile, b.account_profile, "account_profile");
     assert_eq!(a.request_profile, b.request_profile, "request_profile");
     assert_eq!(a.lifecycle_policy, b.lifecycle_policy, "lifecycle_policy");
@@ -639,8 +651,7 @@ fn the_whole_five_action_program_set_has_one_identity_across_two_markets() {
         selected_lengths[4] = width;
         selected_lengths[29] = width;
         let structured_lengths = fixed_lengths(&basis);
-        let mut terminal_lengths =
-            vec![0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
+        let mut terminal_lengths = vec![0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
         terminal_lengths[1] =
             u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection width");
         terminal_lengths[4] = width;
@@ -775,7 +786,8 @@ fn the_market_free_path_compiles_the_identical_release() {
     selected_lengths[29] = width;
     let structured_lengths = fixed_lengths(&basis);
     let mut terminal_lengths = vec![0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
-    terminal_lengths[1] = u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection width");
+    terminal_lengths[1] =
+        u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection width");
     terminal_lengths[4] = width;
     terminal_lengths[29] = width;
 
@@ -818,31 +830,31 @@ fn the_market_free_path_compiles_the_identical_release() {
     let reconstitute = selected(RepresentationActionV2::Reconstitute);
     let issue = structured(RepresentationActionV2::IssueStructured);
     let unwrap = structured(RepresentationActionV2::UnwrapStructured);
-    let redeem = build_rational_terminal_selected_bundle_v6(RationalTerminalSelectedBundleInputV6 {
-        account_profile: RationalTerminalAccountProfileInputV3 {
-            logical_data_lengths: &terminal_lengths,
-            product_basis: &basis,
-        },
-        kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
-        token_behavior_selection: selection,
-        root_schema: identity(0x11),
-        lifecycle_policy: &policy,
-        capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
-        root_state_bytes: 8,
-    })
-    .expect("market-free terminal bundle");
+    let redeem =
+        build_rational_terminal_selected_bundle_v6(RationalTerminalSelectedBundleInputV6 {
+            account_profile: RationalTerminalAccountProfileInputV3 {
+                logical_data_lengths: &terminal_lengths,
+                product_basis: &basis,
+            },
+            kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+            token_behavior_selection: selection,
+            root_schema: identity(0x11),
+            lifecycle_policy: &policy,
+            capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+            root_state_bytes: 8,
+        })
+        .expect("market-free terminal bundle");
 
-    let market_free = build_rational_open_capability_program_set_v6(
-        RationalOpenCapabilityProgramSetInputV6 {
+    let market_free =
+        build_rational_open_capability_program_set_v6(RationalOpenCapabilityProgramSetInputV6 {
             token_behavior_selection: selection,
             denominate: &denominate,
             reconstitute: &reconstitute,
             issue_structured: &issue,
             unwrap_structured: &unwrap,
             redeem_terminal: &redeem,
-        },
-    )
-    .expect("market-free five-action capability set");
+        })
+        .expect("market-free five-action capability set");
 
     // Now the Market-bound path, at an arbitrary Market, for comparison.
     let derived = derived_descriptor_for_market(identity(0x21));
@@ -897,17 +909,16 @@ fn the_market_free_path_compiles_the_identical_release() {
     let bound_issue = bound_structured(RepresentationActionV2::IssueStructured);
     let bound_unwrap = bound_structured(RepresentationActionV2::UnwrapStructured);
 
-    let market_bound = build_rational_open_capability_program_set_v3(
-        RationalOpenCapabilityProgramSetInputV3 {
+    let market_bound =
+        build_rational_open_capability_program_set_v3(RationalOpenCapabilityProgramSetInputV3 {
             authenticated_token_behavior: behavior,
             denominate: &bound_denominate,
             reconstitute: &bound_reconstitute,
             issue_structured: &bound_issue,
             unwrap_structured: &bound_unwrap,
             redeem_terminal: &bound_redeem,
-        },
-    )
-    .expect("descriptor-bound five-action capability set");
+        })
+        .expect("descriptor-bound five-action capability set");
 
     // Per-bundle, so a failure names the bundle rather than only the set.
     assert_eq!(denominate, bound_denominate, "Denominate");

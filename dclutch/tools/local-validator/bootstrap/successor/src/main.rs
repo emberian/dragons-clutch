@@ -300,7 +300,13 @@ fn run() -> Result<()> {
             if command
                 == general_capability_activation::GENERAL_CAPABILITY_ACTIVATION_COMMAND_V1 =>
         {
-            general_capability_activation::run(arguments.collect())
+            general_capability_activation::run_owned_loopback(arguments.collect())
+        }
+        Some(command)
+            if command
+                == general_capability_activation::DEVNET_GENERAL_CAPABILITY_ACTIVATION_COMMAND_V1 =>
+        {
+            general_capability_activation::run_devnet(arguments.collect())
         }
         Some(command) if command == general_successor_plan::COMMAND_V1 => {
             general_successor_plan::run(arguments.collect())
@@ -434,15 +440,22 @@ fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignAr
     let mut substituted_founder = None;
     let mut execute = false;
     let mut founding_only = false;
+    let mut recover_finalized_founding = false;
     let mut keypairs = std::collections::BTreeMap::new();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         // Valueless flags are matched before anything demands a value.
-        if matches!(argument.as_str(), "--execute" | "--founding-only") {
-            let (seen, label) = if argument == "--execute" {
-                (&mut execute, "--execute")
-            } else {
-                (&mut founding_only, "--founding-only")
+        if matches!(
+            argument.as_str(),
+            "--execute" | "--founding-only" | "--recover-finalized-founding"
+        ) {
+            let (seen, label) = match argument.as_str() {
+                "--execute" => (&mut execute, "--execute"),
+                "--founding-only" => (&mut founding_only, "--founding-only"),
+                _ => (
+                    &mut recover_finalized_founding,
+                    "--recover-finalized-founding",
+                ),
             };
             if *seen {
                 return Err(Error::new(format!("{label} may be supplied only once")));
@@ -497,6 +510,13 @@ fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignAr
     } else {
         campaign::CampaignModeV1::Administration
     };
+    // The repair is a founding act and a writing one. Refusing the two other
+    // shapes here keeps the flag from ever being a decoration on a read.
+    if recover_finalized_founding && (mode != campaign::CampaignModeV1::FoundingOnly || !execute) {
+        return Err(Error::new(
+            "--recover-finalized-founding is a founding repair: it requires --founding-only and --execute",
+        ));
+    }
     let through = match (mode, through.as_deref()) {
         (campaign::CampaignModeV1::Administration, None) => campaign::StageV1::Activation,
         (campaign::CampaignModeV1::FoundingOnly, None) => campaign::StageV1::Founding,
@@ -629,6 +649,7 @@ fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignAr
         substituted_founder,
         keypairs,
         execute,
+        recover_finalized_founding,
         through,
     })
 }

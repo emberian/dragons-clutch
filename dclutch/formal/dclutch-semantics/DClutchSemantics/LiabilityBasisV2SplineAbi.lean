@@ -400,4 +400,19 @@ theorem encodeRequest_length
     DClutch.LiabilityBasisV2.PhysicalAbi.encodeI64_length]
   simp [requestBytes, reservedBytes, maxKnots, knotBytes]
 
+/-- The ramp and the spline are ONE request family. They share `requestMagic`
+by construction -- both emitters print that one Lean object -- and they are
+separated by the profile tag, at the same coordinate in both records.
+
+This is stated because the Rust used to print the shared magic under two names,
+`RAMP_MAGIC_V2` and `SPLINE_MAGIC_V2`, and the uniqueness census read one wire
+value as two claimants as soon as it could see emitted magics at all. The right
+adjudication was to declare it once, not to re-letter one side, and this is why:
+nothing dispatches on the magic. Re-lettering the spline would have invented a
+second family on the wire to make a census green. -/
+theorem the_families_share_a_magic_and_differ_by_profile :
+    profileTag ≠ DClutch.LiabilityBasisV2.PhysicalAbi.profile ∧
+    profileOffset = DClutch.LiabilityBasisV2.PhysicalAbi.profileOffset := by
+  native_decide
+
 end DClutch.LiabilityBasisV2.Spline.PhysicalAbi

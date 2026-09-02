@@ -7,7 +7,8 @@ use dclutch_account_profile_contract::{
         encode::{
             LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
             LifecyclePlanInputV3, LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3,
-            LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+            LifecycleRefundSourceInputV3, LifecycleRegisterCoordinateV3, LifecycleSeedInputV3,
+            encode_lifecycle_policy_v5_atomic,
         },
     },
     v2::{
@@ -151,6 +152,7 @@ fn policy(recipe_states: &[u16], payer: u16, rent_credit: u16) -> Vec<u8> {
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(rent_credit)),
             principal: Some(LifecycleRegisterCoordinateV3::common(1)),
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(0)),
+            refund_source: LifecycleRefundSourceInputV3::Credit,
             guard: LifecycleGuardInputV3::Always,
         })
         .collect();
