@@ -173,4 +173,24 @@ theorem domains_are_distinct : realmPdaDomain ≠ positionPdaDomain := by
 route one record to the other's decoder. -/
 theorem magics_are_distinct : realmMagic ≠ positionMagic := by native_decide
 
+
+/-- Canonical finalized-record schema label, and its SHA-256 identity.
+
+The label and the digest lived in the crate as hand-typed constants. Lean does
+not hash, so the digest is DATA here and the byte-compare guard is what holds it
+to its label -- the same arrangement `SourceMaterialV2Abi` uses, and the same
+argument 52bbd463 made about a magic: the VALUE is not a theorem and should not
+be one; what matters is that exactly one place states it. The crate keeps its
+own hashing test, which is the independent check. -/
+def schemaReleasePreimage : String := "dclutch/schema/realm-v1"
+def schemaReleaseId : List UInt8 := [
+  0x94, 0xfe, 0x1f, 0xd6, 0xd7, 0x25, 0x9f, 0x47,
+  0x50, 0x3d, 0x6a, 0xc5, 0x7e, 0xc7, 0xda, 0x78,
+  0xdc, 0x38, 0x06, 0xa5, 0xed, 0x49, 0x8f, 0xea,
+  0xe4, 0x3e, 0xd3, 0x78, 0x5b, 0x5d, 0x0c, 0x69
+]
+
+theorem schema_release_id_is_thirty_two_bytes :
+    schemaReleaseId.length = 32 := by native_decide
+
 end DClutch.RealmPositionAbi

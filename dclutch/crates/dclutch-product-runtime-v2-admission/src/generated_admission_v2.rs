@@ -61,6 +61,12 @@ pub const PRODUCT_ID_OFFSET: usize = 16;
 pub const PRODUCT_DOMAIN_DIGEST_OFFSET: usize = 48;
 /// Portfolio digest coordinate, shared by the record and the request.
 pub const PRODUCT_PORTFOLIO_DIGEST_OFFSET: usize = 80;
+/// Exact magic width, shared by all three records.
+pub const ADMISSION_MAGIC_BYTES_V2: usize = 8;
+/// Magic coordinate of the Product record and the request.
+pub const ADMISSION_BODY_MAGIC_OFFSET_V2: usize = 0;
+/// Version coordinate of the Product record and the request.
+pub const ADMISSION_BODY_VERSION_OFFSET_V2: usize = 8;
 /// Canonical-zero span of the Product record and the request.
 pub const ADMISSION_BODY_RESERVED_OFFSET_V2: usize = 10;
 /// Width of that span: six, one of which the receipt spends on its count.

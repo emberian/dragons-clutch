@@ -34,7 +34,7 @@ import { requireGeneratorFollowsRoute } from './route-binding.mjs';
 // generator reads source text, and a private constant is still the crate's
 // single statement of where a field sits.
 const root = new URL('../../../', import.meta.url);
-const ADMISSION_FILE = 'crates/dclutch-product-runtime-v2-admission/src/lib.rs';
+const ADMISSION_FILE = 'crates/dclutch-product-runtime-v2-admission/src/generated_admission_v2.rs';
 const readCrateFile = (file) => readFileSync(new URL(file, root), 'utf8');
 const sources = Object.freeze({
   admission: readCrateFile(ADMISSION_FILE),
@@ -73,10 +73,22 @@ function scalar(source, name) {
   return Number(match[1].replaceAll('_', ''));
 }
 
+// A magic has TWO spellings and this reader knows both, which is the lesson
+// d0c0990f paid for in the route census: a hand-written magic is `*b"DCLTPRM2"`
+// and a Lean-EMITTED one is a hex array, because an emitter prints bytes and
+// not text. A reader that knows only the first goes blind in exact proportion
+// to how much of the tree is properly authored.
 function magic(source, name) {
-  const match = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: \\[u8; 8\\] = \\*b"([A-Z0-9]{8})";`));
-  if (!match) throw new Error(`missing Rust 8-byte magic ${source}.${name}`);
-  return match[1];
+  const text = sources[source];
+  const literal = text.match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: \\[u8; 8\\] = \\*b"([A-Z0-9]{8})";`));
+  if (literal) return literal[1];
+  const emitted = text.match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: \\[u8; 8\\] =\\s*\\[([^\\]]*)\\];`));
+  if (!emitted) throw new Error(`missing Rust 8-byte magic ${source}.${name}`);
+  const bytes = [...emitted[1].matchAll(/0x[0-9a-fA-F]{2}|\b\d+\b/g)].map((entry) => Number(entry[0]));
+  if (bytes.length !== 8) {
+    throw new Error(`Rust magic ${source}.${name} is ${bytes.length} bytes, not 8`);
+  }
+  return String.fromCharCode(...bytes);
 }
 
 function byteString(source, name) {
@@ -97,41 +109,45 @@ function digest(source, name) {
   });
 }
 
-/**
- * A reserved span written as `require_zero(bytes, <offset>, <length>)` inside a
- * named decoder. Read from the call site rather than restated, because the
- * whole point of this ABI is that the browser must zero exactly what the
- * program checks -- no more, and above all no less.
- */
-function reservedSpan(source, decoderMarker) {
-  const body = sources[source].slice(sources[source].indexOf(decoderMarker));
-  const match = body.match(/require_zero\(bytes, (\d+), (\d+)\)\?;/);
-  if (!match) throw new Error(`missing require_zero span after ${decoderMarker}`);
-  return { offset: Number(match[1]), length: Number(match[2]) };
-}
-
-/**
- * The header read itself, taken from the decoder's own expression rather than
- * assumed to sit at 0 and 8. All three records are checked and required to
- * agree, so a future record that moved its version field could not be silently
- * folded into one shared TypeScript constant.
- */
-function headerRead(source, decoderMarker) {
-  const body = sources[source].slice(sources[source].indexOf(decoderMarker));
-  const match = body.match(/array::<(\d+)>\(bytes, (\d+)\)\? != [A-Z_0-9]+\s*\n?\s*\|\| read_u16\(bytes, (\d+)\)\?/);
-  if (!match) throw new Error(`missing magic/version header read after ${decoderMarker}`);
-  return { magicBytes: Number(match[1]), magicOffset: Number(match[2]), versionOffset: Number(match[3]) };
-}
-
-const requestReserved = reservedSpan('admission', 'impl AdmissionRequestV2 {');
-const recordReserved = reservedSpan('admission', 'impl ProductRecordV2 {');
-const receiptReserved = reservedSpan('admission', 'impl AdmissionReceiptV2 {');
-const headers = ['impl AdmissionRequestV2 {', 'impl ProductRecordV2 {', 'impl AdmissionReceiptV2 {'].map((marker) => headerRead('admission', marker));
-const header = headers[0];
-for (const other of headers.slice(1)) {
-  if (other.magicBytes !== header.magicBytes || other.magicOffset !== header.magicOffset || other.versionOffset !== header.versionOffset) {
-    throw new Error('the three Product Runtime V2 records no longer share one header layout; emit them separately');
-  }
+// The reserved spans and the header coordinates used to be recovered by
+// REGULAR EXPRESSION over the decoder's own call sites -- `require_zero(bytes,
+// 10, 6)` and `array::<8>(bytes, 0)` -- because the crate had no constants for
+// them. That is the shape `c131407b` named when the browser read a lifecycle
+// magic's offset out of a function argument: a coordinate with no name can only
+// be scraped, and a scraper reads whatever the argument happens to be.
+//
+// `DClutch.ProductAdmissionV2Abi` places them now, so both scrapers are gone
+// and these are constant reads like every other value in this file. The two
+// records share a reserved span; the receipt spends its first byte on a record
+// count and reserves the remaining five, which is why there are two spans here
+// and not three.
+const bodyReserved = {
+  offset: scalar('admission', 'ADMISSION_BODY_RESERVED_OFFSET_V2'),
+  length: scalar('admission', 'ADMISSION_BODY_RESERVED_BYTES_V2'),
+};
+const requestReserved = bodyReserved;
+const recordReserved = bodyReserved;
+const receiptReserved = {
+  offset: scalar('admission', 'ADMISSION_RECEIPT_RESERVED_OFFSET_V2'),
+  length: scalar('admission', 'ADMISSION_RECEIPT_RESERVED_BYTES_V2'),
+};
+const header = {
+  magicBytes: scalar('admission', 'ADMISSION_MAGIC_BYTES_V2'),
+  magicOffset: scalar('admission', 'ADMISSION_BODY_MAGIC_OFFSET_V2'),
+  versionOffset: scalar('admission', 'ADMISSION_BODY_VERSION_OFFSET_V2'),
+};
+// The receipt is a separate record with its own placements, so the claim that
+// all three share one header is still CHECKED rather than assumed -- it just no
+// longer needs a regex to find out.
+const receiptHeader = {
+  magicOffset: scalar('admission', 'ADMISSION_RECEIPT_MAGIC_OFFSET_V2'),
+  versionOffset: scalar('admission', 'ADMISSION_RECEIPT_VERSION_OFFSET_V2'),
+};
+if (
+  receiptHeader.magicOffset !== header.magicOffset ||
+  receiptHeader.versionOffset !== header.versionOffset
+) {
+  throw new Error('the three Product Runtime V2 records no longer share one header layout; emit them separately');
 }
 
 let output = '// @generated from the live Rust Product Runtime V2 admission ABI; do not edit.\n';
@@ -148,14 +164,19 @@ for (const [name, rustName] of [
   ['ADMISSION_REQUEST_BYTES_V2', 'ADMISSION_REQUEST_BYTES_V2'],
   ['PRODUCT_RECORD_BYTES_V2', 'PRODUCT_RECORD_BYTES_V2'],
   ['ADMISSION_RECEIPT_BYTES_V2', 'ADMISSION_RECEIPT_BYTES_V2'],
-  ['REQUEST_PRODUCT_DIGEST_OFFSET_V2', 'REQUEST_PRODUCT_DIGEST_OFFSET'],
-  ['REQUEST_DOMAIN_DIGEST_OFFSET_V2', 'REQUEST_DOMAIN_DIGEST_OFFSET'],
-  ['REQUEST_PORTFOLIO_DIGEST_OFFSET_V2', 'REQUEST_PORTFOLIO_DIGEST_OFFSET'],
+  // The request and the Product record are ONE SHAPE, which the crate used to
+  // express by declaring these three coordinates twice under two names. The
+  // browser keeps both TypeScript names because both are part of its published
+  // surface, but they now come from one source constant each -- so the two
+  // records cannot drift apart here either.
+  ['REQUEST_PRODUCT_DIGEST_OFFSET_V2', 'PRODUCT_ID_OFFSET'],
+  ['REQUEST_DOMAIN_DIGEST_OFFSET_V2', 'PRODUCT_DOMAIN_DIGEST_OFFSET'],
+  ['REQUEST_PORTFOLIO_DIGEST_OFFSET_V2', 'PRODUCT_PORTFOLIO_DIGEST_OFFSET'],
   ['PRODUCT_ID_OFFSET_V2', 'PRODUCT_ID_OFFSET'],
   ['PRODUCT_DOMAIN_DIGEST_OFFSET_V2', 'PRODUCT_DOMAIN_DIGEST_OFFSET'],
   ['PRODUCT_PORTFOLIO_DIGEST_OFFSET_V2', 'PRODUCT_PORTFOLIO_DIGEST_OFFSET'],
-  ['RECEIPT_COUNT_OFFSET_V2', 'RECEIPT_COUNT_OFFSET'],
-  ['RECEIPT_RECORDS_OFFSET_V2', 'RECEIPT_RECORDS_OFFSET'],
+  ['RECEIPT_COUNT_OFFSET_V2', 'ADMISSION_RECEIPT_COUNT_OFFSET_V2'],
+  ['RECEIPT_RECORDS_OFFSET_V2', 'ADMISSION_RECEIPT_RECORDS_OFFSET_V2'],
   ['RECORD_COORDINATE_BYTES_V2', 'RECORD_COORDINATE_BYTES'],
 ]) output += `export const ${name} = ${scalar('admission', rustName)} as const;\n`;
 output += `export const ADMISSION_ACCOUNT_COUNT_V2 = ${scalar('adapter', 'ADMISSION_ACCOUNT_COUNT_V2')} as const;\n`;

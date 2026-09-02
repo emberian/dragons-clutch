@@ -84,6 +84,15 @@ def main : IO Unit := do
   emitConst "PRODUCT_PORTFOLIO_DIGEST_OFFSET" "usize"
     (toString (BodyField.offset .portfolioDigest))
     "Portfolio digest coordinate, shared by the record and the request."
+  emitConst "ADMISSION_MAGIC_BYTES_V2" "usize"
+    (toString (BodyField.width .magic))
+    "Exact magic width, shared by all three records."
+  emitConst "ADMISSION_BODY_MAGIC_OFFSET_V2" "usize"
+    (toString (BodyField.offset .magic))
+    "Magic coordinate of the Product record and the request."
+  emitConst "ADMISSION_BODY_VERSION_OFFSET_V2" "usize"
+    (toString (BodyField.offset .version))
+    "Version coordinate of the Product record and the request."
   emitConst "ADMISSION_BODY_RESERVED_OFFSET_V2" "usize"
     (toString (BodyField.offset .reserved))
     "Canonical-zero span of the Product record and the request."

@@ -62,4 +62,24 @@ theorem identity_fields_are_exactly_32_bytes :
       field.name = .capabilityRelease || field.name = .config).all
       (fun field => field.kind.byteWidth = 32) := by native_decide
 
+
+/-- Canonical finalized-record schema label, and its SHA-256 identity.
+
+The label and the digest lived in the crate as hand-typed constants. Lean does
+not hash, so the digest is DATA here and the byte-compare guard is what holds it
+to its label -- the same arrangement `SourceMaterialV2Abi` uses, and the same
+argument 52bbd463 made about a magic: the VALUE is not a theorem and should not
+be one; what matters is that exactly one place states it. The crate keeps its
+own hashing test, which is the independent check. -/
+def schemaReleasePreimage : String := "dclutch/schema/execution-release-set-v1"
+def schemaReleaseId : List UInt8 := [
+  0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87,
+  0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
+  0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39,
+  0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58
+]
+
+theorem schema_release_id_is_thirty_two_bytes :
+    schemaReleaseId.length = 32 := by native_decide
+
 end DClutch.CapabilityExecutionAbi

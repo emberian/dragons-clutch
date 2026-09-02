@@ -29,7 +29,8 @@ mod generated_admission_v2;
 // there is no `REQUEST_*` set any more: `the_record_and_the_request_are_one_shape`
 // says in Lean what six parallel declarations used to say by agreeing.
 use generated_admission_v2::{
-    ADMISSION_BODY_RESERVED_BYTES_V2, ADMISSION_BODY_RESERVED_OFFSET_V2,
+    ADMISSION_BODY_MAGIC_OFFSET_V2, ADMISSION_BODY_RESERVED_BYTES_V2,
+    ADMISSION_BODY_RESERVED_OFFSET_V2, ADMISSION_BODY_VERSION_OFFSET_V2, ADMISSION_MAGIC_BYTES_V2,
     ADMISSION_RECEIPT_COUNT_OFFSET_V2, ADMISSION_RECEIPT_MAGIC_OFFSET_V2,
     ADMISSION_RECEIPT_PORTFOLIO_OFFSET_V2, ADMISSION_RECEIPT_RECORDS_OFFSET_V2,
     ADMISSION_RECEIPT_RESERVED_BYTES_V2, ADMISSION_RECEIPT_RESERVED_OFFSET_V2,
@@ -106,8 +107,9 @@ impl AdmissionRequestV2 {
         if bytes.len() != ADMISSION_REQUEST_BYTES_V2 {
             return Err(Error::InvalidLength);
         }
-        if array::<8>(bytes, 0)? != ADMISSION_REQUEST_MAGIC_V2
-            || read_u16(bytes, 8)? != ADMISSION_VERSION_V2
+        if array::<ADMISSION_MAGIC_BYTES_V2>(bytes, ADMISSION_BODY_MAGIC_OFFSET_V2)?
+            != ADMISSION_REQUEST_MAGIC_V2
+            || read_u16(bytes, ADMISSION_BODY_VERSION_OFFSET_V2)? != ADMISSION_VERSION_V2
         {
             return Err(Error::UnsupportedSchema);
         }
@@ -129,8 +131,16 @@ impl AdmissionRequestV2 {
             return Err(Error::OutputLength);
         }
         output.fill(0);
-        put(output, 0, &ADMISSION_REQUEST_MAGIC_V2)?;
-        put(output, 8, &ADMISSION_VERSION_V2.to_le_bytes())?;
+        put(
+            output,
+            ADMISSION_BODY_MAGIC_OFFSET_V2,
+            &ADMISSION_REQUEST_MAGIC_V2,
+        )?;
+        put(
+            output,
+            ADMISSION_BODY_VERSION_OFFSET_V2,
+            &ADMISSION_VERSION_V2.to_le_bytes(),
+        )?;
         put(output, PRODUCT_ID_OFFSET, &self.product_digest.to_bytes())?;
         put(
             output,
@@ -174,8 +184,9 @@ impl ProductRecordV2 {
         if bytes.len() != PRODUCT_RECORD_BYTES_V2 {
             return Err(Error::InvalidLength);
         }
-        if array::<8>(bytes, 0)? != PRODUCT_RECORD_MAGIC_V2
-            || read_u16(bytes, 8)? != ADMISSION_VERSION_V2
+        if array::<ADMISSION_MAGIC_BYTES_V2>(bytes, ADMISSION_BODY_MAGIC_OFFSET_V2)?
+            != PRODUCT_RECORD_MAGIC_V2
+            || read_u16(bytes, ADMISSION_BODY_VERSION_OFFSET_V2)? != ADMISSION_VERSION_V2
         {
             return Err(Error::UnsupportedSchema);
         }
@@ -197,8 +208,16 @@ impl ProductRecordV2 {
             return Err(Error::OutputLength);
         }
         output.fill(0);
-        put(output, 0, &PRODUCT_RECORD_MAGIC_V2)?;
-        put(output, 8, &ADMISSION_VERSION_V2.to_le_bytes())?;
+        put(
+            output,
+            ADMISSION_BODY_MAGIC_OFFSET_V2,
+            &PRODUCT_RECORD_MAGIC_V2,
+        )?;
+        put(
+            output,
+            ADMISSION_BODY_VERSION_OFFSET_V2,
+            &ADMISSION_VERSION_V2.to_le_bytes(),
+        )?;
         put(output, PRODUCT_ID_OFFSET, &self.product_id.to_bytes())?;
         put(
             output,
@@ -259,7 +278,8 @@ impl AdmissionReceiptV2 {
         if bytes.len() != ADMISSION_RECEIPT_BYTES_V2 {
             return Err(Error::InvalidLength);
         }
-        if array::<8>(bytes, ADMISSION_RECEIPT_MAGIC_OFFSET_V2)? != ADMISSION_RECEIPT_MAGIC_V2
+        if array::<ADMISSION_MAGIC_BYTES_V2>(bytes, ADMISSION_RECEIPT_MAGIC_OFFSET_V2)?
+            != ADMISSION_RECEIPT_MAGIC_V2
             || read_u16(bytes, ADMISSION_RECEIPT_VERSION_OFFSET_V2)? != ADMISSION_VERSION_V2
         {
             return Err(Error::UnsupportedSchema);

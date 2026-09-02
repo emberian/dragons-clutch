@@ -631,4 +631,24 @@ theorem domains_are_pairwise_distinct :
       fundingLedgerVaultPdaDomainV2, readinessPdaDomain].Nodup := by
   native_decide
 
+
+/-- Canonical finalized-record schema label, and its SHA-256 identity.
+
+The label and the digest lived in the crate as hand-typed constants. Lean does
+not hash, so the digest is DATA here and the byte-compare guard is what holds it
+to its label -- the same arrangement `SourceMaterialV2Abi` uses, and the same
+argument 52bbd463 made about a magic: the VALUE is not a theorem and should not
+be one; what matters is that exactly one place states it. The crate keeps its
+own hashing test, which is the independent check. -/
+def schemaReleasePreimage : String := "dclutch/schema/capability-manifest-profile-1-v1"
+def schemaReleaseId : List UInt8 := [
+  0x6b, 0xce, 0xf7, 0xb2, 0x83, 0x67, 0xcb, 0x8d,
+  0x08, 0x97, 0x10, 0xba, 0x58, 0xe6, 0x84, 0x31,
+  0x2f, 0x43, 0x4c, 0x4b, 0xc4, 0x20, 0xee, 0xfd,
+  0x0f, 0x7a, 0x15, 0x0a, 0x90, 0x82, 0x88, 0xdf
+]
+
+theorem schema_release_id_is_thirty_two_bytes :
+    schemaReleaseId.length = 32 := by native_decide
+
 end DClutch.CapabilityManifestV1Abi

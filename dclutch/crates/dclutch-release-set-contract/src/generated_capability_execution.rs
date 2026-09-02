@@ -13,3 +13,9 @@ pub const CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET: usize = 16;
 pub const CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET: usize = 48;
 pub const CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET: usize = 80;
 pub const CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET: usize = 112;
+pub const EXECUTION_RELEASE_SET_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/execution-release-set-v1";
+pub const EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
+    0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58,
+];
