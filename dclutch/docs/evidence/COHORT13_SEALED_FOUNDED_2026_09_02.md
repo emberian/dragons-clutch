@@ -1606,3 +1606,290 @@ seat, one transfer fee, one walk fee, less one lamport of bounty received.
 Campaign payer 1.524416622 → **1.521550103**. The deployer was never touched.
 
 Devnet evidence. Not mainnet evidence.
+
+## Addendum: TERMINAL AND PAID — the certificate reaches Core, the founder redeems, and one finding is retracted
+
+The successor resolution lane opened at 20:15 UTC on 2026-09-02 against a Market
+that was resolved and still Open. It closes with the Market **Terminal**, the
+founder's winning failure position **paid**, and the previous addendum's
+griefing finding **withdrawn as incorrect**. Four producer gaps were closed as
+code; a fifth, in the browser, is measured and named rather than repaired.
+
+### 1. Was `accept` separable from the relayed-VAA ladder? The builder yes, the command no
+
+The previous addendum left this as the first thing to test, and it is settled in
+both directions.
+
+**The builder is separable.** `build_resolution_admit_terminal_v3`
+(`crates/dclutch-resolution-core-v3-operator`) names no relayed-VAA coordinate
+at all: its snapshot is the Market, the activation cache, the four deployment
+programs, SourceMaterial, the capability manifest, the Source state, the funding
+ledger, the certificate, Rent, and three product record pairs. Twenty-two
+accounts, no signer meta, no CPI. `flagship-resolution-v1`'s `accept` stage
+calls exactly this.
+
+**The command is not.** Four independent refusals stand in front of that stage,
+and `--through` reaches past none of them, because `--through` caps the LAST
+stage run while the ENTRY stage always comes from `classify`:
+
+| refusal | site |
+| --- | --- |
+| `encodedVaa` must be a nonzero pubkey | `SelectedInputV1::parse` |
+| `updateAccount` must be a nonzero pubkey | `SelectedInputV1::parse` |
+| `postUpdateBodyBase64` must parse as `PostUpdateParamsView` | `SelectedInputV1::parse` |
+| `Accept` is reachable only from a **Consumed** provider lifecycle and a **Submitted** Receiver update | `classify` |
+
+The last one is executable and now executed:
+`sponsored_push_failure_state_is_not_an_accept_stage` feeds cohort-13's exact
+facts — Market `Open`/`Consumed`, Source `FailureCommitted`, lifecycle vacant,
+update vacant, certificate submitted — and asserts the canonical-stage refusal
+by its text. Its positive control is in the same test: the **same Source phase**
+with the relayed ladder's own lifecycle and update accounts still classifies as
+`Accept`, so the refusal is about the missing VAA route and not about failure
+resolution being unrepresentable.
+
+So the arm went where the market's other five actions already live:
+`devnet-sponsored-push-v1 --action admit-terminal`, committed at `f56b1d2d8`,
+building the Core instruction through the same builder from the same finalized
+snapshot the command already authenticates.
+
+### 2. The Market is Terminal
+
+Preflight planned 22 metas, one writable (the Market), no signers, program =
+Core `HZsbUHHw…`, caller authority `FurcUgNomZopN5p97SF29WV2nkgzNRp87tdPYhmLMVXb`
+at index 0, certificate `7S9tCjXT…` at index 14, 592 instruction bytes.
+
+Executed **20:36 UTC**, signature
+`29oFp7aru4qW52952cqdYLePooUcuoFWH4nQBkxvanDo4LyDgtNkNDAvZKET9FL9rNPSAtcLF3Z5hFiJQXeErGQV`,
+slot **492,149,710**, **95,854 CU**, fee 75,000 lamports, `fee_only_balance_change`
+true — the Market's rent did not move, only its body.
+
+Read back from chain at slot 492,149,793, off the account rather than off the
+report:
+
+| field | offset | before | after |
+| --- | ---: | --- | --- |
+| `phase` | 10 | `1` = **Open** | `2` = **Terminal** |
+| `readiness` | 11 | `2` = Consumed | `2` = Consumed |
+| `terminal_winner` | 12 | `0` | **`3`** — the failure selector |
+| `terminal_receipt` | 328 | all zero | **`7S9tCjXTHMPjtAoRq3uUPGDRfy2hG4rtQtAN5Uybd8Za`** |
+
+The Market's body digest went `2564c367…` → `aa41381b…`. Core committed to the
+failure certificate's own address, and to selector 3.
+
+### 3. The payout, and the two walls in front of it
+
+**Wall 3 — the Claims-role Custody replay had no public producer.** The payout
+input producer refused: *"wallet payout snapshot is missing Claims Custody
+replay `8iXLcqN5NAV3N1xHkeu1jDtxKUxqJ8qFQsNTdvNKrNue`"*. The route that creates
+it exists and is complete — `claims_custody_replay.rs`, whose own module doc
+says terminal payout *"decodes the Claims-role replay and deliberately does not
+create it"* — and it admitted **only a validator this runner owns**. The same
+producer-missing shape a fourth time. Fixed at `31d09aed2` by giving it the
+public arm; the instruction is byte-identical between clusters, and what the
+cluster decides is which origin is admitted, which campaign report is consumable
+and which label the evidence carries.
+
+Created: signature
+`5JKdUXJurc4jjESgrTxZaPwA6zo9f3BKtCYzM2DkjE7RGPeHL7Z6qhP3WpF9v8b7SXeGxAjvb499ytxMu8UtkBhC`,
+slot **492,151,322**, **174,589 CU**, rent 2,634,528 lamports, read back at
+`next_revision 1` in the Claims role over custody context
+`35afb096da2cbf6b2ea79d97f2aecf7c8f23a299dc7a07a34daeb5e556ed13dc` — which is
+the same context the evidence refresh independently recorded as
+`chain_persisted_custody_context`. Two derivations, one digest.
+
+**Wall 4 — the conventional payout destination is unpayable under Token-2022.**
+`dclutch-wallet-terminal-input-operator` documents the wallet's associated token
+account as *"the conventional destination for a payout"* and derives it. Under
+Token-2022 the ATA program always adds the `ImmutableOwner` extension, so that
+account is **170 bytes**; `TokenAccount::parse` is documented as *"Parse exactly
+165 bytes, refusing truncation and every extension suffix"*, and refuses. The
+founder's ATA `4BENW7YgFnAbagoRr8rAdD8p2kqhwiyvtyDzNKj8ef6W` was created, read
+back at 170 bytes, and the payout builder refused it as
+`WalletTerminalPayoutErrorV3::Custody` — one code over a twenty-four-conjunct
+disjunction, which is why localizing it took a byte-width comparison rather than
+a reading. The refusal is not host-side only: `programs/dclutch-claims-sbf`'s
+`rational_terminal_v3.rs:625` parses the recipient with the same function, so
+the chain refuses it too.
+
+Worked around, not repaired: a **165-byte auxiliary** Token-2022 account
+`1JpBu46CZF37RtuiipZfmBQiuPU5voceu8NeqVDFd9T` was created for the founder
+(`spl-token create-account` with an explicit keypair, not the ATA program). The
+contradiction between "the conventional destination" and "every extension suffix
+refuses" is left standing and named; it is the browser's default and therefore
+every stranger's default.
+
+**The payout.** Input produced by `wallet-terminal-payout-input`, quantity
+**500,000,000** at claim index **3**, terminal certificate `7S9tCjXT…`. The
+operator's own ladder then ran: one ALT created, extended twice and frozen
+(`hH77XUWB5BGTN35JjKtmesPB6QS1hJoYv1QZLT2oZEA`, 33 addresses), then the payout.
+
+Signature
+`etUrsvhwZkueSdHam8dJ2v3AMKseXXCn3WgtNisbVXixkXP4HMXtU9BFHefyjgLmBCM3Kpkxo8JpLNuedhRArN2`,
+slot **492,154,205**, **353,233 CU**, fee 10,000 lamports.
+
+**Custody's move, read back from chain at slot 492,154,390:**
+
+| account | before | after |
+| --- | ---: | ---: |
+| Hoard vault `8PMHP6cwe…` | 500,000,000 | **0** |
+| founder token `1JpBu46…` | 0 | **500,000,000** |
+| founder Position `HKw5Uzh…` claim 3 | 500,000,000 | **0** |
+| founder Position claims 0/1/2 | 499,999,800 / 500,000,000 / 500,000,000 | unchanged |
+
+The three losing columns are untouched on purpose: they are claims on outcomes
+this market did not reach, and nothing retires them.
+
+### 4. Participant-2 is paid zero, asserted from chain
+
+Not skipped and not inferred. Both statements come from the same producer that
+paid the founder, run read-only against the same finalized chain:
+
+- At the **failure** selector: `wallet-terminal-payout-input --claim-index 3`
+  for owner `BVBriJDj…` refuses *"payout quantity must be within 1..=0 atoms at
+  claim index 3"*. Their failure balance is zero, so there is no quantity to
+  name.
+- At the outcome they actually bought: `--claim-index 0` produces an input at
+  quantity **200**, and the payout preflight over it reports **`"payout": "0"`**,
+  `keysOpened: false`, nothing sent. Two hundred atoms of a losing outcome are
+  worth exactly nothing, computed by the operator rather than by this document.
+
+Participant-1's Position `EeE6FETM…` reads `[0, 0, 0, 0]` — they hold nothing at
+all, which was already true before resolution.
+
+### 5. The browser's gated redemption test: it fails, and the byte is named
+
+`apps/dclutch-web/lib/walletTerminalRedemption.live.test.ts` was written to be
+run the day a market resolved. Run against this one —
+`DCLUTCH_RESOLVED_MARKET=6t3Znm…`, owner the founder, endpoint Helius devnet —
+its verdict is **red**, and not for the reason anyone expected:
+
+```
+Error: RPC response exceeds the browser byte bound
+  at boundedJson lib/rpc.ts:332
+  ... acquireFinalizedAccountsInChunksV1 lib/coreFound.ts:264
+  ... deriveWalletTerminalPayoutInputV1 lib/walletTerminalInputSnapshot.ts:126
+```
+
+Localized exactly, by replaying the four rounds against the shipped wasm with
+the byte cap removed:
+
+| round | addresses | first chunk | verdict |
+| --- | ---: | ---: | --- |
+| one | 3 | 1,560 B | fine |
+| two | 3 | 648 B | fine |
+| three | 2 | 684 B | fine |
+| **frame** | **38** | **5,269,020 B** | **exceeds `MAX_RPC_RESPONSE_BYTES` = 4,194,304** |
+
+The frame round's first `getMultipleAccounts` chunk takes 32 of its 38
+addresses, and those include the deployment's ProgramData accounts — the largest
+single account in the frame is **1,369,758 bytes**. Three of them in one chunk
+is over the cap. The chunker respects the RPC's 32-KEY bound and has no BYTE
+bound of its own, so the split is by count where the constraint is by size.
+
+Behind that, with the cap lifted, the same derivation reaches the **same
+Token-2022 width refusal** as §3 when the destination is left to default — and
+completes end to end, emitting a well-formed
+`dclutch-wallet-terminal-payout-plan-input-v1`, when handed the 165-byte
+recipient. So the browser path has exactly two blockers, both measured, neither
+guessed: a chunker that splits by count instead of bytes, and a default
+destination the protocol's own token decoder refuses.
+
+Neither is repaired here. `apps/dclutch-web` and `crates/dclutch-token-svm` have
+their own owners and both fixes are design decisions, not adjustments: chunking
+by cumulative size (or fetching ProgramData with `dataSlice`), and whether the
+protocol admits extension-suffixed token accounts at all.
+
+### 6. The producers, closed as code
+
+| gap | before | after |
+| --- | --- | --- |
+| Core `AdmitTerminal` on a sponsored-push market | only inside `flagship-resolution-v1`'s VAA ladder | `--action admit-terminal` (`f56b1d2d8`) |
+| the Claims-role Custody replay | owned-loopback only | `devnet-claims-custody-replay-v1` (`31d09aed2`) |
+| `dclutch-sponsored-push-exterior-input-v1` | **no producer anywhere** | `devnet-sponsored-push-input-v1` (`62a0b7fb5`) |
+| the certificate seat's rent | gauntlet-local `prepay_certificate` only | `--action prepay-certificate --prepay-for …` (`62a0b7fb5`) |
+
+Two checks on the last two are worth recording because they are the ones that
+could have been faked:
+
+- The **input producer reproduces the hand-authored document in all 42 fields**,
+  including the `coreProgramdata` the admission arm needed. The previous lane
+  solved each record's schema against its own digest until the known address
+  reproduced; the command derives each pair from the sealed report's own
+  `data_sha256` and refuses when the derived raw address is not the persisted
+  one. Two independent authors, one document, zero differences. The emitted
+  document is also handed back through the consumer's own `InputKeysV1::parse`
+  before it is written, and producer and consumer share one `SponsoredInputV1`.
+- The **prepay arm's arithmetic matches what the walk actually needed.** For the
+  settle seat `BScEeMiRo5oggZNJAA3sPxCrxM4fGSg9nvF3UwjSJAei`, never taken, it
+  plans a System transfer of **2,786,520 lamports** — to the lamport what the
+  failure seat `7S9tCjXT…` holds on chain, which the previous lane had to
+  transfer by hand after `0x8002`. For the failure seat itself it refuses:
+  *"already occupied by `J33AaXnV…`; a prepay funds a seat the walk has not
+  taken yet"*.
+
+### 7. The griefing window is retracted
+
+The first resolution addendum's stranding vector — one late permissionless
+capture makes a market unresolvable forever — **does not exist**, and
+`docs/design/SPONSORED_WINDOW_ADMISSION_2026_09_02.md` carries the retraction
+with the call chain. In one line: `process_capture` reaches
+`PythProviderAdapterObligationV2::normalize_authenticated_update`, which refuses
+a `publish_time` outside `[window.start, window.end]` as `ProviderWindow` before
+any candidate is built. The addendum's sentence *"nothing in that path consults
+`contains_observation`"* is true as text and false as inference — the conjunct is
+spelled inline, so a sweep for the symbol finds nothing, correctly.
+
+Both repairs that addendum queued are withdrawn. What the retraction uncovered
+and left owed is smaller and real: `cadence_tolerance_seconds` widens the window
+on the multi-observation routes and is **inert** on the two single-snapshot Pyth
+routes, while the narrow site's own doc comment claims to match the widened one.
+Cohort-13 carried tolerance 0, where the two coincide. Queued to the lane that
+owns `dclutch-source-contract`, with its gate named.
+
+### 8. The ledger
+
+Every transaction this lane signed, in order. Payer is the campaign payer
+`7j8RHenZ…` throughout; the deployer was never opened.
+
+| # | act | signature | slot | CU | fee | rent placed |
+| --: | --- | --- | ---: | ---: | ---: | ---: |
+| 1 | Core `AdmitTerminal` | `29oFp7ar…rGQV` | 492,149,710 | 95,854 | 75,000 | — |
+| 2 | Claims-role Custody replay create | `5JKdUXJu…kBhC` | 492,151,322 | 174,589 | 75,000 | 2,634,528 |
+| 3 | founder ATA create (170 B, unusable) | `5XZZoKNZ…J2gZ` | 492,152,448 | 18,014 | 5,000 | 1,887,234 |
+| 4 | founder auxiliary token account (165 B) | `35BiumGH…XfvD` | 492,153,197 | 2,202 | 10,000 | 1,855,569 |
+| 5 | payout ALT create | `2v72ET9r…BA7u` | 492,153,578 | 10,508 | 5,000 | 1,165,272 |
+| 6 | payout ALT extend | `3BADkJxR…ZYXz` | 492,153,651 | 11,657 | 5,000 | 4,053,120 |
+| 7 | payout ALT extend | `5vSbWPCQ…H2Cw` | 492,153,741 | 9,601 | 5,000 | 2,634,528 |
+| 8 | payout ALT freeze | `GeCqKF44…yhh` | 492,153,871 | 1,517 | 5,000 | — |
+| 9 | wallet terminal payout | `etUrsvhw…rN2` | 492,154,205 | 353,233 | 10,000 | — |
+
+Balances:
+
+| | |
+| --- | --- |
+| campaign payer before | **1,521,550,103** (1.521550103 SOL) |
+| campaign payer after | **1,507,124,852** (1.507124852 SOL) |
+| spent by this lane | **14,425,251** lamports = **0.014425251 SOL** |
+| of which rent placed in accounts | 14,230,251 |
+| of which transaction fees | 195,000 |
+| deployer `4zrxtw5c…` | **32,473,851,850** — unmoved to the lamport |
+
+The two figures close exactly: 14,230,251 + 195,000 = 14,425,251, and the fee
+column sums to the same 195,000 (row 4 pays two signatures, because an auxiliary
+token account signs with its own fresh keypair as well as the payer). Of the rent,
+7,852,920 sits in the payout ALT and 1,887,234 in the unusable 170-byte ATA;
+both are recoverable and neither is spent.
+
+Where cohort-13 now stands:
+
+| | |
+| --- | --- |
+| Market `6t3Znm…` | **Terminal**, `terminal_winner` 3, receipt `7S9tCjXT…` |
+| Source `A71ZfJCq…` | FailureCommitted, selector 3, sequence 1 |
+| Founder's failure position | **paid**, 500,000,000 atoms, Hoard vault emptied |
+| Participant-2 | **paid zero**, asserted from chain at both claim indices |
+| Browser redemption | red at a measured byte, with the exact chunk named |
+| Retirement | still owned-loopback only |
+
+Devnet evidence. Not mainnet evidence.

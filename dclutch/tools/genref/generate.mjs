@@ -535,10 +535,10 @@ function phaseGate(route, program) {
     .filter((p) => p.no_persisted_discriminant)
     .map(
       (p) =>
-        `\`${p.label}\`'s ${p.routes.length} routes authenticate ` +
+        `- \`${p.label}\`'s ${p.routes.length} routes: ` +
         `${p.no_persisted_discriminant}.`,
     )
-    .join(" ");
+    .join("\n");
   for (const p of programs) {
     const routes = [...p.routes].sort((a, b) => (a.id < b.id ? -1 : 1));
     const rows = routes.map((r) => {
@@ -660,10 +660,13 @@ carry a gate today.
 **no state machine** is a DIFFERENT fact, and it is the program's own
 declaration rather than an absence: this program persists no lifecycle
 discriminant for any route to consult, so no amount of further naming will
-ever put a set in these cells. ${noMachine} It is carried in the census with
-two checks -- such a program must declare no admissible-state set, and its
-sources must name no known machine's discriminant -- so a state model that
-grows one makes the declaration unclassified in the same run.
+ever put a set in these cells. It is carried in the census with two checks --
+such a program must declare no admissible-state set, and its sources must name
+no known machine's discriminant -- so a state model that grows one makes the
+declaration unclassified in the same run. What those programs authenticate
+instead:
+
+${noMachine}
 
 ` +
       sections.join("\n\n") +
