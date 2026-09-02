@@ -780,6 +780,280 @@
       "program": "",
       "outcome": "executed",
       "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "claims rational-representation-v2: degree-two cumulative-floor payout",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The wallet payout against a degree-two cumulative-floor basis rather than the categorical one: the same route, the same signature shape, a payoff the Product runtime evaluates by integrating the basis instead of reading a coefficient. 603,469 CU."
+    },
+    {
+      "label": "claims rational-representation-v2: a wallet exits at failure terms",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The pre-disclosed failure cell paid to a wallet-held Position. Real Custody moves the collateral through real Token-2022 at 471,243 CU; the failure coordinate is an ordinary payout coordinate to this route, which is what makes the two hostiles below meaningful."
+    },
+    {
+      "label": "claims rational-representation-v2: a holder is paid after a stranger began retiring",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "THE POINT OF THE PERMISSIONLESS-RETIREMENT ATTACK: the same payout, to the atom, after an arbitrary actor drove Core into `Retiring`. A holder's redemption right does not depend on nobody having called `begin_retiring`."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with a substituted certificate identity in the request",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The request names a terminal receipt digest the Core Market does not carry. Refused at the Resolution join before any collateral moves, 13,733 CU -- the cheapest of the certificate hostiles because the substitution is visible in the request itself."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with a substituted certificate account",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The request stays honest and the CERTIFICATE ACCOUNT is swapped for the Rent sysvar. Keeping the request truthful does not permit an account substitution at the Resolution seam."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with a substituted Resolution ProgramData",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Release",
+      "note": "HOSTILE, and it refuses `Release` rather than `Identity` because the defect is a DEPLOYMENT, not an identity: the certificate's owner alone is not authority, and the Resolution ProgramData offered here is the Core program's. The distinct code is the whole reason this case is separable from the three above."
+    },
+    {
+      "label": "claims rational-representation-v2: certificate with another owner",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, at the certificate ACCOUNT rather than at the request: a byte-identical certificate body owned by the Core program instead of Resolution."
+    },
+    {
+      "label": "claims rational-representation-v2: certificate with less than rent exemption",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. One lamport below the rent-exempt minimum for its own width -- an account the runtime may reap, so its bytes are not a durable commitment."
+    },
+    {
+      "label": "claims rational-representation-v2: certificate with a truncated width",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The canonical certificate with its last byte removed."
+    },
+    {
+      "label": "claims rational-representation-v2: certificate with another Market in its canonical body",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, and the sharpest of the four: a WELL-FORMED certificate, correctly owned and rent-exempt, that resolves another Market. Structural validity is not the join."
+    },
+    {
+      "label": "a provider success may not occupy the pre-disclosed failure cell",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. A provider outcome offered at the coordinate the market pre-disclosed as its failure cell. The failure cell is reserved by the disclosure, not by whatever the resolution later says."
+    },
+    {
+      "label": "failure terms may not be claimed for an ordinary coordinate",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, the other direction: failure terms claimed at a coordinate the disclosure did not name. Both directions of the same join, and both refuse before Custody is reached."
+    },
+    {
+      "label": "claims rational-representation-v2: the actor reclaims its replay rent",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process_replay_close"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The actor closes its own representation replay cursor and is credited EXACTLY the stranded rent -- no split, no reward, no residue. 3,107 CU, and the only act in this family that moves lamports and touches no Claims economics, which is why it has its own refusal sub-band."
+    },
+    {
+      "label": "claims rational-representation-v2: replay close naming another actor",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process_replay_close"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/RationalReplayCloseSbfErrorV1::Authority",
+      "note": "HOSTILE. The cursor's own actor did not sign. Refused `Authority` (0x5681) at 1,099 CU, before the cursor is read."
+    },
+    {
+      "label": "claims rational-representation-v2: a stranger reaches for the actor's rent",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process_replay_close"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/RationalReplayCloseSbfErrorV1::Identity",
+      "note": "HOSTILE. A stranger signs and names itself as the beneficiary; the cursor address then does not derive from the coordinates the request names. Refused `Identity` (0x5682), and no refusal moves a lamport."
+    },
+    {
+      "label": "claims rational-representation-v2: replay close at another descriptor",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process_replay_close"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/RationalReplayCloseSbfErrorV1::Identity",
+      "note": "HOSTILE. The right actor, the wrong descriptor: the cursor named does not derive under the descriptor the request carries. Refused `Identity` (0x5682), which is the same code as the stranger case for the same reason -- the address is the join."
+    },
+    {
+      "label": "claims rational-representation-v2: a stranger begins retiring",
+      "routes": [
+        "core/process_instruction",
+        "core/begin_retiring::process#BeginRetiring"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "PERMISSIONLESS BY DESIGN, executed against the real Core ELF at 83,130 CU by an actor holding no role in this market. It is bound as EXECUTED because that is the attack: the transition lands, and the two payout rows above are the proof that landing it ends nobody's redemption. Two transactions carry this label -- one per attack scenario -- and the binding covers both."
+    },
+    {
+      "label": "claims rational-representation-v2: IssueStructured before a replay close",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "A full-width structured issuance planted so the replay-close route has a cursor to close. 1,397 wire bytes, over the packet maximum, which is the campaign's own K = 3 measurement rather than a fault of this row."
+    },
+    {
+      "label": "claims rational-representation-v2: terminal against a substituted Resolution certificate",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE at the terminal redemption rather than at the wallet payout: the certificate account is substituted under an otherwise honest terminal request. Byte-exact rollback of the whole settled state."
+    },
+    {
+      "label": "claims rational-representation-v2: representation redemption after a stranger retired",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The representation-layer half of the permissionless-retirement attack: a terminal redemption commits at 650,115 CU with Core in `Retiring`, real Custody paying through real Token-2022."
+    },
+    {
+      "label": "Trading common-Hot Rational IssueStructured commits",
+      "routes": [
+        "trading/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "THE COMMON-HOT ROUTE, and the first campaign row whose top-level program is Trading rather than Claims or the test caller. Trading authenticates the release, specializes the Claims child from the family request, and invokes it through the release-selected caller PDA: 855,481 CU, 1,589 wire bytes on a live Address Lookup Table. This campaign's program map did not carry Trading at all until 2026-09-02, so every row in this group was unbindable and the census counted each as unbound coverage."
+    },
+    {
+      "label": "Trading common-Hot Rational IssueStructured substituted request digest refuses",
+      "routes": [
+        "trading/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Release",
+      "note": "HOSTILE, one flipped byte in the family request. It refuses at the BINDING, not at a content check: the child caller authority is a PDA over the exact projected child request, whose parent context is the family request's SHA-256, so a moved family byte moves the derived address and Trading cannot present a frame for the request it actually carries. 393,359 CU, and Claims is never reached."
+    },
+    {
+      "label": "Trading common-Hot Rational Denominate commits",
+      "routes": [
+        "trading/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The selected-outcome action on the common-Hot route: 774,025 CU, 1,253 wire bytes. Over the 1,232-byte packet maximum by 21 even with the table applied -- the Claims-direct Denominate is 1,061, and the difference is the Trading envelope and the outer account frame this route carries on top of it."
+    },
+    {
+      "label": "Trading common-Hot Rational RedeemTerminal commits",
+      "routes": [
+        "trading/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "THE TERMINAL REDEMPTION ON THE HOT ROUTE, executing for the first time on 2026-09-02. Trading -> Claims -> Custody -> Token-2022, 1,119,672 CU, 1,277 wire bytes. It was unreachable until the terminal AccountProfile stopped being one account narrower than the frame the request contract specifies: the Resolution program sits at the fifth slot of the fourteen-account terminal suffix, and its absence put the Custody replay, the Hoard and the recipient one index low."
+    },
+    {
+      "label": "Trading common-Hot Rational RedeemTerminal: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "Trading common-Hot Rational RedeemTerminal: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
     }
   ]
 }

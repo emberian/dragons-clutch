@@ -1818,9 +1818,11 @@ dependencies = [
 name = "dclutch-dealer-accelerator-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-program-contract",
  "dclutch-core-contract",
  "dclutch-execution-strategy-contract",
  "dclutch-refusal-registry",
+ "dclutch-sbf-bump-heap",
  "dclutch-trading-sbf",
  "solana-program",
 ]

@@ -80,6 +80,26 @@ pub enum DealerScenarioAcceleratorErrorV4 {
     Arithmetic,
 }
 
+impl DealerScenarioAcceleratorErrorV4 {
+    /// This refusal's own word, for the one log line a reader greps.
+    ///
+    /// The accelerator boundary decides ACCEPTED or REFUSED and has no wire
+    /// field for which conjunct refused, so `.is_ok()` was throwing this away
+    /// at the one line that held it. Exhaustive on purpose: a new variant does
+    /// not compile until its author writes the word a validator log will carry.
+    #[must_use]
+    pub const fn refusal_name(self) -> &'static str {
+        match self {
+            Self::Invocation => "scenario:Invocation",
+            Self::SemanticJoin => "scenario:SemanticJoin",
+            Self::Claims => "scenario:Claims",
+            Self::Custody => "scenario:Custody",
+            Self::Evaluation(inner) => inner.refusal_name(),
+            Self::Arithmetic => "scenario:Arithmetic",
+        }
+    }
+}
+
 impl From<DealerScenarioAdmittedErrorV4> for DealerScenarioAcceleratorErrorV4 {
     fn from(value: DealerScenarioAdmittedErrorV4) -> Self {
         Self::Evaluation(value)

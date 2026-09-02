@@ -2371,14 +2371,17 @@ fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcom
     // `dclutch-operator::general_hot_v3::
     //  every_action_is_alt_packet_safe_at_the_canonical_runtime_width`
     // compiles all seven N=258 account sets through `compile_general_hot_v0`,
-    // widest 922 of 1,232 bytes, and reproduces every account count measured
+    // widest 968 of 1,232 bytes, and reproduces every account count measured
     // here. See `docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`.
     //
-    // The widest was 918, then 920, and is 922 because `f581af6b` appended a
+    // The widest was 918, then 920, then 922 because `f581af6b` appended a
     // rent-refund account to Custody `InitializeReplay`; `InitializeSettlement`
-    // is the only General action that embeds that operation. Restating a number
-    // that lives in another crate's assertion is how it goes stale, which is
-    // exactly what the count below does not do -- see the note there.
+    // is the only General action that embeds that operation. It is 968 since
+    // `e3298c9a` appended the System program to every General action, which
+    // costs two wire bytes per action (one readonly index in the lookup table,
+    // one in the instruction). Restating a number that lives in another crate is
+    // how it goes stale -- and this one had, by 46 bytes, which is exactly what
+    // the DERIVED count below does not do; see the note there.
     assert!(evidence.packet_bytes > 0 && evidence.packet_bytes <= 2_000);
     assert!(evidence.scratch_pages > 0);
     eprintln!(

@@ -10,7 +10,7 @@ use dclutch_capability_program_contract::hot_v3::{
 };
 use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, RationalTerminalHotRequestV3, RepresentationActionV2,
-    RepresentationRequestV2,
+    RepresentationCoordinateV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_operator::ConstructedInstructionV2;
 use solana_program::{
@@ -20,6 +20,9 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
+use crate::hot_account_profile_v3::{
+    InjectedCoordinateV3, LogicalCoordinateV3, logical_coordinate, logical_index,
+};
 use crate::open_capability_set_v3::require_open_program_selection_v3;
 use crate::{
     ConstructedHotTerminalV3, Error, RationalOpenCapabilityProgramSetV3,
@@ -198,18 +201,24 @@ fn build_hot_instruction_from_claims_child_inner_v3(
         return Err(Error::HotInstruction);
     }
     let child_accounts = &claims_child.instruction.accounts;
+    // Named, not numbered. The caller PDA and the wallet actor are the frame's
+    // only two signers and the Claims program is where the child names itself;
+    // all three used to be typed here as 0, 3 and 14.
+    let caller = child_frame_index(RepresentationCoordinateV2::CallerAuthority)?;
+    let actor = child_frame_index(RepresentationCoordinateV2::Actor)?;
+    let claims_program = child_frame_index(RepresentationCoordinateV2::ClaimsProgram)?;
     if child_accounts
-        .first()
+        .get(caller)
         .is_none_or(|account| !account.is_signer)
         || child_accounts
-            .get(3)
+            .get(actor)
             .is_none_or(|account| !account.is_signer)
         || child_accounts
             .iter()
             .enumerate()
-            .any(|(index, account)| index != 0 && index != 3 && account.is_signer)
+            .any(|(index, account)| index != caller && index != actor && account.is_signer)
         || child_accounts
-            .get(14)
+            .get(claims_program)
             .is_none_or(|account| account.pubkey != claims_child.instruction.program_id)
     {
         return Err(Error::HotInstruction);
@@ -244,7 +253,7 @@ fn build_hot_instruction_from_claims_child_inner_v3(
             .enumerate()
             .map(|(index, account)| {
                 let mut outer = account.clone();
-                if index == 0 {
+                if index == caller {
                     outer.is_signer = false;
                 }
                 outer
@@ -268,10 +277,17 @@ fn build_hot_instruction_from_claims_child_inner_v3(
             accounts,
             data,
         },
-        required_wallet_signers: vec![child_accounts.get(3).ok_or(Error::HotInstruction)?.pubkey],
+        required_wallet_signers: vec![
+            child_accounts
+                .get(actor)
+                .ok_or(Error::HotInstruction)?
+                .pubkey,
+        ],
         checked_manifest_digest: checked.checked_manifest_digest,
     })
 }
+
+const INJECTED_ACCOUNTS: usize = crate::RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize;
 
 fn compact_profile13_child_accounts_v3(
     state: &RationalTerminalHotStateV3<'_>,
@@ -280,7 +296,7 @@ fn compact_profile13_child_accounts_v3(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
 ) -> Result<Vec<AccountMeta>> {
-    const INJECTED: usize = 5;
+    const INJECTED: usize = INJECTED_ACCOUNTS;
     let expected_logical = INJECTED
         .checked_add(expected_child_accounts)
         .ok_or(Error::HotInstruction)?;
@@ -323,9 +339,10 @@ fn compact_profile13_child_accounts_v3(
         let route = profile
             .route_privileges_with_dynamic_spans(tail_count, &[], logical)
             .map_err(Error::AccountProfileArtifact)?;
+        let caller = child_frame_index(RepresentationCoordinateV2::CallerAuthority)?;
         if account.is_writable != route.writable()
-            || (child_index != 0 && account.is_signer != route.signer())
-            || (child_index == 0 && !account.is_signer)
+            || (child_index != caller && account.is_signer != route.signer())
+            || (child_index == caller && !account.is_signer)
         {
             return Err(Error::HotInstruction);
         }
@@ -386,17 +403,34 @@ fn physical_privileges_v3(
     Ok((signer, writable))
 }
 
+/// Where one Claims-child role sits inside the child frame.
+fn child_frame_index(coordinate: RepresentationCoordinateV2) -> Result<usize> {
+    logical_index(LogicalCoordinateV3::Child(coordinate))
+        .and_then(|index| {
+            index.checked_sub(crate::RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize)
+        })
+        .ok_or(Error::HotInstruction)
+}
+
 fn injected_meta_v3<'a>(
     state: &'a RationalTerminalHotStateV3<'_>,
-    logical_coordinate: usize,
+    logical_coordinate_index: usize,
 ) -> Result<&'a AccountMeta> {
-    let physical_coordinate = match logical_coordinate {
-        0 => HOT_ROOT_ACCOUNT_V3,
-        1 => HOT_CONFIG_RAW_ACCOUNT_V3,
-        2 => HOT_PRODUCT_RAW_ACCOUNT_V3,
-        3 => HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-        4 => HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
-        _ => return Err(Error::HotInstruction),
+    let physical_coordinate = match logical_coordinate(logical_coordinate_index) {
+        Some(LogicalCoordinateV3::Injected(InjectedCoordinateV3::Root)) => HOT_ROOT_ACCOUNT_V3,
+        Some(LogicalCoordinateV3::Injected(InjectedCoordinateV3::TokenBehaviorSelection)) => {
+            HOT_CONFIG_RAW_ACCOUNT_V3
+        }
+        Some(LogicalCoordinateV3::Injected(InjectedCoordinateV3::ProductRecord)) => {
+            HOT_PRODUCT_RAW_ACCOUNT_V3
+        }
+        Some(LogicalCoordinateV3::Injected(InjectedCoordinateV3::PortfolioRecord)) => {
+            HOT_PORTFOLIO_RAW_ACCOUNT_V3
+        }
+        Some(LogicalCoordinateV3::Injected(InjectedCoordinateV3::LinkedProductBasis)) => {
+            HOT_LINKED_BASIS_RAW_ACCOUNT_V3
+        }
+        Some(LogicalCoordinateV3::Child(_)) | None => return Err(Error::HotInstruction),
     };
     state
         .fixed_accounts
@@ -528,27 +562,51 @@ mod tests {
             .specialize_child_into(family_digest, &mut exact_child)
             .expect("exact child");
         let claims_program = key(70);
-        // A FIFTH AUTHOR for the same width, in this module's own fixture. The
-        // terminal Claims frame is one constant and this is now that constant.
-        let mut metas = (0_u8..u8::try_from(crate::RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3)
-            .expect("terminal Claims frame"))
-            .map(|index| AccountMeta::new_readonly(key(100_u8.wrapping_add(index)), false))
+        // A FIFTH AUTHOR for the same width AND a sixth for the frame's order:
+        // this fixture typed the child's writable set and its three same-frame
+        // aliases as bare indices, which is why it stayed green while the
+        // profile it feeds was one account short. Both now come off the profile
+        // module's declaration, by role.
+        let child_width = usize::from(crate::RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3);
+        let child_rule = |index: usize| {
+            crate::hot_account_profile_v3::declared(
+                logical_coordinate(index + INJECTED_ACCOUNTS).expect("child coordinate"),
+            )
+        };
+        let mut metas = (0..child_width)
+            .map(|index| {
+                let rule = child_rule(index);
+                let mut meta = AccountMeta::new_readonly(
+                    key(100_u8.wrapping_add(u8::try_from(index).expect("child key"))),
+                    false,
+                );
+                meta.is_writable = rule.writable;
+                meta.is_signer = rule.signer;
+                meta
+            })
             .collect::<Vec<_>>();
-        metas.get_mut(0).expect("caller meta").is_signer = true;
-        *metas.get_mut(3).expect("actor meta") = AccountMeta::new_readonly(key(6), true);
-        *metas.get_mut(14).expect("Claims meta") = AccountMeta::new_readonly(claims_program, false);
-        for index in [11_usize, 12, 32, 33, 34, 43, 45, 46] {
-            metas
-                .get_mut(index)
-                .expect("writable child meta")
-                .is_writable = true;
+        let at = |coordinate| child_frame_index(coordinate).expect("child role");
+        metas
+            .get_mut(at(RepresentationCoordinateV2::CallerAuthority))
+            .expect("caller meta")
+            .is_signer = true;
+        *metas
+            .get_mut(at(RepresentationCoordinateV2::Actor))
+            .expect("actor meta") = AccountMeta::new_readonly(key(6), true);
+        *metas
+            .get_mut(at(RepresentationCoordinateV2::ClaimsProgram))
+            .expect("Claims meta") = AccountMeta::new_readonly(claims_program, false);
+        // Every alias whose source is another CHILD coordinate; the three that
+        // point at injected Hot accounts are bound by `bind_injected_aliases`.
+        for index in 0..child_width {
+            let Some(LogicalCoordinateV3::Child(source)) = child_rule(index).alias else {
+                continue;
+            };
+            let mut account = metas.get(at(source)).expect("alias source").clone();
+            account.is_signer = false;
+            account.is_writable = false;
+            *metas.get_mut(index).expect("alias target") = account;
         }
-        *metas.get_mut(21).expect("Claims alias") =
-            AccountMeta::new_readonly(claims_program, false);
-        *metas.get_mut(23).expect("Claims alias") =
-            AccountMeta::new_readonly(claims_program, false);
-        let token_program = metas.get(22).expect("Token program").clone();
-        *metas.get_mut(48).expect("Token alias") = token_program;
         ConstructedHotTerminalV3 {
             family_request,
             family_digest,
@@ -618,10 +676,20 @@ mod tests {
 
     fn bind_injected_aliases(terminal: &mut ConstructedHotTerminalV3, fixed: &[AccountMeta]) {
         for (child, injected) in [
-            (24, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
-            (26, HOT_PRODUCT_RAW_ACCOUNT_V3),
-            (30, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
+            (
+                RepresentationCoordinateV2::LinkedBasisRecord,
+                HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+            ),
+            (
+                RepresentationCoordinateV2::ProductRecord,
+                HOT_PRODUCT_RAW_ACCOUNT_V3,
+            ),
+            (
+                RepresentationCoordinateV2::PortfolioRecord,
+                HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+            ),
         ] {
+            let child = child_frame_index(child).expect("child role");
             let mut account = fixed.get(injected).expect("injected account").clone();
             account.is_signer = false;
             account.is_writable = false;
@@ -650,15 +718,32 @@ mod tests {
         )
         .expect("hot");
         assert_eq!(report.instruction.program_id, key(60));
+        // Physical width is the child frame minus its aliases, both counted off
+        // the declaration rather than typed.
+        let aliases = (0..usize::from(crate::RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3))
+            .filter(|index| {
+                crate::hot_account_profile_v3::declared(
+                    logical_coordinate(index + INJECTED_ACCOUNTS).expect("child coordinate"),
+                )
+                .alias
+                .is_some()
+            })
+            .count();
         assert_eq!(
             report.instruction.accounts.len(),
-            HOT_FIXED_ACCOUNT_COUNT_V3 + 43
+            HOT_FIXED_ACCOUNT_COUNT_V3
+                + usize::from(crate::RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3)
+                - aliases,
         );
         assert!(
             !report
                 .instruction
                 .accounts
-                .get(HOT_FIXED_ACCOUNT_COUNT_V3)
+                .get(
+                    HOT_FIXED_ACCOUNT_COUNT_V3
+                        + child_frame_index(RepresentationCoordinateV2::CallerAuthority)
+                            .expect("caller role")
+                )
                 .expect("outer caller")
                 .is_signer
         );
@@ -666,7 +751,10 @@ mod tests {
             report
                 .instruction
                 .accounts
-                .get(HOT_FIXED_ACCOUNT_COUNT_V3 + 3)
+                .get(
+                    HOT_FIXED_ACCOUNT_COUNT_V3
+                        + child_frame_index(RepresentationCoordinateV2::Actor).expect("actor role")
+                )
                 .expect("outer actor")
                 .is_signer
         );

@@ -67,6 +67,26 @@ pub enum DealerLpAcceleratorErrorV4 {
     Arithmetic,
 }
 
+impl DealerLpAcceleratorErrorV4 {
+    /// This refusal's own word, for the one log line a reader greps.
+    ///
+    /// The accelerator boundary decides ACCEPTED or REFUSED and has no wire
+    /// field for which conjunct refused, so `.is_ok()` was throwing this away
+    /// at the one line that held it. Exhaustive on purpose: a new variant does
+    /// not compile until its author writes the word a validator log will carry.
+    #[must_use]
+    pub const fn refusal_name(self) -> &'static str {
+        match self {
+            Self::Invocation => "lp:Invocation",
+            Self::SemanticJoin => "lp:SemanticJoin",
+            Self::Obligation => "lp:Obligation",
+            Self::Position => "lp:Position",
+            Self::Transition => "lp:Transition",
+            Self::Arithmetic => "lp:Arithmetic",
+        }
+    }
+}
+
 /// Authenticate selector 7/8 and evaluate its exact candidate bank.
 ///
 /// `candidate_bank` is commit-last and remains byte-for-byte unchanged on every

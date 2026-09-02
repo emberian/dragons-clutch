@@ -4627,14 +4627,21 @@ mod tests {
     fn every_action_is_alt_packet_safe_at_the_canonical_runtime_width() {
         let payer = key(250);
         let blockhash = Hash::new_from_array([16; 32]);
+        // +1 ACCOUNT AND +2 WIRE BYTES ON EVERY ROW, from `e3298c9a` appending
+        // the System program to General's account profile. The account cost is
+        // one coordinate; the wire cost is two bytes because an ALT-backed v0
+        // message names a readonly account TWICE -- once in the table's
+        // readonly-index array and once in the instruction's own account-index
+        // array -- and both are one byte. Uniform across all seven, which is
+        // what says the append moved a count and nothing else.
         for (action, accounts, wire) in [
-            (Action::Consider, 88, 708),
-            (Action::Freeze, 86, 704),
-            (Action::InitializeSettlement, 122, 966),
-            (Action::Collect, 116, 859),
-            (Action::Materialize, 114, 855),
-            (Action::Distribute, 116, 859),
-            (Action::Close, 115, 857),
+            (Action::Consider, 89, 710),
+            (Action::Freeze, 87, 706),
+            (Action::InitializeSettlement, 123, 968),
+            (Action::Collect, 117, 861),
+            (Action::Materialize, 115, 857),
+            (Action::Distribute, 117, 861),
+            (Action::Close, 116, 859),
         ] {
             let report = real_frame_report(action, 258);
             assert_eq!(report.instruction.accounts.len(), accounts, "{action:?}");
@@ -4667,29 +4674,41 @@ mod tests {
     ///
     /// `docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md` recorded the
     /// instruction-account count of every N=258 action executed against the
-    /// real `dclutch_general_accelerator_sbf.so`. Read the latest addendum,
-    /// not the superseded tables above it: the common bank widening moved
-    /// every N=258 action from seventeen to eighteen pages and therefore moved
-    /// every logical caller frame by one. This control is what caught the
-    /// drift. Re-measured against the real ELF built from `b92b2cee`; if you are
-    /// tempted to edit a number below to make this green, re-run the campaign
-    /// instead and move the evidence with it. That frame is two harness
+    /// real `dclutch_general_accelerator_sbf.so`. That frame is two harness
     /// accounts (the request record and the accelerator program), then the
     /// admitted fixed frame, then one account per *logical* profile
     /// coordinate -- the accelerator reads an aliased coordinate as its own
     /// readonly account, where the Trading Hot frame carries the physical
     /// account once. Seven independent numbers, none of them derived from this
     /// crate, and the profile generator reproduces all seven.
+    ///
+    /// If you are tempted to edit a number below to make this green, re-run the
+    /// campaign instead and move the evidence with it. RE-RUN 2026-09-02
+    /// against the real ELF at HEAD -- `real_sbf` in
+    /// `programs/dclutch-general-accelerator-sbf/program-test/tests/lifecycle.rs`,
+    /// which derives the same frame and asserts it against the ELF -- and every
+    /// one of the seven moved by exactly +31 from the `b92b2cee` measurement:
+    ///
+    /// - +30 from `68f7c849`, which found that `admitted_v3.rs` described an
+    ///   eighteen-account CPI frame nothing had ever produced and corrected
+    ///   `ADMITTED_RUNTIME_ACCOUNTS_START_V3` from 18 to 48. The campaign
+    ///   numbers were pinned before that correction, so this control has been
+    ///   asserting a frame the code stopped building on 2026-09-01.
+    /// - +1 from `e3298c9a`, which appended the System program to General's
+    ///   account profile.
+    ///
+    /// The uniformity is the evidence that those are the only two causes: a
+    /// third would not have moved all seven by the same amount.
     #[test]
     fn the_derived_geometry_reproduces_the_executed_campaign_frame() {
         for (action, campaign_accounts) in [
-            (Action::Consider, 48),
-            (Action::Freeze, 46),
-            (Action::InitializeSettlement, 105),
-            (Action::Collect, 85),
-            (Action::Materialize, 83),
-            (Action::Distribute, 85),
-            (Action::Close, 102),
+            (Action::Consider, 79),
+            (Action::Freeze, 77),
+            (Action::InitializeSettlement, 136),
+            (Action::Collect, 116),
+            (Action::Materialize, 114),
+            (Action::Distribute, 116),
+            (Action::Close, 133),
         ] {
             let logical =
                 usize::from(general_account_profile_fixed_count_v3(action).expect("logical count"))

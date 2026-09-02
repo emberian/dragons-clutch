@@ -4963,6 +4963,23 @@ async fn a_substituted_destination_refuses_on_the_owner_the_request_names() {
 }
 
 /// Every program the runtime actually invoked, read out of the transaction log.
+/// Every `Program log:` line the transaction emitted, with the prefix removed.
+///
+/// A refusal whose code is one accusation over many conjuncts is named in the
+/// log instead, and a test that wants the conjunct has to read it there.
+fn transaction_logs(
+    processed: &solana_program_test::BanksTransactionResultWithMetadata,
+) -> Vec<String> {
+    processed
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.log_messages.clone())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|line| line.strip_prefix("Program log: ").map(str::to_owned))
+        .collect()
+}
+
 fn invoked_programs(
     processed: &solana_program_test::BanksTransactionResultWithMetadata,
 ) -> Vec<Pubkey> {
@@ -5044,6 +5061,7 @@ mod lp_lifecycle {
     use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_V1;
     use dclutch_token_svm::ACCOUNT_BYTES as TOKEN_ACCOUNT_BYTES;
     use dclutch_trading_sbf::dealer::{
+        v4_equity_accelerator_accounts::DealerEquityAcceleratorErrorV4,
         v3_artifacts::{
             dealer_equity_request_profile_bytes_v3, dealer_equity_transition_bytes_v3,
             encode_dealer_equity_request_profile_v3, encode_dealer_equity_transition_v3,
@@ -8285,14 +8303,47 @@ mod lp_lifecycle {
         )
         .await
         .expect("submit hostile equity Add");
-        eprintln!(
-            "MEASUREMENT-ONLY (uncommitted): hostile disposition {:?} code {:?}",
+        // RE-ARMED, and the accusation it makes is not the one it used to.
+        //
+        // It used to demand `Content` 0x4003 and that the accelerator NOT be
+        // invoked. Both were wrong about this route. The accelerator IS the
+        // comparator for a Position identity on an admitted route -- there is no
+        // Trading-side join that could refuse one -- so it must be invoked, and
+        // what it produces is a REFUSED acknowledgement rather than an error,
+        // because common Trading stays the sole effect projector and commit-last
+        // writer. `admitted_composition_v3` then refuses the disposition with
+        // `Transition`.
+        //
+        // `Transition` alone would not be a refusal assertion: it says the family
+        // refused, not which conjunct. The conjunct is
+        // `DealerEquityAcceleratorErrorV4::Claims` -- the evidence walk's
+        // `else` arm, for a Position whose owner is neither the dealer's nor the
+        // LP's -- and the accelerator publishes it by name. Both halves are
+        // asserted and the name is DERIVED from the enum, never typed.
+        //
+        // NOT A UNIVERSAL DONOR, and that is measured rather than assumed: the
+        // honest Add built from this same fixture passes this conjunct and its
+        // accelerator returns an ACCEPTED acknowledgement at 469,516 CU, so
+        // neither the code nor the name below is one the honest route also
+        // produces. That is the whole reason this could be re-armed before the
+        // honest route reaches its commit.
+        assert_eq!(
+            super::custom_code(&refused.result),
+            Some(TradingSbfError::Transition as u32),
+            "a substituted Position identity must be refused through the accelerator's \
+             own acknowledgement: {:?}",
             refused.result,
-            super::custom_code(&refused.result)
         );
         assert!(
-            true || !super::invoked_programs(&refused).contains(&ACCELERATOR),
-            "the admitted transcript must reject the substituted identity before the accelerator"
+            super::invoked_programs(&refused).contains(&ACCELERATOR),
+            "the accelerator is the comparator for a Position identity on an admitted \
+             route, so it must be invoked and must refuse"
+        );
+        let refused_logs = super::transaction_logs(&refused);
+        assert!(
+            refused_logs.iter().any(|line| line
+                == DealerEquityAcceleratorErrorV4::Claims.refusal_name()),
+            "the refusal must name its own conjunct in the log: {refused_logs:?}"
         );
         for (key, before) in rollback_before {
             assert_eq!(

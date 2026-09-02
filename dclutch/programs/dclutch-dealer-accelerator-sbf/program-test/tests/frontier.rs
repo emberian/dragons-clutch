@@ -74,6 +74,7 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_trading_sbf::TradingSbfError;
 use dclutch_trading_sbf::admitted_composition_v3::{
     ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4, ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
 };
@@ -88,11 +89,18 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 /// These mirror `TradingSbfError`, which the accelerator crate does not
 /// re-export; naming them here is what turns an opaque `Custom(_)` back into
 /// the stage that produced it.
-const TRADING_UNSUPPORTED_CONTENT: u32 = 0x4000;
-const TRADING_RELEASE: u32 = 0x4001;
-const TRADING_ROOT: u32 = 0x4002;
-const TRADING_CONTENT: u32 = 0x4003;
-const TRADING_NATIVE_SIGNATURE: u32 = 0x4006;
+// DERIVED, never typed. `assert!(text.contains("Custom(3)"))` also accepts
+// `Custom(30)`, and a hand-copied hex literal in a test is the same mistake one
+// step earlier: it keeps passing after the enum it claims to name has moved.
+const TRADING_UNSUPPORTED_CONTENT: u32 = TradingSbfError::UnsupportedContent as u32;
+const TRADING_RELEASE: u32 = TradingSbfError::Release as u32;
+const TRADING_ROOT: u32 = TradingSbfError::Root as u32;
+const TRADING_CONTENT: u32 = TradingSbfError::Content as u32;
+const TRADING_NATIVE_SIGNATURE: u32 = TradingSbfError::NativeSignature as u32;
+const TRADING_ACCELERATOR_FRAME: u32 = TradingSbfError::AcceleratorFrame as u32;
+const TRADING_ACCELERATOR_RELEASE: u32 = TradingSbfError::AcceleratorRelease as u32;
+const TRADING_ACCELERATOR_ARTIFACT: u32 = TradingSbfError::AcceleratorArtifact as u32;
+const TRADING_ACCELERATOR_RUNTIME_VIEW: u32 = TradingSbfError::AcceleratorRuntimeView as u32;
 
 fn stage_name(error: &ProgramError) -> String {
     match error {
@@ -110,6 +118,18 @@ fn stage_name(error: &ProgramError) -> String {
         }
         ProgramError::Custom(TRADING_NATIVE_SIGNATURE) => {
             "NativeSignature (0x4006) -- Instructions sysvar / top-level metas".to_owned()
+        }
+        ProgramError::Custom(TRADING_ACCELERATOR_FRAME) => {
+            "AcceleratorFrame (0x401A) -- callback account frame or request transport".to_owned()
+        }
+        ProgramError::Custom(TRADING_ACCELERATOR_RELEASE) => {
+            "AcceleratorRelease (0x401B) -- Market or Rent rejoin".to_owned()
+        }
+        ProgramError::Custom(TRADING_ACCELERATOR_ARTIFACT) => {
+            "AcceleratorArtifact (0x401C) -- Registry records, descriptor, strategy".to_owned()
+        }
+        ProgramError::Custom(TRADING_ACCELERATOR_RUNTIME_VIEW) => {
+            "AcceleratorRuntimeView (0x401D) -- tail, spans, geometry, transcript".to_owned()
         }
         other => format!("{other:?}"),
     }
@@ -826,16 +846,19 @@ fn admitted_authentication_clears_geometry_and_the_release_waist() {
     // Root has already passed. A Root refusal there is therefore reachable only
     // by executing the Market check and passing it.
     //
-    // `Break::Market` cannot be read off the code alone once the frontier is
-    // itself Content, and this is stated rather than papered over: it is
-    // recorded here because a substituted Market is the exact defect class this
-    // lane has already paid for twice, and a break that refuses no LATER than
-    // the unbroken run is still a bound worth keeping.
+    // `Break::Market` USED TO BE unreadable off the code alone, because the
+    // Market rejoin and the frontier both refused `Content` -- 2,126 sites --
+    // and this comment said so rather than papering over it. The four-conjunct
+    // split makes it readable: the Market is the release waist this callback
+    // rejoins, the frontier is the artifact graph beyond it, and they now have
+    // different names. A substituted Market is the exact defect class this lane
+    // has already paid for twice, and it is now asserted positively.
     let substituted_market = probe(Break::Market);
     assert_eq!(
         substituted_market,
-        ProgramError::Custom(TRADING_CONTENT),
-        "a canonical CoreState for another Market must refuse; observed {}",
+        ProgramError::Custom(TRADING_ACCELERATOR_RELEASE),
+        "a canonical CoreState for another Market must refuse on the release \
+         waist rejoin; observed {}",
         stage_name(&substituted_market)
     );
 
@@ -845,10 +868,22 @@ fn admitted_authentication_clears_geometry_and_the_release_waist() {
     // the Dealer chain fixture, and no waist can buy it either.
     assert_eq!(
         unbroken,
-        ProgramError::Custom(TRADING_CONTENT),
+        ProgramError::Custom(TRADING_ACCELERATOR_ARTIFACT),
         "the frontier must be the Product graph, not anything shallower; \
          observed {}",
         stage_name(&unbroken)
+    );
+    assert_ne!(
+        unbroken,
+        ProgramError::Custom(TRADING_ACCELERATOR_RELEASE),
+        "the Market rejoin is bought; an AcceleratorRelease refusal here is a \
+         regression in it"
+    );
+    assert_ne!(
+        unbroken,
+        ProgramError::Custom(TRADING_ACCELERATOR_FRAME),
+        "the callback frame is bought; an AcceleratorFrame refusal here is a \
+         regression in it"
     );
     assert_ne!(
         unbroken,

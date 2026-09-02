@@ -1164,7 +1164,13 @@ mod tests {
             projection.candidate_scalars.len(),
             usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4) + 3
         );
-        assert_eq!(projection.candidate_identities.len(), 117);
+        // 118 since `322de4b2` moved `DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4`
+        // from 117 for selector 9's obligation guard. NOT a General number and
+        // not this lane's: it is moved here only because the literal is a
+        // restatement of a constant with one owner in
+        // `programs/dclutch-trading-sbf/src/dealer/v3_trade_artifacts.rs`, and
+        // it had been red in the shared operator suite since 2026-09-01 19:32.
+        assert_eq!(projection.candidate_identities.len(), 118);
 
         let spans = projection.dynamic_span_counts;
         let (mut fixed_accounts, suffix) = runtime_fixture(3, spans);

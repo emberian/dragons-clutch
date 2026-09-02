@@ -31,8 +31,7 @@ use dclutch_account_profile_contract::{
 };
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-    Error as CapabilityProgramError,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, Error as CapabilityProgramError,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
         HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
@@ -919,49 +918,49 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],
     request_bytes: &'request [u8],
 ) -> Result<Box<AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info>>, ProgramError> {
-    let request =
-        AcceleratorRequestV2::decode(request_bytes).map_err(|_| TradingSbfError::Content)?;
+    let request = AcceleratorRequestV2::decode(request_bytes)
+        .map_err(|_| TradingSbfError::AcceleratorFrame)?;
     let caller_authority = account(accounts, 0)?;
     let fixed = accounts
         .get(
             ADMITTED_ACCELERATOR_HOT_FIXED_START_V4
                 ..ADMITTED_ACCELERATOR_HOT_FIXED_START_V4 + ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4,
         )
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AcceleratorFrame)?;
     let strategy_evidence = accounts
         .get(
             ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4
                 ..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4
                     + ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
         )
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AcceleratorFrame)?;
     let runtime_accounts = accounts
         .get(ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4..)
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AcceleratorFrame)?;
     let trading_program = account(fixed, HOT_TRADING_PROGRAM_ACCOUNT_V3)?;
     let frame = HotFrameV3::parse_accelerator_readonly(trading_program.key, fixed)?;
     let hot_instruction =
         authenticate_accelerator_top_level_v4(frame, strategy_evidence, caller_authority, request)?;
     let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::AcceleratorFrame)?;
     let accelerator_program_evidence = account(
         strategy_evidence,
         ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
             .checked_sub(2)
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AcceleratorFrame)?,
     )?;
     let accelerator_programdata_evidence = account(
         strategy_evidence,
         ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
             .checked_sub(1)
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AcceleratorFrame)?,
     )?;
     let artifact_release_digest = {
         let artifact_release = account(
             strategy_evidence,
             ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
                 .checked_sub(4)
-                .ok_or(TradingSbfError::Content)?,
+                .ok_or(TradingSbfError::AcceleratorFrame)?,
         )?;
         let data = artifact_release
             .try_borrow_data()
@@ -998,7 +997,8 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     }
     let (trading_receipt, claims_program, custody_program) =
         authenticate_accelerator_activation_v4(frame, envelope)?;
-    let market = authenticate_market_boxed_v3(&frame, envelope)?;
+    let market = authenticate_market_boxed_v3(&frame, envelope)
+        .map_err(|_| TradingSbfError::AcceleratorRelease)?;
     let root_data = frame
         .root
         .try_borrow_data()
@@ -1018,8 +1018,10 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     {
         return Err(TradingSbfError::Root.into());
     }
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
-    let product_runtime = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
+    let rent =
+        Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::AcceleratorRelease)?;
+    let product_runtime = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)
+        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
 
     // Same three Market-selected records as the canonical hot path, located the
     // same way: from the bumps this Market's root recorded at activation.
@@ -1051,17 +1053,17 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         hash(&program_set_data).to_bytes(),
         &program_set_data,
     )
-    .map_err(|_| TradingSbfError::Content)?;
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     let selected_entry = program_set
         .select_entry(family_request)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     let selected_action = selected_entry.selector();
     let selected_descriptor = selected_entry.descriptor();
     drop(program_set_data);
     if selected_descriptor.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4
         || selected_descriptor.program() != request.capability_program()
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AcceleratorArtifact.into());
     }
     let descriptor_data = borrow_finalized_record(
         frame,
@@ -1122,12 +1124,12 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         || strategy.certificate_program_id() != Some(request.certificate_program())
         || strategy
             .artifact_release()
-            .ok_or(TradingSbfError::Content)?
+            .ok_or(TradingSbfError::AcceleratorArtifact)?
             .program()
             .to_bytes()
             != accelerator_program.to_bytes()
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AcceleratorArtifact.into());
     }
 
     let input_bank = authenticate_accelerator_input_bank_v4(
@@ -1136,9 +1138,6 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         frame.trading_program.key,
     )?;
     let (scalars, identities) = decode_accelerator_register_bank_v4(request, &input_bank)?;
-    if request.tail_count() != product_runtime.runtime.outcome_count {
-        return Err(TradingSbfError::Content.into());
-    }
     let geometry = authenticate_accelerator_artifacts_v4(
         frame,
         &rent,
@@ -1148,6 +1147,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         family_request,
         runtime_accounts.len(),
         &scalars,
+        product_runtime.runtime.outcome_count,
     )?;
 
     let context = authenticate_accelerator_context_v4(
@@ -1191,6 +1191,40 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     }))
 }
 
+/// The request's tail must be the width the EXECUTOR carved the frame at.
+///
+/// This boundary used to demand `request.tail_count() ==
+/// product_runtime.runtime.outcome_count`, unconditionally, before any
+/// AccountProfile had been decoded. That is the SAME conjunct `bfc8383f`
+/// repaired on Trading's side and it was left standing here: a profile that
+/// declares no `OP_PROJECT_TAIL_COUNT_U32` has no per-outcome tail, so
+/// `project_tail_count` answers `None`, `execute_authenticated_hot_v3` carves
+/// at width zero and puts zero in the invocation context -- and a market has at
+/// least two outcomes, so `0 != 2` and the accelerator refused every honest
+/// invocation of every fixed-topology family. Measured on real ELFs 2026-09-02:
+/// with the transcript and the host tail repaired, the Dealer equity Add
+/// reached this line and refused, accelerator invoked, at 1,017,463 CU.
+///
+/// The law is the executor's, re-derived here from the same two inputs rather
+/// than restated as a different one: the request may carry the projected tail
+/// and nothing else. A profile that DOES project is held to exactly the
+/// equality it always was, because for it `project_tail_count` returns the
+/// product's own count.
+fn require_accelerator_tail_count_v4(
+    account_profile: AccountProfileV2<'_>,
+    product_outcome_count: u32,
+    request_tail_count: u32,
+) -> Result<(), ProgramError> {
+    let projected = project_tail_count(account_profile, product_outcome_count)
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
+    require_tail_count_agreement_v3(product_outcome_count, projected)
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
+    if request_tail_count != projected.unwrap_or(0) {
+        return Err(TradingSbfError::AcceleratorRuntimeView.into());
+    }
+    Ok(())
+}
+
 /// AccountProfile-derived geometry the accelerator must reproduce exactly.
 ///
 /// `representatives` is here because the observation transcript needs it and
@@ -1213,6 +1247,7 @@ fn authenticate_accelerator_artifacts_v4(
     family_request: &[u8],
     runtime_account_count: usize,
     scalars: &[u64],
+    product_outcome_count: u32,
 ) -> Result<AcceleratorGeometryV4, ProgramError> {
     let account_profile_data = borrow_finalized_record(
         frame,
@@ -1225,8 +1260,13 @@ fn authenticate_accelerator_artifacts_v4(
     if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let account_profile =
-        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
+    let account_profile = AccountProfileV2::decode(&account_profile_data)
+        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    require_accelerator_tail_count_v4(
+        account_profile,
+        product_outcome_count,
+        request.tail_count(),
+    )?;
     let request_profile_data = borrow_finalized_record(
         frame,
         frame.request_profile_raw,
@@ -1250,8 +1290,8 @@ fn authenticate_accelerator_artifacts_v4(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let transition =
-        TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
+    let transition = TransitionProgramV3::decode(&transition_data)
+        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     let effect_data = borrow_finalized_record(
         frame,
         frame.effect_raw,
@@ -1298,7 +1338,7 @@ fn authenticate_accelerator_artifacts_v4(
         hash(&lifecycle_data).to_bytes(),
         &lifecycle_data,
     )
-    .map_err(|_| TradingSbfError::Content)?;
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     let mut span_widths = if account_profile.uses_dynamic_fixed_spans() {
         vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
     } else {
@@ -1307,19 +1347,19 @@ fn authenticate_accelerator_artifacts_v4(
     if account_profile.uses_dynamic_fixed_spans() {
         account_profile
             .dynamic_span_widths_from_scalars(scalars, &mut span_widths)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
     }
     let logical_count = if account_profile.uses_dynamic_fixed_spans() {
         account_profile
             .logical_account_count_with_dynamic_spans(request.tail_count(), &span_widths)
-            .map_err(|_| TradingSbfError::Content)?
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
     } else {
         account_profile
             .logical_account_count(request.tail_count())
-            .map_err(|_| TradingSbfError::Content)?
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
     };
     if logical_count != runtime_account_count {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AcceleratorRuntimeView.into());
     }
     require_geometry(
         account_profile,
@@ -1331,7 +1371,8 @@ fn authenticate_accelerator_artifacts_v4(
         runtime_account_count,
         &span_widths,
         scalars,
-    )?;
+    )
+    .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
     // Resolved here and nowhere else on this path: the observation transcript
     // keys an aliased coordinate by its REPRESENTATIVE, and this is the only
     // scope holding the decoded AccountProfile that can say what that is.
@@ -1340,7 +1381,8 @@ fn authenticate_accelerator_artifacts_v4(
         request.tail_count(),
         &span_widths,
         runtime_account_count,
-    )?;
+    )
+    .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
     Ok(AcceleratorGeometryV4 {
         span_widths,
         representatives,
@@ -1387,14 +1429,16 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
     )?;
     let context = Box::new(AdmittedInvocationContextV3 {
         release_set: family_context.release_set(),
-        market: ContentId::new(envelope.market()).map_err(|_| TradingSbfError::Content)?,
-        root: ContentId::new(frame.root.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
+        market: ContentId::new(envelope.market())
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
+        root: ContentId::new(frame.root.key.to_bytes())
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         registry_program: ContentId::new(frame.registry.key.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         trading_program: ContentId::new(frame.trading_program.key.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         accelerator_program: ContentId::new(accelerator_program.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         capability_program: strategy.capability_program_id(),
         account_profile: descriptor.account_profile().program(),
         request_profile: descriptor.request_profile().program(),
@@ -1404,13 +1448,13 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
         strategy: strategy.strategy_program_id(),
         certificate: strategy
             .certificate_program_id()
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AcceleratorRuntimeView)?,
         admission: strategy
             .admission_program_id()
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AcceleratorRuntimeView)?,
         artifact_release: strategy
             .artifact_release_id()
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AcceleratorRuntimeView)?,
         config: family_context.selection().config(),
         product: ContentId::new(
             product_runtime
@@ -1419,7 +1463,7 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
                 .content_digest
                 .to_bytes(),
         )
-        .map_err(|_| TradingSbfError::Content)?,
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         portfolio: ContentId::new(
             product_runtime
                 .runtime
@@ -1427,35 +1471,36 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
                 .content_digest
                 .to_bytes(),
         )
-        .map_err(|_| TradingSbfError::Content)?,
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         linked_basis: ContentId::new(
             product_runtime
                 .linked_basis_record
                 .content_digest
                 .to_bytes(),
         )
-        .map_err(|_| TradingSbfError::Content)?,
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         // The producer of this field is `execute_admitted_candidate_v3`, and it
         // commits the domain-separated, length-prefixed digest. Hashing the
         // request bare here recomputes a value the producer can never emit, so
         // the equality below could never hold and the whole admitted lane
         // refused every well-formed invocation.
         family_request_digest: family_request_digest_v3(family_request)
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         runtime_observations_digest,
         root_prestate_digest: ContentId::new(root_prestate)
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         selected_action,
         tail_count: request.tail_count(),
         account_count: u32::try_from(runtime_accounts.len())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         scalar_count: request.scalar_count(),
         identity_count: request.identity_count(),
     });
-    if admitted_invocation_context_digest_v3(*context).map_err(|_| TradingSbfError::Content)?
+    if admitted_invocation_context_digest_v3(*context)
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
         != request.invocation_context()
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AcceleratorRuntimeView.into());
     }
     Ok(context)
 }
@@ -1813,11 +1858,7 @@ fn require_activation_cache_account_v3(
         Some(bump) => {
             let bump_seed = [bump];
             Pubkey::create_program_address(
-                &[
-                    ACTIVATION_PDA_DOMAIN_V1,
-                    &release_set,
-                    &bump_seed,
-                ],
+                &[ACTIVATION_PDA_DOMAIN_V1, &release_set, &bump_seed],
                 frame.registry.key,
             )
             .map_err(|_| TradingSbfError::Release)?
@@ -2071,7 +2112,7 @@ fn accelerator_runtime_observations_digest_v4(
     linked_basis: [u8; 32],
 ) -> Result<ContentId, ProgramError> {
     if representatives.len() != runtime_accounts.len() {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AcceleratorRuntimeView.into());
     }
     let projected = LogicalProjectionKeysV3 {
         selected_config,
@@ -2079,8 +2120,8 @@ fn accelerator_runtime_observations_digest_v4(
         portfolio,
         linked_basis,
     };
-    let trading_program_id =
-        ContentId::new(trading_program.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+    let trading_program_id = ContentId::new(trading_program.to_bytes())
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
     // Exact capacity, not `collect::<Result<Vec<_>, _>>()`. A fallible collect
     // reports a zero lower bound, so the SBF bump allocator - which never frees
     // - is walked through the whole doubling ladder and charges several times
@@ -2090,7 +2131,7 @@ fn accelerator_runtime_observations_digest_v4(
         runtime_data.push(
             account
                 .try_borrow_data()
-                .map_err(|_| TradingSbfError::Content)?,
+                .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
         );
     }
     let observations = runtime_accounts
@@ -2133,7 +2174,8 @@ fn accelerator_runtime_observations_digest_v4(
             }
         })
         .collect::<Vec<_>>();
-    runtime_observations_digest_v3(&observations).map_err(|_| TradingSbfError::Content.into())
+    runtime_observations_digest_v3(&observations)
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView.into())
 }
 
 fn authenticate_accelerator_caller_authority_v4(
@@ -4012,7 +4054,8 @@ fn execute_authenticated_hot_v3(
             ),
         )?;
     }
-    let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent, selected_action)?;
+    let current_rent_quotes =
+        authenticate_current_rent_quotes_v5(lifecycle, &rent, selected_action)?;
     hot_heap_mark!("rent-quotes");
     hot_cu_checkpoint!("p5-geometry-rent");
 
@@ -5617,8 +5660,8 @@ const REGISTERED_IDENTITY_TOKEN_PROGRAM_V4: usize = 25;
 #[cfg(not(target_os = "solana"))]
 const _: () = {
     use dclutch_direct_codec::{
-        registered_account_artifacts_v4 as accounts,
-        registered_creation_artifacts_v4 as creation, registered_state_artifacts_v4 as state,
+        registered_account_artifacts_v4 as accounts, registered_creation_artifacts_v4 as creation,
+        registered_state_artifacts_v4 as state,
     };
     assert!(DIRECT_REGISTERED_MAKER_ACCOUNT_V4 == state::DIRECT_REGISTERED_MAKER_ACCOUNT_V4);
     assert!(DIRECT_REGISTERED_RECORD_ACCOUNT_V4 == state::DIRECT_REGISTERED_RECORD_ACCOUNT_V4);
@@ -5632,9 +5675,7 @@ const _: () = {
     );
     assert!(REGISTERED_SCALAR_REPLAY_RENT_V4 == creation::REGISTERED_SCALAR_REPLAY_RENT_V4);
     assert!(REGISTERED_SCALAR_VAULT_RENT_V4 == creation::REGISTERED_SCALAR_VAULT_RENT_V4);
-    assert!(
-        REGISTERED_IDENTITY_TOKEN_PROGRAM_V4 == creation::REGISTERED_IDENTITY_TOKEN_PROGRAM_V4
-    );
+    assert!(REGISTERED_IDENTITY_TOKEN_PROGRAM_V4 == creation::REGISTERED_IDENTITY_TOKEN_PROGRAM_V4);
 };
 
 /// One account the registered Direct planner re-derived IN FULL.
@@ -6905,8 +6946,8 @@ fn execute_admitted_candidate_v3(
         .strategy_extras
         .get(7)
         .ok_or(TradingSbfError::AdmittedFrame)?;
-    let family_request_digest =
-        family_request_digest_v3(view.family_request).map_err(|_| TradingSbfError::AdmittedContext)?;
+    let family_request_digest = family_request_digest_v3(view.family_request)
+        .map_err(|_| TradingSbfError::AdmittedContext)?;
     let runtime_observations_digest = runtime_transcript_digest_v3(
         view.observations,
         view.runtime_accounts,
@@ -6925,7 +6966,8 @@ fn execute_admitted_candidate_v3(
     let admitted_context = AdmittedInvocationContextV3 {
         release_set: ContentId::new(view.envelope.release_set())
             .map_err(|_| TradingSbfError::AdmittedContext)?,
-        market: ContentId::new(view.envelope.market()).map_err(|_| TradingSbfError::AdmittedContext)?,
+        market: ContentId::new(view.envelope.market())
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         root: ContentId::new(view.frame.root.key.to_bytes())
             .map_err(|_| TradingSbfError::AdmittedContext)?,
         registry_program: ContentId::new(view.frame.registry.key.to_bytes())
@@ -6973,7 +7015,8 @@ fn execute_admitted_candidate_v3(
         tail_count: view.tail_count,
         account_count: u32::try_from(view.runtime_accounts.len())
             .map_err(|_| TradingSbfError::AdmittedContext)?,
-        scalar_count: u32::try_from(view.scalars.len()).map_err(|_| TradingSbfError::AdmittedContext)?,
+        scalar_count: u32::try_from(view.scalars.len())
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         identity_count: u32::try_from(view.identities.len())
             .map_err(|_| TradingSbfError::AdmittedContext)?,
     };

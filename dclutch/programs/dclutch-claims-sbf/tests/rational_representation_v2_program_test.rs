@@ -599,9 +599,9 @@ mod common_hot_open {
         build_rational_open_selected_hot_instruction_v3,
         build_rational_open_structured_hot_instruction_v3,
         build_rational_open_structured_selected_bundle_v6,
-        build_rational_terminal_selected_bundle_v6, construct_chain_hot_denominate_v3,
-        construct_chain_hot_issue_structured_v3, construct_chain_hot_redeem_terminal_v3,
-        encode_open_capability_lifecycle_policy_v5,
+        build_rational_terminal_hot_instruction_v3, build_rational_terminal_selected_bundle_v6,
+        construct_chain_hot_denominate_v3, construct_chain_hot_issue_structured_v3,
+        construct_chain_hot_redeem_terminal_v3, encode_open_capability_lifecycle_policy_v5,
     };
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
@@ -619,7 +619,7 @@ mod common_hot_open {
         frame::BuiltAccountV1,
     };
     use dclutch_rational_representation_v2_contract::{
-        TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
+        RepresentationCoordinateV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
     use dclutch_rational_representation_v2_operator::{
         AssetObservationV2, FinalizedRecordObservationV2, ObservedAccountV2,
@@ -1026,6 +1026,54 @@ mod common_hot_open {
             .unwrap_or_else(|| panic!("no account at {key}"))
     }
 
+    /// The semantic role the Claims child frame carries at `child_index`.
+    ///
+    /// Read off the request contract that specifies the frame, so this test can
+    /// name a coordinate instead of a base58 address, and can grant a vacancy
+    /// to the coordinates that EARN one rather than to whatever happens to be
+    /// absent.
+    pub(super) fn frame_role(
+        action: RepresentationActionV2,
+        child_index: usize,
+    ) -> Option<RepresentationCoordinateV2> {
+        let assets = if matches!(
+            action,
+            RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured
+        ) {
+            usize::try_from(OUTCOME_COUNT).expect("outcome count")
+        } else {
+            1
+        };
+        dclutch_rational_representation_v2_contract::REPRESENTATION_FRAME_SPEC_V2.coordinate(
+            child_index,
+            assets,
+            action == RepresentationActionV2::RedeemTerminal,
+        )
+    }
+
+    /// The same observation, naming the ROLE the missing coordinate carries.
+    ///
+    /// `account` names the address, which locates nothing on its own: a frame
+    /// coordinate's address is derived, so a reader who sees only the base58
+    /// has to walk the whole child frame to find out what was supposed to be
+    /// there. The request contract knows the role at every index.
+    async fn named_account(
+        context: &mut ProgramTestContext,
+        key: Pubkey,
+        action: RepresentationActionV2,
+        child_index: usize,
+    ) -> Account {
+        let role = frame_role(action, child_index);
+        context
+            .banks_client
+            .get_account(key)
+            .await
+            .expect("account query")
+            .unwrap_or_else(|| {
+                panic!("no account at {key} for child coordinate {child_index} ({role:?})")
+            })
+    }
+
     /// Observe one coordinate that is ALLOWED to hold nothing.
     ///
     /// A finalized record's staging cursor is absent by definition, and an
@@ -1293,21 +1341,6 @@ mod common_hot_open {
         }
     }
 
-    /// The same terminal plan, returning the operator's refusal instead of
-    /// panicking on it. The Hot terminal route cannot be built today; this is
-    /// how the wall is pinned by name rather than by absence.
-    pub(super) async fn plan_redeem_refusal(
-        context: &mut ProgramTestContext,
-        fixture: &Fixture,
-    ) -> dclutch_bearer_v2_operator::Error {
-        match plan(context, fixture, RepresentationActionV2::RedeemTerminal).await {
-            HotPlanV3::Terminal(plan) => {
-                plan.expect_err("the Hot terminal planner must refuse today")
-            }
-            _ => panic!("terminal plan"),
-        }
-    }
-
     pub(super) async fn token_behavior(
         context: &mut ProgramTestContext,
         fixture: &Fixture,
@@ -1449,15 +1482,33 @@ mod common_hot_open {
             // address for an unbound one, so skipping them substituted six
             // accounts in a frame that had been committing. The vacancy is
             // granted to the addresses that earned it, never to the loop.
-            let account = if staging_cursors.contains(&meta.pubkey) {
+            // THREE TERMINAL COORDINATES HOLD NOTHING BY CONSTRUCTION, and they
+            // are granted the vacancy BY ROLE rather than by address. The two
+            // Custody PDAs -- the caller authority the child invokes through
+            // and the authority that owns the Hoard -- are derived addresses
+            // that only ever sign; nothing creates them, and the child frame's
+            // own coordinate 0 is the same shape, which is why the loop already
+            // skips it. The Realm's staging cursor is a finalized record's
+            // cursor, which `authenticate_terminal_privileges` requires to be
+            // System-owned and empty -- so an account there would be the defect.
+            let vacant_by_role = matches!(
+                frame_role(action, child_index),
+                Some(
+                    RepresentationCoordinateV2::TerminalCallerAuthority
+                        | RepresentationCoordinateV2::TerminalCustodyAuthority
+                        | RepresentationCoordinateV2::TerminalRealmStaging
+                )
+            );
+            let account = if vacant_by_role || staging_cursors.contains(&meta.pubkey) {
                 vacant_or_account(context, meta.pubkey).await
             } else {
-                account(context, meta.pubkey).await
+                named_account(context, meta.pubkey, action, child_index).await
             };
             bindings.push((logical, built(meta.pubkey, account)));
         }
 
         let market_account = account(context, fixture.market).await;
+
         let root_key = fixture.capability_root.expect("Structured capability root");
         let root_account = account(context, root_key).await;
         let product = account(context, fixture.product_record).await;
@@ -1606,6 +1657,33 @@ mod common_hot_open {
             behavior,
         )
         .expect("public complete IssueStructured outer");
+        assert_eq!(public.instruction, built.hot_instruction);
+        assert_eq!(public.required_wallet_signers, vec![fixture.actor.pubkey()]);
+    }
+
+    pub(super) async fn assert_public_redeem_outer(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+        planned: &ConstructedHotTerminalV3,
+        built: &BuiltBundleV1,
+    ) {
+        let root = account(context, fixture.capability_root.expect("root")).await;
+        let fixed = built
+            .hot_instruction
+            .accounts
+            .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
+            .expect("Hot fixed prefix");
+        let state = hot_state(fixture, &root.data, fixed);
+        let behavior = token_behavior(context, fixture).await;
+        let release = fixture.hot_release.as_ref().expect("Hot release");
+        let public = build_rational_terminal_hot_instruction_v3(
+            &state,
+            planned,
+            &release.redeem,
+            &release.set,
+            behavior,
+        )
+        .expect("public complete RedeemTerminal outer");
         assert_eq!(public.instruction, built.hot_instruction);
         assert_eq!(public.required_wallet_signers, vec![fixture.actor.pubkey()]);
     }
@@ -5513,34 +5591,30 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
     );
 }
 
-/// THE TERMINAL REDEMPTION ON THE HOT ROUTE, AND THE WALL IT REACHES.
+/// THE TERMINAL REDEMPTION, EXECUTING ON THE HOT ROUTE.
 ///
 /// Every other terminal test in this island drives the direct-caller path AND
 /// hand-builds its request, so until this one a redemption had never crossed
 /// Trading and had never been constructed by the operator at all. The operator
-/// now BUILDS it -- a 50-account Claims child, planned through the same public
-/// planner the browser would use -- and the wall is one account of artifact
-/// geometry.
+/// builds it -- a 50-account Claims child, planned through the same public
+/// planner the browser would use -- and the last wall was one account of
+/// artifact geometry.
 ///
-/// `RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3` says the terminal Claims frame is
-/// 49. The request contract's own `REPRESENTATION_FRAME_SPEC_V2` says 50, every
-/// executing direct terminal frame asserts 50, and the Claims composition checks
-/// the route's declared span against `physical_account_count()` computed from
-/// the request -- so a 49-wide release could only ever have been refused
-/// `Route`. Nothing had met it because nothing had built this route.
-///
-/// The coordinate walk runs off the end of the 54-wide profile at the child's
-/// 50th account, which is what this pins. See the constant's own doc for why the
-/// fix is a re-derivation of five per-index tables rather than an increment:
-/// the missing account sits in the MIDDLE of the terminal suffix, not at its
-/// end.
+/// `RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3` said the terminal Claims frame
+/// was 49 while `REPRESENTATION_FRAME_SPEC_V2`, which owns the frame, said 50.
+/// The missing account was the RESOLUTION PROGRAM at the fifth slot of the
+/// fourteen-account terminal suffix, so the profile was not merely one rule
+/// short: it placed the Custody replay, the Hoard and the recipient one index
+/// low and declared no coordinate executable where the Resolution program
+/// stands. Both the width and the ORDER now derive from the request contract
+/// (`hot_account_profile_v3::declared`), and this test is the executing proof.
 ///
 /// One wall earlier this test refused `InvalidTerminal("custody-replay-no-open-vault")`,
 /// a host-side requirement the chain does not hold; that mirror is deleted and
 /// `real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic` carries
 /// the proof.
 #[tokio::test]
-async fn current_common_hot_terminal_frame_is_one_account_narrower_than_the_request() {
+async fn current_common_hot_terminal_redemption_executes_through_real_elves() {
     let trading = trading_artifact();
     let (test, fixture) = fixture_with_basis_and_trading(
         TerminalV1::Provider,
@@ -5578,8 +5652,84 @@ async fn current_common_hot_terminal_frame_is_one_account_narrower_than_the_requ
                 .logical_account_count_with_dynamic_spans(0, &[])
                 .expect("terminal logical width"),
         ),
-        (50, 54),
-        "the terminal Claims child is 50 accounts and its release profile is 5 + 49",
+        (
+            RATIONAL_BASE_ACCOUNT_COUNT_V2
+                + RATIONAL_ASSET_ACCOUNT_COUNT_V2
+                + RATIONAL_TERMINAL_ACCOUNT_COUNT_V2,
+            dclutch_bearer_v2_operator::RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize,
+        ),
+        "the terminal Claims child and its release profile are the frame the request contract specifies",
+    );
+
+    let bundle = common_hot_open::build_hot(
+        &mut context,
+        &fixture,
+        RepresentationActionV2::RedeemTerminal,
+        &plan.family_request,
+        &plan.claims_child,
+    )
+    .await;
+    common_hot_open::assert_public_redeem_outer(&mut context, &fixture, &plan, &bundle).await;
+    common_hot_open::install(&mut context, &bundle);
+
+    let before = snapshot(&mut context, &fixture).await;
+    let redeem = bundle.hot_instruction.clone();
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        fixture.actor.pubkey(),
+        std::slice::from_ref(&redeem),
+    );
+    let (table, alt_cu) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "Trading common-Hot Rational RedeemTerminal",
+    )
+    .await;
+    let redeemed = submit_v0_with_heap(
+        &mut context,
+        &fixture,
+        redeem,
+        table,
+        &addresses,
+        "Trading common-Hot Rational RedeemTerminal commits",
+    )
+    .await
+    .expect("real Trading RedeemTerminal transaction");
+    if !redeemed.accepted {
+        eprintln!(
+            "common-Hot RedeemTerminal refusal:\n{}",
+            redeemed.logs.join("\n")
+        );
+    }
+    assert!(
+        redeemed.accepted,
+        "real Trading \u{2192} Claims RedeemTerminal"
+    );
+    assert!(
+        redeemed
+            .logs
+            .iter()
+            .any(|line| line == &format!("Program {CLAIMS_PROGRAM_ID} success")),
+        "real Claims ELF must return through Trading"
+    );
+    assert!(
+        redeemed
+            .logs
+            .iter()
+            .any(|line| line == &format!("Program {CUSTODY_PROGRAM_ID} success")),
+        "real Custody ELF must move the collateral"
+    );
+    let after = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        replay_revision(&after.replay),
+        1,
+        "one committed redemption"
+    );
+    eprintln!(
+        "common-Hot Rational terminal: accounts={} wire={} CU={} ALT-CU={alt_cu:?}",
+        bundle.hot_instruction.accounts.len(),
+        redeemed.wire_bytes,
+        redeemed.compute_units,
     );
 }
 
@@ -7840,6 +7990,12 @@ async fn a_stranger_begins_retiring(context: &mut ProgramTestContext, fixture: &
         .first()
         .expect("signed transaction")
         .to_string();
+    // MEASURED LIKE EVERY OTHER ROW. This helper recorded `wire_bytes: None`,
+    // which is honest but is not a claim that the frame fits, and it was the
+    // whole of what `rational-representation-v2-measured-every-transaction`
+    // had to report as unmeasured. Same arithmetic as `submit_legacy_signed`:
+    // the shortvec signature count, the signatures, and the serialized message.
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message_data().len();
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -7862,7 +8018,7 @@ async fn a_stranger_begins_retiring(context: &mut ProgramTestContext, fixture: &
         error: failure.as_deref(),
         logs: &logs,
         compute_units_consumed: Some(compute_units),
-        wire_bytes: None,
+        wire_bytes: Some(wire_bytes),
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     assert!(

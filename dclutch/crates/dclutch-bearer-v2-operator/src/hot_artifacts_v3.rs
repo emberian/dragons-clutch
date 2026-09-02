@@ -282,7 +282,25 @@ pub fn encode_rational_terminal_transition_v3()
         ),
         InstructionV3::nonzero(s(RATIONAL_TERMINAL_SCALAR_QUANTITY_V3)?),
         InstructionV3::nonzero(s(RATIONAL_TERMINAL_SCALAR_DENOMINATOR_V3)?),
-        InstructionV3::scalar_eq(
+        // AT MOST THE DENOMINATOR, and this is the SAME CORRECTION the selected
+        // sibling took in `open_selected_v3.rs::encode_transition`, arriving
+        // here one route later because a terminal redemption had never been
+        // built. `scalar_eq` was a faithful restatement of `D * e_k` under the
+        // old hardcoded Bearer gate; choosing the specialization from the
+        // descriptor (`lib.rs::authenticate_basis_bytes`) removes that
+        // guarantee on purpose, and the campaign's fractional descriptor is
+        // `[2, 3, 5]` over `7`. Measured 2026-09-02 on the first executing
+        // terminal Hot transaction: prelude operation 3, register 12
+        // (coefficient, 3) against register 7 (denominator, 7) -- the equality
+        // refused the very request the chain admits.
+        //
+        // Nothing that should be refused becomes admitted: a Bearer descriptor
+        // asked for the wrong coordinate is still refused by
+        // `BearerDescriptorV2::authenticate` before any artifact runs, which is
+        // the right owner because the basis-vector property needs the whole
+        // coefficient vector and this artifact is compiled per RELEASE and
+        // never sees a descriptor.
+        InstructionV3::scalar_le(
             s(RATIONAL_TERMINAL_SCALAR_COEFFICIENT_V3)?,
             s(RATIONAL_TERMINAL_SCALAR_DENOMINATOR_V3)?,
         ),

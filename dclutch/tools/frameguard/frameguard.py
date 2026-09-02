@@ -34,7 +34,16 @@ from typing import Any
 REPORT_SCHEMA = "dclutch-sbf-frame-sizes-v1"
 MANIFEST_SCHEMA = "dclutch-sbf-frame-manifest-v1"
 BASELINE_SCHEMA = "dclutch-sbf-frame-baseline-v1"
-EXPECTED_LINK_COUNT = 13
+# Twelve since `e6b7bf1a` deleted `dclutch-dealer-sbf`, a standalone measurement
+# prototype its own header disclaimed. `6590f042` moved the runner's copy of
+# this count and left the checker's behind, so every capture since has built all
+# twelve links clean and then been refused by the assembler -- which is why the
+# committed baseline is still the thirteen-link one, and why nothing has
+# ratcheted this gate since `8c050751`. The count is pinned rather than
+# discovered on purpose (a link silently dropping out of the measurement is the
+# failure this guard exists to catch), so it moves by hand, with a reason, in
+# BOTH halves.
+EXPECTED_LINK_COUNT = 12
 SBPF_V0_FRAME_BYTES = 4096
 
 # Legacy Rust mangling ends in a crate/codegen hash. Rust v0 mangling carries

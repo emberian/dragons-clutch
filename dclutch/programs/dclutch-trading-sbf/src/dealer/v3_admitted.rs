@@ -41,6 +41,25 @@ pub enum DealerScenarioAdmittedErrorV4 {
     Arithmetic,
 }
 
+impl DealerScenarioAdmittedErrorV4 {
+    /// This refusal's own word, for the one log line a reader greps.
+    ///
+    /// The accelerator boundary decides ACCEPTED or REFUSED and has no wire
+    /// field for which conjunct refused, so `.is_ok()` was throwing this away
+    /// at the one line that held it. Exhaustive on purpose: a new variant does
+    /// not compile until its author writes the word a validator log will carry.
+    #[must_use]
+    pub const fn refusal_name(self) -> &'static str {
+        match self {
+            Self::Input => "scenario:Evaluation:Input",
+            Self::Geometry => "scenario:Evaluation:Geometry",
+            Self::Semantics => "scenario:Evaluation:Semantics",
+            Self::Candidate => "scenario:Evaluation:Candidate",
+            Self::Arithmetic => "scenario:Evaluation:Arithmetic",
+        }
+    }
+}
+
 /// Caller-owned runtime-width scratch and candidate storage.
 ///
 /// Semantic scratch may be modified on refusal. `candidate_bank` is commit-last

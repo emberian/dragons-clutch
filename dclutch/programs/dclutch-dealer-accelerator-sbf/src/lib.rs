@@ -16,20 +16,30 @@ extern crate std;
 
 use alloc::vec;
 
+use dclutch_capability_program_contract::hot_v3::HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, AcceleratorAckV2,
     AcceleratorRequestV2,
 };
 use dclutch_trading_sbf::{
+    TradingSbfError,
+    admitted_composition_v3::ADMITTED_ACCELERATOR_HOT_FIXED_START_V4,
     dealer::{
-        v3_accelerator_accounts::evaluate_authenticated_dealer_scenario_v4,
+        v3_accelerator_accounts::{
+            DealerScenarioAcceleratorErrorV4, evaluate_authenticated_dealer_scenario_v4,
+        },
         v3_equity_operator::DEALER_EQUITY_REQUEST_MAGIC_V3,
         v3_operator::DEALER_MULTI_LP_REQUEST_MAGIC_V3,
         v3_trade::{DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_MAGIC_V3},
-        v4_equity_accelerator_accounts::evaluate_authenticated_dealer_equity_v4,
-        v4_lp_accelerator_accounts::evaluate_authenticated_dealer_lp_v4,
+        v4_equity_accelerator_accounts::{
+            DealerEquityAcceleratorErrorV4, evaluate_authenticated_dealer_equity_v4,
+        },
+        v4_lp_accelerator_accounts::{
+            DealerLpAcceleratorErrorV4, evaluate_authenticated_dealer_lp_v4,
+        },
     },
+    entrypoint_adapter::admitted_heap_frame_bytes_v1,
     hot_v3::authenticate_accelerator_invocation_v4,
 };
 use solana_program::{
@@ -47,6 +57,32 @@ pub enum DealerAcceleratorSbfErrorV4 {
     InvalidInvocation = 0xD001,
     /// A canonical acknowledgement could not be constructed.
     InvalidAcknowledgement = 0xD002,
+    /// The account frame or request transport this callback was handed.
+    ///
+    /// One of four conjuncts split out of [`Self::InvalidInvocation`], which
+    /// published a single code for everything common Trading authenticates on
+    /// behalf of this program. Measured 2026-09-02: the honest Dealer equity
+    /// Add and a hostile Position substitution both refused `0xD001` here, so
+    /// the campaign's hostile assertion had no code it could name that the
+    /// honest route did not also produce -- a universal donor manufactured by
+    /// a `map_err` that discarded a cause the callee had already computed.
+    InvalidFrame = 0xD003,
+    /// The release waist this callback rejoined: Market or Rent.
+    InvalidRelease = 0xD004,
+    /// The Registry records, selected descriptor or AdmittedAot strategy.
+    InvalidArtifact = 0xD005,
+    /// The AccountProfile-derived runtime view a candidate is computed against:
+    /// tail width, span widths, logical account count, geometry, transcript.
+    InvalidRuntimeView = 0xD006,
+    /// The transaction's granted heap frame could not be admitted.
+    ///
+    /// Its own accusation, not a frame or a runtime view: the caller granted a
+    /// frame this program could not lift its allocator's ceiling to, or the
+    /// account at the Instructions sysvar coordinate is not that sysvar. An
+    /// out-of-memory ABORT names none of that -- it is `ProgramFailedToComplete`
+    /// with no code at all -- which is exactly what this route produced on
+    /// 2026-09-02 before the ceiling was lifted.
+    HeapCeilingNotLifted = 0xD007,
 }
 
 impl DealerAcceleratorSbfErrorV4 {
@@ -56,22 +92,32 @@ impl DealerAcceleratorSbfErrorV4 {
     /// [`DealerAcceleratorSbfErrorV4::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 8] = [
         Self::InvalidRequest,
         Self::InvalidInvocation,
         Self::InvalidAcknowledgement,
+        Self::InvalidFrame,
+        Self::InvalidRelease,
+        Self::InvalidArtifact,
+        Self::InvalidRuntimeView,
+        Self::HeapCeilingNotLifted,
     ];
 
     /// This refusal's position in [`DealerAcceleratorSbfErrorV4::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a fourth variant is a COMPILE ERROR here rather than a discriminant no
+    /// a ninth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
             Self::InvalidRequest => 0,
             Self::InvalidInvocation => 1,
             Self::InvalidAcknowledgement => 2,
+            Self::InvalidFrame => 3,
+            Self::InvalidRelease => 4,
+            Self::InvalidArtifact => 5,
+            Self::InvalidRuntimeView => 6,
+            Self::HeapCeilingNotLifted => 7,
         }
     }
 }
@@ -126,6 +172,22 @@ impl From<DealerAcceleratorSbfErrorV4> for ProgramError {
     }
 }
 
+/// The program heap this executable actually enforces.
+///
+/// `solana_program::entrypoint!` elides its stock allocator only when the
+/// calling crate declares a feature named `custom-heap`, and then the crate
+/// owes an allocator of its own. This one declared the feature and owed the
+/// allocator; see the Cargo.toml note for what that cost and where the same
+/// defect was already paid for once.
+#[cfg(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+))]
+#[global_allocator]
+static PROGRAM_HEAP_V1: dclutch_sbf_bump_heap::BumpHeapV1 =
+    dclutch_sbf_bump_heap::program_heap_v1();
+
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(program_entrypoint);
 
@@ -149,22 +211,13 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    lift_admitted_heap_frame_v4(accounts)?;
     let request = AcceleratorRequestV2::decode(instruction_data)
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let bank_bytes = usize::try_from(request.total_bank_bytes())
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let invocation = authenticate_accelerator_invocation_v4(program_id, accounts, instruction_data)
-        .map_err(|error| {
-            // A DISCARDED CAUSE IS A SEARCH. Common Trading already decided
-            // WHICH conjunct of the release, artifact, frame and runtime view
-            // refused, and it says so in its own band; this boundary has one
-            // code for all of them because the wire cannot carry two programs'
-            // vocabularies. So the cause goes in the log, which is where a
-            // reader looks first, instead of being thrown away at the one line
-            // that knows it.
-            log_discarded_cause_v4(error);
-            DealerAcceleratorSbfErrorV4::InvalidInvocation
-        })?;
+        .map_err(accelerator_invocation_refusal_v4)?;
     let mut candidate = vec![0_u8; bank_bytes];
     let family_magic = invocation.family_request().get(..8);
     let selected_action = invocation.selected_action();
@@ -175,16 +228,27 @@ pub fn process_instruction(
     let accepted = if family_magic == Some(DEALER_MULTI_LP_REQUEST_MAGIC_V3.as_slice())
         && matches!(selected_action, 7 | 8)
     {
-        evaluate_authenticated_dealer_lp_v4(&invocation, &mut candidate).is_ok()
+        accepted_or_named_v4(
+            evaluate_authenticated_dealer_lp_v4(&invocation, &mut candidate)
+                .map_err(DealerLpAcceleratorErrorV4::refusal_name),
+        )
     } else if family_magic == Some(DEALER_EQUITY_REQUEST_MAGIC_V3.as_slice())
         && matches!(selected_action, 1..=6)
     {
-        evaluate_authenticated_dealer_equity_v4(&invocation, &mut candidate).is_ok()
+        accepted_or_named_v4(
+            evaluate_authenticated_dealer_equity_v4(&invocation, &mut candidate)
+                .map_err(DealerEquityAcceleratorErrorV4::refusal_name),
+        )
     } else if family_magic == Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
         && selected_action == u32::from(DEALER_SCENARIO_TRADE_ACTION_V3)
     {
-        evaluate_authenticated_dealer_scenario_v4(&invocation, &mut candidate).is_ok()
+        accepted_or_named_v4(
+            evaluate_authenticated_dealer_scenario_v4(&invocation, &mut candidate)
+                .map_err(DealerScenarioAcceleratorErrorV4::refusal_name),
+        )
     } else {
+        solana_program::log::sol_log(FAMILY_REFUSAL_LOG_PREFIX_V4);
+        solana_program::log::sol_log("dispatch:NoFamily");
         false
     };
     let request_digest = content(instruction_data)?;
@@ -219,18 +283,116 @@ pub fn process_instruction(
     Ok(())
 }
 
-/// Name an inner `ProgramError` this boundary is about to replace.
+/// The line a reader greps for the family evaluator's own word.
 ///
-/// A protocol refusal reaches the log as its exact discriminant, so a reader
-/// greps one number instead of bisecting a route. Anything else is a runtime
-/// builtin, which is a different accusation and is said differently.
-fn log_discarded_cause_v4(error: ProgramError) {
-    match error {
-        ProgramError::Custom(code) => {
+/// Kept as a constant so the test that asserts a refusal by name and the
+/// program that emits it cannot drift apart by a typo.
+pub const FAMILY_REFUSAL_LOG_PREFIX_V4: &str = "dclutch-dealer-accelerator refused:";
+
+/// Whether the selected family accepted, naming its cause when it did not.
+///
+/// A REFUSED acknowledgement is a legitimate disposition -- common Trading
+/// stays the sole effect projector and commit-last writer, so a semantic
+/// refusal here is an answer, not an error -- but `.is_ok()` made every one of
+/// them the same answer. The equity family alone distinguishes seven causes and
+/// the boundary published none of them, so `accepted.rs` had no discriminant it
+/// could assert that the honest route did not also produce. The disposition is
+/// unchanged; what changes is that the cause reaches the log.
+fn accepted_or_named_v4<T>(outcome: Result<T, &'static str>) -> bool {
+    match outcome {
+        Ok(_) => true,
+        Err(name) => {
+            solana_program::log::sol_log(FAMILY_REFUSAL_LOG_PREFIX_V4);
+            solana_program::log::sol_log(name);
+            false
+        }
+    }
+}
+
+/// Lift this program's allocator ceiling to the frame the transaction granted.
+///
+/// INSTALLING AN ALLOCATOR IS NOT LIFTING ITS CEILING, and the two were one
+/// mistake here. `program_heap_v1()` starts at the protocol default -- the same
+/// 32,768 the SDK's allocator enforces -- and stays there until something
+/// authenticates the grant and raises it. Measured on real ELFs 2026-09-02:
+/// with the runtime transcript and the tail conjunct repaired, the Dealer
+/// equity Add finally reached this program's allocations and died of
+/// `memory allocation failed, out of memory` after 331,928 CU, an ABORT that
+/// carries no refusal code, while its transaction had granted 65,536.
+///
+/// The grant is not taken on the caller's word.
+/// [`admitted_heap_frame_bytes_v1`] reads it back out of the Instructions
+/// sysvar the RUNTIME serialized, and refuses unless the account at that
+/// coordinate is the canonical sysvar -- so a frame nobody requested lifts
+/// nothing, and a substituted account refuses rather than being believed.
+#[cfg(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+))]
+fn lift_admitted_heap_frame_v4(accounts: &[AccountInfo<'_>]) -> ProgramResult {
+    let instructions = accounts
+        .get(ADMITTED_ACCELERATOR_HOT_FIXED_START_V4 + HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+        .ok_or(DealerAcceleratorSbfErrorV4::HeapCeilingNotLifted)?;
+    let Some(bytes) = admitted_heap_frame_bytes_v1(instructions)
+        .map_err(|_| DealerAcceleratorSbfErrorV4::HeapCeilingNotLifted)?
+    else {
+        return Ok(());
+    };
+    PROGRAM_HEAP_V1
+        .lift_ceiling(bytes)
+        .map(|_| ())
+        .map_err(|_| DealerAcceleratorSbfErrorV4::HeapCeilingNotLifted.into())
+}
+
+/// See the `target_os = "solana"` arm: there is no ceiling of ours to raise.
+#[cfg(not(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+)))]
+fn lift_admitted_heap_frame_v4(_accounts: &[AccountInfo<'_>]) -> ProgramResult {
+    Ok(())
+}
+
+/// Translate common Trading's callback refusal into this program's band.
+///
+/// A DISCARDED CAUSE IS A SEARCH. Trading already decided which conjunct
+/// refused and says so in its own band; `map_err(|_| InvalidInvocation)` threw
+/// that away at the one line that knew it, and the four conjuncts arrived on
+/// the wire as one code. Each of the four now has its own discriminant here,
+/// derived from `TradingSbfError` rather than written as a literal, so the
+/// wire carries the distinction and decision 0007 still owns both bands.
+///
+/// [`DealerAcceleratorSbfErrorV4::InvalidInvocation`] survives as the residual
+/// for the refusals Trading raises that are ALREADY distinct in its own
+/// vocabulary -- `Release`, `ReleaseSuperseded`, `Root`, `NativeSignature`,
+/// `UnsupportedContent` -- and for a runtime builtin. Those keep their exact
+/// inner code in the log rather than being folded into a conjunct they do not
+/// belong to.
+fn accelerator_invocation_refusal_v4(error: ProgramError) -> DealerAcceleratorSbfErrorV4 {
+    let ProgramError::Custom(code) = error else {
+        solana_program::msg!("dclutch-dealer-accelerator: inner builtin ProgramError");
+        return DealerAcceleratorSbfErrorV4::InvalidInvocation;
+    };
+    match code {
+        _ if code == TradingSbfError::AcceleratorFrame as u32 => {
+            DealerAcceleratorSbfErrorV4::InvalidFrame
+        }
+        _ if code == TradingSbfError::AcceleratorRelease as u32 => {
+            DealerAcceleratorSbfErrorV4::InvalidRelease
+        }
+        _ if code == TradingSbfError::AcceleratorArtifact as u32 => {
+            DealerAcceleratorSbfErrorV4::InvalidArtifact
+        }
+        _ if code == TradingSbfError::AcceleratorRuntimeView as u32 => {
+            DealerAcceleratorSbfErrorV4::InvalidRuntimeView
+        }
+        _ => {
             solana_program::msg!("dclutch-dealer-accelerator: inner refusal code");
             solana_program::log::sol_log_64(0, 0, 0, 0, u64::from(code));
+            DealerAcceleratorSbfErrorV4::InvalidInvocation
         }
-        _ => solana_program::msg!("dclutch-dealer-accelerator: inner builtin ProgramError"),
     }
 }
 

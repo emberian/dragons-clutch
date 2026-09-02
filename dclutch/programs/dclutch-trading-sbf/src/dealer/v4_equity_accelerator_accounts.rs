@@ -118,6 +118,27 @@ pub enum DealerEquityAcceleratorErrorV4 {
     Arithmetic,
 }
 
+impl DealerEquityAcceleratorErrorV4 {
+    /// This refusal's own word, for the one log line a reader greps.
+    ///
+    /// The accelerator boundary decides ACCEPTED or REFUSED and has no wire
+    /// field for which conjunct refused, so `.is_ok()` was throwing this away
+    /// at the one line that held it. Exhaustive on purpose: a new variant does
+    /// not compile until its author writes the word a validator log will carry.
+    #[must_use]
+    pub const fn refusal_name(self) -> &'static str {
+        match self {
+            Self::Invocation => "equity:Invocation",
+            Self::SemanticJoin => "equity:SemanticJoin",
+            Self::Claims => "equity:Claims",
+            Self::PoolState => "equity:PoolState",
+            Self::Custody => "equity:Custody",
+            Self::Transition => "equity:Transition",
+            Self::Arithmetic => "equity:Arithmetic",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EquityFrameV4 {
     action: MultiLpActionV3,
@@ -282,8 +303,26 @@ fn authenticate_invocation_geometry(
         .checked_mul(8)
         .and_then(|value| value.checked_add(expected_identities.checked_mul(32)?))
         .ok_or(DealerEquityAcceleratorErrorV4::Arithmetic)?;
+    // `context().tail_count != request.width` USED TO BE THE FIRST CONJUNCT HERE
+    // AND IT COULD NOT BE SATISFIED. The context's `tail_count` is the width the
+    // EXECUTOR carved the account frame at -- `project_tail_count`'s answer --
+    // and the equity AccountProfile is a fixed topology that projects no tail,
+    // so it is zero. `request.width` is the CLAIMS width, which is the product's
+    // outcome count and is at least two. Two different quantities, compared for
+    // equality, on a route where they can never be equal: the same shape
+    // `bfc8383f` repaired in `require_tail_count_agreement_v3` and the same one
+    // `require_accelerator_tail_count_v4` repaired one frame up.
+    //
+    // Nothing is weakened by its absence, and the chain that replaces it is
+    // exact. `require_accelerator_tail_count_v4` binds the request's tail to
+    // `project_tail_count(profile, product_outcome_count)`;
+    // `authenticate_accelerator_context_v4` puts that same value in the context
+    // and refuses unless the context digest reproduces the request's; and the
+    // conjunct below binds the product's outcome count to `request.width`. On a
+    // profile that DOES project a tail those three compose to exactly the
+    // equality this line stated. On one that does not, they compose to the
+    // truth instead of to a contradiction.
     if invocation.selected_action() != u32::from(request.selector())
-        || invocation.context().tail_count != request.width
         || invocation.product_runtime().runtime.outcome_count != request.width
         || !invocation.span_widths().is_empty()
         || runtime.len() != frame.logical_account_count

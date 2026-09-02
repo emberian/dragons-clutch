@@ -11,11 +11,16 @@
 //! request before invoking that writer. The complete representation contract
 //! re-exports these exact Rust types; it does not implement a second decoder.
 
+mod frame;
 #[allow(missing_docs)]
 pub mod generated;
 mod open_hot_v3;
 mod request;
 
+pub use frame::{
+    REPRESENTATION_ASSET_COORDINATES_V2, REPRESENTATION_BASE_COORDINATES_V2,
+    REPRESENTATION_TERMINAL_COORDINATES_V2, RepresentationCoordinateV2, RepresentationSegmentV2,
+};
 pub use generated::{
     ASSET_BYTES_V2, PHYSICAL_ABI_VERSION_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
     REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
@@ -74,19 +79,45 @@ impl RepresentationFrameSpecV2 {
 
     /// Exact physical account count for an already hostile-decoded request.
     pub fn account_count(self, request: RepresentationRequestV2<'_>) -> Result<usize> {
-        let assets = usize::try_from(request.header().asset_count)
-            .map_err(|_| Error::InvalidWidth)?
-            .checked_mul(self.asset_account_stride)
-            .ok_or(Error::InvalidLength)?;
-        let terminal = if request.header().action == RepresentationActionV2::RedeemTerminal {
+        let assets =
+            usize::try_from(request.header().asset_count).map_err(|_| Error::InvalidWidth)?;
+        let terminal = request.header().action == RepresentationActionV2::RedeemTerminal;
+        self.shape_account_count(assets, terminal)
+            .ok_or(Error::InvalidLength)
+    }
+
+    /// The same count for a frame SHAPE rather than for a decoded request.
+    ///
+    /// The artifacts a release compiles -- AccountProfile, EffectProgram, route
+    /// spans -- need the width before any request exists, and every one of them
+    /// used to carry its own copy of this arithmetic. `account_count` is now
+    /// this function read off a request.
+    pub const fn shape_account_count(self, assets: usize, terminal: bool) -> Option<usize> {
+        let Some(rows) = assets.checked_mul(self.asset_account_stride) else {
+            return None;
+        };
+        let suffix = if terminal {
             self.terminal_account_suffix
         } else {
             0
         };
-        self.fixed_accounts
-            .checked_add(assets)
-            .and_then(|width| width.checked_add(terminal))
-            .ok_or(Error::InvalidLength)
+        let Some(width) = self.fixed_accounts.checked_add(rows) else {
+            return None;
+        };
+        width.checked_add(suffix)
+    }
+
+    /// [`Self::shape_account_count`] narrowed for the artifact encoders whose
+    /// account widths are `u16`, so exactly one place in the tree narrows it.
+    pub const fn shape_account_count_u16(self, assets: usize, terminal: bool) -> Option<u16> {
+        match self.shape_account_count(assets, terminal) {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "guarded by the arm's own bound against u16::MAX"
+            )]
+            Some(count) if count <= u16::MAX as usize => Some(count as u16),
+            _ => None,
+        }
     }
 }
 

@@ -331,6 +331,42 @@ pub enum TradingSbfError {
     ///
     /// Also pre-CPI. Same split, same reason.
     AdmittedContext = 0x4019,
+    /// The ACCELERATOR callback's account frame or request transport.
+    ///
+    /// Raised only inside `hot_v3::authenticate_accelerator_invocation_v4`,
+    /// which is Trading library code executing INSIDE an accelerator program:
+    /// the `AcceleratorRequestV2` did not decode, the account list is too short
+    /// for the fixed/strategy-evidence/runtime spans, or the top-level
+    /// instruction the envelope was split from is not the shape this callback
+    /// was authorized against.
+    ///
+    /// This is the same split `AdmittedFrame`/`AdmittedTransport`/
+    /// `AdmittedContext` got on the caller's side of the same CPI, for the same
+    /// reason and after the same cost: on 2026-09-02 the honest Dealer equity
+    /// Add and a hostile Position substitution both reached this boundary and
+    /// both refused `Content` 0x4003, which has 2,126 sites in this program, so
+    /// the accelerator's single `InvalidInvocation` was all a reader got.
+    AcceleratorFrame = 0x401A,
+    /// The ACCELERATOR callback's rejoin of the release waist.
+    ///
+    /// The Market this envelope names, or the Rent sysvar the record borrows
+    /// need. The activation cache, the deployment pair and the root are
+    /// separately `Release`, `ReleaseSuperseded` and `Root` and keep those.
+    AcceleratorRelease = 0x401B,
+    /// The ACCELERATOR callback's Registry records, descriptor or strategy.
+    ///
+    /// The manifest entry, the CapabilityProgramSet selection, the selected
+    /// descriptor, the config, the Product graph, the AdmittedAot strategy and
+    /// the six artifact records it names.
+    AcceleratorArtifact = 0x401C,
+    /// The ACCELERATOR callback's AccountProfile-derived runtime view.
+    ///
+    /// The tail width the request carries, the dynamic span widths, the logical
+    /// account count against the runtime accounts actually supplied, the
+    /// geometry, the observation transcript and the invocation-context digest.
+    /// This is the conjunct a candidate is computed against, so it is the one
+    /// worth having its own name.
+    AcceleratorRuntimeView = 0x401D,
 }
 
 impl TradingSbfError {
@@ -340,7 +376,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 30] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -367,6 +403,10 @@ impl TradingSbfError {
         Self::AdmittedFrame,
         Self::AdmittedTransport,
         Self::AdmittedContext,
+        Self::AcceleratorFrame,
+        Self::AcceleratorRelease,
+        Self::AcceleratorArtifact,
+        Self::AcceleratorRuntimeView,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -402,6 +442,10 @@ impl TradingSbfError {
             Self::AdmittedFrame => 23,
             Self::AdmittedTransport => 24,
             Self::AdmittedContext => 25,
+            Self::AcceleratorFrame => 26,
+            Self::AcceleratorRelease => 27,
+            Self::AcceleratorArtifact => 28,
+            Self::AcceleratorRuntimeView => 29,
         }
     }
 }

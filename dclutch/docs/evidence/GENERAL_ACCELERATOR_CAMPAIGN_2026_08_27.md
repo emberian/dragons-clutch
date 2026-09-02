@@ -459,3 +459,82 @@ was found, and it was found only because General had a control pinned to
 evidence rather than to itself. **A family with no such control has no signal**
 — which is the argument for the `count set by` column above, and for putting one
 in every table that records a width.
+
+## Addendum, 2026-09-02: the frame table was corrected and the System program became an account
+
+**Every account count in every table above this line is stale by +31 at N=258
+and +30 at N=1, and only one of the two causes is a General change.**
+
+- **+30, both widths, `68f7c849` (2026-09-01 19:11).** `admitted_v3.rs` wrote
+  out an eighteen-account admitted CPI frame — instructions sysvar at 4, Trading
+  at 5, runtime accounts from 18 — that nothing had ever produced, and the
+  commit corrected `ADMITTED_RUNTIME_ACCOUNTS_START_V3` from 18 to 48. Every
+  number this document records is `2 + that start + the action's profile width +
+  the measured page span`, so every one of them moved by thirty the moment the
+  constant was right. This is not a General change and its blast radius is every
+  family that embeds the admitted frame.
+- **+1, both widths, `e3298c9a` (2026-09-02 02:04).** The System program became
+  an account in General's profile rather than only a trusted identity, appended
+  past every route range. `CloseCandidate` is the exception at both ends — it
+  declares no System identity, so it gets no System account — and it is
+  nonetheless +30 here, from the first cause alone.
+- **+1 page at N=258, already recorded above**, from the GEN-SEVEN register-bank
+  widening: seventeen pages became eighteen.
+
+**How this was caught, and the lesson repeated.** Not here. The harness in
+`programs/dclutch-general-accelerator-sbf/program-test/tests/lifecycle.rs`
+DERIVES the expected frame and asserts it against the real ELF, so it stayed
+green through both changes — correctly, because the frame it derives is the
+frame the ELF builds. What went red was the control in another crate,
+`dclutch-operator::general_hot_v3::the_derived_geometry_reproduces_the_executed_campaign_frame`,
+which pins the numbers THIS DOCUMENT records. That is the second time a control
+pinned to evidence rather than to itself has been the only signal, and it is the
+argument for the `count set by` column.
+
+Re-run 2026-09-02 against the real ELF built from `57049067`, filtered to
+`real_sbf`, `--test-threads=1`. All fifteen actions, both widths.
+
+### N = 1 (re-taken at `57049067`)
+
+| action | CU | accounts | legacy packet | scratch pages | count set by |
+|---|---:|---:|---:|---:|---|
+| `OpenBatch` | 49,344 | 63 | 857 | 4 | `68f7c849` + `e3298c9a` |
+| `CloseBatch` | 51,529 | 63 | 889 | 4 | `68f7c849` + `e3298c9a` |
+| `Consider` | 55,245 | 65 | 923 | 4 | `68f7c849` + `e3298c9a` |
+| `Freeze` | 51,395 | 63 | 857 | 4 | `68f7c849` + `e3298c9a` |
+| `SubmitCandidate` | 58,383 | 66 | 1,052 | 4 | `68f7c849` + `e3298c9a` |
+| `VerifyCandidateRow` | 76,212 / 80,699 / 87,746 | 70 | 1,152 | 4 | `68f7c849` + `e3298c9a` |
+| `CloseCandidate` | 54,281 | 63 | 953 | 4 | `68f7c849` only |
+| `PlaceOrder` | 96,769 | 157 | 1,048 | 4 | `68f7c849` + `e3298c9a` |
+| `InitializeSettlement` | 81,199 | 122 | 980 | 4 | `68f7c849` + `e3298c9a` |
+| `Collect` | 76,384 / 77,610 | 102 | 960 | 4 | `68f7c849` + `e3298c9a` |
+| `Materialize` | 72,365 | 100 | 926 | 4 | `68f7c849` + `e3298c9a` |
+| `Distribute` | 76,393 / 77,574 | 102 | 960 | 4 | `68f7c849` + `e3298c9a` |
+| `Close` | 80,649 | 119 | 945 | 4 | `68f7c849` + `e3298c9a` |
+
+### N = 258 (re-taken at `57049067`)
+
+| action | CU | accounts | legacy packet | scratch pages | count set by |
+|---|---:|---:|---:|---:|---|
+| `OpenBatch` | 84,840 | 77 | 1,319 | 18 | `68f7c849` + `e3298c9a` |
+| `CloseBatch` | 87,025 | 77 | 1,351 | 18 | `68f7c849` + `e3298c9a` |
+| `Consider` | 97,093 | 79 | 1,385 | 18 | `68f7c849` + `e3298c9a` |
+| `Freeze` | 86,891 | 77 | 1,319 | 18 | `68f7c849` + `e3298c9a` |
+| `SubmitCandidate` | 102,620 | 80 | 1,514 | 18 | `68f7c849` + `e3298c9a` |
+| `VerifyCandidateRow` | 419,251 | 84 | 1,614 | 18 | `68f7c849` + `e3298c9a` |
+| `CloseCandidate` | 89,777 | 77 | 1,415 | 18 | `68f7c849` only |
+| `PlaceOrder` | 220,360 | 171 | 1,510 | 18 | `68f7c849` + `e3298c9a` |
+| `InitializeSettlement` | 187,501 | 136 | 1,443 | 18 | `68f7c849` + `e3298c9a` |
+| `Collect` | 171,244 / 171,673 / 172,465 | 116 | 1,422 | 18 | `68f7c849` + `e3298c9a` |
+| `Materialize` | 165,478 | 114 | 1,388 | 18 | `68f7c849` + `e3298c9a` |
+| `Distribute` | 168,895 / 170,911 / 170,116 | 116 | 1,422 | 18 | `68f7c849` + `e3298c9a` |
+| `Close` | 179,984 | 133 | 1,408 | 18 | `68f7c849` + `e3298c9a` |
+
+**The packet conclusion is unchanged and worse in degree.** This readonly CPI
+harness submits a LEGACY message on purpose so the accelerator sees every scratch
+page directly, and at N=258 every one of the thirteen actions now exceeds the
+1,232-byte legacy maximum; the largest is `VerifyCandidateRow` at 1,614. The
+production path is the ALT-backed v0 plan, whose witness is
+`dclutch-operator::general_hot_v3::every_action_is_alt_packet_safe_at_the_canonical_runtime_width`
+— re-pinned in the same commit, widest **968 of 1,232**, which is 264 bytes of
+margin and the only number that speaks to what a validator will accept.
