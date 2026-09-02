@@ -30,7 +30,7 @@ export function publicDeploymentEvidenceDocumentV1(): Readonly<Record<string, un
       }),
     ]))),
     evidence: 'docs/evidence/DEPLOY_1.md §2',
-    note: 'These are Solana devnet test programs. The addresses are permanent; the programs are mutable and have been upgraded in place since, keeping those addresses. firstDeploymentSlot is the slot of the ORIGINAL DEPLOY-1 deployment recorded in the evidence below — a historical fact that does not age — and it is NOT where the program sits today. This document is a static projection and cannot observe a chain. For the current slot, read the ProgramData account — which the /operate deployment inspector now does live, reporting each role that has been upgraded since this app was built.',
+    note: 'These are Solana devnet test programs, and they are NOT permanent. Devnet is disposable here by ruling: each cohort is a full redeploy at fresh addresses, and the cohort before it is closed, which returns its rent to pay for the next. This page named DEPLOY-1 — cohort-8 — for a day after cohort-8 was closed and all seven of its ProgramData accounts had been deleted, while its Program stubs stayed executable and kept naming them. deploymentSlot is where each program was read to sit, not a historical first deployment. This document is a static projection and cannot observe a chain. For the current slot, read the ProgramData account — which the /operate deployment inspector now does live, reporting each role that has been upgraded since this app was built.',
   });
 }
 

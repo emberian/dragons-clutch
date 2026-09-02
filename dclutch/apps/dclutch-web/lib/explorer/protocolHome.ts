@@ -35,7 +35,7 @@ export type ProtocolProgramCardV1 = Readonly<{
   /**
    * DEPLOY-1's ORIGINAL deployment slot, not the program's current one.
    *
-   * These programs are mutable and upgraded in place at permanent addresses,
+   * These programs are mutable and upgraded in place within one cohort,
    * so the slot they sit at moves and this constant does not. It is kept
    * because a first-deployment slot is a historical fact that cannot go stale;
    * the card labels it as such. The live slot is read from ProgramData by the

@@ -2961,3 +2961,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   roles, resolve a Direct market, redemption through real Trading, the ticket path).
 - CLAIMS `0f69918c`: wallet-payout budgets green at their 08-27 pins; the raise reverted.
 - Cuts: `79ca99b41`, `af50627a5`.
+
+### Lane map delta — 2026-09-02 13:40
+- WEB `afb43355b9428a30c` closed (11 commits; last `d106bff3`: the "permanent address" prose corrected — it had listed seven
+  deleted ProgramData accounts as permanent) → **`abcbd5c6f9e5eace9`** takes the UX walk's top three AS DERIVATIONS (registry
+  entry, question/cuts/window from the chain's records with the fixture as fallback; trade step ① outside the gate; the stale
+  strings; /create's band from the live spot; the two wasm verifies when execution-strategy-contract is clean).
+- CLAIMS `a216bbfc`/`e6142026`: Custody and Core each decoded the same cache more than once per frame (−26,222 and −24,820 CU);
+  Custody's +12,504 was never a conjunct; every claims-family row green at its 08-27 pins; the Token-2022 audit digest refused
+  by name before eight SBF builds. Next: frameguard and docs/reference from a detached worktree at HEAD; one author for the
+  attempts model in program-test-evidence.
+- DIRECT old lane closed: both margin ratchets **green and pinned** (`d580f4f7`, `a0852855`: fee-bearing 1,297,792, zero-fee
+  1,297,923 + 1,500 slack; ±124 stated as residual noise).
+- Cuts: `cd68a9ed9`.
