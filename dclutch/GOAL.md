@@ -2613,3 +2613,34 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Disk: 30 → **304 GiB free**. Removed under authorization: `.claude/worktrees` (19, branches kept, 4 dirty files captured),
   cohort-8/fill2 source worktrees (5 unmerged commits preserved on `preserve/cohort8-src-20260831` — **unread; someone should
   read them**), fill2 probe ledger (128 GiB; RESULT/SUMMARY kept), smoke0 harness build. Kept: `~/dev/dclutch/target` (warm).
+
+### Lane map delta — 2026-09-02 01:20
+
+- DIRECT — **equity Add executes and commits** (`8ea9d11a`, 1,044,703 CU): `project_tail_count` returned 0 for any profile
+  without a tail projection, so `require_tail_count_agreement_v3` was unsatisfiable by any honest Add — now `Option<u32>`,
+  None ≠ 0. Dealer's localisation was wrong twice; the CU ladder found the phase in one build. Dealer's equity hostile was
+  passing on that donor → routed. Next: C-04 clauses; delete `compile_direct_hot_v0`; operator-side registered v0 builder.
+- GENERAL — `0x4005 Commit` convicted (`0ba29756`): General's release names System as an IDENTITY for the transition and
+  never supplies it as a runtime ACCOUNT for the create — fourth "same party, both halves" instance. Fix = one coordinate in
+  General's account profile, every reader of `general_account_profile_fixed_count_v3` moved in one series. In flight.
+- STRUCTURED — island proven at HEAD in a clean worktree (45/45 without the ten dirty files, which are pre-session rustfmt
+  drift → hygiene). redeem→retire wall: `custody-replay-no-open-vault` — the operator requires the Claims-role replay to
+  count a vault opened under another role at founding; no route opens one. **Two-authority question → cross-boundary test
+  (does the chain admit it?) before any change.** 27 bare `InvalidTerminal` sites split; two hostiles found refusing
+  elsewhere than their authors believed (`d762f2fb`).
+- EMISSION-WIRING — my "three emitted files no crate compiles" was FALSE (they are `#[path]`-included from test targets;
+  census fixed in memory). The real defect was worse: 198 constants with 2–3 authors each; all now derive from Lean, zero
+  value mismatches (`f6404a78`, `20b31177`, `5c95a58e`). Owed → same lane: split `InvalidRentQuote` (3 causes); `#[cfg(test)]`
+  the effect/composition corpora in Lean (hbox).
+- REDEMPTION — `723eed12`: input-wasm boundary landed, digest-pinned, positive load test. Stranger zero-CLI redemption: **no** —
+  phase one takes an eleven-row address book; four `terminal_composition_*` digests have no chain pointer but are
+  recomputable by `compile_native_basis_composition_v1` (already in the wasm closure). → phase zero, in flight.
+- DEALER — tier retired (`1e6433bf`): `dealer-checkpoint` was already the shipped-ELF campaign. Step 2 (delete `dealer-sbf`)
+  blocked on the shared root `Cargo.toml` → building `tools/lane.sh commit-patch` (HEAD + own hunk into the index, guard on
+  the staged path set) so crate-lifecycle lanes stop serialising on one file. Register map ready.
+- RIP — unit 1 done (`c774ad16`, `67cfccec`; magic-collisions and seam-audit registers caught; SBOM green at committed HEAD
+  for the first time). Unit 2: projected v4 outer + five compositions, Series dead items, shadow surface, small contract
+  constants under "wire the pin or delete what it pins", **ELF-identity control** per program crate.
+- Hazards named by lanes: shared scratchpad filenames collide (use lane-unique); bare `rustfmt` on a crate root reformats
+  the module tree and moves wasm digests through panic line numbers; a dirty index makes `git diff` lie about hunk maps.
+- Cuts: `e9c99f00d`, `e1f04652f`, and this one.
