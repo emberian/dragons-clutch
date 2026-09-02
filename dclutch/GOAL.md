@@ -3565,3 +3565,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   "preserve it unregistered"), a real sibling of actions 7/8, and does not compile since this morning's `refund_source`
   field — left. Owed: the codec's now-consumerless registered/complementary planners (a second wave, deliberately not
   taken while the draft sits in that crate). Pre-existing red: the extended-heap-profile admission test → DEALER (told).
+- REDEMPTION-UX closed (`e0594084` the frame planner learns sizes then plans under both RPC bounds — cohort-13's frame 32+6
+  with a 5.27 MB chunk → 24+14 under 4 MiB, sizing round 5,035 B; the "same context slot across chunks" assertion was
+  unsatisfiable (finalized advanced 2 slots in 4 of 4 tries) → every earlier chunk re-read after the last, byte-identical;
+  `e7ecfb2ef` **ImmutableOwner admitted** at crates/dclutch-token-svm state.rs:256 and the on-chain conjunct
+  rational_terminal_v3.rs:642 with six other extensions still refusing at the same width, operator deriving, wasm regenerated,
+  rows carried; `e05940843` the page tells the reader the failure outcome won and what it means per holder). **A real
+  wallet's ATA still cannot be paid: Custody's `ExactTransferProfileV1` pins ExactBaseWidthsOnly inside the
+  CollateralAdapterReleaseV1 preimage a realm pins on chain** — a THIRD adapter release at the cohort-14 boundary
+  (docs/design/TOKEN_2022_IMMUTABLE_OWNER_DESTINATION_2026_09_02.md); cohort-13's 165-byte account was the only
+  destination that cohort could ever pay. Live redemption test **4/4 green** on the resolved-and-paid market. Captures:
+  1,005 words / 18 $ / 0 hex at 1280. Owed: stage two needs a lookup table someone signs.
+- Cuts: `feab86c68`, `196484c79`.
