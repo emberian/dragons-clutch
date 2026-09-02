@@ -193,26 +193,13 @@ pub(crate) fn process_direct_funding_activation_v1(
     let state = authenticate_direct_market(direct, request.as_ref())?;
     authenticate_direct_activation(program_id, direct, request.as_ref())?;
     authenticate_direct_source_records(direct, request.as_ref(), &rent)?;
-    let material_data = direct
-        .source_material
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::SourceMaterial)?;
-    let material =
-        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let manifest_data = direct
         .capability_manifest
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
-    let recovery_policy = authenticate_direct_recovery_policy(
-        direct,
-        accounts.get(18),
-        accounts.get(19),
-        material,
-        &rent,
-    )?;
-    authenticate_funding_entries(material, recovery_policy, manifest, request.role)?;
+    authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest, &rent)?;
     authenticate_direct_source(program_id, direct, request.as_ref(), state)?;
     let manifest_id = CapabilityContentId::new(request.role.capability_manifest)
         .map_err(|_| ResolutionError::Funding)?;
@@ -229,6 +216,59 @@ pub(crate) fn process_direct_funding_activation_v1(
         clock.slot,
         &rent,
     )
+}
+
+/// The Source material, its optional recovery policy, and the funding entries
+/// they license -- on THIS frame rather than on the caller's.
+///
+/// # Why this is its own function
+///
+/// `process_direct_funding_activation_v1` was the deepest measured frame in the
+/// whole tree at **4,032 of SBPF v0's 4,096 bytes**, 64 from a bound the
+/// toolchain calls undefined behaviour, and it could not take one added local.
+/// Three by-value values were sitting on it and only one of them was needed
+/// past the span that produced it: `SourceMaterialV3` is 226 bytes,
+/// `Option<RecoveryPolicyV2>` is 496, and `CoreState` is 360.
+///
+/// The material and the policy are used at exactly three points -- the policy
+/// is authenticated FROM the material, the two are then joined against the
+/// manifest, and neither is read again. That is `2c51ecd1`'s shape one program
+/// over (a large by-value alive across lines that only need it once), and its
+/// fix is the same: the bytes move to the frame of the function that does the
+/// three things. The manifest view stays with the caller because it borrows the
+/// caller's account data and the commit needs it.
+///
+/// **`CoreState` is deliberately left alone, and that is a measurement rather
+/// than a judgement.** Hoisting `identity.generation` into a local before
+/// `authenticate_direct_source` takes the state by value is the textbook
+/// companion move -- read the one field that must outlive the call so the 360
+/// bytes can die at it -- and it made the frame BIGGER: 3,200 without it,
+/// 3,328 with. The backend was already ending the state's live range at the
+/// call, and the hoist only added a value that had to survive it. Measured
+/// both ways before it was dropped, exactly as `2c51ecd1`'s own first attempt
+/// was.
+#[inline(never)]
+fn authenticate_direct_material_and_funding(
+    direct: DirectFundingAccounts<'_, '_>,
+    accounts: &[AccountInfo<'_>],
+    request: &FundingActivationRequestV1,
+    manifest: CapabilityManifestV1<'_>,
+    rent: &Rent,
+) -> ProgramResult {
+    let material_data = direct
+        .source_material
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::SourceMaterial)?;
+    let material =
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let recovery_policy = authenticate_direct_recovery_policy(
+        direct,
+        accounts.get(18),
+        accounts.get(19),
+        material,
+        rent,
+    )?;
+    authenticate_funding_entries(material, recovery_policy, manifest, request.role)
 }
 
 #[inline(never)]

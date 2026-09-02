@@ -10,7 +10,7 @@
         "unitPrefix": "$"
       },
       "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "Founded at exactly 50 basis points a side — the first market here whose fee rate a Direct fill will admit. Its boundaries were centred on a spot measured the morning it opened, not on a stale default."
+      "story": "Founded at exactly 50 basis points a side — the first fee rate here a Direct fill would admit, though no checked execution release exists for it yet. Its boundaries were centred on a measured spot, not a stale default."
     },
     "6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4": {
       "title": "SOL/USD range — open for trading",

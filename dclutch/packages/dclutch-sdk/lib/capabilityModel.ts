@@ -393,6 +393,50 @@ export type CapabilityVerdictV1 = Readonly<{
  */
 export type CapabilityMarketSnapshotV1 = Readonly<{ market: Readonly<{ address: string }> | null }>;
 
+/**
+ * THE PHASE THIS VERDICT DOES NOT CONSULT, and why it is not fixed here.
+ *
+ * `ready-to-preflight` means "you can try this now", and for an act whose
+ * subject is a market it is asserted from the market's EXISTENCE alone. So
+ * `/workbench` observing the open cohort-12 market reports READY TO PREFLIGHT
+ * for `market.found` -- "Found a Market and admit its first participant" --
+ * about a market that finished founding and opened. Measured 2026-09-02 in the
+ * UX walk (row O1).
+ *
+ * The repair is a per-act declaration of the phases that admit it, and it is
+ * ALL TWENTY-SEVEN OR NONE: a verdict that is honest for six acts and
+ * unchanged for twenty-one is worse than one that is uniformly weak, because a
+ * reader cannot tell which kind of "ready" they are looking at.
+ *
+ * The route census cannot supply it. `tools/gauntlet/census` enumerates
+ * refusal codes, instruction magics and unselected entry routes; it records no
+ * dispatch predicate at all, and the string "phase" appears in its enumerator
+ * zero times. What it does carry is refusal MEANINGS that mention a phase --
+ * `claims/ClaimCheckCompactionSbfErrorV1::Phase`, "The Core phase, or the
+ * absence of a terminal receipt, refused" -- which is prose about a code, not a
+ * guard, and reading admissibility out of it would be guessing with extra
+ * steps.
+ *
+ * The one real authority is the Core kernel's own transitions, written as
+ * inline `if state.phase != Phase::Open` inside each function in
+ * `crates/dclutch-market-core-codec/src/generated.rs`. It covers Core's eleven
+ * actions, which reach perhaps five of the twenty-seven below; the rest are
+ * authoring acts with no market phase at all, or routes in eleven other
+ * programs whose guards nothing emits. So the honest order is: name the guards
+ * in the Rust that writes them (the same repair `WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1`
+ * needed), emit them, extend the census to carry a route's phase predicate, and
+ * only then declare all twenty-seven.
+ *
+ * The twenty-seven with no published phase authority, which is all of them:
+ * release.activate, product.compile, market.inspect, market.found, market.join,
+ * source.create-fund, direct.route, direct.author, direct.inline,
+ * direct.register, direct.cancel, series.prepare, general.consider,
+ * dealer.liquidity, dealer.trade, source.ready, source.provider,
+ * source.admit-terminal, source.close-fund, general.settle, claims.conserve,
+ * claims.represent, claims.replay, claims.redeem, series.close, general.close,
+ * dealer.close.
+ */
+
 /** What a reader can do about this act right now, given what has been read. */
 export function evaluateCapabilityV1(
   standing: CapabilityStandingV1,

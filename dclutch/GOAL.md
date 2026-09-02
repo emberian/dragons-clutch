@@ -3118,3 +3118,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   reads DCLTWIN1). Fix in flight: derive the id from what it identifies; then cohort-13 from a commit at or after the fix and
   the Dealer lane's Registry change, sealing in place with nothing stranded.
 - Cuts: `e3835694a`.
+
+### Lane map delta — 2026-09-02 21:00
+- FRAMEGUARD closed (`322ddc81`): `owed` attributes through each link's cargo path-dependency closure (12 links over 64
+  crates; dev edges excluded — following them put Trading inside the Claims closure); found the dealer accelerator compiles
+  Trading as an ordinary dependency, so a Trading change moves its frames. Owed at HEAD: `6ca28de0` (Structured), `1ceb6653`
+  (Dealer) — both told.
+- DIRECT successor (`005358ab`, `08e93424`): the deepest frame in the tree, resolution-proof's
+  `process_direct_funding_activation_v1`, **4,032 → 3,200** (its own split added zero bytes, measured); **the two payout
+  builders agree byte for byte** — the campaign now checks its hand-built frame against `build_wallet_terminal_payout_v3`
+  coordinate by coordinate before submitting the operator's; the one real difference is the operator refusing a cross-market
+  position OFFLINE where the campaign paid the chain; winning-position payout executes with the operator's instruction
+  (Claims 356,395 CU). Not yet on a bank whose Trading role is Trading (the campaign's role is a test caller wearing the hat —
+  adding the ELF changes nothing; making the ROLE real does) → next, then ActivateCapability founding + ProviderCallerV3::Trading.
+- Cuts: `2d1136c40`, `f74d6a6bd`.
