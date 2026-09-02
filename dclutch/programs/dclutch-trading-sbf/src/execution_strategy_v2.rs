@@ -63,6 +63,7 @@ impl From<ShadowAcceleratorAuthErrorV4> for TradingSbfError {
             ShadowAcceleratorAuthErrorV4::Release => Self::Release,
             ShadowAcceleratorAuthErrorV4::Content => Self::Content,
             ShadowAcceleratorAuthErrorV4::ReleaseSuperseded => Self::ReleaseSuperseded,
+            ShadowAcceleratorAuthErrorV4::DeploymentSlotMismatch => Self::DeploymentSlotMismatch,
         }
     }
 }

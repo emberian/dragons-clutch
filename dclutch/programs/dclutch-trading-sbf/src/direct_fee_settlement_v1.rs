@@ -107,6 +107,7 @@ use solana_sdk_ids::system_program;
 
 use crate::TradingSbfError;
 use crate::child_authority_v4::child_caller_authority_v4;
+use crate::child_refused_v1;
 
 /// The Custody `Transfer` frame this route carries verbatim, from its owner.
 const TRANSFER_FRAME: usize = TRANSFER_ACCOUNT_COUNT_V1 as usize;
@@ -734,7 +735,7 @@ fn invoke_custody(
         &infos,
         &[&[domain, release, market, role, context, digest, &bump_seed]],
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(child_refused_v1)?;
     Ok(())
 }
 

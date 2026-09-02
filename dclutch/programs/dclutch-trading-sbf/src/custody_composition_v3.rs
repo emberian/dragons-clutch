@@ -23,6 +23,7 @@ use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
+    child_refused_v1,
     hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
@@ -162,7 +163,7 @@ pub fn execute_custody_route_v3<'info>(
             custody_program.key,
             &[&[domain, release, market, role, context, digest, &bump_seed]],
         )
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(child_refused_v1)?;
     buffers.capture_return()?;
     if buffers.producer != *custody_program.key {
         return Err(TradingSbfError::Transition.into());

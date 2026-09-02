@@ -59,6 +59,7 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 
 use crate::TradingSbfError;
+use crate::child_refused_v1;
 
 /// Sole top-level generic Market founding instruction.
 pub const GENERIC_MARKET_FOUNDING_MAGIC_V3: [u8; 8] = *b"DCLTGMF3";
@@ -1224,8 +1225,7 @@ pub(crate) fn invoke_child<'info>(
     };
     let mut infos = accounts.to_vec();
     infos.push(child_program.clone());
-    invoke_signed(&instruction, &infos, &[signer_seeds])
-        .map_err(|_| TradingSbfError::Transition)?;
+    invoke_signed(&instruction, &infos, &[signer_seeds]).map_err(child_refused_v1)?;
     let (producer, returned) = get_return_data().ok_or(TradingSbfError::Transition)?;
     if producer != *child_program.key {
         return Err(TradingSbfError::Transition.into());

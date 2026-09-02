@@ -68,7 +68,7 @@ use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
-    TradingSbfError,
+    TradingSbfError, child_refused_v1,
     claims_composition_v3::signed_delta_post_resource_digest,
     dealer::{
         v3_obligation::{DealerObligationProjectionV3, stage_scenario_obligation_replacement_v3},
@@ -1694,7 +1694,7 @@ fn execute_dealer_scenario_claims_v1(
         &infos,
         &[&[domain, release, market, role, context, digest, &bump]],
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(child_refused_v1)?;
     let (producer, receipt_data) = get_return_data().ok_or(TradingSbfError::Transition)?;
     if producer != *claims_program.key {
         return Err(TradingSbfError::Transition.into());

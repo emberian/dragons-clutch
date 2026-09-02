@@ -129,6 +129,15 @@ fn authenticate_deployment_v2(
             RegistryContractError::ReleaseSupersededByUpgrade => {
                 ShadowAcceleratorAuthErrorV4::ReleaseSuperseded
             }
+            // A DISCARDED CAUSE IS A SEARCH, and after the 0012 ruling this
+            // cause is the whole argument: no hot route hashes an ELF, so a
+            // moved slot is the entire difference between the admitted artifact
+            // and a substituted one. Folding it into `Content` published a code
+            // with over two thousand sites for the single fact everything now
+            // rests on.
+            RegistryContractError::DeploymentSlotMismatch => {
+                ShadowAcceleratorAuthErrorV4::DeploymentSlotMismatch
+            }
             _ => ShadowAcceleratorAuthErrorV4::Content,
         })
 }

@@ -3233,3 +3233,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   inapplicable-by-construction. → CLASS-DELTA **`a0ad298ac91622479`**: `--declared-class-delta LABEL=I128` in the census,
   the simulator declaring the deltas it caused from the producer's manifest. Founding at 77 of ~186 tx (the frozen-table
   barriers cost the time, as expected).
+
+### Lane map delta — 2026-09-03 03:15
+- PHASE-CENSUS (`315f1931`, `7d24a851`, `4270eb65`, `d2195b57`, `20a45ea1`, `95dcc151`): **11 phase guards (10 Core, 1
+  Custody) are one constant each** — `MarketAdmissionV1`, a 15-bit set over (Phase, Readiness) indexed by the Lean-emitted
+  tags, behaviour identity asserted over all fifteen prestates; the census reads them structurally from the AST (12 gated
+  routes of 169; attribution stops at the next route handler); routes.md carries a `phase` column (empty = no gate read);
+  the SDK table `marketPhaseAdmissionV1.ts` is generated from routes.md with a --check twin; `evaluateCapabilityV1` returns
+  wrong-phase / needs-chain / no-phase-gate BY NAME (8 of 27 acts name a route, 4 gated). Owed: its own frame rows (told);
+  `market.found` reading READY on an open market is a context defect (`requiresMarket: false`) (told); the six-ELF
+  resolution-core-v3 runner (→ DIRECT); 22 acts and 11 programs still ungated.
+- Cuts: `02423de5c`, `578300a4e`, `378439d7c`.

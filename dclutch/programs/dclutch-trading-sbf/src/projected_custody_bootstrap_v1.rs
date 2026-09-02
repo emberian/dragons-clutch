@@ -82,6 +82,7 @@ use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::TradingSbfError;
+use crate::child_refused_v1;
 use crate::execution_strategy_v2::authenticate_activated_current_deployment;
 use crate::generic_market_founding_v1::{
     authenticate_instructions_sysvar_v1, authenticate_projected_lock_join_v1,
@@ -2479,7 +2480,7 @@ fn normalize_vacant_pda_lamports_v1<'info>(
             &transfer(payer.key, target.key, exact_lamports - observed),
             &[payer.clone(), target.clone(), system.clone()],
         )
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(child_refused_v1)?;
     } else if observed > exact_lamports {
         let bump_seed = [bump];
         let mut signer = Vec::with_capacity(seeds.len() + 1);
@@ -2490,7 +2491,7 @@ fn normalize_vacant_pda_lamports_v1<'info>(
             &[target.clone(), rent_credit.clone(), system.clone()],
             &[&signer],
         )
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(child_refused_v1)?;
     }
     if target.lamports() != exact_lamports {
         return Err(TradingSbfError::Transition.into());
@@ -2515,13 +2516,13 @@ fn allocate_and_assign_vacant_pda_v1<'info>(
         &[target.clone(), system.clone()],
         &[&signer],
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(child_refused_v1)?;
     invoke_signed(
         &assign(target.key, owner),
         &[target.clone(), system.clone()],
         &[&signer],
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(child_refused_v1)?;
     Ok(())
 }
 

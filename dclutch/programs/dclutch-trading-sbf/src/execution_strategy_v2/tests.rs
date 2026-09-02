@@ -704,6 +704,24 @@ fn hostile_certificate_admission_and_artifact_substitution_refuse() {
 
 #[test]
 fn current_loader_slot_elf_owner_link_and_immutability_are_mandatory() {
+    // THE ELF EQUALITY MOVED; IT WAS NOT DELETED. This case asserted
+    // `Content` because `authenticate_pinned_artifact` re-hashed the complete
+    // observed ELF on every action, so a flipped byte was caught here.
+    // `271ce0ed` stopped it doing that -- 370,983 CU of a 1,399,700 budget on
+    // one 744,840-byte accelerator, per action -- and `90a8563f` moved the
+    // comparison to the moment that can afford it: the Registry refuses to
+    // FINALIZE an `ArtifactRelease` whose `elf_digest` is not the digest of the
+    // bytes deployed at the address it names. `ProtocolInfrastructure.lean`'s
+    // `release_whose_elf_digest_differs_refuses` decides that case and
+    // `record_v1::release_finalization_corpus` replays it against the real
+    // adapter.
+    //
+    // So a lone flipped ELF byte is now invisible on this path, and saying so
+    // out loud is the point of keeping the case: the reader who wonders where
+    // the check went is told, and the pairing below is what stops this being a
+    // bare `is_ok()`. Under a real Loader those bytes cannot move without an
+    // `Upgrade`, and an `Upgrade` moves the slot -- which is the very next
+    // assertion.
     let elf = Fixture::new(StrategyDispositionV2::ShadowAot);
     fixture_account(&elf, SHADOW_ACCELERATOR_PROGRAMDATA)
         .try_borrow_mut_data()
@@ -711,8 +729,33 @@ fn current_loader_slot_elf_owner_link_and_immutability_are_mandatory() {
         .last_mut()
         .map(|byte| *byte ^= 1)
         .expect("ELF byte");
-    assert_eq!(elf.authenticate(), Err(TradingSbfError::Content));
+    assert!(
+        elf.authenticate().is_ok(),
+        "no hot route reads ELF bytes after 271ce0ed; the digest is bound at \
+         Registry finalization instead",
+    );
 
+    // And the same substitution WITH the slot moved -- which is the only way a
+    // Loader can actually deliver different bytes -- is refused by name. This
+    // is the conjunct that now carries the whole artifact argument, so it has
+    // its own discriminant rather than sharing `Content`'s two thousand sites.
+    let elf_and_slot = Fixture::new(StrategyDispositionV2::ShadowAot);
+    {
+        let programdata = fixture_account(&elf_and_slot, SHADOW_ACCELERATOR_PROGRAMDATA);
+        let mut bytes = programdata.try_borrow_mut_data().expect("ProgramData");
+        bytes.last_mut().map(|byte| *byte ^= 1).expect("ELF byte");
+        bytes.get_mut(4).map(|byte| *byte ^= 1).expect("slot byte");
+    }
+    assert_eq!(
+        elf_and_slot.authenticate(),
+        Err(TradingSbfError::DeploymentSlotMismatch),
+        "substituted bytes arrive with a moved slot, and the slot pin names it"
+    );
+
+    // An immutable release observed at any other slot is a substituted or
+    // wrong-generation observation, NOT an upgrade -- that partition is
+    // `SlotPin.slotRefusal`'s, and `supersession_names_only_forward_movement`
+    // proves the two are disjoint. The upgradeable case is the last one below.
     let slot = Fixture::new(StrategyDispositionV2::ShadowAot);
     fixture_account(&slot, SHADOW_ACCELERATOR_PROGRAMDATA)
         .try_borrow_mut_data()
@@ -720,7 +763,10 @@ fn current_loader_slot_elf_owner_link_and_immutability_are_mandatory() {
         .get_mut(4)
         .map(|byte| *byte ^= 1)
         .expect("slot byte");
-    assert_eq!(slot.authenticate(), Err(TradingSbfError::Content));
+    assert_eq!(
+        slot.authenticate(),
+        Err(TradingSbfError::DeploymentSlotMismatch)
+    );
 
     let mut owner = Fixture::new(StrategyDispositionV2::ShadowAot);
     fixture_account_mut(&mut owner, SHADOW_ACCELERATOR_PROGRAM).owner =

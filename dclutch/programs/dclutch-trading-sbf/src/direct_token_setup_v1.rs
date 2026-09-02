@@ -55,10 +55,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
-use crate::{
-    TradingSbfError, child_refused_v1,
-    execution_strategy_v2::authenticate_activated_current_deployment,
-};
+use crate::{TradingSbfError, execution_strategy_v2::authenticate_activated_current_deployment};
 
 const MARKET: usize = 0;
 const CORE_PROGRAM: usize = 1;
@@ -690,13 +687,13 @@ fn normalize_and_initialize_token(
             &[resource.clone(), refund.clone(), system.clone()],
             &[&signer_seeds],
         )
-        .map_err(child_refused_v1)?;
+        .map_err(|_| TradingSbfError::Transition)?;
     } else if normalization.payer_top_up != 0 {
         invoke(
             &transfer(payer.key, resource.key, normalization.payer_top_up),
             &[payer.clone(), resource.clone(), system.clone()],
         )
-        .map_err(child_refused_v1)?;
+        .map_err(|_| TradingSbfError::Transition)?;
     }
     for instruction in [
         allocate(

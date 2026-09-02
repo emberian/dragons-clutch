@@ -413,6 +413,47 @@ pub enum TradingSbfError {
     /// this one is arithmetic and width on a value the route computed itself,
     /// so it is a defect in this program far more often than a hostile input.
     Width = 0x4021,
+    /// A slot-pinned release's deployment slot is not the one it bound.
+    ///
+    /// Split out of [`Self::Content`] when the Hot path stopped hashing ELFs.
+    /// Before that, `authenticate_pinned_artifact` re-hashed the complete
+    /// observed ELF and a substituted artifact failed on the digest; now the
+    /// slot pin carries the whole argument (decision 0012), so slot equality is
+    /// the single fact standing between a hot route and different bytes at the
+    /// address its Certificate admitted. That fact was reaching the wire as
+    /// `Content`, which has over two thousand sites -- a hostile that moved a
+    /// slot had no word for what it had done.
+    ///
+    /// It is deliberately NOT [`Self::ReleaseSuperseded`]. Supersession is a
+    /// strictly LATER slot on a release that named an upgrade authority: a
+    /// substrate that legitimately moved and wants re-releasing. This is every
+    /// other disagreement -- an immutable release observed at any other slot,
+    /// or an upgradeable one observed earlier -- which is a substituted, stale
+    /// or wrong-generation observation and wants investigating, not
+    /// re-releasing. `ProtocolInfrastructure.lean`'s `SlotPin.slotRefusal`
+    /// owns that partition and `supersession_names_only_forward_movement`
+    /// proves the two are disjoint.
+    DeploymentSlotMismatch = 0x4022,
+    /// An invoked child program refused, and its own code is in the log above.
+    ///
+    /// Split out of [`TradingSbfError::Transition`], and the reason that split
+    /// was worth doing at all. `invoke`/`invoke_signed` returns the CHILD's
+    /// `ProgramError` -- for a first-party child a namespaced `Custom(0x…)`
+    /// this tree reads at a glance -- and `map_err(|_| Transition)` threw it
+    /// away seventeen times, so a Claims, Custody, Core, Resolution or System
+    /// refusal arrived at the caller as one of several hundred sites that
+    /// publish `Transition`, and locating it meant a bisect.
+    ///
+    /// It does not restate the child's cause, and that is deliberate: a u32
+    /// cannot carry another program's band as well as its own, and
+    /// re-publishing the child's `Custom` under Trading's name would put a
+    /// `0x5xxx` where decision 0007 says a `0x4xxx` belongs. It says WHICH
+    /// SIDE of the CPI boundary the cause is on -- the fact a bisect of this
+    /// route has to establish first -- and [`child_refused_v1`] writes the
+    /// child's packed code into the log on the way past, so the reader does
+    /// not have to reconstruct it from a runtime line that exists only for
+    /// `Custom`.
+    ChildRefused = 0x4023,
 }
 
 impl TradingSbfError {
@@ -422,7 +463,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 36] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -457,6 +498,8 @@ impl TradingSbfError {
         Self::AccountData,
         Self::ChildReceipt,
         Self::Width,
+        Self::DeploymentSlotMismatch,
+        Self::ChildRefused,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -500,6 +543,8 @@ impl TradingSbfError {
             Self::AccountData => 31,
             Self::ChildReceipt => 32,
             Self::Width => 33,
+            Self::DeploymentSlotMismatch => 34,
+            Self::ChildRefused => 35,
         }
     }
 }
@@ -557,6 +602,24 @@ impl From<TradingSbfError> for ProgramError {
     fn from(value: TradingSbfError) -> Self {
         Self::Custom(value as u32)
     }
+}
+
+/// Name the child's own refusal in the log, then publish this program's family.
+///
+/// The one `map_err` in this program allowed to discard its cause, because it
+/// writes the cause down first. `u64::from(ProgramError)` is the runtime's own
+/// packing -- a `Custom(c)` becomes `c` and every builtin variant becomes its
+/// reserved high-bit code -- so one line covers a first-party child's
+/// namespaced refusal and the System program's alike, which the runtime's own
+/// `custom program error:` line does not: that line exists only for `Custom`,
+/// and four of these sites invoke System.
+///
+/// `#[inline(never)]` because seventeen call sites do not each need their own
+/// copy of a formatter, and a frame that carries one is better paid for once.
+#[inline(never)]
+pub(crate) fn child_refused_v1(error: ProgramError) -> ProgramError {
+    solana_program::msg!("Trading: the child refused {:#x}", u64::from(error));
+    TradingSbfError::ChildRefused.into()
 }
 
 use crate::admitted_composition_v3::ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4;

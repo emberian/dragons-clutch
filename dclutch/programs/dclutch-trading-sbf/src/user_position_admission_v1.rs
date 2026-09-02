@@ -31,6 +31,7 @@ use solana_program::{
 };
 
 use crate::TradingSbfError;
+use crate::child_refused_v1;
 
 /// Execute one exact wallet-authorized User Position admission or close.
 #[inline(never)]
@@ -104,7 +105,7 @@ pub fn process_user_position_admission_v1(
         &infos,
         &[&[domain, release, market, role, context, digest, &bump_seed]],
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(child_refused_v1)?;
 
     let (producer, receipt) = get_return_data().ok_or(TradingSbfError::Transition)?;
     if producer != *claims_program.key {

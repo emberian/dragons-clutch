@@ -38,6 +38,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 
 use crate::TradingSbfError;
+use crate::child_refused_v1;
 
 /// Exact top-level account count: the thirteen-account Custody frame followed
 /// by the executable Custody program.
@@ -511,7 +512,7 @@ fn invoke_custody(
         &infos,
         &[&[domain, release, market, role, context, digest, &bump_seed]],
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(child_refused_v1)?;
     Ok(())
 }
 

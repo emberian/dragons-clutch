@@ -63,6 +63,11 @@ pub enum ShadowAcceleratorAuthErrorV4 {
     ///
     /// Mirrors `TradingSbfError::ReleaseSuperseded` (decision 0012).
     ReleaseSuperseded = 0x4007,
+    /// The observed slot is not the bound one, and it is not an upgrade.
+    ///
+    /// Mirrors `TradingSbfError::DeploymentSlotMismatch`, which carries the
+    /// argument for why the two slot disagreements are named apart.
+    DeploymentSlotMismatch = 0x4022,
 }
 
 impl From<ShadowAcceleratorAuthErrorV4> for ProgramError {

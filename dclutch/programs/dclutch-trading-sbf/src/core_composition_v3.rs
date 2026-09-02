@@ -38,6 +38,7 @@ use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
+    child_refused_v1,
     hot_v3::{BorrowedRouteRangesV4, ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
@@ -244,7 +245,7 @@ pub(crate) fn execute_core_route_v3<'info>(
                     core_program.key,
                     &[&[domain, release, market, role, context, digest, &bump_seed]],
                 )
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(child_refused_v1)?;
             buffers.capture_return()?;
             if buffers.producer != *core_program.key {
                 return Err(TradingSbfError::Transition.into());
@@ -291,7 +292,7 @@ pub(crate) fn execute_core_route_v3<'info>(
             buffers.push_callee(core_program)?;
             buffers
                 .invoke(core_program.key, &[])
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(child_refused_v1)?;
             // Core permit expiry deliberately returns no DTO. A nonempty OR
             // merely present return channel is a substituted callee outcome;
             // it cannot be laundered into the common receipt bank.
@@ -346,7 +347,7 @@ pub(crate) fn execute_core_route_v3<'info>(
                     core_program.key,
                     &[&[domain, release, market, role, context, digest, &bump_seed]],
                 )
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(child_refused_v1)?;
             if solana_program::program::get_return_data().is_some() {
                 return Err(TradingSbfError::Transition.into());
             }

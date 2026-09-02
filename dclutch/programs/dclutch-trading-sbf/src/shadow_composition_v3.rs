@@ -25,6 +25,7 @@ use solana_program::{
 };
 
 use crate::TradingSbfError;
+use crate::child_refused_v1;
 
 const SHADOW_ACK_TRANSCRIPT_DOMAIN_V3: &[u8] = b"dclutch:hot-shadow-ack:v3";
 
@@ -118,7 +119,7 @@ pub(crate) fn execute_shadow_aot_v3<'info>(
         &infos,
         &[&[domain, release, market, role, context, digest, &bump_seed]],
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(child_refused_v1)?;
     let (producer, ack_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
     if producer != *frame.accelerator_program.key || ack_bytes.len() != SHADOW_ACK_BYTES_V3 {
         return Err(TradingSbfError::Transition.into());
