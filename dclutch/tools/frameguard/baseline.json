@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "5ace0cc8f6fc9d9b066a32558a3f4e36d42e667d",
+  "commit": "ac6893e327e6257a433713edfbed16ee066e7d05",
   "link_count": 12,
   "links": [
     {
@@ -9896,7 +9896,7 @@
         },
         {
           "frames_bytes": [
-            0,
+            64,
             0
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v326scratch_bank_from_slice_v117h<hash>E"

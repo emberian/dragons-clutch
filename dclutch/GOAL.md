@@ -3204,3 +3204,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the resolution. The inline-input OpenBatch (a517d27c, 19 minutes after the pin) is cohort-14's — an in-place Trading upgrade
   would recreate cohort-12's defect; the General-manifest founding and an OpenBatch attempt against cohort-13's bytes are
   recorded as findings either way.
+
+### Lane map delta — 2026-09-03 01:45
+- STRUCTURED (`1accf9e7`, `a416cd8b`, `ac6893e3`, `8e71271a`): the "soundness gap" was NAMING — the chain refused the substituted
+  Mint as `Identity 0x5002` all along; now `ReceiptAlias 0x500F` over the presented accounts before any derivation, the grammar
+  conjunct restored with its second operand, three hostiles restored (campaign, Bearer, browser `distinct`). **Witnesses
+  re-pinned from a green run: 47/47, no transaction over 1,232 in either campaign**, both exclusion lists deleted; a witness
+  whose `> 1232` filter returned null when nothing was over went red saying "expected 1397, chain says null". `run-structured.sh`
+  ran two of three tests — a `cargo test` filter matching nothing reports success. `Transition` split: 80 sites → `AccountData
+  0x401F`, `ChildReceipt 0x4020`, `Width 0x4021` (twelve regex hits corrected by reading); 19 `ChildRefused` invoke sites next.
+  Frameguard green; `prepare_and_execute`'s 3,456 is the v3 design and the eighth-largest frame, not the binding one.
+  Two trading lib tests red on main → DIRECT (`semantic_join…`) and DEALER (`current_loader_slot…`).
+- Cuts: `0e730bf8c`, `d8adf018c`, `7aaa6c36d`.
