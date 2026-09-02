@@ -1,0 +1,52 @@
+# What CI does with each root-workspace package clippy still refuses.
+#
+# columns: status	package	lints	sites	owner	note
+#
+# `cargo clippy --workspace --all-targets -- -D warnings` is printed at
+# README.md:183 and its deny table lives at Cargo.toml:119, and until
+# `tools/ci/run.sh clippy` existed NO TIER RAN IT -- the table was enforced by a
+# human typing that line. 1bdf5572f found a red that had survived a day, and
+# named this as the debt it was evidence of.
+#
+# THE FIRST FULL CENSUS, at the commit that added this file, found reds in 44 of
+# 105 workspace members, and 69 members that clippy NEVER REACHED because a
+# package they depend on was red -- `--keep-going` builds what it can and stops
+# at a red lib, so a red kernel hides everything above it. That is why this file
+# is a debt list and not a quarantine of individual lints: the unit that matters
+# is the PACKAGE, because a red package is what blinds the tier.
+#
+# STATUS:
+#   debt        is RED today and must STAY red. A `debt` package that goes GREEN
+#               fails this tier BY NAME -- the fix landed and the row is now
+#               stale coverage. Delete the row in the commit that fixed it.
+#               Every other package must be clean; a red one with no row here
+#               fails the tier, which is the ratchet.
+#
+# THE `sites` NUMBER IS NOT A GATE and is deliberately not compared. It is the
+# size of the debt when the row was written, so a reader can see whether a row
+# is one line or fifty without running anything. The gate is the package's
+# red/green, which cannot drift.
+#
+# `owner` is the LAST COMMIT to touch the file, and its `Lane:` trailer where it
+# has one. Commits before 2026-09-02 carry no trailer (`tools/lane.sh` began
+# writing it that day), so an older row names a commit and not a lane. It is a
+# starting point for whoever picks the row up, not an accusation.
+#
+# WHY THESE WERE NOT FIXED IN THE SAME COMMIT, in one sentence each, in the note
+# column. Three shapes recur: a live lane holds the file (the CI lane does not
+# edit another lane's working file), the lint is a design question whose answer
+# is not a lint fix, or the finding is a REAL DEFECT that belongs to whoever
+# knows the code -- `dead_code` on a test function is a test that does not run,
+# and no lint lane should decide whether to delete it or wire it up.
+status	package	lints	sites	owner	note
+debt	dclutch-bearer-v2-operator	single_element_loop,type_complexity	5	9785fd923	four `for x in [one]` loops and one four-tuple; both are shape questions for the operator that wrote them
+debt	dclutch-chain-bundle-builder	unused_imports	1	efca69663	an unused `ProgramV3 as EffectBaseV3` in the Trading bundle-builder, whose program-test lane is live
+debt	dclutch-claims-sbf	cast_possible_truncation,indexing_slicing	5	9438c8a1b	two sites are in rational_representation_v2.rs, which a live lane holds uncommitted; the const-block rewrite that fixed the other twelve programs was reverted there for that reason
+debt	dclutch-core-sbf	manual_contains	1	3b98ea3a9	one `iter().any(|x| x == k)` in the capability route
+debt	dclutch-custody-sbf	dead_code,indexing_slicing,large_enum_variant,manual_range_patterns	8	45b48a43e	the length-collision const block is a FOUR-deep nested index loop, not the one-deep `::ALL` walk the other twelve programs took; and `has_duplicate_keys` is dead -- a helper nothing calls, which is a finding for the dealer-reservation owner
+debt	dclutch-dealer-codec	type_complexity	1	dcfb7debb	the DEALER lane committed this file 1h50m before the census; its test case table wants a type alias, which is DEALER's line to write
+debt	dclutch-direct-codec	format_in_format_args,identity_op,indexing_slicing,unused_imports	10	993744360	six fixed-offset writes in two settlement encoders, plus two `+ 0` coordinates that may be documenting a layout; the Direct layer lane owns the wire
+debt	dclutch-product-runtime-v2-operator	too_many_arguments,useless_vec	2	874e6c34c	one authoring entry point and one `vec!` where an array would do
+debt	dclutch-rational-lifecycle-hot-v3	dead_code,unused_imports	6	5ef8a2217	FIVE dead items inside a `#[cfg(test)]` module, one of them named `the_compact_retire_receipt_artifacts_are_market_neutral` -- a TEST FUNCTION NOTHING RUNS. Deleting it and wiring it up are different answers and only its author knows which
+debt	dclutch-relay-contract	cast_possible_truncation,indexing_slicing,items_after_test_module,manual_contains	10	874e6c34c	two `usize as u16` wire widths that want a proven const, and production items declared below the test module
+debt	dclutch-resolution-core-v3-operator	manual_range_patterns	1	30be79b1d	one `0 | 1 | 2` that clippy would rather see as `0..=2`

@@ -791,7 +791,11 @@ impl U256 {
 
     fn digit32(self, index: usize) -> Result<u32, Error> {
         let limb = *self.0.get(index / 2).ok_or(Error::ArithmeticOverflow)?;
-        let shifted = if index % 2 == 0 { limb } else { limb >> 32 };
+        let shifted = if index.is_multiple_of(2) {
+            limb
+        } else {
+            limb >> 32
+        };
         u32::try_from(shifted & u64::from(u32::MAX)).map_err(|_| Error::ArithmeticOverflow)
     }
 }

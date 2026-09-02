@@ -120,6 +120,112 @@ export function auditAgainstBaseline(gating, baseline) {
   return failures;
 }
 
+/**
+ * Every `lib/generated/` module, paired with the `abi:*:verify` that byte-checks
+ * it.
+ *
+ * The hand-mirror survey above SKIPS `lib/generated/` on purpose: a fact stated
+ * there is stated by its authority. That leaves the question it cannot ask --
+ * whether the generated module HAS an authority. AGENTS.md's words: "every
+ * generated module carries an `abi:*:verify` that `npm test` runs, so a surface
+ * with neither is a surface with no authority behind it."
+ *
+ * `packages/dclutch-sdk/lib/generated/routeCensus.ts` sat exactly that way. It
+ * had no generator and no verify in its own package; the only thing holding it
+ * to anything was the web tree's byte-identity test, and on 2026-09-02 the two
+ * copies were found stale by DIFFERENT amounts, having drifted apart through a
+ * program edit with one gate noticing (2fe2b9f84). Neither tree's coverage
+ * census named the file at all, which is the hole this arm closes.
+ *
+ * A verifier is resolved in three steps, because one generator legitimately
+ * writes into both trees:
+ *   1. an `abi:*:verify` in THIS package whose command names the module --
+ *      the Lean-emitted modules pass their output path to `lean-emit.mjs`, so
+ *      for those the path is an argument rather than the script;
+ *   2. one whose GENERATOR SOURCE names the module;
+ *   3. one in the SIBLING tree whose generator source names THIS tree's path.
+ *      `generate-source-provider-wasm.mjs` writes the web module and the SDK
+ *      module in a single run, and a second script here would be a second
+ *      author for a file that already has one.
+ */
+const TREES = ['apps/dclutch-web', 'packages/dclutch-sdk'];
+const repoRoot = join(webRoot, '..', '..');
+
+function scriptsOf(root) {
+  try {
+    return JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function sourceOf(root, command) {
+  const parts = command.split(/\s+/);
+  const script = parts.find((part) => part.endsWith('.mjs'));
+  if (script === undefined) return '';
+  try {
+    return readFileSync(join(root, script), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/** The `abi:<name>:verify` that byte-checks one generated module, and where it lives. */
+function verifierFor(module, ownScripts, siblingRoot, siblingScripts) {
+  for (const [name, command] of Object.entries(ownScripts)) {
+    if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
+    if (command.includes(module)) return { verify: name, tree: 'this package' };
+  }
+  for (const [name, command] of Object.entries(ownScripts)) {
+    if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
+    if (sourceOf(webRoot, command).includes(module)) return { verify: name, tree: 'this package' };
+  }
+  if (siblingRoot !== null) {
+    // The sibling generator names this tree's file by its REPO-RELATIVE path,
+    // which is the spelling `generate-source-provider-wasm.mjs` writes.
+    const fromRepo = relative(repoRoot, join(webRoot, module)).split('\\').join('/');
+    for (const [name, command] of Object.entries(siblingScripts)) {
+      if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
+      if (sourceOf(siblingRoot, command).includes(fromRepo)) {
+        return { verify: name, tree: relative(repoRoot, siblingRoot) };
+      }
+    }
+  }
+  return { verify: null, tree: null };
+}
+
+/**
+ * Survey `lib/generated/`, newest question first: does each module have a
+ * verifier, and whose.
+ */
+export function surveyGeneratedAuthorities() {
+  const here = TREES.find((tree) => join(repoRoot, tree) === join(webRoot, '.').replace(/\/\.$/, ''))
+    ?? TREES.find((tree) => webRoot.replace(/\/$/, '').endsWith(tree));
+  const siblingName = TREES.find((tree) => tree !== here) ?? null;
+  const siblingRoot = siblingName === null ? null : join(repoRoot, siblingName);
+  const ownScripts = scriptsOf(webRoot);
+  const siblingScripts = siblingRoot === null ? {} : scriptsOf(siblingRoot);
+  const directory = join(webRoot, GENERATED);
+  let entries = [];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !entry.name.endsWith('.d.ts'))
+    .map((entry) => `${GENERATED}/${entry.name}`.split('\\').join('/'))
+    .sort()
+    .map((module) => ({ module, ...verifierFor(module, ownScripts, siblingRoot, siblingScripts) }));
+}
+
+/** A generated module with no verifier anywhere is a surface with no authority. */
+export function auditGeneratedAuthorities(rows) {
+  return rows
+    .filter((row) => row.verify === null)
+    .map((row) => `${row.module} is generated and NOTHING verifies it: no abi:*:verify in this package names it, and no generator in the twin tree writes it`);
+}
+
 export function readBaseline() {
   return JSON.parse(readFileSync(baselinePath, 'utf8'));
 }
@@ -147,14 +253,26 @@ function main() {
   for (const [path, count] of Object.entries(gating.offsets).sort((left, right) => right[1] - left[1])) {
     console.log(`  offsets ${String(count).padStart(4)}  ${path}`);
   }
-  const failures = auditAgainstBaseline(gating, readBaseline());
+  const authorities = surveyGeneratedAuthorities();
+  console.log(`\nGenerated modules and the verify that byte-checks each -- ${authorities.length} of them\n`);
+  for (const row of authorities) {
+    console.log(`  ${row.verify === null ? 'NO AUTHORITY' : row.verify.padEnd(36)}  ${row.module}${row.tree !== null && row.tree !== 'this package' ? `  (in ${row.tree})` : ''}`);
+  }
+
+  const failures = [
+    ...auditAgainstBaseline(gating, readBaseline()),
+    ...auditGeneratedAuthorities(authorities),
+  ];
   if (failures.length > 0) {
     console.error(`\n${failures.length} inventory change(s):`);
     for (const failure of failures) console.error(`  ${failure}`);
     console.error('\nConvert the surface, or run `npm run abi:coverage -- --write` if the baseline shrank.');
+    console.error('A module with NO AUTHORITY needs a generator and an `abi:<name>:verify` in');
+    console.error('this package -- or, if a twin-tree generator already writes it, nothing but');
+    console.error('that generator naming this path.');
     process.exit(1);
   }
-  console.log('\ninventory matches its baseline');
+  console.log('\ninventory matches its baseline, and every generated module has a verifier');
 }
 
 if (process.argv[1] && process.argv[1].endsWith('abi-coverage.mjs')) main();

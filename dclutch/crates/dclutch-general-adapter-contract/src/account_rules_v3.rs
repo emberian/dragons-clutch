@@ -2426,6 +2426,8 @@ const fn opaque_rule(privileges: AccountPrivilegesV2) -> AccountRuleWithPrestate
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic)]
+
     extern crate std;
 
     use dclutch_account_profile_contract::lifecycle_v3::encode::LifecycleSeedInputV3;

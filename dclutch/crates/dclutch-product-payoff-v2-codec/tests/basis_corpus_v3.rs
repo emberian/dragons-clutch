@@ -14,6 +14,8 @@
 //! turned only a single reserved-zero check red while every payout assertion
 //! stayed green.
 
+#![allow(clippy::indexing_slicing, clippy::panic)]
+
 use dclutch_product_payoff_v2_codec::runtime_v3::{
     BASIS_PAYOUT_SCALE_OFFSET_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
 };

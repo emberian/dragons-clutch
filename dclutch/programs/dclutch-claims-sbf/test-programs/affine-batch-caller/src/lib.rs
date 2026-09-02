@@ -93,16 +93,17 @@ const _: () = {
             == dclutch_refusal_registry::TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE,
         "AffineBatchTestCallerError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < AffineBatchTestCallerError::ALL.len() {
-        let variant = AffineBatchTestCallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = AffineBatchTestCallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "AffineBatchTestCallerError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
             variant as u32
-                == dclutch_refusal_registry::TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE + index as u32,
+                == dclutch_refusal_registry::TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE + index,
             "AffineBatchTestCallerError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -112,6 +113,7 @@ const _: () = {
             "AffineBatchTestCallerError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

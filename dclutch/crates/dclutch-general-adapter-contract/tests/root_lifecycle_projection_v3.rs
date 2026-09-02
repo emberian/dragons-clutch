@@ -21,6 +21,8 @@
 //! of fixture support in `program-test/direct-hot` -- and none of it exists for
 //! General yet.
 
+#![allow(clippy::panic)]
+
 use dclutch_account_profile_contract::{
     AccountObservationV1,
     v2::{

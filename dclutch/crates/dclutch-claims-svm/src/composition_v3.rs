@@ -10,6 +10,7 @@
 
 use dclutch_effect_kernel::v2::FixedRole;
 use dclutch_effect_kernel::v3::{ProgramV3, RouteKindV3};
+use dclutch_effect_kernel::v4::ProgramV4;
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
@@ -158,6 +159,7 @@ impl<'a> ClaimsCompositionV3<'a> {
     ) -> Result<Self, ClaimsCompositionErrorV3> {
         Self::decode_selected_with_witness(
             effect,
+            None,
             tail_count,
             scalars,
             identities,
@@ -172,6 +174,7 @@ impl<'a> ClaimsCompositionV3<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn decode_selected_with_witness(
         effect: ProgramV3<'_>,
+        successor: Option<ProgramV4<'_>>,
         tail_count: u32,
         scalars: &[u64],
         identities: &[[u8; 32]],
@@ -181,6 +184,7 @@ impl<'a> ClaimsCompositionV3<'a> {
     ) -> Result<Self, ClaimsCompositionErrorV3> {
         Self::decode_selected_with_external(
             effect,
+            successor,
             tail_count,
             scalars,
             identities,
@@ -193,8 +197,17 @@ impl<'a> ClaimsCompositionV3<'a> {
 
     /// Decode with one exact family-owned atomic mutation admitted by its caller.
     #[allow(clippy::too_many_arguments)]
+    /// `successor` is the Effect V4 the routes were resolved through, when the
+    /// family executes one. A borrowed witness reaches a Claims route in two
+    /// spellings -- V3's per-route `borrows_witness` bit, and V4's borrowed
+    /// range bound to the route -- and this decoder read only the first, so a
+    /// successor's mutation route was handed the EMPTY bank slice and every
+    /// `SIGNED_DELTA_PLAN_MAGIC_V3` arm below was unreachable for it. Passing
+    /// `None` keeps the V3-only reading, which is what every caller that has no
+    /// successor means.
     pub fn decode_selected_with_external(
         effect: ProgramV3<'_>,
+        successor: Option<ProgramV4<'_>>,
         tail_count: u32,
         scalars: &[u64],
         identities: &[[u8; 32]],
@@ -239,7 +252,19 @@ impl<'a> ClaimsCompositionV3<'a> {
                 let invocation = effect
                     .resolved_invocation(route_index, 0, tail_count, scalars, identities)
                     .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)?;
-                let request = claims_request(invocation, request_bank, family_request)?;
+                // ONE resolution of "what this route borrows", in either
+                // spelling, and every guard below reads it instead of the V3
+                // bit. Adding a second reader per guard is how the two
+                // spellings would drift apart again.
+                let borrowed = resolved_route_borrow_v3(
+                    invocation,
+                    successor,
+                    route_index,
+                    tail_count,
+                    scalars,
+                    family_request,
+                )?;
+                let request = claims_request(invocation, request_bank, borrowed)?;
                 if request.get(..8) == Some(PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice()) {
                     if route.kind() != RouteKindV3::Once {
                         return Err(ClaimsCompositionErrorV3::Route);
@@ -253,7 +278,7 @@ impl<'a> ClaimsCompositionV3<'a> {
                     if invocation.fixed_account_count != expected_accounts
                         || invocation.item_account_count != 0
                         || invocation.repeated_item_count != 0
-                        || invocation.borrowed_witness.is_some()
+                        || borrowed.is_some()
                     {
                         return Err(ClaimsCompositionErrorV3::Route);
                     }
@@ -299,7 +324,7 @@ impl<'a> ClaimsCompositionV3<'a> {
                     if route.kind() != RouteKindV3::Once
                         || state != CompositionStateV3::Start
                         || invocation.request_len != 0
-                        || invocation.borrowed_witness.is_none()
+                        || borrowed.is_none()
                     {
                         return Err(ClaimsCompositionErrorV3::Order);
                     }
@@ -344,7 +369,14 @@ impl<'a> ClaimsCompositionV3<'a> {
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
                 } else if request.get(..8) == Some(CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice()) {
-                    validate_founding_route(route.kind(), state, invocation, request, parent)?;
+                    validate_founding_route(
+                        route.kind(),
+                        state,
+                        invocation,
+                        borrowed.is_some(),
+                        request,
+                        parent,
+                    )?;
                     founding = Some(request);
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
@@ -353,6 +385,7 @@ impl<'a> ClaimsCompositionV3<'a> {
                         route.kind(),
                         state,
                         invocation,
+                        borrowed.is_some(),
                         request,
                         parent,
                     )?;
@@ -364,6 +397,7 @@ impl<'a> ClaimsCompositionV3<'a> {
                         route.kind(),
                         state,
                         invocation,
+                        borrowed.is_some(),
                         request,
                         parent,
                     )?;
@@ -376,7 +410,7 @@ impl<'a> ClaimsCompositionV3<'a> {
                         || invocation.fixed_account_count != admitted.fixed_account_count
                         || invocation.item_account_count != 0
                         || invocation.repeated_item_count != 0
-                        || invocation.borrowed_witness.is_some()
+                        || borrowed.is_some()
                         || external_once.is_some()
                     {
                         return Err(ClaimsCompositionErrorV3::Route);
@@ -519,10 +553,53 @@ enum CompositionStateV3 {
     Closed,
 }
 
+/// The bytes one route borrows from the family request, in either spelling.
+///
+/// V3 resolves the route's `borrows_witness` bit into
+/// [`dclutch_effect_kernel::v3::ResolvedInvocationV3::borrowed_witness`]; the
+/// V4 successor declares a range in the Effect's own borrowed-range table,
+/// bound to this route. They name the same kind of fact and a route carrying
+/// BOTH is refused here, which is the same accusation
+/// `require_borrowed_witness_coverage_v3` makes before any child runs.
+fn resolved_route_borrow_v3<'a>(
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    successor: Option<ProgramV4<'_>>,
+    route_index: u16,
+    tail_count: u32,
+    scalars: &[u64],
+    family_request: &'a [u8],
+) -> Result<Option<&'a [u8]>, ClaimsCompositionErrorV3> {
+    let legacy = invocation
+        .borrowed_witness
+        .map(|witness| {
+            witness
+                .slice(family_request)
+                .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)
+        })
+        .transpose()?;
+    let Some(program) = successor else {
+        return Ok(legacy);
+    };
+    let count = program
+        .borrowed_range_count_for_route(route_index)
+        .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)?;
+    match (legacy, count) {
+        (legacy, 0) => Ok(legacy),
+        (None, 1) => Ok(Some(
+            program
+                .resolved_borrowed_range_for_tail(route_index, 0, tail_count, scalars)
+                .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)?
+                .slice(family_request)
+                .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)?,
+        )),
+        (None, _) | (Some(_), _) => Err(ClaimsCompositionErrorV3::Route),
+    }
+}
+
 fn claims_request<'a>(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     request_bank: &'a [u8],
-    family_request: &'a [u8],
+    borrowed: Option<&'a [u8]>,
 ) -> Result<&'a [u8], ClaimsCompositionErrorV3> {
     let end = invocation
         .request_offset
@@ -531,11 +608,9 @@ fn claims_request<'a>(
     let fixed = request_bank
         .get(invocation.request_offset..end)
         .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
-    match invocation.borrowed_witness {
+    match borrowed {
         None => Ok(fixed),
-        Some(witness) if fixed.is_empty() => witness
-            .slice(family_request)
-            .map_err(|_| ClaimsCompositionErrorV3::EffectProgram),
+        Some(request) if fixed.is_empty() => Ok(request),
         Some(_) => Err(ClaimsCompositionErrorV3::Route),
     }
 }
@@ -623,6 +698,7 @@ fn validate_founding_route(
     kind: RouteKindV3,
     state: CompositionStateV3,
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    borrows: bool,
     request: &[u8],
     parent: ClaimsCompositionParentV3,
 ) -> Result<(), ClaimsCompositionErrorV3> {
@@ -635,7 +711,7 @@ fn validate_founding_route(
     if invocation.fixed_account_count != CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5
         || invocation.item_account_count != 0
         || invocation.repeated_item_count != 0
-        || invocation.borrowed_witness.is_some()
+        || borrows
     {
         return Err(ClaimsCompositionErrorV3::Route);
     }
@@ -647,6 +723,7 @@ fn validate_rational_representation_route(
     kind: RouteKindV3,
     state: CompositionStateV3,
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    borrows: bool,
     request: &[u8],
     parent: ClaimsCompositionParentV3,
 ) -> Result<(), ClaimsCompositionErrorV3> {
@@ -664,7 +741,7 @@ fn validate_rational_representation_route(
     {
         return Err(ClaimsCompositionErrorV3::ParentBinding);
     }
-    if invocation.borrowed_witness.is_some() {
+    if borrows {
         return Err(ClaimsCompositionErrorV3::Route);
     }
     // ONE RULE FOR BOTH ACTION SHAPES, and it is request-bound.
@@ -721,6 +798,7 @@ fn validate_rational_lifecycle_route(
     kind: RouteKindV3,
     state: CompositionStateV3,
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    borrows: bool,
     request: &[u8],
     parent: ClaimsCompositionParentV3,
 ) -> Result<(), ClaimsCompositionErrorV3> {
@@ -751,7 +829,7 @@ fn validate_rational_lifecycle_route(
     if usize::from(invocation.fixed_account_count) != expected_accounts
         || invocation.item_account_count != 0
         || invocation.repeated_item_count != 0
-        || invocation.borrowed_witness.is_some()
+        || borrows
     {
         return Err(ClaimsCompositionErrorV3::Route);
     }
@@ -1399,6 +1477,7 @@ mod tests {
         let effect = ProgramV3::decode(&effect_bytes).expect("signed EffectProgram");
         let composition = ClaimsCompositionV3::decode_selected_with_witness(
             effect,
+            None,
             0,
             &[1, 480, u64::try_from(family.len() - 480).expect("witness")],
             &[id(50)],
@@ -1419,6 +1498,7 @@ mod tests {
         assert_eq!(
             ClaimsCompositionV3::decode_selected_with_witness(
                 ProgramV3::decode(&wrong_frame).expect("structural effect"),
+                None,
                 0,
                 &[1, 480, u64::try_from(family.len() - 480).expect("witness")],
                 &[id(50)],
@@ -1448,6 +1528,7 @@ mod tests {
         let admitted = ClaimsExternalOnceV3::new(&external_request, 31).expect("external");
         let composition = ClaimsCompositionV3::decode_selected_with_external(
             ProgramV3::decode(&effect_bytes).expect("effect"),
+            None,
             TAIL_COUNT,
             &[1],
             &[id(40)],
@@ -1470,6 +1551,7 @@ mod tests {
             assert_eq!(
                 ClaimsCompositionV3::decode_selected_with_external(
                     ProgramV3::decode(&effect_bytes).expect("effect"),
+                    None,
                     TAIL_COUNT,
                     &[1],
                     &[id(40)],
@@ -1486,6 +1568,7 @@ mod tests {
         assert_eq!(
             ClaimsCompositionV3::decode_selected_with_external(
                 ProgramV3::decode(&twice).expect("effect"),
+                None,
                 TAIL_COUNT,
                 &[1],
                 &[id(40)],

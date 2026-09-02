@@ -1438,6 +1438,138 @@ EOF
 # from their `[workspace]` tables is what `check-all-workspaces.py` does, and it
 # stays the cut tier for that reason. This one is the cheap net under the root
 # and the genuine standalone roots, not a replacement for it.
+# ---------------------------------------------------------------------------
+# clippy -- the deny table at Cargo.toml:119, enforced by something other than a
+# human typing README.md:183.
+#
+# THE HOLE THIS FILLS. `[workspace.lints.clippy]` denies seven lints --
+# `unwrap_used`, `panic`, `indexing_slicing`, `float_arithmetic`,
+# `cast_possible_truncation`, `cast_sign_loss`, `checked_conversions` -- and
+# README.md publishes `cargo clippy --workspace --all-targets -- -D warnings` as
+# a workspace check. NOTHING RAN IT. This runner dispatched fifteen tiers and
+# not one invoked clippy; `workspaces` runs `cargo check`, which cannot see a
+# lint. The only `cargo clippy` anywhere in the tree was
+# tools/direct-translation-validator/check.sh, over a different workspace. So a
+# red survived a day (1bdf5572f, which named this as the debt it was evidence
+# of) and the first full census found reds in 44 of 105 members.
+#
+# THE PACKAGE IS THE UNIT, and that is the load-bearing decision. `--keep-going`
+# checks everything whose dependencies compiled and stops at a red library, so
+# ONE red kernel hides every package above it: the first census reached 30 of
+# 105 members and was blind to 69, which is not a fact a per-lint quarantine
+# would have made visible. `clippy-census.py` therefore reports three sets --
+# clean, red, and NEVER REACHED -- and the third is printed on every run,
+# because "we did not look" and "we looked and it was fine" are different
+# answers and this file's exit codes exist to keep them apart.
+#
+# ITS OWN TARGET DIRECTORY, and this is not tidiness. `cargo clippy` sets
+# `RUSTC_WORKSPACE_WRAPPER`, which is part of every workspace member's
+# fingerprint, so alternating clippy and `cargo check` in one target directory
+# rebuilds all 105 members each way. On a shared checkout that is a tax on every
+# other lane. `target/clippy` keeps this tier warm across runs and keeps it out
+# of everyone else's cache. Override with DCLUTCH_CI_CLIPPY_TARGET.
+#
+# THE BUDGET, measured the way root-targets measures its own: a MINIMUM OF THREE
+# rounds, warm dependency cache, every `crates/` and `programs/` source touched
+# first so the whole workspace is genuinely re-checked. 22s, 25s, 31s -> 22. The
+# assertion is the same loose backstop, `DCLUTCH_CI_TIME_SLACK` (4 by default)
+# because this is a co-tenant machine -- and it is SKIPPED ENTIRELY when the
+# target directory did not exist before the run, because a cold check of every
+# dependency in the graph is not what 22s measured and firing there would be the
+# tier crying wolf on its own first run.
+readonly CLIPPY_WARM_S=22
+
+tier_clippy() {
+  say "clippy -- the workspace deny table, enforced"
+  if ! have cargo; then
+    record clippy $EXIT_PREREQ_MISSING "cargo not on PATH"
+    return
+  fi
+  if ! cargo clippy --version >/dev/null 2>&1; then
+    note "clippy is not installed, so the deny table at Cargo.toml:119 was not"
+    note "checked at all. Install it with:"
+    note "    rustup component add clippy"
+    record clippy $EXIT_PREREQ_MISSING "cargo-clippy not available"
+    return
+  fi
+  if ! have python3; then
+    record clippy $EXIT_PREREQ_MISSING "python3 not on PATH"
+    return
+  fi
+
+  local root="$repo_root" archive_root=""
+  if [ -n "$commit_rev" ]; then
+    local resolved
+    resolved="$(cd "$repo_root" && git rev-parse --verify "$commit_rev^{commit}" 2>/dev/null)" || {
+      record clippy $EXIT_PREREQ_MISSING "--commit $commit_rev does not name a commit"
+      return
+    }
+    archive_root="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-ci-clippy.XXXXXX")"
+    note "running COMMIT $resolved (clean git archive)"
+    archive_revision "$resolved" "$archive_root"
+    root="$archive_root"
+  else
+    local dirty
+    dirty="$(cd "$repo_root" && git status --porcelain -- crates programs 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${dirty:-0}" != 0 ]; then
+      note "running the WORKING TREE, and it has $dirty uncommitted files under"
+      note "crates/ and programs/. A red here may belong to a neighbouring lane;"
+      note "use --commit for one you intend to REPORT."
+    fi
+  fi
+
+  local census="$root/tools/ci/clippy-census.py" debt="$root/tools/ci/clippy-debt.tsv"
+  if [ ! -f "$census" ] || [ ! -f "$debt" ]; then
+    record clippy $EXIT_PREREQ_MISSING "clippy-census.py or clippy-debt.tsv is not in this tree"
+    [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+    return
+  fi
+
+  local target="${DCLUTCH_CI_CLIPPY_TARGET:-$root/target/clippy}"
+  local warm=1
+  [ -d "$target" ] || warm=0
+  [ "$warm" = 1 ] || note "target directory is COLD ($target) -- the wall-clock"
+  [ "$warm" = 1 ] || note "backstop is skipped for this run, and the time below is a build."
+
+  local stream
+  stream="$(mktemp "${TMPDIR:-/tmp}/dclutch-ci-clippy-stream.XXXXXX")"
+  local start end elapsed
+  start=$(date +%s)
+  # `--keep-going` on purpose: the default stops at the first red package and
+  # would report one name where the tsv has to account for all of them.
+  (cd "$root" && CARGO_TARGET_DIR="$target" CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+    cargo clippy --workspace --all-targets --keep-going --message-format=json \
+    -- -D warnings >"$stream" 2>/dev/null)
+  end=$(date +%s)
+  elapsed=$((end - start))
+
+  local code=0
+  (cd "$root" && python3 tools/ci/clippy-census.py \
+    --stream "$stream" --debt tools/ci/clippy-debt.tsv --root .) || code=$?
+  rm -f -- "$stream"
+
+  local slack="${DCLUTCH_CI_TIME_SLACK:-4}"
+  local budget=$((CLIPPY_WARM_S * slack))
+  if [ "$warm" = 1 ]; then
+    note "${elapsed}s (budget ${budget}s = ${CLIPPY_WARM_S}s measured x ${slack} slack)"
+    if [ "$elapsed" -gt "$budget" ]; then
+      note "OVER THE WALL-CLOCK BACKSTOP. This is the LOOSE check and on a machine"
+      note "other lanes are building on it can fire for their reasons. Re-run on an"
+      note "idle host, or with DCLUTCH_CI_TIME_SLACK raised, before reporting it."
+      code=$EXIT_GATE_FAILED
+    fi
+  else
+    note "${elapsed}s (cold target directory: not budgeted)"
+  fi
+
+  [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+  case "$code" in
+  0) record clippy $EXIT_PASS ;;
+  "$EXIT_PREREQ_MISSING") record clippy $EXIT_PREREQ_MISSING "the census could not read its inputs" ;;
+  *) record clippy $EXIT_GATE_FAILED ;;
+  esac
+}
+
 tier_locks() {
   say "locks -- every tracked Cargo workspace lock resolves"
   if ! have cargo; then
@@ -2007,6 +2139,14 @@ sbfcontracts
                                           `cargo check` cannot fail the way
                                           this does: measured 176 SBF errors on
                                           a crate that was host-green
+clippy    22s warm     cargo, clippy,     the deny table at Cargo.toml:119 and
+          minutes cold  python3            the command README.md:183 publishes,
+                                          which NO tier ran until this one: 105
+                                          workspace members judged per package
+                                          against tools/ci/clippy-debt.tsv, and
+                                          the packages `--keep-going` never
+                                          REACHED counted separately, because a
+                                          red library hides everything above it
 sbom      ~3 min       cargo, python3     the dependency/licence closure over
                                           every tracked Cargo workspace and npm
                                           package tree: 59 manifests, 2,151
@@ -2068,14 +2208,21 @@ workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           is not in `all`
 
 aliases:  cheap = census fmt locks seam runbooks release
-          all   = census fmt locks seam runbooks release sbom sbfcontracts web emission
-                  frameguard journey root-targets programs suites
+          all   = census fmt locks seam runbooks release clippy sbom sbfcontracts web
+                  emission frameguard journey root-targets programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
 environment:
   DCLUTCH_CI_SUITES="core custody"   run only those rows of the suites tier
   CARGO_BUILD_JOBS=4                 honoured by the cargo tiers (default 4)
-  DCLUTCH_CI_TIME_SLACK=4            root-targets multiplies its measured
+  DCLUTCH_CI_CLIPPY_TARGET=<dir>     clippy's own target directory (default
+                                     target/clippy). It gets one because
+                                     `cargo clippy` changes every workspace
+                                     member's fingerprint, so sharing a
+                                     directory with `cargo check` rebuilds the
+                                     workspace each way -- a tax on every other
+                                     lane in a shared checkout
+  DCLUTCH_CI_TIME_SLACK=4            root-targets and clippy multiply their measured
                                      budgets by this. 4 by default because this
                                      is a co-tenant machine and one target
                                      measured 39.9s, 5.9s and 6.1s in three
@@ -2122,8 +2269,8 @@ main() {
       exit 0
       ;;
     cheap) tiers+=(census fmt locks seam runbooks release) ;;
-    all) tiers+=(census fmt locks seam runbooks release sbom sbfcontracts web emission frameguard journey root-targets programs suites) ;;
-    census | fmt | locks | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | root-targets | programs | suites | workspaces)
+    all) tiers+=(census fmt locks seam runbooks release clippy sbom sbfcontracts web emission frameguard journey root-targets programs suites) ;;
+    census | fmt | locks | seam | runbooks | release | clippy | sbom | sbfcontracts | web | emission | frameguard | journey | root-targets | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

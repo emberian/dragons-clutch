@@ -448,6 +448,8 @@ fn u64_at(input: &[u8], offset: usize) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     extern crate std;
 
     use super::*;

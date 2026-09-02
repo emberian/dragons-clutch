@@ -1,5 +1,7 @@
 //! Hostile and positive physical Claims/Token/Custody composition corpus.
 
+#![allow(clippy::indexing_slicing)]
+
 use dclutch_claims_svm::affine_batch_v2::{AffineBatchReceiptV2, DeltaDirectionV2};
 use dclutch_claims_svm::{
     CallerRole,
@@ -10,11 +12,10 @@ use dclutch_claims_svm::{
 };
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V3, AffineBatchContextV2, AssetV2, CallerRoleV2,
-    CompletionEvidenceV2, Error, RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
-    CoordinateIdentitiesV3, RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, RepresentationActionV2,
-    ResolvedRequestV2,
+    CompletionEvidenceV2, CoordinateIdentitiesV3, Error, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
+    RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, RepresentationActionV2,
     RepresentationReceiptV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
-    SignedDeltaTerminalEvidenceV3, TokenEffectStyleV2, finalize, prepare,
+    ResolvedRequestV2, SignedDeltaTerminalEvidenceV3, TokenEffectStyleV2, finalize, prepare,
     validate_signed_delta_terminal_v3,
 };
 use dclutch_rational_representation_v2_kernel::{
@@ -308,7 +309,11 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
     );
     let identities = resolved_identities(&assets());
     let prepared = prepare(
-        ResolvedRequestV2::new(request, &identities[..request.header().asset_count as usize]).expect("resolved"),
+        ResolvedRequestV2::new(
+            request,
+            &identities[..request.header().asset_count as usize],
+        )
+        .expect("resolved"),
         descriptor(&descriptor_bytes),
         projection,
         graph(&graph_bytes),
@@ -401,7 +406,11 @@ fn denomination_emits_one_canonical_affine_packet_and_shard_mint() {
     let request = RepresentationRequestV2::new(request_header, &rows).expect("request");
     let identities = resolved_identities(&assets());
     let prepared = prepare(
-        ResolvedRequestV2::new(request, &identities[..request.header().asset_count as usize]).expect("resolved"),
+        ResolvedRequestV2::new(
+            request,
+            &identities[..request.header().asset_count as usize],
+        )
+        .expect("resolved"),
         descriptor(&descriptor_bytes),
         projection,
         graph(&graph_bytes),
@@ -503,7 +512,11 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
     .expect("reconstitution request");
     let identities = resolved_identities(&assets());
     let prepared = prepare(
-        ResolvedRequestV2::new(request, &identities[..request.header().asset_count as usize]).expect("resolved"),
+        ResolvedRequestV2::new(
+            request,
+            &identities[..request.header().asset_count as usize],
+        )
+        .expect("resolved"),
         descriptor(&descriptor_bytes),
         coalesced_projection,
         graph(&graph_bytes),
@@ -572,7 +585,11 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
     .expect("unwrap request");
     let unwrap_identities = resolved_identities(&assets());
     let prepared = prepare(
-        ResolvedRequestV2::new(unwrap, &unwrap_identities[..unwrap.header().asset_count as usize]).expect("resolved"),
+        ResolvedRequestV2::new(
+            unwrap,
+            &unwrap_identities[..unwrap.header().asset_count as usize],
+        )
+        .expect("resolved"),
         descriptor(&descriptor_bytes),
         projection,
         graph(&graph_bytes),
@@ -652,7 +669,11 @@ fn terminal_finalize_consumes_signed_delta_and_accepts_exact_zero_payout() {
         RepresentationRequestV2::new(request_header, &asset_rows).expect("terminal request");
     let identities = resolved_identities(&assets());
     let prepared = prepare(
-        ResolvedRequestV2::new(request, &identities[..request.header().asset_count as usize]).expect("resolved"),
+        ResolvedRequestV2::new(
+            request,
+            &identities[..request.header().asset_count as usize],
+        )
+        .expect("resolved"),
         descriptor(&descriptor_bytes),
         projection,
         graph(&graph_bytes),
@@ -772,7 +793,11 @@ fn product_v3_terminal_accepts_only_one_exact_signed_delta_debit() {
         .expect("terminal receipt");
     let terminal_identities = resolved_identities(&assets());
     let completion = validate_signed_delta_terminal_v3(
-        ResolvedRequestV2::new(request, &terminal_identities[..request.header().asset_count as usize]).expect("resolved"),
+        ResolvedRequestV2::new(
+            request,
+            &terminal_identities[..request.header().asset_count as usize],
+        )
+        .expect("resolved"),
         SignedDeltaTerminalEvidenceV3 {
             request_digest: id(30),
             claims_program: id(31),
@@ -812,7 +837,11 @@ fn product_v3_terminal_accepts_only_one_exact_signed_delta_debit() {
     ] {
         assert_eq!(
             validate_signed_delta_terminal_v3(
-                ResolvedRequestV2::new(request, &terminal_identities[..request.header().asset_count as usize]).expect("resolved"),
+                ResolvedRequestV2::new(
+                    request,
+                    &terminal_identities[..request.header().asset_count as usize]
+                )
+                .expect("resolved"),
                 hostile
             ),
             Err(Error::ClaimsMismatch)
@@ -833,7 +862,11 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
             .expect("request");
     assert_eq!(
         prepare(
-            ResolvedRequestV2::new(request, &selected_identities[..request.header().asset_count as usize]).expect("resolved"),
+            ResolvedRequestV2::new(
+                request,
+                &selected_identities[..request.header().asset_count as usize]
+            )
+            .expect("resolved"),
             descriptor(&descriptor_bytes),
             projection,
             graph(&graph_bytes),
@@ -851,8 +884,11 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
     put_u64(&mut substituted_coefficients, DESCRIPTOR_HEADER_BYTES, 4);
     assert_eq!(
         prepare(
-            ResolvedRequestV2::new(issue, &selected_identities[..issue.header().asset_count as usize])
-                .expect("resolved"),
+            ResolvedRequestV2::new(
+                issue,
+                &selected_identities[..issue.header().asset_count as usize]
+            )
+            .expect("resolved"),
             descriptor(&substituted_coefficients),
             projection,
             graph(&graph_bytes),
@@ -863,8 +899,11 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
     put(&mut substituted_graph, 16, &id(99));
     assert_eq!(
         prepare(
-            ResolvedRequestV2::new(issue, &selected_identities[..issue.header().asset_count as usize])
-                .expect("resolved"),
+            ResolvedRequestV2::new(
+                issue,
+                &selected_identities[..issue.header().asset_count as usize]
+            )
+            .expect("resolved"),
             descriptor(&substituted_graph),
             projection,
             graph(&graph_bytes),
@@ -872,8 +911,11 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
         Err(Error::ProjectionMismatch)
     );
     let prepared = prepare(
-        ResolvedRequestV2::new(issue, &selected_identities[..issue.header().asset_count as usize])
-            .expect("resolved"),
+        ResolvedRequestV2::new(
+            issue,
+            &selected_identities[..issue.header().asset_count as usize],
+        )
+        .expect("resolved"),
         descriptor(&descriptor_bytes),
         projection,
         graph(&graph_bytes),
@@ -916,8 +958,11 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
     )
     .expect("denomination");
     let prepared = prepare(
-        ResolvedRequestV2::new(denomination, &selected_identities[..denomination.header().asset_count as usize])
-            .expect("resolved"),
+        ResolvedRequestV2::new(
+            denomination,
+            &selected_identities[..denomination.header().asset_count as usize],
+        )
+        .expect("resolved"),
         descriptor(&descriptor_bytes),
         projection,
         graph(&graph_bytes),

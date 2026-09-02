@@ -129,6 +129,8 @@ pub fn devnet_release_v1() -> PythReleaseV1Result<PythReleaseV1> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+
     use super::*;
 
     /// Base58-decode, locally, so the pinned byte constants can be asserted

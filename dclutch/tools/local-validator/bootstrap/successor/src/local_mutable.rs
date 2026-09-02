@@ -1360,6 +1360,7 @@ fn prepare_local_mutable_parsed_v1(
             rent_credit_sha256,
             rent_credit_semantic_release_id,
             checked_upgrade_set: None,
+            general_accelerator: None,
         },
         &gate,
     )?;

@@ -12,6 +12,13 @@ type Inventory = Readonly<{
 const survey = coverage.surveyHandMirrors as () => Readonly<{ gating: Inventory; pins: Inventory }>;
 const audit = coverage.auditAgainstBaseline as (gating: Inventory, baseline: Inventory) => ReadonlyArray<string>;
 const baseline = coverage.readBaseline as () => Inventory;
+/** One generated module and the `abi:*:verify` that byte-checks it, if any. */
+type GeneratedAuthority = Readonly<{ module: string; verify: string | null; tree: string | null }>;
+
+const authorities = coverage.surveyGeneratedAuthorities as () => ReadonlyArray<GeneratedAuthority>;
+const auditAuthorities = coverage.auditGeneratedAuthorities as (
+  rows: ReadonlyArray<GeneratedAuthority>,
+) => ReadonlyArray<string>;
 
 /**
  * The done-criterion for the hand-mirror genus.
@@ -51,5 +58,34 @@ describe('ABI coverage', () => {
       const offenders = stated.filter((entry) => entry.endsWith(`\t${converted}`));
       expect(offenders, `${converted} is emitted; import it instead of restating it`).toEqual([]);
     }
+  });
+});
+
+/**
+ * The other half of the coverage question.
+ *
+ * The survey above asks what this package still states in its OWN words. It
+ * skips `lib/generated/` on purpose, which leaves the question it cannot ask:
+ * whether a generated module has an authority behind it at all. AGENTS.md:
+ * "every generated module carries an `abi:*:verify` that `npm test` runs, so a
+ * surface with neither is a surface with no authority behind it."
+ *
+ * `packages/dclutch-sdk/lib/generated/routeCensus.ts` was exactly that surface
+ * until 2026-09-02: no generator, no verify, held only by the web tree's
+ * byte-identity test -- and the two copies drifted apart through a program edit
+ * with just that one gate noticing (2fe2b9f84). Neither tree's coverage census
+ * named the file. This is the arm that would have.
+ */
+describe('generated modules have an authority', () => {
+  it('walks lib/generated/ and finds the modules it is meant to speak about', () => {
+    // A walk that silently matched nothing would make the assertion below
+    // vacuous, which is the one way this test could lie.
+    const rows = authorities();
+    expect(rows.length).toBeGreaterThanOrEqual(20);
+    expect(rows.map((row) => row.module)).toContain('lib/generated/routeCensus.ts');
+  });
+
+  it('pairs every generated module with a verify script', () => {
+    expect(auditAuthorities(authorities())).toEqual([]);
   });
 });

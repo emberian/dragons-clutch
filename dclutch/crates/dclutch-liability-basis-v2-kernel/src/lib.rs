@@ -7,10 +7,10 @@
 //! The semantic theorems and the sole capped-ramp apportionment boundary live
 //! in `DClutchSemantics.LiabilityBasisV2`. This crate is an independent,
 //! handwritten physical implementation checked against Lean-emitted cases.
+//!
+//! Content-bound Product admission and pure Claims transition candidates.
 
 use core::convert::TryInto;
-
-/// Content-bound Product admission and pure Claims transition candidates.
 
 /// Degree-one through degree-three B-spline liability bases.
 pub mod spline;

@@ -348,6 +348,8 @@ fn nonnegative_fraction_less(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use crate::id;
 

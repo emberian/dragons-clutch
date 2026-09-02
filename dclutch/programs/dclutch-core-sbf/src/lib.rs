@@ -335,15 +335,16 @@ const _: () = {
         CoreSbfError::ALL[0] as u32 == dclutch_refusal_registry::CORE_REFUSAL_BASE,
         "CoreSbfError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < CoreSbfError::ALL.len() {
-        let variant = CoreSbfError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = CoreSbfError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "CoreSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == dclutch_refusal_registry::CORE_REFUSAL_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::CORE_REFUSAL_BASE + index,
             "CoreSbfError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -352,6 +353,7 @@ const _: () = {
             "CoreSbfError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

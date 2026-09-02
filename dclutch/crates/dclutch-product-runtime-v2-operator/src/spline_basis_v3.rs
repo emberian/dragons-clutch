@@ -246,6 +246,8 @@ fn derive_semantic_basis_id(bytes: &[u8]) -> Result<ContentId> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use dclutch_product_payoff_v2_codec::{
         price_gate_v1::{

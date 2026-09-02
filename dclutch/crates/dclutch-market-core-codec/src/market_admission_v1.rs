@@ -83,11 +83,10 @@ impl MarketAdmissionV1 {
     #[must_use]
     pub const fn prestates(pairs: &[(Phase, Readiness)]) -> Self {
         let mut prestates = 0u16;
-        let mut position = 0;
-        while position < pairs.len() {
-            let (phase, readiness) = pairs[position];
-            prestates |= 1u16 << index(phase, readiness);
-            position += 1;
+        let mut rest = pairs;
+        while let [(phase, readiness), tail @ ..] = rest {
+            prestates |= 1u16 << index(*phase, *readiness);
+            rest = tail;
         }
         Self { prestates }
     }
@@ -100,13 +99,12 @@ impl MarketAdmissionV1 {
     #[must_use]
     pub const fn phases(phases: &[Phase]) -> Self {
         let mut prestates = 0u16;
-        let mut position = 0;
-        while position < phases.len() {
-            let phase = phases[position];
-            prestates |= 1u16 << index(phase, Readiness::Prepaid);
-            prestates |= 1u16 << index(phase, Readiness::Ready);
-            prestates |= 1u16 << index(phase, Readiness::Consumed);
-            position += 1;
+        let mut rest = phases;
+        while let [phase, tail @ ..] = rest {
+            prestates |= 1u16 << index(*phase, Readiness::Prepaid);
+            prestates |= 1u16 << index(*phase, Readiness::Ready);
+            prestates |= 1u16 << index(*phase, Readiness::Consumed);
+            rest = tail;
         }
         Self { prestates }
     }

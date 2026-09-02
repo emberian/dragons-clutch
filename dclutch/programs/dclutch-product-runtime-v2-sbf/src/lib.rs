@@ -117,16 +117,16 @@ const _: () = {
             == dclutch_refusal_registry::PRODUCT_RUNTIME_V2_REFUSAL_BASE,
         "AdmissionSbfErrorV2 must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < AdmissionSbfErrorV2::ALL.len() {
-        let variant = AdmissionSbfErrorV2::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = AdmissionSbfErrorV2::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "AdmissionSbfErrorV2::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32
-                == dclutch_refusal_registry::PRODUCT_RUNTIME_V2_REFUSAL_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::PRODUCT_RUNTIME_V2_REFUSAL_BASE + index,
             "AdmissionSbfErrorV2 discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -136,6 +136,7 @@ const _: () = {
             "AdmissionSbfErrorV2 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

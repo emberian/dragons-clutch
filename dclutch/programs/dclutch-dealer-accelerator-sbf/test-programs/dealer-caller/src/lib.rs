@@ -42,14 +42,14 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_capability_program_contract::hot_v3::{
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+    HOT_PRODUCT_RAW_ACCOUNT_V3,
+};
+use dclutch_capability_program_contract::hot_v3::{
     HOT_FIXED_ACCOUNT_COUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_CONFIG_COORDINATE_V3,
     HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3,
     HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3,
     HOT_RUNTIME_ROOT_COORDINATE_V3, HotExecutionEnvelopeV3,
-};
-use dclutch_capability_program_contract::hot_v3::{
-    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-    HOT_PRODUCT_RAW_ACCOUNT_V3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::AcceleratorRequestV2;
@@ -132,16 +132,16 @@ const _: () = {
             == dclutch_refusal_registry::TEST_DEALER_ACCELERATOR_CALLER_BASE,
         "DealerAcceleratorTestCallerErrorV1 must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < DealerAcceleratorTestCallerErrorV1::ALL.len() {
-        let variant = DealerAcceleratorTestCallerErrorV1::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = DealerAcceleratorTestCallerErrorV1::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "DealerAcceleratorTestCallerErrorV1::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32
-                == dclutch_refusal_registry::TEST_DEALER_ACCELERATOR_CALLER_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::TEST_DEALER_ACCELERATOR_CALLER_BASE + index,
             "DealerAcceleratorTestCallerErrorV1 discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -151,6 +151,7 @@ const _: () = {
             "DealerAcceleratorTestCallerErrorV1 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 
@@ -324,7 +325,10 @@ fn runtime_accounts<'a, 'info>(
     let fixed = [
         (HOT_RUNTIME_ROOT_COORDINATE_V3, HOT_ROOT_ACCOUNT_V3),
         (HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_CONFIG_RAW_ACCOUNT_V3),
-        (HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_PRODUCT_RAW_ACCOUNT_V3),
+        (
+            HOT_RUNTIME_PRODUCT_COORDINATE_V3,
+            HOT_PRODUCT_RAW_ACCOUNT_V3,
+        ),
         (
             HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
             HOT_PORTFOLIO_RAW_ACCOUNT_V3,

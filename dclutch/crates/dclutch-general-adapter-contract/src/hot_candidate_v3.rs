@@ -844,6 +844,7 @@ pub fn project_general_open_batch_candidate_in_place_v3(
 /// Closing early is admitted only when the persisted admission count proves
 /// the batch full; otherwise the config-derived collection window must have
 /// elapsed. Trading remains the sole writer of the root and batch accounts.
+#[allow(clippy::too_many_arguments)]
 pub fn project_general_close_batch_candidate_in_place_v3(
     root_tail: &[u8],
     batch_body: &[u8],
@@ -2928,6 +2929,7 @@ fn apply_general_initialize_candidate_v3(
 /// `authenticated_input`, `scratch`, and `output` must have the one exact
 /// Product-derived capacity. The entire input is copied to scratch first;
 /// output changes only after every semantic and child-ABI coordinate accepts.
+#[allow(clippy::too_many_arguments)]
 pub fn project_general_hot_candidate_v3<'a>(
     action: Action,
     effect_plan: &[u8],

@@ -1351,7 +1351,7 @@ fn expected_tail(
                 let bump = scalars
                     .get(usize::from(bump_register))
                     .copied()
-                    .filter(|value| *value <= u64::from(u8::MAX))
+                    .filter(|value| u8::try_from(*value).is_ok())
                     .ok_or(ActivationBundleErrorV1::TailFieldRegisterOutOfBank)?;
                 let value = bump
                     .checked_mul(ACTIVATION_ROOT_BUMP_SHIFT_V2)

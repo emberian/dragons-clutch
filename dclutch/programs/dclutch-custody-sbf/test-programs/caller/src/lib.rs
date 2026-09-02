@@ -98,15 +98,16 @@ const _: () = {
         TestCallerError::ALL[0] as u32 == dclutch_refusal_registry::TEST_CUSTODY_CALLER_BASE,
         "TestCallerError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < TestCallerError::ALL.len() {
-        let variant = TestCallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = TestCallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "TestCallerError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == dclutch_refusal_registry::TEST_CUSTODY_CALLER_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::TEST_CUSTODY_CALLER_BASE + index,
             "TestCallerError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -116,6 +117,7 @@ const _: () = {
             "TestCallerError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

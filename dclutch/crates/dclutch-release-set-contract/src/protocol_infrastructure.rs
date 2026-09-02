@@ -262,37 +262,39 @@ pub const PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2: [u8; 32] = [
 ];
 
 const _: () = assert!(
-    !matches!(
-        konst_all_zero(&PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2),
-        true
-    ) && !matches!(
-        konst_all_zero(&PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2),
-        true
-    )
+    !konst_all_zero(&PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2)
+        && !konst_all_zero(&PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2)
 );
 const _: () = assert!(!konst_equal(
     &PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2,
     &PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2,
 ));
 
+// Both walk their slices by pattern rather than by index. `.get` is not
+// available in a `const fn`, so an indexed loop here left `indexing_slicing` --
+// denied workspace-wide -- with only a justified `#[allow]` as its other exit;
+// walking leaves no bound to assert in the first place. Same shape as
+// `dclutch-source-contract`'s `states` (1bdf5572f).
 const fn konst_all_zero(bytes: &[u8; 32]) -> bool {
-    let mut index = 0;
-    while index < 32 {
-        if bytes[index] != 0 {
+    let mut rest: &[u8] = bytes;
+    while let [head, tail @ ..] = rest {
+        if *head != 0 {
             return false;
         }
-        index += 1;
+        rest = tail;
     }
     true
 }
 
 const fn konst_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    let mut index = 0;
-    while index < 32 {
-        if left[index] != right[index] {
+    let mut left: &[u8] = left;
+    let mut right: &[u8] = right;
+    while let ([first, left_rest @ ..], [second, right_rest @ ..]) = (left, right) {
+        if *first != *second {
             return false;
         }
-        index += 1;
+        left = left_rest;
+        right = right_rest;
     }
     true
 }

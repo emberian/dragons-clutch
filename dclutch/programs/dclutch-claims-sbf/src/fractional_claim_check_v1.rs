@@ -286,15 +286,16 @@ const _: () = {
         FractionalClaimCheckCompactionSbfErrorV1::ALL[0] as u32 == SUB_BAND,
         "FractionalClaimCheckCompactionSbfErrorV1 must start at its registered sub-band offset"
     );
-    let mut index = 0;
-    while index < FractionalClaimCheckCompactionSbfErrorV1::ALL.len() {
-        let variant = FractionalClaimCheckCompactionSbfErrorV1::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = FractionalClaimCheckCompactionSbfErrorV1::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "FractionalClaimCheckCompactionSbfErrorV1::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == SUB_BAND + index as u32,
+            variant as u32 == SUB_BAND + index,
             "FractionalClaimCheckCompactionSbfErrorV1 discriminants are not the contiguous run from the sub-band offset that ALL claims"
         );
         assert!(
@@ -304,6 +305,7 @@ const _: () = {
             "FractionalClaimCheckCompactionSbfErrorV1 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 // Four sub-bands now: native compaction 0x600, native redemption 0x620,
@@ -491,15 +493,16 @@ const _: () = {
         FractionalClaimCheckRedemptionSbfErrorV1::ALL[0] as u32 == SUB_BAND,
         "FractionalClaimCheckRedemptionSbfErrorV1 must start at its registered sub-band offset"
     );
-    let mut index = 0;
-    while index < FractionalClaimCheckRedemptionSbfErrorV1::ALL.len() {
-        let variant = FractionalClaimCheckRedemptionSbfErrorV1::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = FractionalClaimCheckRedemptionSbfErrorV1::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "FractionalClaimCheckRedemptionSbfErrorV1::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == SUB_BAND + index as u32,
+            variant as u32 == SUB_BAND + index,
             "FractionalClaimCheckRedemptionSbfErrorV1 discriminants are not the contiguous run from the sub-band offset that ALL claims"
         );
         assert!(
@@ -509,6 +512,7 @@ const _: () = {
             "FractionalClaimCheckRedemptionSbfErrorV1 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 // Endpoints read off `ALL` for the same reason as the assertion above.

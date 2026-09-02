@@ -364,6 +364,8 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> ResultV3<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     extern crate alloc;
 
     use alloc::vec;

@@ -531,7 +531,7 @@ fn content(bytes: [u8; 32]) -> GeneralActivationResultV1<ContentId> {
 mod tests {
     extern crate std;
 
-    use std::{vec, vec::Vec};
+    use std::vec::Vec;
 
     use dclutch_capability_program_contract::v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4,
@@ -720,7 +720,7 @@ mod tests {
         );
         assert_eq!(
             build_general_activation_bundle_v1(GeneralActivationBundleInputV1 {
-                action_descriptor: &vec![0_u8; 8],
+                action_descriptor: &[0_u8; 8],
                 funding_ledger_slot_count: 1,
             })
             .err(),

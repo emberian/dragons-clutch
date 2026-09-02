@@ -175,16 +175,16 @@ const _: () = {
             == dclutch_refusal_registry::DEALER_ACCELERATOR_REFUSAL_BASE,
         "DealerAcceleratorSbfErrorV4 must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < DealerAcceleratorSbfErrorV4::ALL.len() {
-        let variant = DealerAcceleratorSbfErrorV4::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = DealerAcceleratorSbfErrorV4::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "DealerAcceleratorSbfErrorV4::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32
-                == dclutch_refusal_registry::DEALER_ACCELERATOR_REFUSAL_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::DEALER_ACCELERATOR_REFUSAL_BASE + index,
             "DealerAcceleratorSbfErrorV4 discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -194,6 +194,7 @@ const _: () = {
             "DealerAcceleratorSbfErrorV4 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

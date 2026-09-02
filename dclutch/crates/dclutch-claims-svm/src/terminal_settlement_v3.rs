@@ -714,10 +714,10 @@ mod tests {
                 continue;
             }
             slice.fill(0);
-            if let Err(error) = TerminalSettlementRequestV3::decode(&hostile) {
-                if error == TerminalSettlementErrorV3::ZeroIdentity {
-                    witnessed += 1;
-                }
+            if let Err(error) = TerminalSettlementRequestV3::decode(&hostile)
+                && error == TerminalSettlementErrorV3::ZeroIdentity
+            {
+                witnessed += 1;
             }
         }
         assert!(

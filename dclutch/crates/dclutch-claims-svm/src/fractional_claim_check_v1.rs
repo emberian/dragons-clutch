@@ -1317,6 +1317,8 @@ fn write(output: &mut [u8], offset: usize, value: &[u8]) -> ClaimCheckResultV1<(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use crate::claim_check_v1::{
         CLAIM_CHECK_BYTES_V1, CLAIM_CHECK_ESCROW_MAGIC_V1, CLAIM_CHECK_RECORD_KIND_V1,
@@ -1912,7 +1914,7 @@ mod tests {
         // 44 accounts; a shard holder coming back needs nine, and none of the
         // market's.
         assert_eq!(FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, 9);
-        assert!(FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 < 44);
+        const _: () = assert!(FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 < 44);
     }
 
     #[test]
@@ -1969,7 +1971,7 @@ mod tests {
         // 42; this one is 50, and both fit one transaction's locks without an
         // address table.
         assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 - 8, 42);
-        assert!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 < MAX_TRANSACTION_LOCKS_V1);
+        const _: () = assert!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 < MAX_TRANSACTION_LOCKS_V1);
         // Both finalized Registry records are carried as raw/staging PAIRS, the
         // way every sibling route carries them. Stated as a property over the
         // frame rather than as a count, so a later edit that drops one staging

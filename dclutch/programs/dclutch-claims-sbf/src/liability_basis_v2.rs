@@ -125,15 +125,16 @@ const _: () = {
         LiabilityBasisSbfErrorV2::ALL[0] as u32 == SUB_BAND,
         "LiabilityBasisSbfErrorV2 must start at its registered sub-band offset"
     );
-    let mut index = 0;
-    while index < LiabilityBasisSbfErrorV2::ALL.len() {
-        let variant = LiabilityBasisSbfErrorV2::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = LiabilityBasisSbfErrorV2::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "LiabilityBasisSbfErrorV2::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == SUB_BAND + index as u32,
+            variant as u32 == SUB_BAND + index,
             "LiabilityBasisSbfErrorV2 discriminants are not the contiguous run from the sub-band offset that ALL claims"
         );
         assert!(
@@ -143,6 +144,7 @@ const _: () = {
             "LiabilityBasisSbfErrorV2 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

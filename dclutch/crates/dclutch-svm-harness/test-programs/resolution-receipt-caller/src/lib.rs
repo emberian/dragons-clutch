@@ -113,16 +113,16 @@ const _: () = {
             == dclutch_refusal_registry::TEST_RESOLUTION_RECEIPT_CALLER_BASE,
         "TestReceiptCallerError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < TestReceiptCallerError::ALL.len() {
-        let variant = TestReceiptCallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = TestReceiptCallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "TestReceiptCallerError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32
-                == dclutch_refusal_registry::TEST_RESOLUTION_RECEIPT_CALLER_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::TEST_RESOLUTION_RECEIPT_CALLER_BASE + index,
             "TestReceiptCallerError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -132,6 +132,7 @@ const _: () = {
             "TestReceiptCallerError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

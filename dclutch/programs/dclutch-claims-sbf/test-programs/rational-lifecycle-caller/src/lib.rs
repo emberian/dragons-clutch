@@ -96,17 +96,17 @@ const _: () = {
             == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE,
         "RationalLifecycleCallerErrorV2 must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < RationalLifecycleCallerErrorV2::ALL.len() {
-        let variant = RationalLifecycleCallerErrorV2::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = RationalLifecycleCallerErrorV2::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "RationalLifecycleCallerErrorV2::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
             variant as u32
-                == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE
-                    + index as u32,
+                == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE + index,
             "RationalLifecycleCallerErrorV2 discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -116,6 +116,7 @@ const _: () = {
             "RationalLifecycleCallerErrorV2 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

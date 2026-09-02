@@ -105,15 +105,16 @@ const _: () = {
         DirectAotSbfError::ALL[0] as u32 == dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE,
         "DirectAotSbfError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < DirectAotSbfError::ALL.len() {
-        let variant = DirectAotSbfError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = DirectAotSbfError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "DirectAotSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE + index,
             "DirectAotSbfError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -123,6 +124,7 @@ const _: () = {
             "DirectAotSbfError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

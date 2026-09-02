@@ -679,6 +679,7 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
             custody: role_deployment_input(&spec.custody),
             rent_credit: role_deployment_input(&spec.rent_credit),
         },
+        general_accelerator: None,
     })
 }
 
@@ -1868,7 +1869,20 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
     }
 
     authenticate_infrastructure_profile_projection(plan)?;
-    for label in [
+    // The accelerator's row is present exactly when the plan carries its pin,
+    // and the two must agree: a record with no pin is a body nothing observed,
+    // and a pin with no record is a publication that will never be finalized --
+    // which under `90a8563f` is the same as never being observed at all.
+    let accelerator_record = plan
+        .records
+        .contains_key("general_accelerator_artifact_release");
+    if accelerator_record != plan.general_accelerator.is_some() {
+        return Err(Error::new(
+            "the General accelerator's ArtifactRelease record and its plan pin must be present \
+             together or absent together",
+        ));
+    }
+    let mut labels = vec![
         "execution_release_set",
         "registry_artifact_release",
         "core_artifact_release",
@@ -1878,7 +1892,11 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
         "custody_artifact_release",
         "rent_artifact_release",
         "pyth_release",
-    ] {
+    ];
+    if accelerator_record {
+        labels.push("general_accelerator_artifact_release");
+    }
+    for label in labels {
         let (raw, _) = record(plan, label)?;
         let pair = &plan.records[label];
         let body = decode_hex(&pair.body_hex)?;
@@ -1900,8 +1918,14 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
             )));
         }
     }
+    // Under genesis publication every finalized record is also injected as a
+    // genesis account, so an eighth ArtifactRelease adds exactly one. Under
+    // transaction publication the chain produces the record and the count does
+    // not move. The numbers are pinned rather than derived on purpose: a record
+    // silently dropping out of the plan is what this check exists to catch.
+    let accelerator_accounts = usize::from(plan.general_accelerator.is_some());
     let expected_accounts = match plan.record_publication.as_str() {
-        "genesis" => 23,
+        "genesis" => 23 + accelerator_accounts,
         "transaction" => 14,
         other => {
             return Err(Error::new(format!(
@@ -2912,6 +2936,7 @@ mod tests {
             checked_upgrade_set: None,
             record_publication: crate::plan::RecordPublicationV1::Genesis,
             deployments: RoleDeploymentsV1::default(),
+            general_accelerator: None,
         })
         .expect("prepare real-SBF infrastructure plan");
         validate_plan(&plan).expect("validate real-SBF plan");

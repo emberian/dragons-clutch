@@ -119,11 +119,29 @@ pub enum HeapErrorV1 {
 /// the SDK install its own. Enabling the `custom-heap` feature is what
 /// guarantees the second half.
 #[must_use]
+// `HEAP_START_ADDRESS` is a `u64` and the base is a `usize`, so the narrowing is
+// real on a target with pointers narrower than the VM's addresses. It is not
+// real HERE, and the assertion below is the proof rather than the claim: a
+// target where the floor does not fit a pointer refuses to compile this crate at
+// all, which is the honest answer for an allocator that could not address its
+// own heap. `try_from` is not available in a `const fn`, and this one must stay
+// const -- every caller is a `static` initializer.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "HEAP_START_USIZE_FITS_V1 refuses the build on a target where it would truncate"
+)]
 pub const fn program_heap_v1() -> BumpHeapV1 {
     // SAFETY: see this function's documentation -- the address is the
     // platform's, not a caller's.
     unsafe { BumpHeapV1::with_base(HEAP_START_ADDRESS as usize) }
 }
+
+/// The floor is representable as a pointer on every target this crate builds for.
+const HEAP_START_USIZE_FITS_V1: () = assert!(
+    HEAP_START_ADDRESS <= usize::MAX as u64,
+    "the VM heap floor does not fit a pointer on this target"
+);
+const _: () = HEAP_START_USIZE_FITS_V1;
 
 /// Upward bump allocator over the SBF program heap region.
 ///

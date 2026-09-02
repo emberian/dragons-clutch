@@ -93,16 +93,16 @@ const _: () = {
             == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_V2_CALLER_BASE,
         "RationalV2CallerError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < RationalV2CallerError::ALL.len() {
-        let variant = RationalV2CallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = RationalV2CallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "RationalV2CallerError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32
-                == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_V2_CALLER_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_V2_CALLER_BASE + index,
             "RationalV2CallerError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -112,6 +112,7 @@ const _: () = {
             "RationalV2CallerError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

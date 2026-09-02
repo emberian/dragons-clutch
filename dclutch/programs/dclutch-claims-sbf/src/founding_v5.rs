@@ -201,15 +201,16 @@ const _: () = {
         ClaimsFoundingSbfErrorV5::ALL[0] as u32 == SUB_BAND,
         "ClaimsFoundingSbfErrorV5 must start at its registered sub-band offset"
     );
-    let mut index = 0;
-    while index < ClaimsFoundingSbfErrorV5::ALL.len() {
-        let variant = ClaimsFoundingSbfErrorV5::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = ClaimsFoundingSbfErrorV5::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "ClaimsFoundingSbfErrorV5::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == SUB_BAND + index as u32,
+            variant as u32 == SUB_BAND + index,
             "ClaimsFoundingSbfErrorV5 discriminants are not the contiguous run from the sub-band offset that ALL claims"
         );
         assert!(
@@ -219,6 +220,7 @@ const _: () = {
             "ClaimsFoundingSbfErrorV5 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

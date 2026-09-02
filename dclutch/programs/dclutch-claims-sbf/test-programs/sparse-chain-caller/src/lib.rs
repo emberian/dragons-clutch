@@ -148,16 +148,17 @@ const _: () = {
             == dclutch_refusal_registry::TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE,
         "SparseChainCallerError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < SparseChainCallerError::ALL.len() {
-        let variant = SparseChainCallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = SparseChainCallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "SparseChainCallerError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
             variant as u32
-                == dclutch_refusal_registry::TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE + index as u32,
+                == dclutch_refusal_registry::TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE + index,
             "SparseChainCallerError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -167,6 +168,7 @@ const _: () = {
             "SparseChainCallerError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 
@@ -197,9 +199,7 @@ pub fn process_instruction(
         .ok_or(SparseChainCallerError::Instruction)?;
     let expected_body = PROTOCOL_POSITION_REQUEST_BYTES_V2
         .checked_add(SPARSE_NATIVE_TRANSFER_BYTES_V1)
-        .and_then(|held| {
-            held.checked_add(if with_close { CLOSE_RENT_TAIL_BYTES } else { 0 })
-        })
+        .and_then(|held| held.checked_add(if with_close { CLOSE_RENT_TAIL_BYTES } else { 0 }))
         .ok_or(SparseChainCallerError::Instruction)?;
     if body.len() != expected_body {
         return Err(SparseChainCallerError::Instruction.into());
@@ -374,8 +374,7 @@ fn stage(
     let bump = [Pubkey::find_program_address(&seeds.as_slices(), program_id).1];
     let mut metas = Vec::with_capacity(frame.len());
     for (index, account) in frame.iter().enumerate() {
-        let coordinate =
-            u16::try_from(index).map_err(|_| SparseChainCallerError::AccountFrame)?;
+        let coordinate = u16::try_from(index).map_err(|_| SparseChainCallerError::AccountFrame)?;
         // Coordinate zero is the release-scoped caller-authority PDA this
         // program signs for. Nothing else is ever signed, and no coordinate is
         // ever granted more than the transaction already carries.
@@ -423,12 +422,16 @@ fn derive_close_request(
         return Err(SparseChainCallerError::Instruction.into());
     }
     let mut close = admit_bytes.to_vec();
-    put(&mut close, ProtocolPositionRequestLayoutV2::ACTION, &[
-        ProtocolPositionActionV2::Close as u8,
-    ])?;
-    put(&mut close, ProtocolPositionRequestLayoutV2::PRESENCE, &[
-        ProtocolPositionPresenceV2::Existing as u8,
-    ])?;
+    put(
+        &mut close,
+        ProtocolPositionRequestLayoutV2::ACTION,
+        &[ProtocolPositionActionV2::Close as u8],
+    )?;
+    put(
+        &mut close,
+        ProtocolPositionRequestLayoutV2::PRESENCE,
+        &[ProtocolPositionPresenceV2::Existing as u8],
+    )?;
     let source_owner: [u8; 32] = array(sparse_bytes, SparseNativeTransferLayoutV1::SOURCE_OWNER)?;
     let request_id: [u8; 32] = array(sparse_bytes, SparseNativeTransferLayoutV1::REQUEST_ID)?;
     put(

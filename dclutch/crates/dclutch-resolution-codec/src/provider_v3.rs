@@ -574,6 +574,8 @@ fn is_zero(value: &[u8; 32]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     fn identity(tag: u8) -> [u8; 32] {

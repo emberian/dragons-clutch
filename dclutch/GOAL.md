@@ -3623,3 +3623,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `tools/gauntlet/relayed-vertical` does not compile against today's successor sources and no tier builds it → COHORT-14 PREP.
 - Scratch: closed lanes' private directories removed twice (53 → 23 GB; 158 GiB free).
 - Cuts: `35c566e94`, `df4845c15`.
+- CI-LINT closed (`fd6cd0603`, `b10bcdf02` the clippy tier — 22 s warm, root workspace only (the one with a lints table),
+  budget skipped on a cold target; **`--keep-going` stops at a red library, so the first census reached 30 of 105 members** —
+  the unit is the package and every run prints clean / red / never-reached; 74 clean (was 30), 11 packages of debt with
+  owners in `clippy-debt.tsv`, 22 never reached, **37 members do not inherit the deny table at all**; the 39 refusal-band
+  index walks were all inside `const _` so no frame moved; `3976ddeac` the SDK's route-census generator/verify — the web's
+  script byte-identical three levels down, both abi-coverage censuses naming the module, red-proven by one byte).
+  → CLIPPY-2 **`(spawned)`**: the 22 and the 37. Also: a test function nothing runs in compact_artifacts_v4.rs.
+- Cuts: `422cb9136`.

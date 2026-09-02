@@ -99,17 +99,17 @@ const _: () = {
             == dclutch_refusal_registry::TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE,
         "TerminalSettlementCallerError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < TerminalSettlementCallerError::ALL.len() {
-        let variant = TerminalSettlementCallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = TerminalSettlementCallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "TerminalSettlementCallerError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
             variant as u32
-                == dclutch_refusal_registry::TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE
-                    + index as u32,
+                == dclutch_refusal_registry::TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE + index,
             "TerminalSettlementCallerError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -119,6 +119,7 @@ const _: () = {
             "TerminalSettlementCallerError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 
@@ -178,8 +179,7 @@ pub fn process_instruction(
     };
     let request_digest = hash(request_bytes).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::new(
-        ContentId::new(input.release_set)
-            .map_err(|_| TerminalSettlementCallerError::Authority)?,
+        ContentId::new(input.release_set).map_err(|_| TerminalSettlementCallerError::Authority)?,
         input.market,
         role,
         input.parent_context,

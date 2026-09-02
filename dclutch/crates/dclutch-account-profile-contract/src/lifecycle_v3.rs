@@ -1694,15 +1694,15 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         let mut plan_index = 0_u16;
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
-            if let Some(payer) = plan.payer {
-                if is_external_funding_coordinate(external_funding, payer)? {
-                    return Err(Error::ProfileMismatch);
-                }
+            if let Some(payer) = plan.payer
+                && is_external_funding_coordinate(external_funding, payer)?
+            {
+                return Err(Error::ProfileMismatch);
             }
-            if let Some(rent_credit) = plan.rent_credit {
-                if is_external_funding_coordinate(external_funding, rent_credit)? {
-                    return Err(Error::ProfileMismatch);
-                }
+            if let Some(rent_credit) = plan.rent_credit
+                && is_external_funding_coordinate(external_funding, rent_credit)?
+            {
+                return Err(Error::ProfileMismatch);
             }
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
@@ -1899,10 +1899,10 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         if rule.prestate() != AccountPrestateV2::LifecycleBound {
             return Ok(());
         }
-        if let Some(external_funding) = external_funding {
-            if is_external_funding_coordinate(external_funding, coordinate)? {
-                return Ok(());
-            }
+        if let Some(external_funding) = external_funding
+            && is_external_funding_coordinate(external_funding, coordinate)?
+        {
+            return Ok(());
         }
         let mut matching_recipe = None;
         let mut recipe_index = 0_u16;
@@ -4244,6 +4244,8 @@ fn require_tail_zero(bytes: &[u8], offset: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, clippy::panic)]
+
     extern crate std;
 
     use std::vec;

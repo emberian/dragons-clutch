@@ -142,15 +142,16 @@ const _: () = {
         ClaimsMarketClosureSbfErrorV1::ALL[0] as u32 == SUB_BAND,
         "ClaimsMarketClosureSbfErrorV1 must start at its registered sub-band offset"
     );
-    let mut index = 0;
-    while index < ClaimsMarketClosureSbfErrorV1::ALL.len() {
-        let variant = ClaimsMarketClosureSbfErrorV1::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = ClaimsMarketClosureSbfErrorV1::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "ClaimsMarketClosureSbfErrorV1::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == SUB_BAND + index as u32,
+            variant as u32 == SUB_BAND + index,
             "ClaimsMarketClosureSbfErrorV1 discriminants are not the contiguous run from the sub-band offset that ALL claims"
         );
         assert!(
@@ -160,6 +161,7 @@ const _: () = {
             "ClaimsMarketClosureSbfErrorV1 must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

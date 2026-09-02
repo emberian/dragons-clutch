@@ -1000,7 +1000,7 @@ mod tests {
         assert_eq!(COMPACTION_DEADLINE_SLOTS_V1, SLOTS_PER_DAY * 180);
         // Generous by construction: a holder who checks twice a year is never
         // compacted out of their familiar route.
-        assert!(COMPACTION_DEADLINE_SLOTS_V1 > SLOTS_PER_DAY * 120);
+        const _: () = assert!(COMPACTION_DEADLINE_SLOTS_V1 > SLOTS_PER_DAY * 120);
     }
 
     #[test]
@@ -1078,7 +1078,7 @@ mod tests {
         // The residue claim, as a number. A crank needs the whole market; a
         // holder coming back needs seven accounts and none of the market's.
         assert_eq!(CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, 7);
-        assert!(CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 < 36);
+        const _: () = assert!(CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 < 36);
     }
 
     #[test]

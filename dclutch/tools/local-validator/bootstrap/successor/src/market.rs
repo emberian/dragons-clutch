@@ -15201,6 +15201,7 @@ mod tests {
             provider_release_id: String::new(),
             fixture_publish_time: 0,
             genesis_accounts: BTreeMap::new(),
+            general_accelerator: None,
         };
 
         let records = MarketRecords {

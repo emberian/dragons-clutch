@@ -195,6 +195,11 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
     campaign::execute(CampaignArgsV1 {
         origin: ClusterOriginV1::parse(&rpc_url, None)?,
         mode: CampaignModeV1::Administration,
+        // This vertical founds fresh substrates and never resumes one, so the
+        // repair mode is off at both call sites. It is a MODE and not a
+        // fallback (`campaign.rs:950-958`): an unmarked resume must not emit a
+        // report that reads like a fresh founding.
+        recover_finalized_founding: false,
         plan_path: plan_path.clone(),
         market_path: None,
         evidence_path: Some(request.work.join("administration-evidence.json")),
@@ -285,6 +290,7 @@ pub(crate) fn found_market(
     campaign::execute(CampaignArgsV1 {
         origin: ClusterOriginV1::parse(&substrate.rpc_url, None)?,
         mode: CampaignModeV1::FoundingOnly,
+        recover_finalized_founding: false,
         plan_path: substrate.plan_path.clone(),
         market_path: Some(market_path.to_path_buf()),
         evidence_path: Some(evidence_path.to_path_buf()),

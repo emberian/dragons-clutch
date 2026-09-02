@@ -136,6 +136,11 @@ pub struct RationalJoinedReleaseV1 {
     pub release_set: [u8; 32],
 }
 
+/// The four facts every descriptor in one release has to state identically:
+/// `((capacity profile, root schema), (derivation policy, mutable root width))`.
+/// Carried as one value so the agreement is a single comparison rather than four.
+type AgreedReleaseV1 = (([u8; 32], [u8; 32]), ([u8; 32], u32));
+
 /// Authenticate one complete Rational release from bytes alone.
 pub fn authenticate_rational_release_v1(
     selection: RationalArtifactSelectionV1,
@@ -165,7 +170,7 @@ pub fn authenticate_rational_release_v1(
     }
 
     let mut descriptors = [[0_u8; 32]; 4];
-    let mut agreed: Option<(([u8; 32], [u8; 32]), ([u8; 32], u32))> = None;
+    let mut agreed: Option<AgreedReleaseV1> = None;
     for (ordinal, action) in RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6.into_iter().enumerate() {
         let supplied = *bytes
             .actions

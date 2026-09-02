@@ -292,15 +292,16 @@ const _: () = {
         ResolutionError::ALL[0] as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE,
         "ResolutionError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < ResolutionError::ALL.len() {
-        let variant = ResolutionError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = ResolutionError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "ResolutionError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + index,
             "ResolutionError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -310,6 +311,7 @@ const _: () = {
             "ResolutionError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

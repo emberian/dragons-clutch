@@ -555,6 +555,8 @@ fn i64_at(bytes: &[u8], offset: usize) -> PythSponsoredPushReleaseV1Result<i64> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     #[test]

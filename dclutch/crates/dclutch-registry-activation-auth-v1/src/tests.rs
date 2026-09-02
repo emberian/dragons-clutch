@@ -4,6 +4,8 @@
 //! the Registry-owned activation cache through the functions under test, so
 //! these cases are the whole families' refusal set and not one family's.
 
+#![allow(clippy::cast_possible_truncation)]
+
 extern crate std;
 
 use std::{boxed::Box, vec, vec::Vec};

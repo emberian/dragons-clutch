@@ -280,6 +280,8 @@ pub fn project_direct_inline_ordinary_child_requests_v3(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     extern crate std;
 
     use dclutch_claims_svm::sparse_native_transfer_v1::SparseNativeTransferV1;

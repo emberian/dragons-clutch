@@ -360,7 +360,11 @@ impl<'a> RepresentationRequestV2<'a> {
         // DERIVED, not sent: Structured actions carry the complete outcome set
         // (`asset_count == outcome_count`, the exhaustiveness rule that lets
         // issuance mint), every selected-outcome action carries exactly one.
-        let asset_count = if action.selected_outcome() { 1 } else { outcome_count };
+        let asset_count = if action.selected_outcome() {
+            1
+        } else {
+            outcome_count
+        };
         let tail = usize::try_from(asset_count)
             .map_err(|_| Error::InvalidWidth)?
             .checked_mul(ASSET_BYTES_V3)
@@ -460,10 +464,7 @@ impl<'a> RepresentationRequestV2<'a> {
                 generation: u64_at(input, REQUEST_GENERATION_OFFSET_V3)?,
                 quantity: u64_at(input, REQUEST_QUANTITY_OFFSET_V3)?,
                 denominator: u64_at(input, REQUEST_DENOMINATOR_OFFSET_V3)?,
-                expected_receipt_supply: u64_at(
-                    input,
-                    REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3,
-                )?,
+                expected_receipt_supply: u64_at(input, REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3)?,
                 outcome_count,
                 selected_outcome,
                 asset_count,
@@ -906,9 +907,15 @@ impl<'a> ResolvedRequestV2<'a> {
 
 #[cfg(test)]
 mod physical_abi_v3_width {
+    #![allow(
+        clippy::cast_possible_truncation,
+        clippy::indexing_slicing,
+        clippy::unwrap_used
+    )]
+
     extern crate alloc;
-    use crate::*;
     use crate::generated::REQUEST_VERSION_OFFSET_V3;
+    use crate::*;
 
     fn id(seed: u8) -> [u8; 32] {
         [seed; 32]

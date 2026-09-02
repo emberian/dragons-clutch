@@ -512,6 +512,8 @@ fn content(bytes: [u8; 32]) -> Result<ContentId> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, clippy::panic)]
+
     /// The observed Token-2022 vault width these builders quote against.
     ///
     /// An observation, never a protocol constant: the width belongs to the

@@ -463,6 +463,8 @@ fn exact_dust_reconciliation(observed: u64, target: u64) -> (u64, u64) {
 
 #[cfg(test)]
 mod receipt_tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use crate::Observation;
     use dclutch_core_contract::ContentId;

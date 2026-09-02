@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn a_well_formed_degree_two_selection_with_a_certificate_is_admitted() {
         assert_eq!(admit_basis_selection_v3(well_formed(DIGEST)), Ok(()));
-        assert!(SPLINE_EVALUATOR_RELEASED_V3);
+        const _: () = assert!(SPLINE_EVALUATOR_RELEASED_V3);
     }
 
     /// **The envelope conjunct, and the thing it exists to stop.** The same

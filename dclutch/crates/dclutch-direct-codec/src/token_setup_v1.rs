@@ -609,6 +609,8 @@ fn u64_at(input: &[u8], offset: usize) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     fn id(tag: u8) -> [u8; 32] {

@@ -628,7 +628,7 @@ mod tests {
             .is_err()
         );
         assert_eq!(FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, 31);
-        assert!(FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3 < 64);
+        const _: () = assert!(FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3 < 64);
     }
 
     #[test]
@@ -662,6 +662,6 @@ mod tests {
             )
             .is_err()
         );
-        assert!(FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3 < 64);
+        const _: () = assert!(FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3 < 64);
     }
 }

@@ -1122,6 +1122,8 @@ fn put_u64(output: &mut [u8], offset: usize, value: u64) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     fn input() -> ControllerFundingCheckpointInputV1 {

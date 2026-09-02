@@ -12,6 +12,8 @@
 //! reached every region, and it asserts that a one-boundary error (the
 //! opposite half-open convention) is something it can actually see.
 
+#![allow(clippy::indexing_slicing)]
+
 use dclutch_product_runtime_v2::{
     ContentId, ResultDomainInputV2, ResultDomainV2, compile_result_domain_v2,
     result_domain_record_bytes,

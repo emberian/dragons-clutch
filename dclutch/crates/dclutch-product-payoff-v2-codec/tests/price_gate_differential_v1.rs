@@ -42,6 +42,8 @@
 //! one field of a known-good degree-2 certificate at a time, against a control
 //! that asserts the unmutated record is admitted.
 
+#![allow(clippy::indexing_slicing, clippy::panic)]
+
 use dclutch_liability_basis_v2_kernel::{
     PRICE_GATE_AGREEMENT_CASES_V1, PRICE_GATE_REFUSAL_CASES_V1,
 };

@@ -1,5 +1,7 @@
 //! Hostile borrowed-account tests for the independent Product graph reader.
 
+#![allow(clippy::panic)]
+
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{

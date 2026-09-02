@@ -38,6 +38,9 @@ mod chaos_fault;
 #[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
 #[allow(dead_code)]
 mod cluster;
+#[path = "../../../local-validator/bootstrap/successor/src/collateral_release.rs"]
+#[allow(dead_code)]
+mod collateral_release;
 #[path = "../../../local-validator/bootstrap/successor/src/direct_market.rs"]
 #[allow(dead_code)]
 mod direct_market;

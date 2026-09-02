@@ -186,15 +186,16 @@ const _: () = {
         FractionalCompactionTestCallerError::ALL[0] as u32 == SUB_BAND,
         "FractionalCompactionTestCallerError must start at its registered band"
     );
-    let mut index = 0;
-    while index < FractionalCompactionTestCallerError::ALL.len() {
-        let variant = FractionalCompactionTestCallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = FractionalCompactionTestCallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "FractionalCompactionTestCallerError::ALL repeats a variant, skips one, or is out of order"
         );
         assert!(
-            variant as u32 == SUB_BAND + index as u32,
+            variant as u32 == SUB_BAND + index,
             "FractionalCompactionTestCallerError discriminants are not the contiguous run ALL claims"
         );
         assert!(
@@ -202,6 +203,7 @@ const _: () = {
             "FractionalCompactionTestCallerError must not run past its registered band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

@@ -617,7 +617,7 @@ fn gap_widths(
         .into_iter()
         .map(|tenths| {
             let width = spacing
-                .checked_mul(i128::try_from(tenths).map_err(|_| CompileError::ArithmeticOverflow)?)
+                .checked_mul(i128::from(tenths))
                 .and_then(|value| value.checked_div(10))
                 .ok_or(CompileError::ArithmeticOverflow)?;
             Ok(width.max(1))
@@ -645,6 +645,8 @@ fn triangular_antiderivative(half_width: i128, displacement: i128) -> Result<i12
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use crate::ScaledDomain;
 

@@ -76,7 +76,7 @@ use crate::{
     child_receipt_v3::{
         ReceiptDeliveryV3, deliver_receipt_dependency_v3, receipt_dependency_width_v3,
     },
-    hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
+    hot_v3::{BorrowedRouteRangesV4, ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
 /// Exact receipt returned by one canonical Claims route.
@@ -136,7 +136,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
     request_bank: &[u8],
-    family_request: &[u8],
+    borrowed_ranges: BorrowedRouteRangesV4<'_, '_, '_>,
     prior_receipt: Option<&[u8]>,
     buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
@@ -160,7 +160,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let request = invocation_request(invocation, request_bank, family_request)?;
+    let request = invocation_request(invocation, request_bank, borrowed_ranges)?;
     gather_invocation_accounts(&mut buffers.accounts, invocation, effect_accounts)?;
     // ONE counter, shared with the preflight walk, and ALIAS-AWARE. This used
     // to be a second hand-rolled filter over the gathered infos, and the two
@@ -338,9 +338,9 @@ pub(crate) fn execute_claims_route_v3<'info>(
 pub(crate) fn claims_child_wire_capacity_v3(
     invocation: ResolvedInvocationV3,
     request_bank: &[u8],
-    family_request: &[u8],
+    borrowed_ranges: BorrowedRouteRangesV4<'_, '_, '_>,
 ) -> Result<usize, ProgramError> {
-    let request = invocation_request(invocation, request_bank, family_request)?;
+    let request = invocation_request(invocation, request_bank, borrowed_ranges)?;
     let receipt_bytes = receipt_dependency_width_v3(invocation);
     let (_, receipt_kind) = route_authority(request, invocation.kind)?;
     let bump_suffix = usize::from(carries_caller_bump_suffix_v4(receipt_kind));
@@ -464,10 +464,24 @@ fn composition_owns_route(composition: ClaimsCompositionV3<'_>, route: u16) -> b
         || composition.close_route() == Some(route)
 }
 
+/// This invocation's exact child request, in either borrow spelling.
+///
+/// The witness the request profile declared reaches a Claims route two ways.
+/// V3 resolves the route's `borrows_witness` bit into
+/// `ResolvedInvocationV3::borrowed_witness`; the V4 successor declares a range
+/// in the Effect's own borrowed-range table, bound to this route. Only the V3
+/// spelling was read here, so a successor's Claims route was handed an EMPTY
+/// request -- the bank slice -- and the range the Effect authenticated was
+/// dropped on the floor. `execute_core_route_v3` has read both since the range
+/// table existed, and `child_receipt_provenance_v4` digests whichever is
+/// present; this is the third reader, and it was left behind.
+///
+/// One route never spells it both ways: `require_borrowed_witness_coverage_v3`
+/// refuses that by name before any child runs, and so does the Core route.
 fn invocation_request<'a>(
     invocation: ResolvedInvocationV3,
     request_bank: &'a [u8],
-    family_request: &'a [u8],
+    borrowed_ranges: BorrowedRouteRangesV4<'_, '_, 'a>,
 ) -> Result<&'a [u8], ProgramError> {
     let end = invocation
         .request_offset
@@ -476,26 +490,38 @@ fn invocation_request<'a>(
     let fixed = request_bank
         .get(invocation.request_offset..end)
         .ok_or(TradingSbfError::Content)?;
-    match invocation.borrowed_witness {
-        None => Ok(fixed),
-        Some(witness) if fixed.is_empty() => {
-            let request = witness
+    let family_request = borrowed_ranges.family_request();
+    let range_count = borrowed_ranges.count()?;
+    let borrowed = match (invocation.borrowed_witness, range_count) {
+        (None, 0) => return Ok(fixed),
+        (Some(_), 0) if !fixed.is_empty() => return Err(TradingSbfError::Content.into()),
+        (Some(witness), 0) => (
+            witness
                 .slice(family_request)
-                .map_err(|_| TradingSbfError::Content)?;
-            if request.get(..8) == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) {
-                let plan =
-                    SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
-                let parent = family_request
-                    .get(..witness.source_offset())
-                    .ok_or(TradingSbfError::Content)?;
-                if hash(parent).to_bytes() != plan.request_id() {
-                    return Err(TradingSbfError::Content.into());
-                }
-            }
-            Ok(request)
+                .map_err(|_| TradingSbfError::Content)?,
+            witness.source_offset(),
+        ),
+        // A route carrying bank bytes AND a range, or more than one range,
+        // would need its wire concatenated; no Claims route declares either
+        // shape and admitting one silently is how a child request stops being
+        // the bytes its receipt provenance committed to.
+        (None, 1) if fixed.is_empty() => {
+            let resolved = borrowed_ranges.resolved_range(0)?;
+            (borrowed_ranges.range(0)?, resolved.source_offset())
         }
-        Some(_) => Err(TradingSbfError::Content.into()),
+        (None, _) | (Some(_), _) => return Err(TradingSbfError::Content.into()),
+    };
+    let (request, source_offset) = borrowed;
+    if request.get(..8) == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) {
+        let plan = SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let parent = family_request
+            .get(..source_offset)
+            .ok_or(TradingSbfError::Content)?;
+        if hash(parent).to_bytes() != plan.request_id() {
+            return Err(TradingSbfError::Content.into());
+        }
     }
+    Ok(request)
 }
 
 /// Gather this invocation's account windows into a caller-owned buffer.

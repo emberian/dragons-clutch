@@ -990,6 +990,8 @@ fn write_byte(output: &mut [u8], offset: usize, value: u8) -> Result<(), Error> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     extern crate std;
 
     use super::*;

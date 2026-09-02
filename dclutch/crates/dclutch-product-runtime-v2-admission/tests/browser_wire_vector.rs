@@ -34,6 +34,8 @@
 //! `python3 tools/ci/wire-vector-pins.py --update` and commit the fixture and
 //! its pin together.
 
+#![allow(clippy::panic)]
+
 use std::{env, fs, path::PathBuf};
 
 use dclutch_product_runtime_v2::ContentId;

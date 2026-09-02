@@ -2721,6 +2721,12 @@ const _: () = assert!(capability_v3::CAPABILITY_PROGRAM_V3_BYTES == 408);
 
 #[cfg(test)]
 mod tests {
+    // `items_after_test_module`: this file declares production consts BELOW this
+    // module on purpose -- each is pinned to an emitter coordinate named beside
+    // it. Same single-lint exemption dclutch-fractional-claim-operator's
+    // exposure_action_v2.rs carries, rather than a 1,300-line move.
+    #![allow(clippy::indexing_slicing, clippy::items_after_test_module)]
+
     extern crate std;
 
     use dclutch_capability_program_contract::v4::{

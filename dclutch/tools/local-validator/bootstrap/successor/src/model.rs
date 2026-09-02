@@ -841,6 +841,14 @@ pub(crate) struct SuccessorPlan {
     pub(crate) resolution: ProgramPin,
     pub(crate) custody: ProgramPin,
     pub(crate) rent_credit: ProgramPin,
+    /// The General accelerator's publication, present only from cohort-14 on.
+    ///
+    /// `skip_serializing_if` is load-bearing: schema v3 is what every earlier
+    /// plan on disk says it is, and a cohort that founds no General market must
+    /// still emit byte-for-byte the document it emitted before this field
+    /// existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) general_accelerator: Option<ProgramPin>,
     pub(crate) activation: String,
     pub(crate) release_set_id: String,
     pub(crate) core_bootstrap: CoreBootstrapPin,

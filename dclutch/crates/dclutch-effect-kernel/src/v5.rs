@@ -316,9 +316,9 @@ impl FundingSeedV5 {
                 if source == 0
                     && width != 0
                     && width <= 32
-                    && payload[usize::from(width)..]
-                        .iter()
-                        .all(|value| *value == 0) =>
+                    && payload
+                        .get(usize::from(width)..)
+                        .is_some_and(|tail| tail.iter().all(|value| *value == 0)) =>
             {
                 Ok(Self::Literal {
                     bytes: payload,
@@ -348,7 +348,11 @@ impl FundingSeedV5 {
     fn encode(self, output: &mut [u8], offset: usize) -> ResultV5<()> {
         match self {
             Self::Literal { bytes, len } => {
-                if len == 0 || len > 32 || bytes[usize::from(len)..].iter().any(|value| *value != 0)
+                if len == 0
+                    || len > 32
+                    || bytes
+                        .get(usize::from(len)..)
+                        .is_none_or(|tail| tail.iter().any(|value| *value != 0))
                 {
                     return Err(ErrorV5::SeedTable);
                 }
@@ -384,7 +388,7 @@ pub struct ResolvedFundingSeedV5 {
 impl ResolvedFundingSeedV5 {
     /// Exact resolved bytes.
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.len)]
+        self.bytes.get(..usize::from(self.len)).unwrap_or(&[])
     }
 }
 
@@ -427,7 +431,7 @@ impl<'a> ProgramV5<'a> {
         if bytes.len() < HEADER_BYTES_V5
             || bytes.get(..4) != Some(MAGIC_V5.as_slice())
             || read_u8(bytes, 4)? != VERSION_V5
-            || slice(bytes, 5, 1)?[0] != 0
+            || read_u8(bytes, 5)? != 0
             || read_u16(bytes, 10)? != 0
             || slice(bytes, 16, 16)?.iter().any(|value| *value != 0)
         {
@@ -572,10 +576,17 @@ impl<'a> ProgramV5<'a> {
                     .ok_or(ErrorV5::RegisterSelection)?;
                 let bytes = value.to_le_bytes();
                 let width = usize::from(width);
-                if bytes[width..].iter().any(|value| *value != 0) {
+                let (head, tail) = bytes
+                    .split_at_checked(width)
+                    .ok_or(ErrorV5::RegisterSelection)?;
+                if tail.iter().any(|value| *value != 0) {
                     return Err(ErrorV5::RegisterSelection);
                 }
-                resolved.bytes[..width].copy_from_slice(&bytes[..width]);
+                resolved
+                    .bytes
+                    .get_mut(..width)
+                    .ok_or(ErrorV5::RegisterSelection)?
+                    .copy_from_slice(head);
                 resolved.len = u8::try_from(width).map_err(|_| ErrorV5::Arithmetic)?;
             }
             FundingSeedV5::CommonIdentity { index } => {
@@ -833,6 +844,8 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> ResultV5<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     extern crate alloc;
 
     use alloc::{vec, vec::Vec};

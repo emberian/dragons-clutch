@@ -223,6 +223,8 @@ impl SourceClosureReceiptV3 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     fn id(tag: u8) -> [u8; 32] {

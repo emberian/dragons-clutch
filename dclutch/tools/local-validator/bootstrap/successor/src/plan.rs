@@ -100,6 +100,8 @@ pub(crate) struct PrepareArgs {
     pub(crate) rent_credit_sha256: String,
     pub(crate) rent_credit_semantic_release_id: String,
     pub(crate) checked_upgrade_set: Option<CheckedUpgradeSetPinV1>,
+    /// Optional eighth publication, absent for every cohort before the 14th.
+    pub(crate) general_accelerator: Option<GeneralAcceleratorPrepareInputV1>,
 }
 
 /// Where one role's deployment slot was read from.
@@ -164,6 +166,40 @@ pub(crate) struct RoleDeploymentInputV1 {
     /// Absent means the caller declares `None`, which is what every invocation
     /// before 0012 meant and is why they all still behave identically.
     pub(crate) expected_upgrade_authority: Option<Pubkey>,
+}
+
+/// The General accelerator's optional prepare group.
+///
+/// NOT A ROLE, and deliberately not a field of [`RoleDeploymentsV1`]. The seven
+/// cohort roles carry a semantic release identity this protocol owns, sit in
+/// the `ExecutionReleaseSetV1` whose digest is the release set, and are what an
+/// activation ladder activates. The accelerator is admitted through an
+/// `ExecutionStrategyCertificateV2` instead and no cohort's release set names
+/// it. What it shares with a role is exactly one thing: its `ArtifactReleaseV1`
+/// must be published and FINALIZED in the cohort's Registry, because since
+/// `90a8563f` that finalization IS the deployment observation --
+/// `build_record_publication_step_v1` sees `ARTIFACT_RELEASE_SCHEMA_ID_V1` and
+/// derives the Program and ProgramData metas from the record's own content,
+/// and `observe_artifact_release_deployment_v1` compares them before the
+/// staging cursor closes. That is a publication-stage fact, so it belongs in
+/// `prepare` beside the seven and nowhere else.
+///
+/// The semantic release id is an OPERATOR-STATED hex and this is named debt:
+/// `upgrade::checked_semantic_release_preimage_v1` refuses any role outside the
+/// seven with "role has no protocol-owned semantic release identity", so there
+/// is nothing to derive it from. The fix is a
+/// `SourceSemanticRoleV1::GeneralAccelerator` label, after which the id is the
+/// ordinary artifact-derived digest and this flag becomes a check rather than
+/// an input. Until then `validate_prepare` refuses a zero id and refuses one
+/// that collides with a role's, which is what can be checked without inventing
+/// a derivation.
+#[derive(Clone, Debug)]
+pub(crate) struct GeneralAcceleratorPrepareInputV1 {
+    pub(crate) program: Pubkey,
+    pub(crate) elf: PathBuf,
+    pub(crate) elf_sha256: String,
+    pub(crate) semantic_release_id: String,
+    pub(crate) deployment: RoleDeploymentInputV1,
 }
 
 /// The seven roles' deployment sources.
@@ -954,6 +990,43 @@ fn prepare_inner(
         &args.deployments.rent_credit,
     )?;
 
+    // THE EIGHTH PUBLICATION, and it is observed on exactly the same terms as
+    // the seven: the ELF is loaded against its stated digest, the deployment
+    // slot and the upgrade authority are hostile-decoded out of the ProgramData
+    // image, and only then is a release body minted. `release_facts` is the one
+    // author for all eight.
+    //
+    // Its authority is NOT `observed_upgrade_authority`. That flag is the
+    // cohort-wide declaration for the seven roles, which a cohort revokes or
+    // keeps together; the accelerator is deployed on its own and keeps its own
+    // key, so it states its own with `--general-accelerator-expected-upgrade-authority`.
+    // Getting that wrong mints an `Immutable` release for a mutable program and
+    // the Registry refuses it at finalization by name.
+    let general_accelerator = match args.general_accelerator.as_ref() {
+        None => None,
+        Some(accelerator) => {
+            let elf = load_elf(
+                "GeneralAccelerator",
+                &accelerator.elf,
+                &accelerator.elf_sha256,
+            )?;
+            let deployment = role_deployment(
+                "GeneralAccelerator",
+                &elf,
+                accelerator.deployment.expected_upgrade_authority,
+                &accelerator.deployment,
+            )?;
+            let facts = release_facts(
+                accelerator.program,
+                hex32(&accelerator.semantic_release_id)?,
+                deployment.live_elf_sha256,
+                deployment.deployment_slot,
+                deployment.upgrade_authority,
+            )?;
+            Some((facts, deployment))
+        }
+    };
+
     if let Some(set) = &args.checked_upgrade_set {
         validate_checked_upgrade_set(
             &args,
@@ -1322,6 +1395,27 @@ fn prepare_inner(
             )?,
         );
     }
+    if let Some((facts, _)) = general_accelerator.as_ref() {
+        // Under `90a8563f` this row's FINALIZATION is the deployment
+        // observation: `build_record_publication_step_v1` recognises
+        // `ARTIFACT_RELEASE_SCHEMA_ID_V1` and derives the Program and
+        // ProgramData metas from the record's own content, and
+        // `observe_artifact_release_deployment_v1` compares them against the
+        // chain before the staging cursor closes. So publishing this record is
+        // not bookkeeping about a deploy that already happened -- it is the
+        // moment the cohort's Registry checks that the accelerator this cohort
+        // will compile certificates against is the one actually deployed.
+        records.insert(
+            "general_accelerator_artifact_release".into(),
+            writer.finalized_record(
+                "general_accelerator_artifact_release",
+                args.registry_program,
+                ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &facts.release.to_bytes(),
+                publication,
+            )?,
+        );
+    }
     records.insert(
         "pyth_release".into(),
         writer.finalized_record(
@@ -1345,6 +1439,22 @@ fn prepare_inner(
     );
     let custody_pin = pin(&args, ProgramKind::Custody, custody, &custody_deployment);
     let rent_pin = pin(&args, ProgramKind::Rent, rent, &rent_deployment);
+    // The accelerator's pin is built by its OWN function rather than a
+    // `ProgramKind` arm, because it differs from every role in the one field a
+    // role's validator refuses outright: `upgrade_authority` is `Some`. The
+    // seven are `Immutable` by the time they are recognized and
+    // `validate_program_pin` says so; the accelerator is `ExactAuthority` and
+    // keeps its deployer key, which is what lets a redeploy be named as a
+    // supersession instead of a mystery.
+    let general_accelerator_pin = general_accelerator.as_ref().map(|(facts, deployment)| {
+        accelerator_pin(
+            args.general_accelerator
+                .as_ref()
+                .expect("the facts exist only when the input does"),
+            *facts,
+            deployment,
+        )
+    });
 
     let checked_local_mutable_set = checked_local_mutable_gate
         .map(|gate| {
@@ -1408,6 +1518,7 @@ fn prepare_inner(
         resolution: resolution_pin,
         custody: custody_pin,
         rent_credit: rent_pin,
+        general_accelerator: general_accelerator_pin,
         activation: activation.to_string(),
         release_set_id: hex(&release_set_id),
         core_bootstrap: CoreBootstrapPin {
@@ -1550,6 +1661,38 @@ fn pin(
     }
 }
 
+/// Project the General accelerator's `ProgramPin` from its observed deployment.
+///
+/// Deliberately not a `ProgramKind` arm of [`pin`]. Everything it shares with a
+/// role -- the programdata derivation, the digests, the slot, the source label
+/// -- is spelled the same way on purpose, so a reader can diff the two and see
+/// that the only difference is the retained upgrade authority.
+fn accelerator_pin(
+    input: &GeneralAcceleratorPrepareInputV1,
+    facts: ReleaseFacts,
+    deployment: &RoleDeployment,
+) -> ProgramPin {
+    ProgramPin {
+        program_id: input.program.to_string(),
+        programdata_id: programdata(input.program).to_string(),
+        elf_path: input.elf.display().to_string(),
+        elf_sha256: input.elf_sha256.clone(),
+        checked_candidate_elf_path: input.elf.display().to_string(),
+        checked_candidate_elf_sha256: input.elf_sha256.clone(),
+        live_elf_sha256: hex(&deployment.live_elf_sha256),
+        live_elf_padding_bytes: deployment.live_elf_padding_bytes,
+        semantic_release_id: input.semantic_release_id.clone(),
+        artifact_release_id: hex(facts.id.as_bytes()),
+        upgrade_authority: facts
+            .release
+            .upgrade_authority()
+            .map(|bytes| Pubkey::new_from_array(bytes).to_string()),
+        deployment_slot: deployment.deployment_slot,
+        deployment_source: deployment.source.as_str().into(),
+        programdata_sha256: hex(&sha256_bytes(&deployment.image)),
+    }
+}
+
 /// Mint one role's `ArtifactReleaseV1` from facts decoded off its deployment.
 ///
 /// The upgrade policy is DERIVED from the authority that role's `ProgramData`
@@ -1587,8 +1730,90 @@ pub(crate) fn release_facts(
     Ok(ReleaseFacts { release, id })
 }
 
+/// Check what CAN be checked about an operator-stated accelerator publication.
+///
+/// The seven roles' semantic ids are re-derived from
+/// `(role label, shipped ELF digest)` and refused on a mismatch, which is what
+/// makes cohort-12's founding/sealing divergence unrepeatable. The accelerator
+/// has no such derivation --
+/// `upgrade::checked_semantic_release_preimage_v1` refuses it by name -- so
+/// there is nothing here to compare against and this function says so rather
+/// than inventing a comparison.
+///
+/// What it refuses instead is the two failures a stated hex can actually have:
+/// an all-zero id, which is what absence already means; and an id that
+/// COLLIDES with one of the seven, which would make the accelerator's release
+/// record indistinguishable from a role's to any reader that keys on semantic
+/// identity. Everything else about this publication is observed off the chain
+/// by `role_deployment` exactly as a role's is.
+///
+/// OWED, and named here rather than in a doc nobody greps: a
+/// `SourceSemanticRoleV1::GeneralAccelerator` label turns the flag into a check.
+fn validate_general_accelerator_prepare(args: &PrepareArgs) -> Result<()> {
+    let Some(accelerator) = args.general_accelerator.as_ref() else {
+        return Ok(());
+    };
+    if !accelerator.elf.is_absolute() || !accelerator.elf.is_file() {
+        return Err(Error::new(
+            "General accelerator ELF must be an existing absolute regular file",
+        ));
+    }
+    for (label, value) in [
+        ("General accelerator SHA-256", &accelerator.elf_sha256),
+        (
+            "General accelerator semantic release ID",
+            &accelerator.semantic_release_id,
+        ),
+    ] {
+        hex32(value).map_err(|_| {
+            Error::new(format!(
+                "{label} must be 64 lowercase hexadecimal characters"
+            ))
+        })?;
+    }
+    let stated = hex32(&accelerator.semantic_release_id)?;
+    if stated == [0; 32] {
+        return Err(Error::new(
+            "General accelerator semantic release ID is all zero, which is what absence already means",
+        ));
+    }
+    for (role, id) in [
+        ("registry", &args.registry_semantic_release_id),
+        ("core", &args.core_semantic_release_id),
+        ("claims", &args.claims_semantic_release_id),
+        ("trading", &args.trading_semantic_release_id),
+        ("resolution", &args.resolution_semantic_release_id),
+        ("custody", &args.custody_semantic_release_id),
+        ("rent-credit", &args.rent_credit_semantic_release_id),
+    ] {
+        if hex32(id).map(|role_id| role_id == stated).unwrap_or(false) {
+            return Err(Error::new(format!(
+                "General accelerator semantic release ID collides with the {role} role's; \
+                 the accelerator is not a role and must not borrow one's identity"
+            )));
+        }
+    }
+    // An omitted authority would mint an `Immutable` release for a program the
+    // deployer still holds the key to, and the Registry would refuse it at
+    // finalization with `ArtifactReleaseNotDeployed` -- a true refusal about a
+    // record that should never have been minted. The accelerator's deploy is
+    // `ExactAuthority`; if a later one is genuinely immutable, the flag takes
+    // the literal `immutable` and that is a stated decision, not an omission.
+    if accelerator.deployment.expected_upgrade_authority.is_none()
+        && accelerator.deployment.observed_programdata.is_some()
+    {
+        return Err(Error::new(
+            "--general-accelerator-expected-upgrade-authority is required beside an observed \
+             ProgramData account: pass the key the deployment must be upgradeable under, or \
+             `immutable` to assert it carries none. An omitted flag would mint an Immutable \
+             release for a mutable program",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_prepare(args: &PrepareArgs) -> Result<()> {
-    validate_program_ids(&[
+    let mut program_ids = vec![
         args.registry_program,
         args.core_program,
         args.claims_program,
@@ -1596,7 +1821,12 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
         args.resolution_program,
         args.custody_program,
         args.rent_credit_program,
-    ])?;
+    ];
+    if let Some(accelerator) = args.general_accelerator.as_ref() {
+        program_ids.push(accelerator.program);
+    }
+    validate_program_ids(&program_ids)?;
+    validate_general_accelerator_prepare(args)?;
     // RETIRED 2026-09-02 with `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` (decision
     // 0012's amendment): this refused raw release facts for exactly one
     // hardcoded seven-program set. It had no referent left -- that substrate was
@@ -2378,6 +2608,52 @@ mod tests {
         deployments: RoleDeploymentsV1,
         resolution_semantic_release_id: [u8; 32],
     ) -> (Result<SuccessorPlan>, PathBuf) {
+        prepared_plan_full(
+            publication,
+            deployments,
+            resolution_semantic_release_id,
+            AcceleratorFixtureV1::Absent,
+        )
+    }
+
+    /// The same plan with the General accelerator's publication attached.
+    ///
+    /// Its ELF is a distinct test artifact under a distinct program id, and its
+    /// semantic id is a stated hex that is not any role's -- which is exactly
+    /// the shape `prepare` admits and `validate_general_accelerator_prepare`
+    /// checks, because nothing in this tree derives an accelerator's semantic
+    /// identity.
+    fn prepared_plan_with_accelerator(
+        publication: RecordPublicationV1,
+    ) -> (Result<SuccessorPlan>, PathBuf) {
+        prepared_plan_full(
+            publication,
+            RoleDeploymentsV1::default(),
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            AcceleratorFixtureV1::Stated,
+        )
+    }
+
+    /// Which accelerator publication a fixture plan carries.
+    ///
+    /// The two hostile arms are the only two failures an OPERATOR-STATED
+    /// identity can have, and they are named rather than numbered so that when
+    /// `SourceSemanticRoleV1::GeneralAccelerator` lands and the id becomes
+    /// derived, what is being replaced is written down.
+    #[derive(Clone, Copy)]
+    enum AcceleratorFixtureV1 {
+        Absent,
+        Stated,
+        SemanticZero,
+        SemanticBorrowsTheClaimsRole,
+    }
+
+    fn prepared_plan_full(
+        publication: RecordPublicationV1,
+        deployments: RoleDeploymentsV1,
+        resolution_semantic_release_id: [u8; 32],
+        accelerator: AcceleratorFixtureV1,
+    ) -> (Result<SuccessorPlan>, PathBuf) {
         let root = scratch_root("plan");
         let (registry_elf, registry_sha256) = write_test_elf(&root, "dclutch_registry_sbf.so", 1);
         let (core_elf, core_sha256) = write_test_elf(&root, "dclutch_core_sbf.so", 2);
@@ -2436,8 +2712,137 @@ mod tests {
             checked_upgrade_set: None,
             record_publication: publication,
             deployments,
+            general_accelerator: match accelerator {
+                AcceleratorFixtureV1::Absent => None,
+                other => {
+                    let (elf, elf_sha256) =
+                        write_test_elf(&root, "dclutch_general_accelerator_sbf.so", 9);
+                    Some(GeneralAcceleratorPrepareInputV1 {
+                        program: program(9),
+                        elf,
+                        elf_sha256,
+                        semantic_release_id: match other {
+                            AcceleratorFixtureV1::SemanticZero => hex(&[0; 32]),
+                            AcceleratorFixtureV1::SemanticBorrowsTheClaimsRole => {
+                                claims_semantic.clone()
+                            }
+                            _ => hex(&[0x5a; 32]),
+                        },
+                        deployment: RoleDeploymentInputV1::default(),
+                    })
+                }
+            },
         });
         (plan, root)
+    }
+
+    /// THE EIGHTH PUBLICATION, and the seven are byte-for-byte where they were.
+    ///
+    /// A cohort that founds a General market must finalize the accelerator's
+    /// `ArtifactReleaseV1` in its own Registry, because since `90a8563f` that
+    /// finalization IS the deployment observation. This asserts the row exists,
+    /// carries the accelerator's own release body, and -- the part that could
+    /// silently go wrong -- that adding it moved nothing about the seven roles:
+    /// same release-set id, same nine record coordinates, same activation.
+    #[test]
+    fn the_general_accelerator_publishes_a_tenth_record_and_disturbs_no_role() {
+        let (without, without_root) = prepared_plan_with_accelerator(RecordPublicationV1::Genesis);
+        let with_accelerator = without.expect("prepare with the accelerator");
+        let (baseline, baseline_root) = prepared_plan(RecordPublicationV1::Genesis);
+
+        assert_eq!(baseline.records.len(), 9);
+        assert_eq!(with_accelerator.records.len(), 10);
+        assert!(baseline.general_accelerator.is_none());
+        assert!(
+            !baseline
+                .records
+                .contains_key("general_accelerator_artifact_release")
+        );
+
+        // The seven roles' identities did not move. If the accelerator's
+        // publication could change the release set, a General cohort would
+        // found a different market than a Direct one built from the same seven
+        // ELFs, and nothing else in this file would notice.
+        assert_eq!(with_accelerator.release_set_id, baseline.release_set_id);
+        assert_eq!(with_accelerator.activation, baseline.activation);
+        for label in [
+            "execution_release_set",
+            "registry_artifact_release",
+            "core_artifact_release",
+            "claims_artifact_release",
+            "trading_artifact_release",
+            "resolution_artifact_release",
+            "custody_artifact_release",
+            "rent_artifact_release",
+            "pyth_release",
+        ] {
+            assert_eq!(
+                with_accelerator.records[label].raw, baseline.records[label].raw,
+                "role record {label} moved when the accelerator was published"
+            );
+            assert_eq!(
+                with_accelerator.records[label].body_hex,
+                baseline.records[label].body_hex,
+            );
+        }
+
+        let pin = with_accelerator
+            .general_accelerator
+            .as_ref()
+            .expect("the accelerator's pin");
+        let record = &with_accelerator.records["general_accelerator_artifact_release"];
+        assert_eq!(record.schema_id, hex(&ARTIFACT_RELEASE_SCHEMA_ID_V1));
+        let body = crate::runtime::decode_hex(&record.body_hex).expect("record body hex");
+        assert_eq!(body.len(), 216);
+        let release = ArtifactReleaseV1::decode(&body).expect("the accelerator's release body");
+        assert_eq!(
+            release.program().to_bytes(),
+            pubkey(&pin.program_id).expect("program").to_bytes(),
+        );
+        assert_eq!(
+            hex(release.semantic_release_id().as_bytes()),
+            pin.semantic_release_id,
+        );
+        assert_eq!(hex(&sha256_bytes(&body)), record.content_sha256);
+        // A genesis-published record is also a genesis account, so the eighth
+        // publication is one more of them and exactly one.
+        assert_eq!(
+            with_accelerator.genesis_accounts.len(),
+            baseline.genesis_accounts.len() + 1,
+        );
+
+        let _ = fs::remove_dir_all(&without_root);
+        let _ = fs::remove_dir_all(&baseline_root);
+    }
+
+    /// A stated semantic id may not borrow a role's, and may not be zero.
+    ///
+    /// These are the only two things that CAN be checked about an
+    /// operator-stated identity, and the test exists so that when
+    /// `SourceSemanticRoleV1::GeneralAccelerator` lands and the id becomes
+    /// derived, the thing it replaces is written down rather than remembered.
+    #[test]
+    fn an_accelerator_semantic_id_may_be_neither_zero_nor_a_roles() {
+        for (fixture, needle) in [
+            (AcceleratorFixtureV1::SemanticZero, "all zero"),
+            (
+                AcceleratorFixtureV1::SemanticBorrowsTheClaimsRole,
+                "collides with the claims role",
+            ),
+        ] {
+            let (result, root) = prepared_plan_full(
+                RecordPublicationV1::Transaction,
+                RoleDeploymentsV1::default(),
+                RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+                fixture,
+            );
+            let refusal = result.expect_err("a bad accelerator semantic id must refuse");
+            assert!(
+                refusal.to_string().contains(needle),
+                "refusal did not name {needle}: {refusal}"
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 
     #[test]

@@ -615,15 +615,16 @@ const _: () = {
         TradingSbfError::ALL[0] as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE,
         "TradingSbfError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < TradingSbfError::ALL.len() {
-        let variant = TradingSbfError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = TradingSbfError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "TradingSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
-            variant as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE + index as u32,
+            variant as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE + index,
             "TradingSbfError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -633,6 +634,7 @@ const _: () = {
             "TradingSbfError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 

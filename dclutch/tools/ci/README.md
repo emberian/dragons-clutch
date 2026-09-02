@@ -20,6 +20,7 @@ tools/ci/run.sh all --require             # the release answer
 | `census` | milliseconds | python3 | a generated file arriving with **no** re-emit guard, or losing one; and the three two-sided wire vectors still carrying their reviewed digests |
 | `seam` | ~20s | `ast-grep` | six structural seam defect classes, new findings against a triaged baseline |
 | `release` | ~5s | python3 | the four release-tooling **refusal** suites: build-freshness admission, the devnet activity and demo-pulse wrappers, the sponsored-market-open stager |
+| `clippy` | 22s warm, minutes cold | cargo, clippy, python3 | the deny table at `Cargo.toml:119` and the command `README.md:183` publishes, which **no tier ran**: 105 workspace members judged per package against `tools/ci/clippy-debt.tsv`, and the packages `--keep-going` never *reached* counted separately |
 | `web` | ~1 min | node | the web + SDK vitest suites |
 | `emission` | minutes | `lake` | every generated file still byte-matches the emitter that printed it |
 | `journey` | ~2 min | `cargo` | the journey campaign still **compiles** |
@@ -28,7 +29,7 @@ tools/ci/run.sh all --require             # the release answer
 | `suites` | ~15 min | `cargo-build-sbf` | the other SBF program-test suites: custody, core, claims, dealer |
 | `workspaces` | slow | `cargo` | **every** tracked Cargo workspace checks from an archived revision |
 
-`cheap` = census + seam + release. `all` = census seam release web emission
+`cheap` = census + seam + release. `all` = census seam release clippy web emission
 journey programs suites. `workspaces` is deliberately outside `all`: it gives
 every workspace a fresh target directory, which is the cut's price to pay and
 not a push's.
@@ -53,6 +54,51 @@ One honest limit: the stager suite re-runs its red controls against the last
 revision *before* its guards existed, which needs real git history. On a shallow
 clone, or in a vendored subtree whose history does not carry that path, it says
 so itself and two of its thirteen cases do not run.
+
+### `clippy`, and the table nobody ran
+
+`[workspace.lints.clippy]` at `Cargo.toml:119` denies seven lints — `unwrap_used`,
+`panic`, `indexing_slicing`, `float_arithmetic`, `cast_possible_truncation`,
+`cast_sign_loss`, `checked_conversions` — and `README.md:183` publishes
+`cargo clippy --workspace --all-targets -- -D warnings` as a workspace check.
+
+**Nothing ran it.** This runner dispatched fifteen tiers and not one invoked
+clippy; `workspaces` runs `cargo check`, which cannot see a lint. The only
+`cargo clippy` anywhere in the tree was `tools/direct-translation-validator/check.sh`,
+over a different workspace. `1bdf5572f` found a red that had survived a day and
+named this as the debt it was evidence of.
+
+**The package is the unit.** `--keep-going` checks everything whose dependencies
+compiled and stops at a red library, so *one* red kernel hides every package
+above it. The first full census reached **30 of 105** members and was blind to
+69 — a fact a per-lint quarantine would not have shown. So `clippy-census.py`
+reports three sets on every run: clean, red, and **never reached**. The third is
+printed because "we did not look" and "we looked and it was fine" are different
+answers, which is the same distinction this runner's exit codes exist for.
+
+`tools/ci/clippy-debt.tsv` is the list of packages that are red today and must
+**stay** red. A `debt` package that goes green fails the tier by name — the fix
+landed and the row is stale coverage. A red package with no row fails it too.
+That is the ratchet in both directions.
+
+**Its own target directory.** `cargo clippy` sets `RUSTC_WORKSPACE_WRAPPER`,
+which is part of every workspace member's fingerprint, so alternating clippy and
+`cargo check` in one directory rebuilds all 105 members each way — a tax on every
+other lane in a shared checkout. The tier uses `target/clippy`
+(`DCLUTCH_CI_CLIPPY_TARGET` overrides it).
+
+**The budget** is measured the way `root-targets` measures its own: a minimum of
+three rounds, warm dependency cache, every `crates/` and `programs/` source
+touched first so the whole workspace is genuinely re-checked. 22s, 25s, 31s → 22.
+The assertion is the same loose `DCLUTCH_CI_TIME_SLACK` backstop, and it is
+**skipped entirely** when the target directory did not exist before the run: a
+cold check of the whole dependency graph is not what 22s measured, and firing
+there would be the tier crying wolf on its own first run.
+
+**What a green here does not say.** 68 of 105 members carry `[lints] workspace = true`;
+the other 37 do not inherit the deny table at all, and the seven lints above are
+allow-by-default restriction lints that `-D warnings` does not reach. The tier
+prints that ratio on every run so a green is not read as more than it is.
 
 ### `root-targets`, and the ten minutes that were a cold cache
 

@@ -480,6 +480,8 @@ fn content(bytes: [u8; 32]) -> Result<ContentId, DirectActivationBundleErrorV1> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use dclutch_account_profile_contract::{
         AccountObservationV1, ProjectionRegistersV2, project_atomic,

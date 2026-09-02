@@ -61,10 +61,10 @@ impl ProjectedCustodyAdmissionV1 {
     #[must_use]
     pub const fn states(states: &[ProjectedCustodyPhaseV1]) -> Self {
         let mut admitted = 0u8;
-        let mut position = 0;
-        while position < states.len() {
-            admitted |= 1u8 << phase_tag(states[position]);
-            position += 1;
+        let mut rest = states;
+        while let [state, tail @ ..] = rest {
+            admitted |= 1u8 << phase_tag(*state);
+            rest = tail;
         }
         Self { states: admitted }
     }
@@ -178,11 +178,14 @@ mod tests {
     /// Every set, checked against the exact condition that stood at its guard.
     #[test]
     fn admissible_states_reproduce_the_guards_they_replaced() {
-        let cases: [(
-            &str,
+        /// One guard the admission set replaced: its name, the set, and the
+        /// exact predicate that stood at the guard before it.
+        type GuardCase = (
+            &'static str,
             ProjectedCustodyAdmissionV1,
             fn(ProjectedCustodyPhaseV1) -> bool,
-        ); 5] = [
+        );
+        let cases: [GuardCase; 5] = [
             (
                 "open_hoard",
                 PROJECTED_CUSTODY_OPEN_HOARD_ADMISSIBLE_STATES_V1,

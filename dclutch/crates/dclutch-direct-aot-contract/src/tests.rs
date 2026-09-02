@@ -1,3 +1,5 @@
+#![allow(clippy::indexing_slicing)]
+
 extern crate std;
 
 use dclutch_transition_vm::v2::{

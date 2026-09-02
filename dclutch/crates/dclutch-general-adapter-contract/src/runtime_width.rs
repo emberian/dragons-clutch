@@ -45,6 +45,12 @@ pub const PAGE_HEADER_BYTES_V2: usize = wire::PAGE_HEADER_BYTES_V2;
 /// Lean-derived: `GeneralRuntimeWireV2` walks this record's field sequence
 /// and this is where the walk ends.
 pub const SETTLEMENT_CURSOR_HEADER_BYTES_V2: usize = wire::SETTLEMENT_CURSOR_HEADER_BYTES_V2;
+/// The header width is a runtime coordinate, so it has to fit one.
+const INVENTORY_BASE_FITS_V2: () = assert!(
+    SETTLEMENT_CURSOR_HEADER_BYTES_V2 <= u32::MAX as usize,
+    "the settlement cursor header is wider than a runtime coordinate"
+);
+const _: () = INVENTORY_BASE_FITS_V2;
 /// Exact fixed bytes before the Verified Candidate input and output tails.
 ///
 /// Lean-derived: `GeneralRuntimeWireV2` walks the field sequence and this is
@@ -137,6 +143,14 @@ impl SettlementCursorLayoutV2 {
     }
 
     /// Runtime inventory-tail base offset.
+    ///
+    /// The header width is a `usize` and the runtime coordinate is a `u32`. The
+    /// narrowing is proven impossible below rather than asserted here, and
+    /// `try_from` is not available in a `const fn`.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "INVENTORY_BASE_FITS_V2 refuses the build if the header width leaves u32"
+    )]
     pub const fn inventory_base() -> u32 {
         wire::SETTLEMENT_CURSOR_HEADER_BYTES_V2 as u32
     }

@@ -480,6 +480,8 @@ fn write(output: &mut [u8], offset: usize, value: &[u8]) -> ClaimCheckResultV1<(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use crate::CallerRole;
     use crate::fractional_claim_check_compaction_request_v1::FractionalCompactionCoordinatesV1;

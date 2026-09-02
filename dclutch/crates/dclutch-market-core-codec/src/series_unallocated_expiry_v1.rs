@@ -15,6 +15,7 @@ pub const SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLSUP
 pub const SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1: usize = 32;
 
 const VERSION_OFFSET: usize = 8;
+const _: () = assert!(SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1.len() == VERSION_OFFSET);
 const RESERVED_OFFSET: usize = 10;
 /// Byte offset of the expected Series-root revision.
 pub const SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_SERIES_REVISION_OFFSET_V1: usize = 16;
@@ -85,7 +86,7 @@ impl SeriesUnallocatedPermitExpiryRequestV1 {
     #[must_use]
     pub fn encode(self) -> [u8; SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1] {
         let mut output = [0_u8; SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1];
-        output[..SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1.len()]
+        output[..VERSION_OFFSET]
             .copy_from_slice(&SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1);
         output[VERSION_OFFSET..VERSION_OFFSET + 2]
             .copy_from_slice(&PHYSICAL_ABI_VERSION_V1.to_le_bytes());
@@ -122,6 +123,8 @@ fn read_u64(input: &[u8], offset: usize) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     #[test]

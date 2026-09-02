@@ -1632,9 +1632,10 @@ mod tests {
         // The two highest coordinates each bank names must be inside the width
         // the emitted programs were encoded against, or an instruction that
         // addresses one is decodable and out of range at fold time.
-        assert!(scalar::RESULT_RENT_PRINCIPAL < GENERAL_TRANSITION_COMMON_SCALARS_V3);
-        assert!(item_scalar::CURSOR_INVENTORY < GENERAL_TRANSITION_ITEM_SCALAR_STRIDE_V3);
-        assert!(identity::RESULT_OWNER < GENERAL_TRANSITION_COMMON_IDENTITIES_V3);
+        const _: () = assert!(scalar::RESULT_RENT_PRINCIPAL < GENERAL_TRANSITION_COMMON_SCALARS_V3);
+        const _: () =
+            assert!(item_scalar::CURSOR_INVENTORY < GENERAL_TRANSITION_ITEM_SCALAR_STRIDE_V3);
+        const _: () = assert!(identity::RESULT_OWNER < GENERAL_TRANSITION_COMMON_IDENTITIES_V3);
     }
 
     #[test]

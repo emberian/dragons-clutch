@@ -321,6 +321,7 @@ pub fn evaluate_general_admitted_initialize_v3<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn acknowledge_candidate<'a>(
     action: Action,
     accelerator_request: &[u8],

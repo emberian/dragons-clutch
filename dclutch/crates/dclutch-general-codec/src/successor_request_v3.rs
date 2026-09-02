@@ -412,6 +412,8 @@ fn put_byte(output: &mut [u8], offset: usize, value: u8) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     const ACTIONS: [ControllerActionV3; 15] = [

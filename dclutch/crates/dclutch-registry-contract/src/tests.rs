@@ -1,3 +1,5 @@
+#![allow(clippy::indexing_slicing)]
+
 extern crate std;
 
 use dclutch_core_contract::ContentId;
@@ -1325,7 +1327,7 @@ fn a_cycle_terminates_on_the_hop_bound_instead_of_running_forever() {
 
 #[test]
 fn the_walk_refuses_one_hop_past_its_own_bound() {
-    let hops: std::vec::Vec<_> = (0..=u8::from(LINEAGE_WALK_MAX_HOPS_V1))
+    let hops: std::vec::Vec<_> = (0..=LINEAGE_WALK_MAX_HOPS_V1)
         .map(|step| lineage_hop(0x11 + step, 0x12 + step))
         .collect();
     let bound = usize::from(LINEAGE_WALK_MAX_HOPS_V1);

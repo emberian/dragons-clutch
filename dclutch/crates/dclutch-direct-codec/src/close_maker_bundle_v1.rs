@@ -423,6 +423,8 @@ fn content(bytes: [u8; 32]) -> Result<ContentId, DirectCloseMakerBundleErrorV1> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput, execute_atomic};
 

@@ -57,6 +57,11 @@ pub const LINEAGE_WALK_MAX_HOPS_V1: u8 = 32;
 /// The caller decodes, because decoding is [`ReleaseLineageV1`]'s job and a
 /// second decoder here would be a second author. The walk then judges the
 /// chain, which is a fact no single record holds.
+// `large_enum_variant`: the lint's only remedy is boxing the large variant, and
+// its own note says that costs `Copy`. This crate is `no_std` with no allocator,
+// so `Box` is not available at all, and `Copy` is what lets a caller pass a found
+// lineage by value instead of borrowing across a decode. The size is the record's.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LineageAt {
     /// The derived address is vacant: no successor was ever declared.

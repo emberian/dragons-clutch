@@ -182,6 +182,11 @@ cd apps/dclutch-web && npm run dev
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+
+# the clippy line above, as a gate rather than a habit -- it judges every
+# workspace member against tools/ci/clippy-debt.tsv and says how many it
+# never reached:
+tools/ci/run.sh clippy
 ```
 
 After anything under `packages/dclutch-sdk` moves — the deployment manifest

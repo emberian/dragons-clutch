@@ -66,6 +66,7 @@ mod selected_capability;
 mod source_abort_exterior;
 mod spline_product;
 mod sponsored_push;
+mod sponsored_schedule;
 mod structured_market;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
@@ -317,6 +318,9 @@ fn run() -> Result<()> {
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
+        Some(command) if command == sponsored_schedule::COMMAND_V1 => {
+            sponsored_schedule::run(arguments.collect())
+        }
         Some(command) if command == sponsored_push::INPUT_COMMAND_DEVNET_V1 => {
             sponsored_push::run_devnet_input(arguments.collect())
         }
@@ -1496,6 +1500,15 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     // it is hostile-decoded out of the resulting account image by exactly the
     // parse the on-chain authenticator runs. What these choose is which image.
     let mut deployments = plan::RoleDeploymentsV1::default();
+    // THE EIGHTH PUBLICATION, kept out of `RoleDeploymentsV1` on purpose: that
+    // struct is "the seven roles' deployment sources" and the accelerator is
+    // not a role. It borrows the roles' flag GRAMMAR because the facts are the
+    // same facts, and nothing else.
+    let mut general_accelerator_deployment = plan::RoleDeploymentInputV1::default();
+    let mut general_accelerator_program = None;
+    let mut general_accelerator_elf = None;
+    let mut general_accelerator_sha256 = None;
+    let mut general_accelerator_semantic_release = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -1503,7 +1516,11 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
         if let Some(rest) = argument.strip_prefix("--") {
             if let Some(role) = rest.strip_suffix("-live-elf-sha256")
-                && let Some(target) = deployment_target(&mut deployments, role)
+                && let Some(target) = prepare_deployment_target(
+                    &mut deployments,
+                    &mut general_accelerator_deployment,
+                    role,
+                )
             {
                 if target
                     .expected_live_elf_sha256
@@ -1515,7 +1532,11 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
                 continue;
             }
             if let Some(role) = rest.strip_suffix("-observed-programdata")
-                && let Some(target) = deployment_target(&mut deployments, role)
+                && let Some(target) = prepare_deployment_target(
+                    &mut deployments,
+                    &mut general_accelerator_deployment,
+                    role,
+                )
             {
                 if target
                     .observed_programdata
@@ -1527,7 +1548,11 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
                 continue;
             }
             if let Some(role) = rest.strip_suffix("-expected-upgrade-authority")
-                && let Some(target) = deployment_target(&mut deployments, role)
+                && let Some(target) = prepare_deployment_target(
+                    &mut deployments,
+                    &mut general_accelerator_deployment,
+                    role,
+                )
             {
                 if target
                     .expected_upgrade_authority
@@ -1539,7 +1564,11 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
                 continue;
             }
             if let Some(role) = rest.strip_suffix("-genesis-deployment-slot")
-                && let Some(target) = deployment_target(&mut deployments, role)
+                && let Some(target) = prepare_deployment_target(
+                    &mut deployments,
+                    &mut general_accelerator_deployment,
+                    role,
+                )
             {
                 if target.genesis_deployment_slot != 0 {
                     return Err(Error::new(format!("{argument} may be supplied only once")));
@@ -1588,6 +1617,12 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             "--rent-credit-elf" => &mut rent_credit_elf,
             "--rent-credit-sha256" => &mut rent_credit_sha256,
             "--rent-credit-semantic-release-id" => &mut rent_credit_semantic_release,
+            "--general-accelerator-program-id" => &mut general_accelerator_program,
+            "--general-accelerator-elf" => &mut general_accelerator_elf,
+            "--general-accelerator-sha256" => &mut general_accelerator_sha256,
+            "--general-accelerator-semantic-release-id" => {
+                &mut general_accelerator_semantic_release
+            }
             "--deployment-set-journal" => &mut upgrade_set_journal,
             "--rpc-url" => &mut deployment_set_rpc_url,
             "--i-mean-devnet" => &mut deployment_set_devnet_acknowledgment,
@@ -1601,6 +1636,18 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
     }
+    // ASSEMBLED HERE, before any evidence is read, because a half-supplied flag
+    // group is a shape error in the ARGUMENTS and must refuse where the other
+    // shape errors do. Deferring it into the `PrepareArgs` literal put it
+    // behind `--rpc-url is required`, so the caller who mistyped one of four
+    // flags was told about a fifth.
+    let general_accelerator = general_accelerator_prepare_input(
+        general_accelerator_program,
+        general_accelerator_elf,
+        general_accelerator_sha256,
+        general_accelerator_semantic_release,
+        general_accelerator_deployment,
+    )?;
     if upgrade_set_journal.is_some() {
         for (label, supplied) in [
             ("--registry-program-id", registry_program.is_some()),
@@ -1954,6 +2001,13 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             "--rent-credit-semantic-release-id",
         )?,
         checked_upgrade_set,
+        // OPTIONAL, AND LEGAL BESIDE `--deployment-set-journal`. The journal is
+        // the sole owner of the SEVEN checked roles and refuses every raw role
+        // flag; it names no accelerator, so it can neither supply this group
+        // nor contradict it. A cohort-14 prepare is a checked prepare AND
+        // carries this publication, so refusing the combination would make the
+        // step unreachable exactly where it is needed.
+        general_accelerator,
         record_publication: match record_publication.as_deref() {
             None => plan::RecordPublicationV1::Genesis,
             Some(value) => plan::RecordPublicationV1::parse(value)?,
@@ -2012,6 +2066,30 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
 ///
 /// `None` means the name is not a role, which lets the caller fall through to
 /// the ordinary flag table instead of swallowing a typo.
+/// Resolve a `--<role>-<suffix>` flag to the deployment input it fills.
+///
+/// The accelerator is resolved here rather than inside [`deployment_target`]
+/// so that function keeps meaning exactly "one of the seven cohort roles".
+/// This is the only place the two vocabularies meet, and the flag spellings
+/// fall out of the suffix grammar rather than being written a second time:
+/// `--general-accelerator-observed-programdata`,
+/// `--general-accelerator-live-elf-sha256`,
+/// `--general-accelerator-expected-upgrade-authority` and
+/// `--general-accelerator-genesis-deployment-slot` all exist because this arm
+/// does. Note the divergence from `devnet-general-market`, which spells the
+/// authority `--general-accelerator-upgrade-authority`: two commands, two
+/// grammars, and `prepare`'s is the one with seven other users.
+fn prepare_deployment_target<'a>(
+    deployments: &'a mut plan::RoleDeploymentsV1,
+    general_accelerator: &'a mut plan::RoleDeploymentInputV1,
+    role: &str,
+) -> Option<&'a mut plan::RoleDeploymentInputV1> {
+    if role == "general-accelerator" {
+        return Some(general_accelerator);
+    }
+    deployment_target(deployments, role)
+}
+
 fn deployment_target<'a>(
     deployments: &'a mut plan::RoleDeploymentsV1,
     role: &str,
@@ -2026,6 +2104,67 @@ fn deployment_target<'a>(
         "rent-credit" => Some(&mut deployments.rent_credit),
         _ => None,
     }
+}
+
+/// Assemble the accelerator group, or refuse a HALF-SUPPLIED one.
+///
+/// All four scalars absent means no accelerator publication, which is every
+/// cohort before the 14th and is not an error. All four present means one.
+/// Anything between is a typo that would otherwise publish nothing and report
+/// success -- the failure mode this repository calls silent success -- so it is
+/// refused by naming exactly which flags are missing.
+fn general_accelerator_prepare_input(
+    program: Option<String>,
+    elf: Option<String>,
+    sha256: Option<String>,
+    semantic_release_id: Option<String>,
+    deployment: plan::RoleDeploymentInputV1,
+) -> Result<Option<plan::GeneralAcceleratorPrepareInputV1>> {
+    let supplied = [
+        ("--general-accelerator-program-id", program.is_some()),
+        ("--general-accelerator-elf", elf.is_some()),
+        ("--general-accelerator-sha256", sha256.is_some()),
+        (
+            "--general-accelerator-semantic-release-id",
+            semantic_release_id.is_some(),
+        ),
+    ];
+    let present = supplied.iter().filter(|(_, given)| *given).count();
+    let deployment_supplied = deployment.observed_programdata.is_some()
+        || deployment.expected_live_elf_sha256.is_some()
+        || deployment.expected_upgrade_authority.is_some()
+        || deployment.genesis_deployment_slot != 0;
+    if present == 0 {
+        if deployment_supplied {
+            return Err(Error::new(
+                "a --general-accelerator-* deployment flag was supplied without \
+                 --general-accelerator-program-id, --general-accelerator-elf, \
+                 --general-accelerator-sha256 and --general-accelerator-semantic-release-id",
+            ));
+        }
+        return Ok(None);
+    }
+    if present != supplied.len() {
+        let missing: Vec<&str> = supplied
+            .iter()
+            .filter(|(_, given)| !*given)
+            .map(|(label, _)| *label)
+            .collect();
+        return Err(Error::new(format!(
+            "the General accelerator publication needs its whole flag group; missing {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(Some(plan::GeneralAcceleratorPrepareInputV1 {
+        program: parse_pubkey(program, "--general-accelerator-program-id")?,
+        elf: absolute(elf, "--general-accelerator-elf")?,
+        elf_sha256: required(sha256, "--general-accelerator-sha256")?,
+        semantic_release_id: required(
+            semantic_release_id,
+            "--general-accelerator-semantic-release-id",
+        )?,
+        deployment,
+    }))
 }
 
 fn required(value: Option<String>, label: &str) -> Result<String> {
@@ -2154,6 +2293,7 @@ fn usage() {
     println!("{}", sponsored_push::usage());
     println!("{}", sponsored_push::owned_loopback_usage());
     println!("{}", sponsored_push::input_usage());
+    println!("{}", sponsored_schedule::usage());
     println!("{}", sponsored_push::input_owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
     println!("{}", wallet_terminal_payout_exterior::usage());
@@ -2204,7 +2344,7 @@ fn usage() {
 
 fn usage_supervisor() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --deployment-set-journal ABSOLUTE_JSON --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS --solana-cli ABSOLUTE_EXECUTABLE --custody-observed-programdata ABSOLUTE_BODY --resolution-observed-programdata ABSOLUTE_BODY --claims-observed-programdata ABSOLUTE_BODY --trading-observed-programdata ABSOLUTE_BODY --core-observed-programdata ABSOLUTE_BODY\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market (always refuses: retired local-only fixture)\n\nThe checked deployment-set form is the only prepare admission for the permanent devnet set. Registry and Rent are exact CarryForward rows sourced only from the authenticated one-context snapshot; their raw program, ELF, ProgramData, semantic, slot, authority, and publication flags are refused. Custody, Resolution, Claims, Trading, and Core require exact complete Upgrade receipts and hostile current ProgramData bodies. Prepare first reruns the key-free live finalized audit, then rehashes all evidence and reproduces the existing Registry/Rent ArtifactRelease records and singleton profile byte-for-byte. demo-market cannot authenticate permanent-devnet Direct facts and refuses instead of inventing them."
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --deployment-set-journal ABSOLUTE_JSON --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS --solana-cli ABSOLUTE_EXECUTABLE --custody-observed-programdata ABSOLUTE_BODY --resolution-observed-programdata ABSOLUTE_BODY --claims-observed-programdata ABSOLUTE_BODY --trading-observed-programdata ABSOLUTE_BODY --core-observed-programdata ABSOLUTE_BODY [--general-accelerator-program-id PUBKEY --general-accelerator-elf ABSOLUTE_SO --general-accelerator-sha256 64_LOWERCASE_HEX --general-accelerator-semantic-release-id 64_LOWERCASE_HEX --general-accelerator-observed-programdata ABSOLUTE_BODY --general-accelerator-live-elf-sha256 64_LOWERCASE_HEX --general-accelerator-expected-upgrade-authority PUBKEY]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market (always refuses: retired local-only fixture)\n\nThe checked deployment-set form is the only prepare admission for the permanent devnet set. Registry and Rent are exact CarryForward rows sourced only from the authenticated one-context snapshot; their raw program, ELF, ProgramData, semantic, slot, authority, and publication flags are refused. Custody, Resolution, Claims, Trading, and Core require exact complete Upgrade receipts and hostile current ProgramData bodies. Prepare first reruns the key-free live finalized audit, then rehashes all evidence and reproduces the existing Registry/Rent ArtifactRelease records and singleton profile byte-for-byte. demo-market cannot authenticate permanent-devnet Direct facts and refuses instead of inventing them. The --general-accelerator-* group is OPTIONAL and legal beside --deployment-set-journal: the journal owns the seven checked roles and names no accelerator, so it can neither supply this publication nor contradict it. Supply the whole group or none of it; a half-supplied group refuses by naming the missing flags. It publishes an eighth ArtifactRelease record whose FINALIZATION is the cohort's own observation of the accelerator's deployment, which is what a General-manifest market needs before it can be founded. Its semantic release id is operator-stated, because no protocol-owned derivation exists for a role outside the seven."
     );
 }
 
@@ -2457,6 +2597,77 @@ mod tests {
                 refusal.0
             );
         }
+    }
+
+    /// THE ACCELERATOR GROUP IS LEGAL BESIDE THE JOURNAL, and half of it is not.
+    ///
+    /// Both halves matter. `--deployment-set-journal` refuses every raw ROLE
+    /// flag by name, and a cohort-14 prepare is a checked prepare that also
+    /// carries this publication -- so if the journal refused the group too, the
+    /// step would be unreachable exactly where it is needed. And a group
+    /// supplied in part must refuse rather than publish nothing and exit zero,
+    /// which is this repository's named silent-success failure.
+    ///
+    /// Every refusal here is a PARSE refusal, asserted by the fixture's own
+    /// unreadable journal path never appearing in the message.
+    #[test]
+    fn the_general_accelerator_prepare_group_is_whole_or_absent() {
+        let program = Pubkey::new_from_array([9; 32]).to_string();
+        let whole: Vec<&str> = vec![
+            "--general-accelerator-program-id",
+            &program,
+            "--general-accelerator-elf",
+            "/general-accelerator-must-not-be-read.so",
+            "--general-accelerator-sha256",
+            "00000000000000000000000000000000000000000000000000000000000000ff",
+            "--general-accelerator-semantic-release-id",
+            "00000000000000000000000000000000000000000000000000000000000000aa",
+        ];
+        // The whole group parses beside the journal: it gets past the flag
+        // table and dies on the journal file, which is where every other
+        // checked-prepare argument dies too.
+        let refusal = run_prepare(checked(&whole)).expect_err("the journal file is unreadable");
+        assert!(
+            !refusal.0.contains("unknown prepare argument"),
+            "the accelerator group must parse: {}",
+            refusal.0
+        );
+        assert!(
+            !refusal.0.contains("forbidden"),
+            "the journal owns the seven roles and names no accelerator: {}",
+            refusal.0
+        );
+
+        // Each single flag on its own names the three that are missing.
+        for index in [0_usize, 2, 4, 6] {
+            let partial: Vec<&str> = whole[index..index + 2].to_vec();
+            let refusal =
+                run_prepare(checked(&partial)).expect_err("a half-supplied group must refuse");
+            assert!(
+                refusal.0.contains("needs its whole flag group"),
+                "{}",
+                refusal.0
+            );
+            assert!(
+                !refusal.0.contains("this-file-must-not-be-read"),
+                "the refusal must precede any evidence read: {}",
+                refusal.0
+            );
+        }
+
+        // A deployment flag with no group at all is the same defect one level
+        // down: the suffix grammar accepts `general-accelerator` as a target,
+        // so this would otherwise be silently discarded.
+        let refusal = run_prepare(checked(&[
+            "--general-accelerator-observed-programdata",
+            "/general-accelerator-programdata-must-not-be-read.bin",
+        ]))
+        .expect_err("a lone deployment flag must refuse");
+        assert!(
+            refusal.0.contains("deployment flag was supplied without"),
+            "{}",
+            refusal.0
+        );
     }
 
     #[test]

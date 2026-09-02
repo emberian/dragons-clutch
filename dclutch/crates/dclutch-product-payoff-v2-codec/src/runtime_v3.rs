@@ -1784,6 +1784,8 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, clippy::panic)]
+
     extern crate std;
 
     use super::*;

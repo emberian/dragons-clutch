@@ -343,10 +343,22 @@ impl<'effect, 'registers, 'request> BorrowedRouteRangesV4<'effect, 'registers, '
         self.family_request
     }
 
-    fn range(self, ordinal: u16) -> Result<&'request [u8], ProgramError> {
+    /// Resolve one route-local range's coordinates without slicing it.
+    ///
+    /// A consumer that must bind the range to the request BEFORE it -- the
+    /// SignedDelta plan's `request_id` commits to exactly that prefix --
+    /// needs the offset, which the byte slice alone cannot carry.
+    pub(crate) fn resolved_range(
+        self,
+        ordinal: u16,
+    ) -> Result<dclutch_effect_kernel::v4::ResolvedBorrowedRangeV4, ProgramError> {
         self.effect
             .resolved_borrowed_range_for_tail(self.route, ordinal, self.tail_count, self.scalars)
-            .map_err(|_| TradingSbfError::Content)?
+            .map_err(|_| TradingSbfError::Content.into())
+    }
+
+    pub(crate) fn range(self, ordinal: u16) -> Result<&'request [u8], ProgramError> {
+        self.resolved_range(ordinal)?
             .slice(self.family_request)
             .map_err(|_| TradingSbfError::Content.into())
     }
@@ -431,7 +443,7 @@ use crate::{
     feature = "dealer-family"
 ))]
 use dclutch_claims_svm::composition_v3::{
-    ClaimsCompositionParentV3, ClaimsCompositionV3, ClaimsExternalOnceV3,
+    ClaimsCompositionErrorV3, ClaimsCompositionParentV3, ClaimsCompositionV3, ClaimsExternalOnceV3,
 };
 // These are SBF-heap profile bounds, not semantic/product limits. The lifting
 // path is scratch-page transport under authenticated ExecutionStrategy V2.
@@ -10759,6 +10771,7 @@ fn decode_claims_composition_boxed_v3<'request>(
     HeapBoxV3::new(
         ClaimsCompositionV3::decode_selected_with_external(
             effect.base(),
+            Some(effect.successor),
             tail_count,
             scalars,
             identities,
@@ -10767,8 +10780,46 @@ fn decode_claims_composition_boxed_v3<'request>(
             parent,
             external,
         )
-        .map_err(|_| TradingSbfError::Content)?,
+        .map_err(|error| {
+            // Seven conjunct families behind one `Content`, and the callee
+            // already knows which. The wire still carries one code -- these are
+            // genuinely one accusation, "the Claims composition this bundle
+            // declares is not one this program admits" -- so the distinction
+            // goes where a reader looks first. Localizing it by hand cost this
+            // lane one instrumented build on 2026-09-02.
+            solana_program::log::sol_log("dclutch-hot:claims-composition");
+            solana_program::log::sol_log_64(
+                u64::from(claims_composition_tag_v3(error)),
+                0,
+                0,
+                0,
+                0,
+            );
+            TradingSbfError::Content
+        })?,
     )
+}
+
+/// Stable tag for one [`ClaimsCompositionErrorV3`], for the refusing log only.
+///
+/// Not a refusal code and never on the wire: the enum is a host-side type with
+/// no registered discriminants, and giving it any here would be a second
+/// authority for something `dclutch-refusal-registry` owns.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+const fn claims_composition_tag_v3(error: ClaimsCompositionErrorV3) -> u8 {
+    match error {
+        ClaimsCompositionErrorV3::EffectProgram => 1,
+        ClaimsCompositionErrorV3::Route => 2,
+        ClaimsCompositionErrorV3::Order => 3,
+        ClaimsCompositionErrorV3::ParentBinding => 4,
+        ClaimsCompositionErrorV3::AdmissionJoin => 5,
+        ClaimsCompositionErrorV3::CloseJoin => 6,
+        ClaimsCompositionErrorV3::MissingAffine => 7,
+    }
 }
 
 /// Everything the preflight walk and the execution walk BOTH resolve, resolved
@@ -11232,7 +11283,13 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         caller_bumps.record_wire_bytes(claims_child_wire_capacity_v3(
                             invocation,
                             request_bank,
-                            family_request,
+                            BorrowedRouteRangesV4::new(
+                                effect.successor,
+                                route,
+                                tail_count,
+                                scalars,
+                                family_request,
+                            ),
                         )?);
                     }
                     #[cfg(not(any(
@@ -11660,7 +11717,13 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 effect_accounts,
                                 aliases,
                                 request_bank,
-                                family_request,
+                                BorrowedRouteRangesV4::new(
+                                    effect.successor,
+                                    route,
+                                    tail_count,
+                                    scalars,
+                                    family_request,
+                                ),
                                 prior_receipt,
                                 buffers,
                                 claims_program.ok_or(TradingSbfError::Release)?,
@@ -11801,16 +11864,22 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     .ok_or(TradingSbfError::Content)?;
                 continue;
             }
-            require_borrowed_witness_receipt_v3(request_profile, resolved, role, &receipt_bytes)?;
+            let borrowed_ranges = BorrowedRouteRangesV4::new(
+                effect.successor,
+                route,
+                tail_count,
+                scalars,
+                family_request,
+            );
+            require_borrowed_witness_receipt_v3(
+                request_profile,
+                borrowed_ranges.count()?,
+                role,
+                &receipt_bytes,
+            )?;
             let provenance = child_receipt_provenance_v4(
                 resolved,
-                BorrowedRouteRangesV4::new(
-                    effect.successor,
-                    route,
-                    tail_count,
-                    scalars,
-                    family_request,
-                ),
+                borrowed_ranges,
                 role,
                 route,
                 invocation,
@@ -12855,7 +12924,7 @@ fn execute_claims_route_digest_v3<'info>(
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
     request_bank: &[u8],
-    family_request: &[u8],
+    borrowed_ranges: BorrowedRouteRangesV4<'_, '_, '_>,
     prior_receipt: Option<&[u8]>,
     buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
@@ -12872,7 +12941,7 @@ fn execute_claims_route_digest_v3<'info>(
         effect_accounts,
         aliases,
         request_bank,
-        family_request,
+        borrowed_ranges,
         prior_receipt,
         buffers,
         claims_program,
@@ -13729,43 +13798,75 @@ fn require_borrowed_witness_coverage_v3<'a>(
         let route = effect
             .route(route_index)
             .map_err(|_| TradingSbfError::Content)?;
+        let ranges = BorrowedRouteRangesV4::new(
+            effect.successor,
+            route_index,
+            tail_count,
+            scalars,
+            family_request,
+        );
+        let range_count = ranges.count()?;
+        // ONE SPELLING, and it is the successor's. A borrowed witness is a
+        // range in the Effect V4 range table bound to a route; the V3 route
+        // bit is not an alternative this rule admits, because the KERNEL does
+        // not admit it either -- `EffectProgramV4::validate_range_table`
+        // refuses a V4 program any of whose base routes carries the bit, for
+        // every artifact, whatever its range count. Requiring the bit under V4,
+        // which is what stood here, was requiring a shape the kernel refuses to
+        // represent.
+        //
+        // That law is restated rather than assumed, because the shipped Hot
+        // path does not re-run it: `from_sealed` takes `decode_shape` alone
+        // (decision 0005), so a sealed artifact carrying the bit reaches this
+        // walk with the table sweep never having run over it.
         if route.borrows_witness() {
-            borrower_count = borrower_count
-                .checked_add(1)
-                .ok_or(TradingSbfError::Width)?;
-            let invocations = effect
-                .invocation_count(route_index, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Content)?;
-            let shape = u64::from(route.role() != expected_role)
-                | (u64::from(route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once) << 1)
-                | (u64::from(route.fixed_request_bytes() != 0) << 2)
-                | (u64::from(route.item_request_bytes() != 0) << 3)
-                | (u64::from(invocations != 1) << 4);
-            if shape != 0 {
-                log_borrowed_witness_refusal_v3(
-                    1,
-                    u64::from(route_index),
-                    shape,
-                    u64::from(invocations),
-                    0,
-                );
-                return Err(TradingSbfError::BorrowedWitnessRoute.into());
-            }
-            let invocation = effect
-                .resolved_invocation(route_index, 0, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Content)?;
-            let Some(witness) = invocation.borrowed_witness else {
-                log_borrowed_witness_refusal_v3(2, u64::from(route_index), 0, 0, 0);
-                return Err(TradingSbfError::BorrowedWitnessRoute.into());
-            };
-            if invocation.request_len != 0
-                || witness
-                    .slice(family_request)
-                    .map_err(|_| TradingSbfError::BorrowedWitnessBytes)?
-                    != declared_witness
-            {
-                return Err(TradingSbfError::BorrowedWitnessBytes.into());
-            }
+            log_borrowed_witness_refusal_v3(
+                4,
+                u64::from(route_index),
+                u64::from(range_count),
+                0,
+                0,
+            );
+            return Err(TradingSbfError::BorrowedWitnessRoute.into());
+        }
+        if range_count == 0 {
+            route_index = route_index.checked_add(1).ok_or(TradingSbfError::Width)?;
+            continue;
+        }
+        borrower_count = borrower_count
+            .checked_add(1)
+            .ok_or(TradingSbfError::Width)?;
+        let invocations = effect
+            .invocation_count(route_index, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)?;
+        let shape = u64::from(route.role() != expected_role)
+            | (u64::from(route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once) << 1)
+            | (u64::from(route.fixed_request_bytes() != 0) << 2)
+            | (u64::from(route.item_request_bytes() != 0) << 3)
+            | (u64::from(invocations != 1) << 4)
+            | (u64::from(range_count > 1) << 5);
+        if shape != 0 {
+            log_borrowed_witness_refusal_v3(
+                1,
+                u64::from(route_index),
+                shape,
+                u64::from(invocations),
+                u64::from(range_count),
+            );
+            return Err(TradingSbfError::BorrowedWitnessRoute.into());
+        }
+        let invocation = effect
+            .resolved_invocation(route_index, 0, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)?;
+        // The bit was refused above, so the resolution cannot carry a witness;
+        // this is the belt on that. `resolve_borrowed_witness` reads the bit
+        // and nothing else, and the two readings must agree.
+        if invocation.borrowed_witness.is_some() {
+            log_borrowed_witness_refusal_v3(2, u64::from(route_index), 0, 0, 0);
+            return Err(TradingSbfError::BorrowedWitnessRoute.into());
+        }
+        if invocation.request_len != 0 || ranges.range(0)? != declared_witness {
+            return Err(TradingSbfError::BorrowedWitnessBytes.into());
         }
         route_index = route_index.checked_add(1).ok_or(TradingSbfError::Width)?;
     }
@@ -13785,8 +13886,8 @@ fn require_borrowed_witness_coverage_v3<'a>(
 
 /// Print which witness-coverage conjunct refused, on the refusing path only.
 ///
-/// [`TradingSbfError::BorrowedWitnessRoute`] is one accusation over three
-/// sites and five conjuncts, and a u32 cannot carry which. A validator log is
+/// [`TradingSbfError::BorrowedWitnessRoute`] is one accusation over four
+/// sites and six conjuncts, and a u32 cannot carry which. A validator log is
 /// where a reader looks first, so the fact the program already computed is
 /// written there rather than left to be bisected -- the recovery this tree
 /// pays for by hand every time a `map_err` discards a cause.
@@ -13795,11 +13896,14 @@ fn require_borrowed_witness_coverage_v3<'a>(
 ///
 /// * `site 1` -- the borrower's SHAPE: `route_index`, a conjunct mask
 ///   (bit 0 role, bit 1 kind, bit 2 fixed request bytes, bit 3 item request
-///   bytes, bit 4 invocation count), and the invocation count itself.
-/// * `site 2` -- the borrower resolved to an invocation carrying no borrowed
-///   witness: `route_index`.
+///   bytes, bit 4 invocation count, bit 5 more than one borrowed range), the
+///   invocation count, and the route's borrowed-range count.
+/// * `site 2` -- the borrower's resolution carried a V3 borrowed witness,
+///   which the route-bit refusal above says it cannot: `route_index`.
 /// * `site 3` -- the effect's borrower COUNT is not one: the count, the
 ///   effect's route count, its successor range count, and the tail count.
+/// * `site 4` -- a base route carries the retired V3 `borrows_witness` bit,
+///   which no Effect V4 may: `route_index` and its borrowed-range count.
 #[cold]
 #[inline(never)]
 fn log_borrowed_witness_refusal_v3(site: u64, first: u64, second: u64, third: u64, fourth: u64) {
@@ -13816,16 +13920,25 @@ const fn borrowed_witness_role_v3(role: BorrowedWitnessRoleV3) -> FixedRole {
     }
 }
 
+/// Hold the borrowed witness's consumer to the profile's declared receipt.
+///
+/// Reached for every child, and it must recognise the borrower the same way
+/// [`require_borrowed_witness_coverage_v3`] does -- by its Effect V4 range.
+/// Keyed on the V3 `borrowed_witness` alone, as it was, this returns `Ok` for
+/// a V4 successor's consumer, which is not a passed check but an unasked
+/// question and the exact shape of a lost refusal: the declared
+/// `child_receipt_magic` and `child_receipt_bytes` would bind nothing on the
+/// one route the policy exists to bind.
 fn require_borrowed_witness_receipt_v3(
     request_profile: RequestProfileKindV3<'_>,
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    borrowed_range_count: u16,
     role: FixedRole,
     receipt: &[u8],
 ) -> Result<(), ProgramError> {
     let RequestProfileKindV3::Borrowed(profile) = request_profile else {
         return Ok(());
     };
-    if invocation.borrowed_witness.is_none() {
+    if borrowed_range_count == 0 {
         return Ok(());
     }
     let policy: BorrowedWitnessPolicyV3 = profile.witness_policy();
@@ -19508,5 +19621,257 @@ mod tests {
             vec![4, 2, 3],
             "selector 9 aliases Claims linked-basis, Product and portfolio onto the projected coordinates"
         );
+    }
+
+    /// One synthetic borrowed-witness family, in either spelling.
+    ///
+    /// Sixteen bytes of profiled prefix and an eight-byte witness. The V3
+    /// spelling resolves it from `witness_range_common_scalar` 0, whose pair of
+    /// registers hold `[16, 8]`; the V4 spelling declares the same bytes as a
+    /// range on the same route. `both` is the shape neither authority admits.
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    fn witness_coverage_effect_v4(
+        role: dclutch_effect_kernel::v2::FixedRole,
+        legacy_bit: bool,
+        semantic_prefix_bytes: u32,
+        ranges: &[dclutch_effect_kernel::v4::BorrowedRangeV4],
+    ) -> Vec<u8> {
+        use dclutch_effect_kernel::{
+            v3::{
+                HEADER_BYTES, ROUTE_BYTES,
+                encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
+            },
+            v4::{
+                BORROWED_RANGE_BYTES_V4, BorrowedRangePolicyV4, HEADER_BYTES_V4,
+                encode_program_v4_atomic,
+            },
+        };
+
+        let route = RouteInputV3 {
+            role,
+            kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+            enable_common_scalar: None,
+            witness_range_common_scalar: legacy_bit.then_some(0),
+            receipt_dependency: None,
+            fixed_account_start: 0,
+            fixed_account_count: 1,
+            item_account_start: 0,
+            item_account_count: 0,
+            fixed_request: &[],
+            item_request: &[],
+        };
+        let base_bytes = HEADER_BYTES + ROUTE_BYTES;
+        let mut base_scratch = vec![0_u8; base_bytes];
+        let mut base = vec![0_u8; base_bytes];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[route],
+            &[],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("one-route borrowed base");
+        let successor_bytes = HEADER_BYTES_V4 + ranges.len() * BORROWED_RANGE_BYTES_V4 + base.len();
+        let mut scratch = vec![0_u8; successor_bytes];
+        let mut output = vec![0_u8; successor_bytes];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            semantic_prefix_bytes,
+            &[],
+            ranges,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("borrowed successor");
+        output
+    }
+
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    fn borrowed_witness_profile_bytes(minimum: u32, maximum: u32) -> Vec<u8> {
+        use dclutch_request_profile_contract::{
+            encode::{
+                RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1, ScalarRegisterV1,
+                encode_request_profile_v1_atomic,
+            },
+            v3::{REQUEST_PROFILE_V3_HEADER_BYTES, encode_request_profile_v3_atomic},
+        };
+
+        let instructions = [
+            RequestInstructionV1::require_u64(
+                RequestCoordinateV1::fixed(0),
+                u64::from_le_bytes(*b"PREFIX03"),
+            ),
+            RequestInstructionV1::project_u64(
+                RequestCoordinateV1::fixed(8),
+                ScalarRegisterV1::common(0),
+            ),
+        ];
+        let embedded_bytes = dclutch_request_profile_contract::HEADER_BYTES
+            + 2 * dclutch_request_profile_contract::OPERATION_BYTES;
+        let mut embedded_scratch = vec![0_u8; embedded_bytes];
+        let mut embedded = vec![0_u8; embedded_bytes];
+        encode_request_profile_v1_atomic(
+            RequestGeometryV1::new(16, 0, 2, 0, 0, 0),
+            &instructions,
+            &[],
+            &mut embedded_scratch,
+            &mut embedded,
+        )
+        .expect("embedded prefix projector");
+        let width = REQUEST_PROFILE_V3_HEADER_BYTES + embedded.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_request_profile_v3_atomic(
+            &embedded,
+            BorrowedWitnessPolicyV3 {
+                minimum_bytes: minimum,
+                maximum_bytes: maximum,
+                consumer_role: BorrowedWitnessRoleV3::Claims,
+                child_request_magic: *b"CHILD003",
+                child_receipt_magic: *b"RECPT003",
+                child_receipt_bytes: 376,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("borrowed-witness wrapper");
+        output
+    }
+
+    /// The borrow has ONE spelling, and every other shape refuses by name.
+    ///
+    /// The post-trade partial equity Remove was the first action ever to reach
+    /// this rule with a V4 successor, and it refused `BorrowedWitnessRoute` at
+    /// site 3 -- borrower count 0 -- because the rule counted only the V3
+    /// route bit while `encode_dealer_equity_effect_base_for_v4` had moved the
+    /// fact to the Effect's own borrowed-range table. Each conjunct is named
+    /// here rather than left to an integration bundle: a hostile that must
+    /// first get past thirty other gates cannot say which gate answered it.
+    ///
+    /// The V3 bit is pinned from the KERNEL's side as well as this rule's,
+    /// because the two are the same law read at two distances:
+    /// `EffectProgramV4::decode` refuses any base route carrying it, and the
+    /// shipped Hot path reaches this walk through `from_sealed`, which does
+    /// not re-run that sweep.
+    #[test]
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    fn a_borrowed_witness_has_one_spelling_and_every_other_shape_refuses_by_name() {
+        use dclutch_effect_kernel::{
+            v2::FixedRole,
+            v4::{BorrowedRangeV4, RequestCoordinateV4},
+        };
+        use dclutch_request_profile_contract::v3::RequestProfileV3;
+
+        const FAMILY: &[u8] = b"PREFIX03\x00\x00\x00\x00\x00\x00\x00\x00CHILD003";
+        let scalars = [16_u64, 8];
+        let suffix = [BorrowedRangeV4::new(
+            0,
+            RequestCoordinateV4::Fixed(16),
+            RequestCoordinateV4::CommonScalar(1),
+        )];
+        let profile_bytes = borrowed_witness_profile_bytes(8, 16);
+        let profile = RequestProfileV3::decode(&profile_bytes).expect("borrowed profile");
+        let request_profile = RequestProfileKindV3::Borrowed(profile);
+        assert_eq!(
+            profile.split_request(0, FAMILY),
+            Ok((&FAMILY[..16], &FAMILY[16..]))
+        );
+
+        let check = |bytes: &[u8]| -> Result<(), ProgramError> {
+            let successor = EffectProgramV4::decode(bytes).expect("successor");
+            let effect = SelectedEffectProgramV4 {
+                base: EffectProgramV3::decode(successor.base().bytes()).expect("base"),
+                successor,
+                funding: None,
+            };
+            require_borrowed_witness_coverage_v3(request_profile, effect, 0, &scalars, &[], FAMILY)
+        };
+
+        // The V4 successor: no route bit, one range over the declared witness.
+        let v4 = witness_coverage_effect_v4(FixedRole::Claims, false, 16, &suffix);
+        assert_eq!(check(&v4), Ok(()));
+
+        // NEITHER -- a V4 release whose Claims route carries no range at all,
+        // which is the exact shape the equity Remove refused with. Site 3.
+        let neither = witness_coverage_effect_v4(FixedRole::Claims, false, 16, &[]);
+        assert_eq!(
+            check(&neither),
+            Err(TradingSbfError::BorrowedWitnessRoute.into())
+        );
+
+        // A V4 range on a route whose role is not the one the policy admits.
+        // Site 1, conjunct mask bit 0.
+        let wrong_role = witness_coverage_effect_v4(FixedRole::Custody, false, 16, &suffix);
+        assert_eq!(
+            check(&wrong_role),
+            Err(TradingSbfError::BorrowedWitnessRoute.into())
+        );
+
+        // A V4 range that is not the witness the profile declared. The range
+        // table still covers the request exactly, so `SuccessorCoverage` is
+        // satisfied and the bytes are this function's own accusation.
+        let wide = [BorrowedRangeV4::new(
+            0,
+            RequestCoordinateV4::Fixed(8),
+            RequestCoordinateV4::Fixed(16),
+        )];
+        let wrong_bytes = witness_coverage_effect_v4(FixedRole::Claims, false, 8, &wide);
+        assert_eq!(
+            check(&wrong_bytes),
+            Err(TradingSbfError::BorrowedWitnessBytes.into())
+        );
+
+        // The V3 bit under a V4 successor, refused at BOTH distances. The
+        // encoder cannot even emit one -- its own closing decode runs the
+        // table sweep -- so the artifact is built by flipping the bit in the
+        // encoded base, which is exactly what a hostile sealed record is.
+        let mut legacy_bit = witness_coverage_effect_v4(FixedRole::Claims, false, 16, &suffix);
+        let honest = legacy_bit.clone();
+        let base_offset = legacy_bit.len() - honest_base_len(&honest);
+        let route_offset = base_offset + dclutch_effect_kernel::v3::HEADER_BYTES;
+        // `RouteInputV3`'s witness flag is byte 3 of the route record, the same
+        // coordinate `borrowed_witness_is_an_exact_authenticated_suffix` sets.
+        legacy_bit[route_offset + 3] = 1;
+        assert_ne!(legacy_bit, honest, "the hostile flipped exactly one bit");
+        assert_eq!(
+            EffectProgramV4::decode(&legacy_bit).err(),
+            Some(dclutch_effect_kernel::v4::ErrorV4::RangeTable),
+            "no Effect V4 may carry the retired V3 route bit"
+        );
+    }
+
+    /// Exact encoded width of the one-route V3 base inside a test successor.
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    fn honest_base_len(successor: &[u8]) -> usize {
+        EffectProgramV4::decode(successor)
+            .expect("honest successor")
+            .base()
+            .bytes()
+            .len()
     }
 }

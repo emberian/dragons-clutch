@@ -27,6 +27,8 @@
 //!    as properties of the surviving rule rather than as a comparison against
 //!    the deleted one.
 
+#![allow(clippy::indexing_slicing, clippy::panic)]
+
 use dclutch_liability_basis_v2_kernel::spline as kernel;
 use dclutch_product_payoff_v2_codec::runtime_v3::Error;
 use dclutch_product_payoff_v2_codec::spline_eval_v3::{
@@ -359,8 +361,8 @@ fn every_claim_lands_within_one_atom_of_its_exact_share() {
         let mut output = vec![0_u64; weights.width];
         apportion_cumulative_v3(&weights, u64::from(case.scale), &mut output)
             .expect("cumulative apportions");
-        for claim in 0..weights.width {
-            let paid = u128::from(output[claim]);
+        for (claim, apportioned) in output.iter().enumerate() {
+            let paid = u128::from(*apportioned);
             // The exact share is `Q * w / D`. Compared without dividing, and
             // symmetrically: telescoping floors may land either side of the
             // exact value, so the claim is `|paid - share| < 1`, which scaled

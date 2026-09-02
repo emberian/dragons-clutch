@@ -329,10 +329,8 @@ pub mod pda_search {
     #[must_use]
     pub fn census_cost_cu(bumps: &[u8]) -> u32 {
         let mut total = 0;
-        let mut index = 0;
-        while index < bumps.len() {
-            total += cost_cu(bumps[index]);
-            index += 1;
+        for bump in bumps {
+            total += cost_cu(*bump);
         }
         total
     }

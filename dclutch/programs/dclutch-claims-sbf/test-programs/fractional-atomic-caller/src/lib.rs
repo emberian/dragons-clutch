@@ -24,9 +24,8 @@ use dclutch_capability_program_contract::CapabilityRootHeaderV1;
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ROOT_V3,
     FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4, FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2,
-    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3,
-    FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
-    FractionalTerminalAtomicReceiptV3,
+    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3, FractionalAtomicReceiptV3,
+    FractionalExposureActionV2, FractionalExposureRequestV2, FractionalTerminalAtomicReceiptV3,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -116,17 +115,17 @@ const _: () = {
             == dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE,
         "FractionalAtomicTestCallerError must start at its registered refusal band base"
     );
-    let mut index = 0;
-    while index < FractionalAtomicTestCallerError::ALL.len() {
-        let variant = FractionalAtomicTestCallerError::ALL[index];
+    let mut index: u32 = 0;
+    let mut rest = FractionalAtomicTestCallerError::ALL.as_slice();
+    while let [variant, tail @ ..] = rest {
+        let variant = *variant;
         assert!(
-            variant.ordinal() == index,
+            variant.ordinal() == index as usize,
             "FractionalAtomicTestCallerError::ALL repeats a variant, skips one, or is out of discriminant order"
         );
         assert!(
             variant as u32
-                == dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE
-                    + index as u32,
+                == dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE + index,
             "FractionalAtomicTestCallerError discriminants are not the contiguous run from the band base that ALL claims"
         );
         assert!(
@@ -136,6 +135,7 @@ const _: () = {
             "FractionalAtomicTestCallerError must not run past its registered refusal band"
         );
         index += 1;
+        rest = tail;
     }
 };
 
@@ -242,8 +242,7 @@ pub fn process_instruction(
 
     let mut metas = Vec::with_capacity(forwarded.len());
     for (index, account) in forwarded.iter().enumerate() {
-        let signer =
-            account.is_signer || index == CALLER_AUTHORITY || index == root_coordinate;
+        let signer = account.is_signer || index == CALLER_AUTHORITY || index == root_coordinate;
         metas.push(if account.is_writable {
             AccountMeta::new(*account.key, signer)
         } else {
@@ -257,8 +256,14 @@ pub fn process_instruction(
     };
 
     let caller_bump_seed = [caller_bump];
-    let [caller_domain, caller_release, caller_market, caller_role, caller_context, caller_digest] =
-        caller_seeds.as_slices();
+    let [
+        caller_domain,
+        caller_release,
+        caller_market,
+        caller_role,
+        caller_context,
+        caller_digest,
+    ] = caller_seeds.as_slices();
     let root_bump_seed = [root_bump];
     let [
         root_domain,
@@ -308,20 +313,12 @@ pub fn process_instruction(
         FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap => {
             let receipt = FractionalAtomicReceiptV3::decode(&receipt_bytes)
                 .map_err(|_| FractionalAtomicTestCallerError::ClaimsCpi)?;
-            (
-                receipt.action(),
-                receipt.request_digest(),
-                receipt.root(),
-            )
+            (receipt.action(), receipt.request_digest(), receipt.root())
         }
         _ => {
             let receipt = FractionalTerminalAtomicReceiptV3::decode(&receipt_bytes)
                 .map_err(|_| FractionalAtomicTestCallerError::ClaimsCpi)?;
-            (
-                receipt.action(),
-                receipt.request_digest(),
-                receipt.root(),
-            )
+            (receipt.action(), receipt.request_digest(), receipt.root())
         }
     };
     if producer != *claims_program.key

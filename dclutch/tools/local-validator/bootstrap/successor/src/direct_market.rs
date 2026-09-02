@@ -1761,9 +1761,27 @@ mod tests {
         }
     }
 
+    /// One role's semantic release id, derived the way `prepare` re-derives it.
+    fn fixture_semantic_v1(role: &str, artifact_sha256: &str) -> String {
+        crate::upgrade::checked_semantic_release_id(role, artifact_sha256)
+            .expect("fixture semantic release id")
+    }
+
     fn devnet_planner_fixture_v1() -> DevnetPlannerFixtureV1 {
+        // PROCESS-UNIQUE, because `Pubkey::new_unique()` is not.
+        //
+        // It is a monotonic counter seeded identically in every process, so two
+        // runs of this binary produce the SAME sequence of names. The fixture's
+        // `Drop` removes its directory, which is why this held for months -- but
+        // a run that is killed rather than failed never drops, and the eight
+        // planner tests then refuse `AlreadyExists` in every later run on the
+        // machine, forever, naming a file-system error instead of a defect.
+        // Measured 2026-09-02: forty stale directories under $TMPDIR reddened
+        // the whole suite for every lane. `direct_ticket.rs:102` already spells
+        // the answer; this is the same one.
         let root = std::env::temp_dir().join(format!(
-            "dclutch-direct-devnet-planner-{}",
+            "dclutch-direct-devnet-planner-{}-{}",
+            std::process::id(),
             Pubkey::new_unique()
         ));
         fs::create_dir(&root).expect("create Direct planner fixture");
@@ -1776,6 +1794,11 @@ mod tests {
         let resolution_role = fixture_role_v1(&root, "resolution", 5, 104, retained_authority);
         let custody_role = fixture_role_v1(&root, "custody", 6, 103, retained_authority);
         let rent_role = fixture_role_v1(&root, "rent", 7, 102, retained_authority);
+        let registry_role_sha256 = registry_role.sha256.clone();
+        let core_role_sha256 = core_role.sha256.clone();
+        let claims_role_sha256 = claims_role.sha256.clone();
+        let custody_role_sha256 = custody_role.sha256.clone();
+        let rent_role_sha256 = rent_role.sha256.clone();
         let plan_path = root.join("plan.json");
         let mut plan = crate::plan::prepare(crate::plan::PrepareArgs {
             observed_upgrade_authority: None,
@@ -1783,17 +1806,26 @@ mod tests {
             plan_path: plan_path.clone(),
             registry_program: registry,
             registry_elf: registry_role.elf,
-            registry_sha256: registry_role.sha256,
-            registry_semantic_release_id: hex(&[0x11; 32]),
+            registry_sha256: registry_role_sha256.clone(),
+            // DERIVED, NOT INVENTED. `2da012cd` made `validate_prepare` re-derive
+            // every artifact-owned semantic id from `(role label, shipped ELF
+            // digest)` and refuse a mismatch, because founding under one
+            // release-set identity and sealing under another is what stranded
+            // cohort-12. This fixture kept its placeholder `0x11..0x17` bytes
+            // and has refused ever since -- invisibly, because the refusal
+            // happens INSIDE the fixture builder before its `Drop` guard
+            // exists, so every run leaked its scratch directory and the next
+            // run reported `AlreadyExists` instead. Two symptoms, one cause.
+            registry_semantic_release_id: fixture_semantic_v1("registry", &registry_role_sha256),
             core_program: Pubkey::new_from_array([2; 32]),
             core_elf: core_role.elf,
-            core_sha256: core_role.sha256,
-            core_semantic_release_id: hex(&[0x12; 32]),
+            core_sha256: core_role_sha256.clone(),
+            core_semantic_release_id: fixture_semantic_v1("core", &core_role_sha256),
             core_bootstrap_upgrade_authority: retained_authority,
             claims_program: Pubkey::new_from_array([3; 32]),
             claims_elf: claims_role.elf,
-            claims_sha256: claims_role.sha256,
-            claims_semantic_release_id: hex(&[0x13; 32]),
+            claims_sha256: claims_role_sha256.clone(),
+            claims_semantic_release_id: fixture_semantic_v1("claims", &claims_role_sha256),
             trading_program: Pubkey::new_from_array([4; 32]),
             trading_elf: trading_role.elf,
             trading_sha256: trading_role.sha256,
@@ -1806,8 +1838,8 @@ mod tests {
             ),
             custody_program: Pubkey::new_from_array([6; 32]),
             custody_elf: custody_role.elf,
-            custody_sha256: custody_role.sha256,
-            custody_semantic_release_id: hex(&[0x16; 32]),
+            custody_sha256: custody_role_sha256.clone(),
+            custody_semantic_release_id: fixture_semantic_v1("custody", &custody_role_sha256),
             record_publication: crate::plan::RecordPublicationV1::Transaction,
             deployments: crate::plan::RoleDeploymentsV1 {
                 registry: registry_role.deployment,
@@ -1820,9 +1852,10 @@ mod tests {
             },
             rent_credit_program: Pubkey::new_from_array([7; 32]),
             rent_credit_elf: rent_role.elf,
-            rent_credit_sha256: rent_role.sha256,
-            rent_credit_semantic_release_id: hex(&[0x17; 32]),
+            rent_credit_sha256: rent_role_sha256.clone(),
+            rent_credit_semantic_release_id: fixture_semantic_v1("rent", &rent_role_sha256),
             checked_upgrade_set: None,
+            general_accelerator: None,
         })
         .expect("prepare Direct planner fixture");
 

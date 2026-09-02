@@ -640,6 +640,8 @@ pub fn interpret_sealed_record_v1(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use crate::{
         DBC_GRADUATION_ACCEPTANCE_TABLE_V1, DBC_GRADUATION_ACCEPTANCE_TABLE_V1_COUNT,

@@ -15,6 +15,11 @@ use crate::{
 
 /// Exact terminal cleanup receipt width.
 pub const CONTROLLER_FUNDING_CLEANUP_TERMINAL_RECEIPT_BYTES_V1: usize = 512;
+// The width the encoded receipt is asserted to occupy, checked where it cannot
+// become a no-op. It used to be an `assert!` inside `fixed_layout_round_trips_exactly`
+// over two literals, which is a compile-time fact stated at runtime: it could never
+// have failed a test run and clippy's `assertions_on_constants` said so.
+const _: () = assert!(CONTROLLER_FUNDING_CLEANUP_TERMINAL_RECEIPT_BYTES_V1 <= 512);
 /// Canonical terminal cleanup receipt magic.
 pub const CONTROLLER_FUNDING_CLEANUP_TERMINAL_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTCFR2";
 /// Implemented terminal cleanup receipt schema version.
@@ -410,6 +415,8 @@ fn put_u64(output: &mut [u8], offset: usize, value: u64) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     fn input() -> ControllerFundingCleanupTerminalReceiptInputV1 {
@@ -451,7 +458,6 @@ mod tests {
 
     #[test]
     fn fixed_layout_round_trips_exactly() {
-        assert!(CONTROLLER_FUNDING_CLEANUP_TERMINAL_RECEIPT_BYTES_V1 <= 512);
         let receipt = ControllerFundingCleanupTerminalReceiptV1::new(input()).expect("receipt");
         let encoded = receipt.encode();
         assert_eq!(encoded.len(), 512);

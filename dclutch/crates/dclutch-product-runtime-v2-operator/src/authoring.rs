@@ -280,6 +280,8 @@ fn tent_payouts(ordinary_cells: u32, peak_payout: u64) -> Result<Vec<u64>> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
 
     /// Raw signed price atoms at exponent -8, as the committed local Pyth
