@@ -1,23 +1,20 @@
-//! Byte agreement between Lean-owned fixed coordinates and the safe Rust kernel.
+//! Lean-owned fixed coordinates, pinned, and their agreement with safe Rust.
+//!
+//! `abi`, `graph` and `translation` now derive every constant and byte offset
+//! from `generated_abi.rs`, so asserting the two against each other would
+//! compare a name with itself. What derivation cannot give away is whether
+//! Lean still says the numbers this wire committed to, so each is pinned
+//! against its literal; the witness and hostile-corpus tests below are what
+//! check that safe Rust agrees with Lean about the bytes.
 
 #[allow(missing_docs)]
 #[path = "../src/generated_abi.rs"]
 mod generated;
 
 use dclutch_representation_composition_v3_kernel::{
-    CAPACITY_PROFILE_ID_V3, CAPACITY_PROFILE_PREIMAGE_V3, COMPOSITION_DESCRIPTOR_BYTES_V3,
-    COMPOSITION_DESCRIPTOR_MAGIC_V3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
-    COMPOSITION_DESCRIPTOR_SCHEMA_PREIMAGE_V3, COMPOSITION_EDGE_BYTES_V3,
-    COMPOSITION_GRAPH_HEADER_BYTES_V3, COMPOSITION_GRAPH_MAGIC_V3, COMPOSITION_GRAPH_SCHEMA_ID_V3,
-    COMPOSITION_GRAPH_SCHEMA_PREIMAGE_V3, COMPOSITION_NODE_BYTES_V3, COMPOSITION_SCHEMA_VERSION_V3,
-    COMPOSITION_TERM_BYTES_V3, COMPOSITION_TRANSLATION_HEADER_BYTES_V3,
-    COMPOSITION_TRANSLATION_MAGIC_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3,
-    COMPOSITION_TRANSLATION_SCHEMA_PREIMAGE_V3, CanonicalTranslationInputV3,
-    CompositionDescriptorInputV3, CompositionDescriptorV3, CompositionEdgeInputV3,
-    CompositionGraphInputV3, CompositionNodeInputV3, CompositionNodeKindV3, DescriptorLayoutV3,
-    EdgeLayoutV3, Error, GraphLayoutV3, MAX_COMPOSITION_EDGES_V3, MAX_COMPOSITION_NODES_V3,
-    MAX_COMPOSITION_OUTCOMES_V3, MAX_COMPOSITION_TERMS_V3, MIN_COMPOSITION_OUTCOMES_V3,
-    NodeLayoutV3, RecordAdmissionV3, SparseTermV3, TermLayoutV3, TranslationLayoutV3,
+    COMPOSITION_DESCRIPTOR_BYTES_V3, CanonicalTranslationInputV3, CompositionDescriptorInputV3,
+    CompositionDescriptorV3, CompositionEdgeInputV3, CompositionGraphInputV3,
+    CompositionNodeInputV3, CompositionNodeKindV3, Error, RecordAdmissionV3, SparseTermV3,
     composition_graph_bytes_v3, composition_translation_bytes_v3, decode_composition_bundle_v3,
     encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
     encode_composition_graph_v3_atomic,
@@ -224,98 +221,72 @@ fn decode(descriptor: &[u8], graph: &[u8], translation: &[u8]) -> Result<(), Err
 }
 
 #[test]
-fn lean_constants_equal_live_rust_coordinates() {
-    assert_eq!(
-        generated::COMPOSITION_SCHEMA_VERSION_LEAN_V3,
-        COMPOSITION_SCHEMA_VERSION_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_MIN_OUTCOMES_LEAN_V3,
-        MIN_COMPOSITION_OUTCOMES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_MAX_OUTCOMES_LEAN_V3,
-        MAX_COMPOSITION_OUTCOMES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_MAX_NODES_LEAN_V3,
-        MAX_COMPOSITION_NODES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_MAX_EDGES_LEAN_V3,
-        MAX_COMPOSITION_EDGES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_MAX_TERMS_LEAN_V3,
-        MAX_COMPOSITION_TERMS_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_DESCRIPTOR_BYTES_LEAN_V3,
-        COMPOSITION_DESCRIPTOR_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_GRAPH_HEADER_BYTES_LEAN_V3,
-        COMPOSITION_GRAPH_HEADER_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_NODE_BYTES_LEAN_V3,
-        COMPOSITION_NODE_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_EDGE_BYTES_LEAN_V3,
-        COMPOSITION_EDGE_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_TERM_BYTES_LEAN_V3,
-        COMPOSITION_TERM_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_TRANSLATION_HEADER_BYTES_LEAN_V3,
-        COMPOSITION_TRANSLATION_HEADER_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_CAPACITY_PROFILE_PREIMAGE_LEAN_V3,
-        CAPACITY_PROFILE_PREIMAGE_V3
-    );
+fn lean_constants_are_the_pinned_composition_coordinates() {
+    assert_eq!(generated::COMPOSITION_SCHEMA_VERSION_LEAN_V3, 3);
+    assert_eq!(generated::COMPOSITION_MIN_OUTCOMES_LEAN_V3, 2);
+    assert_eq!(generated::COMPOSITION_MAX_OUTCOMES_LEAN_V3, 256);
+    assert_eq!(generated::COMPOSITION_MAX_NODES_LEAN_V3, 32);
+    assert_eq!(generated::COMPOSITION_MAX_EDGES_LEAN_V3, 96);
+    assert_eq!(generated::COMPOSITION_MAX_TERMS_LEAN_V3, 2048);
+    assert_eq!(generated::COMPOSITION_DESCRIPTOR_BYTES_LEAN_V3, 368);
+    assert_eq!(generated::COMPOSITION_GRAPH_HEADER_BYTES_LEAN_V3, 112);
+    assert_eq!(generated::COMPOSITION_NODE_BYTES_LEAN_V3, 80);
+    assert_eq!(generated::COMPOSITION_EDGE_BYTES_LEAN_V3, 48);
+    assert_eq!(generated::COMPOSITION_TERM_BYTES_LEAN_V3, 16);
+    assert_eq!(generated::COMPOSITION_TRANSLATION_HEADER_BYTES_LEAN_V3, 128);
+    assert_eq!(generated::COMPOSITION_CAPACITY_PROFILE_PREIMAGE_LEAN_V3, b"dclutch/capacity/representation-composition-v3/outcomes256/nodes32/edges96/terms2048/u128");
     assert_eq!(
         generated::COMPOSITION_CAPACITY_PROFILE_ID_LEAN_V3,
-        CAPACITY_PROFILE_ID_V3
+        [
+            0x48, 0xaa, 0xa1, 0xf4, 0x37, 0xff, 0xda, 0xc9, 0xbf, 0x14, 0xc9, 0xd8, 0xc8, 0xc4,
+            0x9c, 0xf3, 0xf7, 0x1e, 0x93, 0x9e, 0x30, 0x39, 0x79, 0x4b, 0xf7, 0xc4, 0x11, 0xa8,
+            0xff, 0x8d, 0xb8, 0x78
+        ]
     );
     assert_eq!(
         generated::COMPOSITION_DESCRIPTOR_SCHEMA_PREIMAGE_LEAN_V3,
-        COMPOSITION_DESCRIPTOR_SCHEMA_PREIMAGE_V3
+        b"dclutch/schema/representation-composition-descriptor-v3"
     );
     assert_eq!(
         generated::COMPOSITION_DESCRIPTOR_SCHEMA_ID_LEAN_V3,
-        COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3
+        [
+            0xfa, 0x76, 0x41, 0xfb, 0x0c, 0x60, 0xc1, 0x74, 0xe4, 0x7a, 0x45, 0x69, 0x99, 0x6a,
+            0xcc, 0x5d, 0x12, 0x6a, 0x6c, 0x6d, 0xb7, 0xb4, 0xa5, 0xa9, 0x2f, 0x23, 0x86, 0xb5,
+            0x49, 0xd9, 0x12, 0x88
+        ]
     );
     assert_eq!(
         generated::COMPOSITION_GRAPH_SCHEMA_PREIMAGE_LEAN_V3,
-        COMPOSITION_GRAPH_SCHEMA_PREIMAGE_V3
+        b"dclutch/schema/representation-composition-graph-v3"
     );
     assert_eq!(
         generated::COMPOSITION_GRAPH_SCHEMA_ID_LEAN_V3,
-        COMPOSITION_GRAPH_SCHEMA_ID_V3
+        [
+            0xb3, 0xc5, 0xc7, 0x7b, 0x58, 0x0a, 0x29, 0x6d, 0xf5, 0xf7, 0x59, 0x70, 0x4b, 0x99,
+            0x9b, 0xfb, 0x79, 0xc6, 0xc2, 0x39, 0x6c, 0x4c, 0x39, 0xb2, 0xf4, 0xc5, 0x78, 0xc8,
+            0x72, 0x11, 0x57, 0x84
+        ]
     );
     assert_eq!(
         generated::COMPOSITION_TRANSLATION_SCHEMA_PREIMAGE_LEAN_V3,
-        COMPOSITION_TRANSLATION_SCHEMA_PREIMAGE_V3
+        b"dclutch/schema/representation-composition-translation-v3"
     );
     assert_eq!(
         generated::COMPOSITION_TRANSLATION_SCHEMA_ID_LEAN_V3,
-        COMPOSITION_TRANSLATION_SCHEMA_ID_V3
+        [
+            0xd2, 0xc1, 0x0c, 0x1f, 0xe6, 0xd8, 0xfc, 0x09, 0x42, 0x10, 0xca, 0xad, 0x45, 0xd7,
+            0x00, 0x34, 0x76, 0xe5, 0x98, 0x8b, 0xe5, 0xa0, 0x69, 0xe8, 0x0c, 0x71, 0xec, 0x30,
+            0x0c, 0x2a, 0xe6, 0x41
+        ]
     );
     assert_eq!(
         generated::COMPOSITION_DESCRIPTOR_MAGIC_LEAN_V3,
-        COMPOSITION_DESCRIPTOR_MAGIC_V3
+        *b"DCRCDS03"
     );
-    assert_eq!(
-        generated::COMPOSITION_GRAPH_MAGIC_LEAN_V3,
-        COMPOSITION_GRAPH_MAGIC_V3
-    );
+    assert_eq!(generated::COMPOSITION_GRAPH_MAGIC_LEAN_V3, *b"DCRCDG03");
     assert_eq!(
         generated::COMPOSITION_TRANSLATION_MAGIC_LEAN_V3,
-        COMPOSITION_TRANSLATION_MAGIC_V3
+        *b"DCRCDT03"
     );
 
     assert_eq!(
@@ -341,25 +312,7 @@ fn lean_constants_equal_live_rust_coordinates() {
             generated::COMPOSITION_DESCRIPTOR_RESERVED_TAIL_OFFSET_V3,
         ],
         [
-            DescriptorLayoutV3::MAGIC,
-            DescriptorLayoutV3::VERSION,
-            DescriptorLayoutV3::RESERVED_HEADER,
-            DescriptorLayoutV3::MARKET,
-            DescriptorLayoutV3::RESULT_DOMAIN,
-            DescriptorLayoutV3::RELEASE_SET,
-            DescriptorLayoutV3::NATIVE_BASIS,
-            DescriptorLayoutV3::GRAPH_ID,
-            DescriptorLayoutV3::GRAPH_DIGEST,
-            DescriptorLayoutV3::ROOT_ID,
-            DescriptorLayoutV3::TRANSLATION_ID,
-            DescriptorLayoutV3::TRANSLATION_DIGEST,
-            DescriptorLayoutV3::CAPACITY_PROFILE,
-            DescriptorLayoutV3::OUTCOME_COUNT,
-            DescriptorLayoutV3::NODE_COUNT,
-            DescriptorLayoutV3::EDGE_COUNT,
-            DescriptorLayoutV3::TERM_COUNT,
-            DescriptorLayoutV3::ROOT_DENOMINATOR,
-            DescriptorLayoutV3::RESERVED_TAIL,
+            0, 8, 10, 16, 48, 80, 112, 144, 176, 208, 240, 272, 304, 336, 340, 344, 348, 352, 360
         ]
     );
     assert_eq!(
@@ -376,19 +329,7 @@ fn lean_constants_equal_live_rust_coordinates() {
             generated::COMPOSITION_GRAPH_ROOT_INDEX_OFFSET_V3,
             generated::COMPOSITION_GRAPH_RESERVED_TAIL_OFFSET_V3,
         ],
-        [
-            GraphLayoutV3::MAGIC,
-            GraphLayoutV3::VERSION,
-            GraphLayoutV3::RESERVED_HEADER,
-            GraphLayoutV3::GRAPH_ID,
-            GraphLayoutV3::ROOT_ID,
-            GraphLayoutV3::OUTCOME_COUNT,
-            GraphLayoutV3::NODE_COUNT,
-            GraphLayoutV3::EDGE_COUNT,
-            GraphLayoutV3::TERM_COUNT,
-            GraphLayoutV3::ROOT_INDEX,
-            GraphLayoutV3::RESERVED_TAIL,
-        ]
+        [0, 8, 10, 16, 48, 80, 84, 88, 92, 96, 100]
     );
     assert_eq!(
         [
@@ -405,20 +346,7 @@ fn lean_constants_equal_live_rust_coordinates() {
             generated::COMPOSITION_NODE_RECIPE_DIVISOR_OFFSET_V3,
             generated::COMPOSITION_NODE_FLATTENED_DENOMINATOR_OFFSET_V3,
         ],
-        [
-            NodeLayoutV3::ID,
-            NodeLayoutV3::RANK,
-            NodeLayoutV3::FIRST_EDGE,
-            NodeLayoutV3::EDGE_COUNT,
-            NodeLayoutV3::FIRST_TERM,
-            NodeLayoutV3::TERM_COUNT,
-            NodeLayoutV3::KIND,
-            NodeLayoutV3::RESERVED_KIND,
-            NodeLayoutV3::NATIVE_OUTCOME,
-            NodeLayoutV3::RESERVED_SCALAR,
-            NodeLayoutV3::RECIPE_DIVISOR,
-            NodeLayoutV3::FLATTENED_DENOMINATOR,
-        ]
+        [0, 32, 36, 40, 44, 48, 52, 53, 56, 60, 64, 72]
     );
     assert_eq!(
         [
@@ -427,12 +355,7 @@ fn lean_constants_equal_live_rust_coordinates() {
             generated::COMPOSITION_EDGE_RESERVED_OFFSET_V3,
             generated::COMPOSITION_EDGE_COEFFICIENT_OFFSET_V3,
         ],
-        [
-            EdgeLayoutV3::CHILD_ID,
-            EdgeLayoutV3::CHILD_INDEX,
-            EdgeLayoutV3::RESERVED,
-            EdgeLayoutV3::COEFFICIENT,
-        ]
+        [0, 32, 36, 40]
     );
     assert_eq!(
         [
@@ -440,11 +363,7 @@ fn lean_constants_equal_live_rust_coordinates() {
             generated::COMPOSITION_TERM_RESERVED_OFFSET_V3,
             generated::COMPOSITION_TERM_NUMERATOR_OFFSET_V3,
         ],
-        [
-            TermLayoutV3::OUTCOME,
-            TermLayoutV3::RESERVED,
-            TermLayoutV3::NUMERATOR,
-        ]
+        [0, 4, 8]
     );
     assert_eq!(
         [
@@ -458,17 +377,7 @@ fn lean_constants_equal_live_rust_coordinates() {
             generated::COMPOSITION_TRANSLATION_DENOMINATOR_OFFSET_V3,
             generated::COMPOSITION_TRANSLATION_RESERVED_TAIL_OFFSET_V3,
         ],
-        [
-            TranslationLayoutV3::MAGIC,
-            TranslationLayoutV3::VERSION,
-            TranslationLayoutV3::RESERVED_HEADER,
-            TranslationLayoutV3::GRAPH_ID,
-            TranslationLayoutV3::ROOT_ID,
-            TranslationLayoutV3::OUTCOME_COUNT,
-            TranslationLayoutV3::TERM_COUNT,
-            TranslationLayoutV3::DENOMINATOR,
-            TranslationLayoutV3::RESERVED_TAIL,
-        ]
+        [0, 8, 10, 16, 48, 80, 84, 88, 96]
     );
 }
 

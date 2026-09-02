@@ -1976,7 +1976,7 @@ fn hostile_chain_substitution_zero_width_and_replay_refuse() {
             ),
             wrong_context,
         ),
-        Err(Error::InvalidTerminal)
+        Err(Error::InvalidTerminal("custody-replay-binding"))
     );
 
     let mut wrong_replay_pda = terminal_fixture.terminal_observation();
@@ -1989,7 +1989,7 @@ fn hostile_chain_substitution_zero_width_and_replay_refuse() {
             ),
             wrong_replay_pda,
         ),
-        Err(Error::InvalidTerminal)
+        Err(Error::InvalidTerminal("after-custody"))
     );
 
     let mut wrong_hoard_pda = terminal_fixture.terminal_observation();
@@ -2002,7 +2002,7 @@ fn hostile_chain_substitution_zero_width_and_replay_refuse() {
             ),
             wrong_hoard_pda,
         ),
-        Err(Error::InvalidTerminal)
+        Err(Error::InvalidTerminal("after-conservation"))
     );
     let mut zero_terminal = terminal_fixture.terminal_observation();
     zero_terminal.quantity = 0;

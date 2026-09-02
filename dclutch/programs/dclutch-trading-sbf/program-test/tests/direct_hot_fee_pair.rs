@@ -379,7 +379,13 @@ async fn fee_owed(pair: &mut PairV1) -> u64 {
 async fn conserved(pair: &mut PairV1) -> u64 {
     let (buyer, seller, fee) = pair.collateral();
     let mut total = 0_u64;
-    for key in [buyer, seller, fee, SPARE_RECIPIENT_ACCOUNT, STRANGER_ACCOUNT] {
+    for key in [
+        buyer,
+        seller,
+        fee,
+        SPARE_RECIPIENT_ACCOUNT,
+        STRANGER_ACCOUNT,
+    ] {
         total = total
             .checked_add(token(&mut pair.context, key).await.amount)
             .expect("collateral total");
@@ -480,12 +486,18 @@ async fn the_fee_bearing_trade_settles_across_two_transactions() {
 
     // S0.
     let s0 = conserved(&mut pair).await;
-    assert_eq!(token(&mut pair.context, buyer).await.amount, ledger::BUYER_BEFORE);
+    assert_eq!(
+        token(&mut pair.context, buyer).await.amount,
+        ledger::BUYER_BEFORE
+    );
     assert_eq!(
         token(&mut pair.context, buyer).await.delegated_amount,
         ledger::BUYER_DEBIT
     );
-    assert_eq!(token(&mut pair.context, fee).await.amount, ledger::FEE_BEFORE);
+    assert_eq!(
+        token(&mut pair.context, fee).await.amount,
+        ledger::FEE_BEFORE
+    );
 
     let landed = submit_fill(&mut pair).await;
     let tx1_units = landed.compute_units_consumed;
@@ -581,8 +593,7 @@ async fn the_fee_bearing_trade_settles_across_two_transactions() {
     assert_eq!(replay.next_revision, receipt.resulting_revision);
     assert_eq!(replay.last_request_digest, receipt.custody_request_digest);
     assert_eq!(
-        replay.last_poststate_commitment,
-        receipt.custody_poststate,
+        replay.last_poststate_commitment, receipt.custody_poststate,
         "the receipt reports the commitment the replay actually holds",
     );
 }
@@ -697,7 +708,9 @@ async fn a_foreign_account_of_the_same_recipient_is_admitted_and_a_strangers_is_
         "a settlement into another account of the configured recipient",
     );
     assert_eq!(
-        token(&mut pair.context, SPARE_RECIPIENT_ACCOUNT).await.amount,
+        token(&mut pair.context, SPARE_RECIPIENT_ACCOUNT)
+            .await
+            .amount,
         ledger::COMBINED_FEE,
         "the recipient is paid into the account the settlement named",
     );

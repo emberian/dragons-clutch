@@ -50,8 +50,9 @@
 use dclutch_account_profile_contract::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1;
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1, ContentId as CapabilityContentId,
-    FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1,
+    ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
@@ -67,12 +68,14 @@ use dclutch_direct_codec::{
     program_set_v4::build_direct_inline_ordinary_lifecycle_program_set_v1,
     retirement_v1::{
         DIRECT_BEGIN_RETIRING_ACCOUNT_COUNT_V1, DIRECT_BEGIN_RETIRING_ACTIVATION_CACHE_ACCOUNT_V1,
-        DIRECT_BEGIN_RETIRING_CONFIG_RAW_ACCOUNT_V1, DIRECT_BEGIN_RETIRING_CONFIG_STAGING_ACCOUNT_V1,
-        DIRECT_BEGIN_RETIRING_CORE_PROGRAMDATA_ACCOUNT_V1,
+        DIRECT_BEGIN_RETIRING_CONFIG_RAW_ACCOUNT_V1,
+        DIRECT_BEGIN_RETIRING_CONFIG_STAGING_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_CORE_PROGRAM_ACCOUNT_V1,
+        DIRECT_BEGIN_RETIRING_CORE_PROGRAMDATA_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_DESCRIPTOR_RAW_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_DESCRIPTOR_STAGING_ACCOUNT_V1,
-        DIRECT_BEGIN_RETIRING_EFFECT_RAW_ACCOUNT_V1, DIRECT_BEGIN_RETIRING_EFFECT_STAGING_ACCOUNT_V1,
+        DIRECT_BEGIN_RETIRING_EFFECT_RAW_ACCOUNT_V1,
+        DIRECT_BEGIN_RETIRING_EFFECT_STAGING_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_MANIFEST_RAW_ACCOUNT_V1, DIRECT_BEGIN_RETIRING_MARKET_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_PROFILE_RAW_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_PROFILE_STAGING_ACCOUNT_V1,
@@ -80,8 +83,8 @@ use dclutch_direct_codec::{
         DIRECT_BEGIN_RETIRING_PROGRAM_SET_STAGING_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_REGISTRY_ACCOUNT_V1, DIRECT_BEGIN_RETIRING_RENT_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_REQUEST_BYTES_V1, DIRECT_BEGIN_RETIRING_ROOT_TOP_ACCOUNT_V1,
-        DIRECT_BEGIN_RETIRING_SELECTOR_OFFSET_V1, DIRECT_BEGIN_RETIRING_TRADING_PROGRAMDATA_ACCOUNT_V1,
-        DIRECT_BEGIN_RETIRING_TRADING_PROGRAM_ACCOUNT_V1, DirectBeginRetiringReceiptV1,
+        DIRECT_BEGIN_RETIRING_SELECTOR_OFFSET_V1, DIRECT_BEGIN_RETIRING_TRADING_PROGRAM_ACCOUNT_V1,
+        DIRECT_BEGIN_RETIRING_TRADING_PROGRAMDATA_ACCOUNT_V1, DirectBeginRetiringReceiptV1,
         DirectBeginRetiringRequestV1, direct_begin_retiring_account_privileges_v1,
         direct_begin_retiring_context_v1,
     },
@@ -386,7 +389,10 @@ fn build_case(
         program_set_record.digest, release.program_set_id,
         "the ProgramSet record is not the set the manifest entry names",
     );
-    assert_eq!(descriptor_record.digest, release.begin_retiring.descriptor_id);
+    assert_eq!(
+        descriptor_record.digest,
+        release.begin_retiring.descriptor_id
+    );
     assert_eq!(
         profile_record.digest,
         release.begin_retiring.account_profile_id
@@ -528,7 +534,8 @@ fn build_case(
         ),
     )
     .expect("immutable root header");
-    let mut root_bytes = Vec::with_capacity(CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1);
+    let mut root_bytes =
+        Vec::with_capacity(CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1);
     root_bytes.extend_from_slice(&header.to_bytes());
     root_bytes.extend_from_slice(&DirectRootStateV1::new().encode());
     let root = Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID).0;
@@ -581,7 +588,10 @@ fn build_case(
     .to_bytes()
     .expect("canonical begin-retiring request");
 
-    let mut metas = vec![AccountMeta::new_readonly(Pubkey::default(), false); DIRECT_BEGIN_RETIRING_ACCOUNT_COUNT_V1];
+    let mut metas = vec![
+        AccountMeta::new_readonly(Pubkey::default(), false);
+        DIRECT_BEGIN_RETIRING_ACCOUNT_COUNT_V1
+    ];
     let mut put = |index: usize, key: Pubkey| {
         let (writable, _) =
             direct_begin_retiring_account_privileges_v1(index).expect("coordinate privileges");
@@ -613,7 +623,10 @@ fn build_case(
         DIRECT_BEGIN_RETIRING_DESCRIPTOR_STAGING_ACCOUNT_V1,
         descriptor_record.staging,
     );
-    put(DIRECT_BEGIN_RETIRING_CONFIG_RAW_ACCOUNT_V1, config_record.raw);
+    put(
+        DIRECT_BEGIN_RETIRING_CONFIG_RAW_ACCOUNT_V1,
+        config_record.raw,
+    );
     put(
         DIRECT_BEGIN_RETIRING_CONFIG_STAGING_ACCOUNT_V1,
         config_record.staging,
@@ -626,7 +639,10 @@ fn build_case(
         DIRECT_BEGIN_RETIRING_PROFILE_STAGING_ACCOUNT_V1,
         profile_record.staging,
     );
-    put(DIRECT_BEGIN_RETIRING_EFFECT_RAW_ACCOUNT_V1, effect_record.raw);
+    put(
+        DIRECT_BEGIN_RETIRING_EFFECT_RAW_ACCOUNT_V1,
+        effect_record.raw,
+    );
     put(
         DIRECT_BEGIN_RETIRING_EFFECT_STAGING_ACCOUNT_V1,
         effect_record.staging,
@@ -635,7 +651,10 @@ fn build_case(
         DIRECT_BEGIN_RETIRING_ACTIVATION_CACHE_ACCOUNT_V1,
         releases.activation,
     );
-    put(DIRECT_BEGIN_RETIRING_CORE_PROGRAM_ACCOUNT_V1, CORE_PROGRAM_ID);
+    put(
+        DIRECT_BEGIN_RETIRING_CORE_PROGRAM_ACCOUNT_V1,
+        CORE_PROGRAM_ID,
+    );
     put(
         DIRECT_BEGIN_RETIRING_CORE_PROGRAMDATA_ACCOUNT_V1,
         releases.core_programdata,
@@ -648,7 +667,10 @@ fn build_case(
         DIRECT_BEGIN_RETIRING_TRADING_PROGRAMDATA_ACCOUNT_V1,
         releases.trading_programdata,
     );
-    put(DIRECT_BEGIN_RETIRING_REGISTRY_ACCOUNT_V1, REGISTRY_PROGRAM_ID);
+    put(
+        DIRECT_BEGIN_RETIRING_REGISTRY_ACCOUNT_V1,
+        REGISTRY_PROGRAM_ID,
+    );
     put(DIRECT_BEGIN_RETIRING_RENT_ACCOUNT_V1, sysvar::rent::ID);
 
     for (index, meta) in metas.iter().enumerate() {
@@ -657,7 +679,10 @@ fn build_case(
             Pubkey::default(),
             "begin-retiring coordinate {index} was never filled in",
         );
-        assert!(!meta.is_signer, "the route admits no signer at any coordinate");
+        assert!(
+            !meta.is_signer,
+            "the route admits no signer at any coordinate"
+        );
     }
 
     BeginRetiringCase {
@@ -781,7 +806,10 @@ async fn direct_begin_retiring_v1_executes_and_retires_the_root() {
     let (producer, returned) = execution
         .return_data
         .expect("a successful begin-retiring must return its DCLTDRR1 receipt");
-    assert_eq!(producer, TRADING_PROGRAM_ID, "receipt producer substitution");
+    assert_eq!(
+        producer, TRADING_PROGRAM_ID,
+        "receipt producer substitution"
+    );
     let receipt = DirectBeginRetiringReceiptV1::decode(&returned).expect("canonical receipt");
     let authenticated = receipt
         .authenticate_for_request(
@@ -812,7 +840,10 @@ async fn direct_begin_retiring_v1_executes_and_retires_the_root() {
         refusal.logs,
     );
     let unchanged = account(&mut context, case.root).await;
-    assert_eq!(unchanged.data, after.data, "a refused replay moved the root");
+    assert_eq!(
+        unchanged.data, after.data,
+        "a refused replay moved the root"
+    );
 }
 
 /// Five hostile frames, each naming its exact refusal code.
@@ -893,7 +924,11 @@ async fn direct_begin_retiring_v1_refuses_hostile_frames() {
     // transaction needs a second signature.
     let mut outcomes = Vec::with_capacity(arms.len());
     for (index, arm) in arms.iter().enumerate() {
-        let signers: Vec<&Keypair> = if index == 1 { vec![&bystander] } else { Vec::new() };
+        let signers: Vec<&Keypair> = if index == 1 {
+            vec![&bystander]
+        } else {
+            Vec::new()
+        };
         outcomes.push(refused(
             submit_v0_observed(&mut context, arm, addresses.clone(), None, &signers).await,
             "a hostile begin-retiring frame",
@@ -962,7 +997,9 @@ async fn direct_begin_retiring_v1_refuses_a_market_that_is_not_retiring() {
 
     let market = account(&mut context, case.market).await;
     assert_eq!(
-        CoreState::decode(&market.data).expect("staged Market").phase,
+        CoreState::decode(&market.data)
+            .expect("staged Market")
+            .phase,
         Phase::Open,
         "this arm is only about the phase, so the phase has to be the staged one",
     );
@@ -1011,7 +1048,10 @@ async fn the_submitted_frame_matches_the_published_privilege_table() {
         instruction.accounts.len(),
         DIRECT_BEGIN_RETIRING_ACCOUNT_COUNT_V1
     );
-    assert_eq!(instruction.data.len(), DIRECT_BEGIN_RETIRING_REQUEST_BYTES_V1);
+    assert_eq!(
+        instruction.data.len(),
+        DIRECT_BEGIN_RETIRING_REQUEST_BYTES_V1
+    );
     // The three the table says are executable, and there is no fourth: a
     // membrane that admitted an extra program account would admit an extra
     // thing to be substituted.

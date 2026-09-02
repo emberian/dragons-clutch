@@ -10,14 +10,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use dclutch_representation_composition_v3_kernel::{
-    COMPOSITION_EXPOSURE_CAPACITY_ID_V3, COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_V3,
-    COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_MAGIC_V3,
-    COMPOSITION_EXPOSURE_ROW_BYTES_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
-    COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3, COMPOSITION_EXPOSURE_TERM_BYTES_V3,
-    COMPOSITION_EXPOSURE_VERSION_V3, CompositionExposureBundleV3, CompositionExposureExpectedV3,
-    CompositionExposureLayoutV3, CompositionExposureRowLayoutV3, CompositionExposureTermLayoutV3,
-    Error, MAX_COMPOSITION_EXPOSURE_TERMS_V3, MAX_COMPOSITION_PRODUCT_WIDTH_V3,
-    MAX_COMPOSITION_REPRESENTATION_WIDTH_V3, MIN_COMPOSITION_PRODUCT_WIDTH_V3, RecordAdmissionV3,
+    CompositionExposureBundleV3, CompositionExposureExpectedV3, Error, RecordAdmissionV3,
 };
 
 fn admission() -> RecordAdmissionV3 {
@@ -106,168 +99,85 @@ fn checked_in_exposure_abi_is_exact_lean_output() {
 }
 
 #[test]
-fn lean_constants_match_the_safe_rust_layout() {
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_VERSION_LEAN_V3,
-        COMPOSITION_EXPOSURE_VERSION_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_MIN_PRODUCT_WIDTH_LEAN_V3,
-        MIN_COMPOSITION_PRODUCT_WIDTH_V3
-    );
+fn lean_constants_are_the_pinned_exposure_coordinates() {
+    assert_eq!(generated::COMPOSITION_EXPOSURE_VERSION_LEAN_V3, 3);
+    assert_eq!(generated::COMPOSITION_EXPOSURE_MIN_PRODUCT_WIDTH_LEAN_V3, 1);
     assert_eq!(
         generated::COMPOSITION_EXPOSURE_MAX_PRODUCT_WIDTH_LEAN_V3,
-        MAX_COMPOSITION_PRODUCT_WIDTH_V3
+        512
     );
     assert_eq!(
         generated::COMPOSITION_EXPOSURE_MAX_REPRESENTATION_WIDTH_LEAN_V3,
-        MAX_COMPOSITION_REPRESENTATION_WIDTH_V3
+        256
     );
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_MAX_TERMS_LEAN_V3,
-        MAX_COMPOSITION_EXPOSURE_TERMS_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_HEADER_BYTES_LEAN_V3,
-        COMPOSITION_EXPOSURE_HEADER_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_ROW_BYTES_LEAN_V3,
-        COMPOSITION_EXPOSURE_ROW_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_TERM_BYTES_LEAN_V3,
-        COMPOSITION_EXPOSURE_TERM_BYTES_V3
-    );
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_MAGIC_LEAN_V3,
-        COMPOSITION_EXPOSURE_MAGIC_V3
-    );
+    assert_eq!(generated::COMPOSITION_EXPOSURE_MAX_TERMS_LEAN_V3, 65536);
+    assert_eq!(generated::COMPOSITION_EXPOSURE_HEADER_BYTES_LEAN_V3, 304);
+    assert_eq!(generated::COMPOSITION_EXPOSURE_ROW_BYTES_LEAN_V3, 56);
+    assert_eq!(generated::COMPOSITION_EXPOSURE_TERM_BYTES_LEAN_V3, 16);
+    assert_eq!(generated::COMPOSITION_EXPOSURE_MAGIC_LEAN_V3, *b"DCRCEX03");
     assert_eq!(
         generated::COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_LEAN_V3,
-        COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3
+        b"dclutch/schema/product-representation-exposure-bundle-v3"
     );
     assert_eq!(
         generated::COMPOSITION_EXPOSURE_SCHEMA_ID_LEAN_V3,
-        COMPOSITION_EXPOSURE_SCHEMA_ID_V3
+        [
+            0xc8, 0xbf, 0x29, 0xb9, 0x97, 0x67, 0x94, 0xa7, 0x7d, 0x32, 0xbe, 0xd9, 0xd7, 0xfc,
+            0x93, 0x3d, 0xcb, 0xfc, 0x78, 0x75, 0x91, 0x0c, 0x99, 0xc8, 0x0d, 0xe7, 0x18, 0xc3,
+            0xc0, 0x10, 0x07, 0x5a
+        ]
     );
-    assert_eq!(
-        generated::COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_LEAN_V3,
-        COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_V3
-    );
+    assert_eq!(generated::COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_LEAN_V3, b"dclutch/capacity/product-representation-exposure-v3/product512/representation256/terms65536/u128");
     assert_eq!(
         generated::COMPOSITION_EXPOSURE_CAPACITY_ID_LEAN_V3,
-        COMPOSITION_EXPOSURE_CAPACITY_ID_V3
+        [
+            0x44, 0x0b, 0x9a, 0x61, 0x16, 0x31, 0xa2, 0x3e, 0x68, 0x74, 0xaa, 0x94, 0x54, 0x07,
+            0xe2, 0x35, 0x7a, 0xea, 0xab, 0x3f, 0xea, 0x4d, 0xd0, 0xd8, 0xc7, 0x31, 0x00, 0x9b,
+            0xdc, 0x83, 0x63, 0x9a
+        ]
     );
 
-    for (lean, rust) in [
-        (
+    assert_eq!(
+        [
             generated::COMPOSITION_EXPOSURE_MAGIC_OFFSET_V3,
-            CompositionExposureLayoutV3::MAGIC,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_VERSION_OFFSET_V3,
-            CompositionExposureLayoutV3::VERSION,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_RESERVED_HEADER_OFFSET_V3,
-            CompositionExposureLayoutV3::RESERVED_HEADER,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_MARKET_OFFSET_V3,
-            CompositionExposureLayoutV3::MARKET,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_RESULT_DOMAIN_OFFSET_V3,
-            CompositionExposureLayoutV3::RESULT_DOMAIN,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_RELEASE_SET_OFFSET_V3,
-            CompositionExposureLayoutV3::RELEASE_SET,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_PRODUCT_BASIS_OFFSET_V3,
-            CompositionExposureLayoutV3::PRODUCT_BASIS,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_REPRESENTATION_BASIS_OFFSET_V3,
-            CompositionExposureLayoutV3::REPRESENTATION_BASIS,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_GRAPH_ID_OFFSET_V3,
-            CompositionExposureLayoutV3::GRAPH_ID,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_CAPACITY_PROFILE_OFFSET_V3,
-            CompositionExposureLayoutV3::CAPACITY_PROFILE,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_PRODUCT_WIDTH_OFFSET_V3,
-            CompositionExposureLayoutV3::PRODUCT_WIDTH,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_REPRESENTATION_WIDTH_OFFSET_V3,
-            CompositionExposureLayoutV3::REPRESENTATION_WIDTH,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_ROW_COUNT_OFFSET_V3,
-            CompositionExposureLayoutV3::ROW_COUNT,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_TERM_COUNT_OFFSET_V3,
-            CompositionExposureLayoutV3::TERM_COUNT,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_RESERVED_TAIL_OFFSET_V3,
-            CompositionExposureLayoutV3::RESERVED_TAIL,
-        ),
-    ] {
-        assert_eq!(lean, rust);
-    }
-    for (lean, rust) in [
-        (
+        ],
+        [
+            0, 8, 10, 16, 48, 80, 112, 144, 176, 208, 240, 244, 248, 252, 256
+        ]
+    );
+    assert_eq!(
+        [
             generated::COMPOSITION_EXPOSURE_ROW_NODE_ID_OFFSET_V3,
-            CompositionExposureRowLayoutV3::NODE_ID,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_ROW_COORDINATE_OFFSET_V3,
-            CompositionExposureRowLayoutV3::REPRESENTATION_COORDINATE,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_ROW_RANK_OFFSET_V3,
-            CompositionExposureRowLayoutV3::RANK,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_ROW_FIRST_TERM_OFFSET_V3,
-            CompositionExposureRowLayoutV3::FIRST_TERM,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_ROW_TERM_COUNT_OFFSET_V3,
-            CompositionExposureRowLayoutV3::TERM_COUNT,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_ROW_DENOMINATOR_OFFSET_V3,
-            CompositionExposureRowLayoutV3::DENOMINATOR,
-        ),
-    ] {
-        assert_eq!(lean, rust);
-    }
-    for (lean, rust) in [
-        (
+        ],
+        [0, 32, 36, 40, 44, 48]
+    );
+    assert_eq!(
+        [
             generated::COMPOSITION_EXPOSURE_TERM_PRODUCT_COORDINATE_OFFSET_V3,
-            CompositionExposureTermLayoutV3::PRODUCT_COORDINATE,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_TERM_RESERVED_OFFSET_V3,
-            CompositionExposureTermLayoutV3::RESERVED,
-        ),
-        (
             generated::COMPOSITION_EXPOSURE_TERM_NUMERATOR_OFFSET_V3,
-            CompositionExposureTermLayoutV3::NUMERATOR,
-        ),
-    ] {
-        assert_eq!(lean, rust);
-    }
+        ],
+        [0, 4, 8]
+    );
 }
 
 #[test]

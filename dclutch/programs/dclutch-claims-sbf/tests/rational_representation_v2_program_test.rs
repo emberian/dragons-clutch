@@ -587,19 +587,21 @@ mod common_hot_open {
     use dclutch_account_profile_contract::v2::AccountProfileV2;
     use dclutch_bearer_v2_operator::{
         CheckedRationalHotOuterReleaseV3, ConstructedHotOpenSelectedV3,
-        ConstructedHotOpenStructuredV3, RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
-        RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
-        RationalOpenCapabilityProgramSetInputV6, RationalOpenCapabilityProgramSetV3,
-        RationalOpenSelectedBundleInputV6, RationalOpenSelectedHotBundleV3,
-        RationalOpenSelectedHotStateV3, RationalOpenStructuredHotBundleV3,
-        RationalOpenStructuredHotStateV3, RationalOpenStructuredSelectedBundleInputV6,
-        RationalTerminalAccountProfileInputV3, RationalTerminalSelectedBundleInputV6,
+        ConstructedHotOpenStructuredV3, ConstructedHotTerminalV3,
+        RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3,
+        RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3, RationalOpenCapabilityProgramSetInputV6,
+        RationalOpenCapabilityProgramSetV3, RationalOpenSelectedBundleInputV6,
+        RationalOpenSelectedHotBundleV3, RationalOpenSelectedHotStateV3,
+        RationalOpenStructuredHotBundleV3, RationalOpenStructuredHotStateV3,
+        RationalOpenStructuredSelectedBundleInputV6, RationalTerminalAccountProfileInputV3,
+        RationalTerminalHotBundleV3, RationalTerminalSelectedBundleInputV6,
         build_rational_open_capability_program_set_v6, build_rational_open_selected_bundle_v6,
         build_rational_open_selected_hot_instruction_v3,
         build_rational_open_structured_hot_instruction_v3,
         build_rational_open_structured_selected_bundle_v6,
         build_rational_terminal_selected_bundle_v6, construct_chain_hot_denominate_v3,
-        construct_chain_hot_issue_structured_v3, encode_open_capability_lifecycle_policy_v5,
+        construct_chain_hot_issue_structured_v3, construct_chain_hot_redeem_terminal_v3,
+        encode_open_capability_lifecycle_policy_v5,
     };
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
@@ -622,7 +624,7 @@ mod common_hot_open {
     use dclutch_rational_representation_v2_operator::{
         AssetObservationV2, FinalizedRecordObservationV2, ObservedAccountV2,
         ProductEvidenceObservationV2, RationalObservationV2, ReplayObservationV2,
-        SelectedActionInputV2, StructuredActionInputV2,
+        SelectedActionInputV2, StructuredActionInputV2, TerminalObservationV2,
     };
     use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
     use dclutch_structured_v2_kernel::{
@@ -640,6 +642,7 @@ mod common_hot_open {
     pub(super) struct HotReleaseFixture {
         pub(super) denominate: RationalOpenSelectedHotBundleV3,
         pub(super) issue: RationalOpenStructuredHotBundleV3,
+        pub(super) redeem: RationalTerminalHotBundleV3,
         pub(super) set: RationalOpenCapabilityProgramSetV3,
         pub(super) manifest: ManifestSelection,
     }
@@ -967,6 +970,7 @@ mod common_hot_open {
         HotReleaseFixture {
             denominate,
             issue,
+            redeem,
             set,
             manifest,
         }
@@ -1034,7 +1038,7 @@ mod common_hot_open {
         context: &mut ProgramTestContext,
         fixture: &Fixture,
         action: RepresentationActionV2,
-    ) -> Result<ConstructedHotOpenStructuredV3, ConstructedHotOpenSelectedV3> {
+    ) -> HotPlanV3 {
         let activation = account(context, fixture.activation_cache).await;
         let descriptor_raw = account(context, fixture.descriptor_raw).await;
         let descriptor_staging = vacant_or_account(context, fixture.descriptor_staging).await;
@@ -1055,7 +1059,25 @@ mod common_hot_open {
         let actor_receipt = account(context, fixture.actor_receipt).await;
         let actor_position = account(context, fixture.actor_position).await;
 
-        let selected = action == RepresentationActionV2::Denominate;
+        let terminal = action == RepresentationActionV2::RedeemTerminal;
+        let terminal_fixture = fixture.terminal_accounts;
+        let terminal_observed = match terminal_fixture {
+            Some(accounts) if terminal => Some((
+                account(context, accounts.realm_raw).await,
+                vacant_or_account(context, accounts.realm_staging).await,
+                account(context, accounts.certificate).await,
+                // A LOSING coordinate pays zero and needs no replay at all --
+                // `construct_redeem_terminal` only authenticates one when the
+                // payout is positive -- so absence here is a real state and the
+                // runtime materialises exactly this for it.
+                vacant_or_account(context, accounts.custody_replay).await,
+                account(context, accounts.collateral_mint).await,
+                account(context, accounts.hoard).await,
+                account(context, accounts.recipient).await,
+            )),
+            _ => None,
+        };
+        let selected = action == RepresentationActionV2::Denominate || terminal;
         let selected_index = usize::try_from(WINNER).expect("selected outcome");
         let asset_range: Vec<usize> = if selected {
             vec![selected_index]
@@ -1143,49 +1165,121 @@ mod common_hot_open {
                 account: observed(fixture.representation_replay, &replay),
             },
             receipt_mint: observed(fixture.receipt_mint, &receipt_mint),
-            actor_receipt_account: (!selected)
+            // THREE SHAPES, NOT TWO. The structured actions carry the actor's
+            // receipt; the selected actions carry the actor's Claims Position;
+            // a terminal redemption carries NEITHER, and
+            // `authenticate_terminal_context` refuses `InvalidAction` if either
+            // is present -- it is against the Custody Position and the
+            // resolution certificate, not against anything the actor holds in
+            // this Market's own books.
+            actor_receipt_account: (!selected && !terminal)
                 .then_some(observed(fixture.actor_receipt, &actor_receipt)),
-            actor_claims_position: selected
+            actor_claims_position: (selected && !terminal)
                 .then_some(observed(fixture.actor_position, &actor_position)),
             assets: &assets,
             actor: fixture.actor.pubkey(),
             parent_context: [0; 32],
             rent: &Rent::default(),
         };
-        if selected {
-            Err(construct_chain_hot_denominate_v3(
-                observation,
-                SelectedActionInputV2 {
-                    outcome: WINNER,
-                    quantity: 1,
-                },
-            )
-            .expect("public Denominate planner"))
-        } else {
-            Ok(construct_chain_hot_issue_structured_v3(
-                observation,
-                StructuredActionInputV2 { quantity: 1 },
-            )
-            .expect("public IssueStructured planner"))
+        match action {
+            RepresentationActionV2::RedeemTerminal => {
+                let accounts = terminal_fixture.expect("terminal fixture");
+                let (realm_raw, realm_staging, certificate, replay, mint, hoard, recipient) =
+                    terminal_observed.as_ref().expect("terminal observations");
+                HotPlanV3::Terminal(construct_chain_hot_redeem_terminal_v3(
+                    observation,
+                    TerminalObservationV2 {
+                        outcome: WINNER,
+                        quantity: 1,
+                        realm: record(
+                            REALM_SCHEMA_RELEASE_ID_V1,
+                            accounts.realm_raw,
+                            realm_raw,
+                            accounts.realm_staging,
+                            realm_staging,
+                        ),
+                        terminal_certificate: observed(accounts.certificate, certificate),
+                        custody_replay: observed(accounts.custody_replay, replay),
+                        collateral_mint: observed(accounts.collateral_mint, mint),
+                        hoard: observed(accounts.hoard, hoard),
+                        collateral_recipient: observed(accounts.recipient, recipient),
+                    },
+                ))
+            }
+            RepresentationActionV2::Denominate => HotPlanV3::Selected(
+                construct_chain_hot_denominate_v3(
+                    observation,
+                    SelectedActionInputV2 {
+                        outcome: WINNER,
+                        quantity: 1,
+                    },
+                )
+                .expect("public Denominate planner"),
+            ),
+            _ => HotPlanV3::Structured(
+                construct_chain_hot_issue_structured_v3(
+                    observation,
+                    StructuredActionInputV2 { quantity: 1 },
+                )
+                .expect("public IssueStructured planner"),
+            ),
         }
+    }
+
+    /// One planned Hot family request, in the three shapes the five actions
+    /// compile to.
+    pub(super) enum HotPlanV3 {
+        Structured(ConstructedHotOpenStructuredV3),
+        Selected(ConstructedHotOpenSelectedV3),
+        Terminal(Result<ConstructedHotTerminalV3, dclutch_bearer_v2_operator::Error>),
     }
 
     pub(super) async fn plan_issue(
         context: &mut ProgramTestContext,
         fixture: &Fixture,
     ) -> ConstructedHotOpenStructuredV3 {
-        plan(context, fixture, RepresentationActionV2::IssueStructured)
-            .await
-            .expect("Structured plan")
+        match plan(context, fixture, RepresentationActionV2::IssueStructured).await {
+            HotPlanV3::Structured(plan) => plan,
+            _ => panic!("Structured plan"),
+        }
     }
 
     pub(super) async fn plan_denominate(
         context: &mut ProgramTestContext,
         fixture: &Fixture,
     ) -> ConstructedHotOpenSelectedV3 {
-        plan(context, fixture, RepresentationActionV2::Denominate)
-            .await
-            .expect_err("selected plan")
+        match plan(context, fixture, RepresentationActionV2::Denominate).await {
+            HotPlanV3::Selected(plan) => plan,
+            _ => panic!("selected plan"),
+        }
+    }
+
+    /// Plan one terminal redemption through the same Hot planner the browser
+    /// would use, rather than the direct-caller path every terminal test in
+    /// this island has used until now.
+    pub(super) async fn plan_redeem(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+    ) -> ConstructedHotTerminalV3 {
+        match plan(context, fixture, RepresentationActionV2::RedeemTerminal).await {
+            HotPlanV3::Terminal(plan) => plan.expect("public RedeemTerminal planner"),
+            _ => panic!("terminal plan"),
+        }
+    }
+
+    /// The same terminal plan, returning the operator's refusal instead of
+    /// panicking on it. The Hot terminal route cannot be built today; this is
+    /// how the wall is pinned by name rather than by absence.
+    pub(super) async fn plan_redeem_refusal(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+    ) -> dclutch_bearer_v2_operator::Error {
+        match plan(context, fixture, RepresentationActionV2::RedeemTerminal).await {
+            HotPlanV3::Terminal(plan) => {
+                plan.expect_err("the Hot terminal planner must refuse today")
+            }
+            _ => panic!("terminal plan"),
+        }
     }
 
     pub(super) async fn token_behavior(
@@ -1247,6 +1341,15 @@ mod common_hot_open {
                     release.issue.effect.as_slice(),
                     release.issue.lifecycle_policy.as_slice(),
                     release.issue.strategy.as_slice(),
+                ),
+                RepresentationActionV2::RedeemTerminal => (
+                    release.redeem.descriptor.as_slice(),
+                    release.redeem.account_profile.as_slice(),
+                    release.redeem.request_profile.as_slice(),
+                    release.redeem.transition.as_slice(),
+                    release.redeem.effect.as_slice(),
+                    release.redeem.lifecycle_policy.as_slice(),
+                    release.redeem.strategy.as_slice(),
                 ),
                 RepresentationActionV2::Denominate => (
                     release.denominate.descriptor.as_slice(),
@@ -5374,6 +5477,66 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
         denominate.accounts.len(),
         denominated.wire_bytes,
         denominated.compute_units,
+    );
+}
+
+/// THE TERMINAL REDEMPTION ON THE HOT ROUTE, AND THE WALL IT STOPS AT.
+///
+/// Every terminal test in this island drives the direct-caller path -- a
+/// test-only wrapper in the caller slot -- and builds its request BY HAND, so a
+/// stranger's redemption of a structured position has never crossed Trading and
+/// has never been constructed by the operator either. This drives the Hot route
+/// as far as it goes and pins where it stops, because a wall recorded is a wall
+/// the next lane reads instead of rediscovering.
+///
+/// **The wall is not the Hot route.** It is
+/// `authenticate_positive_custody_replay`
+/// (`rational-representation-v2-operator/src/lib.rs`): a POSITIVE payout
+/// requires `replay.open_vault_count != 0` on the Claims-role Custody replay,
+/// and nothing in this tree opens a vault on one. This island's own fixture
+/// asserts the opposite -- `assert_eq!(created.open_vault_count, 0)` on the
+/// replay the real creation route mints -- so the operator cannot construct a
+/// positive terminal redemption for ANY caller, Hot or direct. The direct tests
+/// do not meet it because they hand-build the request and never call the
+/// operator; the losing-coordinate tests do not meet it because a zero payout
+/// skips the check entirely.
+///
+/// Whether the requirement is right is a design question and is NOT settled
+/// here: the Hoard vault is opened under a different caller role at founding,
+/// so requiring the CLAIMS-role replay to count it may be asking the wrong
+/// replay. Recorded, not answered.
+///
+/// This test pins the exact refusal. The day a vault-opening route lands, it
+/// goes red, and whoever lands it finishes the redemption.
+#[tokio::test]
+async fn current_common_hot_redeem_stops_at_the_claims_role_vault_count() {
+    let trading = trading_artifact();
+    let (test, fixture) = fixture_with_basis_and_trading(
+        TerminalV1::Provider,
+        ReceiptMintRoles::Both,
+        ProductBasisProfileV1::Categorical,
+        Some(trading),
+    );
+    let mut context = test.start_with_context().await;
+
+    // NOTHING PLANTS THE REPLAY. Every terminal test in this island starts by
+    // executing the real Claims replay-creation route against the real ELFs,
+    // because a Claims-role `CustodyReplayV1` is a prestate no other route can
+    // produce and planting one was green against an account that could not
+    // exist. The Hot route is no different, and its absence was the first wall
+    // this test hit: `InvalidTerminal("custody-replay-decode")`.
+    let created = create_claims_custody_replay(&mut context, &fixture).await;
+    assert!(created.accepted, "the real replay-creation route commits");
+
+    let plan = common_hot_open::plan_redeem_refusal(&mut context, &fixture).await;
+    assert_eq!(
+        plan,
+        dclutch_bearer_v2_operator::Error::ChainOperator(
+            dclutch_rational_representation_v2_operator::Error::InvalidTerminal(
+                "custody-replay-no-open-vault"
+            )
+        ),
+        "the Hot terminal planner stops at the Claims-role vault count",
     );
 }
 

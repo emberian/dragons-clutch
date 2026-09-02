@@ -1234,31 +1234,35 @@ fn assemble_plan(
         .to_bytes()
         .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
 
-    let meta_closure = derive_direct_close_maker_meta_closure_v1(DirectCloseMakerCoordinateInputV1 {
-        request,
-        descriptor: hash(&snapshot.descriptor.data).to_bytes(),
-        account_profile: hash(&snapshot.account_profile.data).to_bytes(),
-        effect: hash(&snapshot.effect.data).to_bytes(),
-        root: snapshot.root.key,
-        manifest: selection.manifest().to_bytes(),
-        program_set: selection.capability_release().to_bytes(),
-        config: selection.config().to_bytes(),
-        release_set,
-        registry_program: snapshot.registry_program.key,
-        core_program: snapshot.core_program.key,
-        core_programdata: snapshot.core_programdata.key,
-        trading_program: snapshot.trading_program.key,
-        trading_programdata: snapshot.trading_programdata.key,
-        maker_replay: snapshot.maker_replay.key,
-        rent_owner: snapshot.rent_owner.key,
-    })
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+    let meta_closure =
+        derive_direct_close_maker_meta_closure_v1(DirectCloseMakerCoordinateInputV1 {
+            request,
+            descriptor: hash(&snapshot.descriptor.data).to_bytes(),
+            account_profile: hash(&snapshot.account_profile.data).to_bytes(),
+            effect: hash(&snapshot.effect.data).to_bytes(),
+            root: snapshot.root.key,
+            manifest: selection.manifest().to_bytes(),
+            program_set: selection.capability_release().to_bytes(),
+            config: selection.config().to_bytes(),
+            release_set,
+            registry_program: snapshot.registry_program.key,
+            core_program: snapshot.core_program.key,
+            core_programdata: snapshot.core_programdata.key,
+            trading_program: snapshot.trading_program.key,
+            trading_programdata: snapshot.trading_programdata.key,
+            maker_replay: snapshot.maker_replay.key,
+            rent_owner: snapshot.rent_owner.key,
+        })
+        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
 
     if frame_accounts(snapshot)
         .iter()
         .zip(meta_closure.accounts.iter())
         .any(|(observed, expected)| observed.key != expected.pubkey)
-        || meta_closure.accounts.iter().any(|account| account.is_signer)
+        || meta_closure
+            .accounts
+            .iter()
+            .any(|account| account.is_signer)
         || meta_closure.classes != DIRECT_CLOSE_MAKER_META_CLASSES_V1
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidPlan);
@@ -1488,10 +1492,15 @@ mod tests {
             terminal_receipt: Some(identity(10)),
             bumps: StateBumpsV1::UNRECORDED,
         };
-        let selection =
-            CapabilityExecutionSelectionV1::new(0, content(6), content(11), content(12), content(13))
-                .expect("selection")
-                .with_capability_release_record_bumps(1, 2);
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            content(6),
+            content(11),
+            content(12),
+            content(13),
+        )
+        .expect("selection")
+        .with_capability_release_record_bumps(1, 2);
         let header = CapabilityRootHeaderV1::new(
             content(7),
             market_key.to_bytes(),
@@ -1506,11 +1515,11 @@ mod tests {
 
         // The replay address is the canonical PDA, and the bump the wire
         // records is the one that derives it -- exactly what the chain checks.
-        let coordinates = DirectCoordinatesV1::new(market_key.to_bytes(), market_identity.generation)
-            .expect("coordinates");
+        let coordinates =
+            DirectCoordinatesV1::new(market_key.to_bytes(), market_identity.generation)
+                .expect("coordinates");
         let seeds = MakerReplaySeedsV1::new(coordinates, maker.to_bytes()).expect("seeds");
-        let (replay_key, replay_bump) =
-            Pubkey::find_program_address(&seeds.as_slices(), &trading);
+        let (replay_key, replay_bump) = Pubkey::find_program_address(&seeds.as_slices(), &trading);
         let rent_principal = rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1);
         let donation = 4_242;
 
@@ -1573,29 +1582,30 @@ mod tests {
         snapshot.rent_owner.owner = system_program::ID;
         snapshot.rent_owner.lamports = 1_000;
 
-        let closure = derive_direct_close_maker_meta_closure_v1(DirectCloseMakerCoordinateInputV1 {
-            request: DirectCloseMakerRequestV1 {
-                market: market_key.to_bytes(),
-                maker: maker.to_bytes(),
-                generation: market_identity.generation,
-            },
-            descriptor: hash(&snapshot.descriptor.data).to_bytes(),
-            account_profile: hash(&snapshot.account_profile.data).to_bytes(),
-            effect: hash(&snapshot.effect.data).to_bytes(),
-            root: root_key,
-            manifest: header.selection().manifest().to_bytes(),
-            program_set: header.selection().capability_release().to_bytes(),
-            config: header.selection().config().to_bytes(),
-            release_set: header.release_set().to_bytes(),
-            registry_program: registry,
-            core_program: core,
-            core_programdata: snapshot.core_programdata.key,
-            trading_program: trading,
-            trading_programdata: snapshot.trading_programdata.key,
-            maker_replay: replay_key,
-            rent_owner: rent_owner_key,
-        })
-        .expect("coordinate closure");
+        let closure =
+            derive_direct_close_maker_meta_closure_v1(DirectCloseMakerCoordinateInputV1 {
+                request: DirectCloseMakerRequestV1 {
+                    market: market_key.to_bytes(),
+                    maker: maker.to_bytes(),
+                    generation: market_identity.generation,
+                },
+                descriptor: hash(&snapshot.descriptor.data).to_bytes(),
+                account_profile: hash(&snapshot.account_profile.data).to_bytes(),
+                effect: hash(&snapshot.effect.data).to_bytes(),
+                root: root_key,
+                manifest: header.selection().manifest().to_bytes(),
+                program_set: header.selection().capability_release().to_bytes(),
+                config: header.selection().config().to_bytes(),
+                release_set: header.release_set().to_bytes(),
+                registry_program: registry,
+                core_program: core,
+                core_programdata: snapshot.core_programdata.key,
+                trading_program: trading,
+                trading_programdata: snapshot.trading_programdata.key,
+                maker_replay: replay_key,
+                rent_owner: rent_owner_key,
+            })
+            .expect("coordinate closure");
         snapshot.capability_manifest.key = meta(&closure, 2);
         snapshot.program_set.key = meta(&closure, 3);
         snapshot.program_set_staging.key = meta(&closure, 4);
@@ -1624,12 +1634,15 @@ mod tests {
         }
     }
 
-    fn submit(fixture: &Fixture) -> Result<Box<DirectCloseMakerSubmitV1>, DirectCloseMakerPlanErrorV1>
-    {
+    fn submit(
+        fixture: &Fixture,
+    ) -> Result<Box<DirectCloseMakerSubmitV1>, DirectCloseMakerPlanErrorV1> {
         match assemble_plan(
             &fixture.snapshot,
             &fixture.rent,
-            AuthenticatedCloseV1 { ..fixture.authenticated },
+            AuthenticatedCloseV1 {
+                ..fixture.authenticated
+            },
         )? {
             DirectCloseMakerPlanV1::Submit(report) => Ok(report),
             DirectCloseMakerPlanV1::Complete(_) => {
@@ -1650,12 +1663,24 @@ mod tests {
             report.instruction.accounts.len(),
             DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1
         );
-        assert_eq!(report.instruction.program_id, fixture.snapshot.trading_program.key);
-        assert_eq!(report.instruction.data.len(), DIRECT_CLOSE_MAKER_REQUEST_BYTES_V1);
+        assert_eq!(
+            report.instruction.program_id,
+            fixture.snapshot.trading_program.key
+        );
+        assert_eq!(
+            report.instruction.data.len(),
+            DIRECT_CLOSE_MAKER_REQUEST_BYTES_V1
+        );
 
         // Permissionless is a property of the frame, not a promise in a doc
         // comment: no account in it asks for a signature.
-        assert!(report.instruction.accounts.iter().all(|meta| !meta.is_signer));
+        assert!(
+            report
+                .instruction
+                .accounts
+                .iter()
+                .all(|meta| !meta.is_signer)
+        );
 
         // The writable membrane is the codec's, not a second opinion.
         for (index, meta) in report.instruction.accounts.iter().enumerate() {
@@ -1668,7 +1693,10 @@ mod tests {
         // recorded number and the donation is exactly the excess balance.
         assert_eq!(report.rent_principal, fixture.rent_principal);
         assert_eq!(report.unclassified_donation, fixture.donation);
-        assert_eq!(report.total_credit, fixture.rent_principal + fixture.donation);
+        assert_eq!(
+            report.total_credit,
+            fixture.rent_principal + fixture.donation
+        );
         assert_eq!(
             report.expected_rent_owner_lamports,
             fixture.snapshot.rent_owner.lamports + report.total_credit
@@ -1681,16 +1709,28 @@ mod tests {
             report.expected_post_root_digest,
             hash(&report.expected_post_root_data).to_bytes()
         );
-        assert_ne!(report.expected_post_root_data, report.expected_pre_root_data);
+        assert_ne!(
+            report.expected_post_root_data,
+            report.expected_pre_root_data
+        );
 
         // The receipt is the one the chain will produce, decoded back from the
         // exact bytes rather than compared field-by-field to itself.
         let decoded = DirectCloseMakerReceiptV1::decode(&report.expected_receipt_body)
             .expect("receipt round trip");
         assert_eq!(decoded, report.expected_receipt);
-        assert_eq!(decoded.rent_owner, fixture.snapshot.rent_owner.key.to_bytes());
-        assert_eq!(decoded.maker_root, fixture.snapshot.maker_replay.key.to_bytes());
-        assert_eq!(decoded.request_digest, hash(&report.instruction.data).to_bytes());
+        assert_eq!(
+            decoded.rent_owner,
+            fixture.snapshot.rent_owner.key.to_bytes()
+        );
+        assert_eq!(
+            decoded.maker_root,
+            fixture.snapshot.maker_replay.key.to_bytes()
+        );
+        assert_eq!(
+            decoded.request_digest,
+            hash(&report.instruction.data).to_bytes()
+        );
         assert_eq!(decoded.post_root_digest, report.expected_post_root_digest);
         assert_eq!(
             decoded.rent_principal + decoded.unclassified_donation,
@@ -1755,7 +1795,9 @@ mod tests {
         match assemble_plan(
             &fixture.snapshot,
             &fixture.rent,
-            AuthenticatedCloseV1 { ..fixture.authenticated },
+            AuthenticatedCloseV1 {
+                ..fixture.authenticated
+            },
         )
         .expect("complete")
         {
@@ -1845,7 +1887,9 @@ mod tests {
         match assemble_plan(
             &fixture.snapshot,
             &fixture.rent,
-            AuthenticatedCloseV1 { ..fixture.authenticated },
+            AuthenticatedCloseV1 {
+                ..fixture.authenticated
+            },
         ) {
             Err(DirectCloseMakerPlanErrorV1::InvalidRootState) => {}
             other => panic!("an Open root must refuse, not report Complete: {other:?}"),
@@ -1858,7 +1902,10 @@ mod tests {
     fn coordinate_closure_owns_placement_classes_and_refuses_hostile_identities() {
         let fixture = fixture(3, 0, 0);
         let report = submit(&fixture).expect("submit");
-        assert_eq!(report.meta_closure.classes, DIRECT_CLOSE_MAKER_META_CLASSES_V1);
+        assert_eq!(
+            report.meta_closure.classes,
+            DIRECT_CLOSE_MAKER_META_CLASSES_V1
+        );
         assert_eq!(
             DIRECT_CLOSE_MAKER_META_CLASSES_V1.len(),
             DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1
@@ -1947,7 +1994,8 @@ mod tests {
             mainnet.snapshot.cluster = cluster;
             mainnet.snapshot.genesis_hash = SOLANA_MAINNET_GENESIS_HASH_V1;
             assert_eq!(
-                plan_direct_close_maker_v1(&mainnet.snapshot).expect_err("mainnet is never planned"),
+                plan_direct_close_maker_v1(&mainnet.snapshot)
+                    .expect_err("mainnet is never planned"),
                 DirectCloseMakerPlanErrorV1::ClusterRefused
             );
         }

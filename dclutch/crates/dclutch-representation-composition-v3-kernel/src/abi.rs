@@ -1,109 +1,105 @@
 //! Descriptor ABI and shared hostile-decoding utilities.
 
+use crate::generated_abi as gen_abi;
+
 use core::convert::TryInto;
 
 /// Implemented composition schema version.
-pub const COMPOSITION_SCHEMA_VERSION_V3: u16 = 3;
+pub const COMPOSITION_SCHEMA_VERSION_V3: u16 = gen_abi::COMPOSITION_SCHEMA_VERSION_LEAN_V3;
 /// Minimum exhaustive Product-native result-domain width.
-pub const MIN_COMPOSITION_OUTCOMES_V3: u32 = 2;
+pub const MIN_COMPOSITION_OUTCOMES_V3: u32 = gen_abi::COMPOSITION_MIN_OUTCOMES_LEAN_V3;
 /// Maximum Product-native width in this executable capacity profile.
-pub const MAX_COMPOSITION_OUTCOMES_V3: u32 = 256;
+pub const MAX_COMPOSITION_OUTCOMES_V3: u32 = gen_abi::COMPOSITION_MAX_OUTCOMES_LEAN_V3;
 /// Maximum graph nodes in this executable capacity profile.
-pub const MAX_COMPOSITION_NODES_V3: u32 = 32;
+pub const MAX_COMPOSITION_NODES_V3: u32 = gen_abi::COMPOSITION_MAX_NODES_LEAN_V3;
 /// Maximum graph edges in this executable capacity profile.
-pub const MAX_COMPOSITION_EDGES_V3: u32 = 96;
+pub const MAX_COMPOSITION_EDGES_V3: u32 = gen_abi::COMPOSITION_MAX_EDGES_LEAN_V3;
 /// Maximum sparse terms across every node in this executable capacity profile.
-pub const MAX_COMPOSITION_TERMS_V3: u32 = 2_048;
+pub const MAX_COMPOSITION_TERMS_V3: u32 = gen_abi::COMPOSITION_MAX_TERMS_LEAN_V3;
 
 /// Capacity-profile preimage. These maxima are executable bounds, not ontology.
 pub const CAPACITY_PROFILE_PREIMAGE_V3: &[u8] =
-    b"dclutch/capacity/representation-composition-v3/outcomes256/nodes32/edges96/terms2048/u128";
+    gen_abi::COMPOSITION_CAPACITY_PROFILE_PREIMAGE_LEAN_V3;
 /// SHA-256 of [`CAPACITY_PROFILE_PREIMAGE_V3`].
-pub const CAPACITY_PROFILE_ID_V3: [u8; 32] = [
-    0x48, 0xaa, 0xa1, 0xf4, 0x37, 0xff, 0xda, 0xc9, 0xbf, 0x14, 0xc9, 0xd8, 0xc8, 0xc4, 0x9c, 0xf3,
-    0xf7, 0x1e, 0x93, 0x9e, 0x30, 0x39, 0x79, 0x4b, 0xf7, 0xc4, 0x11, 0xa8, 0xff, 0x8d, 0xb8, 0x78,
-];
+pub const CAPACITY_PROFILE_ID_V3: [u8; 32] = gen_abi::COMPOSITION_CAPACITY_PROFILE_ID_LEAN_V3;
 
 /// Descriptor schema preimage.
 pub const COMPOSITION_DESCRIPTOR_SCHEMA_PREIMAGE_V3: &[u8] =
-    b"dclutch/schema/representation-composition-descriptor-v3";
+    gen_abi::COMPOSITION_DESCRIPTOR_SCHEMA_PREIMAGE_LEAN_V3;
 /// SHA-256 of [`COMPOSITION_DESCRIPTOR_SCHEMA_PREIMAGE_V3`].
-pub const COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3: [u8; 32] = [
-    0xfa, 0x76, 0x41, 0xfb, 0x0c, 0x60, 0xc1, 0x74, 0xe4, 0x7a, 0x45, 0x69, 0x99, 0x6a, 0xcc, 0x5d,
-    0x12, 0x6a, 0x6c, 0x6d, 0xb7, 0xb4, 0xa5, 0xa9, 0x2f, 0x23, 0x86, 0xb5, 0x49, 0xd9, 0x12, 0x88,
-];
+pub const COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3: [u8; 32] =
+    gen_abi::COMPOSITION_DESCRIPTOR_SCHEMA_ID_LEAN_V3;
 /// Graph schema preimage.
 pub const COMPOSITION_GRAPH_SCHEMA_PREIMAGE_V3: &[u8] =
-    b"dclutch/schema/representation-composition-graph-v3";
+    gen_abi::COMPOSITION_GRAPH_SCHEMA_PREIMAGE_LEAN_V3;
 /// SHA-256 of [`COMPOSITION_GRAPH_SCHEMA_PREIMAGE_V3`].
-pub const COMPOSITION_GRAPH_SCHEMA_ID_V3: [u8; 32] = [
-    0xb3, 0xc5, 0xc7, 0x7b, 0x58, 0x0a, 0x29, 0x6d, 0xf5, 0xf7, 0x59, 0x70, 0x4b, 0x99, 0x9b, 0xfb,
-    0x79, 0xc6, 0xc2, 0x39, 0x6c, 0x4c, 0x39, 0xb2, 0xf4, 0xc5, 0x78, 0xc8, 0x72, 0x11, 0x57, 0x84,
-];
+pub const COMPOSITION_GRAPH_SCHEMA_ID_V3: [u8; 32] = gen_abi::COMPOSITION_GRAPH_SCHEMA_ID_LEAN_V3;
 /// Translation schema preimage.
 pub const COMPOSITION_TRANSLATION_SCHEMA_PREIMAGE_V3: &[u8] =
-    b"dclutch/schema/representation-composition-translation-v3";
+    gen_abi::COMPOSITION_TRANSLATION_SCHEMA_PREIMAGE_LEAN_V3;
 /// SHA-256 of [`COMPOSITION_TRANSLATION_SCHEMA_PREIMAGE_V3`].
-pub const COMPOSITION_TRANSLATION_SCHEMA_ID_V3: [u8; 32] = [
-    0xd2, 0xc1, 0x0c, 0x1f, 0xe6, 0xd8, 0xfc, 0x09, 0x42, 0x10, 0xca, 0xad, 0x45, 0xd7, 0x00, 0x34,
-    0x76, 0xe5, 0x98, 0x8b, 0xe5, 0xa0, 0x69, 0xe8, 0x0c, 0x71, 0xec, 0x30, 0x0c, 0x2a, 0xe6, 0x41,
-];
+pub const COMPOSITION_TRANSLATION_SCHEMA_ID_V3: [u8; 32] =
+    gen_abi::COMPOSITION_TRANSLATION_SCHEMA_ID_LEAN_V3;
 
 /// Descriptor magic.
-pub const COMPOSITION_DESCRIPTOR_MAGIC_V3: [u8; 8] = *b"DCRCDS03";
+pub const COMPOSITION_DESCRIPTOR_MAGIC_V3: [u8; 8] = gen_abi::COMPOSITION_DESCRIPTOR_MAGIC_LEAN_V3;
 /// Graph magic.
-pub const COMPOSITION_GRAPH_MAGIC_V3: [u8; 8] = *b"DCRCDG03";
+pub const COMPOSITION_GRAPH_MAGIC_V3: [u8; 8] = gen_abi::COMPOSITION_GRAPH_MAGIC_LEAN_V3;
 /// Translation magic.
-pub const COMPOSITION_TRANSLATION_MAGIC_V3: [u8; 8] = *b"DCRCDT03";
+pub const COMPOSITION_TRANSLATION_MAGIC_V3: [u8; 8] =
+    gen_abi::COMPOSITION_TRANSLATION_MAGIC_LEAN_V3;
 /// Exact fixed descriptor width.
-pub const COMPOSITION_DESCRIPTOR_BYTES_V3: usize = 368;
+pub const COMPOSITION_DESCRIPTOR_BYTES_V3: usize = gen_abi::COMPOSITION_DESCRIPTOR_BYTES_LEAN_V3;
 /// Exact fixed graph header before node, edge, and term tables.
-pub const COMPOSITION_GRAPH_HEADER_BYTES_V3: usize = 112;
+pub const COMPOSITION_GRAPH_HEADER_BYTES_V3: usize =
+    gen_abi::COMPOSITION_GRAPH_HEADER_BYTES_LEAN_V3;
 /// Exact fixed translation header before canonical sparse terms.
-pub const COMPOSITION_TRANSLATION_HEADER_BYTES_V3: usize = 128;
+pub const COMPOSITION_TRANSLATION_HEADER_BYTES_V3: usize =
+    gen_abi::COMPOSITION_TRANSLATION_HEADER_BYTES_LEAN_V3;
 
 /// Descriptor byte-layout authority.
 pub struct DescriptorLayoutV3;
 
 impl DescriptorLayoutV3 {
     /// Magic offset.
-    pub const MAGIC: usize = 0;
+    pub const MAGIC: usize = gen_abi::COMPOSITION_DESCRIPTOR_MAGIC_OFFSET_V3;
     /// Schema-version offset.
-    pub const VERSION: usize = 8;
+    pub const VERSION: usize = gen_abi::COMPOSITION_DESCRIPTOR_VERSION_OFFSET_V3;
     /// Reserved header offset.
-    pub const RESERVED_HEADER: usize = 10;
+    pub const RESERVED_HEADER: usize = gen_abi::COMPOSITION_DESCRIPTOR_RESERVED_HEADER_OFFSET_V3;
     /// Immutable Core Market identity offset.
-    pub const MARKET: usize = 16;
+    pub const MARKET: usize = gen_abi::COMPOSITION_DESCRIPTOR_MARKET_OFFSET_V3;
     /// Exhaustive Product result-domain identity offset.
-    pub const RESULT_DOMAIN: usize = 48;
+    pub const RESULT_DOMAIN: usize = gen_abi::COMPOSITION_DESCRIPTOR_RESULT_DOMAIN_OFFSET_V3;
     /// Immutable execution release-set identity offset.
-    pub const RELEASE_SET: usize = 80;
+    pub const RELEASE_SET: usize = gen_abi::COMPOSITION_DESCRIPTOR_RELEASE_SET_OFFSET_V3;
     /// Exhaustive native liability-basis identity offset.
-    pub const NATIVE_BASIS: usize = 112;
+    pub const NATIVE_BASIS: usize = gen_abi::COMPOSITION_DESCRIPTOR_NATIVE_BASIS_OFFSET_V3;
     /// Stable representation graph identity offset.
-    pub const GRAPH_ID: usize = 144;
+    pub const GRAPH_ID: usize = gen_abi::COMPOSITION_DESCRIPTOR_GRAPH_ID_OFFSET_V3;
     /// Exact finalized graph-content digest offset.
-    pub const GRAPH_DIGEST: usize = 176;
+    pub const GRAPH_DIGEST: usize = gen_abi::COMPOSITION_DESCRIPTOR_GRAPH_DIGEST_OFFSET_V3;
     /// Sole canonical graph-root identity offset.
-    pub const ROOT_ID: usize = 208;
+    pub const ROOT_ID: usize = gen_abi::COMPOSITION_DESCRIPTOR_ROOT_ID_OFFSET_V3;
     /// Stable canonical-translation identity offset.
-    pub const TRANSLATION_ID: usize = 240;
+    pub const TRANSLATION_ID: usize = gen_abi::COMPOSITION_DESCRIPTOR_TRANSLATION_ID_OFFSET_V3;
     /// Exact finalized translation-content digest offset.
-    pub const TRANSLATION_DIGEST: usize = 272;
+    pub const TRANSLATION_DIGEST: usize =
+        gen_abi::COMPOSITION_DESCRIPTOR_TRANSLATION_DIGEST_OFFSET_V3;
     /// Explicit executable-capacity profile identity offset.
-    pub const CAPACITY_PROFILE: usize = 304;
+    pub const CAPACITY_PROFILE: usize = gen_abi::COMPOSITION_DESCRIPTOR_CAPACITY_PROFILE_OFFSET_V3;
     /// Native result-domain width offset.
-    pub const OUTCOME_COUNT: usize = 336;
+    pub const OUTCOME_COUNT: usize = gen_abi::COMPOSITION_DESCRIPTOR_OUTCOME_COUNT_OFFSET_V3;
     /// Exact node-count offset.
-    pub const NODE_COUNT: usize = 340;
+    pub const NODE_COUNT: usize = gen_abi::COMPOSITION_DESCRIPTOR_NODE_COUNT_OFFSET_V3;
     /// Exact edge-count offset.
-    pub const EDGE_COUNT: usize = 344;
+    pub const EDGE_COUNT: usize = gen_abi::COMPOSITION_DESCRIPTOR_EDGE_COUNT_OFFSET_V3;
     /// Exact total sparse-term count offset.
-    pub const TERM_COUNT: usize = 348;
+    pub const TERM_COUNT: usize = gen_abi::COMPOSITION_DESCRIPTOR_TERM_COUNT_OFFSET_V3;
     /// Canonical root common denominator offset.
-    pub const ROOT_DENOMINATOR: usize = 352;
+    pub const ROOT_DENOMINATOR: usize = gen_abi::COMPOSITION_DESCRIPTOR_ROOT_DENOMINATOR_OFFSET_V3;
     /// Reserved tail offset.
-    pub const RESERVED_TAIL: usize = 360;
+    pub const RESERVED_TAIL: usize = gen_abi::COMPOSITION_DESCRIPTOR_RESERVED_TAIL_OFFSET_V3;
 }
 
 /// Stable hostile-decode, topology, arithmetic, or translation refusal.

@@ -6975,3 +6975,52 @@ the accelerator's `validate_frame`, by both program-test harnesses, and by the
 recorded campaign frame counts in `general_hot_v3.rs`. That is a profile-shape
 change with a verification surface I could not close tonight, and landing it
 unverified is the debt hole rather than the fix.
+
+## 2026-09-02 — the equity Add's wall was one unsatisfiable conjunct, three phases from where it was looked for
+
+`require_tail_count_agreement_v3` demanded `product_outcome_count ==
+projected_tail_count`, and `project_tail_count` returned **0** for any
+AccountProfile carrying no `OP_PROJECT_TAIL_COUNT_U32`. A market has at least two
+outcomes. **The conjunct could not be satisfied by any honest transaction on any
+profile without a tail projection** — and a fixed topology with no item accounts
+legitimately has none. Same shape as the registered family's two `require_key`
+conjuncts: a guard comparing a real value against a zero that no caller can
+supply.
+
+On chain: Dealer's equity Add refused `Content` 0x4003 at 585,279 CU with no CPI,
+`product_outcome_count=3` against `projected_tail_count=0`. After: the honest Add
+**executes, commits and returns its ACK at 1,044,703 CU**. Five Direct suites
+unmoved.
+
+### Two things this cost, and both are classes
+
+**A refusal-site sweep that does not enumerate the EXPRESSION form finds
+nothing.** The site is spelled `Err(TradingSbfError::Content.into())` in tail
+position, not `return Err(..)`. Instrumenting `return Err(..)`, `.map_err(|_| ..)`
+and `.ok_or(..)` covered **1,815 sites** — all 703 in `hot_v3.rs` and all 1,112
+in every other Trading module — and **not one fired**, while the site sat in the
+band the whole time. A sweep that silently under-reports is worse than no sweep:
+it converts "I did not look there" into "it is not there."
+
+**And line-numbered instrumentation must be applied in reverse.** Three
+successive forward passes each shifted the lines the next pass indexed, so the
+third covered a region I had not chosen. Reverse iteration keeps earlier indices
+valid; it is one word of the loop and it is the difference between a measurement
+and a guess.
+
+**The localization was wrong twice.** Routed as "~20 sites at
+`hot_v3.rs:3905-4052`, the `.get(..lifecycle_width)` slices". Instrumented replay
+excluded all twenty; the `hot-cu-profile` ladder then put the refusal between
+`artifacts-strategy-effect` and `runtime-observations` — a whole phase band
+earlier — and the first conjunct-bearing call after `hot-heap:runtime-data` was
+it. **The ladder cost one build and beat two careful reads.**
+
+### Routed to Dealer: a hostile that was passing on a universal donor
+
+`accepted_equity_selector_one_...` asserts a substituted Position identity
+refuses `Content`. It did — but from the unsatisfiable tail-count conjunct, which
+refused **every** equity Add, honest or hostile, before the Position guard was
+reached. With the donor removed the hostile no longer refuses where it claims to:
+it now exhausts the compute budget (1,399,692 of 1,399,700). Ledger `M-38` in its
+sharpest form — the assertion named a code, not a cause, and the code had 2,126
+sites.

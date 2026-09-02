@@ -6,6 +6,8 @@
 //! the `N` Product-result leaves.  Thus acyclicity is structural, row order is
 //! canonical, and callers cannot supply a parallel matrix.
 
+use crate::generated_exposure_abi as gen_exposure;
+
 use crate::abi::{
     Error, RecordAdmissionV3, Result, array_at, gcd_u64, nonzero_array, put, require_zero, slice,
     u16_at, u32_at, u64_at, validate_record_admission,
@@ -13,74 +15,81 @@ use crate::abi::{
 use crate::{CompositionGraphV3, CompositionNodeKindV3};
 
 /// Exposure-bundle schema version.
-pub const COMPOSITION_EXPOSURE_VERSION_V3: u16 = 3;
+pub const COMPOSITION_EXPOSURE_VERSION_V3: u16 = gen_exposure::COMPOSITION_EXPOSURE_VERSION_LEAN_V3;
 /// Exposure-bundle magic.
-pub const COMPOSITION_EXPOSURE_MAGIC_V3: [u8; 8] = *b"DCRCEX03";
+pub const COMPOSITION_EXPOSURE_MAGIC_V3: [u8; 8] = gen_exposure::COMPOSITION_EXPOSURE_MAGIC_LEAN_V3;
 /// Fixed header before ordered roots and sparse edges.
-pub const COMPOSITION_EXPOSURE_HEADER_BYTES_V3: usize = 304;
+pub const COMPOSITION_EXPOSURE_HEADER_BYTES_V3: usize =
+    gen_exposure::COMPOSITION_EXPOSURE_HEADER_BYTES_LEAN_V3;
 /// Fixed ordered-root width.
-pub const COMPOSITION_EXPOSURE_ROW_BYTES_V3: usize = 56;
+pub const COMPOSITION_EXPOSURE_ROW_BYTES_V3: usize =
+    gen_exposure::COMPOSITION_EXPOSURE_ROW_BYTES_LEAN_V3;
 /// Fixed sparse-edge width.
-pub const COMPOSITION_EXPOSURE_TERM_BYTES_V3: usize = 16;
+pub const COMPOSITION_EXPOSURE_TERM_BYTES_V3: usize =
+    gen_exposure::COMPOSITION_EXPOSURE_TERM_BYTES_LEAN_V3;
 /// Minimum Product-result width in this execution profile.
-pub const MIN_COMPOSITION_PRODUCT_WIDTH_V3: u32 = 1;
+pub const MIN_COMPOSITION_PRODUCT_WIDTH_V3: u32 =
+    gen_exposure::COMPOSITION_EXPOSURE_MIN_PRODUCT_WIDTH_LEAN_V3;
 /// Maximum Product-result width in this execution profile.
-pub const MAX_COMPOSITION_PRODUCT_WIDTH_V3: u32 = 512;
+pub const MAX_COMPOSITION_PRODUCT_WIDTH_V3: u32 =
+    gen_exposure::COMPOSITION_EXPOSURE_MAX_PRODUCT_WIDTH_LEAN_V3;
 /// Maximum Claims/representation width in this execution profile.
-pub const MAX_COMPOSITION_REPRESENTATION_WIDTH_V3: u32 = 256;
+pub const MAX_COMPOSITION_REPRESENTATION_WIDTH_V3: u32 =
+    gen_exposure::COMPOSITION_EXPOSURE_MAX_REPRESENTATION_WIDTH_LEAN_V3;
 /// Maximum sparse edges in this execution profile.
-pub const MAX_COMPOSITION_EXPOSURE_TERMS_V3: u32 = 65_536;
+pub const MAX_COMPOSITION_EXPOSURE_TERMS_V3: u32 =
+    gen_exposure::COMPOSITION_EXPOSURE_MAX_TERMS_LEAN_V3;
 
 /// Schema preimage for finalized exposure bundles.
 pub const COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3: &[u8] =
-    b"dclutch/schema/product-representation-exposure-bundle-v3";
+    gen_exposure::COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_LEAN_V3;
 /// SHA-256 of [`COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3`].
-pub const COMPOSITION_EXPOSURE_SCHEMA_ID_V3: [u8; 32] = [
-    0xc8, 0xbf, 0x29, 0xb9, 0x97, 0x67, 0x94, 0xa7, 0x7d, 0x32, 0xbe, 0xd9, 0xd7, 0xfc, 0x93, 0x3d,
-    0xcb, 0xfc, 0x78, 0x75, 0x91, 0x0c, 0x99, 0xc8, 0x0d, 0xe7, 0x18, 0xc3, 0xc0, 0x10, 0x07, 0x5a,
-];
+pub const COMPOSITION_EXPOSURE_SCHEMA_ID_V3: [u8; 32] =
+    gen_exposure::COMPOSITION_EXPOSURE_SCHEMA_ID_LEAN_V3;
 /// Capacity-profile preimage. These bounds are executable, not ontology.
-pub const COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_V3: &[u8] = b"dclutch/capacity/product-representation-exposure-v3/product512/representation256/terms65536/u128";
+pub const COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_V3: &[u8] =
+    gen_exposure::COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_LEAN_V3;
 /// SHA-256 of [`COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_V3`].
-pub const COMPOSITION_EXPOSURE_CAPACITY_ID_V3: [u8; 32] = [
-    0x44, 0x0b, 0x9a, 0x61, 0x16, 0x31, 0xa2, 0x3e, 0x68, 0x74, 0xaa, 0x94, 0x54, 0x07, 0xe2, 0x35,
-    0x7a, 0xea, 0xab, 0x3f, 0xea, 0x4d, 0xd0, 0xd8, 0xc7, 0x31, 0x00, 0x9b, 0xdc, 0x83, 0x63, 0x9a,
-];
+pub const COMPOSITION_EXPOSURE_CAPACITY_ID_V3: [u8; 32] =
+    gen_exposure::COMPOSITION_EXPOSURE_CAPACITY_ID_LEAN_V3;
 
 /// Exposure-header byte layout.
 pub struct CompositionExposureLayoutV3;
 
 impl CompositionExposureLayoutV3 {
     /// Magic offset.
-    pub const MAGIC: usize = 0;
+    pub const MAGIC: usize = gen_exposure::COMPOSITION_EXPOSURE_MAGIC_OFFSET_V3;
     /// Version offset.
-    pub const VERSION: usize = 8;
+    pub const VERSION: usize = gen_exposure::COMPOSITION_EXPOSURE_VERSION_OFFSET_V3;
     /// Reserved header offset.
-    pub const RESERVED_HEADER: usize = 10;
+    pub const RESERVED_HEADER: usize = gen_exposure::COMPOSITION_EXPOSURE_RESERVED_HEADER_OFFSET_V3;
     /// Logical Market offset.
-    pub const MARKET: usize = 16;
+    pub const MARKET: usize = gen_exposure::COMPOSITION_EXPOSURE_MARKET_OFFSET_V3;
     /// Product-owned result-domain offset.
-    pub const RESULT_DOMAIN: usize = 48;
+    pub const RESULT_DOMAIN: usize = gen_exposure::COMPOSITION_EXPOSURE_RESULT_DOMAIN_OFFSET_V3;
     /// Selected release-set offset.
-    pub const RELEASE_SET: usize = 80;
+    pub const RELEASE_SET: usize = gen_exposure::COMPOSITION_EXPOSURE_RELEASE_SET_OFFSET_V3;
     /// Product-owned terminal-result basis offset.
-    pub const PRODUCT_BASIS: usize = 112;
+    pub const PRODUCT_BASIS: usize = gen_exposure::COMPOSITION_EXPOSURE_PRODUCT_BASIS_OFFSET_V3;
     /// Claims-owned representation basis offset.
-    pub const REPRESENTATION_BASIS: usize = 144;
+    pub const REPRESENTATION_BASIS: usize =
+        gen_exposure::COMPOSITION_EXPOSURE_REPRESENTATION_BASIS_OFFSET_V3;
     /// Stable source composition-graph identity offset.
-    pub const GRAPH_ID: usize = 176;
+    pub const GRAPH_ID: usize = gen_exposure::COMPOSITION_EXPOSURE_GRAPH_ID_OFFSET_V3;
     /// Executable capacity-profile offset.
-    pub const CAPACITY_PROFILE: usize = 208;
+    pub const CAPACITY_PROFILE: usize =
+        gen_exposure::COMPOSITION_EXPOSURE_CAPACITY_PROFILE_OFFSET_V3;
     /// Product terminal-result width offset.
-    pub const PRODUCT_WIDTH: usize = 240;
+    pub const PRODUCT_WIDTH: usize = gen_exposure::COMPOSITION_EXPOSURE_PRODUCT_WIDTH_OFFSET_V3;
     /// Claims/representation width offset.
-    pub const REPRESENTATION_WIDTH: usize = 244;
+    pub const REPRESENTATION_WIDTH: usize =
+        gen_exposure::COMPOSITION_EXPOSURE_REPRESENTATION_WIDTH_OFFSET_V3;
     /// Ordered root count offset.
-    pub const ROW_COUNT: usize = 248;
+    pub const ROW_COUNT: usize = gen_exposure::COMPOSITION_EXPOSURE_ROW_COUNT_OFFSET_V3;
     /// Total sparse-edge count offset.
-    pub const TERM_COUNT: usize = 252;
+    pub const TERM_COUNT: usize = gen_exposure::COMPOSITION_EXPOSURE_TERM_COUNT_OFFSET_V3;
     /// Reserved tail offset.
-    pub const RESERVED_TAIL: usize = 256;
+    pub const RESERVED_TAIL: usize = gen_exposure::COMPOSITION_EXPOSURE_RESERVED_TAIL_OFFSET_V3;
 }
 
 /// Ordered exposure-root byte layout.
@@ -88,17 +97,18 @@ pub struct CompositionExposureRowLayoutV3;
 
 impl CompositionExposureRowLayoutV3 {
     /// Stable composition-node identity offset.
-    pub const NODE_ID: usize = 0;
+    pub const NODE_ID: usize = gen_exposure::COMPOSITION_EXPOSURE_ROW_NODE_ID_OFFSET_V3;
     /// Claims/representation coordinate offset.
-    pub const REPRESENTATION_COORDINATE: usize = 32;
+    pub const REPRESENTATION_COORDINATE: usize =
+        gen_exposure::COMPOSITION_EXPOSURE_ROW_COORDINATE_OFFSET_V3;
     /// Canonical node rank offset; exact one for every row.
-    pub const RANK: usize = 36;
+    pub const RANK: usize = gen_exposure::COMPOSITION_EXPOSURE_ROW_RANK_OFFSET_V3;
     /// First sparse-edge index offset.
-    pub const FIRST_TERM: usize = 40;
+    pub const FIRST_TERM: usize = gen_exposure::COMPOSITION_EXPOSURE_ROW_FIRST_TERM_OFFSET_V3;
     /// Sparse-edge count offset.
-    pub const TERM_COUNT: usize = 44;
+    pub const TERM_COUNT: usize = gen_exposure::COMPOSITION_EXPOSURE_ROW_TERM_COUNT_OFFSET_V3;
     /// Positive normalized row denominator offset.
-    pub const DENOMINATOR: usize = 48;
+    pub const DENOMINATOR: usize = gen_exposure::COMPOSITION_EXPOSURE_ROW_DENOMINATOR_OFFSET_V3;
 }
 
 /// Sparse exposure-edge byte layout.
@@ -106,11 +116,12 @@ pub struct CompositionExposureTermLayoutV3;
 
 impl CompositionExposureTermLayoutV3 {
     /// Product-result coordinate offset.
-    pub const PRODUCT_COORDINATE: usize = 0;
+    pub const PRODUCT_COORDINATE: usize =
+        gen_exposure::COMPOSITION_EXPOSURE_TERM_PRODUCT_COORDINATE_OFFSET_V3;
     /// Reserved offset.
-    pub const RESERVED: usize = 4;
+    pub const RESERVED: usize = gen_exposure::COMPOSITION_EXPOSURE_TERM_RESERVED_OFFSET_V3;
     /// Positive numerator offset.
-    pub const NUMERATOR: usize = 8;
+    pub const NUMERATOR: usize = gen_exposure::COMPOSITION_EXPOSURE_TERM_NUMERATOR_OFFSET_V3;
 }
 
 /// One canonical sparse exposure edge.

@@ -1,5 +1,7 @@
 //! Canonical bounded DAG encoding and direct flattening validation.
 
+use crate::generated_abi as gen_abi;
+
 use crate::CompositionDescriptorV3;
 use crate::abi::{
     COMPOSITION_GRAPH_HEADER_BYTES_V3, COMPOSITION_GRAPH_MAGIC_V3, COMPOSITION_SCHEMA_VERSION_V3,
@@ -10,38 +12,38 @@ use crate::abi::{
 };
 
 /// Exact fixed width of one canonical graph node.
-pub const COMPOSITION_NODE_BYTES_V3: usize = 80;
+pub const COMPOSITION_NODE_BYTES_V3: usize = gen_abi::COMPOSITION_NODE_BYTES_LEAN_V3;
 /// Exact fixed width of one canonical graph edge.
-pub const COMPOSITION_EDGE_BYTES_V3: usize = 48;
+pub const COMPOSITION_EDGE_BYTES_V3: usize = gen_abi::COMPOSITION_EDGE_BYTES_LEAN_V3;
 /// Exact fixed width of one canonical sparse payoff term.
-pub const COMPOSITION_TERM_BYTES_V3: usize = 16;
+pub const COMPOSITION_TERM_BYTES_V3: usize = gen_abi::COMPOSITION_TERM_BYTES_LEAN_V3;
 
 /// Graph-header byte-layout authority.
 pub struct GraphLayoutV3;
 
 impl GraphLayoutV3 {
     /// Magic offset.
-    pub const MAGIC: usize = 0;
+    pub const MAGIC: usize = gen_abi::COMPOSITION_GRAPH_MAGIC_OFFSET_V3;
     /// Schema-version offset.
-    pub const VERSION: usize = 8;
+    pub const VERSION: usize = gen_abi::COMPOSITION_GRAPH_VERSION_OFFSET_V3;
     /// Reserved header offset.
-    pub const RESERVED_HEADER: usize = 10;
+    pub const RESERVED_HEADER: usize = gen_abi::COMPOSITION_GRAPH_RESERVED_HEADER_OFFSET_V3;
     /// Stable graph identity offset.
-    pub const GRAPH_ID: usize = 16;
+    pub const GRAPH_ID: usize = gen_abi::COMPOSITION_GRAPH_ID_OFFSET_V3;
     /// Sole canonical root identity offset.
-    pub const ROOT_ID: usize = 48;
+    pub const ROOT_ID: usize = gen_abi::COMPOSITION_GRAPH_ROOT_ID_OFFSET_V3;
     /// Exhaustive native width offset.
-    pub const OUTCOME_COUNT: usize = 80;
+    pub const OUTCOME_COUNT: usize = gen_abi::COMPOSITION_GRAPH_OUTCOME_COUNT_OFFSET_V3;
     /// Node-count offset.
-    pub const NODE_COUNT: usize = 84;
+    pub const NODE_COUNT: usize = gen_abi::COMPOSITION_GRAPH_NODE_COUNT_OFFSET_V3;
     /// Edge-count offset.
-    pub const EDGE_COUNT: usize = 88;
+    pub const EDGE_COUNT: usize = gen_abi::COMPOSITION_GRAPH_EDGE_COUNT_OFFSET_V3;
     /// Total sparse-term count offset.
-    pub const TERM_COUNT: usize = 92;
+    pub const TERM_COUNT: usize = gen_abi::COMPOSITION_GRAPH_TERM_COUNT_OFFSET_V3;
     /// Sole root table index offset.
-    pub const ROOT_INDEX: usize = 96;
+    pub const ROOT_INDEX: usize = gen_abi::COMPOSITION_GRAPH_ROOT_INDEX_OFFSET_V3;
     /// Reserved tail offset.
-    pub const RESERVED_TAIL: usize = 100;
+    pub const RESERVED_TAIL: usize = gen_abi::COMPOSITION_GRAPH_RESERVED_TAIL_OFFSET_V3;
 }
 
 /// Node-record byte-layout authority.
@@ -49,29 +51,30 @@ pub struct NodeLayoutV3;
 
 impl NodeLayoutV3 {
     /// Content identity offset.
-    pub const ID: usize = 0;
+    pub const ID: usize = gen_abi::COMPOSITION_NODE_ID_OFFSET_V3;
     /// Exact topological rank offset.
-    pub const RANK: usize = 32;
+    pub const RANK: usize = gen_abi::COMPOSITION_NODE_RANK_OFFSET_V3;
     /// First owned edge offset.
-    pub const FIRST_EDGE: usize = 36;
+    pub const FIRST_EDGE: usize = gen_abi::COMPOSITION_NODE_FIRST_EDGE_OFFSET_V3;
     /// Owned edge-count offset.
-    pub const EDGE_COUNT: usize = 40;
+    pub const EDGE_COUNT: usize = gen_abi::COMPOSITION_NODE_EDGE_COUNT_OFFSET_V3;
     /// First owned flattened term offset.
-    pub const FIRST_TERM: usize = 44;
+    pub const FIRST_TERM: usize = gen_abi::COMPOSITION_NODE_FIRST_TERM_OFFSET_V3;
     /// Owned flattened term-count offset.
-    pub const TERM_COUNT: usize = 48;
+    pub const TERM_COUNT: usize = gen_abi::COMPOSITION_NODE_TERM_COUNT_OFFSET_V3;
     /// Node-kind offset.
-    pub const KIND: usize = 52;
+    pub const KIND: usize = gen_abi::COMPOSITION_NODE_KIND_OFFSET_V3;
     /// Reserved kind padding offset.
-    pub const RESERVED_KIND: usize = 53;
+    pub const RESERVED_KIND: usize = gen_abi::COMPOSITION_NODE_RESERVED_KIND_OFFSET_V3;
     /// Native outcome offset; zero for composed nodes.
-    pub const NATIVE_OUTCOME: usize = 56;
+    pub const NATIVE_OUTCOME: usize = gen_abi::COMPOSITION_NODE_NATIVE_OUTCOME_OFFSET_V3;
     /// Reserved scalar padding offset.
-    pub const RESERVED_SCALAR: usize = 60;
+    pub const RESERVED_SCALAR: usize = gen_abi::COMPOSITION_NODE_RESERVED_SCALAR_OFFSET_V3;
     /// Exact recipe divisor offset.
-    pub const RECIPE_DIVISOR: usize = 64;
+    pub const RECIPE_DIVISOR: usize = gen_abi::COMPOSITION_NODE_RECIPE_DIVISOR_OFFSET_V3;
     /// Canonical flattened common denominator offset.
-    pub const FLATTENED_DENOMINATOR: usize = 72;
+    pub const FLATTENED_DENOMINATOR: usize =
+        gen_abi::COMPOSITION_NODE_FLATTENED_DENOMINATOR_OFFSET_V3;
 }
 
 /// Edge-record byte-layout authority.
@@ -79,13 +82,13 @@ pub struct EdgeLayoutV3;
 
 impl EdgeLayoutV3 {
     /// Child content identity offset.
-    pub const CHILD_ID: usize = 0;
+    pub const CHILD_ID: usize = gen_abi::COMPOSITION_EDGE_CHILD_ID_OFFSET_V3;
     /// Child node-table index offset.
-    pub const CHILD_INDEX: usize = 32;
+    pub const CHILD_INDEX: usize = gen_abi::COMPOSITION_EDGE_CHILD_INDEX_OFFSET_V3;
     /// Reserved offset.
-    pub const RESERVED: usize = 36;
+    pub const RESERVED: usize = gen_abi::COMPOSITION_EDGE_RESERVED_OFFSET_V3;
     /// Nonzero exact coefficient offset.
-    pub const COEFFICIENT: usize = 40;
+    pub const COEFFICIENT: usize = gen_abi::COMPOSITION_EDGE_COEFFICIENT_OFFSET_V3;
 }
 
 /// Sparse-term byte-layout authority.
@@ -93,11 +96,11 @@ pub struct TermLayoutV3;
 
 impl TermLayoutV3 {
     /// Native outcome offset.
-    pub const OUTCOME: usize = 0;
+    pub const OUTCOME: usize = gen_abi::COMPOSITION_TERM_OUTCOME_OFFSET_V3;
     /// Reserved offset.
-    pub const RESERVED: usize = 4;
+    pub const RESERVED: usize = gen_abi::COMPOSITION_TERM_RESERVED_OFFSET_V3;
     /// Positive canonical numerator offset.
-    pub const NUMERATOR: usize = 8;
+    pub const NUMERATOR: usize = gen_abi::COMPOSITION_TERM_NUMERATOR_OFFSET_V3;
 }
 
 /// Canonical graph node kind.

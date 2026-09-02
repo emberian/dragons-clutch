@@ -19,6 +19,19 @@ mod exposure;
 mod graph;
 mod translation;
 
+/// Lean-owned descriptor, graph and translation coordinates.
+///
+/// `DClutchSemantics.RepresentationCompositionV3Abi` authors every constant and
+/// byte offset below; `abi`, `graph` and `translation` derive theirs from here.
+#[allow(dead_code, missing_docs)]
+mod generated_abi;
+/// Lean-owned Product-exposure coordinates.
+///
+/// `DClutchSemantics.ProductRepresentationExposureV3Abi` is the author;
+/// `exposure` derives from here.
+#[allow(dead_code, missing_docs)]
+mod generated_exposure_abi;
+
 pub use abi::{
     CAPACITY_PROFILE_ID_V3, CAPACITY_PROFILE_PREIMAGE_V3, COMPOSITION_DESCRIPTOR_BYTES_V3,
     COMPOSITION_DESCRIPTOR_MAGIC_V3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,

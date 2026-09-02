@@ -47,29 +47,44 @@ tools/gauntlet/resolution-sponsored/run-resolution-sponsored.sh
   reports that a call overwrites its own stack frame. The runner counts them per
   artifact and refuses to run the campaign at all if the count is nonzero.
 
-## !! CAPTURE AND SETTLE DO NOT FIT A LEGACY PACKET !!
+## Capture and Settle did not fit a legacy packet, and now ride v0
 
 Measured 2026-09-01, the first time this family's wire extents were measured at
-all. Solana's legacy maximum is 1,232 bytes (`PACKET_DATA_BYTES`).
+all; converted 2026-09-02. Packet maximum 1,232 bytes (`PACKET_DATA_BYTES`).
 
-| action | bytes | over |
-|---|---:|---:|
-| `Capture` (×4) | 1,255 | **+23** |
-| `Settle` (×4) | 1,321 | **+89** |
-| `CommitFailure` (×4) | 1,222 | fits, by **10** |
-| `CloseCandidate` / `CloseHead` (×4) | 333 | fits |
+| action | legacy | over | now | static / looked up |
+|---|---:|---:|---:|---:|
+| `Capture` (×4) | 1,255 | **+23** | **392** | 3 / 29 |
+| `Settle` (×4) | 1,321 | **+89** | **396** | 3 / 31 |
+| `CommitFailure` (×4) | 1,222 | fits, by **10** | stays legacy | — |
+| `CloseCandidate` / `CloseHead` (×4) | 333 | fits | stays legacy | — |
 
 Two consequences, and they are not the same.
 
-**Capture and Settle need a v0 message over an Address Lookup Table.** A real
-sponsor cannot submit either on a legacy message. This is the Found31 defect
-class exactly: ProgramTest submits no packet, so the frame survives every
-fixture test in the tree until someone serialises it and looks.
+**Capture and Settle now execute as v0 messages over a frozen Address Lookup
+Table.** No sponsor could submit either on a legacy message, and this is the
+Found31 defect class exactly: ProgramTest submits no packet, so the frame
+survives every fixture test in the tree until someone serialises it and looks.
+Three addresses stay inline in each — the payer, the invoked program, and the
+worker, who signs — because no table can move a signer or a program id. Both
+tables are created, extended and **frozen** before the first
+`set_sponsored_clock`: `create_lookup_table` needs a slot the bank actually
+produced, and from that call onward the Clock this campaign reports is one it
+*wrote*. One table per route class, carrying the union of the coordinates that
+class names; each message resolves only the subset it holds.
+
+The instructions did not move — same bytes, same metas, same privileges — and
+the campaign's own controls say so: all five actions still execute, and the nine
+hostiles still raise the same five distinct codes.
 
 **`CommitFailure` fits with ten bytes of headroom** — and no room at all for a
-priority-fee instruction. `sponsored-commit-failure-fits-by-ten-bytes` records
-that margin so a later account added to the failure frame is a red witness
-rather than a silent crossing.
+priority-fee instruction. It is now the widest transaction this campaign
+submits, and it stays legacy **deliberately**: a failure route is the last one
+that should acquire a published lookup table as a liveness precondition. If it
+grows, shrink the frame; do not give it a table.
+`sponsored-commit-failure-fits-by-ten-bytes` records that margin so a later
+account added to the failure frame is a red witness rather than a silent
+crossing.
 
 ## Nine hostiles, five distinct codes
 

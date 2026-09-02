@@ -16,25 +16,25 @@
       "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. Before 2026-09-01 this campaign measured NOTHING, which is why the next witness is a first observation rather than a regression guard."
     },
     {
-      "id": "sponsored-capture-and-settle-do-not-fit-a-legacy-packet",
+      "id": "sponsored-capture-and-settle-ride-v0-lookup-tables",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.wire_bytes > 1232) | .label | split(\"/\")[0]] | unique | join(\" + \")",
-      "expect": "Capture + Settle",
-      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree until 4e1c4db put it on a v0 ALT. This family had never been measured. Every Capture is 1,255 bytes and every Settle is 1,321; neither can be submitted by a real sponsor on a legacy message, and both need v0 messages over an Address Lookup Table. Eight of the sixteen transactions are over."
+      "query": "[.transactions[] | \"\\(.label | split(\"/\")[0])=\\(.wire_bytes)\"] | unique | sort | join(\" + \")",
+      "expect": "Capture=392 + CloseCandidate=333 + CloseHead=333 + CommitFailure=1222 + Settle=396",
+      "provenance": "Capture was 1,255 bytes as a legacy message and Settle 1,321, against Solana's 1,232-byte PACKET_DATA_BYTES -- over by 23 and 89, so neither could be submitted anywhere and ProgramTest submits no packet to say so. Both classes now execute as v0 messages over a table frozen for that class, built before the campaign starts driving the Clock by hand because create_lookup_table needs a slot the bank actually produced. 29 and 31 of the frame's addresses become one-byte indexes; three stay static in each -- the payer, the invoked program, and the worker, who signs. One line per class rather than a max, so a single class drifting cannot hide behind another."
     },
     {
-      "id": "sponsored-eight-transactions-are-over-the-packet-limit",
+      "id": "sponsored-no-transaction-exceeds-the-packet-maximum",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.wire_bytes > 1232)] | length | tostring",
-      "expect": "8",
-      "provenance": "The count that goes with the witness above, kept separate so a campaign that grows a ninth over-limit transaction fails loudly rather than passing on a prefix match of the family names."
+      "query": "[.transactions[] | select(.wire_bytes != null and .wire_bytes > 1232)] | length | tostring",
+      "expect": "0",
+      "provenance": "Against Solana's 1,232-byte PACKET_DATA_BYTES. Eight transactions -- four Capture and four Settle -- were over it before 2026-09-02. Nulls are excluded on purpose: an unmeasured transaction is not a transaction that fits, and `sponsored-measured-every-transaction` is what holds that count at zero."
     },
     {
       "id": "sponsored-commit-failure-fits-by-ten-bytes",
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.wire_bytes <= 1232) | .wire_bytes] | max | tostring",
       "expect": "1222",
-      "provenance": "Against the same 1,232-byte PACKET_DATA_BYTES: the largest transaction in this campaign that DOES fit is a CommitFailure at 1,222 bytes -- ten bytes of headroom, and no room at all for a priority fee instruction. Recorded as a measured margin so that a later account added to the failure frame is a red witness rather than a silent crossing."
+      "provenance": "CommitFailure is 1,222 bytes on a legacy message, ten under Solana's 1,232-byte PACKET_DATA_BYTES, and it is now the widest transaction this campaign submits. It stays legacy DELIBERATELY, and the ten bytes are the reason to keep watching it: one more account, or the twelve-byte priority-fee instruction the house builder pushes unconditionally, puts it over -- and a FAILURE route is the last one that should acquire a published lookup table as a liveness precondition. If it grows, the answer is to shrink its frame, not to give it a table."
     },
     {
       "id": "sponsored-all-five-actions-execute",

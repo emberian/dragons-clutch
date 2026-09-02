@@ -96,7 +96,14 @@ pub enum Error {
     /// An action carried a noncanonical revision, quantity, or account shape.
     InvalidAction,
     /// A terminal Realm, winner, Custody replay, Vault, or recipient differed.
-    InvalidTerminal,
+    /// Terminal redemption evidence refused, and WHICH evidence.
+    ///
+    /// Twenty-seven sites published this as one word, so every terminal fixture
+    /// gap in this tree has been a bisect. The tag is the check that refused --
+    /// the same shape `BuilderError::Projection` already uses in the shared
+    /// bundle builder -- because the caller is an operator on a developer's
+    /// machine, not a chain refusal code with a band to respect.
+    InvalidTerminal(&'static str),
     /// The basis names the degree-2-to-3 spline family and no evaluator
     /// exists. The off-chain counterpart of
     /// `ClaimsSbfError::BasisEvaluatorAbsent` (`0x500C`).
@@ -411,7 +418,7 @@ pub fn construct_redeem_terminal(
     if common.core.phase != CorePhase::Terminal
         || terminal.outcome >= common.representation_admission.basis_width()
     {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("phase-or-outcome"));
     }
     let assets = authenticate_assets(common, Some(terminal.outcome))?;
     let selected = assets.first().copied().ok_or(Error::InvalidWidth)?;
@@ -1379,10 +1386,12 @@ fn authenticate_terminal_context(
         common.observation.rent,
     )?;
     if common.core.identity.realm_id.to_bytes() != realm_digest {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("realm-identity"));
     }
-    let realm = RealmV1::decode(terminal.realm.raw.data).map_err(|_| Error::InvalidTerminal)?;
-    TokenProgram::parse(*realm.token_program()).map_err(|_| Error::InvalidTerminal)?;
+    let realm = RealmV1::decode(terminal.realm.raw.data)
+        .map_err(|_| Error::InvalidTerminal("realm-decode"))?;
+    TokenProgram::parse(*realm.token_program())
+        .map_err(|_| Error::InvalidTerminal("realm-token-program"))?;
     let scenario = authenticate_terminal_scenario(common, terminal)?;
     let token_program = Pubkey::new_from_array(*realm.token_program());
     let collateral_mint = Pubkey::new_from_array(*realm.collateral_mint());
@@ -1390,10 +1399,10 @@ fn authenticate_terminal_context(
         || terminal.collateral_mint.owner != token_program
         || terminal.collateral_mint.executable
         || !Mint::parse(terminal.collateral_mint.data)
-            .map_err(|_| Error::InvalidTerminal)?
+            .map_err(|_| Error::InvalidTerminal("collateral-mint-decode"))?
             .is_initialized
     {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("collateral-mint"));
     }
     let recipient = authenticate_token_account(
         terminal.collateral_recipient,
@@ -1402,7 +1411,8 @@ fn authenticate_terminal_context(
         collateral_mint,
         common.observation.actor,
     )?;
-    let hoard = TokenAccount::parse(terminal.hoard.data).map_err(|_| Error::InvalidTerminal)?;
+    let hoard = TokenAccount::parse(terminal.hoard.data)
+        .map_err(|_| Error::InvalidTerminal("hoard-decode"))?;
     if terminal.hoard.owner != token_program
         || terminal.hoard.executable
         || hoard.mint != collateral_mint.to_bytes()
@@ -1413,7 +1423,7 @@ fn authenticate_terminal_context(
         || hoard.close_authority != COption::None
         || recipient.mint != collateral_mint.to_bytes()
     {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("hoard-or-recipient"));
     }
     Ok(TerminalContextV2 {
         realm_id: Pubkey::new_from_array(realm_digest),
@@ -1430,7 +1440,7 @@ fn authenticate_terminal_scenario(
     let expected = common
         .core
         .terminal_receipt
-        .ok_or(Error::InvalidTerminal)?
+        .ok_or(Error::InvalidTerminal("terminal-receipt-absent"))?
         .to_bytes();
     let observed = terminal.terminal_certificate;
     if common.core.terminal_winner >= common.result_outcome_count
@@ -1443,10 +1453,10 @@ fn authenticate_terminal_scenario(
             .rent
             .is_exempt(observed.lamports, observed.data.len())
     {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("certificate-frame"));
     }
-    let certificate =
-        ResolutionCertificateV2::decode(observed.data).map_err(|_| Error::InvalidTerminal)?;
+    let certificate = ResolutionCertificateV2::decode(observed.data)
+        .map_err(|_| Error::InvalidTerminal("certificate-decode"))?;
     if certificate.receipt_account != expected
         || certificate.market != common.core.identity.market_id.to_bytes()
         || certificate.source_material != common.core.identity.resolution_policy.to_bytes()
@@ -1460,7 +1470,7 @@ fn authenticate_terminal_scenario(
             )
             .is_err()
     {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("certificate-join"));
     }
     match (
         common.representation_admission.basis_kind(),
@@ -1500,7 +1510,7 @@ fn authenticate_terminal_scenario(
             | BasisKindV3::GradedExactComplement
             | BasisKindV3::SplineDegree2To3 { .. },
             ResolutionCertificateKindV2::RecoveryAdvanced | ResolutionCertificateKindV2::Exhausted,
-        ) => Err(Error::InvalidTerminal),
+        ) => Err(Error::InvalidTerminal("scenario-shape")),
     }
 }
 
@@ -1526,7 +1536,7 @@ fn evaluate_terminal_payout(
         } => basis.evaluate_rational(numerator, denominator, &mut product_payouts),
         TerminalScenarioV3::Failure => basis.evaluate_failure(&mut product_payouts),
     }
-    .map_err(|_| Error::InvalidTerminal)?;
+    .map_err(|_| Error::InvalidTerminal("payout"))?;
     let exposure = authenticate_operator_exposure(common, basis.basis_width())?;
     let mut translation_scratch = vec![0_u64; claims_width];
     let mut claims_payouts = vec![0_u64; claims_width];
@@ -1581,13 +1591,24 @@ fn authenticate_positive_custody_replay(
     context: TerminalContextV2,
 ) -> Result<u64> {
     let replay = CustodyReplayV1::decode(terminal.custody_replay.data)
-        .map_err(|_| Error::InvalidTerminal)?;
+        .map_err(|_| Error::InvalidTerminal("custody-replay-decode"))?;
+    // FOUR ACCUSATIONS, NOT ONE. These were a single twelve-conjunct `||` and a
+    // single word, which is the difference between reading a wall and bisecting
+    // one -- and a Hot terminal fixture met it on 2026-09-02 with no way to ask
+    // which half was wrong.
     if terminal.custody_replay.owner != common.roles.custody
         || terminal.custody_replay.executable
         || terminal.custody_replay.data.len() != CUSTODY_REPLAY_BYTES_V1
-        || replay.open_vault_count == 0
-        || replay.next_revision == u64::MAX
-        || replay.generation != common.core.identity.generation
+    {
+        return Err(Error::InvalidTerminal("custody-replay-frame"));
+    }
+    if replay.open_vault_count == 0 {
+        return Err(Error::InvalidTerminal("custody-replay-no-open-vault"));
+    }
+    if replay.next_revision == u64::MAX {
+        return Err(Error::InvalidTerminal("custody-replay-exhausted"));
+    }
+    if replay.generation != common.core.identity.generation
         || replay.caller_role != CustodyCallerRoleV1::Claims
         || replay.release_set != common.descriptor.release_set_id()
         || replay.market != common.descriptor.market_id()
@@ -1595,7 +1616,7 @@ fn authenticate_positive_custody_replay(
         || replay.context != common.claims_custody_context
         || replay.caller_program != common.roles.claims.to_bytes()
     {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("custody-replay-binding"));
     }
     Ok(replay.next_revision)
 }
@@ -1613,13 +1634,17 @@ fn derive_terminal_after_request(
     let product_width =
         usize::try_from(common.result_outcome_count).map_err(|_| Error::InvalidWidth)?;
     let claims_width = usize::try_from(width).map_err(|_| Error::InvalidWidth)?;
-    let neutral =
-        SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).map_err(|_| Error::InvalidTerminal)?;
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0)
+        .map_err(|_| Error::InvalidTerminal("after-neutral-delta"))?;
     let mut product_payout_scratch = vec![0_u64; product_width];
     let mut translation_scratch = vec![0_u64; claims_width];
     let mut claims_payout_scratch = vec![0_u64; claims_width];
     let mut aggregate_scratch = vec![neutral; claims_width];
-    let mut packet = vec![0_u8; plan_bytes(width, 1, 1).map_err(|_| Error::InvalidTerminal)?];
+    let mut packet = vec![
+        0_u8;
+        plan_bytes(width, 1, 1)
+            .map_err(|_| Error::InvalidTerminal("after-plan-bytes"))?
+    ];
     let planner_payout = encode_product_basis_terminal_signed_delta_v3(
         ProductBasisTerminalInputV3 {
             product_basis_bytes: common.observation.product_evidence.linked_basis.raw.data,
@@ -1662,9 +1687,9 @@ fn derive_terminal_after_request(
         &mut aggregate_scratch,
         &mut packet,
     )
-    .map_err(|_| Error::InvalidTerminal)?;
+    .map_err(|_| Error::InvalidTerminal("after-plan-encode"))?;
     if planner_payout != payout {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("after-plan"));
     }
     let packet_digest = hash(&packet).to_bytes();
     let candidate_digest = hashv(&[
@@ -1733,10 +1758,10 @@ fn derive_terminal_after_request(
     custody_request.source = hoard.to_bytes();
     custody_request
         .validate()
-        .map_err(|_| Error::InvalidTerminal)?;
+        .map_err(|_| Error::InvalidTerminal("after-position-decode"))?;
     let custody_bytes = custody_request
         .to_bytes()
-        .map_err(|_| Error::InvalidTerminal)?;
+        .map_err(|_| Error::InvalidTerminal("after-row-decode"))?;
     let custody_digest = hash(&custody_bytes).to_bytes();
     let caller = Pubkey::find_program_address(
         &CallerAuthoritySeedsV1::from_bytes(
@@ -1746,7 +1771,7 @@ fn derive_terminal_after_request(
             custody_request.context,
             custody_digest,
         )
-        .map_err(|_| Error::InvalidTerminal)?
+        .map_err(|_| Error::InvalidTerminal("after-row"))?
         .as_slices(),
         &common.roles.claims,
     )
@@ -1762,7 +1787,7 @@ fn derive_terminal_after_request(
     )
     .0;
     if terminal.hoard.key != hoard {
-        return Err(Error::InvalidTerminal);
+        return Err(Error::InvalidTerminal("after-conservation"));
     }
     let token_program = Pubkey::new_from_array(custody_request.token_program);
     let mint = Pubkey::new_from_array(custody_request.mint);
@@ -1775,17 +1800,17 @@ fn derive_terminal_after_request(
     )?;
     let (custody_caller_authority, custody_replay, custody_request) = if payout == 0 {
         if terminal.custody_replay.key != common.roles.custody {
-            return Err(Error::InvalidTerminal);
+            return Err(Error::InvalidTerminal("after-shard-supply"));
         }
         (common.roles.claims, common.roles.custody, None)
     } else {
         if terminal.custody_replay.key != replay {
-            return Err(Error::InvalidTerminal);
+            return Err(Error::InvalidTerminal("after-custody"));
         }
         custody_request.amount = payout;
         custody_request
             .validate()
-            .map_err(|_| Error::InvalidTerminal)?;
+            .map_err(|_| Error::InvalidTerminal("after-encode"))?;
         (caller, replay, Some(custody_request))
     };
     Ok(DerivedTerminalIdentitiesV2 {

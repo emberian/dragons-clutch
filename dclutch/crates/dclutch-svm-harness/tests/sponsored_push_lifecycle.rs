@@ -25,6 +25,7 @@ mod sponsored_campaign {
         PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
         ProductRecordV2, RESULT_DOMAIN_SCHEMA_ID_V2,
     };
+    use dclutch_program_test_evidence::TransactionEvidence;
     use dclutch_pyth_svm::{
         DEVNET_CLUSTER_ID_V1, FULL_PRICE_UPDATE_V2_LEN, PythSponsoredPushReleaseV1,
         PythSponsoredPushReleaseV1Input, RECEIVER_CONFIG_V2_LEN,
@@ -53,7 +54,6 @@ mod sponsored_campaign {
         SponsoredPushActionV1, SponsoredPushCandidateV1, SponsoredPushHeadV1,
         SponsoredPushInstructionV1, SponsoredPushReceiptV1,
     };
-    use dclutch_program_test_evidence::TransactionEvidence;
     use dclutch_resolution_proof_sbf::ResolutionError;
     use dclutch_source_contract::{
         CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
@@ -1310,6 +1310,302 @@ mod sponsored_campaign {
         1 + signatures * 64 + message.len()
     }
 
+    /// Solana's serialized transaction packet maximum.
+    ///
+    /// Restated here because this harness resolves independently of the
+    /// protocol workspace and cannot link `dclutch_versioned_message_operator`,
+    /// which owns the constant: that crate pins `solana-hash =4.6.0` and
+    /// `solana-address-lookup-table-interface =3.2.0` against this harness's
+    /// `solana-message =4.4.1` and `=3.1.0`, and the two pin sets have no common
+    /// solution.
+    const PACKET_DATA_BYTES: usize = 1_232;
+
+    /// What one route costs on the wire, measured both ways.
+    ///
+    /// A conversion that reports only the number it arrived at is not a
+    /// measurement, it is an assertion: the reader cannot tell whether the route
+    /// moved or the instrument did. Both extents are built from the SAME
+    /// instruction bytes and the SAME account set, so the only difference
+    /// between them is the envelope.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct PacketExtentV1 {
+        legacy_bytes: usize,
+        v0_bytes: usize,
+        static_keys: usize,
+        loaded_addresses: usize,
+    }
+
+    /// Every Capture submission carries the same 30-meta frame, so the whole
+    /// class has one extent. 1,255 legacy is 23 over Solana's maximum.
+    const CAPTURE_EXTENT: PacketExtentV1 = PacketExtentV1 {
+        legacy_bytes: 1_255,
+        v0_bytes: 392,
+        static_keys: 3,
+        loaded_addresses: 29,
+    };
+
+    /// Every Settle submission carries the same 32-meta frame. 1,321 legacy is
+    /// 89 over.
+    const SETTLE_EXTENT: PacketExtentV1 = PacketExtentV1 {
+        legacy_bytes: 1_321,
+        v0_bytes: 396,
+        static_keys: 3,
+        loaded_addresses: 31,
+    };
+
+    /// A frozen lookup table and the addresses it carries.
+    #[derive(Clone)]
+    struct FrozenRouteTableV1 {
+        table: Pubkey,
+        addresses: Vec<Pubkey>,
+    }
+
+    /// The addresses these routes' table must carry, decided by the message
+    /// compiler rather than by a filter written here.
+    ///
+    /// Two classes of address can never be looked up -- an instruction's program
+    /// id has to resolve before the tables load, and a signer is authenticated
+    /// by its position in the static header -- and a campaign that states that
+    /// rule in its own words acquires a second author for it. So this states
+    /// nothing: it offers the compiler every address the routes name and keeps
+    /// the ones the compiler resolved through a table.
+    ///
+    /// `dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1`
+    /// is the same probe for the protocol workspace; this harness cannot link it
+    /// for the reason given at `PACKET_DATA_BYTES`.
+    fn route_lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
+        let mut eligible = Vec::new();
+        for instruction in instructions {
+            let mut candidates: Vec<Pubkey> = Vec::new();
+            for account in &instruction.accounts {
+                if !candidates.contains(&account.pubkey) {
+                    candidates.push(account.pubkey);
+                }
+            }
+            let probe_key = Pubkey::new_from_array([0xff; 32]);
+            assert!(
+                !candidates.contains(&probe_key) && payer != probe_key,
+                "the probe table's key must not be one of a route's own coordinates"
+            );
+            let probe = solana_message::v0::Message::try_compile(
+                &payer,
+                std::slice::from_ref(instruction),
+                &[solana_message::AddressLookupTableAccount {
+                    key: probe_key,
+                    addresses: candidates.clone(),
+                }],
+                solana_sdk::hash::Hash::default(),
+            )
+            .expect("the route compiles as a message");
+            for lookup in &probe.address_table_lookups {
+                for index in lookup
+                    .writable_indexes
+                    .iter()
+                    .chain(lookup.readonly_indexes.iter())
+                {
+                    eligible.push(candidates[usize::from(*index)]);
+                }
+            }
+        }
+        eligible.sort_unstable_by_key(Pubkey::to_bytes);
+        eligible.dedup();
+        assert!(
+            !eligible.is_empty(),
+            "a route with nothing a table can carry does not need one"
+        );
+        eligible
+    }
+
+    /// Create, extend and FREEZE one table for a route class, then wait out the
+    /// slot its addresses need to become resolvable.
+    ///
+    /// One table per route CLASS, not per submission, and both are built before
+    /// the campaign starts driving the Clock by hand. `create_lookup_table`
+    /// needs a slot the bank actually produced, and from the first
+    /// `set_sponsored_clock` onward the Clock this campaign reports is one it
+    /// WROTE, not one the bank reached -- so a table created after that point
+    /// would be created against a slot that never existed. The table therefore
+    /// carries the union of the coordinates its class will name, and each
+    /// submitted message resolves only the subset it actually holds; an entry no
+    /// message uses costs rent and nothing else.
+    ///
+    /// Freezing is not tidiness. A mutable table is a second authority over
+    /// which addresses a submitted message actually resolves to, which is the
+    /// substitution the Pyth caller refuses by name.
+    async fn frozen_route_table(
+        context: &mut ProgramTestContext,
+        instructions: &[Instruction],
+    ) -> FrozenRouteTableV1 {
+        let payer = context.payer.pubkey();
+        let addresses = route_lookup_addresses(payer, instructions);
+        let clock = context
+            .banks_client
+            .get_sysvar::<Clock>()
+            .await
+            .expect("pre-derivation Clock");
+        context
+            .warp_to_slot(clock.slot + 1)
+            .expect("the derivation slot must be strictly recent");
+        let (create, table) =
+            solana_address_lookup_table_interface::instruction::create_lookup_table(
+                payer, payer, clock.slot,
+            );
+        submit_fixture(context, create, &[], "fixture/lookup-table-create")
+            .await
+            .expect("create the route class's lookup table");
+        for chunk in addresses.chunks(20) {
+            submit_fixture(
+                context,
+                solana_address_lookup_table_interface::instruction::extend_lookup_table(
+                    table,
+                    payer,
+                    Some(payer),
+                    chunk.to_vec(),
+                ),
+                &[],
+                "fixture/lookup-table-extend",
+            )
+            .await
+            .expect("extend the route class's lookup table");
+        }
+        submit_fixture(
+            context,
+            solana_address_lookup_table_interface::instruction::freeze_lookup_table(table, payer),
+            &[],
+            "fixture/lookup-table-freeze",
+        )
+        .await
+        .expect("freeze the route class's lookup table");
+        let extended = context
+            .banks_client
+            .get_sysvar::<Clock>()
+            .await
+            .expect("post-extension Clock");
+        context
+            .warp_to_slot(extended.slot + 1)
+            .expect("appended addresses resolve only after the slot they landed in");
+        FrozenRouteTableV1 { table, addresses }
+    }
+
+    /// Submit one labelled action as a v0 message over its class's frozen table,
+    /// record it, and report both extents.
+    ///
+    /// The legacy extent is compiled from the identical instruction and thrown
+    /// away unsubmitted. It is the control: without it a converted figure says
+    /// nothing about whether the route moved or the instrument did.
+    async fn submit_v0_with_cu(
+        context: &mut ProgramTestContext,
+        instruction: Instruction,
+        signers: &[&Keypair],
+        label: &str,
+        route_table: &FrozenRouteTableV1,
+        expected: PacketExtentV1,
+    ) -> Result<u64, BanksClientError> {
+        let blockhash = context
+            .banks_client
+            .get_latest_blockhash()
+            .await
+            .expect("blockhash");
+        let payer = context.payer.pubkey();
+        let mut all = vec![&context.payer];
+        all.extend_from_slice(signers);
+        let legacy = Transaction::new_signed_with_payer(
+            std::slice::from_ref(&instruction),
+            Some(&payer),
+            &all,
+            blockhash,
+        );
+        let legacy_bytes = wire_extent(legacy.signatures.len(), &legacy.message.serialize());
+        let compiled = solana_message::v0::Message::try_compile(
+            &payer,
+            std::slice::from_ref(&instruction),
+            &[solana_message::AddressLookupTableAccount {
+                key: route_table.table,
+                addresses: route_table.addresses.clone(),
+            }],
+            blockhash,
+        )
+        .expect("the route compiles as v0 over its class's frozen table");
+        let static_keys = compiled.account_keys.len();
+        let loaded_addresses: usize = compiled
+            .address_table_lookups
+            .iter()
+            .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+            .sum();
+        let transaction = solana_transaction::versioned::VersionedTransaction::try_new(
+            solana_message::VersionedMessage::V0(compiled),
+            &all,
+        )
+        .expect("signed v0 transaction");
+        let v0_bytes = wire_extent(
+            transaction.signatures.len(),
+            &transaction.message.serialize(),
+        );
+        let extent = PacketExtentV1 {
+            legacy_bytes,
+            v0_bytes,
+            static_keys,
+            loaded_addresses,
+        };
+        let signature = transaction
+            .signatures
+            .first()
+            .expect("signed transaction")
+            .to_string();
+        let slot = context
+            .banks_client
+            .get_sysvar::<Clock>()
+            .await
+            .map_or(0, |clock| clock.slot);
+        let processed = context
+            .banks_client
+            .process_transaction_with_metadata(transaction)
+            .await
+            .expect("Banks RPC");
+        let units = processed
+            .metadata
+            .as_ref()
+            .map_or(0, |metadata| metadata.compute_units_consumed);
+        eprintln!("sponsored-push CU {label}: {units}");
+        let failure = processed
+            .result
+            .clone()
+            .err()
+            .map(|error| format!("{error:?}"));
+        let logs = processed
+            .metadata
+            .as_ref()
+            .map(|metadata| metadata.log_messages.clone())
+            .unwrap_or_default();
+        dclutch_program_test_evidence::record(&TransactionEvidence {
+            label,
+            signature: &signature,
+            slot,
+            error: failure.as_deref(),
+            logs: &logs,
+            compute_units_consumed: Some(units),
+            wire_bytes: Some(v0_bytes),
+        })
+        .expect("campaign evidence must be writable when the gauntlet asked for it");
+        // Every submission of one route class carries the same frame, so it
+        // carries the same extent, and the expectation is stated per class. A
+        // row that drifts from its class is the interesting event and this is
+        // what makes it visible.
+        assert_eq!(extent, expected, "{label}");
+        assert!(
+            expected.legacy_bytes > PACKET_DATA_BYTES,
+            "{label}: a route that already fit needs no table"
+        );
+        assert!(
+            expected.v0_bytes <= PACKET_DATA_BYTES,
+            "{label}: the table did not close the overrun"
+        );
+        processed
+            .result
+            .map(|()| units)
+            .map_err(BanksClientError::TransactionError)
+    }
+
     /// Submit one labelled action and record the runtime's own account of it.
     ///
     /// The evidence is emitted BEFORE the caller gets to assert anything, so a
@@ -1474,6 +1770,32 @@ mod sponsored_campaign {
             .checked_add(i64::from(fixture.graph.window_value.max_age_seconds()))
             .expect("checked sponsored deadline");
 
+        // Capture is 1,255 bytes as a legacy message and Settle is 1,321,
+        // against Solana's 1,232-byte maximum: over by 23 and 89. Neither could
+        // be submitted, and ProgramTest submits no packet, so nothing here would
+        // ever have said so. Both classes ride a frozen table from here on.
+        //
+        // The tables are built NOW, before the first `set_sponsored_clock`.
+        // `create_lookup_table` needs a slot the bank actually produced, and
+        // from that call onward the Clock this campaign reports is one it WROTE.
+        let capture_table = frozen_route_table(
+            &mut context,
+            &[
+                fixture.capture_instruction(success, success.first_candidate),
+                fixture.capture_instruction(success, success.second_candidate),
+                fixture.capture_instruction(failure, failure.second_candidate),
+            ],
+        )
+        .await;
+        let settle_table = frozen_route_table(
+            &mut context,
+            &[
+                fixture.settle_instruction(success, success.first_candidate),
+                fixture.settle_instruction(success, success.second_candidate),
+            ],
+        )
+        .await;
+
         set_sponsored_clock(&mut context, FIRST_CAPTURE_SLOT, FIRST_PUBLISH + 1);
 
         // Exact account ownership is independent of body validity and also
@@ -1483,11 +1805,13 @@ mod sponsored_campaign {
             fixture.price_account,
             update_account(&fixture.first_update, system_program::ID),
         );
-        let error = submit_with_cu(
+        let error = submit_v0_with_cu(
             &mut context,
             fixture.capture_instruction(success, success.first_candidate),
             &[worker],
             "Capture/owner-refusal",
+            &capture_table,
+            CAPTURE_EXTENT,
         )
         .await
         .expect_err("wrong upstream owner must refuse");
@@ -1499,11 +1823,13 @@ mod sponsored_campaign {
             update_account(&fixture.first_update, RECEIVER_PROGRAM),
         );
 
-        let capture_one_cu = submit_with_cu(
+        let capture_one_cu = submit_v0_with_cu(
             &mut context,
             fixture.capture_instruction(success, success.first_candidate),
             &[worker],
             "Capture/first",
+            &capture_table,
+            CAPTURE_EXTENT,
         )
         .await
         .expect("first capture");
@@ -1545,11 +1871,13 @@ mod sponsored_campaign {
             update_account(&fixture.second_update, RECEIVER_PROGRAM),
         );
         set_sponsored_clock(&mut context, SECOND_CAPTURE_SLOT, SECOND_PUBLISH + 1);
-        let capture_two_cu = submit_with_cu(
+        let capture_two_cu = submit_v0_with_cu(
             &mut context,
             fixture.capture_instruction(success, success.second_candidate),
             &[worker],
             "Capture/head-advance",
+            &capture_table,
+            CAPTURE_EXTENT,
         )
         .await
         .expect("second capture");
@@ -1569,11 +1897,13 @@ mod sponsored_campaign {
         let source_prestate = observed(&mut context, success.state).await;
         let certificate_prestate = observed(&mut context, success.success_certificate).await;
         set_sponsored_clock(&mut context, SECOND_CAPTURE_SLOT + 1, deadline);
-        let error = submit_with_cu(
+        let error = submit_v0_with_cu(
             &mut context,
             fixture.settle_instruction(success, success.second_candidate),
             &[worker],
             "Settle/deadline-boundary-refusal",
+            &settle_table,
+            SETTLE_EXTENT,
         )
         .await
         .expect_err("settlement at the closed deadline must refuse");
@@ -1590,11 +1920,13 @@ mod sponsored_campaign {
         );
 
         set_sponsored_clock(&mut context, SECOND_CAPTURE_SLOT + 2, deadline + 1);
-        let error = submit_with_cu(
+        let error = submit_v0_with_cu(
             &mut context,
             fixture.settle_instruction(success, success.first_candidate),
             &[worker],
             "Settle/non-head-refusal",
+            &settle_table,
+            SETTLE_EXTENT,
         )
         .await
         .expect_err("resolver cannot choose an older candidate");
@@ -1616,11 +1948,13 @@ mod sponsored_campaign {
         // than max_age. Settlement still uses the sealed capture Clock and does
         // not re-age or re-read the mutable upstream account.
         set_sponsored_clock(&mut context, SECOND_CAPTURE_SLOT + 200, deadline + 1_000);
-        let settle_cu = submit_with_cu(
+        let settle_cu = submit_v0_with_cu(
             &mut context,
             fixture.settle_instruction(success, success.second_candidate),
             &[worker],
             "Settle/best-sealed",
+            &settle_table,
+            SETTLE_EXTENT,
         )
         .await
         .expect("post-deadline best-candidate settlement");
@@ -1649,11 +1983,13 @@ mod sponsored_campaign {
         assert_eq!(receipt.consumed_slot, SECOND_CAPTURE_SLOT + 200);
         assert_eq!(receipt.certificate, success.success_certificate.to_bytes());
 
-        let error = submit_with_cu(
+        let error = submit_v0_with_cu(
             &mut context,
             fixture.settle_instruction(success, success.second_candidate),
             &[worker],
             "Settle/replay-refusal",
+            &settle_table,
+            SETTLE_EXTENT,
         )
         .await
         .expect_err("terminal Source cannot settle twice");
@@ -1695,11 +2031,13 @@ mod sponsored_campaign {
         // admission refuses, exact-deadline failure refuses atomically, and
         // one second later the canonical funded failure pays its worker.
         set_sponsored_clock(&mut context, SECOND_CAPTURE_SLOT + 300, deadline + 1);
-        let error = submit_with_cu(
+        let error = submit_v0_with_cu(
             &mut context,
             fixture.capture_instruction(failure, failure.second_candidate),
             &[worker],
             "Capture/late-refusal",
+            &capture_table,
+            CAPTURE_EXTENT,
         )
         .await
         .expect_err("late candidate admission must refuse");

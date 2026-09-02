@@ -1,5 +1,7 @@
 //! Canonical root translation and complete admitted-bundle joins.
 
+use crate::generated_abi as gen_abi;
+
 use crate::CompositionDescriptorV3;
 use crate::abi::{
     COMPOSITION_SCHEMA_VERSION_V3, COMPOSITION_TRANSLATION_HEADER_BYTES_V3,
@@ -13,23 +15,23 @@ pub struct TranslationLayoutV3;
 
 impl TranslationLayoutV3 {
     /// Magic offset.
-    pub const MAGIC: usize = 0;
+    pub const MAGIC: usize = gen_abi::COMPOSITION_TRANSLATION_MAGIC_OFFSET_V3;
     /// Schema-version offset.
-    pub const VERSION: usize = 8;
+    pub const VERSION: usize = gen_abi::COMPOSITION_TRANSLATION_VERSION_OFFSET_V3;
     /// Reserved header offset.
-    pub const RESERVED_HEADER: usize = 10;
+    pub const RESERVED_HEADER: usize = gen_abi::COMPOSITION_TRANSLATION_RESERVED_HEADER_OFFSET_V3;
     /// Stable graph identity offset.
-    pub const GRAPH_ID: usize = 16;
+    pub const GRAPH_ID: usize = gen_abi::COMPOSITION_TRANSLATION_GRAPH_ID_OFFSET_V3;
     /// Sole graph-root identity offset.
-    pub const ROOT_ID: usize = 48;
+    pub const ROOT_ID: usize = gen_abi::COMPOSITION_TRANSLATION_ROOT_ID_OFFSET_V3;
     /// Exhaustive native width offset.
-    pub const OUTCOME_COUNT: usize = 80;
+    pub const OUTCOME_COUNT: usize = gen_abi::COMPOSITION_TRANSLATION_OUTCOME_COUNT_OFFSET_V3;
     /// Sparse root-term count offset.
-    pub const TERM_COUNT: usize = 84;
+    pub const TERM_COUNT: usize = gen_abi::COMPOSITION_TRANSLATION_TERM_COUNT_OFFSET_V3;
     /// Canonical common denominator offset.
-    pub const DENOMINATOR: usize = 88;
+    pub const DENOMINATOR: usize = gen_abi::COMPOSITION_TRANSLATION_DENOMINATOR_OFFSET_V3;
     /// Reserved tail offset.
-    pub const RESERVED_TAIL: usize = 96;
+    pub const RESERVED_TAIL: usize = gen_abi::COMPOSITION_TRANSLATION_RESERVED_TAIL_OFFSET_V3;
 }
 
 /// Borrowed canonical translation supplied to the atomic encoder.

@@ -3,7 +3,7 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify`. Automatically, that check is the `sbom` tier of `tools/ci/run.sh` and the `lib/sbomVerify.test.ts` case in `apps/dclutch-web`'s `npm test` — see `tools/sbom/README.md`.
 
-**52 manifests, 2183 unique dependency rows (1243 cargo, 940 npm), 0 flagged for human review, 67 reviewed and allowed.**
+**59 manifests, 2192 unique dependency rows (1252 cargo, 940 npm), 0 flagged for human review, 67 reviewed and allowed.**
 
 ## Counts by license
 
@@ -11,8 +11,8 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 |---|---|
 | `MIT` | 869 |
 | `Apache-2.0` | 500 |
-| `MIT OR Apache-2.0` | 333 |
-| `AGPL-3.0-or-later` | 157 |
+| `MIT OR Apache-2.0` | 334 |
+| `AGPL-3.0-or-later` | 165 |
 | `MIT/Apache-2.0` | 67 |
 | `Apache-2.0 OR MIT` | 48 |
 | `MPL-2.0` | 30 |
@@ -442,6 +442,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-claims-sparse-chain-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/sparse-chain` | inherited-default (publish=false, undeclared) |
 | `dclutch-claims-sparse-chain-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/sparse-chain-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-claims-svm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-claims-svm` | declared |
+| `dclutch-cli` | 0.1.0-devnet.3 | `AGPL-3.0-or-later` | `path+tools/dclutch-cli` | declared |
 | `dclutch-core-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-core-contract` | declared |
 | `dclutch-core-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-core-sbf` | declared |
 | `dclutch-custody-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-custody-contract` | declared |
@@ -488,7 +489,9 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-general-adapter-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-adapter-contract` | declared |
 | `dclutch-general-codec` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-codec` | declared |
 | `dclutch-general-config-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-config-contract` | declared |
+| `dclutch-general-hot-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/general-hot` | declared |
 | `dclutch-general-successor-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-successor-operator` | declared |
+| `dclutch-journey-campaign` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/journey` | declared |
 | `dclutch-liability-basis-v2-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-liability-basis-v2-kernel` | declared |
 | `dclutch-lineage-loopback` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/lineage-loopback` | declared |
 | `dclutch-local-successor-bootstrap` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/local-validator/bootstrap/successor` | declared |
@@ -549,6 +552,8 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-route-census` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/census` | declared |
 | `dclutch-sbf-bump-heap` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-sbf-bump-heap` | declared |
 | `dclutch-series-consume-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-core-sbf/test-programs/series-consume-caller` | declared |
+| `dclutch-series-shadow-bundle-generator` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf/generator` | declared |
+| `dclutch-series-shadow-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf/program-test` | declared |
 | `dclutch-series-shadow-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf` | declared |
 | `dclutch-series-v3-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-series-v3-kernel` | declared |
 | `dclutch-sha256-adapter` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-sha256-adapter` | declared |
@@ -568,6 +573,8 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-trading-core-caller-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/core-caller` | declared |
 | `dclutch-trading-dealer-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/dealer-program-test` | declared |
 | `dclutch-trading-dealer-wave-fixture` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/test-programs/dealer-wave` | declared |
+| `dclutch-trading-outer-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/trading-outer` | declared |
+| `dclutch-trading-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test` | declared |
 | `dclutch-trading-registry-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/registry` | declared |
 | `dclutch-trading-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf` | declared |
 | `dclutch-trading-user-position-admission-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/user-position-admission` | inherited-default (publish=false, undeclared) |
@@ -576,6 +583,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-user-position-admission-wasm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-user-position-admission-wasm` | declared |
 | `dclutch-versioned-message-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-versioned-message-operator` | declared |
 | `dclutch-wallet-terminal-input-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-wallet-terminal-input-operator` | declared |
+| `dclutch-wallet-terminal-input-wasm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-wallet-terminal-input-wasm` | declared |
 | `dclutch-wallet-terminal-payout-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-wallet-terminal-payout-operator` | declared |
 | `dclutch-wallet-terminal-payout-wasm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-wallet-terminal-payout-wasm` | declared |
 | `dclutch-web-founding-vector-generator` | 0.1.0 | `AGPL-3.0-or-later` | `path+apps/dclutch-web/fixtures/founding/generator` | declared |
@@ -674,6 +682,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `hashbrown` | 0.17.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `heck` | 0.5.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hermit-abi` | 0.5.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `hermit-abi` | 0.5.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hex` | 0.4.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `histogram` | 0.6.9 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hkdf` | 0.12.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -2435,7 +2444,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 
 | Manifest | Packages |
 |---|---|
-| `Cargo.toml` | 845 |
+| `Cargo.toml` | 846 |
 | `apps/dclutch-web/fixtures/founding/generator/Cargo.toml` | 21 |
 | `apps/dclutch-web/package.json` | 845 |
 | `crates/dclutch-svm-harness/Cargo.toml` | 792 |
@@ -2467,38 +2476,33 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 771 |
 | `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 810 |
 | `programs/dclutch-general-accelerator-sbf/test-programs/general-caller/Cargo.toml` | 160 |
+| `programs/dclutch-series-shadow-sbf/generator/Cargo.toml` | 200 |
+| `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml` | 789 |
 | `programs/dclutch-trading-sbf/dealer-program-test/Cargo.toml` | 734 |
+| `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 811 |
+| `programs/dclutch-trading-sbf/program-test/general-hot/Cargo.toml` | 809 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/core-caller/Cargo.toml` | 163 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/custody-leg-caller/Cargo.toml` | 164 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-claims/Cargo.toml` | 232 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-custody/Cargo.toml` | 184 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-token/Cargo.toml` | 160 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml` | 163 |
+| `programs/dclutch-trading-sbf/program-test/test-programs/trading-outer/Cargo.toml` | 200 |
 | `programs/dclutch-trading-sbf/program-test/user-position-admission/Cargo.toml` | 774 |
 | `programs/dclutch-trading-sbf/test-programs/dealer-wave/Cargo.toml` | 161 |
+| `tools/dclutch-cli/Cargo.toml` | 406 |
 | `tools/devnet-scenarios/Cargo.toml` | 63 |
 | `tools/direct-translation-validator/Cargo.toml` | 42 |
 | `tools/fractional-exterior/Cargo.toml` | 651 |
 | `tools/gauntlet/aot-cu/Cargo.toml` | 772 |
 | `tools/gauntlet/census/Cargo.toml` | 22 |
 | `tools/gauntlet/direct/producer/Cargo.toml` | 754 |
+| `tools/gauntlet/journey/Cargo.toml` | 407 |
 | `tools/gauntlet/relayed-vertical/Cargo.toml` | 411 |
 | `tools/lineage-loopback/Cargo.toml` | 230 |
 | `tools/local-validator/bootstrap/successor/Cargo.toml` | 415 |
 | `tools/relayer/Cargo.toml` | 229 |
 | `tools/ticket-board/Cargo.toml` | 241 |
-
-## Unresolvable manifests (stale lockfile, not a license question)
-
-Each manifest below refused `cargo metadata --locked --offline`: its `Cargo.lock` does not match its `Cargo.toml` (typically a dependency edge added or changed without re-running cargo in that mini-workspace). This tool cannot see that manifest's dependency graph at all until its owning lane runs `cargo metadata`/`cargo check` there and commits the refreshed lock — recorded here as owed work, not folded into the flagged-license review list above, and not failing `--verify` by itself, since it is a reproducibility gap rather than an unclassified license.
-
-- `programs/dclutch-series-shadow-sbf/generator/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-trading-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-trading-sbf/program-test/general-hot/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-trading-sbf/program-test/test-programs/trading-outer/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `tools/dclutch-cli/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `tools/gauntlet/journey/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
 
 ## Stray lockfiles (not read by cargo, not part of this closure)
 
@@ -4295,6 +4299,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - hashbrown 0.17.1 (cargo)
 - heck 0.5.0 (cargo)
 - hermit-abi 0.5.2 (cargo)
+- hermit-abi 0.5.3 (cargo)
 - hex 0.4.3 (cargo)
 - hkdf 0.12.4 (cargo)
 - hmac 0.12.1 (cargo)

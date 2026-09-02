@@ -70,13 +70,6 @@ use dclutch_direct_codec::{
         consume_nonce_v2,
     },
 };
-use dclutch_operator::{
-    Finality, Observation, ObservedAccount,
-    direct_close_maker_v1::{
-        DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
-        DirectCloseMakerSnapshotV1, plan_direct_close_maker_v1,
-    },
-};
 use dclutch_direct_hot_program_test_support::{
     DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5, DirectHotDeploymentWidthsV5,
     build_direct_hot_artifact_fixture_v5,
@@ -92,6 +85,13 @@ use dclutch_market_core_codec::CoreEffectActionV1;
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     STATE_BYTES, StateBumpsV1,
+};
+use dclutch_operator::{
+    Finality, Observation, ObservedAccount,
+    direct_close_maker_v1::{
+        DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
+        DirectCloseMakerSnapshotV1, plan_direct_close_maker_v1,
+    },
 };
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading_sbf::TradingSbfError;
@@ -1325,7 +1325,11 @@ async fn operator_plan_builder_drives_a_real_close_and_refuses_the_two_by_name()
     assert_eq!(report.instruction.data, handbuilt.data);
     assert_eq!(report.instruction.accounts, handbuilt.accounts);
     assert!(
-        report.instruction.accounts.iter().all(|meta| !meta.is_signer),
+        report
+            .instruction
+            .accounts
+            .iter()
+            .all(|meta| !meta.is_signer),
         "the close is permissionless; nothing in its frame may ask to sign",
     );
 

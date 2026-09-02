@@ -47,10 +47,8 @@ crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs
 crates/dclutch-dealer-codec/src/trading_request.rs
 
 # --- Direct lane -----------------------------------------------------------
-crates/dclutch-operator/src/direct_close_maker_v1.rs
 programs/dclutch-trading-sbf/program-test/direct-hot/src/fixture.rs
 programs/dclutch-trading-sbf/src/hot_v3.rs
 
 # --- Redemption lane -------------------------------------------------------
 crates/dclutch-wallet-terminal-payout-operator/src/wire.rs
-crates/dclutch-wallet-terminal-payout-wasm/src/lib.rs
