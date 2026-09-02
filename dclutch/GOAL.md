@@ -3425,3 +3425,9 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Captures: market 1,319 words / 23 $ / 3 hex at 1280; 1,240 at 390. Owed (lane resumed): sbomVerify red for hours;
   three census fields dropped by simulator-series.mjs; the SDK absorption of two web-only modules. Note: a stale vite dep
   cache served cohort-12's Core for an hour — `rm -rf apps/dclutch-web/node_modules/.vite` after any deployments change.
+- WEB closed (`73827e17` sbomVerify convicted: two refreshed program-test locks admitted their closures and nothing told the
+  SBOM — failures 0 before and after, emitted to scratch and diffed before writing; `c9f8f587` the three carried fields, and
+  two /pulse charts that had existed since v3 now draw; `d3131840` SDK absorption, twin identity **154 → 166**;
+  `478a350e` **the package refused the first fill's transaction over one padded log line** — the web fixed it on 08-27 and
+  the SDK never absorbed it, behind a twin exemption). README's milestone paragraph brought current.
+- Cuts: `5e1ee8b9e`, `99bdf5822`, `98cb056e8`.

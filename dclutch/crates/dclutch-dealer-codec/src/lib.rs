@@ -33,6 +33,15 @@ mod generated_dealer_liquidity;
 #[rustfmt::skip]
 mod generated_dealer_trading_profile;
 
+/// Lean-owned selector-9 Dealer scenario trade request header ABI.
+///
+/// The executor is `programs/dclutch-trading-sbf/src/dealer/v3_trade.rs`; this
+/// is the layout it executes against. It lives in the codec rather than in the
+/// program because the header is a wire object with consumers in three crates,
+/// and a program is not a good place to keep one.
+#[rustfmt::skip]
+pub mod generated_scenario_trade_v4;
+
 /// Inventory-free mutable tail for the canonical composite Trading root.
 pub mod root_tail;
 /// Canonical Trading Dealer request with explicit Claims optimistic revision.

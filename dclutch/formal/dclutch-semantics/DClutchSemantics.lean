@@ -118,5 +118,6 @@ differential oracle, not a source of formal definitions.
 -/
 import DClutchSemantics.AbiCoverage
 import DClutchSemantics.ClaimsLiabilityBasisStateV2Abi
+import DClutchSemantics.DealerScenarioTradeV4Abi
 import DClutchSemantics.CoreFoundFrameV3Abi
 import DClutchSemantics.LifecycleRentV2Abi

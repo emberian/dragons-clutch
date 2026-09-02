@@ -196,10 +196,11 @@ repository runs on.
 
 ## Where this is going
 
-The first Market is open on devnet and its trading capability is activated.
-The next milestone is the first trade made on it, and after that a Market
-asking a question about the state of Solana mainnet and resolving it in
-public. Pyth's devnet feeds carry the
+The first trade has been made: on 2026-09-02 a SOL/USD Market on devnet
+took two stranger admissions and a fee-bearing fill, the fee settled, and
+the ledger census held every law across the crossing. The next milestone is
+that Market resolving and paying out in public, and after that a Market
+asking a question about the state of Solana mainnet. Pyth's devnet feeds carry the
 major prices directly, and a disclosed relayer carries everything else.
 dClutch grew out of Dragon's Clutch; the first generation lives in the
 neighboring `dragons-clutch` repository as an archive.

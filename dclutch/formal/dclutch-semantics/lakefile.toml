@@ -87,6 +87,10 @@ name = "emit-dealer-trading-profile-rust"
 root = "EmitDealerTradingProfileRust"
 
 [[lean_exe]]
+name = "emit-dealer-scenario-trade-v4-rust"
+root = "EmitDealerScenarioTradeV4Rust"
+
+[[lean_exe]]
 name = "emit-direct-codec-rust"
 root = "EmitDirectCodecRust"
 

@@ -43,76 +43,69 @@ use super::{
 #[cfg(not(target_os = "solana"))]
 use super::v3_equity_claims::encode_equity_claims_packet_v3;
 
-/// Canonical exact-fill request magic.
-pub const DEALER_SCENARIO_TRADE_MAGIC_V3: [u8; 8] = *b"DCLDST03";
-/// Successor exact-fill request version carrying one canonical Claims packet,
-/// the exact readonly evidence width required before admitted evaluation, and
-/// the six optional-Custody route-span counts the frame is carved from.
+// ## The header's coordinates
+//
+// Every constant below is EMITTED. `DClutch.DealerScenarioTradeV4Abi` places
+// the twenty-nine fields and `EmitDealerScenarioTradeV4Rust.lean` prints them
+// into `dclutch-dealer-codec`; this module re-exports them so every path that
+// already spelled a `DEALER_SCENARIO_TRADE_*` name keeps working. Five of
+// these names existed before and are unchanged, because nothing here MOVED --
+// only the author did. The other twenty-four were bare decimal literals
+// written once in `encode_scenario_trade_request_v3` and once again in
+// `decode`, which is the shape a same-width transposition hides in: swap the
+// two Position-revision coordinates in both places and every test in this
+// crate still passes, because the encoder and the decoder agree with each
+// other about a layout that no longer matches the declared ABI.
+//
+// The list is explicit rather than a glob on purpose. A leftover local
+// definition of one of these names would SHADOW a glob import in silence; it
+// collides with a named import and fails to compile.
+pub use dclutch_dealer_codec::generated_scenario_trade_v4::{
+    DEALER_SCENARIO_TRADE_ACTION_OFFSET_V4, DEALER_SCENARIO_TRADE_ACTION_V3,
+    DEALER_SCENARIO_TRADE_CANDIDATE_OBLIGATION_DIGEST_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_CANDIDATE_OBLIGATION_REVISION_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_CANDIDATE_STRIDE_V4, DEALER_SCENARIO_TRADE_CHILD_ROOT_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
+    DEALER_SCENARIO_TRADE_CLAIMS_REVISION_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_COUNTERPARTY_ACCOUNT_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_COUNTERPARTY_OWNER_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_COUNTERPARTY_POSITION_REVISION_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_CURRENT_OBLIGATION_DIGEST_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_CURRENT_OBLIGATION_REVISION_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3,
+    DEALER_SCENARIO_TRADE_DEALER_OWNER_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_DEALER_POSITION_REVISION_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_DIRECTION_OFFSET_V4, DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3,
+    DEALER_SCENARIO_TRADE_EXPIRES_AT_OFFSET_V4, DEALER_SCENARIO_TRADE_GENERATION_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_HEADER_BYTES_V4, DEALER_SCENARIO_TRADE_IDENTITY_BYTES_V4,
+    DEALER_SCENARIO_TRADE_MAGIC_BYTES_V4, DEALER_SCENARIO_TRADE_MAGIC_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_MAGIC_V3, DEALER_SCENARIO_TRADE_MARKET_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_OBLIGATION_ADDRESS_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4, DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3,
+    DEALER_SCENARIO_TRADE_PRINCIPAL_OFFSET_V4, DEALER_SCENARIO_TRADE_REALIZED_FEE_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_RELEASE_SET_OFFSET_V4, DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4,
+    DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4, DEALER_SCENARIO_TRADE_SELECTOR_BYTES_V4,
+    DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3, DEALER_SCENARIO_TRADE_VERSION_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_VERSION_V3, DEALER_SCENARIO_TRADE_WIDTH_OFFSET_V4,
+};
+
+// Not re-exported: these three were private to this module before the emission
+// existed, and moving an author is not a reason to widen a visibility.
+use dclutch_dealer_codec::generated_scenario_trade_v4::{
+    DEALER_SCENARIO_TRADE_RESERVED_BYTES_V4, DEALER_SCENARIO_TRADE_RESERVED_OFFSET_V4,
+    DEALER_SCENARIO_TRADE_ROUTE_SPAN_WIDTH_V4,
+};
+
+/// The emitted route-span width and the Custody frame it must equal.
 ///
-/// Version 5, not 4: the header grew, so a request built by an older encoder
-/// is a different shape and must refuse at `decode` rather than be read with
-/// its fields eight bytes out of place.
-pub const DEALER_SCENARIO_TRADE_VERSION_V3: u16 = 5;
-/// Family-neutral CapabilityProgramSet selector offset.
-pub const DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3: u32 = 10;
-/// Exact fixed header before the `u64[N]` candidate and SignedDeltaV3 witness.
-///
-/// 392 and not 384, and the name carries `_V4` for exactly that reason: this
-/// is a POSITION, and a position that moves must not keep its old name, or a
-/// consumer that was not updated goes on compiling against a value that is now
-/// wrong. Everything downstream of the header derives from this constant, so
-/// renaming it is what makes the eight new bytes a compile error everywhere
-/// they matter instead of a silent eight-byte shift.
-pub const DEALER_SCENARIO_TRADE_HEADER_BYTES_V4: usize = 392;
-/// First exact candidate-obligation `u64` after the fixed header.
-pub const DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4: usize =
-    DEALER_SCENARIO_TRADE_HEADER_BYTES_V4;
-/// First of the six exact optional-Custody route-span counts.
-///
-/// THE REQUEST IS THE AUTHOR OF THE FRAME'S SHAPE, and these six bytes are why.
-/// `hot_v3::authenticate_dynamic_span_widths_v3` carves the account frame from
-/// the widths it can project out of the family request BEFORE any account is
-/// expanded, and it requires every EffectV4 span selector to be one a request
-/// operation writes. Selector 9 declares six `{0, 14}` optional-Custody spans
-/// on common scalars 7..12; until this field existed nothing in the request
-/// wrote them, the counts were produced only by the admitted candidate -- which
-/// runs later and is UNTRUSTED -- and the action could not be authenticated at
-/// all. Declaring them here does not weaken the check: the frame is carved from
-/// the declaration and `require_dynamic_span_values_v3` then requires the final
-/// transition scalars to reproduce exactly these widths, so a request that lies
-/// about its own shape refuses after execution instead of being believed.
-pub const DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4: usize = 384;
-/// Exact number of optional Custody routes selector 9 can enable.
-pub const DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4: usize = 6;
-/// Two reserved bytes keeping the candidate-obligation vector `u64`-aligned.
-const DEALER_SCENARIO_TRADE_RESERVED_OFFSET_V4: usize = 390;
-const DEALER_SCENARIO_TRADE_RESERVED_BYTES_V4: usize = 2;
-/// One enabled optional Custody route's exact account width, as a request byte.
-///
-/// Pinned to the frame constant that decides it rather than restated: the span
-/// admits `{0, DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3}` and nothing else, so
-/// if that width ever moves this assertion is what goes red.
-const DEALER_SCENARIO_TRADE_ROUTE_SPAN_WIDTH_V4: u8 = 14;
+/// Lean DECLARES the 14 and this crate asserts it against the frame constant
+/// that decides it. Two independent authorities that must agree is the point:
+/// deriving the Lean side from the Custody frame would make this assertion a
+/// tautology and take away its ability to go red.
 const _: () = assert!(
     DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 as usize
         == DEALER_SCENARIO_TRADE_ROUTE_SPAN_WIDTH_V4 as usize
 );
-/// Fixed-header routing coordinate for the Claims Position-table width.
-pub const DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3: usize = 377;
-/// Fixed-header routing coordinate for the conditional Dealer Position
-/// evidence account. It is exactly one for P1 and zero for P2.
-pub const DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3: usize = 378;
-/// Fixed-header projected width of the trailing readonly evidence span.
-///
-/// The span contains an absent FeeVault observation, an absent HoardVault
-/// observation, and the conditional Dealer Position observation, in that
-/// canonical order. Accounts already present in an active Custody frame are
-/// never duplicated.
-pub const DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3: usize = 379;
-/// Fixed-header exact borrowed witness width.
-pub const DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3: usize = 380;
-/// Sole exact-fill action in the global Dealer selector space.
-pub const DEALER_SCENARIO_TRADE_ACTION_V3: u16 = 9;
 
 /// Stable refusal from request decoding, construction, or execution joining.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,13 +200,18 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
     /// Hostile-decode the exact count-derived request.
     pub fn decode(bytes: &'a [u8]) -> Result<Self, ScenarioTradeErrorV3> {
         if bytes.len() < DEALER_SCENARIO_TRADE_HEADER_BYTES_V4
-            || bytes.get(..8) != Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
-            || read_u16(bytes, 8)? != DEALER_SCENARIO_TRADE_VERSION_V3
-            || read_u16(bytes, 10)? != DEALER_SCENARIO_TRADE_ACTION_V3
+            || bytes.get(
+                DEALER_SCENARIO_TRADE_MAGIC_OFFSET_V4
+                    ..DEALER_SCENARIO_TRADE_MAGIC_OFFSET_V4 + DEALER_SCENARIO_TRADE_MAGIC_BYTES_V4,
+            ) != Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
+            || read_u16(bytes, DEALER_SCENARIO_TRADE_VERSION_OFFSET_V4)?
+                != DEALER_SCENARIO_TRADE_VERSION_V3
+            || read_u16(bytes, DEALER_SCENARIO_TRADE_ACTION_OFFSET_V4)?
+                != DEALER_SCENARIO_TRADE_ACTION_V3
         {
             return Err(ScenarioTradeErrorV3::InvalidRequest);
         }
-        let width = read_u32(bytes, 12)?;
+        let width = read_u32(bytes, DEALER_SCENARIO_TRADE_WIDTH_OFFSET_V4)?;
         let claims_position_count = byte(bytes, DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3)?;
         let dealer_evidence_count =
             byte(bytes, DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3)?;
@@ -260,7 +258,7 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
         {
             return Err(ScenarioTradeErrorV3::InvalidRequest);
         }
-        let direction = match byte(bytes, 376)? {
+        let direction = match byte(bytes, DEALER_SCENARIO_TRADE_DIRECTION_OFFSET_V4)? {
             0 => ScenarioTradeDirectionV3::CounterpartyPaysDealer,
             1 => ScenarioTradeDirectionV3::DealerPaysCounterparty,
             _ => return Err(ScenarioTradeErrorV3::InvalidRequest),
@@ -268,24 +266,48 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
         let value = Self {
             bytes,
             width,
-            release_set: read_identity(bytes, 16)?,
-            market: read_identity(bytes, 48)?,
-            child_root: read_identity(bytes, 80)?,
-            obligation: read_identity(bytes, 112)?,
-            current_obligation_digest: read_identity(bytes, 144)?,
-            candidate_obligation_digest: read_identity(bytes, 176)?,
-            dealer_owner: read_identity(bytes, 208)?,
-            counterparty_owner: read_identity(bytes, 240)?,
-            counterparty_account: read_identity(bytes, 272)?,
-            current_obligation_revision: read_u64(bytes, 304)?,
-            candidate_obligation_revision: read_u64(bytes, 312)?,
-            dealer_position_revision: read_u64(bytes, 320)?,
-            counterparty_position_revision: read_u64(bytes, 328)?,
-            claims_revision: read_u64(bytes, 336)?,
-            generation: read_u64(bytes, 344)?,
-            expires_at: read_u64(bytes, 352)?,
-            principal: read_u64(bytes, 360)?,
-            realized_fee: read_u64(bytes, 368)?,
+            release_set: read_identity(bytes, DEALER_SCENARIO_TRADE_RELEASE_SET_OFFSET_V4)?,
+            market: read_identity(bytes, DEALER_SCENARIO_TRADE_MARKET_OFFSET_V4)?,
+            child_root: read_identity(bytes, DEALER_SCENARIO_TRADE_CHILD_ROOT_OFFSET_V4)?,
+            obligation: read_identity(bytes, DEALER_SCENARIO_TRADE_OBLIGATION_ADDRESS_OFFSET_V4)?,
+            current_obligation_digest: read_identity(
+                bytes,
+                DEALER_SCENARIO_TRADE_CURRENT_OBLIGATION_DIGEST_OFFSET_V4,
+            )?,
+            candidate_obligation_digest: read_identity(
+                bytes,
+                DEALER_SCENARIO_TRADE_CANDIDATE_OBLIGATION_DIGEST_OFFSET_V4,
+            )?,
+            dealer_owner: read_identity(bytes, DEALER_SCENARIO_TRADE_DEALER_OWNER_OFFSET_V4)?,
+            counterparty_owner: read_identity(
+                bytes,
+                DEALER_SCENARIO_TRADE_COUNTERPARTY_OWNER_OFFSET_V4,
+            )?,
+            counterparty_account: read_identity(
+                bytes,
+                DEALER_SCENARIO_TRADE_COUNTERPARTY_ACCOUNT_OFFSET_V4,
+            )?,
+            current_obligation_revision: read_u64(
+                bytes,
+                DEALER_SCENARIO_TRADE_CURRENT_OBLIGATION_REVISION_OFFSET_V4,
+            )?,
+            candidate_obligation_revision: read_u64(
+                bytes,
+                DEALER_SCENARIO_TRADE_CANDIDATE_OBLIGATION_REVISION_OFFSET_V4,
+            )?,
+            dealer_position_revision: read_u64(
+                bytes,
+                DEALER_SCENARIO_TRADE_DEALER_POSITION_REVISION_OFFSET_V4,
+            )?,
+            counterparty_position_revision: read_u64(
+                bytes,
+                DEALER_SCENARIO_TRADE_COUNTERPARTY_POSITION_REVISION_OFFSET_V4,
+            )?,
+            claims_revision: read_u64(bytes, DEALER_SCENARIO_TRADE_CLAIMS_REVISION_OFFSET_V4)?,
+            generation: read_u64(bytes, DEALER_SCENARIO_TRADE_GENERATION_OFFSET_V4)?,
+            expires_at: read_u64(bytes, DEALER_SCENARIO_TRADE_EXPIRES_AT_OFFSET_V4)?,
+            principal: read_u64(bytes, DEALER_SCENARIO_TRADE_PRINCIPAL_OFFSET_V4)?,
+            realized_fee: read_u64(bytes, DEALER_SCENARIO_TRADE_REALIZED_FEE_OFFSET_V4)?,
             direction,
             claims_position_count,
             dealer_evidence_count,
@@ -575,7 +597,7 @@ pub fn scenario_trade_claims_packet_offset_v3(width: u32) -> Result<usize, Scena
     }
     usize::try_from(width)
         .ok()
-        .and_then(|value| value.checked_mul(8))
+        .and_then(|value| value.checked_mul(DEALER_SCENARIO_TRADE_CANDIDATE_STRIDE_V4))
         .and_then(|value| DEALER_SCENARIO_TRADE_HEADER_BYTES_V4.checked_add(value))
         .ok_or(ScenarioTradeErrorV3::InvalidRequest)
 }
@@ -611,8 +633,12 @@ pub fn build_scenario_trade_request_v3(
     {
         return Err(ScenarioTradeErrorV3::ProgramSelection);
     }
-    let mut selector = [0_u8; 12];
-    selector[10..12].copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
+    // The selector IS this header's own prefix: `select` reads the `u16` the
+    // header calls `action`, so the buffer width and the coordinate are both
+    // projections of the layout rather than a third and fourth spelling of 10.
+    let mut selector = [0_u8; DEALER_SCENARIO_TRADE_SELECTOR_BYTES_V4];
+    selector[DEALER_SCENARIO_TRADE_ACTION_OFFSET_V4..DEALER_SCENARIO_TRADE_SELECTOR_BYTES_V4]
+        .copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
     let selected_program = set
         .select(&selector)
         .map_err(|_| ScenarioTradeErrorV3::ProgramSelection)?;
@@ -716,38 +742,93 @@ pub(super) fn encode_scenario_trade_request_v3(
         .get_mut(..expected)
         .ok_or(ScenarioTradeErrorV3::WidthMismatch)?
         .fill(0);
-    write_bytes(output, 0, &DEALER_SCENARIO_TRADE_MAGIC_V3)?;
-    write_bytes(output, 8, &DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes())?;
-    write_bytes(output, 10, &DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes())?;
-    write_bytes(output, 12, &width.to_le_bytes())?;
+    write_bytes(
+        output,
+        DEALER_SCENARIO_TRADE_MAGIC_OFFSET_V4,
+        &DEALER_SCENARIO_TRADE_MAGIC_V3,
+    )?;
+    write_bytes(
+        output,
+        DEALER_SCENARIO_TRADE_VERSION_OFFSET_V4,
+        &DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes(),
+    )?;
+    write_bytes(
+        output,
+        DEALER_SCENARIO_TRADE_ACTION_OFFSET_V4,
+        &DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes(),
+    )?;
+    write_bytes(
+        output,
+        DEALER_SCENARIO_TRADE_WIDTH_OFFSET_V4,
+        &width.to_le_bytes(),
+    )?;
     for (offset, identity) in [
-        (16, chain.release_set),
-        (48, chain.market),
-        (80, chain.child_root),
-        (112, chain.obligation_address),
-        (144, chain.current_obligation.state_digest()),
-        (176, candidate.state_digest()),
-        (208, chain.dealer_position.position_owner),
-        (240, chain.counterparty_position.position_owner),
-        (272, chain.counterparty_account),
+        (
+            DEALER_SCENARIO_TRADE_RELEASE_SET_OFFSET_V4,
+            chain.release_set,
+        ),
+        (DEALER_SCENARIO_TRADE_MARKET_OFFSET_V4, chain.market),
+        (DEALER_SCENARIO_TRADE_CHILD_ROOT_OFFSET_V4, chain.child_root),
+        (
+            DEALER_SCENARIO_TRADE_OBLIGATION_ADDRESS_OFFSET_V4,
+            chain.obligation_address,
+        ),
+        (
+            DEALER_SCENARIO_TRADE_CURRENT_OBLIGATION_DIGEST_OFFSET_V4,
+            chain.current_obligation.state_digest(),
+        ),
+        (
+            DEALER_SCENARIO_TRADE_CANDIDATE_OBLIGATION_DIGEST_OFFSET_V4,
+            candidate.state_digest(),
+        ),
+        (
+            DEALER_SCENARIO_TRADE_DEALER_OWNER_OFFSET_V4,
+            chain.dealer_position.position_owner,
+        ),
+        (
+            DEALER_SCENARIO_TRADE_COUNTERPARTY_OWNER_OFFSET_V4,
+            chain.counterparty_position.position_owner,
+        ),
+        (
+            DEALER_SCENARIO_TRADE_COUNTERPARTY_ACCOUNT_OFFSET_V4,
+            chain.counterparty_account,
+        ),
     ] {
         write_bytes(output, offset, &identity)?;
     }
     for (offset, value) in [
-        (304, chain.current_obligation.revision()),
-        (312, candidate.revision()),
-        (320, chain.dealer_position.revision),
-        (328, chain.counterparty_position.revision),
-        (336, chain.claims_revision),
-        (344, chain.generation),
-        (352, chain.expires_at),
-        (360, intent.principal),
-        (368, intent.realized_fee),
+        (
+            DEALER_SCENARIO_TRADE_CURRENT_OBLIGATION_REVISION_OFFSET_V4,
+            chain.current_obligation.revision(),
+        ),
+        (
+            DEALER_SCENARIO_TRADE_CANDIDATE_OBLIGATION_REVISION_OFFSET_V4,
+            candidate.revision(),
+        ),
+        (
+            DEALER_SCENARIO_TRADE_DEALER_POSITION_REVISION_OFFSET_V4,
+            chain.dealer_position.revision,
+        ),
+        (
+            DEALER_SCENARIO_TRADE_COUNTERPARTY_POSITION_REVISION_OFFSET_V4,
+            chain.counterparty_position.revision,
+        ),
+        (
+            DEALER_SCENARIO_TRADE_CLAIMS_REVISION_OFFSET_V4,
+            chain.claims_revision,
+        ),
+        (DEALER_SCENARIO_TRADE_GENERATION_OFFSET_V4, chain.generation),
+        (DEALER_SCENARIO_TRADE_EXPIRES_AT_OFFSET_V4, chain.expires_at),
+        (DEALER_SCENARIO_TRADE_PRINCIPAL_OFFSET_V4, intent.principal),
+        (
+            DEALER_SCENARIO_TRADE_REALIZED_FEE_OFFSET_V4,
+            intent.realized_fee,
+        ),
     ] {
         write_bytes(output, offset, &value.to_le_bytes())?;
     }
     *output
-        .get_mut(376)
+        .get_mut(DEALER_SCENARIO_TRADE_DIRECTION_OFFSET_V4)
         .ok_or(ScenarioTradeErrorV3::InvalidRequest)? = match intent.direction {
         ScenarioTradeDirectionV3::CounterpartyPaysDealer => 0,
         ScenarioTradeDirectionV3::DealerPaysCounterparty => 1,
@@ -796,7 +877,7 @@ pub(super) fn encode_scenario_trade_request_v3(
     )?;
     for (index, obligation) in intent.candidate_obligations.iter().copied().enumerate() {
         let offset = index
-            .checked_mul(8)
+            .checked_mul(DEALER_SCENARIO_TRADE_CANDIDATE_STRIDE_V4)
             .and_then(|relative| DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4.checked_add(relative))
             .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
         write_bytes(output, offset, &obligation.to_le_bytes())?;
@@ -1243,7 +1324,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, ScenarioTradeErrorV3> {
 
 fn read_identity(bytes: &[u8], offset: usize) -> Result<[u8; 32], ScenarioTradeErrorV3> {
     let value = bytes
-        .get(offset..offset + 32)
+        .get(offset..offset + DEALER_SCENARIO_TRADE_IDENTITY_BYTES_V4)
         .and_then(|value| value.try_into().ok())
         .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
     if value == [0; 32] {
