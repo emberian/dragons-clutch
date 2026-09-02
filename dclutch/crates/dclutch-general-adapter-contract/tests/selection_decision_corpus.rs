@@ -20,18 +20,25 @@
 use dclutch_general_adapter_contract::runtime_selection::{
     RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2, consider_verified_candidate_v2,
 };
-use dclutch_general_adapter_contract::runtime_verify::runtime_verified_balance_v2;
+use dclutch_general_adapter_contract::runtime_verify::{
+    RuntimeCandidateComparisonKeyV2, runtime_candidate_key_better_v2, runtime_verified_balance_v2,
+};
 use dclutch_general_adapter_contract::runtime_width::{
     VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len,
 };
-use dclutch_general_codec::{MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1};
+use dclutch_general_adapter_contract::{CompleteSetMoveV1, VerifiedCandidateV1, candidate_better};
+use dclutch_general_codec::{
+    MAX_OUTCOMES, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
+};
 
 #[allow(dead_code, missing_docs)]
 mod corpus {
     include!("generated/selection_decision_corpus_v1.rs");
 }
 
-use corpus::{GENERAL_SELECTION_VECTORS_V1, GeneralSelectionSubmissionV1};
+use corpus::{
+    GENERAL_IDENTITY_ORDER_PAIRS_V1, GENERAL_SELECTION_VECTORS_V1, GeneralSelectionSubmissionV1,
+};
 
 const PRODUCT: [u8; 32] = [1; 32];
 const BATCH: [u8; 32] = [2; 32];
@@ -157,5 +164,78 @@ fn lean_selection_corpus_replays_through_the_runtime_cursor() {
             "{} submitted count",
             vector.name
         );
+    }
+}
+
+/// Both private copies of `le_numeric_id` answer what Lean says they answer.
+///
+/// The adapter implements the identity tie-break twice on purpose --
+/// `runtime_candidate_key_better_v2` behind the persisted cursor key and
+/// `candidate_better` behind the V1 differential oracle, each with its own
+/// private byte scan -- because an oracle is only an oracle while it is an
+/// independent implementation. Neither had an authority. Four of these ten
+/// pairs are answered differently by a big-endian reading of the same bytes,
+/// so a copy that scanned from the wrong end would red here rather than
+/// nowhere.
+#[test]
+fn lean_decided_identity_order_holds_in_both_private_byte_scans() {
+    let mut criteria = [SelectionCriterion::MinimizeCandidateId; MAX_SELECTION_CRITERIA];
+    criteria[0] = SelectionCriterion::MinimizeCandidateId;
+    let policy = SelectionPolicyV1 {
+        policy_id: POLICY,
+        criterion_count: 1,
+        criteria,
+    };
+
+    let key = |identity: [u8; 32]| RuntimeCandidateComparisonKeyV2 {
+        filled_lots: 0,
+        quote_surplus: 0,
+        candidate_id: identity,
+    };
+    let record = |identity: [u8; 32]| VerifiedCandidateV1 {
+        candidate_id: identity,
+        product_id: PRODUCT,
+        batch_id: BATCH,
+        outcome_count: 2,
+        page_count: 1,
+        filled_lots: 0,
+        quote_surplus: 0,
+        quote_inputs: 0,
+        quote_outputs: 0,
+        complete_set_move: CompleteSetMoveV1::None,
+        complete_set_quantity: 0,
+        claim_inputs: [0; MAX_OUTCOMES],
+        claim_outputs: [0; MAX_OUTCOMES],
+    };
+
+    for pair in GENERAL_IDENTITY_ORDER_PAIRS_V1 {
+        for (left, right, expected, direction) in [
+            (
+                pair.left,
+                pair.right,
+                pair.left_is_below,
+                "left below right",
+            ),
+            (
+                pair.right,
+                pair.left,
+                pair.right_is_below,
+                "right below left",
+            ),
+        ] {
+            let runtime = runtime_candidate_key_better_v2(&policy, key(left), key(right))
+                .unwrap_or_else(|error| panic!("{} {direction}: {error:?}", pair.name));
+            assert_eq!(
+                runtime, expected,
+                "{} {direction}: the persisted-key scan",
+                pair.name
+            );
+            let oracle = candidate_better(&policy, &record(left), &record(right));
+            assert_eq!(
+                oracle, expected,
+                "{} {direction}: the differential oracle scan",
+                pair.name
+            );
+        }
     }
 }

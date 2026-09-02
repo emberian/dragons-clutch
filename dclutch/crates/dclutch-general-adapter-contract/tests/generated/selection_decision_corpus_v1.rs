@@ -323,3 +323,151 @@ pub const GENERAL_SELECTION_VECTORS_V1: [GeneralSelectionVectorV1; 8] = [
         best_quote_surplus: 0,
     },
 ];
+
+/// One little-endian identity-order case, as Lean decides it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralIdentityOrderPairV1 {
+    /// The ordering case this pair stands for.
+    pub name: &'static str,
+    /// Left content identity, little-endian.
+    pub left: [u8; 32],
+    /// Right content identity, little-endian.
+    pub right: [u8; 32],
+    /// Whether the left identity is below the right one.
+    pub left_is_below: bool,
+    /// Whether the right identity is below the left one.
+    pub right_is_below: bool,
+}
+
+pub const GENERAL_IDENTITY_ORDER_PAIRS_V1: [GeneralIdentityOrderPairV1; 10] = [
+    GeneralIdentityOrderPairV1 {
+        name: "byte_thirty_one_outranks_every_lower_byte",
+        left: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1,
+        ],
+        right: [
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0,
+        ],
+        left_is_below: false,
+        right_is_below: true,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "only_the_most_significant_byte_differs",
+        left: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1,
+        ],
+        right: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 2,
+        ],
+        left_is_below: true,
+        right_is_below: false,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "only_the_least_significant_byte_differs",
+        left: [
+            7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ],
+        right: [
+            8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ],
+        left_is_below: true,
+        right_is_below: false,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "identical_identities_are_below_neither",
+        left: [
+            57, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+        ],
+        right: [
+            57, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+        ],
+        left_is_below: false,
+        right_is_below: false,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "the_second_most_significant_byte_breaks_an_equal_top",
+        left: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 3, 1,
+        ],
+        right: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 4, 1,
+        ],
+        left_is_below: true,
+        right_is_below: false,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "a_larger_low_byte_does_not_beat_a_larger_high_byte",
+        left: [
+            255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+        ],
+        right: [
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ],
+        left_is_below: true,
+        right_is_below: false,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "the_maximum_identity_against_one_less_in_its_top_byte",
+        left: [
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        ],
+        right: [
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254,
+        ],
+        left_is_below: false,
+        right_is_below: true,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "zero_is_below_every_nonzero_identity",
+        left: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ],
+        right: [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ],
+        left_is_below: true,
+        right_is_below: false,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "two_disagreements_and_the_more_significant_one_decides",
+        left: [
+            255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 1,
+        ],
+        right: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 2,
+        ],
+        left_is_below: true,
+        right_is_below: false,
+    },
+    GeneralIdentityOrderPairV1 {
+        name: "adjacent_high_bytes_swap_places",
+        left: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1,
+        ],
+        right: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 1, 0,
+        ],
+        left_is_below: false,
+        right_is_below: true,
+    },
+];

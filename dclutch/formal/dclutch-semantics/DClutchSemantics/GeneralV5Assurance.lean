@@ -654,4 +654,112 @@ theorem corpus_exact_tie_keeps_the_earlier_coordinate :
   refine ⟨exact_objective_tie_never_replaces canonicalCriteria _ _ rfl, ?_⟩
   native_decide
 
+/-! ### The little-endian identity order
+
+`le_numeric_id` has TWO private copies in the adapter -- one in
+`runtime_verify.rs` behind the persisted comparison key, one in `lib.rs` behind
+the V1 differential oracle -- and had no Lean statement of what the scan means.
+The duplication is deliberate and stays: an oracle is only an oracle while it
+is an independent implementation. What was missing is an authority both are
+answerable to.
+
+`identityValue` is the meaning -- a 32-byte little-endian content identity read
+as the `Nat` that `Objective.candidateId` compares -- and `leNumericLess` is the
+scan the Rust performs, from the most significant byte, which is the LAST byte
+of a little-endian identity, answering at the first disagreement. The pairs
+below are chosen to SEPARATE that scan from a big-endian reading of the same
+bytes rather than to agree with both. -/
+
+def identityValueFrom : Nat → List Nat → Nat
+  | _, [] => 0
+  | place, byte :: rest => byte * place + identityValueFrom (place * 256) rest
+
+/-- A little-endian 32-byte identity as the `Nat` it denotes. -/
+def identityValue (bytes : List Nat) : Nat := identityValueFrom 1 bytes
+
+/-- The 32 little-endian bytes of a `Nat` identity. -/
+def identityBytes (value : Nat) : List Nat :=
+  (List.range 32).map (fun index => value / (256 ^ index) % 256)
+
+/-- Lexicographic order on a byte sequence, answering at the first
+disagreement. -/
+def lexLess : List Nat → List Nat → Bool
+  | [], _ => false
+  | _ :: _, [] => false
+  | leftByte :: leftRest, rightByte :: rightRest =>
+      if leftByte != rightByte then decide (leftByte < rightByte)
+      else lexLess leftRest rightRest
+
+/-- Exactly `le_numeric_id`. -/
+def leNumericLess (left right : List Nat) : Bool := lexLess left.reverse right.reverse
+
+/-- The same bytes read most-significant-first: the drift this tie-break is
+one transcription away from. -/
+def bigEndianLess (left right : List Nat) : Bool := lexLess left right
+
+structure IdentityPair where
+  name : String
+  left : Nat
+  right : Nat
+
+def identityPairs : List IdentityPair := [
+  { name := "byte_thirty_one_outranks_every_lower_byte",
+    left := 452312848583266388373324160190187140051835877600158453279131187530910662656,
+    right := 452312848583266388373324160190187140051835877600158453279131187530910662655 },
+  { name := "only_the_most_significant_byte_differs",
+    left := 452312848583266388373324160190187140051835877600158453279131187530910662656,
+    right := 904625697166532776746648320380374280103671755200316906558262375061821325312 },
+  { name := "only_the_least_significant_byte_differs", left := 7, right := 8 },
+  { name := "identical_identities_are_below_neither", left := 12345, right := 12345 },
+  { name := "the_second_most_significant_byte_breaks_an_equal_top",
+    left := 457613389777601541362074052692415895599318329290785310153496006134788521984,
+    right := 459380236842379925691657350193158814115145813187660929111617612336081141760 },
+  { name := "a_larger_low_byte_does_not_beat_a_larger_high_byte", left := 255, right := 256 },
+  { name := "the_maximum_identity_against_one_less_in_its_top_byte",
+    left := 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+    right := 115339776388732929035197660848497720713218148788040405586178452820382218977279 },
+  { name := "zero_is_below_every_nonzero_identity", left := 0, right := 1 },
+  { name := "two_disagreements_and_the_more_significant_one_decides",
+    left := 452312848583266388373324160190187140051835877600158453279131187530910662911,
+    right := 904625697166532776746648320380374280103671755200316906558262375061821325312 },
+  { name := "adjacent_high_bytes_swap_places",
+    left := 452312848583266388373324160190187140051835877600158453279131187530910662656,
+    right := 1766847064778384329583297500742918515827483896875618958121606201292619776 }
+]
+
+/-- The emitted bytes denote the identity they came from. -/
+theorem corpus_identity_bytes_round_trip :
+    identityPairs.all (fun pair =>
+      (identityValue (identityBytes pair.left) == pair.left) &&
+        (identityValue (identityBytes pair.right) == pair.right)) = true := by
+  native_decide
+
+/-- On every pair the byte scan IS the numeric order, in both directions. This
+is what makes `le_numeric_id` mean `<` on `Objective.candidateId` rather than
+merely being a total order that happens to be deterministic. -/
+theorem corpus_byte_scan_is_the_numeric_order :
+    identityPairs.all (fun pair =>
+      (leNumericLess (identityBytes pair.left) (identityBytes pair.right) ==
+          decide (pair.left < pair.right)) &&
+        (leNumericLess (identityBytes pair.right) (identityBytes pair.left) ==
+          decide (pair.right < pair.left))) = true := by
+  native_decide
+
+/-- Irreflexive, and never true in both directions. -/
+theorem corpus_identity_order_is_strict :
+    identityPairs.all (fun pair =>
+      (leNumericLess (identityBytes pair.left) (identityBytes pair.left) == false) &&
+        !(leNumericLess (identityBytes pair.left) (identityBytes pair.right) &&
+            leNumericLess (identityBytes pair.right) (identityBytes pair.left))) = true := by
+  native_decide
+
+/-- Four of the ten pairs are answered differently by a big-endian reading of
+the same bytes. A corpus a transposed copy could also satisfy would prove
+nothing about which end of the identity is significant. -/
+theorem corpus_separates_the_two_byte_orders :
+    (identityPairs.filter (fun pair =>
+      bigEndianLess (identityBytes pair.left) (identityBytes pair.right) !=
+        leNumericLess (identityBytes pair.left) (identityBytes pair.right))).length = 4 := by
+  native_decide
+
 end DClutch.General.V5Assurance
