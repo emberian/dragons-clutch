@@ -38,6 +38,7 @@ use dclutch_wallet_terminal_input_operator::{
         derive_terminal_routing_table_v1, routing_round_one_addresses_v1,
         routing_round_three_addresses_v1, routing_round_two_addresses_v1,
     },
+    associated_token_account_program_v1, associated_token_account_v1,
     complete_terminal_payout_input_v1, market_release_set_v1, route_terminal_payout_frame_v1,
 };
 use dclutch_wallet_terminal_payout_operator::{
@@ -113,7 +114,16 @@ struct RoutingWireV1 {
 struct PayoutWireV1 {
     market: String,
     owner: String,
-    recipient: String,
+    /// Absent means "the conventional destination".
+    ///
+    /// The protocol takes any token account the owner controls, so naming one
+    /// is always allowed and always wins. Leaving it out asks the derivation to
+    /// fill in the owner's associated token account for this Market's
+    /// collateral mint, which it can only do once the address book has named
+    /// that mint -- so the default is filled in by
+    /// `derive_wallet_terminal_input_request_v1`, beside the book.
+    #[serde(default)]
+    recipient: Option<String>,
     claim_index: u32,
     /// Absent redeems the whole authenticated balance; the derivation decides
     /// what that is, and this boundary does not.
@@ -161,6 +171,7 @@ struct ProgramsV1 {
 
 struct DecodedRequestV1 {
     programs: ProgramsV1,
+    recipient: Option<Pubkey>,
     release_set: Option<[u8; 32]>,
     routing: Option<TerminalRoutingTableV1>,
     request: TerminalPayoutRequestV1,
@@ -188,6 +199,20 @@ impl DecodedRequestV1 {
             custody: self.programs.custody,
             resolution: self.programs.resolution,
             release_set,
+        })
+    }
+
+    /// The caller's payout request, or the refusal that names what is missing.
+    fn payout_request(&self) -> Result<TerminalPayoutRequestV1, String> {
+        let recipient = self.recipient.ok_or_else(|| {
+            "this payout input request names no recipient token account; derive one first, which \
+             fills in the owner's associated token account for this Market's collateral mint, or \
+             name one in the request"
+                .to_string()
+        })?;
+        Ok(TerminalPayoutRequestV1 {
+            recipient,
+            ..self.request
         })
     }
 
@@ -272,10 +297,16 @@ fn parse_request(request_json: &str) -> Result<DecodedRequestV1, String> {
             Some(value) => Some(digest(value, "release set")?),
         },
         routing,
+        recipient: match wire.request.recipient.as_deref() {
+            None => None,
+            Some(value) => Some(key(value, "recipient")?),
+        },
         request: TerminalPayoutRequestV1 {
             market: key(&wire.request.market, "Market")?,
             owner: key(&wire.request.owner, "owner")?,
-            recipient: key(&wire.request.recipient, "recipient")?,
+            // Placeholder only: every phase that READS the recipient goes
+            // through `payout_request`, which refuses an absent one by name.
+            recipient: key(&wire.request.owner, "owner")?,
             claim_index: wire.request.claim_index,
             quantity: match wire.request.quantity.as_deref() {
                 None => None,
@@ -359,7 +390,7 @@ pub fn wallet_terminal_input_frame_addresses_json_v1(
     let frame = route_terminal_payout_frame_v1(
         &coordinates,
         decoded.routing()?,
-        &decoded.request,
+        &decoded.payout_request()?,
         &round_one,
     )
     .map_err(|error| format!("payout input frame refused: {error}"))?;
@@ -384,12 +415,13 @@ pub fn build_wallet_terminal_payout_input_json_v1(
     let frame = route_terminal_payout_frame_v1(
         &coordinates,
         decoded.routing()?,
-        &decoded.request,
+        &decoded.payout_request()?,
         &round_one,
     )
     .map_err(|error| format!("payout input frame refused: {error}"))?;
-    let completed = complete_terminal_payout_input_v1(&frame, &round_two, &decoded.request)
-        .map_err(|error| format!("payout input refused: {error}"))?;
+    let completed =
+        complete_terminal_payout_input_v1(&frame, &round_two, &decoded.payout_request()?)
+            .map_err(|error| format!("payout input refused: {error}"))?;
     serde_json::to_string(&completed.input)
         .map_err(|error| format!("payout input could not be serialized: {error}"))
 }
@@ -473,6 +505,18 @@ pub fn derive_wallet_terminal_input_request_json_v1(
     let mut wire: serde_json::Value = serde_json::from_str(request_json)
         .map_err(|error| format!("payout input request is not the exact accepted JSON: {error}"))?;
     wire["routing"] = routing_wire_v1(&routing);
+    if decoded.recipient.is_none() {
+        // THE CONVENTIONAL DESTINATION, filled in only now because only now is
+        // the collateral mint known. A caller that named one is untouched.
+        wire["request"]["recipient"] = serde_json::json!(
+            associated_token_account_v1(
+                decoded.request.owner,
+                routing.collateral_mint,
+                routing.token_program,
+            )
+            .to_string()
+        );
+    }
     serde_json::to_string(&wire)
         .map_err(|error| format!("payout input request could not be serialized: {error}"))
 }
@@ -576,6 +620,12 @@ pub fn build_wallet_terminal_payout_input_v1(
 ) -> Result<String, JsValue> {
     build_wallet_terminal_payout_input_json_v1(request_json, round_one_json, round_two_json)
         .map_err(|e| JsValue::from_str(&e))
+}
+
+/// The associated-token-account program the default destination derives under.
+#[wasm_bindgen]
+pub fn associated_token_account_program_id_v1() -> String {
+    associated_token_account_program_v1().to_string()
 }
 
 /// The Core Market state width, read from its codec for the client to check.
@@ -735,6 +785,49 @@ mod tests {
         )
         .expect_err("stage two's snapshot format must be refused here");
         assert!(error.contains(SNAPSHOT_FORMAT_V1), "{error}");
+    }
+
+    /// A request with no recipient refuses BY NAME rather than planning a
+    /// payout into a placeholder.
+    #[test]
+    fn a_request_with_no_recipient_refuses_before_it_can_route() {
+        let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
+        let mut wire: serde_json::Value =
+            serde_json::from_str(&request_wire(&input)).expect("request is JSON");
+        wire["request"]["recipient"] = serde_json::Value::Null;
+        let error = wallet_terminal_input_frame_addresses_json_v1(
+            &wire.to_string(),
+            &format!(
+                r#"{{"format":"{SNAPSHOT_FORMAT_V1}","slot":"9","unixTimestamp":"1","keys":[],"accounts":[]}}"#
+            ),
+        )
+        .expect_err("a request with no destination must refuse");
+        assert!(
+            error.contains("names no recipient token account"),
+            "{error}"
+        );
+    }
+
+    /// The default destination is the standard convention, derived under the
+    /// program that declares it -- not a new addressing rule.
+    #[test]
+    fn the_default_destination_is_the_conventional_associated_token_account() {
+        assert_eq!(
+            associated_token_account_program_id_v1(),
+            "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+            "the interface crate that declares the program is the only place this id lives"
+        );
+        let owner = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let token_program = Pubkey::new_unique();
+        let derived = associated_token_account_v1(owner, mint, token_program);
+        assert_ne!(derived, owner);
+        // A different mint is a different destination: the default is per
+        // collateral, not per wallet.
+        assert_ne!(
+            derived,
+            associated_token_account_v1(owner, Pubkey::new_unique(), token_program)
+        );
     }
 
     #[test]

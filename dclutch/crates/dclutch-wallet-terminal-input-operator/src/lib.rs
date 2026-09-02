@@ -52,6 +52,10 @@ use dclutch_wallet_terminal_payout_operator::{
 };
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
+use spl_associated_token_account_interface::{
+    address::get_associated_token_address_with_program_id,
+    program::ID as ASSOCIATED_TOKEN_PROGRAM_ID,
+};
 
 pub mod address_book;
 
@@ -222,6 +226,34 @@ pub struct CompletedTerminalPayoutInputV1 {
 /// is why the Custody context costs no round of its own.
 pub fn claims_aggregate_address_v1(claims: Pubkey, market: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()], &claims).0
+}
+
+/// The conventional destination for a payout: the owner's associated token
+/// account for the collateral mint.
+///
+/// A DEFAULT, NOT A RULE. The protocol takes any token account the owner
+/// controls and this crate changes nothing about that; the CLI still names one
+/// with `--recipient` and a browser caller that names one overrides this. What
+/// it removes is the last thing a stranger had to know before redeeming, and
+/// it removes it by the standard convention rather than by a new one.
+///
+/// The associated-token-account program is pinned BY CONSTANT NAME from the
+/// interface crate that declares it, and the address comes from that crate's
+/// own derivation rather than from seeds written down here.
+pub fn associated_token_account_v1(
+    owner: Pubkey,
+    collateral_mint: Pubkey,
+    token_program: Pubkey,
+) -> Pubkey {
+    get_associated_token_address_with_program_id(&owner, &collateral_mint, &token_program)
+}
+
+/// The associated-token-account program this crate derives under.
+///
+/// Exposed so a client can state which program the default came from instead of
+/// writing its id down.
+pub fn associated_token_account_program_v1() -> Pubkey {
+    ASSOCIATED_TOKEN_PROGRAM_ID
 }
 
 /// The release set this Market selected, read from the Market itself.

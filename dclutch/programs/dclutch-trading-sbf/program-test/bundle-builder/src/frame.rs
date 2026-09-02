@@ -11,7 +11,7 @@ use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountData
 use crate::profile_ops;
 use solana_account::Account;
 use solana_program::{instruction::AccountMeta, pubkey::Pubkey, rent::Rent};
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program};
 
 use crate::BuilderError;
 
@@ -311,6 +311,52 @@ pub fn program_with_view(key: Pubkey, programdata: Pubkey) -> BuiltAccountV1 {
 pub fn program_with_deployed_view(key: Pubkey) -> BuiltAccountV1 {
     let programdata = Pubkey::find_program_address(&[key.as_ref()], &bpf_loader_upgradeable::ID).0;
     program_with_view(key, programdata)
+}
+
+/// The bank's registered name for the System program builtin.
+///
+/// One author for a string the bank owns and the campaign cannot install. It
+/// is asserted against a live bank by the frame control every admitted
+/// campaign runs, so a runtime that renames its builtin goes red naming this
+/// constant rather than at the far end of a route.
+pub const SYSTEM_PROGRAM_BUILTIN_NAME_V1: &str = "solana_system_program";
+
+/// Builtin program binding whose chain view is the account genesis writes.
+///
+/// A builtin is not a deployed program: the bank owns it through the NATIVE
+/// loader and its data is the registered name, not a 36-byte upgradeable
+/// Loader `Program` record. It is always externally installed -- `bundle.rs`
+/// lists `system_program::ID` among the external candidates -- so the campaign
+/// states only the observation, and stating it wrong is invisible everywhere
+/// except one place: `runtime_observations_digest` is a field of
+/// `AdmittedInvocationContextV3`, so a mismodelled builtin makes the host's
+/// scratch pages and the chain's request carry different context digests and
+/// the admitted route refuses `0x4018 AdmittedTransport` with nothing naming a
+/// coordinate.
+///
+/// Measured 2026-09-02 on General `OpenBatch` at N=2, which reached exactly
+/// that: the campaign bound `program_with_deployed_view(system_program::ID)`,
+/// claiming 36 bytes owned by `BPFLoaderUpgradeab1e...`, where the bank holds
+/// 21 bytes of `solana_system_program` owned by `NativeLoader111...`.
+#[must_use]
+pub fn builtin_program(key: Pubkey, name: &str) -> BuiltAccountV1 {
+    BuiltAccountV1 {
+        key,
+        account: Account {
+            lamports: 1,
+            data: name.as_bytes().to_vec(),
+            owner: native_loader::ID,
+            executable: true,
+            rent_epoch: 0,
+        },
+        observed: None,
+    }
+}
+
+/// The System program exactly as the bank holds it.
+#[must_use]
+pub fn system_program_builtin() -> BuiltAccountV1 {
+    builtin_program(system_program::ID, SYSTEM_PROGRAM_BUILTIN_NAME_V1)
 }
 
 /// External data account whose chain view has the given exact content.

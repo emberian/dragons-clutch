@@ -2981,6 +2981,7 @@ dependencies = [
  "sha2 0.10.9",
  "solana-program",
  "solana-sdk-ids",
+ "spl-associated-token-account-interface",
 ]
 
 [[package]]

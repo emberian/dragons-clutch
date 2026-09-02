@@ -43,7 +43,13 @@ export type WalletTerminalInputRequestV1 = Readonly<{
   programs: Readonly<{ registry: string; core: string; claims: string; custody: string; resolution: string }>;
   market: string;
   owner: string;
-  recipient: string;
+  /**
+   * Where the proceeds land. Absent means the conventional destination: the
+   * derivation fills in the owner's associated token account for this Market's
+   * collateral mint, which it can only do once the address book has named that
+   * mint. Naming one is always allowed and always wins.
+   */
+  recipient?: string;
   claimIndex: number;
   quantity?: string;
 }>;
@@ -70,7 +76,7 @@ export function walletTerminalInputRequestJsonV1(request: WalletTerminalInputReq
     request: {
       market: request.market,
       owner: request.owner,
-      recipient: request.recipient,
+      ...(request.recipient === undefined || request.recipient === '' ? {} : { recipient: request.recipient }),
       claimIndex: request.claimIndex,
       ...(request.quantity === undefined ? {} : { quantity: request.quantity }),
     },

@@ -2,6 +2,11 @@
 /* eslint-disable */
 
 /**
+ * The associated-token-account program the default destination derives under.
+ */
+export function associated_token_account_program_id_v1(): string;
+
+/**
  * Build the exact payout input. Browser entry point.
  */
 export function build_wallet_terminal_payout_input_v1(request_json: string, round_one_json: string, round_two_json: string): string;
@@ -50,6 +55,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly associated_token_account_program_id_v1: () => [number, number];
     readonly build_wallet_terminal_payout_input_v1: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly core_state_bytes_v1: () => number;
     readonly derive_wallet_terminal_input_request_v1: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
@@ -60,10 +66,10 @@ export interface InitOutput {
     readonly wallet_terminal_input_frame_addresses_v1: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wallet_terminal_input_round_one_addresses_v1: (a: number, b: number) => [number, number, number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

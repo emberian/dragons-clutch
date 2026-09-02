@@ -1,6 +1,23 @@
 /* @ts-self-types="./wallet_terminal_input.d.ts" */
 
 /**
+ * The associated-token-account program the default destination derives under.
+ * @returns {string}
+ */
+export function associated_token_account_program_id_v1() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.associated_token_account_program_id_v1();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
  * Build the exact payout input. Browser entry point.
  * @param {string} request_json
  * @param {string} round_one_json

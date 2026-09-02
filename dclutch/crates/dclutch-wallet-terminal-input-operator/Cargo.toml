@@ -33,6 +33,12 @@ dclutch-operator = { path = "../dclutch-operator", default-features = false }
 # refusal vocabulary -- one derivation in two stages, never two derivations.
 dclutch-wallet-terminal-payout-operator = { path = "../dclutch-wallet-terminal-payout-operator" }
 sha2 = "0.10"
+# The associated-token-account program enters this crate as an ADDRESSING
+# authority and nothing else: one derivation, `get_associated_token_address_
+# with_program_id`, for the default destination of a payout. The protocol is
+# unchanged -- the payout still accepts any token account the owner controls,
+# and a caller that names one overrides this.
+spl-associated-token-account-interface = { version = "=2.0.0", default-features = false }
 solana-program = { version = "=3.0.0", default-features = false }
 
 # Two getrandom majors reach wasm32 through the payout operator's own

@@ -73,8 +73,8 @@ describe('live devnet payout-input address book', () => {
       programs: COHORT_11.programs,
       market: COHORT_11.market,
       owner: COHORT_11.owner,
-      // Unused by phase zero: the destination only enters the payout frame.
-      recipient: COHORT_11.owner,
+      // NO RECIPIENT. The conventional destination is filled in beside the
+      // book, once the collateral mint is known.
       claimIndex: 0,
     });
 
@@ -108,6 +108,14 @@ describe('live devnet payout-input address book', () => {
     expect(derived.routing.foundingMarket).toBe(COHORT_11.market);
     expect(derived.routing.collateralMint).toBe(COHORT_11.book.collateralMint);
     expect(derived.routing.tokenProgram).toBe(COHORT_11.book.tokenProgram);
+    // THE DESTINATION, defaulted rather than asked for: the owner's associated
+    // token account for this Market's collateral, under the program that
+    // declares the convention.
+    expect(derived.request.recipient).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+    expect(derived.request.recipient).not.toBe(COHORT_11.owner);
+    expect(derivation.associated_token_account_program_id_v1())
+      .toBe('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
     for (const row of ['realm', 'product', 'resultDomain', 'portfolio', 'productBasis',
       'compositionDescriptor', 'compositionGraph', 'compositionTranslation', 'compositionExposure'] as const) {
       expect(records[row].address, row).toBe(COHORT_11.book[row]);
@@ -127,7 +135,6 @@ describe('live devnet payout-input address book', () => {
       programs: COHORT_11.programs,
       market: 'ARuPAuyJbJoLdMWGDzSqvcV9py25EkmMj8ABnfKP56s',
       owner: COHORT_11.owner,
-      recipient: COHORT_11.owner,
       claimIndex: 0,
     });
     const floor = await client.finalizedSlot();

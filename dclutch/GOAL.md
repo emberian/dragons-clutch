@@ -2748,3 +2748,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Active: DIRECT `a8931c4eecc29c8fb`, GENERAL `a39412e2663ca5f8d`, DEALER `a929bd24b931c8297`, EMISSION `addb8204ef3d72bb0`,
   STRUCTURED `ae1559fc2d9501927`, REDEMPTION `a07bc54d2e4753bc9`, RIP `a4208061e68425b0d`, POPULATION `ad6d48cc39f881e8e`.
 - Cuts: `4b029ac53`, `795dc7961`.
+
+### Lane map delta — 2026-09-02 04:35
+- RIP `a4208061e68425b0d` closed after unit 4 (`cbb1ebca`: the claims receipt commits to the validated construction — the
+  copy compared counts to the DECLARED shape and took no tables at all; the "five hand conversions" were a wrapper in the
+  wrong layer, deleted as a second name). Unit 5 (the hits==2 layer, 894 items, clusters first) → **`ae0b9b375646fb099`**.
+- Stopped the closed V0 lane and the superseded first General lane (both were still registered as running).
+- Cuts: `815bea319`.

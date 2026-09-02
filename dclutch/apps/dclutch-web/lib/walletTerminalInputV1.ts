@@ -37,6 +37,7 @@ export type WalletTerminalInputWasmV1 = Readonly<{
   derive_wallet_terminal_input_request_v1(requestJson: string, roundOneJson: string, roundTwoJson: string, roundThreeJson: string): string;
   wallet_terminal_input_frame_addresses_v1(requestJson: string, roundOneJson: string): string;
   build_wallet_terminal_payout_input_v1(requestJson: string, roundOneJson: string, roundTwoJson: string): string;
+  associated_token_account_program_id_v1(): string;
   core_state_bytes_v1(): number;
   liability_basis_market_header_bytes_v2(): number;
   liability_basis_position_header_bytes_v2(): number;
@@ -121,6 +122,7 @@ export async function loadWalletTerminalInputWasmV1(
     derive_wallet_terminal_input_request_v1: wasmModule.derive_wallet_terminal_input_request_v1,
     wallet_terminal_input_frame_addresses_v1: wasmModule.wallet_terminal_input_frame_addresses_v1,
     build_wallet_terminal_payout_input_v1: wasmModule.build_wallet_terminal_payout_input_v1,
+    associated_token_account_program_id_v1: wasmModule.associated_token_account_program_id_v1,
     core_state_bytes_v1: wasmModule.core_state_bytes_v1,
     liability_basis_market_header_bytes_v2: wasmModule.liability_basis_market_header_bytes_v2,
     liability_basis_position_header_bytes_v2: wasmModule.liability_basis_position_header_bytes_v2,

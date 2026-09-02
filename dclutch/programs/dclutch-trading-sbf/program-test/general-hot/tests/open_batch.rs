@@ -20,8 +20,8 @@ use dclutch_chain_bundle_builder::{
     artifacts::{ArtifactSetV1, DerivedRecordV1, derive_record, digest},
     bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
     frame::{
-        BuiltAccountV1, data_account, external_with_view, program_with_deployed_view,
-        program_with_view, vacant,
+        BuiltAccountV1, SYSTEM_PROGRAM_BUILTIN_NAME_V1, data_account, external_with_view,
+        program_with_view, system_program_builtin, vacant,
     },
     general::{
         GeneralOpenBatchRequestInputV1, build_general_open_batch_bundle_v1,
@@ -78,7 +78,12 @@ use dclutch_rent_contract::{
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{hash::hash, pubkey::Pubkey, rent::Rent};
-use solana_sdk::signature::{Keypair, Signer};
+use solana_program_test::BanksClientError;
+use solana_sdk::{
+    instruction::InstructionError,
+    signature::{Keypair, Signer},
+    transaction::TransactionError,
+};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 const ACCELERATOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
@@ -548,7 +553,7 @@ fn build_host_case(
                 general_system_program_account_v3(Action::OpenBatch)
                     .expect("OpenBatch declares a System coordinate"),
             ),
-            program_with_deployed_view(system_program::ID),
+            system_program_builtin(),
         ),
     ];
     let set = ArtifactSetV1 {
@@ -641,7 +646,25 @@ fn add_case_accounts(
     }
 }
 
-async fn execute_open_batch(outcome_count: u32) {
+/// What this width is expected to do on the real ELFs.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OpenBatchOutcomeV1 {
+    /// The whole route runs: four accelerator chunks, commit, materialized Batch.
+    Commits,
+    /// The 64 KiB heap runs out inside the admitted candidate.
+    ///
+    /// This is a WALL, not a law, and it is asserted so the wall cannot move
+    /// without saying so. `MAX_HOT_SCALARS_V3 = 512` is documented as an
+    /// SBF-heap profile bound, and for this profile it does not bind: General
+    /// `OpenBatch` declares `163 + 6*(N - 2)` scalars, so the declared bound is
+    /// not reached until N = 60, and the heap is exhausted at N = 14 -- forty-six
+    /// outcomes earlier. Measured 2026-09-02, both directions: N = 13 (229
+    /// scalars) commits and N = 14 (235 scalars) aborts, right after
+    /// `dclutch-hot-cu:candidate-transcript` at 0xd360 of 0x10000 bytes.
+    ExhaustsTheHeap,
+}
+
+async fn execute_open_batch(outcome_count: u32, expected: OpenBatchOutcomeV1) {
     assert_eq!(DIRECT_HOT_HEAP_FRAME_BYTES_V1, 65_536);
     let substrate = waist::fixture_substrate();
     let elves = waist::elves();
@@ -686,6 +709,11 @@ async fn execute_open_batch(outcome_count: u32) {
         case.built.admitted_authorities.entries.len(),
         47 + case.built.admitted_authorities.entries.len(),
     );
+    eprintln!(
+        "general-open-batch registers N={outcome_count} scalars={} identities={}",
+        case.built.bundle.engine.input_scalars.len(),
+        case.built.bundle.engine.input_identities.len(),
+    );
     // The accelerator's OpenBatch admission joins the request's witnessed
     // `STATE_BUMP` to the lifecycle's `PRIMARY_CANONICAL_BUMP` and nothing
     // else, so two derivations that name DIFFERENT accounts still satisfy it
@@ -713,6 +741,66 @@ async fn execute_open_batch(outcome_count: u32) {
     let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer.pubkey());
     waist::add_lookup_table(&mut test, &lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
+    // THE FRAME CONTROL, and the reason it is an assertion rather than a
+    // diagnostic. `runtime_observations_digest` is a field of
+    // `AdmittedInvocationContextV3`, and the host computes it over
+    // `bundle.logical`'s modelled chain views while the chain computes it over
+    // the accounts the bank actually holds. So every coordinate the host
+    // mismodels is an invisible defect until the admitted route hashes the
+    // frame, at which point it surfaces as `0x4018 AdmittedTransport` naming
+    // no coordinate at all -- which is what General `OpenBatch` refused with
+    // for the whole of 2026-09-02 because one binding claimed the System
+    // program was a deployed upgradeable program.
+    //
+    // An account the transaction is about to CREATE is absent from the bank,
+    // and the runtime presents an absent account to the program exactly as the
+    // default System-owned empty account below, so that is not an exception to
+    // the rule; it is the rule stated for a coordinate with no stored account.
+    for coordinate in 0..case.built.bundle.logical.len() {
+        let Some(built) = case.built.bundle.logical.get(coordinate) else {
+            continue;
+        };
+        let view = built.chain_view();
+        let observed = context
+            .banks_client
+            .get_account(built.key)
+            .await
+            .expect("bank query")
+            .unwrap_or(Account {
+                lamports: 0,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            });
+        assert_eq!(
+            (
+                observed.owner,
+                observed.lamports,
+                observed.data.len(),
+                observed.executable
+            ),
+            (view.owner, view.lamports, view.data.len(), view.executable),
+            "logical coordinate {coordinate} ({}) is modelled by the host as something the bank does not hold",
+            built.key,
+        );
+        assert_eq!(
+            observed.data, view.data,
+            "logical coordinate {coordinate} ({}) has the declared width and different bytes",
+            built.key,
+        );
+    }
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(system_program::ID)
+            .await
+            .expect("System program query")
+            .expect("the bank holds the System program builtin")
+            .data,
+        SYSTEM_PROGRAM_BUILTIN_NAME_V1.as_bytes(),
+        "the bank renamed its System builtin; `SYSTEM_PROGRAM_BUILTIN_NAME_V1` is the one author"
+    );
     let payer_before = context
         .banks_client
         .get_account(payer.pubkey())
@@ -739,15 +827,47 @@ async fn execute_open_batch(outcome_count: u32) {
             .expect("Batch query")
             .is_none()
     );
-    let execution = waist::submit_v0_observed(
+    let submission = waist::submit_v0_observed(
         &mut context,
         &instructions,
         lookup_addresses,
         Some(&fee_payer),
         &[&payer],
     )
-    .await
-    .expect("real Trading -> General accelerator OpenBatch");
+    .await;
+    if expected == OpenBatchOutcomeV1::ExhaustsTheHeap {
+        let Err(refusal) = submission else {
+            panic!("this width is asserted to exhaust the heap and it committed");
+        };
+        // Named, not `is_err()`. An allocator abort is `ProgramFailedToComplete`
+        // and so is every other abort, so the log line is what says WHICH wall
+        // this is; without it the assertion would pass on a stack overflow, a
+        // panic, or a CU exhaustion and report them all as the heap.
+        assert!(
+            matches!(
+                refusal.error,
+                BanksClientError::TransactionError(TransactionError::InstructionError(
+                    2,
+                    InstructionError::ProgramFailedToComplete
+                ))
+            ),
+            "expected the allocator abort, got {:?}",
+            refusal.error
+        );
+        assert!(
+            refusal
+                .logs
+                .iter()
+                .any(|line| line.contains("memory allocation failed, out of memory")),
+            "the abort was not the heap running out"
+        );
+        eprintln!(
+            "general-open-batch N={outcome_count} HEAP WALL cu={}",
+            refusal.compute_units_consumed
+        );
+        return;
+    }
+    let execution = submission.expect("real Trading -> General accelerator OpenBatch");
     assert!(
         execution
             .logs
@@ -810,7 +930,21 @@ async fn execute_open_batch(outcome_count: u32) {
         .1
     );
     assert_eq!(local.header().rent_principal, batch_after.lamports);
-    assert_eq!(local.header().beneficiary, case.rent_credit.to_bytes());
+    // THE HEADER'S BENEFICIARY IS THE CREDIT'S REFUND WALLET, NOT THE CREDIT
+    // ACCOUNT. `apply_lifecycle_closes_v3` refuses unless
+    // `authenticate_lifecycle_credit_v3(..).beneficiary` -- which is
+    // `credit.refund_wallet()` -- equals the plan's beneficiary register, so
+    // the wallet is what a close pays back and the wallet is what this header
+    // has to carry. Read it off the credit account rather than restating it,
+    // because a campaign that spells the beneficiary itself becomes a second
+    // author for a fact the Rent record already owns.
+    assert_eq!(
+        local.header().beneficiary,
+        LifecycleRentCreditV2::decode(&credit_after.data)
+            .expect("RentCredit record")
+            .refund_wallet()
+            .to_bytes(),
+    );
     let batch = decoded_batch;
     assert_eq!(batch.opening().outcome_count, outcome_count);
     assert_eq!(batch.opening().generation, GENERATION);
@@ -858,7 +992,16 @@ async fn execute_open_batch(outcome_count: u32) {
 }
 
 #[tokio::test]
-async fn real_elf_open_batch_runs_at_small_and_maximum_width() {
-    execute_open_batch(2).await;
-    execute_open_batch(258).await;
+async fn real_elf_open_batch_runs_to_the_widest_width_the_heap_admits() {
+    execute_open_batch(2, OpenBatchOutcomeV1::Commits).await;
+    // THE MAXIMUM WIDTH IS A HEAP FACT, and 258 is not it. That figure came
+    // from a PACKET reading -- 1,330 bytes legacy against 918 bytes v0 -- and
+    // this campaign has been v0 since it was written, so the packet was never
+    // the wall here. What refuses at 258 is `0x4000 UnsupportedContent` at
+    // `hot_v3.rs:3986`, because General `OpenBatch` declares 1,699 scalars
+    // against `MAX_HOT_SCALARS_V3 = 512`; and below that bound the 64 KiB heap
+    // gives out first. Both are named where they are asserted; neither is
+    // weakened to make this pass.
+    execute_open_batch(13, OpenBatchOutcomeV1::Commits).await;
+    execute_open_batch(14, OpenBatchOutcomeV1::ExhaustsTheHeap).await;
 }

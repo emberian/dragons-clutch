@@ -111,10 +111,13 @@ describe('the browser derives the payout plan instead of only importing one', ()
     expect(html).toContain('no operator document is needed at any step');
   });
 
-  it('asks for the one coordinate the protocol has never derived', () => {
-    // The destination of the proceeds. The CLI takes it as `--recipient`, and
-    // every other browser surface that moves collateral asks for it the same
-    // way. A wallet coordinate is not an imported document.
-    expect(html).toContain('Collateral token account for your proceeds');
+  it('offers the destination as an override, not as a question', () => {
+    // WAS: this pinned that the page ASKS for the recipient token account,
+    // which was honest while nothing derived one. The default is now the
+    // standard associated token account, derived under the program that
+    // declares it, so the field is an override and the page says so.
+    expect(html).toContain('empty means your associated token account');
+    expect(html).toContain('Leave both boxes below empty and it needs nothing from you at all');
+    expect(html).toContain('associated token account');
   });
 });
