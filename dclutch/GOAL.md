@@ -3404,3 +3404,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `registered_terminal_artifacts_v4.rs` is 2,529 untracked, unwired lines of someone's in-flight sibling — left. Owed (lane
   resumed): the capability-surface generator reads tracked files; a bump-carrying record test; runtime_width.rs's cursor
   literals.
+- ABI-READERS closed (`1ff89144` the capability surface reads what git tracks — HEAD's generator named three files no commit
+  contained; `ef2b8f01` the Settlement Cursor's three authors become the emission, with the guard that a forward must name
+  its own record's constant and offsets strictly increase — `methodOffset` had been answering for two layouts sharing six
+  names; `38f94a1c` the bump-carrying record test, proven red against the pre-fix spans; `94c92a62` rows: zero moved).
+  **27/27 and 23/23 in the live checkout.** WEB landed `0cae44b5` (the first crossing has a page), `1463a678`/`b2a7a83a`
+  (cohort-13's simulator record; a chained census), `4cb950d1` — its report pending.
+- Cuts: `cb3e9ecbb`, `70a5480cd`, `d63bcf7a4`.
