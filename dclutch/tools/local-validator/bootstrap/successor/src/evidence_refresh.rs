@@ -76,15 +76,15 @@ const MAX_REFRESH_BYTES_V1: usize = 1024 * 1024;
 /// are the lineage: an author who cannot reproduce them is not describing a
 /// later view of this founded world.
 ///
-/// `founding_market` is deliberately absent — it is the one live mutable
-/// account in the producer's set, and advancing it is the whole point.
-pub(crate) const IMMUTABLE_FOUNDING_RECORD_LABELS_V1: [&str; 11] = [
+/// `founding_market` and `resolution_funding_ledger` are deliberately absent:
+/// they are the producer's live mutable accounts, and advancing them is the
+/// whole point.
+pub(crate) const IMMUTABLE_FOUNDING_RECORD_LABELS_V1: [&str; 10] = [
     "capability_manifest_record",
     "portfolio_record",
     "product_record",
     "provider_release_record",
     "pyth_adapter_config_record",
-    "resolution_funding_ledger",
     "result_domain_record",
     "source_material_record",
     "source_spec_record",
@@ -106,11 +106,21 @@ pub(crate) const IMMUTABLE_FOUNDING_RECORD_LABELS_V1: [&str; 11] = [
 /// Being listed here buys permission to *differ from the founding evidence*. It
 /// never buys permission to differ from the chain: each row is still pinned
 /// byte-exact against the live finalized account by the consumer that reads it.
-pub(crate) const ADVANCEABLE_FOUNDING_LABELS_V1: [&str; 5] = [
+pub(crate) const ADVANCEABLE_FOUNDING_LABELS_V1: [&str; 6] = [
     // Core state: phase, readiness, outstanding capabilities.
     "founding_market",
     // Activation carries the parked rent quote out of it.
     "direct_trading_funding_ledger",
+    // Resolution debits the walker's bounty out of it. Every terminal action
+    // this refresh exists to unblock writes this ledger: the deadline walk
+    // debits the Failure row (`relay_transport_v1::commit_deadline_failure`)
+    // and settlement debits its own. Listing it as immutable made the refresh
+    // producible only BEFORE resolution and demanded byte-equality with the
+    // founding row AFTER it -- and the terminal sequence needs a refresh to
+    // learn `direct_capability_root`, so a resolved market could produce no
+    // refresh and consume no terminal. Measured on devnet 2026-09-02, cohort-13,
+    // one lamport of bounty: `refresh/immutable-moved`.
+    "resolution_funding_ledger",
     // The Claims trio, moved by admission. `claims_admission` is pinned
     // byte-exact in its own right (`flagship_resolution::admitted_campaign_resolver`),
     // which is the second, independent way this wall is reached.
@@ -1153,5 +1163,45 @@ mod tests {
             error.to_string().contains("needs no acknowledgment"),
             "{error}"
         );
+    }
+
+    /// The resolution funding ledger is ADVANCEABLE, not immutable.
+    ///
+    /// It is the account every terminal action debits: the deadline walk takes
+    /// the Failure row's bounty and settlement takes its own. Classifying it as
+    /// immutable deadlocked a resolved market -- the terminal sequence refuses
+    /// without a refresh (only a refresh publishes `direct_capability_root` as
+    /// the execution root), and the refresh producer refused any world where
+    /// this ledger had moved. Cohort-13 hit it on devnet with a one-lamport
+    /// bounty debit and could produce no refresh at all.
+    ///
+    /// Before the fix this assertion failed on its first line: the label was a
+    /// member of `IMMUTABLE_FOUNDING_RECORD_LABELS_V1`.
+    #[test]
+    fn resolution_funding_ledger_is_advanceable_and_not_immutable() {
+        let label = "resolution_funding_ledger";
+        assert!(
+            !IMMUTABLE_FOUNDING_RECORD_LABELS_V1.contains(&label),
+            "{label} is debited by every terminal action and cannot be pinned to its founding row"
+        );
+        assert!(
+            ADVANCEABLE_FOUNDING_LABELS_V1.contains(&label),
+            "{label} must be allowed to differ from the founding evidence"
+        );
+    }
+
+    /// No label may be both immutable and advanceable.
+    ///
+    /// The two lists are read as a partition by `parse_refresh_v1`, which
+    /// admits a row when EITHER contains its label; an overlap would silently
+    /// grant an immutable record permission to move.
+    #[test]
+    fn the_two_founding_label_classes_are_disjoint() {
+        for label in IMMUTABLE_FOUNDING_RECORD_LABELS_V1 {
+            assert!(
+                !ADVANCEABLE_FOUNDING_LABELS_V1.contains(&label),
+                "{label} is classified both immutable and advanceable"
+            );
+        }
     }
 }

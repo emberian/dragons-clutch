@@ -4616,12 +4616,34 @@ async fn account_lamports(context: &mut ProgramTestContext, key: Pubkey) -> u64 
 /// Delivery is not reachable any other way: `activate_batch` refuses every
 /// checkpoint whose phase is not `Committed`, so the delivery leg is chained
 /// after the executed commit rather than staged beside it.
+///
+/// The reservation is CUSTODY-PRODUCED, the way `drive_to_committed`'s already
+/// is. It used to be published by the campaign, and a published reservation
+/// carries only its RECORDS -- the batch, the state and the receipt. Its token
+/// POSTSTATE, the debited source vault and the escrow holding the locked
+/// collateral, was never published with them; it was installed at genesis by
+/// `program_test` from the very same `DealerDeliveryV1`, so for a scenario
+/// whose delivery is the whole story the two agreed by construction and the
+/// omission was invisible. A scenario SPLIT off a live campaign has a fresh
+/// checkpoint, hence a fresh reservation state, hence a fresh escrow PDA that
+/// nothing has ever installed -- and `activate_one_effect` compares the
+/// reservation's `effect_poststate_digest` against the escrow the chain holds,
+/// which for a vacant account it cannot equal. Custody's own reserve route
+/// owes no such coincidence: it debits the vault and creates the escrow
+/// itself, at the one moment in the sequence when the vault may be debited --
+/// after the checkpoint pages have authenticated it undebited, before the
+/// commit.
 async fn committed_with_delivery_inputs(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
 ) -> ReservationEvidence {
-    let (reservation, receipt_address, _reserved) =
-        reserved_with_commit_inputs(context, scenario).await;
+    prepare_through_evaluation(context, scenario).await;
+    let reservation = reserve_through_custody(context, scenario).await;
+    let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
+        TRADING,
+        scenario.checkpoint,
+        scenario.request_digest,
+    );
     let bank = commit_bank(
         scenario,
         context.payer.pubkey(),
@@ -4961,14 +4983,16 @@ async fn a_replayed_delivery_refuses_and_the_collateral_does_not_move_twice() {
     );
 }
 
-/// One Custody-owned body from the staged reservation evidence.
-fn staged_body(reservation: &ReservationEvidence, key: Pubkey) -> Vec<u8> {
-    reservation
-        .installed
-        .iter()
-        .find(|(installed, _)| *installed == key)
-        .map(|(_, body)| body.clone())
-        .expect("the reservation staged this body")
+/// One Custody-owned reservation body, read back off the chain.
+///
+/// It used to be read out of `ReservationEvidence::installed` -- the bodies the
+/// campaign published. Custody's own reserve route publishes nothing and leaves
+/// that list empty, so the only place a reservation body exists is the account
+/// Custody wrote, which is also the body the hostile below has to defeat.
+async fn reserved_body(context: &mut ProgramTestContext, key: Pubkey) -> Vec<u8> {
+    account_body(context, key)
+        .await
+        .expect("Custody wrote this reservation body")
 }
 
 /// Re-seal the locked batch around a lie, through its own codec.
@@ -4976,26 +5000,27 @@ fn staged_body(reservation: &ReservationEvidence, key: Pubkey) -> Vec<u8> {
 /// A hostile that edits a body and leaves the digests that commit to it alone is
 /// answered by the shallower digest check and never reaches the check it claims
 /// to be about. Every case below re-seals, so the case is the case it names.
-fn resealed_batch(
+async fn resealed_batch(
+    context: &mut ProgramTestContext,
     reservation: &ReservationEvidence,
     edit: impl FnOnce(&mut DealerScenarioReservationBatchV1),
 ) -> Vec<u8> {
     let mut batch =
-        DealerScenarioReservationBatchV1::decode(&staged_body(reservation, reservation.batch))
+        DealerScenarioReservationBatchV1::decode(&reserved_body(context, reservation.batch).await)
             .expect("canonical batch");
     edit(&mut batch);
     batch.encode().expect("the batch re-encodes").to_vec()
 }
 
 /// Re-seal the reservation state around a lie, through its own codec.
-fn resealed_state(
+async fn resealed_state(
+    context: &mut ProgramTestContext,
     reservation: &ReservationEvidence,
     edit: impl FnOnce(&mut DealerScenarioReservationStateV1),
 ) -> Vec<u8> {
-    let mut state = DealerScenarioReservationStateV1::decode(&staged_body(
-        reservation,
-        reservation.reservation_state,
-    ))
+    let mut state = DealerScenarioReservationStateV1::decode(
+        &reserved_body(context, reservation.reservation_state).await,
+    )
     .expect("canonical reservation state");
     edit(&mut state);
     state.encode().expect("the state re-encodes").to_vec()
@@ -5046,14 +5071,11 @@ async fn a_replay_cursor_at_the_wrong_revision_refuses_inside_the_delivery() {
         "the unsealed lie is answered by the batch, before any collateral moves"
     );
 
-    restage(
-        &mut context,
-        custody,
-        reservation.batch,
-        resealed_batch(&reservation, |batch| {
-            batch.replay_prestate_digest = hash(&cursor_bytes).to_bytes();
-        }),
-    );
+    let sealed_batch = resealed_batch(&mut context, &reservation, |batch| {
+        batch.replay_prestate_digest = hash(&cursor_bytes).to_bytes();
+    })
+    .await;
+    restage(&mut context, custody, reservation.batch, sealed_batch);
 
     let destination_before = account_body(&mut context, delivery.destination)
         .await
@@ -5127,14 +5149,16 @@ async fn a_substituted_destination_refuses_on_the_owner_the_request_names() {
     // neither the reservation's key comparison nor its destination prestate
     // digest can answer this case. What is left is the only thing that should
     // refuse it -- the external destination owner the request itself names.
+    let sealed_state = resealed_state(&mut context, &reservation, |state| {
+        state.destination = intruder.to_bytes();
+        state.destination_prestate_digest = hash(&intruder_bytes).to_bytes();
+    })
+    .await;
     restage(
         &mut context,
         custody,
         reservation.reservation_state,
-        resealed_state(&reservation, |state| {
-            state.destination = intruder.to_bytes();
-            state.destination_prestate_digest = hash(&intruder_bytes).to_bytes();
-        }),
+        sealed_state,
     );
 
     let payer = context.payer.pubkey();
@@ -8215,7 +8239,7 @@ mod lp_lifecycle {
             .destination_after
             .checked_sub(custody_request.amount)
             .expect("scenario destination prestate");
-        let delivery = stage_dealer_delivery_v1(DealerDeliveryInputV1 {
+        let mut delivery = stage_dealer_delivery_v1(DealerDeliveryInputV1 {
             custody_program: base.waist.custody_program,
             trading_program: TRADING,
             release_set: base.waist.release_set_id,
@@ -8249,6 +8273,31 @@ mod lp_lifecycle {
         assert_eq!(delivery.replay, collateral.replay);
         assert_eq!(delivery.source, collateral.principal);
         assert_eq!(delivery.destination, collateral.external);
+
+        // The replay cursor is a CHAIN FACT here, not a staged one. In the base
+        // scenario `program_test` installs `replay_bytes`, so a body rebuilt
+        // from the fixture's inputs is the body the chain holds; in this split
+        // leg the account has been live since the campaign opened it and every
+        // Custody transaction since has written it. `reservation_evidence`
+        // publishes `replay_prestate_digest` as Custody's own reserve route
+        // would -- over the account, not over a reconstruction of it -- and
+        // `activate_batch` re-hashes the account and compares. So the observed
+        // body replaces the staged one, and the two facts the reconstruction
+        // could not know are joined here where they can be read: the cursor the
+        // composer planned the transfer against, and the one the chain holds.
+        let observed_replay = chain_account(context, collateral.replay).await.data;
+        assert_eq!(
+            observed_replay, collateral.replay_bytes,
+            "the composer planned this transfer against the replay body the chain still holds"
+        );
+        assert_eq!(
+            CustodyReplayV1::decode(&observed_replay)
+                .expect("live Custody replay cursor decodes")
+                .next_revision,
+            delivery.request.expected_revision,
+            "the composed effect's expected revision is the live cursor's own next revision"
+        );
+        delivery.replay_bytes = observed_replay;
 
         let waist = super::release_waist();
         assert_eq!(waist.release_set_id, base.waist.release_set_id);
