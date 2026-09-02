@@ -44,6 +44,11 @@ Four defects, all live at `HEAD`, none visible to any existing gate:
 - **`tools/ticket-board/run-local.sh` was tracked without its execute bit**, so
   the command `docs/operators/author-a-ticket.md` publishes could not start.
 
+And then it found two in the page written to answer it, which is the argument
+for having it: `docs/guides/two-clients.md` published `dclutch-terminal markets
+ls | markets show <address>`, using `|` as prose alternation inside a `sh`
+fence, where a reader's shell reads a pipe.
+
 ## Scope, stated rather than assumed
 
 `README.md`, `docs/guides/`, `docs/operators/` — the documents a reader is
@@ -66,6 +71,20 @@ passes it, established by running `<program> --help` and reading the output.
 Required arguments come from the program's own `usage:` line: argparse prints
 optional things in `[...]` and required things bare, so stripping the bracketed
 spans leaves exactly what a reader must pass.
+
+The probe **descends into a subcommand's own help page**, through words the
+current page already names, and judges a flag against every page on that path —
+because a reader walks the same path. A CLI that documents its subcommands
+there is healthy, and demanding every flag on the top-level page would report a
+defect where there is none: `dclutch ticket author` takes fourteen flags that
+`dclutch ticket --help` names and `dclutch --help` rightly does not.
+
+A declared binary is looked for **beside its own manifest first**, then in the
+root `target/`. That is not a nicety: `tools/dclutch-cli` declares a
+`[workspace]` of its own, so `dclutch` builds to
+`tools/dclutch-cli/target/release/`, and a checker that only looked at the root
+one called the repository's published binary unbuilt while it sat there
+compiled.
 
 ## What it will not do
 

@@ -191,6 +191,20 @@ fn input_bank(outcome_count: u32) -> Vec<u8> {
     for (coordinate, value) in [
         (identity::PRODUCT_RECORD_DIGEST, product_id()),
         (identity::GENERAL_CONFIG_ID, hash(&config()).to_bytes()),
+        // A STAND-IN, AND LABELLED AS ONE.
+        //
+        // On the real route this register is projected by the General
+        // AccountProfile out of the authenticated Portfolio record's
+        // `claim_basis_id` -- `account_rules_v3.rs`, the operation at
+        // `general_semantic_basis_operation_index_v3`. This fixture runs no
+        // profile: it hand-builds the bank, so here the harness IS the
+        // producer, and the value has to be written.
+        //
+        // Which is exactly the act that hid the producer gap for as long as it
+        // was unlabelled. Measured 2026-09-01: delete this line and the test
+        // refuses `ConfigMarket` at both widths, because nothing else in this
+        // file writes the register. It is kept, and it is named, so the next
+        // reader does not mistake a hand-written register for a sourced one.
         (identity::SEMANTIC_BASIS_ID, CONFIG_CLAIM_BASIS_ID),
     ] {
         write_identity(&mut bank, outcome_count, coordinate, value);

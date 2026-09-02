@@ -9,6 +9,9 @@
 #      argument the runbook omits.
 #   3. It keeps "could not be checked" apart from "checked and fine": an
 #      unprobed command exits 2, never 0 and never 1.
+#   4. It descends into a subcommand's own help page -- a CLI that documents
+#      its subcommands there is healthy -- without that descent swallowing a
+#      flag no page on the path names.
 #
 # The synthetic half runs in a temp directory on purpose: a shared checkout must
 # not have a control planting broken commands in another lane's runbook.
@@ -25,7 +28,7 @@ printf '%s' "$out" | grep -q 'not probed' || {
     echo "control FAILED: the survey no longer states what it did not probe." >&2
     exit 1
 }
-echo "control 1/4: still reports what it probed and what it did not"
+echo "control 1/5: still reports what it probed and what it did not"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -66,7 +69,7 @@ printf '%s' "$report" | grep -q 'unresolved program\|rejected by its own program
     printf '%s\n' "$report" >&2
     exit 1
 }
-echo "control 2/4: a runbook whose commands work is reported clean"
+echo "control 2/5: a runbook whose commands work is reported clean"
 
 cat > "$work/docs/guides/bad.md" <<'MD'
 # A runbook that has rotted
@@ -95,7 +98,7 @@ if python3 "$tool" --root "$work" --check >/dev/null 2>&1; then
     echo "control FAILED: --check did not fire on a rotted runbook." >&2
     exit 1
 fi
-echo "control 3/4: names each of the three defects, and --check exits nonzero"
+echo "control 3/5: names each of the three defects, and --check exits nonzero"
 
 rm "$work/docs/guides/bad.md"
 cat > "$work/tools/opaque.sh" <<'SH'
@@ -120,4 +123,46 @@ set -e
     echo "control FAILED: an unprobed command exited $code; it must be 2, which is 'nothing was proven'." >&2
     exit 1
 }
-echo "control 4/4: an unprobed command exits 2, not 0 and not 1"
+echo "control 4/5: an unprobed command exits 2, not 0 and not 1"
+
+rm "$work/docs/guides/unprobed.md" "$work/tools/opaque.sh"
+cat > "$work/tools/nested.sh" <<'SH'
+#!/bin/sh
+# A program whose subcommand documents itself, which is healthy, not broken.
+case "${1:-}" in
+    inner)
+        case "${2:-}" in
+            --help) printf 'usage: nested.sh inner [--deep VALUE]\n\n  --deep   only ever named here\n' ; exit 0 ;;
+        esac ;;
+    --help) printf 'usage: nested.sh <command>\n\ncommands:\n  inner   do the inner thing\n' ; exit 0 ;;
+esac
+SH
+chmod +x "$work/tools/nested.sh"
+cat > "$work/docs/guides/nested.md" <<'MD'
+# A runbook using a flag only the subcommand page names
+
+```sh
+tools/nested.sh inner --deep 3
+```
+MD
+(cd "$work" && git add -A && git -c user.email=c@x -c user.name=c commit --quiet -m nested)
+
+report="$(python3 "$tool" --root "$work")"
+printf '%s' "$report" | grep -q 'rejected by its own program' && {
+    echo "control FAILED: a flag documented on the subcommand's own page was reported missing." >&2
+    printf '%s\n' "$report" >&2
+    exit 1
+}
+cat > "$work/docs/guides/nested.md" <<'MD'
+# A runbook using a flag no page names
+
+```sh
+tools/nested.sh inner --shallow 3
+```
+MD
+(cd "$work" && git add -A && git -c user.email=c@x -c user.name=c commit --quiet -m nested-bad)
+python3 "$tool" --root "$work" | grep -q -- '--shallow' || {
+    echo "control FAILED: the descent swallowed a flag no page names." >&2
+    exit 1
+}
+echo "control 5/5: descends into a subcommand page, and still refuses a flag no page names"

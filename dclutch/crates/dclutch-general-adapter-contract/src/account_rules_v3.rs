@@ -40,7 +40,8 @@ use dclutch_general_config_contract::{
     v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3Layout},
 };
 use dclutch_product_runtime_v2::{
-    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
+    PORTFOLIO_CLAIM_BASIS_ID_OFFSET, PORTFOLIO_COEFFICIENT_BYTES,
+    PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
 };
 use dclutch_product_runtime_v2_admission::{
     PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2,
@@ -218,22 +219,26 @@ pub const fn general_scratch_page_rule_v3() -> AccountRuleWithPrestateInputV2 {
 /// [`general_root_identity_operation_index_v3`].
 #[must_use]
 pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
+    // Every count below gained ONE on 2026-09-01: the semantic-basis
+    // projection, appended at each action's own last coordinate so that no
+    // existing index moved. See the arm that emits it for why the register
+    // needed a source at all.
     match action {
-        Action::SubmitCandidate => 34,
-        Action::VerifyCandidateRow => 13,
-        Action::CloseCandidate => 21,
-        Action::OpenBatch => 21,
-        Action::CloseBatch => 18,
-        Action::PlaceOrder => 32,
-        Action::CancelOrder => 30,
-        Action::ReleaseOrder => 18,
-        Action::Close => 11,
+        Action::SubmitCandidate => 35,
+        Action::VerifyCandidateRow => 14,
+        Action::CloseCandidate => 22,
+        Action::OpenBatch => 22,
+        Action::CloseBatch => 19,
+        Action::PlaceOrder => 33,
+        Action::CancelOrder => 31,
+        Action::ReleaseOrder => 19,
+        Action::Close => 12,
         Action::Consider
         | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
-        | Action::Distribute => 7,
+        | Action::Distribute => 8,
     }
 }
 
@@ -277,6 +282,31 @@ const fn general_account_profile_fixed_operation_count_v3(action: Action) -> u16
 /// whole projection chain has run, never by another operation, so its position
 /// among the operations is semantically free while every other pair's relative
 /// order is load-bearing.
+/// Index of the operation that sources the semantic basis into its register.
+///
+/// WHY THIS IS DERIVED AND NOT A NUMBER. The fixed operation body ends in a
+/// TWO-operation block whose indices are both computed -- the creation-payer
+/// owner anchor, then the root identity -- and the root identity documents that
+/// it must stay last. A literal index appended past them moved them and left
+/// their old ordinals handled by nothing; a literal index placed at the root
+/// identity's old slot was silently claimed by the owner anchor, which had
+/// shifted into it. Both attempts surfaced as `Geometry` on `Consider`, which is
+/// the cheapest action and therefore the first to run out of arms.
+///
+/// So this one is computed too, and sits immediately in front of that block:
+/// two back from the root identity where an owner anchor exists, one back for
+/// `SubmitCandidate` and `CloseCandidate`, which have none. Every EARLIER
+/// ordinal keeps its position and its bytes, which is the property the root
+/// identity's own comment exists to protect.
+const fn general_semantic_basis_operation_index_v3(action: Action) -> u16 {
+    let tail = if matches!(action, Action::SubmitCandidate | Action::CloseCandidate) {
+        1
+    } else {
+        2
+    };
+    general_root_identity_operation_index_v3(action).saturating_sub(tail)
+}
+
 const fn general_root_identity_operation_index_v3(action: Action) -> u16 {
     general_account_profile_fixed_operation_count_v3(action).saturating_sub(1)
 }
@@ -865,22 +895,42 @@ pub fn general_account_profile_operation_v3(
             destination: common_scalar(scalar::GENERATION)?,
             data_offset: width(GeneralConfigV3Layout::GENERATION)?,
         }),
-        30 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
-            account: order_terms_account(action)?,
-            destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::CURSOR_INVENTORY)?),
-            data_offset: width(
-                GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
-            )?,
-            data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
-        }),
-        31 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
-            account: order_terms_account(action)?,
-            destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::QUANTITY)?),
-            data_offset: width(
-                GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
-            )?,
-            data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
-        }),
+        // PlaceOrder's two item operations are THE TAIL, after every fixed
+        // one, and they were written here as `30` and `31`. That was true
+        // until the fixed body grew by the semantic-basis projection, and a
+        // literal in a span whose start moves is a number that stops being
+        // what it names without anything going red -- it simply stops being
+        // reached, and the encoder reports `Geometry` for an action that has
+        // run out of arms. Derived from the fixed count now, which is the
+        // definition of "the tail" rather than a snapshot of where it was.
+        first_item
+            if action == Action::PlaceOrder
+                && first_item == general_account_profile_fixed_operation_count_v3(action) =>
+        {
+            Ok(AccountOperationInputV2::ProjectDataU64Affine {
+                account: order_terms_account(action)?,
+                destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::CURSOR_INVENTORY)?),
+                data_offset: width(
+                    GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
+                )?,
+                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
+            })
+        }
+        second_item
+            if action == Action::PlaceOrder
+                && second_item
+                    == general_account_profile_fixed_operation_count_v3(action)
+                        .saturating_add(1) =>
+        {
+            Ok(AccountOperationInputV2::ProjectDataU64Affine {
+                account: order_terms_account(action)?,
+                destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::QUANTITY)?),
+                data_offset: width(
+                    GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
+                )?,
+                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
+            })
+        }
         // CancelOrder's projections. The second derived state (the order, at
         // the terminal coordinate) is observed the way Close observes its
         // terminal record; the batch window's counters and clock feed the
@@ -1128,6 +1178,33 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::beneficiary(),
         }),
+        // THE SEMANTIC BASIS, WHICH NOTHING SOURCED.
+        //
+        // Every one of the fifteen actions crosses `authenticated_general_domain`
+        // before it does anything else, and that function hands the config the
+        // bank's `SEMANTIC_BASIS_ID` for `require_market` to compare against its
+        // own `claim_basis_id`. No operation in this file ever wrote that
+        // register, so it arrived as thirty-two zero bytes and the conjunct could
+        // not be satisfied by ANY producer -- only by a harness writing the
+        // register by hand, which is what every General fixture here was doing.
+        // Measured 2026-09-01 through real Trading ELFs: config `0x56` x32,
+        // bank zero.
+        //
+        // The source is the authenticated PORTFOLIO record and MUST NOT be the
+        // config. A register projected out of the config account would be
+        // compared against the account it was read from and pass forever; this
+        // tree has recorded three guards whose two sides moved together, one of
+        // them inside the mechanism that had just been credited with closing a
+        // hole. Portfolio is the Product-side authority for the same value and
+        // is already this profile's source for operation zero, so the comparison
+        // joins two records written by different acts.
+        basis if basis == general_semantic_basis_operation_index_v3(action) => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)?),
+                destination: common_identity(identity::SEMANTIC_BASIS_ID)?,
+                data_offset: width(PORTFOLIO_CLAIM_BASIS_ID_OFFSET)?,
+            })
+        }
         // Every exact signer account Lifecycle may debit is anchored to the
         // trusted System Program identity. SubmitCandidate already carries
         // this same anchor in its signed-evidence suffix; CloseCandidate has
@@ -1276,7 +1353,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 34;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 35;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -2525,7 +2602,9 @@ mod tests {
     fn submit_candidate_profile_owns_one_fixed_candidate_and_three_exact_evidence_records() {
         let action = Action::SubmitCandidate;
         assert_eq!(general_account_profile_fixed_count_v3(action), Ok(11));
-        assert_eq!(general_account_profile_operation_count_v3(action), 34);
+        // 34 until the semantic-basis projection landed; every action's count
+        // gained exactly one.
+        assert_eq!(general_account_profile_operation_count_v3(action), 35);
 
         let candidate =
             general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)

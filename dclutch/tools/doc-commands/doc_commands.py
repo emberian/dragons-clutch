@@ -258,7 +258,8 @@ def collect(root: Path, roots: tuple[str, ...], tracked: set[str]) -> list[Comma
     return commands
 
 
-def resolve(command: Command, root: Path, tracked: set[str], bins: dict[str, str]) -> tuple[str, str]:
+def resolve(command: Command, root: Path, tracked: set[str],
+            bins: dict[str, tuple[str, str | None]]) -> tuple[str, str]:
     """Where a reader's shell would find this command's program.
 
     Returns `(disposition, detail)`. `repo` and `bin` are ours to check; `third
@@ -290,7 +291,8 @@ def resolve(command: Command, root: Path, tracked: set[str], bins: dict[str, str
 
 
 def help_text(root: Path, disposition: str, target: str, program: str,
-              bins: dict[str, tuple[str, str | None]]) -> tuple[str | None, str]:
+              bins: dict[str, tuple[str, str | None]],
+              subcommands: tuple[str, ...] = ()) -> tuple[str | None, str]:
     """`<program> --help`, when the program's own source declares one.
 
     Safety by declaration: a program whose source never mentions a help flag is
@@ -305,7 +307,14 @@ def help_text(root: Path, disposition: str, target: str, program: str,
         if launcher is not None and (root / launcher).exists():
             executable = ["node", str(root / launcher)] if launcher.endswith((".mjs", ".js")) else [str(root / launcher)]
         else:
-            for candidate in (root / "target" / "release" / program, root / "target" / "debug" / program):
+            # Beside its own manifest FIRST, then the root target dir. Not a
+            # guess: `tools/dclutch-cli` declares `[workspace]` of its own, so
+            # cargo puts `dclutch` under `tools/dclutch-cli/target/`, and a
+            # checker that only looked at the root one reported the repository's
+            # published binary as unbuilt while it sat there compiled.
+            beside = root / Path(target).parent / "target"
+            for candidate in (beside / "release" / program, beside / "debug" / program,
+                              root / "target" / "release" / program, root / "target" / "debug" / program):
                 if candidate.exists():
                     executable = [str(candidate)]
                     break
@@ -329,7 +338,7 @@ def help_text(root: Path, disposition: str, target: str, program: str,
     # leaving it holding a port or a build slot behind the checker's back.
     try:
         result = subprocess.run(
-            executable + ["--help"], capture_output=True, text=True, timeout=30,
+            executable + list(subcommands) + ["--help"], capture_output=True, text=True, timeout=30,
             cwd=str(root), env={**os.environ, "NO_COLOR": "1"}, start_new_session=True,
         )
     except subprocess.TimeoutExpired as error:
@@ -371,15 +380,22 @@ def required_flags(text: str) -> frozenset[str]:
     return frozenset(word for word in "".join(bare).split() if LONG_FLAG.match(word))
 
 
-def probe(command: Command, text: str) -> list[str]:
-    """Every subcommand and long flag the runbook uses that help does not name."""
+def probe(command: Command, text: str, consumed: int) -> list[str]:
+    """Every subcommand and long flag the runbook uses that help does not name.
+
+    `consumed` is how many leading words the descent already validated on its
+    way into the subcommand's own page; re-checking them against the page they
+    SELECTED is how a correct `dclutch market show` gets reported as a market
+    verb `dclutch market --help` never mentions.
+    """
     missing: list[str] = []
-    for index, word in enumerate(command.words[1:], 1):
+    rest = command.words[1 + consumed:]
+    for index, word in enumerate(rest):
         if LONG_FLAG.match(word):
             if not re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", text):
                 missing.append(word)
             continue
-        if index == 1 and re.match(r"^[a-z][a-z0-9-]*$", word):
+        if index == 0 and re.match(r"^[a-z][a-z0-9-]*$", word):
             if not re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", text):
                 missing.append(word)
     return missing
@@ -392,7 +408,7 @@ def survey(root: Path, roots: tuple[str, ...], run_probes: bool) -> tuple[list[F
     findings: list[Finding] = []
     counts = {"commands": len(commands), "repo": 0, "bin": 0, "third party": 0, "placeholder": 0,
               "build output": 0, "probed": 0, "unprobed": 0}
-    helps: dict[str, tuple[str | None, str]] = {}
+    helps: dict[tuple[str, tuple[str, ...]], tuple[str | None, str]] = {}
     for command in commands:
         disposition, detail = resolve(command, root, tracked, bins)
         if disposition == "unresolved":
@@ -401,21 +417,49 @@ def survey(root: Path, roots: tuple[str, ...], run_probes: bool) -> tuple[list[F
         counts[disposition] += 1
         if not run_probes or disposition not in {"repo", "bin"}:
             continue
-        if detail not in helps:
-            helps[detail] = help_text(root, disposition, detail, command.program, bins)
-        text, reason = helps[detail]
+        if (detail, ()) not in helps:
+            helps[(detail, ())] = help_text(root, disposition, detail, command.program, bins)
+        text, reason = helps[(detail, ())]
         if text is None:
             counts["unprobed"] += 1
             findings.append(Finding("unprobed", command.source, command.line, reason))
             continue
         counts["probed"] += 1
-        missing = probe(command, text)
+        # Descend into the subcommand's OWN help before judging its flags. A
+        # CLI whose subcommands document themselves is healthy, not broken, and
+        # demanding every flag in the top-level page would report a defect where
+        # there is none -- `dclutch ticket author` takes fourteen flags that
+        # `dclutch ticket --help` names and `dclutch --help` rightly does not.
+        # The descent goes only through words the CURRENT page already names,
+        # so it never invents a subcommand to run.
+        path: list[str] = []
+        # Every page the descent passed through, because a reader passes
+        # through them too. `dclutch market decode --file` documents `--file`
+        # on the TOP page and `decode` on the market page; a flag named at any
+        # level of the path a reader walks is a flag they can find.
+        pages: list[str] = [text]
+        for word in command.words[1:]:
+            if not re.match(r"^[a-z][a-z0-9-]*$", word) or len(path) >= 2:
+                break
+            if not re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", text):
+                break
+            candidate = (*path, word)
+            key = (detail, candidate)
+            if key not in helps:
+                helps[key] = help_text(root, disposition, detail, command.program, bins, candidate)
+            deeper, _ = helps[key]
+            if deeper is None:
+                break
+            path = list(candidate)
+            text = deeper
+            pages.append(deeper)
+        missing = probe(command, "\n".join(pages), len(path))
         if missing:
             findings.append(Finding(
                 "rejected by its own program", command.source, command.line,
                 f"{command.program} --help names none of: {' '.join(missing)}",
             ))
-        omitted = sorted(required_flags(text) - set(command.words))
+        omitted = sorted(required_flags(pages[-1]) - set(command.words))
         if omitted:
             findings.append(Finding(
                 "incomplete as published", command.source, command.line,

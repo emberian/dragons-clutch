@@ -6008,3 +6008,82 @@ that model into the bank, and the account is gone before any transaction runs. T
 chain never touched it. Which author is right — a finalized record's staging cursor
 genuinely *is* closed after adoption — is the next unit, settled by reading the
 adoption path rather than by a fixture edit made in passing.
+
+## 2026-09-01 - the register with no writer, and the one with nowhere to be written
+
+**The third conjunct is closed and the fourth cannot be closed by a rule at
+all.**
+
+`SEMANTIC_BASIS_ID` was sourced by nothing. Every one of the fifteen actions
+crosses `authenticated_general_domain` first, and it hands the config that
+register for `require_market` to compare against its own `claim_basis_id`. Thirty-two
+zero bytes, so **no producer could satisfy it -- only a harness writing the
+register by hand.**
+
+**The source is not the root, and that is the first finding.** `GeneralRootV2` is
+128 bytes -- magic, version, lifecycle, reserved header, market, config id,
+generation, revision, next batch sequence, open batches, and a **sixteen-byte**
+reserved tail. No basis field, and **not enough reserve for one 32-byte
+identity.** Sourcing from the root means `GENERAL_ROOT_BYTES_V2` 128 -> 160 plus
+a write in the activation tail the founding path composes: a root ABI change,
+not a rule.
+
+So the rule sources the authenticated **Portfolio** record at
+`PORTFOLIO_CLAIM_BASIS_ID_OFFSET`, which meets the constraint that mattered --
+**it is not the config.** A register projected out of the config account would be
+compared against the account it was read from and pass forever; three recorded
+instances in this tree. Portfolio is the Product-side authority for the same
+value, is already this profile's source for operation zero, and is already in the
+General frame, which the root alternative is not without a founding change.
+
+### The index is derived, and two wrong attempts bought that
+
+The fixed body ends in a **two-operation derived block** -- the creation-payer
+owner anchor, then the root identity, which documents that it must stay last.
+
+- **Appending past them** moved both and orphaned their old ordinals.
+- **A literal at the root identity's old slot** was silently claimed by the owner
+  anchor, which had shifted into it.
+
+Both surfaced as `Geometry` on `Consider` -- the cheapest action, and so the
+first to run out of arms. The new operation computes its own index in front of
+that block. And PlaceOrder's two item operations, written as literal `30` and
+`31` and correct only while the fixed body never grew, are derived from the fixed
+count now.
+
+> **A literal index inside a span whose start can move is a number that stops
+> being what it names with nothing going red -- it simply stops being reached.**
+
+### Measured, and the refusal advanced exactly where it was predicted to
+
+OpenBatch at N=2 through real Trading ELFs, seven ELFs from a clean worktree,
+zero frame diagnostics, name-filtered and single-threaded:
+
+| | refusal |
+|---|---|
+| before the frame derivation | `0xC00A InstructionsSysvarAccount` |
+| after it | `ConfigMarket` -- config `0x56` x32, bank zero |
+| after this | **`ProductIdentity`** -- *"product digest is not the bank's product id"* |
+
+### The fourth conjunct has neither a holder nor an expressible rule
+
+`PRODUCT_RECORD_DIGEST` is `hash(product account)`. The AccountProfile operation
+vocabulary has **twenty-five variants and not one computes a digest** -- every
+projection reads bytes at an offset, or a key, owner, lamports, or tail count. So
+the register can only be projected from an account that **records** the product
+record digest as a field, and no account in the General runtime frame does.
+
+> **Same shape as the basis, one level harder: the basis had a holder and no
+> rule; this has neither a holder nor a rule the vocabulary can express.**
+
+### `freeze.rs` keeps its hand-written value, labelled
+
+There is no green available for it. That fixture runs no profile -- it hand-builds
+the bank, so **the harness is the producer there**. Measured: delete the line and
+it refuses `ConfigMarket` at both widths. **Keeping an unlabelled hand-written
+register is what hid the gap; keeping a labelled one that names the real rule
+does not.**
+
+Control, separately: the accelerator program-test is 22 passed / 3 failed before
+and after, the three being the same width-258 heap rows; the account-rules module
+is 11/11; the encoder generates all fifteen actions.
