@@ -3132,3 +3132,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   (Claims 356,395 CU). Not yet on a bank whose Trading role is Trading (the campaign's role is a test caller wearing the hat —
   adding the ELF changes nothing; making the ROLE real does) → next, then ActivateCapability founding + ProviderCallerV3::Trading.
 - Cuts: `2d1136c40`, `f74d6a6bd`.
+
+### Lane map delta — 2026-09-02 21:45
+- WEB (`6f0c55d3`, `5ba04250`, `2b0046fb`, `92fc365f`): the public cut carries a REQUIRED `checkedReleases` map and the
+  market page raises a `release` wall when the market's set is absent — live: "TRADING CLOSED · RELEASE … 797e83ac…",
+  confirmed independently by the seal lane's finding; /workbench's 27 acts are a NAMED LIST because the census carries no
+  phase predicate at all → PHASE-CENSUS **`ae5974c220b124438`** (name the guards in the programs, carry them in the census,
+  emit the SDK table); /markets derives every card's question in two observations for the page. Next: /create reads the
+  price through the source-provider wasm; the cut ingests cohort-13's checked-release fragment.
+- Cuts: `8cace5baa`.
