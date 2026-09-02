@@ -3411,3 +3411,7 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   **27/27 and 23/23 in the live checkout.** WEB landed `0cae44b5` (the first crossing has a page), `1463a678`/`b2a7a83a`
   (cohort-13's simulator record; a chained census), `4cb950d1` — its report pending.
 - Cuts: `cb3e9ecbb`, `70a5480cd`, `d63bcf7a4`.
+- Started 16:05 EDT: EMISSION **`acf4254eebf7d47df`** (a Lean owner for the selector-9 trade header; coreFound 82 → 95;
+  RefusalBandsV1 into the lib root; the reference's stale provenance lines; the Series ticket-state producer gap named as
+  design debt) and PHASE-CENSUS **`a5b016449be284441`** (the 22 ungated acts across 11 programs: admissibility guards over
+  every persisted state machine become per-route constants; the census reads them; the SDK table grows).
