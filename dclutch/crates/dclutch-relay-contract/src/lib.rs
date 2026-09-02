@@ -251,10 +251,10 @@ pub(crate) fn header(bytes: &[u8], expected: usize, magic: [u8; 8]) -> Result<()
 }
 
 pub(crate) fn variable_header(bytes: &[u8], magic: [u8; 8]) -> Result<()> {
-    if bytes.get(..8) != Some(&magic) {
+    if bytes.get(HEADER_MAGIC_OFFSET..HEADER_MAGIC_OFFSET + magic.len()) != Some(&magic) {
         return Err(Error::InvalidMagic);
     }
-    if u16_at(bytes, 8)? != RELAYED_SCHEMA_VERSION {
+    if u16_at(bytes, HEADER_VERSION_OFFSET)? != RELAYED_SCHEMA_VERSION {
         return Err(Error::UnsupportedSchema);
     }
     Ok(())
@@ -262,8 +262,12 @@ pub(crate) fn variable_header(bytes: &[u8], magic: [u8; 8]) -> Result<()> {
 
 pub(crate) fn base<const N: usize>(magic: [u8; 8]) -> Result<[u8; N]> {
     let mut out = [0u8; N];
-    put(&mut out, 0, &magic)?;
-    put(&mut out, 8, &RELAYED_SCHEMA_VERSION.to_le_bytes())?;
+    put(&mut out, HEADER_MAGIC_OFFSET, &magic)?;
+    put(
+        &mut out,
+        HEADER_VERSION_OFFSET,
+        &RELAYED_SCHEMA_VERSION.to_le_bytes(),
+    )?;
     Ok(out)
 }
 
@@ -292,6 +296,8 @@ mod generated_layout_tests {
         assert_eq!(MAX_RELAYED_INLINE_BYTES_V1, 448);
         assert_eq!(MAX_RELAYED_ACCOUNTS_V1, 8);
         assert_eq!(MAX_RELAYER_KEYS_V1, 5);
+        assert_eq!(HEADER_MAGIC_OFFSET, 0);
+        assert_eq!(HEADER_VERSION_OFFSET, 8);
     }
 
     #[test]
@@ -320,3 +326,35 @@ mod generated_layout_tests {
         assert_eq!(buffer, [0, 0, 0, 0], "a refused write changed bytes");
     }
 }
+
+/// Byte coordinate of the eight-byte magic in every `RelayedMainnetStateV1`
+/// record header.
+///
+/// [`variable_header`], [`header`] and [`base`] are generic over the record
+/// kind, so they need one coordinate where the Lean emitter specializes five.
+/// The pin below licenses reading the Record's as the family's: an emission
+/// that moved any one of the five would stop compiling here instead of
+/// silently disagreeing with a hand-written `0`.
+const HEADER_MAGIC_OFFSET: usize = RELAYED_RECORD_MAGIC_OFFSET;
+/// Byte coordinate of the `u16` schema version in every record header.
+///
+/// Licensed by the same pin as [`HEADER_MAGIC_OFFSET`].
+const HEADER_VERSION_OFFSET: usize = RELAYED_RECORD_VERSION_OFFSET;
+
+const _: () = assert!(
+    RELAYED_ATTESTATION_MAGIC_OFFSET == HEADER_MAGIC_OFFSET
+        && RELAYED_SEAL_MAGIC_OFFSET == HEADER_MAGIC_OFFSET
+        && RELAYER_KEY_SET_MAGIC_OFFSET == HEADER_MAGIC_OFFSET
+        && RELAYED_ADAPTER_CONFIG_MAGIC_OFFSET == HEADER_MAGIC_OFFSET,
+    "a RelayedMainnetStateV1 record moved its magic away from the shared header \
+     coordinate the generic header helpers read"
+);
+
+const _: () = assert!(
+    RELAYED_ATTESTATION_VERSION_OFFSET == HEADER_VERSION_OFFSET
+        && RELAYED_SEAL_VERSION_OFFSET == HEADER_VERSION_OFFSET
+        && RELAYER_KEY_SET_VERSION_OFFSET == HEADER_VERSION_OFFSET
+        && RELAYED_ADAPTER_CONFIG_VERSION_OFFSET == HEADER_VERSION_OFFSET,
+    "a RelayedMainnetStateV1 record moved its schema version away from the \
+     shared header coordinate the generic header helpers read"
+);

@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**78 generated files from 76 emitters. 70 guarded (68 emitters), 8 unguarded (8 emitters).**
+**78 generated files from 76 emitters. 78 guarded (76 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -64,7 +64,9 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-representation-composition-v3-kernel/tests/lean_exposure_fresh.rs` | cargo-test | `EmitProductRepresentationExposureV3AbiRust.lean` |
 | `crates/dclutch-representation-composition-v3-kernel/tests/lean_generator_fresh.rs` | cargo-test | `EmitRepresentationCompositionV3AbiRust.lean` |
 | `crates/dclutch-request-profile-contract/check-generated.sh` | shell | `EmitRequestProfileAbiRust.lean`, `EmitRequestProfileV4AbiRust.lean` |
+| `crates/dclutch-resolution-codec/check-generated.sh` | shell | `EmitSourceResolutionControllerAbiRust.lean`, `EmitSourceResolutionTerminalV2AbiRust.lean` |
 | `crates/dclutch-series-v3-kernel/check-generated.sh` | shell | `EmitSeriesOccurrenceV3Rust.lean` |
+| `crates/dclutch-source-contract/check-generated.sh` | shell | `EmitSourceMaterialV2AbiRust.lean`, `EmitSourceMaterialV3AbiRust.lean`, `EmitSourcePrincipalCapacityV1Rust.lean`, `EmitSourceRecoveryPolicyV2AbiRust.lean`, `EmitSourceResolutionStateV2AbiRust.lean`, `EmitSourceScheduledMedianV1Rust.lean` |
 | `crates/dclutch-structured-v2-kernel/check-generated.sh` | shell | `EmitStructuredV2AbiRust.lean` |
 | `crates/dclutch-structured-v2-kernel/tests/lean_generator_fresh.rs` | cargo-test | `EmitStructuredV2AbiRust.lean` |
 | `crates/dclutch-transition-vm/check-v2-generated.sh` | shell | `EmitTransitionVMV2Rust.lean` |
@@ -142,7 +144,15 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-representation-composition-v3-kernel/src/generated_exposure_abi.rs` | `EmitProductRepresentationExposureV3AbiRust.lean` |
 | `crates/dclutch-request-profile-contract/src/generated.rs` | `EmitRequestProfileAbiRust.lean` |
 | `crates/dclutch-request-profile-contract/src/generated_v4.rs` | `EmitRequestProfileV4AbiRust.lean` |
+| `crates/dclutch-resolution-codec/src/generated_source_resolution.rs` | `EmitSourceResolutionControllerAbiRust.lean` |
+| `crates/dclutch-resolution-codec/src/generated_v2.rs` | `EmitSourceResolutionTerminalV2AbiRust.lean` |
 | `crates/dclutch-series-v3-kernel/src/generated.rs` | `EmitSeriesOccurrenceV3Rust.lean` |
+| `crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs` | `EmitSourcePrincipalCapacityV1Rust.lean` |
+| `crates/dclutch-source-contract/src/generated_scheduled_median_v1.rs` | `EmitSourceScheduledMedianV1Rust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_material_v2.rs` | `EmitSourceMaterialV2AbiRust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_material_v3.rs` | `EmitSourceMaterialV3AbiRust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_recovery_policy_v2.rs` | `EmitSourceRecoveryPolicyV2AbiRust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_resolution_state_v2.rs` | `EmitSourceResolutionStateV2AbiRust.lean` |
 | `crates/dclutch-structured-v2-kernel/src/generated_abi.rs` | `EmitStructuredV2AbiRust.lean` |
 | `crates/dclutch-transition-vm/src/v2/generated.rs` | `EmitTransitionVMV2Rust.lean` |
 | `packages/dclutch-sdk/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1AbiTs.lean` |
@@ -152,16 +162,5 @@ Each runs its emitter and compares the output against the committed bytes. All o
 
 ## Unguarded generated files
 
-No guard of any kind re-runs these emitters. Listed by emitter, because a single new guard covers every file in a group.
-
-| Emitter | Files with no guard |
-|---|---|
-| `EmitSourceMaterialV2AbiRust.lean` | `crates/dclutch-source-contract/src/generated_source_material_v2.rs` |
-| `EmitSourceMaterialV3AbiRust.lean` | `crates/dclutch-source-contract/src/generated_source_material_v3.rs` |
-| `EmitSourcePrincipalCapacityV1Rust.lean` | `crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs` |
-| `EmitSourceRecoveryPolicyV2AbiRust.lean` | `crates/dclutch-source-contract/src/generated_source_recovery_policy_v2.rs` |
-| `EmitSourceResolutionControllerAbiRust.lean` | `crates/dclutch-resolution-codec/src/generated_source_resolution.rs` |
-| `EmitSourceResolutionStateV2AbiRust.lean` | `crates/dclutch-source-contract/src/generated_source_resolution_state_v2.rs` |
-| `EmitSourceResolutionTerminalV2AbiRust.lean` | `crates/dclutch-resolution-codec/src/generated_v2.rs` |
-| `EmitSourceScheduledMedianV1Rust.lean` | `crates/dclutch-source-contract/src/generated_scheduled_median_v1.rs` |
+None. Every generated file has a check script behind it.
 

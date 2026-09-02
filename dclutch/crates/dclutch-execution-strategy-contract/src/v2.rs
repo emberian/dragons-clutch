@@ -1849,11 +1849,12 @@ fn require_prefix_header(bytes: &[u8], width: usize, magic: &[u8; 8]) -> Result<
     if bytes.len() < width {
         return Err(Error::InvalidLength);
     }
-    if slice(bytes, 0, 8)? != magic {
+    if slice(bytes, HEADER_MAGIC_OFFSET_V2, magic.len())? != magic {
         return Err(Error::InvalidMagic);
     }
-    if read_u16(bytes, 8)? != EXECUTION_STRATEGY_SCHEMA_VERSION_V2
-        || read_u16(bytes, 10)? != EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2
+    if read_u16(bytes, HEADER_SCHEMA_VERSION_OFFSET_V2)? != EXECUTION_STRATEGY_SCHEMA_VERSION_V2
+        || read_u16(bytes, HEADER_ARTIFACT_PROFILE_OFFSET_V2)?
+            != EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2
     {
         return Err(Error::UnsupportedSchema);
     }
@@ -1871,13 +1872,20 @@ fn require_certificate_header(bytes: &[u8]) -> Result<u16> {
     if bytes.len() != EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2 {
         return Err(Error::InvalidLength);
     }
-    if slice(bytes, 0, 8)? != EXECUTION_STRATEGY_CERTIFICATE_MAGIC_V2 {
+    if slice(
+        bytes,
+        CERTIFICATE_MAGIC_OFFSET_V2,
+        EXECUTION_STRATEGY_CERTIFICATE_MAGIC_V2.len(),
+    )? != EXECUTION_STRATEGY_CERTIFICATE_MAGIC_V2
+    {
         return Err(Error::InvalidMagic);
     }
-    if read_u16(bytes, 8)? != EXECUTION_STRATEGY_SCHEMA_VERSION_V2 {
+    if read_u16(bytes, CERTIFICATE_SCHEMA_VERSION_OFFSET_V2)?
+        != EXECUTION_STRATEGY_SCHEMA_VERSION_V2
+    {
         return Err(Error::UnsupportedSchema);
     }
-    let profile = read_u16(bytes, 10)?;
+    let profile = read_u16(bytes, CERTIFICATE_ARTIFACT_PROFILE_OFFSET_V2)?;
     if profile != EXECUTION_STRATEGY_RELEASE_ARTIFACT_PROFILE_V2
         && profile != EXECUTION_STRATEGY_SEMANTIC_ARTIFACT_PROFILE_V2
     {
@@ -1926,9 +1934,17 @@ fn require_zero(bytes: &[u8], offset: usize, width: usize) -> Result<()> {
 }
 
 fn write_header(output: &mut [u8], magic: &[u8; 8]) {
-    put(output, 0, magic);
-    put_u16(output, 8, EXECUTION_STRATEGY_SCHEMA_VERSION_V2);
-    put_u16(output, 10, EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2);
+    put(output, HEADER_MAGIC_OFFSET_V2, magic);
+    put_u16(
+        output,
+        HEADER_SCHEMA_VERSION_OFFSET_V2,
+        EXECUTION_STRATEGY_SCHEMA_VERSION_V2,
+    );
+    put_u16(
+        output,
+        HEADER_ARTIFACT_PROFILE_OFFSET_V2,
+        EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2,
+    );
 }
 
 fn put_optional(
@@ -2843,3 +2859,51 @@ mod tests {
         assert_eq!(page_output, page_before);
     }
 }
+
+/// Byte coordinate of the eight-byte magic in every `ExecutionStrategyV2`
+/// record header.
+///
+/// [`require_prefix_header`] and [`write_header`] are generic over the record
+/// kind, so they need one coordinate where the Lean emitter specializes six.
+/// The pin below licenses reading the Strategy record's as the family's: an
+/// emission that moved any one of the six would stop compiling here instead of
+/// silently disagreeing with a hand-written `0`.
+const HEADER_MAGIC_OFFSET_V2: usize = STRATEGY_MAGIC_OFFSET_V2;
+/// Byte coordinate of the `u16` schema version in every record header.
+///
+/// Licensed by the same pin as [`HEADER_MAGIC_OFFSET_V2`].
+const HEADER_SCHEMA_VERSION_OFFSET_V2: usize = STRATEGY_SCHEMA_VERSION_OFFSET_V2;
+/// Byte coordinate of the `u16` artifact profile in every record header.
+///
+/// Licensed by the same pin as [`HEADER_MAGIC_OFFSET_V2`].
+const HEADER_ARTIFACT_PROFILE_OFFSET_V2: usize = STRATEGY_ARTIFACT_PROFILE_OFFSET_V2;
+
+const _: () = assert!(
+    CERTIFICATE_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
+        && ADMISSION_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
+        && REQUEST_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
+        && ACK_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
+        && SCRATCH_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2,
+    "an ExecutionStrategyV2 record moved its magic away from the shared header \
+     coordinate the generic header helpers read"
+);
+
+const _: () = assert!(
+    CERTIFICATE_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
+        && ADMISSION_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
+        && REQUEST_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
+        && ACK_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
+        && SCRATCH_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2,
+    "an ExecutionStrategyV2 record moved its schema version away from the \
+     shared header coordinate the generic header helpers read"
+);
+
+const _: () = assert!(
+    CERTIFICATE_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
+        && ADMISSION_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
+        && REQUEST_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
+        && ACK_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
+        && SCRATCH_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2,
+    "an ExecutionStrategyV2 record moved its artifact profile away from the \
+     shared header coordinate the generic header helpers read"
+);
