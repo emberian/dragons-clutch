@@ -22,8 +22,8 @@
       "owner": "cycle-2 tranche A, Claims"
     },
     {
-      "route": "claims/process_core_effect",
-      "reason": "The DCLTCEF1 Core-effect route. Reachable only from a Core effect batch; no campaign drives Core into it.",
+      "route": "claims/process_core_effect*",
+      "reason": "The DCLTCEF1 Core-effect route. Reachable only from a Core effect batch; no campaign drives Core into it. GLOBBED 2026-09-02: the census learned to walk `let`-bound guards, and the Core-effect action pairing at claims/lib.rs:690 and the post-revision guard at :754 -- both `let … = match … { _ => return Err(Instruction) }` -- became five child rows of this route. They are the same route's arms, unreachable for the same reason, so the trailing `*` carries this entry's reason to them instead of leaving five freshly-enumerated rows with none.",
       "owner": "cycle-2 tranche A, Claims"
     },
     {
@@ -210,6 +210,11 @@
       "route": "core/resolution::authenticate_recovery_policy#(recovery_id,policy)",
       "reason": "STRUCTURALLY UNDRIVABLE, and the emptiness is convicted rather than asserted. This is the `Some((recovery_id, policy))` arm -- the recovery-BEARING half of `authenticate_recovery_policy` -- and its satisfying set is empty for three independent reasons, any one of which suffices. (1) `recovery_walk_has_a_live_route` (programs/dclutch-core-sbf/src/resolution.rs:883) returns FALSE for `CreateFund`, so a Market whose SourceMaterialV3 names a recovery policy refuses fund creation with `CoreSbfError::RecoveryWalkUnavailable` (0x3011, lib.rs:160) at resolution.rs:726, before the arm's body runs. (2) The two actions the predicate DOES admit, `VerifyFundReady` and `CloseFund`, each require a fund that `CreateFund` refused to create, so neither can ever present recovery-bearing material. (3) `CloseFund` is separately refused at the top of `resolution::process` (line 136), so it cannot reach the call at all. The weld is doubled off-chain: `build_resolution_create_fund_v3` returns `ResolutionCoreOperatorErrorV3::RecoveryWalkUnavailable` for exactly this shape (crates/dclutch-resolution-core-v3-operator/src/lib.rs:1131), so the instruction cannot even be built. The stated cause is a real protocol fact and not a gap in the harness: `SourceResolutionStateV2` HAS NO TRANSITION THAT ADVANCES A RECOVERY ATTEMPT -- `funded.rs` plans the whole failure walk as Primary -> Exhausted -> FailureCommitted -- so a fund created over recovery-bearing material would have no terminal at all. A fixture that faked the precondition would witness nothing. THE POSITIVE CONTROL that this is a branch problem and not an unreached guard: the sibling arm `core/authenticate_no_recovery_entries#None` is EXECUTED (resolution-core-v3-programtest, one CreateFund at 286,481 CU) -- the guard is reached and evaluated on every fund creation; it is the other branch that has no inhabitant.",
       "owner": "ember -- open ruling, \"recovery as a capability child\" (GOAL.md). NOT C-09's to build: the honest cost is between one transition function and ~5,000 lines (architect-scholar A2), and the design question of whether recovery is universal ontology or a purchased capability is unanswered. C-09 drives this arm the day a transition that advances a recovery attempt exists."
+    },
+    {
+      "route": "resolution/core_effect::process_close#Retired",
+      "reason": "STRUCTURALLY UNDRIVABLE, and newly ENUMERATED rather than newly written: the census learned on 2026-09-02 to walk `let`-bound guards, and `let terminal_kind = match source.phase() { Retired => …, _ => return Err(Transition) }` (core_effect.rs:2383) became a row. It is inside `process_close`, which is reached only from the `CloseFund` arm of `process_core_effect` -- a Core-effect envelope only Core CPIs, and Core refuses that action at decode (dclutch-core-sbf/src/resolution.rs, the UnsupportedAction guard). Same weld as `resolution/process_close#CloseFund`; the live close is `core_effect::process_direct_funding_close_v1`, which has its own path through `commit_direct_close` and never enters `process_close`.",
+      "owner": "the Resolution lane owns core_effect.rs; the weld is the Core lane's (a34ff595). Delete this with the two `CloseFund` entries the day a caller for the composed close exists."
     }
   ]
 }

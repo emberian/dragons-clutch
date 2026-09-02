@@ -1,6 +1,6 @@
-import { acquireFinalizedAccountsInChunksV1 } from './coreFound';
 import { WALLET_TERMINAL_PAYOUT_SNAPSHOT_FORMAT_V1 } from './generated/walletTerminalPayoutWasmV1';
-import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import { observedSnapshotJsonV1 } from './observedSnapshotV1';
+import { type SolanaRpcClient } from './rpc';
 import {
   parseWalletTerminalPayoutAddressesV1,
   type WalletTerminalPayoutWasmV1,
@@ -35,12 +35,6 @@ export type AcquiredPayoutSnapshotV1 = Readonly<{
   addresses: ReadonlyArray<string>;
 }>;
 
-function base64(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 /** Read the derivation's own frame at one finalized floor. */
 export async function acquireWalletTerminalPayoutSnapshotV1(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'blockTime' | 'multipleAccounts'>,
@@ -58,41 +52,16 @@ export async function acquireWalletTerminalPayoutSnapshotV1(
     planner.wallet_terminal_payout_addresses_v1(inputJson),
   );
 
-  const observed = await acquireFinalizedAccountsInChunksV1(client, addresses, floor);
-  const byAddress = new Map<string, RpcAccount | null>(
-    observed.accounts.map((entry) => [entry.address, entry.account]),
+  // ONE acquiring implementation, shared with stage one rather than copied.
+  const snapshotJson = await observedSnapshotJsonV1(
+    client,
+    addresses,
+    floor,
+    unixTimestamp,
+    WALLET_TERMINAL_PAYOUT_SNAPSHOT_FORMAT_V1,
   );
 
-  const accounts = addresses.map((address) => {
-    const account = byAddress.get(address) ?? null;
-    // A vacant account is a legitimate input — a payout's lookup table or a
-    // record may or may not exist — so absence is carried, not refused. The
-    // derivation decides which of the frame may be empty, with its own reason.
-    if (account === null) return null;
-    return {
-      // Carried beside the key list on purpose: the boundary cross-checks the
-      // two, because an observation paired with the wrong slot is the one
-      // corruption a snapshot can suffer that still decodes and still
-      // authenticates, against the wrong account.
-      key: address,
-      owner: account.owner,
-      lamports: account.lamports,
-      executable: account.executable,
-      dataBase64: base64(account.data),
-    };
-  });
-
-  return Object.freeze({
-    snapshotJson: JSON.stringify({
-      format: WALLET_TERMINAL_PAYOUT_SNAPSHOT_FORMAT_V1,
-      slot: floor,
-      unixTimestamp,
-      keys: [...addresses],
-      accounts,
-    }),
-    observedSlot: floor,
-    addresses,
-  });
+  return Object.freeze({ snapshotJson, observedSlot: floor, addresses });
 }
 
 /**

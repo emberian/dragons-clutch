@@ -49,6 +49,8 @@ type RedeemContextV1 = Readonly<{
   claimsProgramId: string;
   custodyProgramId: string;
   registryProgramId: string;
+  coreProgramId: string;
+  resolutionProgramId: string;
   directory: WalletDirectoryHandleV1;
 }>;
 
@@ -110,6 +112,8 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
         claimsProgramId={redeem.claimsProgramId}
         custodyProgramId={redeem.custodyProgramId}
         registryProgramId={redeem.registryProgramId}
+        coreProgramId={redeem.coreProgramId}
+        resolutionProgramId={redeem.resolutionProgramId}
         directory={redeem.directory}
       />}
       {position.claim.kind === 'unavailable' && <p className="market-capability-refusal"><span>nothing you can do right now</span>{position.claim.note}</p>}
@@ -222,7 +226,7 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
         </div>
         {portfolio.entries.length === 0
           ? <p className="market-empty">{portfolio.reason}</p>
-          : <div className="market-card-grid">{portfolio.entries.map((entry) => <PositionEntry key={entry.marketAddress} entry={entry} redeem={{ endpoint: deployment.endpoint, claimsProgramId: deployment.programs.claims, custodyProgramId: deployment.programs.custody, registryProgramId: deployment.programs.registry, directory }} />)}</div>}
+          : <div className="market-card-grid">{portfolio.entries.map((entry) => <PositionEntry key={entry.marketAddress} entry={entry} redeem={{ endpoint: deployment.endpoint, claimsProgramId: deployment.programs.claims, custodyProgramId: deployment.programs.custody, registryProgramId: deployment.programs.registry, coreProgramId: deployment.programs.core, resolutionProgramId: deployment.programs.resolution, directory }} />)}</div>}
       </>}
     </section>
 

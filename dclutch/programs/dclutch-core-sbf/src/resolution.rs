@@ -159,17 +159,7 @@ pub(crate) fn process(
     // The one place the wire enum is read, and the one place the refusal lives.
     // Everything below this line is typed in `ComposedResolutionActionV1` and
     // therefore CANNOT name `CloseFund`.
-    //
-    // Deliberately a STATEMENT-position `match` writing a deferred binding,
-    // not `let action = match …`. The route census walks dispatch statements
-    // and does not descend into `let` initialisers
-    // (`tools/gauntlet/census/src/enumerate.rs`, the `Stmt::Local(_) => {}`
-    // arm), so the tidier expression form silently DELETES
-    // `core/resolution::process#CloseFund` — measured, 160 routes to 159 —
-    // while keeping the refusal itself intact. The row that records where this
-    // action is refused is worth the deferred binding.
-    let action;
-    match resolution_request.action {
+    let action = match resolution_request.action {
         // V7 closes directly in Resolution (`process_direct_funding_close_v1`).
         // Retaining the composed Core CPI would preserve the exact
         // duplicate-authentication route that exceeds the transaction compute
@@ -182,14 +172,10 @@ pub(crate) fn process(
         }
         // Every action Core still composes continues into the shared
         // authentication below and is dispatched after it.
-        ResolutionCoreActionV1::CreateFund => action = ComposedResolutionActionV1::CreateFund,
-        ResolutionCoreActionV1::VerifyFundReady => {
-            action = ComposedResolutionActionV1::VerifyFundReady;
-        }
-        ResolutionCoreActionV1::AdmitTerminal => {
-            action = ComposedResolutionActionV1::AdmitTerminal;
-        }
-    }
+        ResolutionCoreActionV1::CreateFund => ComposedResolutionActionV1::CreateFund,
+        ResolutionCoreActionV1::VerifyFundReady => ComposedResolutionActionV1::VerifyFundReady,
+        ResolutionCoreActionV1::AdmitTerminal => ComposedResolutionActionV1::AdmitTerminal,
+    };
     if funding_header.selected_mask()
         != resolution_request
             .funding_entry_mask()

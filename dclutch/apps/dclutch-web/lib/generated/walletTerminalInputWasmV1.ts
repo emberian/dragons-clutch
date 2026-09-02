@@ -6,5 +6,5 @@ export const WALLET_TERMINAL_INPUT_ADDRESSES_FORMAT_V1 = 'dclutch-wallet-termina
 export const CORE_STATE_BYTES_V1 = 368 as const;
 export const LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 = 256 as const;
 export const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 = 128 as const;
-export const WALLET_TERMINAL_INPUT_WASM_SHA256_V1 = 'c01ea74bddaeac3bf40f95a78262ffb8afb2161c6c4723bb54f03362d47ce50c' as const;
-export const WALLET_TERMINAL_INPUT_WASM_BYTES_V1 = 622406 as const;
+export const WALLET_TERMINAL_INPUT_WASM_SHA256_V1 = '0a9daa7db9e221c5abf723adfef6424cd617047d2804eed1b7c6072dc3bf8de5' as const;
+export const WALLET_TERMINAL_INPUT_WASM_BYTES_V1 = 760682 as const;

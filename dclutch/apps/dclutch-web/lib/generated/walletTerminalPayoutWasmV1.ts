@@ -5,5 +5,5 @@ export const WALLET_TERMINAL_PAYOUT_ADDRESSES_FORMAT_V1 = 'dclutch-wallet-termin
 export const WALLET_TERMINAL_PAYOUT_INPUT_FORMAT_V1 = 'dclutch-wallet-terminal-payout-plan-input-v1' as const;
 export const TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 = 36 as const;
 export const TERMINAL_SETTLEMENT_REQUEST_BYTES_V3 = 640 as const;
-export const WALLET_TERMINAL_PAYOUT_WASM_SHA256_V1 = '17ca7aba3f1b5d47e681d360981db56c81a41643bb9340ad15cb7c30bcf401b9' as const;
+export const WALLET_TERMINAL_PAYOUT_WASM_SHA256_V1 = 'd4d6fa25e06735136e7d7df6ef51dcc91e188f7d376c0dacbf63272222e04392' as const;
 export const WALLET_TERMINAL_PAYOUT_WASM_BYTES_V1 = 723093 as const;

@@ -571,6 +571,23 @@ impl ProtocolPositionAdmissionV2 {
         Ok(Self { request, evidence })
     }
 
+    /// The admitted request this record persists.
+    pub fn request(&self) -> ProtocolPositionRequestV2 {
+        self.request
+    }
+
+    /// The Product/LBV2 evidence the admission was granted against.
+    ///
+    /// A getter rather than a byte coordinate on purpose. This record is the
+    /// only place on chain that names the finalized LINKED-BASIS RECORD digest
+    /// -- the aggregate carries the *semantic* basis identity, which
+    /// authenticates a basis body but cannot address one -- so a reader that
+    /// needs the record must come through here, and it should come through the
+    /// decoder rather than through an offset it wrote down.
+    pub fn evidence(&self) -> ProtocolPositionAdmissionEvidenceV2 {
+        self.evidence
+    }
+
     /// Decode exact persisted admission bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
         decode_admission(input, PROTOCOL_POSITION_ADMISSION_MAGIC_V2)

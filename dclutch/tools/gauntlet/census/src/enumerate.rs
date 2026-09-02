@@ -567,7 +567,18 @@ impl DispatchWalk<'_> {
                         self.walk_expr(expr, relative, context, depth, parent, inherited, cfg);
                     }
                 }
-                Stmt::Local(_) | Stmt::Item(_) | Stmt::Macro(_) => {}
+                // A `let` initialiser is walked when it is a DISPATCH, and
+                // skipped when it is a lookup table. See
+                // `local_initialiser_dispatches` for why the distinction is the
+                // whole content of this arm.
+                Stmt::Local(local) => {
+                    if let Some(init) = &local.init
+                        && local_initialiser_dispatches(&init.expr)
+                    {
+                        self.walk_expr(&init.expr, relative, context, depth, parent, inherited, cfg);
+                    }
+                }
+                Stmt::Item(_) | Stmt::Macro(_) => {}
             }
         }
     }
@@ -1170,6 +1181,66 @@ fn qualified(module: &str, name: &str) -> String {
     }
 }
 
+/// Whether a `let` initialiser is a DISPATCH, and not a lookup table.
+///
+/// This arm used to be `Stmt::Local(_) => {}` — every initialiser skipped — and
+/// the cost was measured on 2026-09-02: welding Core's `CloseFund` shut moved
+/// its refusal into `let action = match resolution_request.action { … }`, and
+/// the census silently dropped `core/resolution::process#CloseFund` while the
+/// refusal it recorded was still live on chain. 160 routes to 159, that row and
+/// no other. **A refusal that still exists is not necessarily a refusal that is
+/// still recorded**, and the instrument that made that true was this arm.
+///
+/// Descending into EVERY initialiser is not the fix and was measured too: 160
+/// routes to 246, with 17 previously-classified positions going unclassified.
+/// It invents `custody/Pubkey::find_program_address#None` and
+/// `core/account#recovery_id` — value lookups keyed by a tag, which is most of
+/// the 222 `let … = match …` sites this tree contains. A route is a shape a
+/// CLIENT can select, and the census's denominator stops meaning that if every
+/// table indexed by an action becomes a row.
+///
+/// The line between them is DIVERGENCE, and it is a fact about the code rather
+/// than a heuristic about names. A guard decides whether the instruction may
+/// proceed, so at least one of its branches leaves the function. A table
+/// produces a value for every branch and leaves none. That is exactly the
+/// difference between the `CloseFund` arm that returns `UnsupportedAction` and
+/// the `expected_writable` arm four hundred lines below it that returns
+/// `[true, false]`.
+fn local_initialiser_dispatches(expr: &Expr) -> bool {
+    match expr {
+        Expr::Match(matched) => matched.arms.iter().any(|arm| diverges(&arm.body)),
+        Expr::If(branch) => {
+            branch.then_branch.stmts.iter().any(statement_diverges)
+                || branch
+                    .else_branch
+                    .as_ref()
+                    .is_some_and(|(_, otherwise)| diverges(otherwise))
+        }
+        _ => false,
+    }
+}
+
+/// Whether an expression leaves the enclosing function.
+///
+/// `return` only. `?` is deliberately NOT divergence here: a fallible call in
+/// a table arm (`let (a, b) = match action { A => f()?, … }`) is a lookup that
+/// can fail, not a decision about which instruction shape ran, and admitting it
+/// would put the table rows back.
+fn diverges(expr: &Expr) -> bool {
+    match expr {
+        Expr::Return(_) => true,
+        Expr::Block(block) => block.block.stmts.iter().any(statement_diverges),
+        _ => false,
+    }
+}
+
+fn statement_diverges(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Expr(expr, _) => diverges(expr),
+        _ => false,
+    }
+}
+
 fn is_control(expr: &Expr) -> bool {
     matches!(expr, Expr::If(_) | Expr::Match(_) | Expr::Return(_))
 }
@@ -1552,6 +1623,166 @@ fn specific_tag(selectors: &[Selector]) -> String {
         (Some(tag), _) => tag,
         (None, true) => "else".to_string(),
         (None, false) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod local_initialiser_tests {
+    use super::{ConstantIndex, CrateIndex, DispatchWalk};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Enumerate one function body, the way `enumerate` does, and return the
+    /// route ids it produced.
+    fn route_ids(block: syn::Block) -> Vec<String> {
+        let constants = ConstantIndex {
+            facts: BTreeMap::new(),
+        };
+        let index = CrateIndex {
+            functions: Vec::new(),
+        };
+        let mut walk = DispatchWalk {
+            label: "core",
+            index: &index,
+            constants: &constants,
+            routes: Vec::new(),
+            unclassified: Vec::new(),
+            visited: BTreeSet::new(),
+        };
+        walk.walk_block(
+            &block,
+            "src/resolution.rs",
+            "resolution::process",
+            0,
+            None,
+            &[],
+            &[],
+        );
+        let mut ids: Vec<String> = walk.routes.into_iter().map(|route| route.id).collect();
+        ids.sort();
+        ids
+    }
+
+    /// THE DEFECT, and the reason this module exists.
+    ///
+    /// `f6b84c56` welded Core's `CloseFund` shut and had to write its guard as a
+    /// statement-position `match` writing a deferred binding, because the
+    /// obvious `let action = match …` DELETED
+    /// `core/resolution::process#CloseFund` from the register while the refusal
+    /// stayed live on chain. The two forms decide the same thing and must
+    /// enumerate the same way.
+    #[test]
+    fn the_expression_form_of_a_guard_names_the_same_routes_as_the_statement_form() {
+        let statement_form = route_ids(syn::parse_quote! {{
+            let action;
+            match resolution_request.action {
+                ResolutionCoreActionV1::CloseFund => {
+                    return Err(CoreSbfError::UnsupportedAction.into());
+                }
+                ResolutionCoreActionV1::CreateFund => action = Composed::CreateFund,
+                ResolutionCoreActionV1::VerifyFundReady => action = Composed::VerifyFundReady,
+                ResolutionCoreActionV1::AdmitTerminal => action = Composed::AdmitTerminal,
+            }
+            Ok(())
+        }});
+        let expression_form = route_ids(syn::parse_quote! {{
+            let action = match resolution_request.action {
+                ResolutionCoreActionV1::CloseFund => {
+                    return Err(CoreSbfError::UnsupportedAction.into());
+                }
+                ResolutionCoreActionV1::CreateFund => Composed::CreateFund,
+                ResolutionCoreActionV1::VerifyFundReady => Composed::VerifyFundReady,
+                ResolutionCoreActionV1::AdmitTerminal => Composed::AdmitTerminal,
+            };
+            Ok(())
+        }});
+        assert_eq!(statement_form, expression_form);
+        assert!(
+            statement_form.contains(&"core/resolution::process#CloseFund".to_string()),
+            "the refused action must keep its row in BOTH forms: {statement_form:?}"
+        );
+    }
+
+    /// THE NEGATIVE CONTROL, in the shape the tree actually shipped.
+    ///
+    /// Before this change the same body enumerated three routes instead of
+    /// four, and the missing one was the refusal. Whole-tree, that was 159
+    /// against 160.
+    #[test]
+    fn a_let_bound_guard_no_longer_loses_the_row_that_records_its_refusal() {
+        let ids = route_ids(syn::parse_quote! {{
+            let action = match resolution_request.action {
+                ResolutionCoreActionV1::CloseFund => {
+                    return Err(CoreSbfError::UnsupportedAction.into());
+                }
+                ResolutionCoreActionV1::CreateFund => Composed::CreateFund,
+                ResolutionCoreActionV1::VerifyFundReady => Composed::VerifyFundReady,
+                ResolutionCoreActionV1::AdmitTerminal => Composed::AdmitTerminal,
+            };
+            Ok(())
+        }});
+        assert_eq!(
+            ids,
+            vec![
+                "core/resolution::process#AdmitTerminal".to_string(),
+                "core/resolution::process#CloseFund".to_string(),
+                "core/resolution::process#CreateFund".to_string(),
+                "core/resolution::process#VerifyFundReady".to_string(),
+            ]
+        );
+    }
+
+    /// AND THE OPPOSITE CONTROL, which is what stops the fix from being worse
+    /// than the defect.
+    ///
+    /// Descending into every initialiser took the tree from 160 routes to 246
+    /// and put seventeen previously-classified positions into `unclassified`.
+    /// A table indexed by an action is not a route: no branch of it decides
+    /// whether the instruction may proceed, and none leaves the function.
+    #[test]
+    fn a_lookup_table_keyed_by_the_same_discriminant_is_not_a_route() {
+        let ids = route_ids(syn::parse_quote! {{
+            let expected_writable = match action {
+                Composed::CreateFund => [true, false],
+                Composed::VerifyFundReady => [false, false],
+                Composed::AdmitTerminal => [false, false],
+            };
+            Ok(())
+        }});
+        assert!(
+            ids.is_empty(),
+            "a value table must contribute no routes: {ids:?}"
+        );
+    }
+
+    /// One arm returning is enough, and it is enough because that arm is the
+    /// decision: the rest of the match is what happens when it does not fire.
+    #[test]
+    fn one_diverging_arm_makes_the_whole_initialiser_a_dispatch() {
+        let ids = route_ids(syn::parse_quote! {{
+            let width = match header.action {
+                Action::Narrow => NARROW_BYTES,
+                Action::Wide => WIDE_BYTES,
+                Action::Unsupported => return Err(Error::Instruction),
+            };
+            Ok(())
+        }});
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        assert!(ids.contains(&"core/resolution::process#Unsupported".to_string()));
+    }
+
+    /// A `let` bound to an `if` whose else-branch refuses is the same shape
+    /// written with two branches instead of four arms.
+    #[test]
+    fn an_if_initialiser_that_refuses_in_one_branch_is_a_dispatch() {
+        let ids = route_ids(syn::parse_quote! {{
+            let bytes = if instruction_data.len() == SETTLE_BYTES {
+                instruction_data
+            } else {
+                return Err(Error::Instruction);
+            };
+            Ok(())
+        }});
+        assert!(!ids.is_empty(), "a refusing if-initialiser is a dispatch");
     }
 }
 

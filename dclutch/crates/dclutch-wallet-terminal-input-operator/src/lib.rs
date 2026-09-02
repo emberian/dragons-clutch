@@ -53,6 +53,8 @@ use dclutch_wallet_terminal_payout_operator::{
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
+pub mod address_book;
+
 const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context/v1";
 
 /// The exact input format stage one emits and stage two consumes.
@@ -220,6 +222,37 @@ pub struct CompletedTerminalPayoutInputV1 {
 /// is why the Custody context costs no round of its own.
 pub fn claims_aggregate_address_v1(claims: Pubkey, market: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()], &claims).0
+}
+
+/// The release set this Market selected, read from the Market itself.
+///
+/// The sixth coordinate. A browser's deployment table names five program ids
+/// and no release set — the release set is the MARKET's choice, not the
+/// deployment's — so a caller that holds only a deployment reads it here, from
+/// round one, before it can state the coordinates the rest of the derivation
+/// takes. A caller that already pins one (the CLI does, from its plan) supplies
+/// it instead and keeps the two-source check in
+/// [`decode_routed_market_v1`].
+pub fn market_release_set_v1(
+    core: Pubkey,
+    market: Pubkey,
+    round_one: &FinalizedSnapshotV1,
+) -> Result<[u8; 32]> {
+    let account = round_one.required(market, "Core Market")?;
+    if account.owner != core || account.executable {
+        return Err(Error::new(format!(
+            "the Core Market at {market} is owned by {}, not the deployment's Core program {core}",
+            account.owner
+        )));
+    }
+    let state = CoreState::decode(&account.data)
+        .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
+    if state.identity.market_id.to_bytes() != market.to_bytes() {
+        return Err(Error::new(
+            "the Core Market names another market as its own identity",
+        ));
+    }
+    Ok(state.identity.selected_release_set.to_bytes())
 }
 
 /// PHASE ONE — the two addresses round one observes.

@@ -2680,3 +2680,24 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - GENERAL: convicting 3 stack-frame diagnostics on `execute_authenticated_hot_v3` (frameguard refuses to baseline) before
   the System coordinate lands.
 - Cuts: `7365f1503`, `93aaeaf20`. Dirty paths 65 → 40. Disk 293 GiB free.
+
+### Lane map delta — 2026-09-02 02:45
+
+- DEALER lane `adefc90f75702203a` **died at the context ceiling** ("prompt is too long") mid-measurement; relaunched as
+  `a929bd24b931c8297` with the full handoff (the hostile's ladder, the 5de38ef2 checkpoint, the two ruled-out ideas, the open
+  number: the honest Add's plain-build cost). Lanes nearest the same ceiling: GENERAL (~890k tokens), DIRECT (~740k),
+  STRUCTURED (~710k) — hand off on their next report if they stop mid-unit.
+- GENERAL: `0x4005 Commit` closed (`e3298c9a`, System program is an account now); next `0x4018 AdmittedTransport`.
+- WITNESS: Core narrowing landed `f6b84c56` (census unmoved; found the enumerator skips `let` initialisers → fixing it).
+- RIP unit 3 `c00a2242`: the split_root defect class was EMPTY on measurement (110 sites classified); four pins wired red-first;
+  ELF rule refined again (panic `Location.line` shifts in `.data.rel.ro` with column unchanged are line-shift artifacts).
+  Unit 4: `validate_construction` never called in a live claims kernel; funding-list derivation.
+- V0: rent leak closed (`c09beaa1`, one entry per table nothing could use, 222,720 lamports each); pin alignment blocked by a
+  runtime panic recorded at the pin (`ba69ef0d`); founding chain already v0; DCLTGMF3 measured 2,129 → 460. Ruled: freeze the
+  seven mutable tables (authority-redirectable routes are the defect; rent is the price). Ceiling check in `send_inner_with_signers`.
+- POPULATION: cohort-11's market was founded at **30 bps** and the Direct setup requires exactly 50 → **can never fill**
+  (fourth such market; stager now refuses). Fee rate has two authors → DIRECT. Cohort-12 + a 50 bps market + the trade
+  waits on Direct's frame fix (still 3 at `be67416e`). Census bindings and the fill-boundary laws landed (`49c8fa92`, `be67416e`).
+- EMISSION: admissibility table Lean-owned (`e692f8e4`, non-monotone in the profile number — a theorem states the exception);
+  alias-width question answered safe and pinned (`f3694735`); now the decision-0012 admission rule's Lean corpus for Core.
+- Cuts: `98648c089`, `bc666b7b2`, `18b260248`, `f5dfc7145`, `313df674c`, `b3977fd16`.

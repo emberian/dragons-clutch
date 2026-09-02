@@ -33,8 +33,12 @@ use dclutch_claims_svm::liability_basis_state_v2::{
 use dclutch_market_core_codec::STATE_BYTES;
 use dclutch_wallet_terminal_input_operator::{
     ProtocolCoordinatesV1, RoutedRecordV1, TerminalPayoutRequestV1, TerminalRecordRoutingV1,
-    TerminalRoutingTableV1, complete_terminal_payout_input_v1, route_terminal_payout_frame_v1,
-    terminal_payout_round_one_addresses_v1,
+    TerminalRoutingTableV1,
+    address_book::{
+        derive_terminal_routing_table_v1, routing_round_one_addresses_v1,
+        routing_round_three_addresses_v1, routing_round_two_addresses_v1,
+    },
+    complete_terminal_payout_input_v1, market_release_set_v1, route_terminal_payout_frame_v1,
 };
 use dclutch_wallet_terminal_payout_operator::{
     hex32, pubkey, snapshot_wire::parse_observed_snapshot_v1, wire::FinalizedSnapshotV1,
@@ -128,15 +132,75 @@ struct PayoutWireV1 {
 struct RequestWireV1 {
     format: String,
     programs: ProgramsWireV1,
-    release_set: String,
-    routing: RoutingWireV1,
+    /// Absent when the caller holds only a deployment table.
+    ///
+    /// The release set is the MARKET's choice, not the deployment's, so a
+    /// browser reads it out of round one instead of writing one down. A caller
+    /// that pins one (the CLI, from its plan) supplies it and keeps the
+    /// two-source check.
+    #[serde(default)]
+    release_set: Option<String>,
+    /// Absent while the address book is still being DERIVED.
+    ///
+    /// A browser has no campaign report, so it starts without one and calls
+    /// [`derive_wallet_terminal_input_request_json_v1`], which hands back this
+    /// same request with the book filled in. The routing shape is therefore
+    /// never written down by a client: it is only ever carried.
+    #[serde(default)]
+    routing: Option<RoutingWireV1>,
     request: PayoutWireV1,
 }
 
+struct ProgramsV1 {
+    registry: Pubkey,
+    core: Pubkey,
+    claims: Pubkey,
+    custody: Pubkey,
+    resolution: Pubkey,
+}
+
 struct DecodedRequestV1 {
-    coordinates: ProtocolCoordinatesV1,
-    routing: TerminalRoutingTableV1,
+    programs: ProgramsV1,
+    release_set: Option<[u8; 32]>,
+    routing: Option<TerminalRoutingTableV1>,
     request: TerminalPayoutRequestV1,
+}
+
+impl DecodedRequestV1 {
+    /// The six coordinates, with the release set resolved against round one.
+    ///
+    /// A caller that pinned one keeps its two-source check; a caller that
+    /// pinned none reads the Market's own, which is the sixth coordinate a
+    /// deployment table does not carry.
+    fn coordinates(
+        &self,
+        round_one: &FinalizedSnapshotV1,
+    ) -> Result<ProtocolCoordinatesV1, String> {
+        let release_set = match self.release_set {
+            Some(value) => value,
+            None => market_release_set_v1(self.programs.core, self.request.market, round_one)
+                .map_err(|error| format!("payout input request refused: {error}"))?,
+        };
+        Ok(ProtocolCoordinatesV1 {
+            registry: self.programs.registry,
+            core: self.programs.core,
+            claims: self.programs.claims,
+            custody: self.programs.custody,
+            resolution: self.programs.resolution,
+            release_set,
+        })
+    }
+
+    /// The address book, or the refusal that names why there is none.
+    fn routing(&self) -> Result<&TerminalRoutingTableV1, String> {
+        self.routing.as_ref().ok_or_else(|| {
+            format!(
+                "this payout input request carries no address book; derive one first with the \
+                 round-two and round-three observations, or supply `routing` in the exact \
+                 {REQUEST_FORMAT_V1}"
+            )
+        })
+    }
 }
 
 fn key(value: &str, field: &str) -> Result<Pubkey, String> {
@@ -154,6 +218,35 @@ fn record(wire: &RecordWireV1, field: &str) -> Result<RoutedRecordV1, String> {
     })
 }
 
+fn decode_routing(wire: &RoutingWireV1) -> Result<TerminalRoutingTableV1, String> {
+    let records = &wire.records;
+    Ok(TerminalRoutingTableV1 {
+        founding_market: key(&wire.founding_market, "founding Market")?,
+        collateral_mint: key(&wire.collateral_mint, "collateral mint")?,
+        token_program: key(&wire.token_program, "token program")?,
+        records: TerminalRecordRoutingV1 {
+            realm: record(&records.realm, "realm record")?,
+            product: record(&records.product, "Product record")?,
+            result_domain: record(&records.result_domain, "result-domain record")?,
+            portfolio: record(&records.portfolio, "portfolio record")?,
+            product_basis: record(&records.product_basis, "product-basis record")?,
+            composition_descriptor: record(
+                &records.composition_descriptor,
+                "composition descriptor record",
+            )?,
+            composition_graph: record(&records.composition_graph, "composition graph record")?,
+            composition_translation: record(
+                &records.composition_translation,
+                "composition translation record",
+            )?,
+            composition_exposure: record(
+                &records.composition_exposure,
+                "composition exposure record",
+            )?,
+        },
+    })
+}
+
 fn parse_request(request_json: &str) -> Result<DecodedRequestV1, String> {
     let wire: RequestWireV1 = serde_json::from_str(request_json)
         .map_err(|error| format!("payout input request is not the exact accepted JSON: {error}"))?;
@@ -162,41 +255,23 @@ fn parse_request(request_json: &str) -> Result<DecodedRequestV1, String> {
             "payout input request format must be {REQUEST_FORMAT_V1}"
         ));
     }
-    let records = &wire.routing.records;
+    let routing = match &wire.routing {
+        None => None,
+        Some(routing) => Some(decode_routing(routing)?),
+    };
     Ok(DecodedRequestV1 {
-        coordinates: ProtocolCoordinatesV1 {
+        programs: ProgramsV1 {
             registry: key(&wire.programs.registry, "Registry program")?,
             core: key(&wire.programs.core, "Core program")?,
             claims: key(&wire.programs.claims, "Claims program")?,
             custody: key(&wire.programs.custody, "Custody program")?,
             resolution: key(&wire.programs.resolution, "Resolution program")?,
-            release_set: digest(&wire.release_set, "release set")?,
         },
-        routing: TerminalRoutingTableV1 {
-            founding_market: key(&wire.routing.founding_market, "founding Market")?,
-            collateral_mint: key(&wire.routing.collateral_mint, "collateral mint")?,
-            token_program: key(&wire.routing.token_program, "token program")?,
-            records: TerminalRecordRoutingV1 {
-                realm: record(&records.realm, "realm record")?,
-                product: record(&records.product, "Product record")?,
-                result_domain: record(&records.result_domain, "result-domain record")?,
-                portfolio: record(&records.portfolio, "portfolio record")?,
-                product_basis: record(&records.product_basis, "product-basis record")?,
-                composition_descriptor: record(
-                    &records.composition_descriptor,
-                    "composition descriptor record",
-                )?,
-                composition_graph: record(&records.composition_graph, "composition graph record")?,
-                composition_translation: record(
-                    &records.composition_translation,
-                    "composition translation record",
-                )?,
-                composition_exposure: record(
-                    &records.composition_exposure,
-                    "composition exposure record",
-                )?,
-            },
+        release_set: match wire.release_set.as_deref() {
+            None => None,
+            Some(value) => Some(digest(value, "release set")?),
         },
+        routing,
         request: TerminalPayoutRequestV1 {
             market: key(&wire.request.market, "Market")?,
             owner: key(&wire.request.owner, "owner")?,
@@ -239,10 +314,35 @@ pub fn wallet_terminal_input_round_one_addresses_json_v1(
     request_json: &str,
 ) -> Result<String, String> {
     let decoded = parse_request(request_json)?;
-    let keys = terminal_payout_round_one_addresses_v1(
-        &decoded.coordinates,
-        &decoded.routing,
-        &decoded.request,
+    // Round one needs no address book: both of its addresses come from the
+    // deployment's own coordinates and the caller's Market. That is what lets a
+    // browser with no campaign report start the sequence at all.
+    // A supplied book still gets its Market checked against the caller's,
+    // which is the check the CLI has always made before opening a socket.
+    if let Some(routing) = decoded.routing.as_ref() {
+        if routing.founding_market != decoded.request.market {
+            return Err(
+                "payout input request refused: terminal Market differed from exact founding campaign evidence"
+                    .into(),
+            );
+        }
+    }
+    // THREE accounts, not two. The third is the owner's Claims admission
+    // record, which is the only place on chain that names the linked-basis
+    // record digest; phase one reads the first two and ignores the rest, so one
+    // round serves both.
+    let keys = routing_round_one_addresses_v1(
+        &ProtocolCoordinatesV1 {
+            registry: decoded.programs.registry,
+            core: decoded.programs.core,
+            claims: decoded.programs.claims,
+            custody: decoded.programs.custody,
+            resolution: decoded.programs.resolution,
+            // Round one names no address that depends on the release set.
+            release_set: [1; 32],
+        },
+        decoded.request.market,
+        decoded.request.owner,
     )
     .map_err(|error| format!("payout input request refused: {error}"))?;
     addresses_json(&keys)
@@ -255,9 +355,10 @@ pub fn wallet_terminal_input_frame_addresses_json_v1(
 ) -> Result<String, String> {
     let decoded = parse_request(request_json)?;
     let round_one = snapshot(round_one_json, "payout input round one")?;
+    let coordinates = decoded.coordinates(&round_one)?;
     let frame = route_terminal_payout_frame_v1(
-        &decoded.coordinates,
-        &decoded.routing,
+        &coordinates,
+        decoded.routing()?,
         &decoded.request,
         &round_one,
     )
@@ -279,9 +380,10 @@ pub fn build_wallet_terminal_payout_input_json_v1(
     let decoded = parse_request(request_json)?;
     let round_one = snapshot(round_one_json, "payout input round one")?;
     let round_two = snapshot(round_two_json, "payout input round two")?;
+    let coordinates = decoded.coordinates(&round_one)?;
     let frame = route_terminal_payout_frame_v1(
-        &decoded.coordinates,
-        &decoded.routing,
+        &coordinates,
+        decoded.routing()?,
         &decoded.request,
         &round_one,
     )
@@ -290,6 +392,162 @@ pub fn build_wallet_terminal_payout_input_json_v1(
         .map_err(|error| format!("payout input refused: {error}"))?;
     serde_json::to_string(&completed.input)
         .map_err(|error| format!("payout input could not be serialized: {error}"))
+}
+
+/// PHASE ZERO, ROUND TWO — the three records round one's own digests address.
+///
+/// The realm, Product and product-basis records. Every address is a raw-record
+/// PDA of a digest the CHAIN published — Core's `realm_id` and `product_record`
+/// and the Claims aggregate's `basis_id` — so none of them comes from a
+/// document, and a caller with only a deployment table can reach all three.
+pub fn wallet_terminal_input_book_round_two_addresses_json_v1(
+    request_json: &str,
+    round_one_json: &str,
+) -> Result<String, String> {
+    let decoded = parse_request(request_json)?;
+    let round_one = snapshot(round_one_json, "payout input round one")?;
+    let coordinates = decoded.coordinates(&round_one)?;
+    let keys = routing_round_two_addresses_v1(
+        &coordinates,
+        decoded.request.market,
+        decoded.request.owner,
+        &round_one,
+    )
+    .map_err(|error| format!("payout input address book refused: {error}"))?;
+    addresses_json(&keys)
+}
+
+/// PHASE ZERO, ROUND THREE — the records round two's BYTES address.
+///
+/// The result-domain and portfolio digests are inside the Product record and
+/// the price-gate digest inside the basis, so this round cannot merge with the
+/// one before it. A basis that names no price gate returns two addresses; one
+/// that names a certificate returns three, and the BASIS decides which.
+pub fn wallet_terminal_input_book_round_three_addresses_json_v1(
+    request_json: &str,
+    round_one_json: &str,
+    round_two_json: &str,
+) -> Result<String, String> {
+    let decoded = parse_request(request_json)?;
+    let round_one = snapshot(round_one_json, "payout input round one")?;
+    let round_two = snapshot(round_two_json, "payout input book round two")?;
+    let coordinates = decoded.coordinates(&round_one)?;
+    let keys = routing_round_three_addresses_v1(
+        &coordinates,
+        decoded.request.market,
+        decoded.request.owner,
+        &round_one,
+        &round_two,
+    )
+    .map_err(|error| format!("payout input address book refused: {error}"))?;
+    addresses_json(&keys)
+}
+
+/// PHASE ZERO — the same request, with its address book DERIVED and filled in.
+///
+/// Returns the caller's own request rather than a bare table, so the routing
+/// shape is never written down by a client: it is only ever carried from here
+/// to the phases that consume it. Seven rows come from chain pointers; the four
+/// `terminal_composition_*` rows are recompiled by the function the founding
+/// published them with, which authenticates the whole product graph on the way.
+pub fn derive_wallet_terminal_input_request_json_v1(
+    request_json: &str,
+    round_one_json: &str,
+    round_two_json: &str,
+    round_three_json: &str,
+) -> Result<String, String> {
+    let decoded = parse_request(request_json)?;
+    let round_one = snapshot(round_one_json, "payout input round one")?;
+    let round_two = snapshot(round_two_json, "payout input book round two")?;
+    let round_three = snapshot(round_three_json, "payout input book round three")?;
+    let coordinates = decoded.coordinates(&round_one)?;
+    let routing = derive_terminal_routing_table_v1(
+        &coordinates,
+        decoded.request.market,
+        decoded.request.owner,
+        &round_one,
+        &round_two,
+        &round_three,
+    )
+    .map_err(|error| format!("payout input address book refused: {error}"))?;
+    let mut wire: serde_json::Value = serde_json::from_str(request_json)
+        .map_err(|error| format!("payout input request is not the exact accepted JSON: {error}"))?;
+    wire["routing"] = routing_wire_v1(&routing);
+    serde_json::to_string(&wire)
+        .map_err(|error| format!("payout input request could not be serialized: {error}"))
+}
+
+/// The address book, in exactly the shape [`RoutingWireV1`] accepts.
+///
+/// The one place this crate WRITES the routing wire rather than reading it. A
+/// round-trip test pins the two against each other, because a serializer and a
+/// deserializer that drift are two wires wearing one name.
+fn routing_wire_v1(routing: &TerminalRoutingTableV1) -> serde_json::Value {
+    let row = |routed: &RoutedRecordV1| {
+        serde_json::json!({
+            "digest": dclutch_wallet_terminal_payout_operator::hex(&routed.digest),
+            "address": routed.address.to_string(),
+        })
+    };
+    let records = &routing.records;
+    serde_json::json!({
+        "foundingMarket": routing.founding_market.to_string(),
+        "collateralMint": routing.collateral_mint.to_string(),
+        "tokenProgram": routing.token_program.to_string(),
+        "records": {
+            "realm": row(&records.realm),
+            "product": row(&records.product),
+            "resultDomain": row(&records.result_domain),
+            "portfolio": row(&records.portfolio),
+            "productBasis": row(&records.product_basis),
+            "compositionDescriptor": row(&records.composition_descriptor),
+            "compositionGraph": row(&records.composition_graph),
+            "compositionTranslation": row(&records.composition_translation),
+            "compositionExposure": row(&records.composition_exposure),
+        },
+    })
+}
+
+/// Every address phase zero's round two observes. Browser entry point.
+#[wasm_bindgen]
+pub fn wallet_terminal_input_book_round_two_addresses_v1(
+    request_json: &str,
+    round_one_json: &str,
+) -> Result<String, JsValue> {
+    wallet_terminal_input_book_round_two_addresses_json_v1(request_json, round_one_json)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Every address phase zero's round three observes. Browser entry point.
+#[wasm_bindgen]
+pub fn wallet_terminal_input_book_round_three_addresses_v1(
+    request_json: &str,
+    round_one_json: &str,
+    round_two_json: &str,
+) -> Result<String, JsValue> {
+    wallet_terminal_input_book_round_three_addresses_json_v1(
+        request_json,
+        round_one_json,
+        round_two_json,
+    )
+    .map_err(|e| JsValue::from_str(&e))
+}
+
+/// The request with its address book derived. Browser entry point.
+#[wasm_bindgen]
+pub fn derive_wallet_terminal_input_request_v1(
+    request_json: &str,
+    round_one_json: &str,
+    round_two_json: &str,
+    round_three_json: &str,
+) -> Result<String, JsValue> {
+    derive_wallet_terminal_input_request_json_v1(
+        request_json,
+        round_one_json,
+        round_two_json,
+        round_three_json,
+    )
+    .map_err(|e| JsValue::from_str(&e))
 }
 
 /// Every address round one observes. Browser entry point.
@@ -395,18 +653,33 @@ mod tests {
         assert!(error.contains("exact accepted JSON") || error.contains(REQUEST_FORMAT_V1));
     }
 
-    /// The boundary hands back the derivation's own two addresses.
+    /// The boundary hands back the derivation's own round-one addresses.
+    ///
+    /// WAS: "round one is two accounts, never three". That was true while the
+    /// address book arrived as a document. Deriving it needs a third — the
+    /// owner's Claims admission record, the only account on chain that names
+    /// the linked-basis RECORD digest — and the assertion moves with the
+    /// behaviour rather than the sentence being deleted from under it. It is
+    /// still ONE round: all three are addressable before any read.
     #[test]
-    fn round_one_hands_back_the_derivations_own_two_addresses() {
+    fn round_one_hands_back_the_derivations_own_three_addresses() {
         let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
         let listed = wallet_terminal_input_round_one_addresses_json_v1(&request_wire(&input))
             .expect("the fixture request routes");
         assert!(listed.contains(ADDRESSES_FORMAT_V1));
         let parsed: serde_json::Value = serde_json::from_str(&listed).expect("addresses are JSON");
         let addresses = parsed["addresses"].as_array().expect("address list");
-        assert_eq!(addresses.len(), 2, "round one is two accounts, never three");
+        assert_eq!(
+            addresses.len(),
+            3,
+            "Market, Claims aggregate, and the owner's admission record"
+        );
         assert_eq!(addresses[0].as_str().unwrap(), input.market);
         assert_ne!(addresses[1].as_str().unwrap(), input.market);
+        assert_ne!(
+            addresses[2].as_str().unwrap(),
+            addresses[1].as_str().unwrap()
+        );
     }
 
     /// A routing table for another Market is refused before any read.

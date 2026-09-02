@@ -37,6 +37,8 @@ import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '
 import { WALLET_TERMINAL_PAYOUT_INPUT_FORMAT_V1 } from '@/lib/generated/walletTerminalPayoutWasmV1';
 import { deriveWalletTerminalPayoutManifestV1 } from '@/lib/walletTerminalPayoutSnapshot';
 import { loadWalletTerminalPayoutWasmV1 } from '@/lib/walletTerminalPayoutV1';
+import { deriveWalletTerminalPayoutInputV1 } from '@/lib/walletTerminalInputSnapshot';
+import { loadWalletTerminalInputWasmV1 } from '@/lib/walletTerminalInputV1';
 
 type ReplayFlow =
   | Readonly<{ kind: 'idle' | 'inspecting' }>
@@ -81,14 +83,20 @@ function isPayoutInputV1(text: string): boolean {
   } catch { return false; }
 }
 
-export default function RedeemFlow({ endpoint, marketAddress, positionAddress, claimIndex, availableQuantity, claimsProgramId, custodyProgramId, registryProgramId, directory }: Readonly<{
+export default function RedeemFlow({ endpoint, marketAddress, positionAddress, claimIndex, availableQuantity, claimsProgramId, custodyProgramId, registryProgramId, coreProgramId, resolutionProgramId, directory }: Readonly<{
   endpoint: string; marketAddress: string; positionAddress: string; claimIndex: number; availableQuantity: string;
-  claimsProgramId: string; custodyProgramId: string; registryProgramId: string; directory: WalletDirectoryHandleV1;
+  claimsProgramId: string; custodyProgramId: string; registryProgramId: string; coreProgramId: string; resolutionProgramId: string; directory: WalletDirectoryHandleV1;
 }>) {
   const client = useMemo(() => new SolanaRpcClient(endpoint), [endpoint]);
   const [replay, setReplay] = useState<ReplayFlow>({ kind: 'idle' });
   const [manifestText, setManifestText] = useState('');
   const [manifestSource, setManifestSource] = useState('');
+  // The one coordinate the protocol has never derived: which token account the
+  // proceeds are paid into. The CLI takes it as `--recipient`, and every other
+  // browser surface that moves collateral asks for it the same way -- JoinPanel
+  // and the Direct workspace both do. It is a wallet coordinate, not a
+  // document.
+  const [recipient, setRecipient] = useState('');
   const [payout, setPayout] = useState<PayoutFlow>({ kind: 'idle' });
   const [recovery, setRecovery] = useState('');
   const wallet = directory.address;
@@ -217,7 +225,7 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
   async function inspect() {
     setReplay({ kind: 'inspecting' });
     if (wallet === null) { setReplay({ kind: 'refused', reason: 'connect a browser wallet first: your wallet owns the claim balance and must authorize its payout', journal: null }); return; }
-    if (custodyProgramId === '' || registryProgramId === '') { setReplay({ kind: 'refused', reason: 'this deployment does not name all of the programs the payout needs', journal: null }); return; }
+    if (custodyProgramId === '' || registryProgramId === '' || coreProgramId === '' || resolutionProgramId === '') { setReplay({ kind: 'refused', reason: 'this deployment does not name all of the programs the payout needs', journal: null }); return; }
     try {
       const request = replayRequest(wallet); const state = await inspectClaimsCustodyReplayV1(client, request);
       if (state.status !== 'creatable') { setReplay({ kind: 'ready', state, journal: null }); return; }
@@ -257,6 +265,20 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
     setPayout({ kind: 'preparing' });
     try {
       if (BigInt(availableQuantity) === 0n) throw new Error('this Position holds zero winning atoms, so there is nothing to redeem');
+      // NOTHING IS IMPORTED. With an empty box the payout input is DERIVED
+      // here, from this deployment's five program ids and this Market: four
+      // finalized rounds that name the eleven-row address book the CLI used to
+      // project out of a sealed campaign report, and recompile the four
+      // composition records that no account on chain points at.
+      const inputText = manifestText.trim() === ''
+        ? (await deriveWalletTerminalPayoutInputV1(client, await loadWalletTerminalInputWasmV1(), {
+            programs: { registry: registryProgramId, core: coreProgramId, claims: claimsProgramId, custody: custodyProgramId, resolution: resolutionProgramId },
+            market: marketAddress,
+            owner: wallet,
+            recipient: recipient.trim(),
+            claimIndex,
+          })).inputJson
+        : manifestText;
       // A payout INPUT is completed here by the compiled derivation; an
       // already-complete manifest is taken as it always was. Two artifacts at
       // different stages of ONE authority, not two authorities: whichever
@@ -264,9 +286,9 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
       // `dclutch-wallet-terminal-payout-v3` proved against finalized devnet by
       // the same code.
       const manifest = importRustWalletTerminalPayoutArtifactV3(
-        isPayoutInputV1(manifestText)
-          ? await deriveWalletTerminalPayoutManifestV1(client, await loadWalletTerminalPayoutWasmV1(), manifestText)
-          : manifestText,
+        isPayoutInputV1(inputText)
+          ? await deriveWalletTerminalPayoutManifestV1(client, await loadWalletTerminalPayoutWasmV1(), inputText)
+          : inputText,
       );
       if (manifest.request.market !== marketAddress || manifest.request.position !== positionAddress || manifest.request.owner !== wallet || manifest.request.claimIndex !== claimIndex) throw new Error('the payout plan names another Market, Position, owner, or winning claim');
       if (BigInt(manifest.request.quantity) > BigInt(availableQuantity)) throw new Error('the payout plan tries to redeem more winning atoms than this Position holds');
@@ -358,10 +380,11 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
 
     <details className="trade-v3-bytes" open={payout.kind !== 'idle'}>
       <summary>Review and execute a payout plan</summary>
-      <p className="direct-status">Import the payout input the Rust producer emits — the <code>wallet-terminal-payout-input</code> command of the successor bootstrap tool, run against this market with your wallet as the position owner — or paste those bytes below. <strong>This browser completes the plan itself</strong>, with the <strong>compiled Rust</strong> derivation: the same code the operator toolchain runs, built to WebAssembly and refused unless its bytes match the recorded digest. It asks that derivation which accounts it authenticates, reads every one at one <strong>finalized</strong> floor, and hands them back for it to build the exact payout. An already-complete payout manifest is still accepted here unchanged. Before your wallet opens, it proves Solana devnet genesis, the checked Program and ProgramData generation, the activation release, terminal Market and certificate, Registry records, your Position, your recipient token account, and the one exact lookup table from finalized chain state.</p>
-      <label><span>Rust payout plan file</span><input type="file" accept="application/json,.json" disabled={payoutUnsigned !== null || payout.kind === 'submitted'} onChange={(event) => void importPayoutFile(event)} /></label>
+      <p className="direct-status"><strong>This browser builds the whole payout itself</strong>, from this deployment and this Market, with the <strong>compiled Rust</strong> derivation: the same code the operator toolchain runs, built to WebAssembly and refused unless its bytes match the recorded digest. Give it the token account your proceeds should land in and leave the box below empty. It reads four <strong>finalized</strong> rounds at one floor — the Market, the payment record and your admission record; the Realm, Product and basis records they name; the result-domain and portfolio records those name; then the payout frame — and <strong>recompiles the four composition records that nothing on chain points at</strong>, so no operator document is needed at any step. Pasting a payout input or a complete payout manifest still works and is checked exactly the same way. Before your wallet opens, it proves Solana devnet genesis, the checked Program and ProgramData generation, the activation release, terminal Market and certificate, Registry records, your Position, your recipient token account, and the one exact lookup table from finalized chain state.</p>
+      <label><span>Collateral token account for your proceeds</span><input required value={recipient} spellCheck={false} disabled={payoutUnsigned !== null || payout.kind === 'submitted'} onChange={(event) => { setRecipient(event.target.value); setPayout({ kind: 'idle' }); }} /></label>
+      <label><span>Rust payout plan file — optional</span><input type="file" accept="application/json,.json" disabled={payoutUnsigned !== null || payout.kind === 'submitted'} onChange={(event) => void importPayoutFile(event)} /></label>
       {manifestSource !== '' && <p className="direct-status" aria-live="polite">Imported {manifestSource}. No wallet action occurred.</p>}
-      <label><span>Payout plan JSON</span><textarea rows={7} spellCheck={false} disabled={payoutUnsigned !== null || payout.kind === 'submitted'} value={manifestText} onChange={(event) => { setManifestText(event.target.value); setPayout({ kind: 'idle' }); }} /></label>
+      <label><span>Payout plan JSON — optional; empty means derive it here</span><textarea rows={7} spellCheck={false} disabled={payoutUnsigned !== null || payout.kind === 'submitted'} value={manifestText} onChange={(event) => { setManifestText(event.target.value); setPayout({ kind: 'idle' }); }} /></label>
       {!replayExists && <p className="direct-status">You can inspect or import the Rust artifact now. Checking it against devnet and asking your wallet remain disabled until the payment record above is verified.</p>}
       <div className="direct-actions"><button type="button" disabled={!replayExists || payout.kind === 'preparing' || payout.kind === 'signing' || payout.kind === 'submitted'} onClick={() => void preparePayout()}>{payout.kind === 'preparing' ? 'Checking payout plan…' : 'Check payout plan'}</button></div>
       {payout.kind === 'refused' && <p className="market-refusal">Refused: {payout.reason}</p>}

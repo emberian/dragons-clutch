@@ -27,6 +27,8 @@ describe('wallet redemption flow', () => {
     claimsProgramId="4vJ9JU1bJJE96FWSJKvHsmmF7ujPKAy5SKpjXkLc6R1Q"
     custodyProgramId="8qbHbw2BbbTHBW1sbeqakYXV5ZZGczXJG2ajNeN3WFe"
     registryProgramId="CktRuQ2mttgRG9XJNgMHDqZqQmM4j5EJQ3R2A4j3ZxY"
+    coreProgramId="6JsGGCyDXfC7HmVpBZKUMkYCDnJTFhqBTPQCJgApnpDe"
+    resolutionProgramId="9V1s7wcYqGZHtGx5jrCWWiVWMqDPFKSGZ2Hk8DYNmuKk"
     directory={directory}
   />);
 
@@ -59,7 +61,7 @@ describe('wallet redemption flow', () => {
     // quietly deleted from under it.
     expect(html).toContain('Rust payout plan file');
     expect(html).not.toContain('This browser never creates or completes a payout plan');
-    expect(html).toContain('This browser completes the plan itself');
+    expect(html).toContain('This browser builds the whole payout itself');
     expect(html).toContain('the checked Program and ProgramData generation');
     expect(html).toContain('remain disabled until the payment record above is verified');
   });
@@ -75,6 +77,8 @@ describe('the browser derives the payout plan instead of only importing one', ()
     claimsProgramId="4vJ9JU1bJJE96FWSJKvHsmmF7ujPKAy5SKpjXkLc6R1Q"
     custodyProgramId="8qbHbw2BbbTHBW1sbeqakYXV5ZZGczXJG2ajNeN3WFe"
     registryProgramId="CktRuQ2mttgRG9XJNgMHDqZqQmM4j5EJQ3R2A4j3ZxY"
+    coreProgramId="6JsGGCyDXfC7HmVpBZKUMkYCDnJTFhqBTPQCJgApnpDe"
+    resolutionProgramId="9V1s7wcYqGZHtGx5jrCWWiVWMqDPFKSGZ2Hk8DYNmuKk"
     directory={directory}
   />);
 
@@ -89,10 +93,28 @@ describe('the browser derives the payout plan instead of only importing one', ()
     expect(html).toContain('finalized');
   });
 
-  it('is honest that the payout input still comes from the Rust producer', () => {
-    // Stage one — `wallet-terminal-payout-input` — reads two operator
-    // artifacts and its own RPC and was NOT extracted. Saying the browser does
-    // everything would be a claim this lane did not earn.
-    expect(html).toContain('wallet-terminal-payout-input');
+  it('no longer sends the reader to the Rust producer for the payout input', () => {
+    // WAS: this pinned that the page still names
+    // `wallet-terminal-payout-input`, the CLI command a reader had to run to
+    // get stage one's artifact. That was honest while stage one lived only in
+    // a binary and while its address book could only come from a sealed
+    // campaign report. The three phases were extracted, the book is DERIVED
+    // from chain, and the sentence goes with the behaviour rather than being
+    // quietly left standing.
+    expect(html).not.toContain('wallet-terminal-payout-input');
+    expect(html).not.toContain('successor bootstrap tool');
+  });
+
+  it('states that an empty box means the browser derives the input itself', () => {
+    expect(html).toContain('empty means derive it here');
+    expect(html).toContain('recompiles the four composition records that nothing on chain points at');
+    expect(html).toContain('no operator document is needed at any step');
+  });
+
+  it('asks for the one coordinate the protocol has never derived', () => {
+    // The destination of the proceeds. The CLI takes it as `--recipient`, and
+    // every other browser surface that moves collateral asks for it the same
+    // way. A wallet coordinate is not an imported document.
+    expect(html).toContain('Collateral token account for your proceeds');
   });
 });

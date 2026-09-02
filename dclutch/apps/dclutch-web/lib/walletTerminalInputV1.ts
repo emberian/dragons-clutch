@@ -24,15 +24,17 @@ import {
  * two file reads, an RPC and a cluster policy — and compiled to wasm32, so what
  * runs here is the same code the operator toolchain runs.
  *
- * NOT YET CALLED. The acquisition is its own unit and is not built: the address
- * book that phase one takes has no browser source yet. A boundary that compiles
- * and is not yet wired is a clean state; a boundary half-wired to an
- * acquisition is not.
+ * AND IT IS CALLED NOW. `walletTerminalInputSnapshot.ts` derives the address
+ * book instead of receiving one, so a browser with a deployment table and a
+ * connected wallet reaches a redemption with no imported document at all.
  */
 
 /** The six functions the compiled derivation exposes. */
 export type WalletTerminalInputWasmV1 = Readonly<{
   wallet_terminal_input_round_one_addresses_v1(requestJson: string): string;
+  wallet_terminal_input_book_round_two_addresses_v1(requestJson: string, roundOneJson: string): string;
+  wallet_terminal_input_book_round_three_addresses_v1(requestJson: string, roundOneJson: string, roundTwoJson: string): string;
+  derive_wallet_terminal_input_request_v1(requestJson: string, roundOneJson: string, roundTwoJson: string, roundThreeJson: string): string;
   wallet_terminal_input_frame_addresses_v1(requestJson: string, roundOneJson: string): string;
   build_wallet_terminal_payout_input_v1(requestJson: string, roundOneJson: string, roundTwoJson: string): string;
   core_state_bytes_v1(): number;
@@ -114,6 +116,9 @@ export async function loadWalletTerminalInputWasmV1(
   }
   return Object.freeze({
     wallet_terminal_input_round_one_addresses_v1: wasmModule.wallet_terminal_input_round_one_addresses_v1,
+    wallet_terminal_input_book_round_two_addresses_v1: wasmModule.wallet_terminal_input_book_round_two_addresses_v1,
+    wallet_terminal_input_book_round_three_addresses_v1: wasmModule.wallet_terminal_input_book_round_three_addresses_v1,
+    derive_wallet_terminal_input_request_v1: wasmModule.derive_wallet_terminal_input_request_v1,
     wallet_terminal_input_frame_addresses_v1: wasmModule.wallet_terminal_input_frame_addresses_v1,
     build_wallet_terminal_payout_input_v1: wasmModule.build_wallet_terminal_payout_input_v1,
     core_state_bytes_v1: wasmModule.core_state_bytes_v1,

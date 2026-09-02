@@ -17,6 +17,13 @@ test-fixtures = ["dclutch-wallet-terminal-payout-operator/test-fixtures"]
 [dependencies]
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+# PHASE ZERO's owners. Every one of these is already inside stage two's wasm
+# closure, so deriving the address book adds no crate to the browser's boundary
+# -- it only stops a document being the place four digests come from.
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-representation-composition-v3-operator = { path = "../dclutch-representation-composition-v3-operator" }
 # `default-features = false` drops `dealer-series`, and with it the Trading
 # PROGRAM, whose 64-bit `size_of` layout assertions cannot hold on a 32-bit
 # target. Those assertions are right; this derivation simply does not need the
