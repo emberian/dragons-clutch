@@ -161,20 +161,14 @@
 //! discipline. Adding a route to that list is the single visible act that lets
 //! it off.
 
-use core::{
-    alloc::Layout,
-    marker::PhantomData,
-    mem::MaybeUninit,
-    ptr::{NonNull, null_mut},
-    slice,
-};
+use core::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, ptr::NonNull, slice};
 use std::vec::Vec;
 
 #[cfg(not(target_os = "solana"))]
 use solana_program::instruction::Instruction;
 use solana_program::{
     account_info::AccountInfo,
-    entrypoint::{BPF_ALIGN_OF_U128, HEAP_LENGTH, MAX_PERMITTED_DATA_INCREASE},
+    entrypoint::{BPF_ALIGN_OF_U128, MAX_PERMITTED_DATA_INCREASE},
     instruction::AccountMeta,
     program_error::ProgramError,
     pubkey::Pubkey,
@@ -2119,7 +2113,7 @@ mod tests {
     // `dclutch-sbf-bump-heap` narrowed that import to `Layout`, which is right
     // for the module and left these tests unable to name `alloc`. Scoped to the
     // tests that call it rather than restored file-wide.
-    use core::alloc::GlobalAlloc;
+    use core::{alloc::GlobalAlloc, ptr::null_mut};
 
     fn layout(size: usize, align: usize) -> Layout {
         Layout::from_size_align(size, align).expect("layout")

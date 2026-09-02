@@ -647,10 +647,7 @@ fn admit_basket_phase(phase: Phase, action: BasketAction) -> Result<()> {
             | BasketAction::MintCompleteSet
             | BasketAction::MergeCompleteSet,
         )
-        | (
-            Phase::Terminal(_) | Phase::Retiring(_),
-            BasketAction::RedeemNativeTerminal,
-        ) => Ok(()),
+        | (Phase::Terminal(_) | Phase::Retiring(_), BasketAction::RedeemNativeTerminal) => Ok(()),
         _ => Err(Error::InvalidPhase),
     }
 }
@@ -832,10 +829,7 @@ fn command_coordinates(command: Command) -> (u32, u64) {
 fn admit_phase(phase: Phase, command: Command) -> Result<()> {
     match (phase, command) {
         (Phase::Open, Command::TransferNative { .. })
-        | (
-            Phase::Terminal(_) | Phase::Retiring(_),
-            Command::RedeemTerminal { .. },
-        ) => Ok(()),
+        | (Phase::Terminal(_) | Phase::Retiring(_), Command::RedeemTerminal { .. }) => Ok(()),
         _ => Err(Error::InvalidPhase),
     }
 }

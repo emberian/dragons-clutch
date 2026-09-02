@@ -207,6 +207,9 @@ async fn current_source_series_expire_lands_before_the_future_market_exists() {
         canonical_lookup_addresses(&instructions, solana_program::pubkey::Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
+    context
+        .warp_to_slot(2)
+        .expect("warp beyond the Series retry deadline");
     let before = capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
         .await
         .expect("success prestates");
@@ -268,6 +271,9 @@ async fn underfunded_selected_permit_refuses_with_exact_state_reversion() {
         canonical_lookup_addresses(&instructions, solana_program::pubkey::Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
+    context
+        .warp_to_slot(2)
+        .expect("warp beyond the Series retry deadline");
     let before = capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
         .await
         .expect("hostile prestates");
@@ -316,6 +322,9 @@ async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
         let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
         add_lookup_table(&mut test, &addresses);
         let mut context = start_with_substrate(test, fixture_substrate()).await;
+        context
+            .warp_to_slot(2)
+            .expect("warp beyond the Series retry deadline");
         let before =
             capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
                 .await

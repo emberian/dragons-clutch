@@ -49,7 +49,8 @@ pub const PLAN_FORMAT_V1: &str = "dclutch-user-position-admission-plan-v1";
 /// runtime refuses at execution with no useful reason.
 const _: () = assert!(USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1 == 27);
 const _: () = assert!(USER_POSITION_ADMISSION_MAGIC_V1.len() == 8);
-const _: () = assert!(USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1 < USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1);
+const _: () =
+    assert!(USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1 < USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

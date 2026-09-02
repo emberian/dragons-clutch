@@ -248,8 +248,8 @@ pub fn compile_interesting_product_records_v2(
     if belief.denominator() != input.cut_denominator {
         return Err(Error::FoundingBand);
     }
-    let report = require_interesting_partition_v1(input.cuts, belief, ceiling_bps)
-        .map_err(quality_error)?;
+    let report =
+        require_interesting_partition_v1(input.cuts, belief, ceiling_bps).map_err(quality_error)?;
     let compiled = compile_product_records_v2(
         registry_program,
         input,

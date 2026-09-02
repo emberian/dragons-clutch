@@ -71,9 +71,7 @@
 //! was substituted, while this means the selection a Market committed to and
 //! the terms it executes against describe different instruments.
 
-use crate::{
-    Error, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsV2, Result,
-};
+use crate::{Error, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsV2, Result};
 
 /// Exact encoded width of one selection config record.
 pub const FRACTIONAL_SELECTION_CONFIG_BYTES_V1: usize = 128;

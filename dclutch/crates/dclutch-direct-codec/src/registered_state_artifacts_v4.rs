@@ -756,9 +756,10 @@ fn registered_creation_plans_v4(
     ])
 }
 
-fn registered_creation_protected_v4()
--> Result<[Option<LifecycleProtectedOutputsInputV3>; PLAN_COUNT], DirectRegisteredStateArtifactErrorV4>
-{
+fn registered_creation_protected_v4() -> Result<
+    [Option<LifecycleProtectedOutputsInputV3>; PLAN_COUNT],
+    DirectRegisteredStateArtifactErrorV4,
+> {
     Ok([
         Some(LifecycleProtectedOutputsInputV3 {
             created: scalar(REGISTERED_SCALAR_MAKER_CREATED_V4)?,
@@ -787,8 +788,10 @@ fn registered_creation_protected_v4()
 /// with `base` stepping over that action's plans.
 fn registered_creation_bindings_v4(
     base: u16,
-) -> Result<[LifecycleImmutableIdentityBindingInputV4; BINDING_COUNT], DirectRegisteredStateArtifactErrorV4>
-{
+) -> Result<
+    [LifecycleImmutableIdentityBindingInputV4; BINDING_COUNT],
+    DirectRegisteredStateArtifactErrorV4,
+> {
     Ok([
         binding(
             base + 0,
@@ -881,8 +884,7 @@ mod unified_lifecycle_tests {
         }
         assert!(
             !sell_quotes.contains(&scalar(REGISTERED_SCALAR_REPLAY_RENT_V4).expect("replay"))
-                && !sell_quotes
-                    .contains(&scalar(REGISTERED_SCALAR_VAULT_RENT_V4).expect("vault")),
+                && !sell_quotes.contains(&scalar(REGISTERED_SCALAR_VAULT_RENT_V4).expect("vault")),
             "a Sell must never quote the Custody replay or vault",
         );
     }
@@ -907,8 +909,7 @@ mod unified_lifecycle_tests {
     #[test]
     fn the_unified_policy_is_one_digest_where_there_were_two_widths() {
         assert_ne!(
-            DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5,
-            DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5,
+            DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5, DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5,
             "the wall this crosses was two widths; if they ever match, say why",
         );
         assert!(unified().len() == DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5);

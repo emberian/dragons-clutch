@@ -2538,3 +2538,47 @@ map to the scratchpad at session start rather than session end.
 
 ### Lane map delta — 21:55
 - DEALER: C-06's eight routes witnessed (`a78f03eb`) — 273 transactions, 423 observations admitted, 7 executed + 1 refused-only (rollback: no campaign drives an accepting one yet, named as such, not as blocked). Provenance caveat: ELFs and harness from different commits; **not C-14 evidence until a quiet-tree re-run.** Runner now gates on `cargo check` **and** a campaign-private `CARGO_TARGET_DIR` — five attempts died on shared-lock starvation and half-applied refactors. Next: the equity Add with the new codes; the rollback twin.
+
+### Lane map delta — 2026-09-02 00:15 (after the 429 reboot; Fable)
+
+Resumed by SendMessage, never relaunched: `a88faeac520a279ee` COHORT (cohort-10 abandoned
+in place on a stale frame exemption, fixed `8ae2c9c9`; **cohort-11 deployed, genesis born at
+V2 on chain**; resumed at the founding/candidate), `a07bc54d2e4753bc9` REDEMPTION-STAGE-ONE
+(`d376896d` landed; on the WASM step), `af0d560c200fa8218` GENERAL (supply committed `a0ec6a2f`;
+heap wall is **one allocation > 34,640 B at width 2 with half of 65,536 free** — sized from a
+maximum; convicting), `a00611258f691f981` DIRECT (equity-Add `0x4003` window
+`hot_v3.rs:3905-4052`, then C-04), `aa481a3dcafc5b3f2` STRUCTURED (own S7 dirty paths, then
+redeem→retire on the Trading route), `a42033e11f655c7c5` WITNESS (L8 declarations, last 2 of 13).
+`adefc90f75702203a` DEALER — **closed**: `accepted.rs` landed `8099f363` (had been +4,059 lines
+uncommitted), custody reserve/rollback claimed `10e44fea`, selector 9 collapses into Direct's Add
+(`b059666d`); accelerator frames measure 2,342–3,084 B → packet lane.
+
+New: `a81fbac4395c47956` TREE-HYGIENE (52 dirty paths; HEAD is canonical under rustfmt
+1.97.1/2024 — proved; drift is bare-`rustfmt` 2015 style; `rustfmt.toml` + CI fmt gate + proof-gated
+restores + orphan landing + genref from a detached worktree). `a1d142591d150d69b` CORE (the dead
+`VerifyFundReady`/`AdmitTerminal` arms + `retire_v1.rs`'s 28 never-named frame constants).
+`ae46f8fc098a84c4b` PACKET (reading lane, Fable: `docs/design/PACKET_LIMIT_2026_09_01.md`, every
+route measured). `a4208061e68425b0d` RIP (four zero-consumer crates: product-payoff-codec V1 +
+its two Lean emitters, product-payoff-svm, product-payoff-v2-svm, pyth-contract).
+
+**Rip census (ember: "rip and tear old code that piled up").** Method: `cargo metadata`
+reverse-deps over 110 members + every sub-workspace manifest; then a one-pass tokenization of the
+tree joined against 20,681 `pub` definitions. Scratch: `census/census.tsv` under this session's
+scratchpad. **241 pub items are named exactly once in the tree (their definition).** They cluster:
+`core-sbf/retire_v1.rs` (28, → CORE), `trading-sbf/projected_{hot_outer,open,realize}_*_v4.rs`
+(7 entry points, zero callers — possibly not even `mod`-declared), `trading-sbf/series/*` (14 incl.
+`process_close_v3`/`process_retire_v3`, never dispatched), the shadow accelerator surface (12 across
+execution-strategy-contract + general-adapter-contract + series-shadow-sbf), `general-adapter-contract`
+(21 incl. the three `evaluate_general_admitted_*_v3`), `direct-codec/lib.rs` register/schema
+constants (7), `operator` (22 incl. `build_dealer_{equity,lp}_hot_instruction` — the campaign has
+its own builders: **two authors**; `build_claim_check_escrow_close_v1` never called;
+`compile_direct_hot_v0` never called → PACKET). Three programs are in no cohort AND not in the
+release tool's ROLES: `dealer-sbf` (5,234 lines, carries the B.13 HoardPrincipal defect),
+`direct-aot-sbf` (780), `product-runtime-v2-sbf` (694). Feature-gated families (`series-family`,
+`dealer-family`) are by design; dead items inside them are not.
+
+**Disk.** Data volume was at 30 GiB free. Reclaimed ~70 GiB from dead-session `/private/tmp`
+worktrees (diffs captured to scratchpad `orphan-worktrees/` first). NOT mine and not touched,
+for ember: `.claude/worktrees/` **122 GiB** (19 worktrees, 14 `target/` dirs; branches survive
+`git worktree remove`; opforms/genseven2/cohort10 hold 1/1/2 dirty files), `~/jobs/dclutch-fill2`
+**130 GiB**, `~/dev/dclutch/target` 64 GiB.

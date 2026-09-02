@@ -71,8 +71,7 @@ use crate::{
     },
     registered_state_artifacts_v4::{
         DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5, DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5,
-        DirectRegisteredCreationChildRentWidthsV4,
-        DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5,
+        DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5, DirectRegisteredCreationChildRentWidthsV4,
         encode_direct_registered_creation_unified_lifecycle_v5_atomic,
     },
     successor::{

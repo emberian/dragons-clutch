@@ -115,6 +115,24 @@ well-formed genesis V2 — both sentinels intact, `born_at_v2()` true — built 
 a *different* Registry binding. Only the derived-from-the-V1 equality can refuse
 that, and it does.
 
+### The genesis release candidate — the one control not yet closed
+
+`checked-release-candidate.sh --genesis-cohort` at `8ae2c9c9` built all thirteen
+SBF links, passed the freshness gate, produced all thirteen frame reports and
+provenance descriptors and the host tool, and then **died on the very stale
+`Cargo.lock` this lane fixed in `b2ac8a79`** — because it archives the source of
+the commit it is given, and `8ae2c9c9` predates that fix. Re-running it needs a
+commit that carries the lock, which is a different commit from the one whose
+bytes cohort-11 runs; the candidate is a source→artifact provenance artifact
+with synthetic program ids, so that is legitimate, but it means this control is
+**queued, not closed**.
+
+What it would add is end-to-end confirmation in the real pipeline. The substance
+it checks is already proven by unit test: schema 4 carries both profiles and
+neither can be substituted (`a_genesis_manifest_carries_both_profiles_and_neither_can_be_substituted`,
+red-proved), and `derive-genesis-infrastructure-profile` now writes both
+`profile.bin` and `profile.v2.bin`.
+
 ### Suites
 
 - 660 successor tests green, 22 of them `plan::tests`, and 35 release-tool tests.
@@ -353,5 +371,50 @@ before anything was claimed.
 The campaign payer holds 1.662489345 of the 2 SOL it was given. Cohort-10 left
 behind nine finalized Registry record bodies and its own 2 SOL payer — the price
 of learning that the frame exemption had rotted, paid once.
+
+Devnet evidence. Not mainnet evidence.
+
+## The load simulator against cohort-11, and where it stops
+
+Condition (b) of the standing grant. The config binds cohort-11's real facts —
+market `ARuPAuyJ…`, mint `H5zmg8nV…`, Claims aggregate `5wdhigoU…`, Hoard
+`ANJc9A1z…`, campaign payer as the funding wallet, never the deployer — and two
+fresh participants funded 0.05 SOL each from that payer.
+
+Pointing the sustain loop at a real founded market immediately produced two
+defects it had carried unseen, each the next refusal in order, both fixed in
+`18b9a21c`:
+
+- **It could not admit anybody.** The admission packet does not fit a legacy
+  message; it routes through the founding's own **frozen DCLTGMF3 address
+  lookup table**, and the driver refuses `PacketTooLarge` without one.
+  `simlife_drivers.py` has carried that fact since SEL-SEAM; `simulator.py`
+  never learned it.
+- **`simlife`'s own discovery helper does not work here.**
+  `frozen_routing_table_for` scans `getProgramAccounts` over the entire
+  AddressLookupTable program and answered `None` for a market whose frozen table
+  demonstrably exists — devnet's ALT program is far too large for that scan
+  through a real endpoint. The address is in the founding's own create/freeze
+  transaction: `6Pwb16HHphgvDbr6RW4p7k82qTGDccQHizJzk3LDXZwk`, from
+  `5iyBJssn…` / `2jF8ETgM…`.
+- **The journal lock has no directory.** The driver writes a lock beside its
+  `--output` before the output, so the admission died on the lock rather than on
+  anything about the admission.
+
+With those closed, both participants' admissions compile and preflight. **The
+run then stops at a wall that is not the protocol's**: the admission transaction
+refuses `BlockhashNotFound` at simulation, reproducibly, *after* its prefund
+transfer has landed (`4qMCqn7f…`). That is a v0 lookup-table packet whose
+blockhash is stale by the time a load-balanced endpoint simulates it, and the
+driver correctly refuses to re-sign an expired packet — *"archive the journal
+rather than re-signing"* — which is replay safety working, not a retry to
+weaken.
+
+So the market is founded and alive in the sense that matters for the genesis
+claim, and its **population life is not yet demonstrated**. What remains is
+narrow and named: a blockhash-freshness fix on the admission submission path,
+then the Direct trade path, which additionally needs authored seller/buyer
+tickets and a checked execution release the simulator config still carries as
+placeholders.
 
 Devnet evidence. Not mainnet evidence.

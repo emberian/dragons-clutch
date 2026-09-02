@@ -933,8 +933,14 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
     // are the reason the two Custody children cannot disagree about the token
     // they move even though no operation compares them -- an alias is a geometry
     // fact the runtime enforces, not a check a profile can get wrong.
-    (DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 9, MINT_ACCOUNT),
-    (DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 11, VAULT_ACCOUNT),
+    (
+        DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 9,
+        MINT_ACCOUNT,
+    ),
+    (
+        DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 11,
+        VAULT_ACCOUNT,
+    ),
     (
         DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 12,
         CUSTODY_AUTHORITY_ACCOUNT,

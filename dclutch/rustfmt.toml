@@ -1,0 +1,37 @@
+# rustfmt.toml -- one formatting authority for a tree that had two.
+#
+# Until this file existed, `cargo fmt` and `tools/lane.sh fmt` produced
+# DIFFERENT BYTES for the same source, and each one's output was the other's
+# diff. That is this project's signature defect -- a value duplicated instead
+# of read -- applied to formatting:
+#
+#   tools/lane.sh fmt  runs `rustfmt --edition 2024`, hardcoded, on whatever
+#                      file it is handed, regardless of the crate it lives in.
+#   cargo fmt          passes each target's DECLARED edition, read from the
+#                      manifest, and rustfmt derives `style_edition` from it.
+#
+# Those agree for the 108 packages that declare edition 2024 and disagree for
+# the one that does not: `dclutch-dealer-codec` declares `edition = "2021"`, so
+# `cargo fmt` formatted it in 2021 style while `lane.sh fmt` formatted it in
+# 2024 style. Import sorting is where it shows -- 2021 sorts `Error` before
+# `array_at` (ASCII, uppercase first), 2024 sorts it after -- so the five
+# `scenario_*_v1.rs` files flipped back and forth depending on which formatter
+# a lane happened to run, and each lane's diff looked to the next like real
+# work. No gate could see it: there was no fmt gate, because there was no
+# answer to "formatted how?" to gate against.
+#
+# `style_edition` here is that answer, and it is deliberately not a copy of
+# anything: rustfmt resolves style_edition as
+#   --style-edition (CLI) > this file > --edition (CLI) > edition > 2015
+# so setting it here OVERRIDES the per-crate edition that cargo fmt passes, and
+# every invocation -- `cargo fmt`, `lane.sh fmt`, a bare `rustfmt file.rs` --
+# now produces identical bytes. Verified against `dclutch-dealer-codec`, the
+# one crate where the two authorities disagreed.
+#
+# `edition` sets the PARSE edition for a bare `rustfmt file.rs`, which would
+# otherwise parse as 2015 and reject syntax the tree uses everywhere. cargo fmt
+# still overrides it per target from the manifest, which is correct: the crate
+# is the authority on how its own source parses. This is only the default for
+# an invocation that names no edition at all.
+edition = "2024"
+style_edition = "2024"

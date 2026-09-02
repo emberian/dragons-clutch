@@ -235,9 +235,7 @@ fn compose_lineage(
     for role in EXECUTION_ROLE_ORDER_V1 {
         let (before, after) = pair(predecessor, successor, role)?;
         let index = role.role_index();
-        let slot = *authority
-            .get(index)
-            .ok_or(RegistryError::AccountFrame)?;
+        let slot = *authority.get(index).ok_or(RegistryError::AccountFrame)?;
         if moved(before, after) {
             // An `Immutable` artifact binds no authority, so a hop claiming it
             // moved is a contradiction rather than a missing signature.
@@ -262,8 +260,7 @@ fn compose_lineage(
     // Under conjuncts 3 and 4 this constructor cannot refuse: equal programs
     // plus no moved artifact would mean equal projections, hence equal set ids,
     // which conjunct 3 already refused. It is a belt on that argument.
-    ReleaseLineageV1::new(before_id, after_id, consent)
-        .map_err(|_| RegistryError::Release.into())
+    ReleaseLineageV1::new(before_id, after_id, consent).map_err(|_| RegistryError::Release.into())
 }
 
 fn pair<'a>(
@@ -444,4 +441,3 @@ const _: () = assert!(
     RELEASE_LINEAGE_PDA_DOMAIN_V1.len() == 26,
     "the lineage signer seed must keep the domain width it signs with"
 );
-

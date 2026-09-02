@@ -486,11 +486,7 @@ fn claims_atoms(units: u64, basis_scale: u64) -> PoolEquityResultV3<u64> {
 /// Split one scenario's pro-rata atom payout into its whole claim-unit leg.
 ///
 /// `POOL_EQUITY_CLAIM_LEG_ROUNDING_V3` is the boundary applied here.
-fn claim_units_out(
-    payout: u64,
-    collateral_out: u64,
-    basis_scale: u64,
-) -> PoolEquityResultV3<u64> {
+fn claim_units_out(payout: u64, collateral_out: u64, basis_scale: u64) -> PoolEquityResultV3<u64> {
     if basis_scale == 0 {
         return Err(PoolEquityErrorV3::InvalidBasisScale);
     }

@@ -68,15 +68,6 @@
       "owner": "Dealer + Direct (naming)"
     },
     {
-      "magic": "DCLTPRQ2",
-      "constants": [
-        "ADMISSION_REQUEST_MAGIC_V2",
-        "PAYOFF_REQUEST_MAGIC_V2"
-      ],
-      "verdict": "DIFFERENT ELFS. ADMISSION_REQUEST_MAGIC_V2 is the Product Runtime V2 admission request (crates/dclutch-product-runtime-v2-admission, dispatched by dclutch-product-runtime-v2-sbf); PAYOFF_REQUEST_MAGIC_V2 is the payoff request of crates/dclutch-product-payoff-v2-svm. Neither program's entrypoint sees the other's constant, so one dispatcher never has to choose. Both are genuine request magics, which makes this the one to re-letter first -- but NOT YET. HELD 2026-09-01 until the current devnet cohort reports live: the deploy lane is rebuilding its ELF pack at a post-adjudication commit, and moving a magic mid-rebuild would leave it deploying artifacts that no longer match its recorded hashes. There is no hazard in waiting, because the two constants are in different ELFs and no dispatcher chooses between them. Ember's deploy grant is standing (\"as often as you feel ready\"), so the next redeploy is cheap and this belongs to it. Land it after the cohort is live, not before.",
-      "owner": "Product Runtime + Payoff"
-    },
-    {
       "magic": "DCLTSA03",
       "constants": [
         "SHADOW_ACK_MAGIC_V3",

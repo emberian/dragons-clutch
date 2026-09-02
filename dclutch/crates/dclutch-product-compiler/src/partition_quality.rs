@@ -427,7 +427,10 @@ fn assess_stated_prior(
     cuts: &[i128],
     prior: &StatedPropositionV1,
 ) -> Result<PartitionQualityReportV1, CompileError> {
-    let ordinary_cells = cuts.len().checked_add(1).ok_or(CompileError::CountOverflow)?;
+    let ordinary_cells = cuts
+        .len()
+        .checked_add(1)
+        .ok_or(CompileError::CountOverflow)?;
     if prior.denominator == 0 {
         return Err(CompileError::ZeroCoordinateDenominator);
     }
@@ -723,9 +726,12 @@ mod tests {
             vec![99_400_000, 99_800_000, 100_200_000, 100_600_000]
         );
         assert_eq!((centred[0] + centred[3]) / 2, LOCAL_PYTH_FIXTURE_COORDINATE);
-        let healthy =
-            require_interesting_partition_v1(&centred, &two_wide(band), MAX_CELL_EX_ANTE_SHARE_BPS_V1)
-                .expect("a centred band is not degenerate");
+        let healthy = require_interesting_partition_v1(
+            &centred,
+            &two_wide(band),
+            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        )
+        .expect("a centred band is not degenerate");
         // The band states a width of one characteristic displacement, so under
         // a two-displacement plausible band the open tails legitimately hold
         // most of the mass. What matters is that no single cell takes the
@@ -918,13 +924,13 @@ mod tests {
         // holds. P(graduates) = 35%: the cell takes 3,500 bps and the disclosed
         // failure outcome takes the other 6,500. Neither takes the market.
         let graduation = proposition(&[3_500]);
-        let report = require_interesting_partition_v1(
-            &[],
-            &graduation,
-            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
-        )
-        .expect("a stated proposition is a question");
-        assert_eq!(report.model, PartitionQualityModelV1::StatedCategoricalPrior);
+        let report =
+            require_interesting_partition_v1(&[], &graduation, MAX_CELL_EX_ANTE_SHARE_BPS_V1)
+                .expect("a stated proposition is a question");
+        assert_eq!(
+            report.model,
+            PartitionQualityModelV1::StatedCategoricalPrior
+        );
         assert_eq!(report.cell_share_bps, vec![3_500]);
         assert_eq!(report.unresolved_share_bps, 6_500);
         assert_eq!(report.dominant_share_bps, 3_500);
@@ -960,8 +966,12 @@ mod tests {
         );
         // POSITIVE CONTROL in the same run, so the two refusals above are
         // about placement rather than about the checker.
-        require_interesting_partition_v1(&[], &proposition(&[3_500]), MAX_CELL_EX_ANTE_SHARE_BPS_V1)
-            .expect("a 35% proposition is a question");
+        require_interesting_partition_v1(
+            &[],
+            &proposition(&[3_500]),
+            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        )
+        .expect("a 35% proposition is a question");
     }
 
     /// The stated ceiling is bounded by the release's own ceiling.
@@ -1022,8 +1032,12 @@ mod tests {
             Err(CompileError::DegenerateOutcomePartition),
             "a width-two SPOT market is still degenerate, and no exemption saves it"
         );
-        require_interesting_partition_v1(&[], &proposition(&[4_200]), MAX_CELL_EX_ANTE_SHARE_BPS_V1)
-            .expect("a width-two PROPOSITIONAL market states a belief and passes");
+        require_interesting_partition_v1(
+            &[],
+            &proposition(&[4_200]),
+            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        )
+        .expect("a width-two PROPOSITIONAL market states a belief and passes");
         // And a width-three proposition splits across cells the same way.
         let three = require_interesting_partition_v1(
             &[7],
@@ -1085,7 +1099,10 @@ mod tests {
         assert_eq!(report.dominant_share_bps, 3_950);
         assert_eq!(report.characteristic_displacement, Some(300));
         assert_eq!(report.plausible_half_width, Some(900));
-        assert_eq!(report.model, PartitionQualityModelV1::TriangularPlausibleBand);
+        assert_eq!(
+            report.model,
+            PartitionQualityModelV1::TriangularPlausibleBand
+        );
         // The new disjunct in `is_degenerate` cannot reach the price path.
         assert_eq!(report.unresolved_share_bps, 0);
     }

@@ -2883,8 +2883,12 @@ impl Operation {
             return Err(Error::InvalidCoordinate);
         }
         match self.opcode {
-            OP_REQUIRE_KEY | OP_REQUIRE_OWNER | OP_PROJECT_KEY | OP_PROJECT_OWNER
-            | OP_PROJECT_LAMPORTS | OP_PROJECT_DATA_DIGEST => {
+            OP_REQUIRE_KEY
+            | OP_REQUIRE_OWNER
+            | OP_PROJECT_KEY
+            | OP_PROJECT_OWNER
+            | OP_PROJECT_LAMPORTS
+            | OP_PROJECT_DATA_DIGEST => {
                 if self.data_offset != 0 || self.data_stride != 0 {
                     return Err(Error::NonCanonicalOperation);
                 }
@@ -4403,9 +4407,7 @@ mod tests {
         output
     }
 
-    fn project_one_digest(
-        observation: AccountObservationV1<'_>,
-    ) -> Result<[u8; 32]> {
+    fn project_one_digest(observation: AccountObservationV1<'_>) -> Result<[u8; 32]> {
         let bytes = data_digest_profile_bytes();
         let profile = AccountProfileV2::decode(&bytes).expect("digest profile");
         let accounts = [observation];
@@ -4482,8 +4484,9 @@ mod tests {
         // says so -- a pass that ignored the field would report `digest` here
         // too, or the zero it started from.
         let forged = [0x3e_u8; 32];
-        let perturbed = AccountObservationV1::new(&[1; 32], &[2; 32], 0, &data, false, false, false)
-            .with_adapter_data_digest(&forged);
+        let perturbed =
+            AccountObservationV1::new(&[1; 32], &[2; 32], 0, &data, false, false, false)
+                .with_adapter_data_digest(&forged);
         assert_eq!(project_one_digest(perturbed), Ok(forged));
         assert_ne!(forged, digest);
 

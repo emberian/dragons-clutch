@@ -235,11 +235,11 @@ loudly which tree it measured, and counts the uncommitted files if there are any
   *host* tests (`cargo test --manifest-path
   tools/local-validator/bootstrap/successor/Cargo.toml`, 443 of them) are
   ordinary and would drop into `suites` as one more row — call it an hour.
-- **`tools/gauntlet/claims-extended` and `tools/gauntlet/dealer`**, which fold
+- **`tools/gauntlet/claims-extended` and `tools/gauntlet/dealer-checkpoint`**, which fold
   their campaigns into census evidence and *do* carry the frame-diagnostic
   refusal. Both refuse to start until `tools/gauntlet/run.sh --mode census` has
   run, so wiring them means wiring that ordering too. Half a day, and the payoff
-  is real: the dealer family test was silently red from 2026-08-27 to
+  is real: the retired dealer family test was silently red from 2026-08-27 to
   `33a61576` because a release-path change touched seven programs and zero
   campaigns.
 - **The gauntlet's validator campaigns** are not here and should not be: they

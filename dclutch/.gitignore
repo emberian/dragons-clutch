@@ -6,3 +6,8 @@
 # tools/sbom/sbom_check.py now runs on every `npm test` (73f84c19), so every
 # lane that runs the web suite materialises this next to a tracked tool.
 __pycache__/
+# Lane worktrees. `tools/lane.sh`-driven lanes and the Claude Code harness
+# create git worktrees under .claude/worktrees/ (19 of them as this was
+# written), each a full checkout of this repository. They are working state of
+# whoever is running right now, never content of this tree.
+/.claude/worktrees/

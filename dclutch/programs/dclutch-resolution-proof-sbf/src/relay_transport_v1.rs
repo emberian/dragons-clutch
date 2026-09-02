@@ -74,11 +74,10 @@ use dclutch_registry_contract::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
 };
 use dclutch_relay_contract::{
-    MAX_RELAYED_ACCOUNTS_V1, RELAYED_ADAPTER_CONFIG_BYTES,
+    Error as RelayContractError, MAX_RELAYED_ACCOUNTS_V1, RELAYED_ADAPTER_CONFIG_BYTES,
     RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYED_RECORD_PDA_DOMAIN_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYER_KEY_SET_BYTES,
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
-    Error as RelayContractError,
     frame::{RelayAccountPrivilegeV1, RelayFrameKindV1, validate_relay_frame_v1},
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,

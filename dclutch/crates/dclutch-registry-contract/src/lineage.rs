@@ -76,8 +76,7 @@ const UNMOVED_BYTE: u8 = 0;
 
 // The declared width is the sum of the fields, not a number someone typed.
 const _: () = assert!(
-    RELEASE_LINEAGE_BYTES_V1
-        == AUTHORITIES_OFFSET + EXECUTION_ROLE_COUNT_V1 * IDENTITY_BYTES,
+    RELEASE_LINEAGE_BYTES_V1 == AUTHORITIES_OFFSET + EXECUTION_ROLE_COUNT_V1 * IDENTITY_BYTES,
     "release-lineage width must equal its own layout"
 );
 const _: () = assert!(
@@ -140,10 +139,10 @@ impl ReleaseLineageV1 {
     /// Hostile-decode one exact release-set lineage record.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         validate_lineage_header(bytes)?;
-        let predecessor =
-            ContentId::new(read_array(bytes, PREDECESSOR_OFFSET)?).map_err(|_| Error::ZeroIdentity)?;
-        let successor =
-            ContentId::new(read_array(bytes, SUCCESSOR_OFFSET)?).map_err(|_| Error::ZeroIdentity)?;
+        let predecessor = ContentId::new(read_array(bytes, PREDECESSOR_OFFSET)?)
+            .map_err(|_| Error::ZeroIdentity)?;
+        let successor = ContentId::new(read_array(bytes, SUCCESSOR_OFFSET)?)
+            .map_err(|_| Error::ZeroIdentity)?;
         let mut consent = [None; EXECUTION_ROLE_COUNT_V1];
         for role in EXECUTION_ROLE_ORDER_V1 {
             let index = role.role_index();
@@ -172,7 +171,11 @@ impl ReleaseLineageV1 {
     pub fn to_bytes(self) -> [u8; RELEASE_LINEAGE_BYTES_V1] {
         let mut output = [0; RELEASE_LINEAGE_BYTES_V1];
         copy_infallible(&mut output, 0, &RELEASE_LINEAGE_MAGIC_V1);
-        put_u16(&mut output, SCHEMA_OFFSET, RELEASE_LINEAGE_SCHEMA_VERSION_V1);
+        put_u16(
+            &mut output,
+            SCHEMA_OFFSET,
+            RELEASE_LINEAGE_SCHEMA_VERSION_V1,
+        );
         put_u16(&mut output, PROFILE_OFFSET, RELEASE_LINEAGE_PROFILE_V1);
         copy_infallible(&mut output, PREDECESSOR_OFFSET, self.predecessor.as_bytes());
         copy_infallible(&mut output, SUCCESSOR_OFFSET, self.successor.as_bytes());

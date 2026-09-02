@@ -8,6 +8,8 @@
   },
   "bootstrap_bin": "/Users/ember/dev/dclutch/tools/local-validator/bootstrap/successor/target/debug/dclutch-local-successor-bootstrap",
   "work_dir": "/private/tmp/dclutch-sim-devnet-01",
+  "_routing_table_comment": "The founding's own FROZEN DCLTGMF3 address lookup table. The admission packet does not fit a legacy message and the driver refuses PacketTooLarge without one. It is the frozen table (authority None) whose address list contains the Market; the founding does not write its address down, so read it from the create/freeze transactions in campaign-open.json or scan for it. Per-admission `routing_table` overrides this.",
+  "routing_table": "<founding frozen DCLTGMF3 lookup table>",
   "market_address": "<SPINE flagship market address>",
   "cadence": { "period_seconds": 20.0, "jitter_fraction": 0.25 },
   "trade": {

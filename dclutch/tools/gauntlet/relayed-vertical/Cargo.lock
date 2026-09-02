@@ -1021,6 +1021,7 @@ dependencies = [
  "dclutch-resolution-core-v3-operator",
  "dclutch-series-v3-kernel",
  "dclutch-source-contract",
+ "dclutch-source-readiness-operator",
  "dclutch-token-svm",
  "dclutch-versioned-message-operator",
  "reqwest",
@@ -1125,6 +1126,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-sbf-bump-heap"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-series-v3-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1161,6 +1169,19 @@ version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
  "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-source-readiness-operator"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "dclutch-market-core-codec",
+ "dclutch-resolution-core-v3-operator",
+ "serde",
+ "serde_json",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -1207,6 +1228,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
+ "dclutch-sbf-bump-heap",
  "dclutch-series-v3-kernel",
  "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",

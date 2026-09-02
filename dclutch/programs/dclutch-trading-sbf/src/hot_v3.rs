@@ -576,7 +576,42 @@ fn hot_checkpoint(phase: &str) {
 fn hot_heap_mark(label: &str) {
     let (position, scratch) = hot_heap_outstanding();
     solana_program::log::sol_log(label);
-    solana_program::log::sol_log_64(position.saturating_add(scratch), position, scratch, 0, 0);
+    solana_program::log::sol_log_64(
+        position.saturating_add(scratch),
+        position,
+        scratch,
+        hot_heap_capacity(),
+        0,
+    );
+}
+
+/// The ceiling the allocator is actually enforcing, as the fourth logged word.
+///
+/// A mark that prints only what has been HANDED OUT cannot say whether the next
+/// allocation will fit, because the ceiling is not a constant: `admit_heap_frame_v1`
+/// raises it mid-invocation for a route that declared the extended profile. Read
+/// without it, 30,896 outstanding looks like exhaustion of a 32,768 default and
+/// is in fact 47% of a 65,536 grant -- opposite conclusions from the same three
+/// numbers. That reading cost a one-line throwaway probe on 2026-09-01; the
+/// probe is this line now.
+#[cfg(feature = "hot-cu-profile")]
+fn hot_heap_capacity() -> u64 {
+    #[cfg(all(
+        target_os = "solana",
+        not(feature = "custom-heap"),
+        not(feature = "no-entrypoint")
+    ))]
+    {
+        u64::try_from(crate::entrypoint_adapter::program_heap_capacity_v1()).unwrap_or(u64::MAX)
+    }
+    #[cfg(not(all(
+        target_os = "solana",
+        not(feature = "custom-heap"),
+        not(feature = "no-entrypoint")
+    )))]
+    {
+        0
+    }
 }
 
 /// The bump position and the scratch bytes outstanding, both as offsets from

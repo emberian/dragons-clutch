@@ -74,7 +74,12 @@ struct RequestV1 {
 /// probability vector decode as either member, and which model measures a
 /// market is the one thing this wire must not leave ambiguous.
 #[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", rename_all_fields = "camelCase", tag = "kind", deny_unknown_fields)]
+#[serde(
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    tag = "kind",
+    deny_unknown_fields
+)]
 enum BeliefWireV1 {
     #[serde(rename = "spot-band")]
     SpotBand {

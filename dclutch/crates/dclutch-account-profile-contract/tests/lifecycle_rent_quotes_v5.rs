@@ -316,12 +316,26 @@ fn four_authenticated_quotes_project_atomically_to_protected_common_scalars() {
     assert_eq!(output.get(37), Some(&0));
     assert_eq!(output.get(49), Some(&0));
     assert_eq!(
-        policy.validate_projected_current_rent_quotes(profile, None, 0, 0, &output, &quote_inputs()),
+        policy.validate_projected_current_rent_quotes(
+            profile,
+            None,
+            0,
+            0,
+            &output,
+            &quote_inputs()
+        ),
         Ok(())
     );
     *output.get_mut(47).expect("protected quote") = 1;
     assert_eq!(
-        policy.validate_projected_current_rent_quotes(profile, None, 0, 0, &output, &quote_inputs()),
+        policy.validate_projected_current_rent_quotes(
+            profile,
+            None,
+            0,
+            0,
+            &output,
+            &quote_inputs()
+        ),
         Err(Error::InvalidRentQuote)
     );
 }

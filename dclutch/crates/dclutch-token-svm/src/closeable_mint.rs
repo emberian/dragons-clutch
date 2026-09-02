@@ -18,9 +18,9 @@
 use crate::{
     Address, COption, Error, MINT_BYTES, Mint, Result, TOKEN_2022_PROGRAM_ID,
     tlv::{
-        ACCOUNT_TYPE_OFFSET, AUTHORITY_EXTENSION_BYTES, BASE_ACCOUNT_BYTES,
-        MINT_ACCOUNT_TYPE, MINT_CLOSE_AUTHORITY_EXTENSION, PERMISSIONED_BURN_EXTENSION,
-        TLV_HEADER_BYTES, TLV_START_OFFSET, TlvCursor, require_extension, require_key,
+        ACCOUNT_TYPE_OFFSET, AUTHORITY_EXTENSION_BYTES, BASE_ACCOUNT_BYTES, MINT_ACCOUNT_TYPE,
+        MINT_CLOSE_AUTHORITY_EXTENSION, PERMISSIONED_BURN_EXTENSION, TLV_HEADER_BYTES,
+        TLV_START_OFFSET, TlvCursor, require_extension, require_key,
     },
 };
 
@@ -259,19 +259,35 @@ mod tests {
     #[test]
     fn duplicate_unknown_and_extra_extensions_are_refused() {
         let mut duplicate_close = base_account();
-        put_tlv(&mut duplicate_close, MINT_CLOSE_AUTHORITY_EXTENSION, &AUTHORITY);
-        put_tlv(&mut duplicate_close, MINT_CLOSE_AUTHORITY_EXTENSION, &AUTHORITY);
+        put_tlv(
+            &mut duplicate_close,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &AUTHORITY,
+        );
+        put_tlv(
+            &mut duplicate_close,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &AUTHORITY,
+        );
         assert_eq!(duplicate_close.len(), TOKEN_2022_CLOSEABLE_MINT_BYTES_V2);
         assert_eq!(check(&duplicate_close), Err(Error::InvalidExtensionLayout));
 
         let mut duplicate_burn = closeable_mint();
-        put_tlv(&mut duplicate_burn, PERMISSIONED_BURN_EXTENSION, &BURN_AUTHORITY);
+        put_tlv(
+            &mut duplicate_burn,
+            PERMISSIONED_BURN_EXTENSION,
+            &BURN_AUTHORITY,
+        );
         assert_eq!(check(&duplicate_burn), Err(Error::InvalidExtensionLayout));
 
         // Admitted by the wider behavior profile, refused by this one: the
         // lifecycle's own Mints carry no metadata.
         let mut with_metadata_pointer = closeable_mint();
-        put_tlv(&mut with_metadata_pointer, METADATA_POINTER_EXTENSION, &[0; 64]);
+        put_tlv(
+            &mut with_metadata_pointer,
+            METADATA_POINTER_EXTENSION,
+            &[0; 64],
+        );
         assert_eq!(
             check(&with_metadata_pointer),
             Err(Error::InvalidExtensionLayout)
@@ -339,13 +355,29 @@ mod tests {
         assert_eq!(check(&mint_authority), Err(Error::AuthorityMismatch));
 
         let mut close_authority = base_account();
-        put_tlv(&mut close_authority, MINT_CLOSE_AUTHORITY_EXTENSION, &OTHER_AUTHORITY);
-        put_tlv(&mut close_authority, PERMISSIONED_BURN_EXTENSION, &BURN_AUTHORITY);
+        put_tlv(
+            &mut close_authority,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &OTHER_AUTHORITY,
+        );
+        put_tlv(
+            &mut close_authority,
+            PERMISSIONED_BURN_EXTENSION,
+            &BURN_AUTHORITY,
+        );
         assert_eq!(check(&close_authority), Err(Error::AuthorityMismatch));
 
         let mut burn_authority = base_account();
-        put_tlv(&mut burn_authority, MINT_CLOSE_AUTHORITY_EXTENSION, &AUTHORITY);
-        put_tlv(&mut burn_authority, PERMISSIONED_BURN_EXTENSION, &OTHER_AUTHORITY);
+        put_tlv(
+            &mut burn_authority,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &AUTHORITY,
+        );
+        put_tlv(
+            &mut burn_authority,
+            PERMISSIONED_BURN_EXTENSION,
+            &OTHER_AUTHORITY,
+        );
         assert_eq!(check(&burn_authority), Err(Error::AuthorityMismatch));
 
         let mut supply = canonical.clone();

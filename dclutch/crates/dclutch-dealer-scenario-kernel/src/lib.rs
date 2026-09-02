@@ -180,8 +180,7 @@ pub fn scenario_equity(
     basis_scale: u64,
     obligation: u64,
 ) -> i128 {
-    i128::from(present_capital)
-        + i128::from(canonical_claim_inventory) * i128::from(basis_scale)
+    i128::from(present_capital) + i128::from(canonical_claim_inventory) * i128::from(basis_scale)
         - i128::from(obligation)
 }
 
@@ -190,7 +189,8 @@ fn set_atoms(sets: u64, basis_scale: u64) -> Result<u64> {
     if basis_scale == 0 {
         return Err(Error::InvalidBasisScale);
     }
-    sets.checked_mul(basis_scale).ok_or(Error::ArithmeticOverflow)
+    sets.checked_mul(basis_scale)
+        .ok_or(Error::ArithmeticOverflow)
 }
 
 /// Require exact terminal-scenario equity to meet the locked capital floor.
@@ -347,7 +347,12 @@ pub fn plan_scenario_netting(
         let candidate = funded
             .checked_sub(maximum_merge)
             .ok_or(Error::ArithmeticOverflow)?;
-        let equity = scenario_equity(capital_after, candidate, transition.basis_scale, *obligation);
+        let equity = scenario_equity(
+            capital_after,
+            candidate,
+            transition.basis_scale,
+            *obligation,
+        );
         if equity < minimum_equity_after {
             minimum_equity_after = equity;
             minimum_scenario_after = scenario;
@@ -379,8 +384,12 @@ pub fn plan_scenario_netting(
             .saturating_sub(*delivered)
             .saturating_sub(maximum_merge);
         *inventory_output = candidate;
-        *equity_output =
-            scenario_equity(capital_after, candidate, transition.basis_scale, *obligation);
+        *equity_output = scenario_equity(
+            capital_after,
+            candidate,
+            transition.basis_scale,
+            *obligation,
+        );
     }
 
     Ok(ScenarioNettingPlan {

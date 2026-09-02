@@ -41,8 +41,8 @@ use crate::{
     OBSERVED_CLOCK_SLOT_OFFSET_V1, OBSERVED_CLOCK_SYSVAR_KEY_V1,
     OBSERVED_CLOCK_UNIX_TIMESTAMP_OFFSET_V1, OBSERVED_SYSVAR_OWNER_V1,
     RELAYED_OBSERVABLE_DBC_MIGRATION_PROGRESS_V1, RELAYED_OBSERVABLE_DBC_RAW_EXPONENT_V1,
-    RELAYED_OBSERVABLE_MINT_AUTHORITY_RAW_EXPONENT_V1, RELAYED_OBSERVABLE_MINT_AUTHORITY_RENOUNCED_V1,
-    Result,
+    RELAYED_OBSERVABLE_MINT_AUTHORITY_RAW_EXPONENT_V1,
+    RELAYED_OBSERVABLE_MINT_AUTHORITY_RENOUNCED_V1, Result,
     identity::{LOADER_V3_PROGRAM_ID, reconstruct_deployment_observation_v1},
     record::RelayedObservationRecordViewV1,
     release::{AccountSetEntryV1, RelayedAdapterConfigV1},
@@ -530,7 +530,8 @@ fn read_mint_authority_renounced(mint: AccountObservationV1<'_>) -> Result<i128>
         return Err(Error::InvalidInlineWidth);
     }
     let inline = mint.inline();
-    let state = MintAuthorityStateV1::from_tag(crate::u32_at(inline, MINT_AUTHORITY_TAG_OFFSET_V1)?)?;
+    let state =
+        MintAuthorityStateV1::from_tag(crate::u32_at(inline, MINT_AUTHORITY_TAG_OFFSET_V1)?)?;
     let is_initialized = crate::one(inline, MINT_IS_INITIALIZED_OFFSET_V1)?;
     let freeze_authority_tag = crate::u32_at(inline, MINT_FREEZE_AUTHORITY_TAG_OFFSET_V1)?;
     if is_initialized != 1 {
@@ -769,8 +770,11 @@ mod tests {
         }
     }
 
-    fn mint_body(authority_tag: u32, is_initialized: u8, freeze_tag: u32) -> [u8; MINT_INLINE_BYTES_V1]
-    {
+    fn mint_body(
+        authority_tag: u32,
+        is_initialized: u8,
+        freeze_tag: u32,
+    ) -> [u8; MINT_INLINE_BYTES_V1] {
         let mut data = [0u8; MINT_INLINE_BYTES_V1];
         data[MINT_AUTHORITY_TAG_OFFSET_V1..MINT_AUTHORITY_TAG_OFFSET_V1 + 4]
             .copy_from_slice(&authority_tag.to_le_bytes());
@@ -865,13 +869,7 @@ mod tests {
         }
         let body = mint_body(COPTION_NONE_TAG_V1, 1, COPTION_SOME_TAG_V1);
         let wrong_length = AccountObservationV1::new(
-            [0x77; 32],
-            [0x2a; 32],
-            1_461_600,
-            165,
-            &body,
-            false,
-            [0x11; 32],
+            [0x77; 32], [0x2a; 32], 1_461_600, 165, &body, false, [0x11; 32],
         )
         .expect("a body whose account is longer than its inline prefix");
         assert_eq!(
@@ -927,9 +925,7 @@ mod tests {
             DBC_ADMITTED_DATA_LENGTHS_V1[0]
         );
         assert_eq!(
-            u32::from(
-                RelayedObservableV1::Token2022MintAuthorityRenouncedV1.state_inline_bytes()
-            ),
+            u32::from(RelayedObservableV1::Token2022MintAuthorityRenouncedV1.state_inline_bytes()),
             MINT_ADMITTED_DATA_LENGTHS_V1[0]
         );
     }
@@ -937,7 +933,10 @@ mod tests {
     #[test]
     fn a_malformed_layout_refuses_by_name_rather_than_reading_one_body_twice() {
         let sound = RelayedObservableV1::DbcMigrationProgressV1.set_layout();
-        assert_eq!(sound.require_well_formed(DBC_VENUE_SET_CARDINALITY_V1), Ok(()));
+        assert_eq!(
+            sound.require_well_formed(DBC_VENUE_SET_CARDINALITY_V1),
+            Ok(())
+        );
         // Two roles on one position: the defect the check exists to catch.
         let collided = RelayedSetLayoutV1 {
             state: sound.clock,

@@ -275,8 +275,14 @@ fn two_lp_life_conserves_every_scenario_and_pays_equal_shares_equally() {
 
     // NO FIRST-MOVER SUBSIDY: exiting first is worth exactly the same as
     // exiting second. If it were worth more, the later LP funded the earlier.
-    assert_eq!(a_first, a_second, "LP A's exit must not depend on its order");
-    assert_eq!(b_first, b_second, "LP B's exit must not depend on its order");
+    assert_eq!(
+        a_first, a_second,
+        "LP A's exit must not depend on its order"
+    );
+    assert_eq!(
+        b_first, b_second,
+        "LP B's exit must not depend on its order"
+    );
     assert_eq!(pool_ab.residual(), pool_ba.residual());
 
     // EQUAL SHARES, EQUAL VALUE: both hold 100 of 200 shares, and B entered at
@@ -409,9 +415,7 @@ fn a_policy_floor_raised_after_i_joined_can_strand_my_exit() {
                 obligations: &pool.obligations,
                 total_shares: pool.total_shares,
                 locked_capital_floor: floor,
-                action: PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 {
-                    burned_shares: 100,
-                }),
+                action: PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 { burned_shares: 100 }),
                 basis_scale: 1,
             },
             &mut a,

@@ -3890,8 +3890,8 @@ mod tests {
                 // the crank takes all of it and NONE of anyone's principal.
                 assert_eq!(close.crank_reward(), exact_rent + donation);
                 assert!(
-                    close.crank_reward() <= close.ledger_rent_lamports()
-                        + close.ledger_lamport_donation(),
+                    close.crank_reward()
+                        <= close.ledger_rent_lamports() + close.ledger_lamport_donation(),
                     "the reward must never reach principal"
                 );
             } else {

@@ -1,4 +1,20 @@
-# dealer-checkpoint — the Dealer scenario-checkpoint lifecycle, on real ELFs
+# dealer-checkpoint — the C-06 Dealer evidence tier, on the SHIPPED path
+
+**This is the Dealer tier.** `tools/gauntlet/dealer` was retired on 2026-09-02:
+it drove `dclutch-dealer-sbf`'s own program-test, and that program is marked
+`false` in the release tool's `SHIPPED_LINKS` and calls itself, in its own
+header, "a standalone prototype ... not a second accepted Trading release
+identity". So the row's evidence was about a program nobody ships while the
+shipped path — Trading's dealer family through the accelerator — was the one
+`blocked.json` recorded as undriven. That is an evidence-integrity defect, and
+the retired tier's frame-diagnostic gate on the accelerator link (the thing its
+own comment said "the Dealer tier is where that link belongs") is carried here,
+in this runner's build loop.
+
+The name stays `dealer-checkpoint` rather than becoming `dealer`: renaming a
+campaign directory rewrites the `campaign` field every ledger row already
+carries, and the rows are the evidence.
+
 
 This tier exists to witness eight routes that row **C-06** owned and no campaign
 drove: the seven `dealer_scenario_checkpoint_v1` stages from create through
@@ -77,6 +93,40 @@ their own beneath `dealer_reservation_v1::process`, and the campaign drives both
 transaction drove is not a guess: the Trading ingest magic the label was derived
 from is emitted by the same builder call that chose the Custody action, so the
 two cannot disagree.
+
+## Why selector 9 has no executed row, and what unblocks it
+
+Attempted 2026-09-02. Selector 9 — the Dealer's inventory-bounded trade — is
+**not** missing a campaign. It is blocked twice, and both blocks are upstream of
+anything this tier can do.
+
+**One: the instruction is built and never submitted.** `build_scenario_bundle`
+(`accepted.rs`) produces the full admitted selector-9 bundle, and the test
+asserts its semantic plan against a host-side preflight and its span counts.
+But the bundle's `hot_instruction` is used at exactly one place — `:7685`, which
+reads `.accounts` to project the successor scenario — and is never cloned into a
+submission. Every `hot_instruction` this campaign actually submits belongs to an
+LP open/close or an equity Add/Remove, all **selector 1**. The split activation
+after it *is* submitted (`submit_activation`), so the delivery half is driven and
+the trade half is not.
+
+**Two: the construction is unreachable anyway.** It sits about 450 lines
+downstream of `assert!(accepted.result.is_ok(), "equity Add: ...")` inside the
+same test,
+`lp_lifecycle::accepted_equity_selector_one_executes_real_custody_and_rolls_back_late_evidence_refusal`.
+That assertion fails today (`0x4003 Content`, 576,043 CU, no CPI), so the trade
+code has never run. Its prestate is genuinely earned rather than staged — two
+executed equity Adds produce the obligation and Claims inventory the trade is
+bounded by — so there is no honest way to reach it while the Add refuses.
+
+The control for both claims is complete rather than sampled: this campaign has
+exactly four transaction-submission sites and every one of them records, so if a
+selector-9 trade were submitted anywhere it would appear in the evidence. Across
+284 recorded transactions the accelerator is invoked by three, all selector 1.
+
+So register 116 being repaired made selector 9 SATISFIABLE, not driven. What it
+now waits on, in order: the equity Add (`hot_v3.rs`, Direct's), and then one
+submission of the bundle this campaign already builds.
 
 ## Running it
 

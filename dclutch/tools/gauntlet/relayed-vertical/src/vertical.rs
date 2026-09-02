@@ -45,7 +45,7 @@ use crate::funding_readiness::{
 use crate::input::{
     self, DISCLOSED_FAILURE_CONFLATION, RelayedMarketFactsV1, WALK_BOUNTY_LAMPORTS,
 };
-use crate::ledger::{ConservationLedgerV1, LamportClaimV1};
+use crate::ledger::{ClassClaimV1, ConservationLedgerV1, LamportClaimV1};
 use crate::plan::pubkey;
 use crate::relayworld::{
     self, RESOLUTION_FAILURE_KIND, RESOLUTION_SUCCESS_KIND, RecordPairV1, RelayAddressBookV1,
@@ -473,6 +473,15 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         LamportClaimV1::inapplicable(
             "record publication spends fees and rent from the campaign payer; no collateral moves",
         ),
+        // This campaign admits no Custody namespace, so `class_of` cannot tell
+        // its own Hoard from an ordinary wallet and every account censuses as
+        // one undifferentiated class. Claiming `unchanged()` would report an
+        // L8 green that looked like compartment-level assurance and was not.
+        ClassClaimV1::inapplicable(
+            "this campaign admits no Custody namespace, so it cannot classify even its own \
+             Hoard; L8 has nothing to attribute a movement to and says so rather than \
+             reporting one undifferentiated class as a compartment",
+        ),
     )?;
 
     // ------------------------------------ 5. resolution funding, no-recovery
@@ -703,6 +712,15 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         0,
         LamportClaimV1::inapplicable(
             "the funding ladder moves prepaid rent and quotes between campaign-owned accounts",
+        ),
+        // This campaign admits no Custody namespace, so `class_of` cannot tell
+        // its own Hoard from an ordinary wallet and every account censuses as
+        // one undifferentiated class. Claiming `unchanged()` would report an
+        // L8 green that looked like compartment-level assurance and was not.
+        ClassClaimV1::inapplicable(
+            "this campaign admits no Custody namespace, so it cannot classify even its own \
+             Hoard; L8 has nothing to attribute a movement to and says so rather than \
+             reporting one undifferentiated class as a compartment",
         ),
     )?;
 
@@ -1118,6 +1136,15 @@ fn success_walk(
         0,
         0,
         LamportClaimV1::inapplicable("append and seal spend the daemon fee payer's lamports only"),
+        // This campaign admits no Custody namespace, so `class_of` cannot tell
+        // its own Hoard from an ordinary wallet and every account censuses as
+        // one undifferentiated class. Claiming `unchanged()` would report an
+        // L8 green that looked like compartment-level assurance and was not.
+        ClassClaimV1::inapplicable(
+            "this campaign admits no Custody namespace, so it cannot classify even its own \
+             Hoard; L8 has nothing to attribute a movement to and says so rather than \
+             reporting one undifferentiated class as a compartment",
+        ),
     )?;
 
     // 5. Consume: the sealed graduation resolves the market through the
@@ -1178,6 +1205,15 @@ fn success_walk(
         0,
         LamportClaimV1::inapplicable(
             "consumption allocates the certificate from its own prepaid rent; no collateral moves",
+        ),
+        // This campaign admits no Custody namespace, so `class_of` cannot tell
+        // its own Hoard from an ordinary wallet and every account censuses as
+        // one undifferentiated class. Claiming `unchanged()` would report an
+        // L8 green that looked like compartment-level assurance and was not.
+        ClassClaimV1::inapplicable(
+            "this campaign admits no Custody namespace, so it cannot classify even its own \
+             Hoard; L8 has nothing to attribute a movement to and says so rather than \
+             reporting one undifferentiated class as a compartment",
         ),
     )?;
     let _ = source;
@@ -1392,6 +1428,15 @@ fn failure_walk(
             "the walk moves the disclosed bounty from the watched escrow to the walker, and the \
              terminal admission moves no collateral; the stage's own assertions carry the exact \
              lamport deltas",
+        ),
+        // This campaign admits no Custody namespace, so `class_of` cannot tell
+        // its own Hoard from an ordinary wallet and every account censuses as
+        // one undifferentiated class. Claiming `unchanged()` would report an
+        // L8 green that looked like compartment-level assurance and was not.
+        ClassClaimV1::inapplicable(
+            "this campaign admits no Custody namespace, so it cannot classify even its own \
+             Hoard; L8 has nothing to attribute a movement to and says so rather than \
+             reporting one undifferentiated class as a compartment",
         ),
     )?;
     Ok(serde_json::json!({

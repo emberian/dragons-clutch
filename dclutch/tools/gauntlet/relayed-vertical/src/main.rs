@@ -32,6 +32,9 @@ use std::{env, error::Error as StdError, fmt};
 #[path = "../../../local-validator/bootstrap/successor/src/campaign.rs"]
 #[allow(dead_code)]
 mod campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/chaos_fault.rs"]
+#[allow(dead_code)]
+mod chaos_fault;
 #[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
 #[allow(dead_code)]
 mod cluster;
@@ -44,6 +47,9 @@ mod funding_readiness;
 #[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
 #[allow(dead_code)]
 mod general_market;
+#[path = "../../../local-validator/bootstrap/successor/src/infrastructure_succession.rs"]
+#[allow(dead_code)]
+mod infrastructure_succession;
 #[path = "../../../local-validator/bootstrap/successor/src/local_mutable.rs"]
 #[allow(dead_code)]
 mod local_mutable;

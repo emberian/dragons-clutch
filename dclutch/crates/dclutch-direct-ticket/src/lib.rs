@@ -43,9 +43,8 @@ mod strict_json;
 #[cfg(feature = "author")]
 pub use author::{
     DIRECT_TICKET_AUTHOR_COMMAND_V1, DirectTicketAuthorArgumentsV1, DirectTicketAuthorReceiptV1,
-    author_direct_intent_ticket_v1, author_with_keypair_path_v1,
-    keypair_path_from_environment_v1, keypair_seed_from_file_v1, parse_arguments_v1, run_v1,
-    sign_direct_intent_v1, usage_v1,
+    author_direct_intent_ticket_v1, author_with_keypair_path_v1, keypair_path_from_environment_v1,
+    keypair_seed_from_file_v1, parse_arguments_v1, run_v1, sign_direct_intent_v1, usage_v1,
 };
 pub use envelope::{
     MAXIMUM_TICKET_BYTES_V1, PORTABLE_DIRECT_TICKET_KIND_V1, PortableDirectTicketIntentV1,

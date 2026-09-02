@@ -416,8 +416,7 @@ mod tests {
                 peak_payout: 60,
             },
         ] {
-            let authored =
-                author_product_v1(&band(), CEILING, question).expect("authored");
+            let authored = author_product_v1(&band(), CEILING, question).expect("authored");
             assert!(
                 authored.payoff_distinguishes_cells,
                 "{question:?} emitted a payoff its own partition cannot change"
@@ -502,7 +501,11 @@ mod tests {
         // And a proposition against a spot band, which is the exact market the
         // partition gate exists to refuse.
         assert_eq!(
-            author_product_v1(&band(), CEILING, MarketQuestionV1::Proposition { payout: 1 }),
+            author_product_v1(
+                &band(),
+                CEILING,
+                MarketQuestionV1::Proposition { payout: 1 }
+            ),
             Err(Error::BeliefKindMismatch)
         );
     }

@@ -31,7 +31,6 @@
 
 extern crate alloc;
 
-
 use alloc::{vec, vec::Vec};
 
 use dclutch_capability_program_contract::{
@@ -210,10 +209,11 @@ pub fn execute_admitted_aot_v3<'info>(
     input_scalars: &[u64],
     input_identities: &[[u8; 32]],
 ) -> Result<AdmittedExecutionV3, ProgramError> {
-    let invocation_context =
-        admitted_invocation_context_digest_v3(*context).map_err(|_| TradingSbfError::AdmittedContext)?;
+    let invocation_context = admitted_invocation_context_digest_v3(*context)
+        .map_err(|_| TradingSbfError::AdmittedContext)?;
     validate_authenticated_frame(program_id, frame, runtime_accounts, context, authenticated)?;
-    let scalar_count = u32::try_from(input_scalars.len()).map_err(|_| TradingSbfError::AdmittedTransport)?;
+    let scalar_count =
+        u32::try_from(input_scalars.len()).map_err(|_| TradingSbfError::AdmittedTransport)?;
     let identity_count =
         u32::try_from(input_identities.len()).map_err(|_| TradingSbfError::AdmittedTransport)?;
     if scalar_count != context.scalar_count || identity_count != context.identity_count {
@@ -278,8 +278,24 @@ pub fn execute_admitted_aot_v3<'info>(
     let mut candidate = vec![0_u8; input_bank.len()];
     let mut accepted_digest = None;
     let mut transcript = hash(ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3).to_bytes();
+    // One buffer set for every chunk. See `AdmittedChunkBuffersV4` for the
+    // measurement that made this necessary; `first_request` sizes the request
+    // buffer because every chunk's request is the same width, which
+    // `invoke_admitted_chunk` refuses rather than assumes.
+    let mut chunk_buffers = AdmittedChunkBuffersV4::new(
+        frame,
+        runtime_accounts,
+        frame
+            .caller_authorities
+            .first()
+            .ok_or(TradingSbfError::AdmittedTransport)?,
+        ACCELERATOR_REQUEST_HEADER_BYTES_V2
+            .checked_add(first_request.inline_bank().len())
+            .ok_or(TradingSbfError::AdmittedTransport)?,
+    )?;
     for chunk_index in 0..chunk_count {
-        let chunk_index_u32 = u32::try_from(chunk_index).map_err(|_| TradingSbfError::AdmittedTransport)?;
+        let chunk_index_u32 =
+            u32::try_from(chunk_index).map_err(|_| TradingSbfError::AdmittedTransport)?;
         let request = accelerator_request(
             transport,
             authenticated,
@@ -297,8 +313,8 @@ pub fn execute_admitted_aot_v3<'info>(
             .ok_or(TradingSbfError::AdmittedTransport)?;
         let (ack_bytes, request_digest) = invoke_admitted_chunk(
             program_id,
+            &mut chunk_buffers,
             frame,
-            runtime_accounts,
             authority,
             context,
             request,
@@ -387,11 +403,79 @@ fn accelerator_request<'a>(
     .map_err(|_| TradingSbfError::AdmittedTransport.into())
 }
 
+/// The one CPI buffer set, rented across every chunk instead of rebuilt per chunk.
+///
+/// WHY THIS EXISTS, in numbers. `invoke_admitted_chunk` used to allocate its
+/// request bytes, its `AccountMeta` vector and its `AccountInfo` vector fresh on
+/// every chunk, and the SBF allocator's `dealloc` is a no-op, so the cost was
+/// `chunk_count` times the cost of one. Measured 2026-09-02 on General OpenBatch
+/// at runtime width 2, four chunks, sixty accounts each: the upward heap
+/// position went 26,616 -> 35,048 -> 43,480 -> 51,912, **exactly 8,432 bytes per
+/// chunk, perfectly linear**, against a scratch floor of 53,616. The fourth
+/// chunk had 1,704 bytes and needed 8,432, and the route died on an
+/// out-of-memory abort that named nothing.
+///
+/// NOTHING HERE WAS EVER SIZED FROM A MAXIMUM. Every buffer was already exactly
+/// the width it needed -- `ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4` plus
+/// the actual runtime accounts. The defect was repetition, not size, so the fix
+/// is not a smaller number: it is the one `prepare_lifecycle_v4` already
+/// specifies for itself two files over -- *every working bank is rented from one
+/// arena that outlives both passes; they are reset here rather than
+/// reallocated.*
+///
+/// Only two things differ between chunks, and both are overwritten in place:
+/// the caller authority at index 0, and the request bytes. Their LENGTHS are
+/// identical, which is a conjunct rather than an assumption -- see the refusal
+/// in [`invoke_admitted_chunk`].
+struct AdmittedChunkBuffersV4<'info> {
+    instruction: Instruction,
+    infos: Vec<AccountInfo<'info>>,
+}
+
+impl<'info> AdmittedChunkBuffersV4<'info> {
+    /// Build the buffers once, shaped by the frame every chunk shares.
+    ///
+    /// `authority` seeds index zero only so the vectors have the right length
+    /// and the right shape; every chunk overwrites that slot with its own.
+    fn new(
+        frame: AdmittedCpiFrameV3<'_, 'info>,
+        runtime_accounts: &[&AccountInfo<'info>],
+        authority: &AccountInfo<'info>,
+        request_len: usize,
+    ) -> Result<Self, ProgramError> {
+        let capacity = ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
+            .checked_add(runtime_accounts.len())
+            .ok_or(TradingSbfError::AdmittedTransport)?;
+        let mut metas = Vec::with_capacity(capacity);
+        metas.extend(
+            fixed_cpi_accounts(frame, authority)
+                .enumerate()
+                .map(|(index, account)| AccountMeta::new_readonly(*account.key, index == 0)),
+        );
+        metas.extend(
+            runtime_accounts
+                .iter()
+                .map(|account| AccountMeta::new_readonly(*account.key, false)),
+        );
+        let mut infos = Vec::with_capacity(capacity);
+        infos.extend(fixed_cpi_accounts(frame, authority).cloned());
+        infos.extend(runtime_accounts.iter().map(|account| (*account).clone()));
+        Ok(Self {
+            instruction: Instruction {
+                program_id: *frame.accelerator_program.key,
+                accounts: metas,
+                data: vec![0_u8; request_len],
+            },
+            infos,
+        })
+    }
+}
+
 #[inline(never)]
 fn invoke_admitted_chunk<'info>(
     program_id: &Pubkey,
+    buffers: &mut AdmittedChunkBuffersV4<'info>,
     frame: AdmittedCpiFrameV3<'_, 'info>,
-    runtime_accounts: &[&AccountInfo<'info>],
     caller_authority: &AccountInfo<'info>,
     context: &AdmittedInvocationContextV3,
     request: AcceleratorRequestV2<'_>,
@@ -399,11 +483,16 @@ fn invoke_admitted_chunk<'info>(
     let request_len = ACCELERATOR_REQUEST_HEADER_BYTES_V2
         .checked_add(request.inline_bank().len())
         .ok_or(TradingSbfError::AdmittedTransport)?;
-    let mut request_bytes = vec![0_u8; request_len];
+    // The reuse rests on this being the same every chunk, so it is CHECKED
+    // rather than assumed: a transport whose per-chunk request width varied
+    // would otherwise be encoded into a buffer sized for a different one.
+    if request_len != buffers.instruction.data.len() {
+        return Err(TradingSbfError::AdmittedTransport.into());
+    }
     request
-        .encode_into(&mut request_bytes)
+        .encode_into(&mut buffers.instruction.data)
         .map_err(|_| TradingSbfError::AdmittedTransport)?;
-    let request_digest = content(&request_bytes)?;
+    let request_digest = content(&buffers.instruction.data)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         context.release_set,
         context.market.to_bytes(),
@@ -421,38 +510,23 @@ fn invoke_admitted_chunk<'info>(
     {
         return Err(TradingSbfError::Release.into());
     }
-    let mut metas = Vec::with_capacity(
-        ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
-            .checked_add(runtime_accounts.len())
-            .ok_or(TradingSbfError::AdmittedTransport)?,
-    );
-    metas.extend(
-        fixed_cpi_accounts(frame, caller_authority)
-            .enumerate()
-            .map(|(index, account)| AccountMeta::new_readonly(*account.key, index == 0)),
-    );
-    metas.extend(
-        runtime_accounts
-            .iter()
-            .map(|account| AccountMeta::new_readonly(*account.key, false)),
-    );
-    let instruction = Instruction {
-        program_id: *frame.accelerator_program.key,
-        accounts: metas,
-        data: request_bytes,
-    };
-    let mut infos = Vec::with_capacity(
-        ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
-            .checked_add(runtime_accounts.len())
-            .ok_or(TradingSbfError::AdmittedTransport)?,
-    );
-    infos.extend(fixed_cpi_accounts(frame, caller_authority).cloned());
-    infos.extend(runtime_accounts.iter().map(|account| (*account).clone()));
+    // The only two coordinates that move between chunks, overwritten in place.
+    // Everything else in both vectors is the frame, which every chunk shares.
+    buffers
+        .instruction
+        .accounts
+        .first_mut()
+        .ok_or(TradingSbfError::AdmittedTransport)?
+        .pubkey = *caller_authority.key;
+    *buffers
+        .infos
+        .first_mut()
+        .ok_or(TradingSbfError::AdmittedTransport)? = caller_authority.clone();
     let bump_seed = [bump];
     let [domain, release, market, role, authority_context, digest] = authority_seeds.as_slices();
     invoke_signed(
-        &instruction,
-        &infos,
+        &buffers.instruction,
+        &buffers.infos,
         &[&[
             domain,
             release,
@@ -671,7 +745,8 @@ fn validate_input_scratch_pages(
     {
         return Err(TradingSbfError::AdmittedTransport.into());
     }
-    let trading = ContentId::new(program_id.to_bytes()).map_err(|_| TradingSbfError::AdmittedTransport)?;
+    let trading =
+        ContentId::new(program_id.to_bytes()).map_err(|_| TradingSbfError::AdmittedTransport)?;
     let mut cursor = 0_usize;
     for (index, account) in pages.iter().enumerate() {
         if account.owner != program_id
@@ -688,12 +763,15 @@ fn validate_input_scratch_pages(
         let data = account
             .try_borrow_data()
             .map_err(|_| TradingSbfError::AdmittedTransport)?;
-        let page =
-            AuthenticatedScratchPageV2::decode(&data).map_err(|_| TradingSbfError::AdmittedTransport)?;
+        let page = AuthenticatedScratchPageV2::decode(&data)
+            .map_err(|_| TradingSbfError::AdmittedTransport)?;
         page.validate_request_input(trading, request)
             .map_err(|_| TradingSbfError::AdmittedTransport)?;
-        if usize::try_from(page.chunk_index()).map_err(|_| TradingSbfError::AdmittedTransport)? != index
-            || usize::try_from(page.chunk_offset()).map_err(|_| TradingSbfError::AdmittedTransport)? != cursor
+        if usize::try_from(page.chunk_index()).map_err(|_| TradingSbfError::AdmittedTransport)?
+            != index
+            || usize::try_from(page.chunk_offset())
+                .map_err(|_| TradingSbfError::AdmittedTransport)?
+                != cursor
         {
             return Err(TradingSbfError::AdmittedTransport.into());
         }
@@ -717,8 +795,9 @@ fn encode_register_bank(scalars: &[u64], identities: &[[u8; 32]]) -> Result<Vec<
         u32::try_from(identities.len()).map_err(|_| TradingSbfError::AdmittedTransport)?,
     )
     .map_err(|_| TradingSbfError::AdmittedTransport)?;
-    let mut output =
-        Vec::with_capacity(usize::try_from(expected).map_err(|_| TradingSbfError::AdmittedTransport)?);
+    let mut output = Vec::with_capacity(
+        usize::try_from(expected).map_err(|_| TradingSbfError::AdmittedTransport)?,
+    );
     for scalar in scalars {
         output.extend_from_slice(&scalar.to_le_bytes());
     }

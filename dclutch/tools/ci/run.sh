@@ -756,9 +756,10 @@ tier_journey() {
 #   - They do not carry the SBF stack-frame-overwrite refusal that `programs`
 #     and the accelerator links have. A frame diagnostic on one of these links
 #     would exit zero here. That is owed by the runners, and it is the same
-#     hole ee3dbe8f closed in two other places. (`tools/gauntlet/dealer` and
-#     `tools/gauntlet/claims-extended` DO refuse on it; the four rows below are
-#     the cheaper per-suite runners, which do not.)
+#     hole ee3dbe8f closed in two other places.
+#     (`tools/gauntlet/dealer-checkpoint` and `tools/gauntlet/claims-extended`
+#     DO refuse on it; the four rows below are the cheaper per-suite runners,
+#     which do not.)
 #
 # WHAT EACH ROW COSTS AND NEEDS, from the runners themselves:
 #
@@ -783,9 +784,12 @@ tier_journey() {
 #            claims defect. It is why this tier reports absence per row.
 #   dealer   six links, about three minutes cold. This row has the strongest
 #            history for a gate: its campaign was uncompilable for days once,
-#            and tools/gauntlet/dealer's family test was red from 2026-08-27
-#            until 33a61576, both times because a release-path change touched
-#            seven programs and zero campaigns.
+#            and the retired tools/gauntlet/dealer family test was red from
+#            2026-08-27 until 33a61576, both times because a release-path change
+#            touched seven programs and zero campaigns. This row has always
+#            driven the SHIPPED link (the accelerator's program-test); the
+#            gauntlet evidence tier that drove the unshipped dclutch-dealer-sbf
+#            was retired 2026-09-02 in favour of tools/gauntlet/dealer-checkpoint.
 #   registry the release-set successor declaration on a real Registry ELF.
 #            Added 2026-08-31, having run in NO tier since it was written: the
 #            campaign that red-proofed d6e43b11's consent geometry was reachable

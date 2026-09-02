@@ -182,6 +182,11 @@ class Simulator:
         for adm in self.config.get("admissions", []):
             name = adm["name"]
             output = Path(adm["output"])
+            # The driver writes a journal LOCK beside its output before it
+            # writes the output, so the directory has to exist first or the
+            # admission dies on the lock rather than on anything about the
+            # admission. `simlife` makes it; this loop did not.
+            output.parent.mkdir(parents=True, exist_ok=True)
             marker = self.work / "admissions" / f"{name}.done"
             if marker.exists():
                 continue
@@ -201,6 +206,17 @@ class Simulator:
                 "--minimum-finalized-slot", str(adm["minimum_finalized_slot"]),
                 "--output", str(output),
             ]
+            # The admission packet does not fit a legacy message: it routes
+            # through the founding's own FROZEN DCLTGMF3 lookup table, and the
+            # driver refuses `PacketTooLarge` without one. `simlife` already
+            # knew this and this loop did not, so a config that named every
+            # other fact correctly still could not admit anybody.
+            #
+            # Per-admission first, then a config-wide default, so one table
+            # serves a whole market's participants without being restated.
+            routing = adm.get("routing_table") or self.config.get("routing_table")
+            if routing:
+                argv += ["--routing-table", routing]
             collateral = adm.get("collateral")
             if collateral:
                 argv += [

@@ -14,6 +14,8 @@ use sha2::{Digest, Sha256};
 
 /// Preterminal bridge schema.
 pub const PRETERMINAL_SCHEMA_V1: &str = "dclutch/curved-fractional-life/preterminal/v1";
+/// Compiler-to-Found bridge schema.
+pub const FOUNDING_SCHEMA_V1: &str = "dclutch/curved-fractional-life/founding/v1";
 /// Compaction bridge schema.
 pub const COMPACTION_SCHEMA_V1: &str = "dclutch/curved-fractional-life/compaction/v1";
 /// Complete propagated life ledger schema.
@@ -27,6 +29,237 @@ pub const COMPLETED_PHASES_V1: [&str; 3] = [
     "terminal-permissionless-compaction",
     "hostile-partial-settling-close",
 ];
+
+/// Exact successor role ELF digests authenticated by the founding campaign.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FoundingElfPinsV1 {
+    /// Registry ELF SHA-256.
+    pub registry: String,
+    /// Core ELF SHA-256.
+    pub core: String,
+    /// Claims ELF SHA-256.
+    pub claims: String,
+    /// Trading ELF SHA-256.
+    pub trading: String,
+    /// Resolution ELF SHA-256.
+    pub resolution: String,
+    /// Custody ELF SHA-256.
+    pub custody: String,
+    /// Rent-credit ELF SHA-256.
+    pub rent: String,
+}
+
+impl FoundingElfPinsV1 {
+    fn validate(&self) -> Result<(), String> {
+        for (name, digest) in [
+            ("registry", &self.registry),
+            ("core", &self.core),
+            ("claims", &self.claims),
+            ("trading", &self.trading),
+            ("resolution", &self.resolution),
+            ("custody", &self.custody),
+            ("rent", &self.rent),
+        ] {
+            validate_digest(name, digest)?;
+        }
+        Ok(())
+    }
+}
+
+/// One exact poststate row bound by the finalized DCLTGMF3 journal.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FoundingAccountPinV1 {
+    /// Account address.
+    pub address: [u8; 32],
+    /// Owning program.
+    pub owner: [u8; 32],
+    /// SHA-256 of the exact account data.
+    pub data_sha256: String,
+    /// SHA-256 of owner, lamports, executable, rent epoch, length, and data.
+    pub account_sha256: String,
+}
+
+impl FoundingAccountPinV1 {
+    fn validate(&self, name: &str) -> Result<(), String> {
+        if self.address == [0; 32] || self.owner == [0; 32] {
+            return Err(format!("founding {name} account identity is zero"));
+        }
+        validate_digest(&format!("{name}.data_sha256"), &self.data_sha256)?;
+        validate_digest(&format!("{name}.account_sha256"), &self.account_sha256)
+    }
+}
+
+/// Exact compiler artifacts and finalized Generic Found poststate which begin
+/// one physical cubic Fractional life.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FoundingBridgeV1 {
+    /// Schema discriminator.
+    pub schema: String,
+    /// Exact Git commit used by compiler and Found.
+    pub source_commit: String,
+    /// SHA-256 over the committed recursive `git ls-tree` manifest.
+    pub source_tree_sha256: String,
+    /// SHA-256 of the exact compiler input JSON.
+    pub compiler_input_sha256: String,
+    /// SHA-256 of the canonical compiler report JSON.
+    pub compiler_report_sha256: String,
+    /// SHA-256 of the exact successor plan JSON.
+    pub successor_plan_sha256: String,
+    /// SHA-256 of the exact successor Market input JSON.
+    pub market_input_sha256: String,
+    /// SHA-256 of the complete successor campaign report JSON.
+    pub successor_report_sha256: String,
+    /// SHA-256 of the canonical embedded founding checkpoint.
+    pub founding_checkpoint_sha256: String,
+    /// SHA-256 of the canonical finalized DCLTGMF3 journal row.
+    pub dcltgmf3_journal_sha256: String,
+    /// DCLTGMF3 immutable-intent SHA-256.
+    pub dcltgmf3_intent_sha256: String,
+    /// DCLTGMF3 finalized state SHA-256.
+    pub dcltgmf3_state_sha256: String,
+    /// DCLTGMF3 signed transaction SHA-256.
+    pub dcltgmf3_transaction_sha256: String,
+    /// Exact live ELF identities observed by successor Found.
+    pub elves: FoundingElfPinsV1,
+    /// Activated execution release set.
+    pub release_set: [u8; 32],
+    /// Canonical Realm content identity.
+    pub realm: [u8; 32],
+    /// Found Open Market address.
+    pub market: [u8; 32],
+    /// Claims aggregate address created by Found.
+    pub aggregate: [u8; 32],
+    /// Founder Position address created by Found.
+    pub founder_position: [u8; 32],
+    /// Product content identity.
+    pub product: [u8; 32],
+    /// Result-domain content identity.
+    pub result_domain: [u8; 32],
+    /// Portfolio content identity.
+    pub portfolio: [u8; 32],
+    /// ProductBasisV3 content identity.
+    pub product_basis: [u8; 32],
+    /// DCLTPGT1 price-gate content identity.
+    pub price_gate: [u8; 32],
+    /// Exact Product record poststate.
+    pub product_account: FoundingAccountPinV1,
+    /// Exact result-domain record poststate.
+    pub result_domain_account: FoundingAccountPinV1,
+    /// Exact portfolio record poststate.
+    pub portfolio_account: FoundingAccountPinV1,
+    /// Exact ProductBasisV3 record poststate.
+    pub product_basis_account: FoundingAccountPinV1,
+    /// Exact price-gate record poststate.
+    pub price_gate_account: FoundingAccountPinV1,
+    /// Exact Open Market poststate.
+    pub market_account: FoundingAccountPinV1,
+    /// Exact Claims aggregate poststate.
+    pub aggregate_account: FoundingAccountPinV1,
+    /// Exact founder Position poststate.
+    pub founder_position_account: FoundingAccountPinV1,
+    /// Product outcome and native-Claims width.
+    pub product_width: u32,
+    /// ProductBasis spline degree.
+    pub curve_degree: u8,
+    /// Exact ProductBasis payout scale.
+    pub payout_scale: u64,
+    /// Total collateral Mint supply before Found.
+    pub initial_collateral_atoms: u64,
+    /// Complete-set quantity Found admits at every coordinate.
+    pub complete_set_quantity: u64,
+    /// Exact collateral principal conserved by Found.
+    pub collateral_principal_atoms: u64,
+}
+
+impl FoundingBridgeV1 {
+    /// Refuse a compiler/Found bridge with any substituted identity, digest,
+    /// account coordinate, or second rounding boundary.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != FOUNDING_SCHEMA_V1 {
+            return Err("founding bridge schema mismatch".into());
+        }
+        validate_commit(&self.source_commit)?;
+        for (name, value) in [
+            ("source_tree_sha256", &self.source_tree_sha256),
+            ("compiler_input_sha256", &self.compiler_input_sha256),
+            ("compiler_report_sha256", &self.compiler_report_sha256),
+            ("successor_plan_sha256", &self.successor_plan_sha256),
+            ("market_input_sha256", &self.market_input_sha256),
+            ("successor_report_sha256", &self.successor_report_sha256),
+            (
+                "founding_checkpoint_sha256",
+                &self.founding_checkpoint_sha256,
+            ),
+            ("dcltgmf3_journal_sha256", &self.dcltgmf3_journal_sha256),
+            ("dcltgmf3_intent_sha256", &self.dcltgmf3_intent_sha256),
+            ("dcltgmf3_state_sha256", &self.dcltgmf3_state_sha256),
+            (
+                "dcltgmf3_transaction_sha256",
+                &self.dcltgmf3_transaction_sha256,
+            ),
+        ] {
+            validate_digest(name, value)?;
+        }
+        self.elves.validate()?;
+        for (name, value) in [
+            ("release_set", self.release_set),
+            ("realm", self.realm),
+            ("market", self.market),
+            ("aggregate", self.aggregate),
+            ("founder_position", self.founder_position),
+            ("product", self.product),
+            ("result_domain", self.result_domain),
+            ("portfolio", self.portfolio),
+            ("product_basis", self.product_basis),
+            ("price_gate", self.price_gate),
+        ] {
+            if value == [0; 32] {
+                return Err(format!("founding {name} must be nonzero"));
+            }
+        }
+        for (name, pin) in [
+            ("product", &self.product_account),
+            ("result_domain", &self.result_domain_account),
+            ("portfolio", &self.portfolio_account),
+            ("product_basis", &self.product_basis_account),
+            ("price_gate", &self.price_gate_account),
+            ("market", &self.market_account),
+            ("aggregate", &self.aggregate_account),
+            ("founder_position", &self.founder_position_account),
+        ] {
+            pin.validate(name)?;
+        }
+        for (name, pin, address) in [
+            ("market", &self.market_account, self.market),
+            ("aggregate", &self.aggregate_account, self.aggregate),
+            (
+                "founder_position",
+                &self.founder_position_account,
+                self.founder_position,
+            ),
+        ] {
+            if pin.address != address {
+                return Err(format!("founding {name} account address mismatch"));
+            }
+        }
+        if self.product_width != 4
+            || self.curve_degree != 3
+            || self.payout_scale != 11
+            || self.initial_collateral_atoms != 198
+            || self.complete_set_quantity != 9
+            || self.collateral_principal_atoms != 99
+            || self.complete_set_quantity.checked_mul(self.payout_scale)
+                != Some(self.collateral_principal_atoms)
+            || self.initial_collateral_atoms.checked_div(2) != Some(self.collateral_principal_atoms)
+        {
+            return Err("founding cubic scale or exact-reserve contract mismatch".into());
+        }
+        Ok(())
+    }
+}
 
 /// Exact executable artifact digests shared by all phases.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -426,6 +659,18 @@ pub fn write_atomic(path: &Path, value: &impl Serialize) -> Result<String, Strin
     Ok(digest(&bytes))
 }
 
+/// Strictly decode and validate one compiler-to-Found bridge.
+pub fn read_founding(path: &Path) -> Result<FoundingBridgeV1, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let value: FoundingBridgeV1 =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if canonical_bytes(&value).map_err(|error| error.to_string())? != bytes {
+        return Err("founding bridge is not canonical JSON".into());
+    }
+    value.validate()?;
+    Ok(value)
+}
+
 /// Strictly decode and validate a preterminal bridge.
 pub fn read_preterminal(path: &Path) -> Result<PreterminalBridgeV1, String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
@@ -487,6 +732,70 @@ fn validate_commit(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn founding_pins() -> FoundingElfPinsV1 {
+        FoundingElfPinsV1 {
+            registry: "31".repeat(32),
+            core: "32".repeat(32),
+            claims: "33".repeat(32),
+            trading: "34".repeat(32),
+            resolution: "35".repeat(32),
+            custody: "36".repeat(32),
+            rent: "37".repeat(32),
+        }
+    }
+
+    fn founding_account(address: u8, owner: u8) -> FoundingAccountPinV1 {
+        FoundingAccountPinV1 {
+            address: [address; 32],
+            owner: [owner; 32],
+            data_sha256: format!("{address:02x}").repeat(32),
+            account_sha256: format!("{owner:02x}").repeat(32),
+        }
+    }
+
+    fn founding() -> FoundingBridgeV1 {
+        FoundingBridgeV1 {
+            schema: FOUNDING_SCHEMA_V1.into(),
+            source_commit: "ab".repeat(20),
+            source_tree_sha256: "10".repeat(32),
+            compiler_input_sha256: "11".repeat(32),
+            compiler_report_sha256: "12".repeat(32),
+            successor_plan_sha256: "13".repeat(32),
+            market_input_sha256: "14".repeat(32),
+            successor_report_sha256: "15".repeat(32),
+            founding_checkpoint_sha256: "16".repeat(32),
+            dcltgmf3_journal_sha256: "17".repeat(32),
+            dcltgmf3_intent_sha256: "18".repeat(32),
+            dcltgmf3_state_sha256: "19".repeat(32),
+            dcltgmf3_transaction_sha256: "1a".repeat(32),
+            elves: founding_pins(),
+            release_set: [1; 32],
+            realm: [2; 32],
+            market: [3; 32],
+            aggregate: [4; 32],
+            founder_position: [5; 32],
+            product: [6; 32],
+            result_domain: [7; 32],
+            portfolio: [8; 32],
+            product_basis: [9; 32],
+            price_gate: [10; 32],
+            product_account: founding_account(20, 0xa2),
+            result_domain_account: founding_account(21, 0xa2),
+            portfolio_account: founding_account(22, 0xa2),
+            product_basis_account: founding_account(23, 0xa2),
+            price_gate_account: founding_account(24, 0xa2),
+            market_account: founding_account(3, 0xa3),
+            aggregate_account: founding_account(4, 0xa1),
+            founder_position_account: founding_account(5, 0xa1),
+            product_width: 4,
+            curve_degree: 3,
+            payout_scale: 11,
+            initial_collateral_atoms: 198,
+            complete_set_quantity: 9,
+            collateral_principal_atoms: 99,
+        }
+    }
 
     fn pins() -> ElfPinsV1 {
         ElfPinsV1 {
@@ -563,6 +872,33 @@ mod tests {
             holder_collateral: image(holder_collateral_token, 0x22),
             closer_collateral: image(closer_collateral_token, 0x22),
         }
+    }
+
+    #[test]
+    fn founding_bridge_refuses_digest_account_and_rounding_substitution() {
+        let value = founding();
+        value.validate().expect("control");
+
+        let mut report = value.clone();
+        report.successor_report_sha256 = "not-a-digest".into();
+        assert_eq!(
+            report.validate(),
+            Err("successor_report_sha256 is not lowercase SHA-256".into())
+        );
+
+        let mut account = value.clone();
+        account.aggregate_account.address = [90; 32];
+        assert_eq!(
+            account.validate(),
+            Err("founding aggregate account address mismatch".into())
+        );
+
+        let mut remainder = value;
+        remainder.initial_collateral_atoms = 200;
+        assert_eq!(
+            remainder.validate(),
+            Err("founding cubic scale or exact-reserve contract mismatch".into())
+        );
     }
 
     fn ledger() -> FractionalCubicLifeLedgerV1 {

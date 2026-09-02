@@ -1008,8 +1008,8 @@ use dclutch_registry_activation_auth_v1::{
 };
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1, ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1,
-    ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1, ACTIVATED_ROLE_BYTES_V1, ReleaseLineageV1,
-    RELEASE_LINEAGE_BYTES_V1,
+    ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1, ACTIVATED_ROLE_BYTES_V1,
+    RELEASE_LINEAGE_BYTES_V1, ReleaseLineageV1,
 };
 use dclutch_release_set_contract::{EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1};
 use solana_program::{entrypoint::ProgramResult, program_error::ProgramError};
@@ -1168,10 +1168,16 @@ impl LineageFixture {
         Self::with_moved([true, false, true, false, false])
     }
 
-    fn cache_account(&self, id: ContentId, roles: [LineageRole; EXECUTION_ROLE_COUNT_V1]) -> AccountInfo<'static> {
-        let key =
-            Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, id.as_bytes()], &self.registry)
-                .0;
+    fn cache_account(
+        &self,
+        id: ContentId,
+        roles: [LineageRole; EXECUTION_ROLE_COUNT_V1],
+    ) -> AccountInfo<'static> {
+        let key = Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, id.as_bytes()],
+            &self.registry,
+        )
+        .0;
         let data = lineage_cache_bytes(id, roles);
         account(
             key,
@@ -1267,10 +1273,7 @@ impl LineageFixture {
     /// real-SVM campaign. Every refusal below runs through the whole
     /// `process_instruction` entry point, because every one of them refuses
     /// before the CPI.
-    fn compose(
-        &self,
-        accounts: &[AccountInfo<'static>],
-    ) -> Result<ReleaseLineageV1, ProgramError> {
+    fn compose(&self, accounts: &[AccountInfo<'static>]) -> Result<ReleaseLineageV1, ProgramError> {
         let predecessor_data = accounts
             .get(DECLARE_SUCCESSOR_PREDECESSOR_CACHE_ACCOUNT_V1)
             .expect("predecessor cache")
@@ -1529,7 +1532,11 @@ fn hostile_h10_an_unmoved_role_slot_cannot_carry_a_signature() {
     let fixture = LineageFixture::new();
 
     let mut signing = fixture.accounts([true, false, true, false, false]);
-    *signing.get_mut(crate::lineage_v1::authority_account_index(ExecutionRoleV1::Claims)).expect("Claims slot") = account(
+    *signing
+        .get_mut(crate::lineage_v1::authority_account_index(
+            ExecutionRoleV1::Claims,
+        ))
+        .expect("Claims slot") = account(
         Pubkey::new_from_array(bytes(0xaa)),
         true,
         false,
@@ -1545,7 +1552,11 @@ fn hostile_h10_an_unmoved_role_slot_cannot_carry_a_signature() {
 
     // And a non-signing stranger is refused too: the slot names one account.
     let mut stranger = fixture.accounts([true, false, true, false, false]);
-    *stranger.get_mut(crate::lineage_v1::authority_account_index(ExecutionRoleV1::Claims)).expect("Claims slot") = account(
+    *stranger
+        .get_mut(crate::lineage_v1::authority_account_index(
+            ExecutionRoleV1::Claims,
+        ))
+        .expect("Claims slot") = account(
         Pubkey::new_from_array(bytes(0xab)),
         false,
         false,
@@ -1603,7 +1614,11 @@ fn the_declaration_frame_is_exactly_eleven_accounts_with_tabled_privileges() {
             lineage,
         ),
         Ok(()).map(|()| {
-            release_lineage_address_and_bump_v1(&fixture.registry, &fixture.predecessor_id.to_bytes()).1
+            release_lineage_address_and_bump_v1(
+                &fixture.registry,
+                &fixture.predecessor_id.to_bytes(),
+            )
+            .1
         }),
         "the canonical frame's lineage account is pristine at its own address"
     );
@@ -1615,12 +1630,7 @@ fn the_declaration_frame_is_exactly_eleven_accounts_with_tabled_privileges() {
         Some(RegistryError::AccountFrame as u32)
     );
     let mut long = canonical.clone();
-    long.push(
-        canonical
-            .last()
-            .expect("rent sysvar account")
-            .clone(),
-    );
+    long.push(canonical.last().expect("rent sysvar account").clone());
     assert_eq!(
         refusal(declare(&long, &fixture.registry)),
         Some(RegistryError::AccountFrame as u32)
@@ -1709,13 +1719,28 @@ fn a_consent_slot_admits_the_system_program_and_refuses_every_other_program() {
     // anything is decoded -- including one owned by the loader that owns the
     // System Program, so the exemption is the KEY and not the pedigree.
     for (label, key, owner) in [
-        ("a native program", Pubkey::new_from_array(bytes(0xc0)), native_loader::ID),
-        ("a deployed program", Pubkey::new_from_array(bytes(0xc1)), bpf_loader_upgradeable::ID),
+        (
+            "a native program",
+            Pubkey::new_from_array(bytes(0xc0)),
+            native_loader::ID,
+        ),
+        (
+            "a deployed program",
+            Pubkey::new_from_array(bytes(0xc1)),
+            bpf_loader_upgradeable::ID,
+        ),
     ] {
         for slot in [unmoved_slot, moved_slot] {
             let mut smuggled = fixture.accounts(moved);
-            *smuggled.get_mut(slot).expect("consent slot") =
-                account(key, false, false, 1, Vec::from(&b"a program"[..]), owner, true);
+            *smuggled.get_mut(slot).expect("consent slot") = account(
+                key,
+                false,
+                false,
+                1,
+                Vec::from(&b"a program"[..]),
+                owner,
+                true,
+            );
             assert_eq!(
                 crate::lineage_v1::validate_declaration_frame_for_test(&smuggled),
                 Err(RegistryError::AccountFrame.into()),
@@ -1774,7 +1799,12 @@ fn the_declaration_reads_no_role_out_of_the_predecessor_cache() {
         let key = copied(&fixture.authority, index);
         // A predecessor whose recorded ELF and slot describe nothing deployed.
         if let Some(slot) = fixture.predecessor.get_mut(index) {
-            *slot = lineage_role(program, 0x30 + u8::try_from(index).expect("small"), 1, Some(key.to_bytes()));
+            *slot = lineage_role(
+                program,
+                0x30 + u8::try_from(index).expect("small"),
+                1,
+                Some(key.to_bytes()),
+            );
         }
     }
     let accounts = fixture.accounts([true, false, true, false, false]);
@@ -1801,7 +1831,9 @@ fn every_role_moving_needs_every_authority_and_none_may_be_omitted() {
         let mut missing = fixture.accounts(all);
         // Drop exactly one role's signature and keep everything else canonical.
         let index = role.role_index();
-        *missing.get_mut(crate::lineage_v1::authority_account_index(role)).expect("consent slot") = account(
+        *missing
+            .get_mut(crate::lineage_v1::authority_account_index(role))
+            .expect("consent slot") = account(
             copied(&fixture.authority, index),
             false,
             false,

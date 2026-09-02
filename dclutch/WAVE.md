@@ -6828,3 +6828,100 @@ gone, and the law moved to a unit case that drives the closed action list and
 **names all fourteen** — where the chain campaign could only ever name the one
 action it submitted. A wall test whose wall falls should get cheaper and more
 complete, not deleted and not left lying.
+
+## 2026-09-02 - eight thousand four hundred and thirty-two bytes, four times
+
+**The Trading heap OOM behind OpenBatch is convicted, and it refutes both the
+framing it was given and my own first report of it.**
+
+I told the board it was **one allocation larger than 34,640 bytes**. It is not.
+That bound was computed at the last observed heap mark — which sits **before
+three accelerator CPIs** — and then asserted about a failure that happens after
+them.
+
+> **A figure measured at one place and asserted about another. That is the same
+> defect as reading two ceilings that both said 32,768 as one ceiling, three
+> hours earlier, by me.**
+
+### What the per-chunk probe says
+
+Capacity 65,536, scratch 11,920 throughout, usable upward bound 53,616:
+
+| chunk | upward position | delta |
+|---|---|---|
+| 0 | 26,616 | — |
+| 1 | 35,048 | **+8,432** |
+| 2 | 43,480 | **+8,432** |
+| 3 | 51,912 | **+8,432** |
+
+At chunk 3, **1,704 bytes remain and the fourth chunk needs 8,432.** Four chunks
+cost 33,728 of the 35,432 available above the baseline. Perfectly linear.
+
+### No buffer is sized from a maximum
+
+The instruction was to find the buffer sized from a constant and size it from the
+actual width instead. **There is no such buffer, and nothing to lower.**
+`LifecycleBatchSinkV4::new` reserves `planned = 1` element of 272 bytes at
+`tail_count = 2`; the CPI's `metas` and `infos` are `48 + 12` runtime accounts =
+60 entries, which *is* the width.
+
+> **The defect is repetition, not size.** `invoke_admitted_chunk` allocates
+> `request_bytes`, `metas`, `infos` and the returned ack **fresh on every chunk**,
+> on an allocator whose `dealloc` is a no-op, so the cost is
+> `chunk_count × 8,432`.
+
+### The fix is one this route already knows
+
+`prepare_lifecycle_v4` solved exactly this for itself, and its own comment is the
+specification: *"Every working bank is rented from one arena that outlives both
+passes… They are reset here rather than reallocated."* Build the `Instruction`
+and the `infos` vector once before the loop and refill per chunk — only the
+caller authority at index 0 and the request bytes differ, while the lengths are
+identical. That reclaims three of the four allocations, ~22,000 bytes, leaving
+only the SDK's `get_return_data` ack.
+
+**Not implemented here**: it is a redesign of another lane's CPI loop signature,
+not a constant, and it is their file. Routed with the measurement.
+
+`hot_heap_mark` now carries capacity as its fourth word (`2afc1854`), because a
+mark that prints only what has been handed out cannot say whether the next
+allocation fits — and finding that out cost a throwaway probe that is now a line
+of the instrument.
+
+## 2026-09-02 - the chunk loop rents its buffers, and the wall moves to the commit
+
+**`397ef013`.** `invoke_admitted_chunk` allocated its request bytes, `AccountMeta`
+vector and `AccountInfo` vector **fresh on every chunk**, on an allocator whose
+`dealloc` is a no-op, so the cost was `chunk_count × 8,432`.
+
+**Nothing was ever sized from a maximum**, and that is worth stating because it is
+the fix the shape suggests and it would have been wrong. Every buffer was already
+exactly its width. **There was no constant to lower.** The defect was repetition,
+and the fix is the one `prepare_lifecycle_v4` already specifies for itself two
+files over: *every working bank is rented from one arena that outlives both
+passes, reset rather than reallocated.*
+
+| chunk | before | after | before Δ | after Δ |
+|---|---|---|---|---|
+| 0 | 26,616 | 31,760 | — | — |
+| 1 | 35,048 | 35,048 | +8,432 | **+3,288** |
+| 2 | 43,480 | 38,336 | +8,432 | **+3,288** |
+| 3 | 51,912 | 41,624 | +8,432 | **+3,288** |
+
+Per-chunk cost **8,432 → 3,288**, a 61% cut; peak **51,912 → 41,624** against the
+same 53,616 bound. Only the caller authority at index 0 and the request bytes
+differ between chunks, and their lengths being equal is a **checked conjunct**,
+not an assumption — a chunk whose request width differed would be refused
+`AdmittedTransport` rather than encoded into a buffer sized for another.
+
+> **It is not flat, and flat is what I was asked for.** The residual 3,288 is the
+> ack: `get_return_data` allocates on the **callee** side of the CPI and this
+> arena cannot reach it. Making that flat means a caller-owned output buffer the
+> SDK does not offer, or bounding `chunk_count`. Neither is this commit, and I am
+> claiming neither.
+
+**The wall moved**, on the shipping artifact with no profile feature and no probe:
+OpenBatch at N=2 no longer aborts, Trading runs to **816,888 CU** where it died at
+708,284, and refuses **`Custom(16389)` = `0x4005 TradingSbfError::Commit`**. Zero
+out-of-memory, zero access violations, zero frame diagnostics. The next wall is
+the commit phase, and it has a code and a site.

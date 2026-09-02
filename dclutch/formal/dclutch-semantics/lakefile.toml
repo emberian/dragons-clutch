@@ -199,14 +199,6 @@ name = "emit-product-graded-basis-admission-v3-abi-rust"
 root = "EmitProductGradedBasisAdmissionV3AbiRust"
 
 [[lean_exe]]
-name = "emit-product-payoff-rust"
-root = "EmitProductPayoffRust"
-
-[[lean_exe]]
-name = "emit-product-payoff-translation-corpus"
-root = "EmitProductPayoffTranslationCorpus"
-
-[[lean_exe]]
 name = "emit-product-representation-exposure-v3-abi-rust"
 root = "EmitProductRepresentationExposureV3AbiRust"
 

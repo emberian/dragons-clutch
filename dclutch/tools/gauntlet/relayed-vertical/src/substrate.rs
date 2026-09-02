@@ -198,6 +198,10 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
         plan_path: plan_path.clone(),
         market_path: None,
         evidence_path: Some(request.work.join("administration-evidence.json")),
+        // The vertical asks for no standalone lineage artifact: `main.rs` is the
+        // only caller that wants one, and asking here would add a second owner
+        // for infrastructure facts this substrate does not publish.
+        infrastructure_lineage_path: None,
         founding_founder: None,
         substituted_founder: None,
         keypairs: BTreeMap::from([(
@@ -284,6 +288,8 @@ pub(crate) fn found_market(
         plan_path: substrate.plan_path.clone(),
         market_path: Some(market_path.to_path_buf()),
         evidence_path: Some(evidence_path.to_path_buf()),
+        // Founding refuses the flag outright (`campaign.rs:3479-3487`).
+        infrastructure_lineage_path: None,
         founding_founder: Some(pubkey(founder)?),
         substituted_founder: Some(pubkey(substituted)?),
         keypairs: founding_keys,

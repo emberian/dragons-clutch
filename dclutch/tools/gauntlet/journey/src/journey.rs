@@ -12,7 +12,7 @@ use solana_sdk::signature::Signer;
 
 use crate::{
     Error, Result,
-    ledger::{ConservationLedgerV1, LamportClaimV1, ObservationV1},
+    ledger::{ClassClaimV1, ConservationLedgerV1, LamportClaimV1, ObservationV1},
     provider, resolution,
     stages::{self, MarketAddressesV1, StageReportV1},
 };
@@ -126,6 +126,15 @@ pub(crate) fn execute(
              tier 1's own witnesses; this ledger accounts for lamports from the first \
              journey-owned boundary onward",
         ),
+        // The same boundary, and the same reason: the founding's compartment
+        // placements are the producer's. Declaring `unchanged()` here would be
+        // false -- the founding funds the Hoard out of nothing -- and it would
+        // also be unevaluated, since the first census has no predecessor. L8
+        // accounts per class from the first journey-owned boundary onward.
+        ClassClaimV1::inapplicable(
+            "the founding's compartment placements belong to the tier-1 producer; this ledger \
+             accounts per compartment class from the first journey-owned boundary onward",
+        ),
     )?;
 
     let mut stages = vec![StageReportV1 {
@@ -162,6 +171,11 @@ pub(crate) fn execute(
         0,
         0,
         LamportClaimV1::fees(distribution_fees),
+        // Every transfer is founder wallet to holder wallet: two accounts of
+        // the SAME class, and neither is a Custody vault. So every compartment
+        // moved zero, which is the strong claim -- it fails if one atom reaches
+        // a vault, and unlike L5's single total it says WHICH vault.
+        ClassClaimV1::unchanged(),
     )?;
 
     let (ring, ring_fees) = stages::holder_to_holder(
@@ -179,6 +193,8 @@ pub(crate) fn execute(
         0,
         0,
         LamportClaimV1::fees(ring_fees),
+        // A ring of holder-to-holder transfers: same class at both ends.
+        ClassClaimV1::unchanged(),
     )?;
 
     let mut unexpected_refusals = Vec::new();
@@ -199,6 +215,8 @@ pub(crate) fn execute(
         0,
         0,
         resolution_lamports,
+        // The funding ladder is lamports only. No compartment sees an atom.
+        ClassClaimV1::unchanged(),
     )?;
 
     // The provider legs bootstrap two captured third-party programs and then
@@ -206,41 +224,49 @@ pub(crate) fn execute(
     // is worth more written down beside a complete ledger than thrown as an
     // error that discards the rest of the journey -- so the stage is recorded
     // either way and the run fails at the end, after the transcript exists.
-    let (provider_report, provider_lamports) = match provider::resolve_through_pyth(
-        &mut session.rpc,
-        &session.authority,
-        &session.plan,
-        &resolution_addresses,
-        &provider_plan,
-        &mut session.transactions,
-    ) {
-        Ok(value) => value,
-        Err(error) => {
-            unexpected_refusals.push(format!(
-                "resolution: the Pyth transport carries the Market to Terminal -- {error}"
-            ));
-            (
-                StageReportV1 {
-                    stage: "resolution: the Pyth transport carries the Market to Terminal".into(),
-                    outcome: "refused".into(),
-                    transactions: 0,
-                    compute_units: 0,
-                    note: format!(
-                        "REFUSED, and the refusal is the finding: {error}. Everything the legs \
+    let (provider_report, provider_lamports, provider_classes) =
+        match provider::resolve_through_pyth(
+            &mut session.rpc,
+            &session.authority,
+            &session.plan,
+            &resolution_addresses,
+            &provider_plan,
+            &mut session.transactions,
+        ) {
+            // Resolution moves no collateral: a terminal certificate is an assertion
+            // about which outcome won, not a transfer.
+            Ok((report, lamports)) => (report, lamports, ClassClaimV1::unchanged()),
+            Err(error) => {
+                unexpected_refusals.push(format!(
+                    "resolution: the Pyth transport carries the Market to Terminal -- {error}"
+                ));
+                (
+                    StageReportV1 {
+                        stage: "resolution: the Pyth transport carries the Market to Terminal"
+                            .into(),
+                        outcome: "refused".into(),
+                        transactions: 0,
+                        compute_units: 0,
+                        note: format!(
+                            "REFUSED, and the refusal is the finding: {error}. Everything the legs \
                          need is on this chain -- the receiver and router ELFs are loaded by the \
                          launcher, the Pyth release record is published by the infrastructure \
                          plan, and the Market's own source spec, window spec, statistic spec, \
                          provider release and adapter configuration are finalized records at the \
                          identities its SourceMaterialV3 names."
-                    ),
-                },
-                LamportClaimV1::inapplicable(
-                    "the stage refused part way through, so what it placed and where is exactly \
+                        ),
+                    },
+                    LamportClaimV1::inapplicable(
+                        "the stage refused part way through, so what it placed and where is exactly \
                      what is not known; L7 does not guess across a wall",
-                ),
-            )
-        }
-    };
+                    ),
+                    ClassClaimV1::inapplicable(
+                        "the stage refused part way through, so which compartments it touched is \
+                     exactly what is not known; L8 does not guess across a wall either",
+                    ),
+                )
+            }
+        };
     stages.push(provider_report);
     // Resolution moves no collateral either: a terminal certificate is an
     // assertion about which outcome won, not a transfer. The Hoard must not
@@ -251,6 +277,7 @@ pub(crate) fn execute(
         0,
         0,
         provider_lamports,
+        provider_classes,
     )?;
 
     // Retirement runs BEFORE rent recovery, and the order is load-bearing: the
@@ -271,6 +298,10 @@ pub(crate) fn execute(
         0,
         0,
         retirement_lamports,
+        // Closing the Source subtree refunds lamports; the Hoard's atoms are
+        // not a party to it. Zero for every compartment, the Hoard included --
+        // which is the clause C-10 is sharpest about, stated where it can fail.
+        ClassClaimV1::unchanged(),
     )?;
 
     let (rent, rent_fees) = stages::recover_rent(
@@ -287,6 +318,8 @@ pub(crate) fn execute(
         0,
         0,
         LamportClaimV1::fees(rent_fees),
+        // Rent recovery sweeps lamport credits and closes no collateral vault.
+        ClassClaimV1::unchanged(),
     )?;
 
     let markets = vec![
