@@ -44,7 +44,8 @@
  *   node scripts/generate-capability-surface.mjs           # regenerate
  *   node scripts/generate-capability-surface.mjs --check   # verify only
  */
-import { readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -138,12 +139,41 @@ const sdkExports = JSON.parse(readFileSync(join(sdkRoot, 'package.json'), 'utf8'
 /** Web `package.json` scripts, for pairing each generated module with its verifier. */
 const webScripts = JSON.parse(readFileSync(join(webRoot, 'package.json'), 'utf8')).scripts;
 
-function exists(path) {
+/**
+ * Every file git TRACKS, absolute.
+ *
+ * WHY THIS IS NOT `statSync`. This generator walks the working tree, and the
+ * working tree of a shared checkout carries whatever every live lane is in the
+ * middle of writing. A surface derived from it names modules, routes and
+ * crates that no commit contains -- so the committed answer to "what can this
+ * browser do" depended on who else had an editor open, and the file could not
+ * be reproduced from its own commit. That is the same defect
+ * `tools/genref/generate.sh` refuses a dirty tree for, in a surface that had no
+ * refusal.
+ *
+ * Tracked is the line, exactly as `packages/dclutch-sdk/scripts/sync-from-web.mjs`
+ * draws it: an untracked file is a lane's work in progress and is deliberately
+ * invisible here, while a tracked file is read from the WORKING TREE, so a
+ * lane's own edits to files that already exist still show up in its own run.
+ *
+ * A git that cannot answer is a refusal, never an empty set: an empty tracked
+ * list would emit a surface saying this browser does nothing, and every check
+ * downstream would measure that absence.
+ */
+const trackedFiles = (() => {
+  let listing;
   try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
+    listing = execFileSync('git', ['-C', repoRoot, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  } catch (error) {
+    throw new Error(`cannot list tracked files (${error.message}); this generator reads what git tracks, not what the working tree happens to hold`);
   }
+  const paths = listing.split('\0').filter(Boolean);
+  if (paths.length === 0) throw new Error('git tracks no files here; refusing to emit a surface from an empty tree');
+  return new Set(paths.map((path) => join(repoRoot, path)));
+})();
+
+function exists(path) {
+  return trackedFiles.has(path);
 }
 
 /** Resolve one extensionless module path the way the bundler does. */
@@ -298,7 +328,9 @@ function routes() {
   const walk = (absolute, path) => {
     for (const entry of readdirSync(absolute, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
       if (entry.isDirectory()) walk(join(absolute, entry.name), `${path}/${entry.name}`);
-      else if (entry.name === 'page.tsx') found.push({ route: path === '' ? '/' : path, file: join(absolute, entry.name) });
+      else if (entry.name === 'page.tsx' && exists(join(absolute, entry.name))) {
+        found.push({ route: path === '' ? '/' : path, file: join(absolute, entry.name) });
+      }
     }
   };
   walk(join(webRoot, 'app'), '');

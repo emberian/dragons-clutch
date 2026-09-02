@@ -83,65 +83,69 @@ impl SettlementCursorLayoutV2 {
 
     /// Cursor magic byte offset.
     pub const fn magic() -> u32 {
-        0
+        wire::SETTLEMENT_CURSOR_MAGIC_OFFSET_V2
     }
 
     /// Cursor version byte offset.
     pub const fn version() -> u32 {
-        8
+        wire::SETTLEMENT_CURSOR_VERSION_OFFSET_V2
     }
 
     /// Cursor phase byte offset.
     pub const fn phase() -> u32 {
-        10
+        wire::SETTLEMENT_CURSOR_PHASE_OFFSET_V2
     }
 
     /// Product-derived outcome-count offset.
     pub const fn outcome_count() -> u32 {
-        12
+        wire::SETTLEMENT_CURSOR_OUTCOME_COUNT_OFFSET_V2
     }
 
     /// Total verifier-emitted order-count offset.
     pub const fn order_count() -> u32 {
-        16
+        wire::SETTLEMENT_CURSOR_ORDER_COUNT_OFFSET_V2
     }
 
     /// Next settlement order offset.
     pub const fn next_order() -> u32 {
-        20
+        wire::SETTLEMENT_CURSOR_NEXT_ORDER_OFFSET_V2
     }
 
     /// Optimistic cursor revision offset.
     pub const fn revision() -> u32 {
-        24
+        wire::SETTLEMENT_CURSOR_REVISION_OFFSET_V2
     }
 
     /// Selected Candidate identity offset.
     pub const fn candidate_id() -> u32 {
-        32
+        wire::SETTLEMENT_CURSOR_CANDIDATE_ID_OFFSET_V2
     }
 
     /// Quote-inventory offset.
     pub const fn quote_inventory() -> u32 {
-        64
+        wire::SETTLEMENT_CURSOR_QUOTE_INVENTORY_OFFSET_V2
     }
 
     /// Complete-set-quantity offset.
     pub const fn complete_set_quantity() -> u32 {
-        72
+        wire::SETTLEMENT_CURSOR_COMPLETE_SET_QUANTITY_OFFSET_V2
     }
 
     /// Terminal-coordinate offset.
     pub const fn terminal_coordinate() -> u32 {
-        80
+        wire::SETTLEMENT_CURSOR_TERMINAL_COORDINATE_OFFSET_V2
     }
 
     /// Runtime inventory-tail base offset.
     pub const fn inventory_base() -> u32 {
-        88
+        wire::SETTLEMENT_CURSOR_HEADER_BYTES_V2 as u32
     }
 
     /// Runtime inventory-tail item stride.
+    ///
+    /// Still a literal: `GeneralRuntimeWireV2` walks this record's FIXED field
+    /// sequence and names no constant for the inventory tail's element width,
+    /// so there is no emitted name to read. The eight is a `u64` per outcome.
     pub const fn inventory_stride() -> u32 {
         8
     }
@@ -741,7 +745,11 @@ impl<'a> SettlementCursorV2<'a> {
         exact_width_at_least(bytes, SETTLEMENT_CURSOR_HEADER_BYTES_V2)?;
         require_magic(bytes, &SETTLEMENT_CURSOR_MAGIC)?;
         require_version(bytes)?;
-        require_zero(bytes, 11, 1)?;
+        require_zero(
+            bytes,
+            wire::SETTLEMENT_CURSOR_RESERVED_OFFSET_V2 as usize,
+            wire::SETTLEMENT_CURSOR_RESERVED_BYTES_V2,
+        )?;
         let header = SettlementCursorHeaderV2 {
             outcome_count: u32_at(
                 bytes,
@@ -769,7 +777,10 @@ impl<'a> SettlementCursorV2<'a> {
                 bytes,
                 wire::SETTLEMENT_CURSOR_TERMINAL_COORDINATE_OFFSET_V2 as usize,
             )?,
-            phase: SettlementPhaseV2::decode(byte_at(bytes, 10)?)?,
+            phase: SettlementPhaseV2::decode(byte_at(
+                bytes,
+                wire::SETTLEMENT_CURSOR_PHASE_OFFSET_V2 as usize,
+            )?)?,
         };
         exact_width(bytes, settlement_cursor_len(header.outcome_count)?)?;
         validate_settlement_cursor_header(header)?;
@@ -857,17 +868,61 @@ fn encode_settlement_cursor_header(
     header: SettlementCursorHeaderV2,
     output: &mut [u8],
 ) -> RuntimeWidthResultV2<()> {
-    put(output, 0, &SETTLEMENT_CURSOR_MAGIC)?;
-    put_u16(output, 8, RUNTIME_WIDTH_VERSION_V2)?;
-    put_byte(output, 10, header.phase.tag())?;
-    put_u32(output, 12, header.outcome_count)?;
-    put_u32(output, 16, header.order_count)?;
-    put_u32(output, 20, header.next_order)?;
-    put_u64(output, 24, header.revision)?;
-    put(output, 32, &header.candidate_id)?;
-    put_u64(output, 64, header.quote_inventory)?;
-    put_u64(output, 72, header.complete_set_quantity)?;
-    put_u64(output, 80, header.terminal_coordinate)
+    put(
+        output,
+        wire::SETTLEMENT_CURSOR_MAGIC_OFFSET_V2 as usize,
+        &SETTLEMENT_CURSOR_MAGIC,
+    )?;
+    put_u16(
+        output,
+        wire::SETTLEMENT_CURSOR_VERSION_OFFSET_V2 as usize,
+        RUNTIME_WIDTH_VERSION_V2,
+    )?;
+    put_byte(
+        output,
+        wire::SETTLEMENT_CURSOR_PHASE_OFFSET_V2 as usize,
+        header.phase.tag(),
+    )?;
+    put_u32(
+        output,
+        wire::SETTLEMENT_CURSOR_OUTCOME_COUNT_OFFSET_V2 as usize,
+        header.outcome_count,
+    )?;
+    put_u32(
+        output,
+        wire::SETTLEMENT_CURSOR_ORDER_COUNT_OFFSET_V2 as usize,
+        header.order_count,
+    )?;
+    put_u32(
+        output,
+        wire::SETTLEMENT_CURSOR_NEXT_ORDER_OFFSET_V2 as usize,
+        header.next_order,
+    )?;
+    put_u64(
+        output,
+        wire::SETTLEMENT_CURSOR_REVISION_OFFSET_V2 as usize,
+        header.revision,
+    )?;
+    put(
+        output,
+        wire::SETTLEMENT_CURSOR_CANDIDATE_ID_OFFSET_V2 as usize,
+        &header.candidate_id,
+    )?;
+    put_u64(
+        output,
+        wire::SETTLEMENT_CURSOR_QUOTE_INVENTORY_OFFSET_V2 as usize,
+        header.quote_inventory,
+    )?;
+    put_u64(
+        output,
+        wire::SETTLEMENT_CURSOR_COMPLETE_SET_QUANTITY_OFFSET_V2 as usize,
+        header.complete_set_quantity,
+    )?;
+    put_u64(
+        output,
+        wire::SETTLEMENT_CURSOR_TERMINAL_COORDINATE_OFFSET_V2 as usize,
+        header.terminal_coordinate,
+    )
 }
 
 /// Caller-owned Verified Candidate fields before two runtime aggregate tails.

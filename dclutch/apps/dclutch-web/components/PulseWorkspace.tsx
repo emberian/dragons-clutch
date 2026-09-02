@@ -11,6 +11,7 @@ import Sparkline from '@/components/charts/Sparkline';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
 import { marketEditorialV1 } from '@/lib/marketRegistry';
 import {
+  campaignStageLabelsV1,
   conservationLawRowsV1,
   conservationReadingV1,
   everyLineFlatV1,
@@ -112,6 +113,7 @@ const LAW_GLOSSES: Readonly<Record<string, string>> = Object.freeze({
   L5: 'stage delta — tracked collateral changed between two readings by exactly the declared amount',
   L6: 'rent conservation — lamports leaving a closed protocol account are accounted for',
   L7: 'lamport accounting — the fee payer’s balance moved by exactly the fees paid',
+  L8: 'compartment accounting — every named compartment of collateral moved by exactly what the act that moved it declared',
 });
 
 /**
@@ -172,7 +174,7 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
         about the chain rather than about the robot. */}
     <NumberStrip
       stats={stats}
-      provenance={`Derived from ${span.cycles} recorded cycles in ${series.censusFile}. Slots and seconds are the run's own readings; the rate is the one divided by the other.`}
+      provenance={`Derived from ${span.cycles} recorded boundaries in ${series.censusFile}. Slots and seconds are the run's own readings; the rate is the one divided by the other.`}
     />
 
     {/* FE-CHART mount: how far the chain moved between two readings. */}
@@ -260,7 +262,12 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
   // never heard of keeps its claim indices and says nothing else.
   const editorial = series.market === null ? null : marketEditorialV1(series.market);
   const supplyLines = issuedSupplyLinesV1(series, editorial?.outcomes ?? null);
-  const xLabels = series.points.map((point) => `cycle ${point.cycle}`);
+  // The boundary's own name where the record has one. `campaignStageLabelsV1`
+  // has existed for the campaign series since v3 and this page kept counting,
+  // because the pulse producer never wrote `stage` — so a census that chains a
+  // fee settlement onto a poller's cycles drew `cycle 4` for a boundary whose
+  // name is `cohort13-post-fee-settlement`.
+  const xLabels = campaignStageLabelsV1(series);
 
   const covered = span.minutesCovered === null
     ? `${span.slotsCovered} slots of chain`
@@ -268,11 +275,16 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
 
   return <>
     <p className="direct-status">
-      {span.cycles} recorded cycle{span.cycles === 1 ? '' : 's'} covering {covered}, from the run&apos;s own
+      {span.cycles} recorded boundar{span.cycles === 1 ? 'y' : 'ies'} covering {covered}, from the run&apos;s own
       census file {series.censusFile}.{' '}
+      {/* BOUNDARY, not cycle. A census chains: cohort-13's runs two poller
+          cycles from one run, one from a second, and one boundary that no
+          poller drove at all — the permissionless fee settlement. Calling
+          those four "cycles" says the poller ran four times, which it did
+          not. Each one's own name is on the axis below. */}
       {series.pointsOmittedBefore === 0
-        ? 'Every cycle the run has recorded is drawn.'
-        : `${series.pointsOmittedBefore} earlier cycle${series.pointsOmittedBefore === 1 ? ' is' : 's are'} counted but not drawn.`}
+        ? 'Every boundary the run has recorded is drawn.'
+        : `${series.pointsOmittedBefore} earlier boundar${series.pointsOmittedBefore === 1 ? 'y is' : 'ies are'} counted but not drawn.`}
       {' '}{span.checksBroken === 0
         ? `Across all of them the ledger was re-checked ${span.checksHeld} times and held every time.`
         : `Across all of them ${span.checksBroken} check${span.checksBroken === 1 ? '' : 's'} did not hold.`}
@@ -286,7 +298,7 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
       unit="atoms"
       caption="Claims issued per outcome, per cycle."
       flatNote={everyLineFlatV1(supplyLines)
-        ? 'unchanged at every recorded cycle: no trade has landed in this run yet'
+        ? 'unchanged at every recorded boundary — which is what a market that has only issued complete sets looks like. A Direct fill MOVES claims between two positions; it issues none, so a flat line here does not mean nothing traded. Who holds them is the table below.'
         : undefined}
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
@@ -297,12 +309,16 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
 /**
  * Who is standing in the market, and what each of them holds.
  *
- * This is the surface a prediction market would normally call a leaderboard,
- * and calling it that today would be the lie: the record shows one founding
- * position and two funded participants who have not traded, so an ordering of
- * it ranks nothing. It is still worth showing — who is in a market before
- * anything happens is a real thing to know, and it is the exact table that
- * becomes a leaderboard on its own the first time somebody trades.
+ * This said, in its own words, that calling it a leaderboard would be a lie —
+ * "one founding position and two funded participants who have not traded, so
+ * an ordering of it ranks nothing". That was true when it was written and it
+ * stopped being true on 2026-09-02, when a real crossing moved 200 claims of
+ * outcome 0 from the founder to participant-2. The ordering ranks something
+ * now, and the sort was already correct: it has always been by total claims.
+ *
+ * It stays a RECORDED table, from the run's own census — the derived, live
+ * ordering of the same market is on the market page, read from the Positions
+ * themselves. Two surfaces, two provenances, and each says which it is.
  *
  * The labels are the operator's, from the run's own configuration. The gloss
  * on what a label means is this site's editorial and is marked as such, the
@@ -383,6 +399,13 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
   const read = state.read;
   const status = read !== null && read.kind === 'loaded' ? read.status : null;
   const beat = beatFor(read);
+  // How many laws this record names. Derived, because the count moved: the
+  // census gained L8 (compartment accounting) and this page said "seven" in
+  // its own words, which would have been a wrong number the day the record
+  // changed and no gate anywhere could have noticed.
+  const lawCount = series !== null && series.kind === 'loaded' && series.series.lawIds.length > 0
+    ? series.series.lawIds.length
+    : null;
 
   /*
     THE PILL FOLLOWS THE BEAT, not the file.
@@ -451,14 +474,14 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The seven checks, after every cycle</h2><p>After each cycle the simulator re-checks seven things: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay, and four more like them. Each row is one check; each column is one cycle.</p></div></header>
+      <header><span>03</span><div><h2>{lawCount === null ? 'The checks, after every cycle' : `The ${lawCount} checks, after every boundary`}</h2><p>At every boundary the census re-checks the same named laws: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay, and the rest. Each row is one check; each column is one boundary. How many there are is the record&apos;s own number, not this page&apos;s — cohort-13 is the first run whose census judges all of them, with none sitting out.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <ConservationLaws series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>What the run looked like over time</h2><p>One point per cycle.</p></div></header>
+      <header><span>04</span><div><h2>What the run looked like over time</h2><p>One point per recorded boundary, in the census&apos;s own order.</p></div></header>
       <RecordedCycles read={series} />
     </section>
 

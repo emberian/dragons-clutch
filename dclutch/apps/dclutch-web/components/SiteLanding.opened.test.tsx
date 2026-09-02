@@ -35,6 +35,19 @@ describe('the front door, once a market is open', () => {
     expect(html).toContain(`/market?address=${MARKET}`);
   });
 
+  it('does not TYPE the phase it has not read', () => {
+    // The aside said the first market was "open" as a written word, which is a
+    // promise about a chain fact nobody was checking -- and a resolution moves
+    // that fact the same afternoon a fill lands on it. The phase now comes off
+    // the market's own Core account, so the SERVER-rendered face, which has
+    // read nothing yet, must carry no phase word at all: it says where the
+    // answer is read instead of guessing it.
+    expect(html).toContain('What state it is in is read on its own page');
+    for (const phase of ['open', 'resolved', 'winding down', 'finished', 'still being set up']) {
+      expect(html.slice(html.indexOf('Where this stands'), html.indexOf('landing-key-art'))).not.toContain(phase);
+    }
+  });
+
   it('stops saying the app will tell you there is no open market, once there is one', () => {
     // The aside was not the only dated sentence on this page. "Anything that
     // still needs an open market will tell you plainly that there is not one

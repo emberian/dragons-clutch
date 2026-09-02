@@ -157,10 +157,27 @@ function main() {
   const lawIds = newestVerdicts.map((verdict) => String(verdict.law));
   let cyclesWithoutLaws = 0;
 
+  /**
+   * A journal instant is attributed only to a stage name that occurs ONCE.
+   *
+   * The journal is keyed by the poller's cycle number, and a census that
+   * chains two runs contains `load-sim-cycle-000001` twice — one of them from
+   * a run whose journal is not in this work directory. Handing both the same
+   * instant made the cadence line read zero seconds across four thousand
+   * slots, which is not a slow reading, it is a false one. An unattributable
+   * boundary carries no instant, and the cadence line is drawn only when every
+   * interval on it was measured.
+   */
+  const stageOccurrences = new Map();
+  for (const observation of observations) {
+    const stage = String(observation.stage ?? '');
+    stageOccurrences.set(stage, (stageOccurrences.get(stage) ?? 0) + 1);
+  }
+
   const all = observations.map((observation, index) => {
     const stage = String(observation.stage ?? '');
     const matched = CENSUS_STAGE.exec(stage);
-    const cycle = matched === null ? index + 1 : Number(matched[1]);
+    const pollerCycle = matched === null ? null : Number(matched[1]);
     const verdicts = Array.isArray(observation.verdicts) ? observation.verdicts : [];
     const aligned = verdicts.length === lawIds.length
       && verdicts.every((verdict, cell) => String(verdict.law) === lawIds[cell]);
@@ -169,9 +186,13 @@ function main() {
       law_statuses: !aligned || lawIds.length === 0
         ? null
         : verdicts.map((verdict) => LAW_STATUS_CHARS[verdict.status] ?? 'i').join(''),
-      cycle,
+      // The boundary's OWN NAME, verbatim, so the axis can say what happened
+      // there rather than counting. `lib/simulatorSeries.ts` has decoded this
+      // field since v3 and no producer had ever written it, so every pulse
+      // axis read `cycle N` for a record that knew better.
+      stage: stage.length === 0 ? null : stage,
       slot: exact(observation.slot, `observation ${index} slot`),
-      recorded_at: instants.get(cycle) ?? null,
+      recorded_at: pollerCycle === null || stageOccurrences.get(stage) !== 1 ? null : instants.get(pollerCycle) ?? null,
       supply: (observation.aggregate_supply ?? []).map((atoms, cell) => exact(atoms, `observation ${index} aggregate_supply ${cell}`)),
       hoard_atoms: exact(observation.hoard_atoms, `observation ${index} hoard_atoms`),
       tracked_collateral: exact(observation.tracked_collateral, `observation ${index} tracked_collateral`),
@@ -183,17 +204,40 @@ function main() {
     };
   });
 
-  const kept = all.slice(-keep);
+  const window = all.slice(-keep);
   // The run's own count of itself, when it is at least what the census still
   // holds. A windowed census can only ever UNDERSTATE how many cycles ran, so
   // the larger of the two is the honest number and never an invented one.
   const cyclesRun = typeof status.cycles?.run === 'number' && Number.isSafeInteger(status.cycles.run)
     ? Math.max(status.cycles.run, all.length)
     : all.length;
+
+  /**
+   * THE X-AXIS IS THE CENSUS'S OWN ORDER, not a number parsed out of a name.
+   *
+   * `cycle` used to be the integer inside the stage name `load-sim-cycle-NNN`,
+   * falling back to the array position when a stage did not match. That is
+   * exactly right for one continuous poller run and WRONG the moment a census
+   * chains boundaries from more than one run: cohort-13's record runs
+   * `load-sim-cycle-000001`, `load-sim-cycle-000002`, `load-sim-cycle-000001`
+   * (a second run's first cycle) and `cohort13-post-fee-settlement` (a
+   * boundary no poller drove at all), which numbered 1, 2, 1, 4 — and
+   * `seriesBody` in lib/simulatorSeries.ts REFUSES a series whose points do
+   * not ascend, so the producer could publish an artifact its own reader
+   * rejects and /pulse would have shown "it did not decode".
+   *
+   * A census array is ordered by construction: each file reloads its
+   * predecessor and appends. So the honest ordinal is the position in that
+   * record, offset by whatever the window dropped — which is identical to the
+   * old number for every continuous run, and is defined for chained ones. The
+   * boundary's identity travels beside it in `stage`.
+   */
+  const omittedBefore = cyclesRun - window.length;
+  const kept = window.map((point, index) => ({ ...point, cycle: omittedBefore + index + 1 }));
   const outcomeCount = kept.length === 0 ? 0 : kept[kept.length - 1].supply.length;
   for (const point of kept) {
     if (point.supply.length !== outcomeCount) {
-      throw new Error(`cycle ${point.cycle} carries ${point.supply.length} outcomes and the newest carries ${outcomeCount}; this series would be drawing two different markets on one axis`);
+      throw new Error(`boundary ${point.stage ?? point.cycle} carries ${point.supply.length} outcomes and the newest carries ${outcomeCount}; this series would be drawing two different markets on one axis`);
     }
   }
 
@@ -254,7 +298,7 @@ function main() {
     mode: status.mode,
     outcome_count: outcomeCount,
     cycles_recorded: cyclesRun,
-    points_omitted_before: cyclesRun - kept.length,
+    points_omitted_before: omittedBefore,
     census_file: path.basename(censusPath),
     points: kept,
   };
@@ -295,7 +339,7 @@ function main() {
 
   const first = kept[0];
   const last = kept[kept.length - 1];
-  console.log(`simulator-series: ${kept.length} of ${cyclesRun} cycles kept, cycle ${first.cycle} to ${last.cycle}`);
+  console.log(`simulator-series: ${kept.length} of ${cyclesRun} boundaries kept, ${first.stage ?? `cycle ${first.cycle}`} to ${last.stage ?? `cycle ${last.cycle}`}`);
   console.log(`simulator-series: slot ${first.slot} to ${last.slot}, ${outcomeCount} outcomes, ${status.trades?.landed ?? '?'} trades landed`);
   const moved = ['slot', 'hoard_atoms', 'tracked_collateral']
     .filter((field) => new Set(kept.map((point) => point[field])).size > 1);

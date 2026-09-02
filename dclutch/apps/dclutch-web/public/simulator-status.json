@@ -1,13 +1,13 @@
 {
   "census_retention": {
-    "bytes_bound": 3716160,
-    "bytes_on_disk": 3340517,
-    "bytes_per_observation": 3871,
+    "bytes_bound": 4588800,
+    "bytes_on_disk": 23469,
+    "bytes_per_observation": 4780,
     "dropped_observations": 0,
     "files": 2,
     "keep_files": 2,
-    "observations": 432,
-    "removed_files": 1,
+    "observations": 3,
+    "removed_files": 0,
     "window": 480
   },
   "cluster": {
@@ -15,8 +15,8 @@
     "rpc_url": "https://devnet.helius-rpc.com/?<redacted>"
   },
   "cycles": {
-    "run": 432,
-    "target": null
+    "run": 1,
+    "target": 1
   },
   "halt_reason": null,
   "halted": false,
@@ -24,41 +24,71 @@
     "backoff_seconds": 0.0,
     "budget_seconds": 325.0,
     "cadence_seconds": 20.0,
-    "expected_next_update_by": "2026-08-30T19:56:24+00:00",
+    "expected_next_update_by": "2026-09-02T17:56:36+00:00",
     "grace_seconds": 300.0,
     "jitter_fraction": 0.25,
     "note": "A living run rewrites this file every cycle. If your clock is past expected_next_update_by, no process is writing here any more -- read that and not the halted flag, which a run killed outright never gets to set. EXIT.json records how a run ended when it was able to; its absence past this instant means the run could not say."
   },
   "last_reconciliation": {
-    "checked_at": "2026-08-30T19:50:58+00:00",
+    "checked_at": "2026-09-02T17:51:11+00:00",
+    "declared": {
+      "accounts": {
+        "direct_seller_token": 199,
+        "direct_venue_fee_token": 2,
+        "participant-2_delegated_collateral": -201
+      },
+      "accounts_the_census_does_not_name": [],
+      "class_deltas": {
+        "HoardPrincipal": 0,
+        "unclassified": 0
+      },
+      "collateral_delta": 0,
+      "hoard_delta": 0,
+      "terms": {
+        "execution_price": 1000000,
+        "fee_atoms_per_side": 1,
+        "fee_basis_points_per_side": 50,
+        "fill_atoms": 200,
+        "gross_atoms": 200,
+        "outcome_index": 0,
+        "price_scale": 1000000
+      }
+    },
     "ok": true,
-    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000432.json"
+    "output": "/Users/ember/jobs/dclutch-cohort13-20260902/sim-trade/census/cycle-000001.json"
   },
   "market": {
-    "address": "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq"
+    "address": "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15"
   },
-  "mode": "sustain",
+  "mode": "finite",
   "schema": "dclutch-load-simulator-status-v1",
-  "started_at": "2026-08-30T17:42:40+00:00",
+  "spend": {
+    "bounded": true,
+    "credited_lamports": 0,
+    "max_lamports_spent": 500000000,
+    "observations": 1,
+    "payers": {
+      "7j8RHenZxcdrfGkqxei3RsJqJUgdwYuB16LbX8d7uUzw": 1524491622
+    },
+    "spent_lamports": 0
+  },
+  "started_at": "2026-09-02T17:51:05+00:00",
   "stopping": false,
   "trades": {
-    "landed": 0,
-    "signatures": []
+    "landed": 1,
+    "signatures": [
+      "4gBoKbbQE2CFHVgM228DBC1RQHKmFQGT4Tnk64s26phRg13dudTR8SPB847xLF26mcCmfZT4xgRf1CFRnRfsgR1u",
+      "4ekfpH6tuonx7wnfwQqy7ZjMqJw77AAwoVMB1HFrQGfxLAZn89Y9Lz2MHz8cezjAmYh9LqzAfX8GPRgVKroi9SD2",
+      "Yw4QP62va8YQ1XttquRsJpavv1DaMTWxAHgxjsTKWrC8usnMQ5oUM5aB9cDvHQwDoEsAYEAp3Z94mJthnqYxSyF",
+      "5pB6yGEni6m4veTQC1vnma2ehQqhijQRyhpWU7EdreaJJ6SsqtAUxmLnv41zcPxd2cLpdJqw3a8JyQFJxWqckhD8",
+      "3EemkrmwuwuVwRtpU32CjAMosWRAW2Ye22dzh1sVcvjSpvWUetEHcB6j9A5yDz7aazFnxyx4KLKcJTYrrJgsyvGo",
+      "4EpvmiiS7UkMWeKvLLG5vQZesfyxcarxeFc5suuboSmCT8XpwWmxyaorn2T4LnM9k7weVAKkEqUKxyfuuPTxnNg3",
+      "43bNZSWK8EoAGx1aswvSvK8Nb4x8rqyjy2deLZg61YgpYZD5b9TbhagAp61fHo1LWhRv5T7LotKnNyYbnVPubMFx",
+      "4Yi8YHmYd7MceNAZPqGyGJ9SgjYsdZJwnpLf4go9yGAaj8VgdgeuTKcG1gWfBQhU55pAxzp8hyMGNDgyodr7cqN8",
+      "3FpQ2fSEph8WXovyYeoSG36ZwNGqenpVi3pEW4t2Xn64PQyCNhP5Cv4NCkuPxPcd4DxXqKyRtbtuc6HChYB1P2eJ"
+    ]
   },
-  "trades_attempted": false,
-  "updated_at": "2026-08-30T19:50:59+00:00",
-  "wallets": [
-    {
-      "address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",
-      "role": "participant",
-      "sol_lamports": 7077240,
-      "source": "staged"
-    },
-    {
-      "address": "GcE6LWbduoATDgK8jsGyj2i8ywV37fcAYABKCmKgttDz",
-      "role": "participant",
-      "sol_lamports": 7082240,
-      "source": "staged"
-    }
-  ]
+  "trades_attempted": true,
+  "updated_at": "2026-09-02T17:51:11+00:00",
+  "wallets": []
 }

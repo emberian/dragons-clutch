@@ -89,7 +89,17 @@ describe('the published simulator series', () => {
     expect(heartbeat).not.toBeNull();
     expect(heartbeat?.slotAdvance.values.length).toBe(series.points.length - 1);
     expect(new Set(heartbeat?.slotAdvance.values).size).toBeGreaterThan(1);
-    expect(heartbeat?.measuredSlotRate).toMatch(/^\d+\.\d\d$/);
+    // THE RATE IS MEASURED OR IT IS ABSENT, and which one is a property of the
+    // record rather than of this assertion. A capture whose boundaries all
+    // carry instants must divide; cohort-13's does not, because its census
+    // CHAINS two runs and one poller cycle number appears twice — the journal
+    // is keyed by that number, so neither boundary can be attributed and the
+    // producer refuses to guess. Pinning the two-place decimal unconditionally
+    // would make this case a demand that every future capture come from one
+    // continuous run.
+    const measurable = series.points.filter((point) => point.recordedAt !== null).length;
+    if (measurable === series.points.length) expect(heartbeat?.measuredSlotRate).toMatch(/^\d+\.\d\d$/);
+    else expect(heartbeat?.measuredSlotRate).toBeNull();
   });
 
   it('carries a market, so every line drawn from it can name what it is about', () => {
@@ -105,14 +115,32 @@ describe('the published simulator series', () => {
     }
   });
 
-  it('never claims a conservation check was broken when the run is still going', () => {
-    // A broken check halts the simulator. If one is ever recorded here, the
-    // page must show it — this pin exists so a real violation cannot be
-    // introduced by a careless capture rather than by the chain.
+  it('publishes a broken check only where the record broke, and never at the end', () => {
+    // Renegotiated 2026-09-02. This used to demand `checksBroken === 0`, on
+    // the reasoning that a broken check halts the simulator so a published one
+    // must be a careless capture. Cohort-13's capture has two, they ARE the
+    // census's — it caught 201 delegated atoms in an account it had not been
+    // told to watch, halted, and the run was re-configured and re-run — and
+    // refusing to publish them would be refusing to publish the census doing
+    // its job.
+    //
+    // What still guards against carelessness is stronger and is about the
+    // shape of the record, not its count: the LAST boundary drawn is the state
+    // the page presents as where things stand, and it may not be a broken one.
+    // A capture that ends broken is a run that halted and stayed halted, and
+    // publishing that as the pulse is a decision somebody has to make on
+    // purpose. The sibling case above already requires the page to LEAD on any
+    // violation it does carry.
     const span = simulatorSeriesSpanV1(series);
     expect(span).not.toBeNull();
-    expect(span?.checksBroken).toBe(0);
     expect(span?.checksHeld).toBeGreaterThan(0);
+    const last = series.points[series.points.length - 1];
+    expect(last.checksBroken).toBe(0);
+    expect(last.lawStatuses.filter((status) => status === 'violated')).toHaveLength(0);
+    // And a broken count is never asserted without a boundary that carries it.
+    if ((span?.checksBroken ?? 0) > 0) {
+      expect(series.points.some((point) => point.checksBroken > 0)).toBe(true);
+    }
   });
 });
 

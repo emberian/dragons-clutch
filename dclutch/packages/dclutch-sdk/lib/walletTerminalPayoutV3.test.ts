@@ -36,6 +36,7 @@ import {
   LIABILITY_BASIS_MARKET_REGISTRY_OFFSET,
   LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET,
   LIABILITY_BASIS_MARKET_REVISION_OFFSET,
+  LIABILITY_BASIS_MARKET_SEED_V2,
   LIABILITY_BASIS_POSITION_BASIS_OFFSET,
   LIABILITY_BASIS_POSITION_CLAIM_COUNT_OFFSET,
   LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -43,9 +44,15 @@ import {
   LIABILITY_BASIS_POSITION_MARKET_OFFSET,
   LIABILITY_BASIS_POSITION_OWNER_OFFSET,
   LIABILITY_BASIS_POSITION_REVISION_OFFSET,
+  LIABILITY_BASIS_POSITION_SEED_V2,
   LIABILITY_BASIS_STATE_VERSION_V2,
 } from './generated/coreFound';
 import {
+  LIABILITY_BASIS_HEADER_RESERVED_BYTES_V2,
+  LIABILITY_BASIS_HEADER_RESERVED_OFFSET_V2,
+  LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2,
+  LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2,
+  LIABILITY_BASIS_POSITION_RESERVED_BYTES_V2,
   TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3,
   TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3,
   TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
@@ -194,6 +201,73 @@ async function manifestText(): Promise<string> {
 }
 
 describe('wallet terminal payout v3', () => {
+
+  /**
+   * The first byte of the aggregate's reserved header, and of the Position's
+   * reserved tail, is that record's own canonical PDA bump. The Claims founding
+   * route records it through `put_liability_basis_market_bump_v2`;
+   * `liability_basis_state_v2.rs` deliberately does NOT zero-check that byte;
+   * and this browser did -- so it refused every record carrying one, which is
+   * every record the founding route has written. Nothing here invents a bump:
+   * it comes from the same `findProgramAddress` call the route's own address
+   * comes from, and the addresses are asserted equal so the bump provably
+   * belongs to the account it is stored in.
+   */
+  it('admits an aggregate and a Position that carry their own canonical PDA bump', async () => {
+    const input = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
+    input.signedPacket.set(await sha256(input.__requestBytes), 80);
+    const claimsProgram = new PublicKey(input.route.claimsProgram);
+    const [aggregateAddress, aggregateBump] = PublicKey.findProgramAddressSync(
+      [LIABILITY_BASIS_MARKET_SEED_V2, new PublicKey(input.route.market).toBytes()],
+      claimsProgram,
+    );
+    const [positionAddress, positionBump] = PublicKey.findProgramAddressSync(
+      [LIABILITY_BASIS_POSITION_SEED_V2, aggregateAddress.toBytes(), new PublicKey(input.request.owner).toBytes()],
+      claimsProgram,
+    );
+    expect(aggregateAddress.toBase58()).toBe(input.route.aggregate);
+    expect(positionAddress.toBase58()).toBe(input.route.position);
+    input.aggregateBytes[LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2] = aggregateBump;
+    input.positionBytes[LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2] = positionBump;
+
+    // THE CONTROL, so this cannot be a test that would have passed before the
+    // fix. The check this replaced covered each whole reserved span, starting
+    // AT the bump rather than one past it, and on these exact bytes it refuses.
+    // A canonical bump is never zero, which is the whole reason the byte cannot
+    // be zero-checked.
+    const beforeTheFix = (record: Uint8Array, offset: number, width: number): void => {
+      if (record.slice(offset, offset + width).some((byte) => byte !== 0)) {
+        throw new Error('contains noncanonical reserved bytes');
+      }
+    };
+    expect(aggregateBump).not.toBe(0);
+    expect(positionBump).not.toBe(0);
+    expect(() => beforeTheFix(input.aggregateBytes, LIABILITY_BASIS_HEADER_RESERVED_OFFSET_V2, LIABILITY_BASIS_HEADER_RESERVED_BYTES_V2))
+      .toThrow('noncanonical reserved bytes');
+    expect(() => beforeTheFix(input.positionBytes, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2, LIABILITY_BASIS_POSITION_RESERVED_BYTES_V2))
+      .toThrow('noncanonical reserved bytes');
+
+    const built = await buildWalletTerminalPayoutV3(input);
+    expect(built.route.position).toBe(input.route.position);
+  });
+
+  /**
+   * The control on the control. A "fix" that skipped the bump by simply
+   * widening the hole would pass the test above and nothing would notice, so
+   * this dirties the byte AFTER each bump -- which the Rust decoder still
+   * requires to be zero -- and demands the same refusal.
+   */
+  it('still refuses a reserved byte that is not the bump', async () => {
+    const aggregateDirty = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
+    aggregateDirty.signedPacket.set(await sha256(aggregateDirty.__requestBytes), 80);
+    aggregateDirty.aggregateBytes[LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2 + 1] = 1;
+    await expect(buildWalletTerminalPayoutV3(aggregateDirty)).rejects.toThrow('Claims aggregate header contains noncanonical reserved bytes');
+
+    const positionDirty = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
+    positionDirty.signedPacket.set(await sha256(positionDirty.__requestBytes), 80);
+    positionDirty.positionBytes[LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2 + 1] = 1;
+    await expect(buildWalletTerminalPayoutV3(positionDirty)).rejects.toThrow('Claims Position header tail contains noncanonical reserved bytes');
+  });
   it('hostile-decodes the bounded payout manifest and refuses unknown authority', async () => {
     const input = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
     input.signedPacket.set(await sha256(input.__requestBytes), 80);

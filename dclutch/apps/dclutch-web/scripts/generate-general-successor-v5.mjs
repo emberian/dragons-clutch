@@ -53,11 +53,51 @@ function bytes(source, name) {
   return [...new TextEncoder().encode(match[1])];
 }
 
-function methodOffset(source, method) {
-  const match = sources[source].match(new RegExp(`pub const fn ${method}\\(\\) -> u32 \\{\\s*(wire::)?([A-Z0-9_]+|[0-9_]+)\\s*\\}`));
-  if (!match) throw new Error(`missing Rust typed offset ${source}.${method}`);
-  if (match[1] !== undefined) return scalar('runtimeWire', match[2]);
-  return Number(match[2].replaceAll('_', ''));
+/**
+ * One typed offset projection, SCOPED TO ITS OWN `impl`.
+ *
+ * `runtime_width.rs` holds two layouts that share six method names --
+ * `SettlementCursorLayoutV2` and `VerifiedCandidateLayoutV2` both project
+ * `magic`, `version`, `phase`, `outcome_count`, `revision` and `candidate_id`
+ * -- and an unscoped search took whichever came first in the file, which is the
+ * settlement one, for BOTH tables below. It was right only because the two
+ * records happen to share a prologue. Naming the owner makes that a fact the
+ * reader states rather than one it depends on.
+ */
+function methodOffset(source, owner, method) {
+  const body = sources[source].match(new RegExp(`impl ${owner} \\{([\\s\\S]*?)\\n\\}`))?.[1];
+  if (body === undefined) throw new Error(`missing Rust layout ${source}.${owner}`);
+  const match = body.match(new RegExp(`pub const fn ${method}\\(\\) -> u32 \\{\\s*(wire::)?([A-Z0-9_]+|[0-9_]+)(?: as u32)?\\s*\\}`));
+  if (!match) throw new Error(`missing Rust typed offset ${source}.${owner}.${method}`);
+  if (match[1] !== undefined) return { offset: scalar('runtimeWire', match[2]), emitted: match[2] };
+  return { offset: Number(match[2].replaceAll('_', '')), emitted: null };
+}
+
+/**
+ * A whole layout's offsets, in field order, with the two checks a
+ * constant-at-a-time read cannot make.
+ *
+ * A projection that FORWARDS must forward to a constant of its own record:
+ * crossing records is the mis-wiring the conversion to emitted names makes
+ * possible, and it is invisible in a value comparison because the two records
+ * share a prologue. And the offsets must strictly increase in field order,
+ * which is what catches a forward wired to the wrong field of the RIGHT
+ * record. Neither check restates a coordinate here; both would have to be
+ * defeated deliberately.
+ */
+function layoutOffsets(source, owner, prefix, entries) {
+  let previous = -1;
+  return entries.map(([exported, method]) => {
+    const { offset, emitted } = methodOffset(source, owner, method);
+    if (emitted !== null && !emitted.startsWith(prefix)) {
+      throw new Error(`${source}.${owner}.${method} forwards to ${emitted}, which is not a ${prefix} coordinate`);
+    }
+    if (offset <= previous) {
+      throw new Error(`${source}.${owner}.${method} is at ${offset}, not after the field before it at ${previous}`);
+    }
+    previous = offset;
+    return `export const ${exported} = ${offset} as const;\n`;
+  }).join('');
 }
 
 function associatedOffset(source, owner, name) {
@@ -268,12 +308,12 @@ output += `export const GENERAL_LOCAL_STATE_BATCH_KIND_V3 = ${scalar('local', 'K
 output += `export const GENERAL_LOCAL_STATE_ORDER_KIND_V3 = ${scalar('local', 'KIND_ORDER')} as const;\n`;
 output += `export const GENERAL_LOCAL_STATE_CANDIDATE_KIND_V3 = ${scalar('local', 'KIND_CANDIDATE')} as const;\n`;
 output += `export const GENERAL_LOCAL_STATE_VERIFIER_KIND_V3 = ${scalar('local', 'KIND_VERIFIER')} as const;\n`;
-for (const [name, method] of [
+output += layoutOffsets('local', 'GeneralLocalStateLayoutV3', 'GENERAL_LOCAL_STATE_', [
   ['GENERAL_LOCAL_STATE_MAGIC_OFFSET_V3', 'magic'], ['GENERAL_LOCAL_STATE_VERSION_OFFSET_V3', 'version'],
   ['GENERAL_LOCAL_STATE_KIND_OFFSET_V3', 'kind'], ['GENERAL_LOCAL_STATE_BUMP_OFFSET_V3', 'bump'],
   ['GENERAL_LOCAL_STATE_RENT_PRINCIPAL_OFFSET_V3', 'rent_principal'],
   ['GENERAL_LOCAL_STATE_BENEFICIARY_OFFSET_V3', 'beneficiary'], ['GENERAL_LOCAL_STATE_BODY_OFFSET_V3', 'body'],
-]) output += `export const ${name} = ${methodOffset('local', method)} as const;\n`;
+]);
 for (const name of actionNames) output += `export const ${name}_V2 = ${scalar('controller', name)} as const;\n`;
 for (const [name, variant] of actionNamesV3) output += `export const ${name}_V3 = ${enumTag('requestV3', 'ControllerActionV3', variant)} as const;\n`;
 for (const name of [
@@ -307,7 +347,7 @@ for (const name of [
   'VERIFIED_DIGEST', 'SUBMITTED_SLOT', 'VERIFIED_REVISION', 'ROW_COUNT', 'ROW_RESERVED',
   'REWARD_RATE', 'VERIFICATION_REMAINING', 'CLEANUP_REMAINING', 'TAIL_RESERVED',
 ]) output += `export const GENERAL_SUBMISSION_${name}_OFFSET_V1 = ${associatedOffset('candidate', 'GeneralCandidateLayoutV1', `${name}_OFFSET`)} as const;\n`;
-for (const [name, method] of [
+output += layoutOffsets('verifier', 'RuntimeVerifierLayoutV2', 'RUNTIME_VERIFIER_', [
   ['MAGIC', 'magic'], ['VERSION', 'version'], ['HAS_CURRENT_ORDER', 'has_current_order'],
   ['OUTCOME_COUNT', 'outcome_count'], ['PAGE_COUNT', 'page_count'], ['NEXT_PAGE_INDEX', 'next_page_index'],
   ['NEXT_ROW_INDEX', 'next_row_index'], ['ORDER_COUNT', 'order_count'], ['REVISION', 'revision'],
@@ -319,21 +359,21 @@ for (const [name, method] of [
   ['CURRENT_MAX_QUOTE_DEBIT_PER_LOT', 'current_max_quote_debit_per_lot'], ['CURRENT_LOTS', 'current_lots'],
   ['CURRENT_SOURCE_PAGE_INDEX', 'current_source_page_index'],
   ['CURRENT_SOURCE_EXECUTION_INDEX', 'current_source_execution_index'], ['TAILS_BASE', 'tails_base'],
-]) output += `export const GENERAL_VERIFIER_${name}_OFFSET_V2 = ${methodOffset('verifier', method)} as const;\n`;
-output += `export const GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2 = ${methodOffset('verifier', 'tail_item_stride')} as const;\n`;
+].map(([name, method]) => [`GENERAL_VERIFIER_${name}_OFFSET_V2`, method]));
+output += `export const GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2 = ${methodOffset('verifier', 'RuntimeVerifierLayoutV2', 'tail_item_stride').offset} as const;\n`;
 for (const name of ['PRICES', 'CURRENT_RECEIVE', 'CURRENT_DELIVER', 'CLAIM_INPUTS', 'CLAIM_OUTPUTS']) {
   output += `export const GENERAL_VERIFIER_${name}_TAIL_V2 = ${scalar('verifier', `${name}_TAIL`)} as const;\n`;
 }
-for (const [name, method] of [
+output += layoutOffsets('runtime', 'VerifiedCandidateLayoutV2', 'VERIFIED_CANDIDATE_', [
   ['MAGIC', 'magic'], ['VERSION', 'version'], ['PHASE', 'phase'], ['OUTCOME_COUNT', 'outcome_count'],
   ['PAGE_COUNT', 'page_count'], ['CANDIDATE_COORDINATE', 'candidate_coordinate'], ['REVISION', 'revision'],
   ['CANDIDATE_ID', 'candidate_id'], ['PRODUCT_ID', 'product_id'], ['BATCH_ID', 'batch_id'],
   ['FILLED_LOTS', 'filled_lots'], ['QUOTE_DEBIT', 'quote_debit'], ['QUOTE_CREDIT', 'quote_credit'],
   ['PRICE_SCALE', 'price_scale'], ['CLAIM_INPUTS_BASE', 'claim_inputs_base'],
-]) output += `export const GENERAL_VERIFIED_CANDIDATE_${name}_OFFSET_V2 = ${methodOffset('runtime', method)} as const;\n`;
-output += `export const GENERAL_VERIFIED_CANDIDATE_TAIL_ITEM_STRIDE_V2 = ${methodOffset('runtime', 'tail_item_stride')} as const;\n`;
+].map(([name, method]) => [`GENERAL_VERIFIED_CANDIDATE_${name}_OFFSET_V2`, method]));
+output += `export const GENERAL_VERIFIED_CANDIDATE_TAIL_ITEM_STRIDE_V2 = ${methodOffset('runtime', 'VerifiedCandidateLayoutV2', 'tail_item_stride').offset} as const;\n`;
 output += `export const GENERAL_VERIFIED_CANDIDATE_PHASE_V2 = ${scalar('runtime', 'VERIFIED_PHASE')} as const;\n`;
-for (const [name, method] of [
+output += layoutOffsets('selection', 'RuntimeSelectionLayoutV2', 'RUNTIME_SELECTION_', [
   ['GENERAL_SELECTION_MAGIC_OFFSET_V2', 'magic'], ['GENERAL_SELECTION_VERSION_OFFSET_V2', 'version'],
   ['GENERAL_SELECTION_PHASE_OFFSET_V2', 'phase'], ['GENERAL_SELECTION_OUTCOME_COUNT_OFFSET_V2', 'outcome_count'],
   ['GENERAL_SELECTION_REVISION_OFFSET_V2', 'revision'], ['GENERAL_SELECTION_SUBMITTED_COUNT_OFFSET_V2', 'submitted_count'],
@@ -345,8 +385,8 @@ for (const [name, method] of [
   ['GENERAL_SELECTION_VERIFIED_DIGEST_OFFSET_V2', 'best_verified_digest'],
   ['GENERAL_SELECTION_FILLED_LOTS_OFFSET_V2', 'best_filled_lots'],
   ['GENERAL_SELECTION_QUOTE_SURPLUS_OFFSET_V2', 'best_quote_surplus'],
-]) output += `export const ${name} = ${methodOffset('selection', method)} as const;\n`;
-for (const [name, method] of [
+]);
+output += layoutOffsets('runtime', 'SettlementCursorLayoutV2', 'SETTLEMENT_CURSOR_', [
   ['GENERAL_SETTLEMENT_MAGIC_OFFSET_V2', 'magic'], ['GENERAL_SETTLEMENT_VERSION_OFFSET_V2', 'version'],
   ['GENERAL_SETTLEMENT_PHASE_OFFSET_V2', 'phase'], ['GENERAL_SETTLEMENT_OUTCOME_COUNT_OFFSET_V2', 'outcome_count'],
   ['GENERAL_SETTLEMENT_ORDER_COUNT_OFFSET_V2', 'order_count'], ['GENERAL_SETTLEMENT_NEXT_ORDER_OFFSET_V2', 'next_order'],
@@ -355,7 +395,7 @@ for (const [name, method] of [
   ['GENERAL_SETTLEMENT_COMPLETE_SET_OFFSET_V2', 'complete_set_quantity'],
   ['GENERAL_SETTLEMENT_TERMINAL_OFFSET_V2', 'terminal_coordinate'],
   ['GENERAL_SETTLEMENT_INVENTORY_OFFSET_V2', 'inventory_base'],
-]) output += `export const ${name} = ${methodOffset('runtime', method)} as const;\n`;
+]);
 output += 'export const GENERAL_SETTLEMENT_INVENTORY_STRIDE_V2 = 8 as const;\n';
 output += 'export const GENERAL_PHASE_COLLECTING_V2 = 4 as const;\nexport const GENERAL_PHASE_MATERIALIZING_V2 = 5 as const;\n';
 output += 'export const GENERAL_PHASE_DISTRIBUTING_V2 = 6 as const;\nexport const GENERAL_PHASE_READY_TO_CLOSE_V2 = 7 as const;\n';

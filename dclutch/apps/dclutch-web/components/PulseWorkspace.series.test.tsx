@@ -32,7 +32,7 @@ describe('the pulse surface, with a recorded run', () => {
   });
 
   it('says in numbers what the drawn window covers, instead of in adjectives', () => {
-    expect(html).toContain(`${series.points.length} recorded cycles covering`);
+    expect(html).toContain(`${series.points.length} recorded boundaries covering`);
     expect(html).toContain('slots of chain');
     expect(html).toContain(`census file ${series.censusFile}`);
   });
@@ -43,8 +43,15 @@ describe('the pulse surface, with a recorded run', () => {
   });
 
   it('reports the ledger checks across every drawn cycle, and whether they held', () => {
-    expect(html).toContain('the ledger was re-checked');
-    expect(html).toContain('held every time');
+    // Which sentence is right is the record's to decide, not this case's: a
+    // capture with no violation says the ledger held every time, and one with
+    // a violation must say how many did not. Demanding the first outright made
+    // this a case that only a spotless capture could pass, which is a case
+    // that fails the day the census earns its keep.
+    const broken = series.points.reduce((sum, point) => sum + point.checksBroken, 0);
+    expect(html).toContain(broken === 0 ? 'the ledger was re-checked' : 'did not hold');
+    if (broken === 0) expect(html).toContain('held every time');
+    else expect(html).toContain(`${broken} check${broken === 1 ? '' : 's'} did not hold`);
   });
 
   /**
@@ -58,13 +65,21 @@ describe('the pulse surface, with a recorded run', () => {
   it('draws the two quantities that are actually moving', () => {
     expect(html).toContain('The heartbeat');
     expect(html).toContain('slots the chain advanced');
-    expect(html).toContain('seconds between recordings');
     expect(html).toContain('Chain slots covered');
+    // The cadence is the half that depends on the record carrying instants,
+    // and a chained census cannot attribute them (see simulatorSeries.test.ts).
+    // So the page either draws the seconds or says why it has none — what it
+    // may never do is leave the reader with an unexplained gap.
+    const timed = series.points.every((point) => point.recordedAt !== null);
+    expect(html).toContain(timed ? 'seconds between recordings' : 'Some cycles recorded no timestamp');
   });
 
   it('says the slot rate was measured here rather than looked up', () => {
     expect(html).toContain('Measured slot rate');
-    expect(html).toContain('measured here, not a published constant');
+    const timed = series.points.every((point) => point.recordedAt !== null);
+    expect(html).toContain(timed
+      ? 'measured here, not a published constant'
+      : 'the run did not record enough instants to divide by');
   });
 
   /**
@@ -72,7 +87,11 @@ describe('the pulse surface, with a recorded run', () => {
    * true and shapeless; what a reader needs is which law and what it compared.
    */
   it('gives every conservation law its name, its verdict and its own sentence', () => {
-    expect(html).toContain('The seven checks, after every cycle');
+    // The count in the heading is the RECORD's, not the page's: the census
+    // gained L8 and the heading still said seven, which is the shape of wrong
+    // that no decoder can catch. It is derived now, so this asserts the
+    // derivation rather than a number.
+    expect(html).toContain(`The ${series.lawIds.length} checks, after every boundary`);
     for (const id of series.lawIds) expect(html).toContain(`>${id}<`);
     // The census writes its sentences with real comparison operators in them
     // ("Hoard ... >= worst outcome ..."), which is exactly the phrasing worth
@@ -109,7 +128,14 @@ describe('the pulse surface, with a recorded run', () => {
   it('names a flat line as flat instead of hiding the chart or implying a movement', () => {
     const flat = series.points.every((point) => point.supply.every((atoms, cell) => atoms === series.points[0].supply[cell]));
     if (!flat) return;
-    expect(html).toContain('no trade has landed in this run yet');
+    // The note used to read "no trade has landed in this run yet", which was
+    // an inference from a flat ISSUED-SUPPLY line and became false the day a
+    // trade landed: a Direct fill moves claims between two positions and
+    // issues none, so this line is flat across a real crossing. The note says
+    // what the line means now, and points at the table that does move.
+    expect(html).toContain('unchanged at every recorded boundary');
+    expect(html).toContain('A Direct fill MOVES claims between two positions');
+    expect(html).not.toContain('no trade has landed in this run yet');
   });
 
   /**
@@ -188,7 +214,6 @@ describe('who is in the market', () => {
 });
 
 describe('what may be said about who holds what', () => {
-  const base = parseSimulatorSeriesV1(published);
   const position = (label: string, claims: ReadonlyArray<string>) => ({
     label,
     address: null,
@@ -208,7 +233,11 @@ describe('what may be said about who holds what', () => {
   });
 
   it('says one position cannot be ranked', () => {
-    const reading = holdingsReadingV1(base);
+    // Built here rather than taken from the published capture. This case is
+    // about the RULE — one position is not an ordering — and reading it off
+    // the shipped artifact made it a case about how many positions cohort-12
+    // happened to record; it went red the hour a second holder appeared.
+    const reading = holdingsReadingV1(withPositions([position('a', ['4', '4'])]));
     expect(reading.positionCount).toBe(1);
     expect(reading.rankable).toBe(false);
   });
@@ -256,6 +285,6 @@ describe('the recorded-run section on its own', () => {
       points: (published as { points: ReadonlyArray<unknown> }).points.slice(-3),
     });
     const html = renderToStaticMarkup(<RecordedCycles read={{ kind: 'loaded', series: trimmed }} />);
-    expect(html).toContain('7 earlier cycles are counted but not drawn');
+    expect(html).toContain('7 earlier boundaries are counted but not drawn');
   });
 });

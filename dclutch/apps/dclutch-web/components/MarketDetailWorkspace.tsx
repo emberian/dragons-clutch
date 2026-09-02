@@ -34,6 +34,7 @@ import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { formatBasisPointsV1, issuedSupplySharesV1, SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
 import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
+import MarketActivity from '@/components/MarketActivity';
 import MarketTradePanel from '@/components/MarketTradePanel';
 import RefusedMarketStory from '@/components/RefusedMarketStory';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
@@ -626,6 +627,22 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             </details>
           </>}
     </section>}
+
+    {/* The page's only past tense, and a read of its own: the crossings this
+        market has taken, where the claims sit now, and what the venue is still
+        owed. It renders its own refusal rather than taking the page with it. */}
+    {decoded !== null && <MarketActivity
+      address={address}
+      endpoint={deployment.endpoint}
+      programs={{
+        core: deployment.programs.core,
+        registry: deployment.programs.registry,
+        trading: deployment.programs.trading,
+        claims: deployment.programs.claims,
+      }}
+      denomination={denomination}
+      outcomes={narrative.outcomes}
+    />}
 
     {decoded !== null && (decoded.collateral.status === 'bound'
       ? <details className="market-detail-drawer"><summary>Realm · payout asset</summary><div className="market-detail-drawer-body"><Realm collateral={decoded.collateral} /></div></details>

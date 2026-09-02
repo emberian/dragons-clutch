@@ -1,13 +1,12 @@
 import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import FeaturedMarketStanding from '@/components/FeaturedMarketStanding';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import LandingPulse from '@/components/charts/LandingPulse';
 
 import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
-import { marketEditorialV1 } from '@/lib/marketRegistry';
-import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@/lib/publicCutStaging';
 
 /**
  * The long-form field notes, served as a plain page beside the app.
@@ -35,12 +34,6 @@ export const FIELD_NOTES_HREF_V1 = '/notes/plan-to-compost-at-least-three/';
  * No chain is read here and no address is asked for. Every card is a link.
  */
 export default function SiteLanding() {
-  // The featured market's editorial name, when the shipped registry has one.
-  // The cut names the address; the registry names the market. Either can be
-  // absent and the sentence below stays true without it.
-  const featuredTitle = PUBLIC_DEVNET_CUT_V1.market === null
-    ? null
-    : marketEditorialV1(PUBLIC_DEVNET_CUT_V1.market)?.title ?? null;
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/" status="live devnet programs" />}>
 
     <section className="trade-v3-hero">
@@ -63,9 +56,7 @@ export default function SiteLanding() {
         <strong>On devnet — nothing for sale</strong>
         <p>dClutch runs on Solana&apos;s devnet, a public test network whose
         tokens are worthless by construction. The programs are deployed{' '}
-        {PUBLIC_DEVNET_CUT_V1.market === null
-          ? <>and the first markets are being set up.</>
-          : <>and the first market is <Anchor href={publicCutMarketHrefV1(PUBLIC_DEVNET_CUT_V1)}>open{featuredTitle === null ? '' : ` — ${featuredTitle}`}</Anchor>.</>} There
+        <FeaturedMarketStanding /> There
         is no token, nothing to buy, and no value at risk anywhere. If you want
         to try it, devnet SOL is free from the{' '}
         <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.</p>
