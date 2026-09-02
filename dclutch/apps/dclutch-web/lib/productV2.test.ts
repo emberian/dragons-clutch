@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   PRODUCT_V2_BYTES,
   compileProductV2,
-  evaluateProductV2,
   parseProductKnots,
   parseProductTerms,
 } from './productV2';
@@ -40,15 +39,18 @@ describe('Product V2 exact signed-rational studio', () => {
     ]);
   });
 
-  it('keeps the coordinate rational and floors only each final interpolation contribution', async () => {
-    const product = await fixture();
-    expect(evaluateProductV2(product, -50n, 1n)).toBe(3n);
-    expect(evaluateProductV2(product, -25n, 1n)).toBe(78n);
-    expect(evaluateProductV2(product, 0n, 7n)).toBe(153n);
-    expect(evaluateProductV2(product, 25n, 1n)).toBe(128n);
-    expect(evaluateProductV2(product, 1n, 3n)).toBe(152n);
-    expect(evaluateProductV2(product, 10_000n, 1n)).toBe(103n);
-  });
+  /*
+   * The six evaluation assertions that stood here moved with the thing they
+   * measured. `evaluateProductV2` was a second implementation of
+   * `ProductPayoffV2::evaluate_rational`; the evaluator is compiled now, and
+   * every one of those six values is asserted against the compiled owner in
+   * `lib/productPayoffV2Evaluation.test.ts` -- verbatim, because the case for
+   * deleting a mirror is that the surviving authority reproduces every value
+   * the mirror was ever held to.
+   *
+   * What stays here is what this module still owns: authoring,
+   * canonicalization, the record, and its identity.
+   */
 
   it('refuses noncanonical integers, partitions, terms, and arithmetic bounds', async () => {
     expect(() => parseProductKnots('01\n2')).toThrow('canonical');
@@ -64,9 +66,6 @@ describe('Product V2 exact signed-rational studio', () => {
         { shape: 'ramp-up', left: 0, peak: 0, right: 1, amplitude: 2n },
       ],
     })).rejects.toThrow('duplicate');
-    const product = await fixture();
-    expect(() => evaluateProductV2(product, 0n, 0n)).toThrow('denominator');
-    expect(() => evaluateProductV2(product, 1n << 127n, 1n)).toThrow('i128');
   });
 
   // The two transaction tests that stood here were deleted with the surface they

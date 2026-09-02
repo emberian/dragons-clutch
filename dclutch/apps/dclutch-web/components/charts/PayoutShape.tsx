@@ -2,8 +2,6 @@
 
 import { useState, type PointerEvent } from 'react';
 
-import { evaluateProductV2, type CompiledProductV2 } from '@/lib/productV2';
-
 import { atomShareV1, maxAtomsV1, planRationalPositionsV1 } from './atomGeometry';
 import { FIGURE_AXIS_PX, useFigureScale } from './useFigureScale';
 
@@ -17,9 +15,12 @@ import { FIGURE_AXIS_PX, useFigureScale } from './useFigureScale';
  * evaluation the caller supplies, and only the projection to screen
  * coordinates rounds (in bigint, to one millionth of the plot).
  *
- * Presentational only: the knot values arrive as props. The adapter below
- * derives them from a compiled Product V2 record with the same exact
- * evaluator the byte-level tests pin.
+ * Presentational only: the knot values arrive as props, already evaluated.
+ * The adapter that produced them used to live here and ran a TypeScript
+ * reimplementation of the payoff; it is now `payoutCurveKnotsV1` in
+ * `lib/productPayoffV2Evaluation.ts`, which asks the compiled Rust codec. A
+ * chart is not a place to keep a second implementation of the arithmetic it
+ * draws, and it is not a place to hold a WASM boundary either.
  */
 
 export type PayoutShapeKnotV1 = Readonly<{
@@ -41,14 +42,6 @@ export type PayoutShapePropsV1 = Readonly<{
   position?: Readonly<{ atoms: string; note: string }> | null;
   emptyReason?: string;
 }>;
-
-/** Exact knot evaluations of a compiled Product V2 payoff — no sampling. */
-export function payoutShapeKnotsFromCompiledProductV2(compiled: CompiledProductV2): ReadonlyArray<PayoutShapeKnotV1> {
-  return Object.freeze(compiled.input.knots.map((numerator) => Object.freeze({
-    numerator: numerator.toString(),
-    payoutAtoms: evaluateProductV2(compiled, numerator, compiled.input.knotDenominator).toString(),
-  })));
-}
 
 const PLOT_WIDTH = 460;
 const PLOT_HEIGHT = 130;

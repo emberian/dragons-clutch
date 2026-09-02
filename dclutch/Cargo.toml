@@ -42,6 +42,7 @@ members = [
     "crates/dclutch-product-payoff-svm",
     "crates/dclutch-product-payoff-v2-codec",
     "crates/dclutch-product-payoff-v2-svm",
+    "crates/dclutch-product-payoff-v2-wasm",
     "crates/dclutch-record-contract",
     "crates/dclutch-refusal-registry",
     "crates/dclutch-request-profile-contract",

@@ -2311,6 +2311,17 @@ name = "dclutch-product-payoff-v2-svm"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-payoff-v2-wasm"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dclutch-product-payoff-v2-codec",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "dclutch-product-runtime-v2"
 version = "0.1.0"
 

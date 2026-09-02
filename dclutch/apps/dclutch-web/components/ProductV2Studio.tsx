@@ -7,8 +7,14 @@ import { FormEvent, useMemo, useState } from 'react';
 import { fromHex, hex } from '@/lib/bytes';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 import {
+  evaluateProductPayoffV2WasmV1,
+  loadProductPayoffV2WasmV1,
+  payoutCurveKnotsV1,
+  type PayoutCurveKnotV1,
+  type ProductPayoffV2WasmV1,
+} from '@/lib/productPayoffV2Evaluation';
+import {
   compileProductV2,
-  evaluateProductV2,
   parseProductKnots,
   parseProductTerms,
   productInteger,
@@ -16,7 +22,7 @@ import {
   type CompiledProductV2,
 } from '@/lib/productV2';
 import { buildAdmissionInstructionV2 } from '@/lib/productRuntimeV2Admission';
-import PayoutShape, { payoutShapeKnotsFromCompiledProductV2 } from '@/components/charts/PayoutShape';
+import PayoutShape from '@/components/charts/PayoutShape';
 import {
   DerivedProvenance,
   DerivedValue,
@@ -57,6 +63,18 @@ const DIGEST_FOR_SLOT_V1: Readonly<Record<string, string>> = Object.freeze({
 export default function ProductV2Studio() {
   const [productId, setProductId] = useState(''); const [domainId, setDomainId] = useState(''); const [unitId, setUnitId] = useState(''); const [payoutScale, setPayoutScale] = useState(''); const [knotDenominator, setKnotDenominator] = useState(''); const [knots, setKnots] = useState(''); const [terms, setTerms] = useState('');
   const [compiled, setCompiled] = useState<CompiledProductV2 | null>(null); const [compileStatus, setCompileStatus] = useState('No Product has been authored or compiled.');
+  /**
+   * The compiled payoff evaluator, and the curve it produced.
+   *
+   * Both used to be synchronous, because both went through `evaluateProductV2`
+   * -- a TypeScript reimplementation of `ProductPayoffV2::evaluate_rational`,
+   * which is the arithmetic the chain settles with. The Studio was showing a
+   * payout the protocol had never been asked about. The boundary is loaded
+   * once, on the first compile, and the curve is evaluated in ONE call across
+   * it because a curve is its knots and nothing here is sampled.
+   */
+  const [payoffBoundary, setPayoffBoundary] = useState<ProductPayoffV2WasmV1 | null>(null);
+  const [shapeKnots, setShapeKnots] = useState<ReadonlyArray<PayoutCurveKnotV1> | null>(null);
   const [sampleNumerator, setSampleNumerator] = useState(''); const [sampleDenominator, setSampleDenominator] = useState(''); const [sample, setSample] = useState<string | null>(null);
   const [admissionProgram, setAdmissionProgram] = useState(''); const [registry, setRegistry] = useDeploymentFieldV1((d) => d.programs.registry);
   const [deployedRegistry] = useDeploymentFieldV1((d) => d.programs.registry);
@@ -95,17 +113,30 @@ export default function ProductV2Studio() {
     } catch (error) { setAdmissionStatus(`Refused: ${message(error)}`); }
   }
 
+  /** Load the digest-pinned evaluator once, and keep it. */
+  async function payoffEvaluator(): Promise<ProductPayoffV2WasmV1> {
+    if (payoffBoundary !== null) return payoffBoundary;
+    const loaded = await loadProductPayoffV2WasmV1();
+    setPayoffBoundary(loaded);
+    return loaded;
+  }
+
   async function compile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setCompiled(null); setSample(null); setCompileStatus('Compiling…');
+    event.preventDefault(); setCompiled(null); setSample(null); setShapeKnots(null); setCompileStatus('Compiling…');
     try {
       const value = await compileProductV2({ productId: productInteger(productId, 'product scalar ID'), domainId: productInteger(domainId, 'domain scalar ID'), coordinateUnitId: productInteger(unitId, 'coordinate-unit scalar ID'), payoutScale: productInteger(payoutScale, 'payout scale'), knotDenominator: productInteger(knotDenominator, 'knot denominator'), knots: parseProductKnots(knots), terms: parseProductTerms(terms) });
       setCompiled(value); setCompileStatus(`Compiled ${value.input.knots.length} knots and ${value.input.terms.length} canonical terms into exactly ${value.bytes.length} bytes.`);
+      setShapeKnots(await payoutCurveKnotsV1(await payoffEvaluator(), value, base64));
     } catch (error) { setCompileStatus(`Refused: ${message(error)}`); }
   }
 
-  function evaluate(event: FormEvent<HTMLFormElement>) {
+  async function evaluate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setSample(null); if (compiled === null) return;
-    try { const numerator = productInteger(sampleNumerator, 'sample numerator'); const denominator = productInteger(sampleDenominator, 'sample denominator'); setSample(`${evaluateProductV2(compiled, numerator, denominator)} scaled payout atoms at ${numerator}/${denominator}`); } catch (error) { setSample(`Refused: ${message(error)}`); }
+    try {
+      const numerator = productInteger(sampleNumerator, 'sample numerator'); const denominator = productInteger(sampleDenominator, 'sample denominator');
+      const answer = await evaluateProductPayoffV2WasmV1(await payoffEvaluator(), base64(compiled.bytes), [{ numerator, denominator }]);
+      setSample(`${answer.payouts[0]} scaled payout atoms at ${numerator}/${denominator}`);
+    } catch (error) { setSample(`Refused: ${message(error)}`); }
   }
 
   return <PageShell className="product-shell direct-workspace product-v2-studio" header={<ConsoleHeader path="/product-v2" title="Product studio" purpose="Compile the current five-record spline graph through its Rust owner, then inspect exact low-level payoff semantics." />}>
@@ -137,7 +168,7 @@ export default function ProductV2Studio() {
       </fieldset>
       <div className="product-author-grid"><label><span>Strictly increasing signed knot numerators · one i128 per line</span><textarea required value={knots} onChange={(event) => setKnots(event.target.value)} spellCheck={false} /></label><label><span>Payoff terms · one canonical expression per line</span><textarea required value={terms} onChange={(event) => setTerms(event.target.value)} spellCheck={false} /><small>constant amplitude<br />ramp-up left-index right-index amplitude<br />ramp-down left-index right-index amplitude<br />tent left-index peak-index right-index amplitude</small></label></div>
       <button type="submit">Compile exact Product bytes</button><p className="direct-status" aria-live="polite">{compileStatus}</p>
-      {compiled && <div className="direct-output product-compiled"><dl><div><dt>Canonical record identity</dt><dd>{compiled.digestHex}</dd></div><div><dt>Exact ABI</dt><dd>576 bytes · {compiled.input.knots.length} active knots · {compiled.input.terms.length} active terms</dd></div><div><dt>Conservative liability</dt><dd>{compiled.liabilityBound.toString()} scaled payout atoms</dd></div></dl><label><span>{PRODUCT_V2_BYTES}-byte Product V2 record · base64</span><textarea readOnly value={base64(compiled.bytes)} /></label><p className="direct-status">Payoff interpolation segments, derived from the knots above. Not the outcome partition.</p><div className="product-region-grid">{compiled.regions.map((region) => <article className="registered-state-card" key={`${region.label}-${region.left}`}><span className="eyebrow">{region.label}</span><h3>{region.left} → {region.right}</h3><p>Rational coordinates; shape-specific endpoint clamp.</p></article>)}</div>{/* FE-CHART mount: the compiled record drawn exactly — knot evaluations, not samples. */}<PayoutShape knots={payoutShapeKnotsFromCompiledProductV2(compiled)} knotDenominator={compiled.input.knotDenominator.toString()} payoutScale={compiled.input.payoutScale.toString()} caption="What this payoff pays across its result domain: exact evaluations at every knot, straight lines between them, flat clamped tails beyond." /></div>}
+      {compiled && <div className="direct-output product-compiled"><dl><div><dt>Canonical record identity</dt><dd>{compiled.digestHex}</dd></div><div><dt>Exact ABI</dt><dd>576 bytes · {compiled.input.knots.length} active knots · {compiled.input.terms.length} active terms</dd></div><div><dt>Conservative liability</dt><dd>{compiled.liabilityBound.toString()} scaled payout atoms</dd></div></dl><label><span>{PRODUCT_V2_BYTES}-byte Product V2 record · base64</span><textarea readOnly value={base64(compiled.bytes)} /></label><p className="direct-status">Payoff interpolation segments, derived from the knots above. Not the outcome partition.</p><div className="product-region-grid">{compiled.regions.map((region) => <article className="registered-state-card" key={`${region.label}-${region.left}`}><span className="eyebrow">{region.label}</span><h3>{region.left} → {region.right}</h3><p>Rational coordinates; shape-specific endpoint clamp.</p></article>)}</div>{/* FE-CHART mount: the compiled record drawn exactly — knot evaluations from the compiled Rust codec, not samples and not a second evaluator. */}<PayoutShape knots={shapeKnots ?? []} knotDenominator={compiled.input.knotDenominator.toString()} payoutScale={compiled.input.payoutScale.toString()} caption="What this payoff pays across its result domain: exact evaluations at every knot by the compiled Rust codec, straight lines between them, flat clamped tails beyond." emptyReason="The record compiled; its payout curve is still being evaluated by the compiled Rust codec." /></div>}
     </form>
 
     {compiled && <form className="direct-card" onSubmit={evaluate}><div className="direct-card-heading"><span>02</span><div><h2>Evaluate without quantizing the coordinate</h2><p>The compiled bytes’ exact rational semantics. Only the final nonnegative payout interpolation is floored.</p></div></div><div className="direct-form-grid"><label><span>Signed result numerator · i128</span><input required value={sampleNumerator} onChange={(event) => setSampleNumerator(event.target.value.trim())} spellCheck={false} /><small className="feed-forward">Signed, and wider than u64 — this one stays a plain field until the vocabulary carries an i128 type.</small></label><U64Field label="Positive result denominator · u64" value={sampleDenominator} onChange={setSampleDenominator} noun="result denominator" min={1n} required /></div><button type="submit">Evaluate exact coordinate</button><p className="direct-status" aria-live="polite">{sample ?? 'No coordinate has been evaluated.'}</p></form>}

@@ -1,9 +1,34 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { compileProductV2, parseProductKnots, parseProductTerms } from '@/lib/productV2';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-import PayoutShape, { payoutShapeKnotsFromCompiledProductV2 } from './PayoutShape';
+import {
+  loadProductPayoffV2WasmV1,
+  payoutCurveKnotsV1,
+  type PayoutCurveKnotV1,
+} from '@/lib/productPayoffV2Evaluation';
+import { compileProductV2, parseProductKnots, parseProductTerms, type CompiledProductV2 } from '@/lib/productV2';
+
+import PayoutShape from './PayoutShape';
+
+const wasmPath = fileURLToPath(new URL('../../lib/generated/productPayoffV2Wasm/product_payoff_v2_bg.wasm', import.meta.url));
+
+/**
+ * The knots the chart draws, evaluated by the compiled Rust codec.
+ *
+ * This used to be a synchronous call into `evaluateProductV2`, a TypeScript
+ * reimplementation of the payoff living in the chart module itself. The values
+ * asserted below are unchanged, which is the point: the curve is the same
+ * curve, drawn by the authority that settles it.
+ */
+async function knotsOf(compiled: CompiledProductV2): Promise<ReadonlyArray<PayoutCurveKnotV1>> {
+  const boundary = await loadProductPayoffV2WasmV1(
+    (async () => new Response(new Uint8Array(readFileSync(wasmPath)))) as unknown as typeof fetch,
+  );
+  return payoutCurveKnotsV1(boundary, compiled, (bytes) => Buffer.from(bytes).toString('base64'));
+}
 
 async function tentProduct() {
   return compileProductV2({
@@ -19,7 +44,7 @@ async function tentProduct() {
 
 describe('PayoutShape', () => {
   it('derives exact knot values from a compiled Product V2 — the control polygon, not samples', async () => {
-    const knots = payoutShapeKnotsFromCompiledProductV2(await tentProduct());
+    const knots = await knotsOf(await tentProduct());
     expect(knots.map((knot) => [knot.numerator, knot.payoutAtoms])).toEqual([
       ['0', '0'],
       ['50', '1000000'],
@@ -30,7 +55,7 @@ describe('PayoutShape', () => {
   it('renders the curve with one marker per knot, the payout-scale law line, and the exact table twin', async () => {
     const compiled = await tentProduct();
     const html = renderToStaticMarkup(<PayoutShape
-      knots={payoutShapeKnotsFromCompiledProductV2(compiled)}
+      knots={await knotsOf(compiled)}
       knotDenominator="1"
       payoutScale="1000000"
       caption="What this payoff pays across its result domain, exact at every knot."
@@ -62,7 +87,7 @@ describe('PayoutShape', () => {
   it('carries the your-position note into the readout when a position is named', async () => {
     const compiled = await tentProduct();
     const html = renderToStaticMarkup(<PayoutShape
-      knots={payoutShapeKnotsFromCompiledProductV2(compiled)}
+      knots={await knotsOf(compiled)}
       knotDenominator="1"
       payoutScale="1000000"
       caption="Shaded for a held position."

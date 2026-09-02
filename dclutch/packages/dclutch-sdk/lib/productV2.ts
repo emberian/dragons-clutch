@@ -105,22 +105,27 @@ export async function compileProductV2(input: ProductAuthoringV2): Promise<Compi
   return Object.freeze({ input: canonicalInput, bytes, digest, digestHex: hex(digest), liabilityBound: validated.liabilityBound, regions: Object.freeze(regions) });
 }
 
-function compareRational(left: bigint, leftDenominator: bigint, right: bigint, rightDenominator: bigint): number { const difference = left * rightDenominator - right * leftDenominator; return difference < 0 ? -1 : difference > 0 ? 1 : 0; }
-function ramp(amplitude: bigint, left: bigint, right: bigint, knotDenominator: bigint, numerator: bigint, denominator: bigint, rising: boolean): bigint {
-  if (compareRational(numerator, denominator, left, knotDenominator) <= 0) return rising ? BigInt(0) : amplitude;
-  if (compareRational(numerator, denominator, right, knotDenominator) >= 0) return rising ? amplitude : BigInt(0);
-  const coordinate = numerator * knotDenominator; const leftScaled = left * denominator; const rightScaled = right * denominator; const elapsed = rising ? coordinate - leftScaled : rightScaled - coordinate; return amplitude * elapsed / (rightScaled - leftScaled);
-}
-
-export function evaluateProductV2(product: CompiledProductV2, numerator: bigint, denominator: bigint): bigint {
-  exactI128(numerator, 'result numerator'); exactU64(denominator, 'result denominator', true); let payout = BigInt(0); const knots = product.input.knots; const kd = product.input.knotDenominator;
-  for (const term of product.input.terms) {
-    if (term.shape === 'constant') payout += term.amplitude;
-    else if (term.shape === 'ramp-up') payout += ramp(term.amplitude, knots[term.left], knots[term.right], kd, numerator, denominator, true);
-    else if (term.shape === 'ramp-down') payout += ramp(term.amplitude, knots[term.left], knots[term.right], kd, numerator, denominator, false);
-    else payout += [ramp(term.amplitude, knots[term.left], knots[term.peak], kd, numerator, denominator, true), ramp(term.amplitude, knots[term.peak], knots[term.right], kd, numerator, denominator, false)].reduce((a, b) => a < b ? a : b);
-  }
-  return payout;
-}
+/*
+ * `evaluateProductV2` STOOD HERE, and it is gone.
+ *
+ * It was a hand-written TypeScript reimplementation of
+ * `ProductPayoffV2::evaluate_rational` -- its own `ramp`, its own rational
+ * comparison, its own flooring -- and it was what the Studio drew a payout
+ * curve from. Two authorities for one piece of exact arithmetic, and the
+ * screen was never showing the one the chain settles with. It survived a lane
+ * that was FIXING mirrors, named there "untouched, unexcused", because the
+ * answer to a mirror is never a second mirror.
+ *
+ * The evaluator is compiled now: `crates/dclutch-product-payoff-v2-wasm`,
+ * behind the digest pin and constant-name canary in
+ * `lib/productPayoffV2Evaluation.ts`. Every value this function was ever
+ * pinned to is asserted against the compiled owner in
+ * `lib/productPayoffV2Evaluation.test.ts`, which is what made the removal
+ * something other than a hope.
+ *
+ * This module keeps what it actually owns: authoring, canonicalization, the
+ * 576-byte record, its content identity, and the conservative liability bound
+ * the encoder computes on the way. Not the payoff.
+ */
 
 export function productInteger(value: string, field: string): bigint { return parseInteger(value, field); }

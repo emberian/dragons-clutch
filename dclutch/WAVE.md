@@ -6502,3 +6502,15 @@ exactly as the key is. `DataDigestUnavailable` makes an unestablished digest a
 refusal rather than a zero register — proved red by making the arm read
 `unwrap_or(&[0; 32])`, which is the same defect the registered family shipped in
 its two `require_key` conjuncts.
+
+## 2026-09-01 — the converse of the hash trap
+
+The forward trap is recorded: **byte-identical after a real change means the build
+did not happen.** Its converse is easier to fall for, because it manufactures a
+finding instead of a silence: an alias that moved the trading ELF `311d22d0 →
+6c45fdd0` looked like proof the values disagreed. A perturbation carrying **only
+twenty-one comment lines and no value change** rebuilt to the identical `6c45fdd0`
+— `core::panic::Location` embeds line numbers. The values agreed exactly.
+
+> **ELF identity is not a valid control for any edit that changes a file's line
+> count. The valid control is a line-count-matched comment-only build.**
