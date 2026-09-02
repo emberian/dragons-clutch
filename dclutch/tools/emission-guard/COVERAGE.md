@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**80 generated files from 78 emitters. 80 guarded (78 emitters), 0 unguarded (0 emitters).**
+**82 generated files from 79 emitters. 82 guarded (79 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -15,6 +15,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 |---|---|---|
 | `apps/dclutch-web: lean-emit EmitCapabilityManifestV1AbiTs.lean` | lean-emit | `EmitCapabilityManifestV1AbiTs.lean` |
 | `apps/dclutch-web: lean-emit EmitRealmPositionAbiTs.lean` | lean-emit | `EmitRealmPositionAbiTs.lean` |
+| `apps/dclutch-web: lean-emit EmitRefusalBandsV1Ts.lean` | lean-emit | `EmitRefusalBandsV1Ts.lean` |
 | `crates/dclutch-account-profile-contract/check-generated.sh` | shell | `EmitAccountProfileAbiRust.lean` |
 | `crates/dclutch-account-profile-contract/tests/lifecycle_v5_generator_fresh.rs` | cargo-test | `EmitStateLifecyclePolicyV5AbiRust.lean` |
 | `crates/dclutch-account-profile-contract/tests/profile14_generator_fresh.rs` | cargo-test | `EmitAccountProfileV2Profile14Rust.lean` |
@@ -74,6 +75,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-transition-vm/check-v2-generated.sh` | shell | `EmitTransitionVMV2Rust.lean` |
 | `packages/dclutch-sdk: lean-emit EmitCapabilityManifestV1AbiTs.lean` | lean-emit | `EmitCapabilityManifestV1AbiTs.lean` |
 | `packages/dclutch-sdk: lean-emit EmitRealmPositionAbiTs.lean` | lean-emit | `EmitRealmPositionAbiTs.lean` |
+| `packages/dclutch-sdk: lean-emit EmitRefusalBandsV1Ts.lean` | lean-emit | `EmitRefusalBandsV1Ts.lean` |
 | `programs/dclutch-core-sbf/tests/slot_pin_corpus_generator_fresh.rs` | cargo-test | `EmitProtocolInfrastructurePinCorpusRust.lean` |
 | `programs/dclutch-custody-sbf/check-generated.sh` | shell | `EmitCustodyAbiRust.lean` |
 | `tools/direct-translation-validator/check-generated.sh` | shell | `EmitDirectProgramRust.lean` |
@@ -85,6 +87,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 |---|---|
 | `apps/dclutch-web/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1AbiTs.lean` |
 | `apps/dclutch-web/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbiTs.lean` |
+| `apps/dclutch-web/lib/generated/refusalBandsV1.ts` | `EmitRefusalBandsV1Ts.lean` |
 | `crates/dclutch-account-profile-contract/src/generated.rs` | `EmitAccountProfileAbiRust.lean` |
 | `crates/dclutch-account-profile-contract/src/lifecycle_v3/generated_v5.rs` | `EmitStateLifecyclePolicyV5AbiRust.lean` |
 | `crates/dclutch-account-profile-contract/src/v2/generated_abi.rs` | `EmitAccountProfileV2AbiRust.lean` |
@@ -161,6 +164,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-transition-vm/src/v2/generated.rs` | `EmitTransitionVMV2Rust.lean` |
 | `packages/dclutch-sdk/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1AbiTs.lean` |
 | `packages/dclutch-sdk/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbiTs.lean` |
+| `packages/dclutch-sdk/lib/generated/refusalBandsV1.ts` | `EmitRefusalBandsV1Ts.lean` |
 | `programs/dclutch-core-sbf/src/generated_slot_pin_corpus.rs` | `EmitProtocolInfrastructurePinCorpusRust.lean` |
 | `tools/direct-translation-validator/src/generated_direct_program.rs` | `EmitDirectProgramRust.lean` |
 

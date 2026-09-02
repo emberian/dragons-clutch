@@ -45,8 +45,8 @@ describe('redeem operation recovery decisions', () => {
   });
 
   it('requires both the exact replay account and a successful finalized signature', () => {
-    const exists: ClaimsCustodyReplayStateV1 = Object.freeze({ status: 'exists', replayAddress: address(7), nextRevision: '1', generation: '0', rentRefund: request.payer, note: 'exact' });
-    const creatable = Object.freeze({ status: 'creatable' as const, plan: replayPlan, note: 'absent' });
+    const exists: ClaimsCustodyReplayStateV1 = Object.freeze({ status: 'exists', replayAddress: address(7), nextRevision: '1', generation: '0', rentRefund: request.payer, note: 'exact', observedSlot: '9' });
+    const creatable = Object.freeze({ status: 'creatable' as const, plan: replayPlan, note: 'absent', observedSlot: '9' });
     const status = (confirmationStatus: string | null, succeeded: boolean | null = true): SignatureStatusObservation => Object.freeze({
       signature: 'x', known: true, slot: '9', confirmationStatus, succeeded, errorText: succeeded === false ? 'failed' : null,
     });

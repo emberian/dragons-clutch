@@ -368,6 +368,21 @@ function required(accounts: ReadonlyMap<string, RpcAccount | null>, address: str
   return account;
 }
 
+/**
+ * The two reads a Direct Hot route inspection performs.
+ *
+ * Named because the public entry points took the whole `SolanaRpcClient`
+ * class, which carries a `#request` private slot and is therefore NOMINAL: the
+ * browser's deliberately diverged twin client cannot satisfy it however
+ * complete it is. `acquire` below already said what it needed; the entry
+ * points did not, and two correct call sites failed to typecheck for that
+ * reason alone.
+ */
+export type DirectHotRouteReaderV3 = Pick<
+  SolanaRpcClient,
+  'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption' | 'latestMutationBlockhash'
+>;
+
 async function acquire(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
   addresses: ReadonlyArray<string>,
@@ -910,7 +925,7 @@ export async function authenticateDirectCapabilitySealV1(
 }
 
 export async function inspectDirectHotRouteV3(
-  client: SolanaRpcClient,
+  client: DirectHotRouteReaderV3,
   manifest: DirectHotRouteManifestV3,
 ): Promise<DirectHotRouteInspectionV3> {
   if (manifest.fixedAccounts.length !== HOT_FIXED_ACCOUNT_COUNT_V3) throw new Error(`route manifest requires ${HOT_FIXED_ACCOUNT_COUNT_V3} fixed accounts`);

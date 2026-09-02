@@ -1,0 +1,165 @@
+{
+  "campaign": "direct-fee-pair-programtest",
+  "note": "The C-04 fee-completion pair on five REAL role ELFs under solana-program-test: the fee-bearing Direct fill records an obligation on the buyer's maker replay, and a separate PERMISSIONLESS DCLTDFS1 transaction reads it, signs one Custody CPI and clears it. Campaign: programs/dclutch-trading-sbf/program-test/tests/direct_hot_fee_pair.rs, seven tests, run by tools/gauntlet/direct-fee-pair/run-direct-fee-pair.sh. WHY THIS CAMPAIGN EXISTS: both Trading routes below executed on real ELFs for days and were NEVER-EXECUTED to the census the whole time, because no bindings.json named them -- UNWITNESSED_ROUTES_BY_ROW_2026_09_01.md lists both among C-04's four. The gap was the campaign wrapper, never the route. EVERY ROW IS AUTHORED FROM FOLDED EVIDENCE, never from what the campaign ought to touch: the label is the libtest thread name plus that test's submission ordinal plus a disposition read back from the runtime, so a refusal that changes code changes binding instead of quietly reusing one. Child routes are deliberately NOT bound: the invoke log names the child PROGRAM at depth 2 but not which selector ran inside it, and a binding this campaign cannot corroborate is worse than an absent one. EVERY transaction reports wire_bytes -- docs/design/PACKET_LIMIT_2026_09_01.md records that no C-04 program-test did, and ProgramTest submits no packet, so the 1,232-byte maximum is measured here rather than enforced by the runtime.",
+  "bindings": [
+    {
+      "label": "direct: a_foreign_account_of_the_same_recipient_is_admitted_and_a_strangers_is_not #1 -- executed",
+      "routes": [
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx1, the fee-bearing Direct fill at 1,317,145 CU in a 1167-byte packet against the 1,232-byte maximum. Claims and Custody both appear at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_foreign_account_of_the_same_recipient_is_admitted_and_a_strangers_is_not #2 -- refused 0x400d",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::FeeDestination",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 17,920 CU in a 400-byte packet against the 1,232-byte maximum. The refusal is raised before any CPI: Trading is the only program in the log. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_foreign_account_of_the_same_recipient_is_admitted_and_a_strangers_is_not #3 -- executed",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 173,721 CU in a 400-byte packet against the 1,232-byte maximum. Custody appears at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_read_only_coordinate_marked_writable_is_still_admitted #1 -- executed",
+      "routes": [
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx1, the fee-bearing Direct fill at 1,317,145 CU in a 1167-byte packet against the 1,232-byte maximum. Claims and Custody both appear at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_read_only_coordinate_marked_writable_is_still_admitted #2 -- executed",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 173,719 CU in a 369-byte packet against the 1,232-byte maximum. Custody appears at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_against_a_foreign_maker_replay_refuses #1 -- executed",
+      "routes": [
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx1, the fee-bearing Direct fill at 1,317,145 CU in a 1167-byte packet against the 1,232-byte maximum. Claims and Custody both appear at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_against_a_foreign_maker_replay_refuses #2 -- refused 0x4003",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 10,873 CU in a 369-byte packet against the 1,232-byte maximum. The refusal is raised before any CPI: Trading is the only program in the log. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_against_something_that_is_not_the_direct_root_refuses #1 -- executed",
+      "routes": [
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx1, the fee-bearing Direct fill at 1,317,145 CU in a 1167-byte packet against the 1,232-byte maximum. Claims and Custody both appear at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_against_something_that_is_not_the_direct_root_refuses #2 -- refused 0x4002",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Root",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 11,243 CU in a 369-byte packet against the 1,232-byte maximum. The refusal is raised before any CPI: Trading is the only program in the log. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_out_of_somebody_elses_account_refuses #1 -- executed",
+      "routes": [
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx1, the fee-bearing Direct fill at 1,317,145 CU in a 1167-byte packet against the 1,232-byte maximum. Claims and Custody both appear at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_out_of_somebody_elses_account_refuses #2 -- refused 0x400e",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::FeeSource",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 17,771 CU in a 369-byte packet against the 1,232-byte maximum. The refusal is raised before any CPI: Trading is the only program in the log. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_with_nothing_owed_refuses_for_a_maker_who_never_owed_and_for_one_who_paid #1 -- executed",
+      "routes": [
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx1, the fee-bearing Direct fill at 1,317,145 CU in a 1167-byte packet against the 1,232-byte maximum. Claims and Custody both appear at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_with_nothing_owed_refuses_for_a_maker_who_never_owed_and_for_one_who_paid #2 -- refused 0x400c",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::FeeNotOwed",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 11,205 CU in a 369-byte packet against the 1,232-byte maximum. The refusal is raised before any CPI: Trading is the only program in the log. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_with_nothing_owed_refuses_for_a_maker_who_never_owed_and_for_one_who_paid #3 -- executed",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 173,721 CU in a 369-byte packet against the 1,232-byte maximum. Custody appears at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: a_settlement_with_nothing_owed_refuses_for_a_maker_who_never_owed_and_for_one_who_paid #4 -- refused 0x400c",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::FeeNotOwed",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 11,205 CU in a 369-byte packet against the 1,232-byte maximum. The refusal is raised before any CPI: Trading is the only program in the log. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: the_fee_bearing_trade_settles_across_two_transactions #1 -- executed",
+      "routes": [
+        "trading/hot_v3::process_hot_execution_v3"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx1, the fee-bearing Direct fill at 1,317,145 CU in a 1167-byte packet against the 1,232-byte maximum. Claims and Custody both appear at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: the_fee_bearing_trade_settles_across_two_transactions #2 -- executed",
+      "routes": [
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "tx2, the permissionless DCLTDFS1 fee settlement at 173,721 CU in a 369-byte packet against the 1,232-byte maximum. Custody appears at depth 2 and Token-2022 at depth 3. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    }
+  ]
+}

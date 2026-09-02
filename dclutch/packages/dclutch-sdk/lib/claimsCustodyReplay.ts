@@ -272,8 +272,18 @@ export type ClaimsCustodyReplayStateV1 =
     generation: string;
     rentRefund: string;
     note: string;
+    /**
+     * The finalized slot the replay account was read at.
+     *
+     * Every other inspection this browser performs reports the floor its
+     * answer was authenticated against, and this one did not -- so the cold
+     * client, which prints a slot for each step, had nowhere to get one and
+     * read `state.observedSlot` off a union that carried no such field. The
+     * inspector always knew it; it just never said it.
+     */
+    observedSlot: string;
   }>
-  | Readonly<{ status: 'creatable'; plan: ClaimsCustodyReplayPlanV1; note: string }>
+  | Readonly<{ status: 'creatable'; plan: ClaimsCustodyReplayPlanV1; note: string; observedSlot: string }>
   | Readonly<{ status: 'refused'; reason: string }>;
 
 export type ClaimsCustodyReplayRequestV1 = Readonly<{
@@ -399,6 +409,7 @@ export async function inspectClaimsCustodyReplayV1(
         generation: generation.toString(),
         rentRefund: new PublicKey(rentRefund).toBase58(),
         note: 'The Claims-role Custody replay already exists, so a redemption plan replays against it directly; no creation is owed.',
+        observedSlot: replayObservation.slot,
       });
     }
 
@@ -473,6 +484,7 @@ export async function inspectClaimsCustodyReplayV1(
     }
     return Object.freeze({
       status: 'creatable',
+      observedSlot: replayObservation.slot,
       note: `No Claims-role replay exists at ${replayAddress}. One ${wireBytes.length}-byte legacy transaction creates it from prepaid rent (${rent.lamports} lamports); the immutable Core Market lifecycle RentCredit remains its refund beneficiary.`,
       plan: Object.freeze({
         marketAddress,

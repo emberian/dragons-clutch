@@ -558,6 +558,22 @@ export class SolanaRpcClient {
     }
   }
 
+  /**
+   * Read the finalized block height used by recent-blockhash expiry.
+   *
+   * The one read this client was missing, and the one the Direct trade needs
+   * BEFORE it submits: a signed packet names a `lastValidBlockHeight`, and
+   * comparing it against the chain's current height is how the browser refuses
+   * to send a packet the chain can no longer include. `tradeFlowMachine` was
+   * reaching for the SDK's read-only client just to get this method, which
+   * meant the same variable then had to submit and could not.
+   */
+  async blockHeight(minimumContextSlot?: string): Promise<string> {
+    const configuration: Record<string, unknown> = { commitment: 'finalized' };
+    if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
+    return String(exactUnsigned(await this.request('getBlockHeight', [configuration]), 'finalized block height'));
+  }
+
   async latestBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
     const configuration: Record<string, unknown> = { commitment: 'finalized' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');

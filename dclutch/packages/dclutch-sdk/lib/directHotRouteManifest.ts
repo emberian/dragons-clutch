@@ -4,6 +4,7 @@ import { sha256 } from './bytes';
 import {
   inspectDirectHotRouteV3,
   type DirectHotRouteCoordinateV3,
+  type DirectHotRouteReaderV3,
   type DirectHotRouteInspectionV3,
   type DirectHotRouteManifestV3,
 } from './directHotChain';
@@ -472,7 +473,7 @@ async function parseUntrustedManifestV3(source: string | Uint8Array): Promise<Di
  * signs, submits, chooses a fee, or turns transport JSON into authority.
  */
 export async function inspectDirectHotRouteManifestJsonV3(
-  client: SolanaRpcClient,
+  client: DirectHotRouteReaderV3,
   source: string | Uint8Array,
 ): Promise<DirectHotRouteInspectionV3> {
   const manifest = await parseUntrustedManifestV3(source);

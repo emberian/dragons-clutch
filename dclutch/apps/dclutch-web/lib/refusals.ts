@@ -10,8 +10,10 @@
  * authenticate exactly is refused with a code that names the program and the
  * reason, and no partial effect survives.
  */
-import { REFUSAL_BANDS_V1, REFUSAL_BAND_SPAN, REFUSAL_CODES_V1 } from './generated/refusalRegistryV1';
-import type { RefusalBandV1, RefusalCodeV1 } from './generated/refusalRegistryV1';
+import { REFUSAL_BANDS_V1, REFUSAL_BAND_SPAN } from './generated/refusalBandsV1';
+import type { RefusalBandV1 } from './generated/refusalBandsV1';
+import { REFUSAL_CODES_V1 } from './generated/refusalRegistryV1';
+import type { RefusalCodeV1 } from './generated/refusalRegistryV1';
 
 export type { RefusalBandV1, RefusalCodeV1 };
 

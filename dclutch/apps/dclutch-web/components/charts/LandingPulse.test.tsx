@@ -71,7 +71,11 @@ function card(
     outstandingCapabilities: '0',
     principalCapSets: '500000000',
     settlement: options.terminal === true
-      ? Object.freeze({ status: 'terminal', label: 'terminal receipt', winner: 0 })
+      // What `decodeMarketCoreStateV2` actually produces for a settled Market:
+      // the label it writes, and the receipt identity. A terminal settlement
+      // with no `receiptId` is a state the decoder cannot reach, and building
+      // one here made this fixture a card no chain could hand the chart.
+      ? Object.freeze({ status: 'terminal', label: 'terminal receipt accepted', winner: 0, receiptId: 'ab'.repeat(32) })
       : Object.freeze({ status: 'open', label: 'no terminal receipt' }),
     identity: IDENTITY,
     collateral: Object.freeze({ status: 'unread', realmContentId: IDENTITY.realmId, reason: 'unread' }),

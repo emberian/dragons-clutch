@@ -1257,6 +1257,78 @@ pub async fn submit_v0(
     )
 }
 
+/// Emit one census observation, when the gauntlet asked for evidence.
+///
+/// A no-op in an ordinary `cargo test` run, because
+/// `dclutch_program_test_evidence::evidence_directory` is `None` with the
+/// environment variable unset. This is the ONLY place in the Direct family that
+/// can record one: it is the single funnel every suite's submission passes
+/// through, and it is the only frame that knows the signature, the observed
+/// slot and the exact wire width at once.
+///
+/// **THE WIRE WIDTH IS THE POINT AS MUCH AS THE ROUTE IS.**
+/// `docs/design/PACKET_LIMIT_2026_09_01.md` records that no C-04 program-test
+/// reports `wire_bytes`, and a campaign that does not measure the packet cannot
+/// claim the fast lane's second condition -- ProgramTest submits no packet, so
+/// it enforces no 1,232-byte maximum and an over-wide frame survives untouched.
+/// This function has the number the assertion above already computed, so it
+/// reports it rather than passing `None`.
+///
+/// The label is DERIVED, never hand-written, for the reason the Dealer campaign
+/// gives at length: a label is the key a `bindings.json` row matches on, so a
+/// hand-written one can drift from the transaction it names while both still
+/// look right. This one is the libtest thread name -- the test's own path --
+/// plus that test's submission ordinal, plus a disposition READ BACK from what
+/// the runtime reported. It cannot name a transaction other than its own, a
+/// second submission in one test cannot collide with the first, and a refusal
+/// that changes code changes binding instead of quietly reusing one.
+fn record_campaign_transaction(
+    signature: &str,
+    slot: u64,
+    wire_bytes: usize,
+    logs: &[String],
+    result: &Result<(), solana_sdk::transaction::TransactionError>,
+    compute_units_consumed: Option<u64>,
+) {
+    use solana_sdk::instruction::InstructionError;
+    use solana_sdk::transaction::TransactionError;
+
+    if dclutch_program_test_evidence::evidence_directory().is_none() {
+        return;
+    }
+    thread_local! {
+        static ORDINAL: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+    }
+    let ordinal = ORDINAL.with(|cell| {
+        let next = cell.get().saturating_add(1);
+        cell.set(next);
+        next
+    });
+    let case = std::thread::current()
+        .name()
+        .unwrap_or("unnamed")
+        .to_owned();
+    let disposition = match result {
+        Ok(()) => "executed".to_owned(),
+        Err(TransactionError::InstructionError(_, InstructionError::Custom(code))) => {
+            format!("refused 0x{code:x}")
+        }
+        Err(_) => "refused".to_owned(),
+    };
+    let failure = result.as_ref().err().map(|error| format!("{error:?}"));
+    let label = format!("direct: {case} #{ordinal} -- {disposition}");
+    dclutch_program_test_evidence::record(&dclutch_program_test_evidence::TransactionEvidence {
+        label: &label,
+        signature,
+        slot,
+        error: failure.as_deref(),
+        logs,
+        compute_units_consumed,
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+}
+
 /// Submit one canonical v0 transaction and retain exact success metadata.
 pub async fn submit_v0_observed(
     context: &mut ProgramTestContext,
@@ -1341,6 +1413,17 @@ pub async fn submit_v0_observed(
     all_signers.extend_from_slice(signers);
     let transaction = VersionedTransaction::try_new(message, &all_signers)
         .expect("complete canonical v0 signatures");
+    let signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .expect("a signed transaction carries at least the payer signature")
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_root_slot()
+        .await
+        .expect("the bank reports a root slot");
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -1350,6 +1433,17 @@ pub async fn submit_v0_observed(
         .as_ref()
         .map(|metadata| metadata.log_messages.clone())
         .unwrap_or_default();
+    record_campaign_transaction(
+        &signature,
+        slot,
+        wire,
+        &logs,
+        &processed.result,
+        processed
+            .metadata
+            .as_ref()
+            .map(|metadata| metadata.compute_units_consumed),
+    );
     if let Err(error) = processed.result {
         return Err(RefusedExecution {
             error: BanksClientError::TransactionError(error),

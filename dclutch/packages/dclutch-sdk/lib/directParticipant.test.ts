@@ -352,7 +352,9 @@ describe('Direct crossing participant admission', () => {
       .toThrow('your finalized token balance is 20000');
 
     expect(() => admitDirectParticipantCrossingV1(participant, { ...crossing(participant, 'buy', 1n), takerAddress: MARKET })).toThrow('another participant');
-    if (participant.status !== 'ready') throw new Error(participant.reason);
+    // The readiness guard is twenty lines above and has already thrown; a
+    // second copy of it re-narrowed an already-narrowed value to `never` and
+    // then read `.reason` off it. Nothing between the two can widen it back.
     const available = participant.positionBalances[0] ?? 0n;
     expect(admitDirectParticipantCrossingV1(participant, crossing(participant, 'sell', available))).toMatchObject({ resource: 'claim balance', availableAtoms: available });
     expect(() => admitDirectParticipantCrossingV1(participant, crossing(participant, 'sell', available + 1n))).toThrow('current finalized Position');

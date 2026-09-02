@@ -328,7 +328,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
           return Object.freeze({
             step,
             status: 'ready' as const,
-            reason: state.status === 'exists' ? 'the replay record exists and can carry a payout' : state.plan.note,
+            reason: state.status === 'exists' ? 'the replay record exists and can carry a payout' : state.note,
             observedSlot: state.observedSlot,
             truths: Object.freeze([verdict]),
           });

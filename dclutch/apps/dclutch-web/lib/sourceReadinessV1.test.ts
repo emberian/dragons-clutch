@@ -13,7 +13,7 @@ import {
   buildSourceReadinessTransactionV1,
   parseSourceReadinessPlanV1,
   type SourceReadinessPlanV1,
-  type SourceReadinessWasmV1,
+  type SourceReadinessRouteWasmV1,
 } from './sourceReadinessV1';
 
 const address = (byte: number) => new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -79,7 +79,10 @@ function fixture(slotMismatch = false) {
   const account = (owner: string, data = Uint8Array.of(1)) => Object.freeze({
     owner, executable: false, lamports: '1', data, space: data.length,
   });
-  const wasm: SourceReadinessWasmV1 = Object.freeze({
+  // FOUR exports, annotated as the four this route calls -- not as the whole
+  // eleven-export module. The old annotation made this stub claim a boundary
+  // it covered a third of.
+  const wasm: SourceReadinessRouteWasmV1 = Object.freeze({
     derive_source_readiness_base_v1(source: string) {
       const value = JSON.parse(source) as Record<string, unknown>;
       expect(value.format).toBe(SOURCE_READINESS_MARKET_FORMAT_V1);

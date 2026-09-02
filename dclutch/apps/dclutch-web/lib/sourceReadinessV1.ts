@@ -45,6 +45,26 @@ export type SourceReadinessWasmV1 = Readonly<{
   verify_source_close_receipt_v1(source: string): string;
 }>;
 
+/**
+ * The four exports the READINESS route calls, named apart from the module.
+ *
+ * `SourceReadinessWasmV1` describes the whole eleven-export WASM boundary --
+ * readiness, terminal, and close. This route uses four of them, and taking the
+ * whole module as its parameter meant every caller and every test had to
+ * present eleven exports to exercise four. Its test presented four and
+ * annotated them as the module, which is a stub claiming to be a boundary it
+ * does not cover; either the stub or the parameter had to become honest, and
+ * the parameter is the half that also tells a reader what this route depends
+ * on. The loader still returns the whole module and still satisfies this.
+ */
+export type SourceReadinessRouteWasmV1 = Pick<
+  SourceReadinessWasmV1,
+  'derive_source_readiness_base_v1'
+  | 'derive_source_readiness_recovery_v1'
+  | 'derive_source_readiness_detail_v1'
+  | 'plan_source_readiness_v1'
+>;
+
 export type SourceReadinessAccountMetaV1 = Readonly<{
   address: string;
   isSigner: boolean;
@@ -439,7 +459,7 @@ function observedAccountJson(address: string, account: RpcAccount | null): Reado
  */
 export async function acquireSourceReadinessFrameV1(
   client: SourceReadinessRpcV1,
-  wasm: SourceReadinessWasmV1,
+  wasm: SourceReadinessRouteWasmV1,
   market: string,
   programs: SourceReadinessProgramsV1,
 ): Promise<SourceReadinessFrameAcquisitionV1> {
@@ -527,7 +547,7 @@ export async function acquireSourceReadinessFrameV1(
 /** Reacquire a frame, then ask the Rust owner for its sole readiness route. */
 export async function acquireSourceReadinessV1(
   client: SourceReadinessRpcV1,
-  wasm: SourceReadinessWasmV1,
+  wasm: SourceReadinessRouteWasmV1,
   market: string,
   programs: SourceReadinessProgramsV1,
 ): Promise<SourceReadinessAcquisitionV1> {

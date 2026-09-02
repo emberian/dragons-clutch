@@ -9,12 +9,18 @@
  * making its reader do the band arithmetic by hand; this module lets it say
  * `claims 0x5080 ClaimsFoundingV5Error::Instruction` instead.
  *
- * Two sources, each already an authority for its half:
- *   - the band table is scraped from the registry crate's own `BANDS` const —
- *     the same source the census parses with syn;
- *   - the per-code names and meanings come from `docs/reference/refusals.md`,
- *     which `tools/genref/generate.sh --check` byte-gates against the census
- *     sweep of every `#[repr(u32)]` refusal enum in the tree.
+ * This module emits the CODE table only. The band allocation moved to
+ * `lib/generated/refusalBandsV1.ts`, which `DClutchSemantics.RefusalBandsV1`
+ * emits directly: this script used to obtain the same table by running a
+ * regular expression over `crates/dclutch-refusal-registry/src/lib.rs`, and
+ * once that crate became generated too the scrape was reading a generated file
+ * to rebuild what the generator already knew. The bases are still read here,
+ * from the emitted module, for one purpose only -- proving that every code in
+ * `refusals.md` lands inside an allocated band.
+ *
+ * The per-code names and meanings come from `docs/reference/refusals.md`,
+ * which `tools/genref/generate.sh --check` byte-gates against the census sweep
+ * of every `#[repr(u32)]` refusal enum in the tree.
  *
  * So the chain of custody is: enum doc comment -> census -> refusals.md ->
  * this module, with a verify gate at every arrow.
@@ -30,29 +36,30 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
-const registrySource = readFileSync(new URL('crates/dclutch-refusal-registry/src/lib.rs', root), 'utf8');
+const bandsSource = readFileSync(new URL('../lib/generated/refusalBandsV1.ts', import.meta.url), 'utf8');
 const referenceSource = readFileSync(new URL('docs/reference/refusals.md', root), 'utf8');
 const outputUrl = new URL('../lib/generated/refusalRegistryV1.ts', import.meta.url);
 
-// ---------------------------------------------------------------- band table
+// ------------------------------------------------- the allocated band bases
+//
+// Read back from the Lean-emitted module rather than matched out of Rust
+// source. This is a membership test, not a second copy of the table: nothing
+// below re-emits a band.
 
-function constant(name) {
-  const match = registrySource.match(new RegExp(`pub const ${name}: u32 = (0x[0-9A-Fa-f_]+|[0-9]+);`));
-  if (!match) throw new Error(`missing registry constant ${name}`);
-  return Number(match[1].replaceAll('_', ''));
+function emitted(name) {
+  const match = bandsSource.match(new RegExp(`export const ${name} = ([0-9]+) as const;`));
+  if (!match) throw new Error(`missing ${name} in lib/generated/refusalBandsV1.ts`);
+  return Number(match[1]);
 }
 
-const BAND_SHIFT = constant('BAND_SHIFT');
-const BAND_SPAN = constant('BAND_SPAN');
+const BAND_SPAN = emitted('REFUSAL_BAND_SPAN');
+const BAND_COUNT = emitted('REFUSAL_BAND_COUNT');
 
-const bandEntries = [...registrySource.matchAll(
-  /RefusalBand \{\s*label: "([^"]+)",\s*package: "([^"]+)",\s*base: ([A-Z0-9_]+),\s*span: BAND_SPAN,\s*tier: BandTier::(Program|TestCaller),\s*\}/g,
-)].map(([, label, pkg, baseName, tier]) => ({ label, package: pkg, base: constant(baseName), tier }));
-if (bandEntries.length === 0) throw new Error('found no RefusalBand entries in the registry crate');
-for (let index = 1; index < bandEntries.length; index += 1) {
-  const previous = bandEntries[index - 1];
-  const entry = bandEntries[index];
-  if (entry.base <= previous.base) throw new Error(`band table is not ascending at ${entry.label}`);
+const bandEntries = [...bandsSource.matchAll(
+  /\{ label: '([^']+)', package: '([^']+)', base: (0x[0-9A-Fa-f]+), tier: '(program|test-caller)' \}/g,
+)].map(([, label, pkg, base, tier]) => ({ label, package: pkg, base: Number(base), tier }));
+if (bandEntries.length !== BAND_COUNT) {
+  throw new Error(`parsed ${bandEntries.length} bands but the emitted module declares ${BAND_COUNT}`);
 }
 
 // ---------------------------------------------------------------- code table
@@ -80,16 +87,8 @@ codeEntries.sort((left, right) => left.code - right.code);
 // -------------------------------------------------------------------- output
 
 const ts = (value) => JSON.stringify(value);
-let generated = '// @generated from crates/dclutch-refusal-registry/src/lib.rs and docs/reference/refusals.md; do not edit.\n';
+let generated = '// @generated from lib/generated/refusalBandsV1.ts and docs/reference/refusals.md; do not edit.\n';
 generated += '// Regenerate with: npm run abi:refusal-registry\n\n';
-generated += `export const REFUSAL_BAND_SHIFT = ${BAND_SHIFT} as const;\n`;
-generated += `export const REFUSAL_BAND_SPAN = ${BAND_SPAN} as const;\n\n`;
-generated += 'export interface RefusalBandV1 {\n  readonly label: string;\n  readonly package: string;\n  readonly base: number;\n  readonly tier: \'program\' | \'test-caller\';\n}\n\n';
-generated += 'export const REFUSAL_BANDS_V1: ReadonlyArray<RefusalBandV1> = [\n';
-for (const band of bandEntries) {
-  generated += `  { label: ${ts(band.label)}, package: ${ts(band.package)}, base: 0x${band.base.toString(16).toUpperCase()}, tier: ${ts(band.tier === 'Program' ? 'program' : 'test-caller')} },\n`;
-}
-generated += '];\n\n';
 generated += 'export interface RefusalCodeV1 {\n  readonly code: number;\n  readonly name: string;\n  readonly meaning: string;\n  readonly band: string;\n}\n\n';
 generated += 'export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [\n';
 for (const entry of codeEntries) {

@@ -1,0 +1,33 @@
+{
+ "campaign": "direct-fee-pair-programtest",
+ "witnesses": [
+  {
+   "id": "direct-fee-pair-fits-the-compute-maximum",
+   "kind": "evidence-jq",
+   "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+   "expect": "true",
+   "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The whole point of FEE_SECOND_TRANSACTION_V1 is that the fee-bearing trade did not fit under it as ONE transaction; this witness is the standing proof that each half of the pair does."
+  },
+  {
+   "id": "direct-fee-pair-measured-every-packet",
+   "kind": "evidence-jq",
+   "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+   "expect": "0",
+   "provenance": "ProgramTest submits no packet and so enforces no 1,232-byte maximum: an over-wide frame survives a fast lane untouched, which is exactly the defect Found31 was. A campaign claiming the fast lane's second condition must MEASURE the packet. None means the campaign did not measure, which is honest but is not evidence."
+  },
+  {
+   "id": "direct-fee-pair-fits-the-packet-maximum",
+   "kind": "evidence-jq",
+   "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+   "expect": "true",
+   "provenance": "Solana's maximum transaction wire size is 1,232 bytes. The fill is the tight one at 1,167; the settlement is 369."
+  },
+  {
+   "id": "direct-fee-pair-settlement-is-cheap-enough-for-a-stranger",
+   "kind": "evidence-jq",
+   "query": "[.transactions[] | select(.label | contains(\"#2 -- executed\")) | .compute_units_consumed] | max | (. <= 400000) | tostring",
+   "expect": "true",
+   "provenance": "DCLTDFS1 is permissionless by design: a stranger cranks it. FEE_SECOND_TRANSACTION_V1 section 4 estimated 165,000-210,000 CU in an 18-21 account frame. This bound is generous against that estimate on purpose -- it is a regression fence, not the estimate restated -- and the measured figure is ~173,700."
+  }
+ ]
+}

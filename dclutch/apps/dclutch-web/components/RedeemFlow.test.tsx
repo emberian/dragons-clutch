@@ -1,13 +1,33 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { WALLET_CONNECTION_IDLE_V1 } from '@/lib/walletStandard';
+import {
+  WALLET_CONNECTION_IDLE_V1,
+  discoverWalletsV1,
+  projectWalletConnectionV1,
+} from '@/lib/walletStandard';
 
 import RedeemFlow from './RedeemFlow';
 import { type WalletDirectoryHandleV1 } from './WalletDirectory';
 
+/**
+ * The state a browser with no Wallet Standard registry actually renders.
+ *
+ * This used to be `WALLET_CONNECTION_IDLE_V1`, which is an INTENT -- what a
+ * surface has asked one wallet for -- assigned to `state`, which is a
+ * PROJECTION of an intent against a live registry listing. The two unions do
+ * not even overlap: `idle` has no `discovery` and appears in no state. So the
+ * component under test was handed a value its own hook can never produce, and
+ * every assertion below was about a shape that does not occur.
+ *
+ * Deriving it through `projectWalletConnectionV1` is the point: the fixture
+ * cannot drift from what `useWalletDirectoryV1` computes, because it is the
+ * same function.
+ */
+const NO_REGISTRY_STATE = projectWalletConnectionV1(discoverWalletsV1(null), WALLET_CONNECTION_IDLE_V1);
+
 const directory: WalletDirectoryHandleV1 = Object.freeze({
-  state: WALLET_CONNECTION_IDLE_V1,
+  state: NO_REGISTRY_STATE,
   wallets: Object.freeze([]),
   refusals: Object.freeze([]),
   address: null,

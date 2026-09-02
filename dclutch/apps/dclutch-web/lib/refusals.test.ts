@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { REFUSAL_BANDS_V1, REFUSAL_BAND_SPAN, REFUSAL_CODES_V1 } from './generated/refusalRegistryV1';
+import { REFUSAL_BANDS_V1, REFUSAL_BAND_SPAN } from './generated/refusalBandsV1';
+import type { RefusalBandV1 } from './generated/refusalBandsV1';
+import { REFUSAL_CODES_V1 } from './generated/refusalRegistryV1';
 import { customCodeFromTransactionError, refusalBand, refusalCode, releaseSupersededMeaningV1, renderRefusal } from './refusals';
 
 describe('refusal band arithmetic', () => {
@@ -59,12 +61,16 @@ describe('refusal band arithmetic', () => {
 });
 
 describe('the supersession story decision 0012 registered', () => {
-  it('is one meaning carried by exactly the eight reader bands, so no client invents its own', () => {
+  it('is one meaning carried by exactly the seven reader bands, so no client invents its own', () => {
     const rows = REFUSAL_CODES_V1.filter((entry) => entry.name.endsWith('::ReleaseSuperseded'));
-    // Decision 0012 gave one discriminant per reader program. If a ninth reader
-    // ever grows one, this number moves deliberately rather than by accident.
-    expect(rows.map((entry) => entry.code)).toEqual([0x100D, 0x200B, 0x3010, 0x4007, 0x500A, 0x600C, 0x700A, 0x8014]);
-    expect(rows.map((entry) => entry.band)).toEqual(['registry', 'rent', 'core', 'trading', 'claims', 'custody', 'dealer', 'resolution']);
+    // Decision 0012 gave one discriminant per reader program. It was eight
+    // until `dclutch-dealer-sbf` was deleted on 2026-09-02 and band 7 retired,
+    // which took `dealer 0x700A` out of refusals.md and left this list — and
+    // the registry crate's own `BANDS.len()` assertion — naming a program that
+    // no longer exists. If a reader ever grows one, this number moves
+    // deliberately rather than by accident.
+    expect(rows.map((entry) => entry.code)).toEqual([0x100D, 0x200B, 0x3010, 0x4007, 0x500A, 0x600C, 0x8014]);
+    expect(rows.map((entry) => entry.band)).toEqual(['registry', 'rent', 'core', 'trading', 'claims', 'custody', 'resolution']);
     expect(new Set(rows.map((entry) => entry.meaning)).size).toBe(1);
   });
 

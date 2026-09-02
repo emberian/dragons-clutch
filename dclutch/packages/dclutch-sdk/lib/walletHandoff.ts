@@ -125,8 +125,21 @@ function chunks<T>(values: ReadonlyArray<T>, width: number): T[][] {
   return output;
 }
 
+/**
+ * The two reads this acquisition performs, named as a contract.
+ *
+ * Taking the whole `SolanaRpcClient` class made the parameter NOMINAL: the
+ * class carries a `#request` private field, so a structurally identical client
+ * from another module -- and `apps/dclutch-web/lib/rpc.ts` is exactly that, a
+ * deliberately diverged twin -- is not assignable to it however complete it is.
+ * Two browser call sites failed to typecheck for that reason alone while
+ * calling the function correctly. Naming the two methods says what is actually
+ * required and lets either client supply them.
+ */
+export type UnsignedDependencyClientV1 = Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>;
+
 export async function acquireUnsignedTransactionDependenciesV1(
-  client: SolanaRpcClient,
+  client: UnsignedDependencyClientV1,
   inspection: UnsignedTransactionInspectionV1,
 ): Promise<UnsignedTransactionChainReportV1> {
   const floor = await client.finalizedSlot();

@@ -103,10 +103,21 @@ export function filterMarketCardsV1(
  * for ties, so this is stable against the chain's enumeration and against
  * whatever curation already ran.
  */
-export function sortMarketCardsV1(
-  cards: ReadonlyArray<MarketDiscoveryCardV1>,
+/**
+ * Reorder one group of cards. GENERIC because a sort is not a widening.
+ *
+ * Written against the whole `MarketDiscoveryCardV1` union, this handed back
+ * the union whatever it was given -- so running it over `MarketListingV1`'s
+ * four DECODED groups produced four groups that might contain a refused card,
+ * and `RestOfTheRecord`, which correctly asks for the decoded rows, stopped
+ * typechecking. The function never reads a decoded-only field and never builds
+ * a card; it permutes the array it was handed. Saying so keeps the caller's
+ * narrower element type all the way through.
+ */
+export function sortMarketCardsV1<CardV1 extends MarketDiscoveryCardV1>(
+  cards: ReadonlyArray<CardV1>,
   order: MarketSortOrderV1,
-): ReadonlyArray<MarketDiscoveryCardV1> {
+): ReadonlyArray<CardV1> {
   if (order === 'enumerated') return cards;
   const indexed = cards.map((card, index) => ({ card, index }));
   if (order === 'name') {

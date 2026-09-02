@@ -95,7 +95,14 @@ function LocalStatus({ title, value }: Readonly<{ title: string; value: GeneralL
 
 function ResultStatus({ value }: Readonly<{ value: GeneralChainStatusV5['conditionalResult'] }>) {
   if (value === null) return null;
-  if ('status' in value && value.status === 'vacant') return <article className="registered-state-card"><span className="eyebrow">conditional result</span><h3>Vacant until the final valid row</h3><p>{value.lamports.toString()} lamports are present, but no result bytes exist. A nonterminal Verify cannot create them.</p></article>;
+  // `&& value.status === 'vacant'` looked like a check and was the opposite of
+  // one. `status` exists on exactly one arm of this union and its only value
+  // there is `'vacant'`, so the conjunct could never fail -- but it turned a
+  // narrowing into a compound whose FALSE branch is "not vacant OR carries no
+  // status", which is the whole union again. The verified-candidate render
+  // below then received a value that might be the vacant arm. The `in` alone
+  // is the discriminant, and dropping the tail is what narrows.
+  if ('status' in value) return <article className="registered-state-card"><span className="eyebrow">conditional result</span><h3>Vacant until the final valid row</h3><p>{value.lamports.toString()} lamports are present, but no result bytes exist. A nonterminal Verify cannot create them.</p></article>;
   return <article className="registered-state-card"><span className="eyebrow">conditional result · raw V2</span><h3>Verified candidate</h3><p>This Trading-owned result exists only after the verifier completes every authenticated row.</p><VerifiedCandidateStatus value={value} /></article>;
 }
 

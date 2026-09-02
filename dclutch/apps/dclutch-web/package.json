@@ -55,6 +55,8 @@
     "abi:realm-position:verify": "node scripts/lean-emit.mjs DClutchSemantics.RealmPositionAbi EmitRealmPositionAbiTs.lean lib/generated/realmPositionV1.ts --check",
     "abi:capability-manifest": "node scripts/lean-emit.mjs DClutchSemantics.CapabilityManifestV1Abi EmitCapabilityManifestV1AbiTs.lean lib/generated/capabilityManifestV1.ts",
     "abi:capability-manifest:verify": "node scripts/lean-emit.mjs DClutchSemantics.CapabilityManifestV1Abi EmitCapabilityManifestV1AbiTs.lean lib/generated/capabilityManifestV1.ts --check",
+    "abi:refusal-bands": "node scripts/lean-emit.mjs DClutchSemantics.RefusalBandsV1 EmitRefusalBandsV1Ts.lean lib/generated/refusalBandsV1.ts",
+    "abi:refusal-bands:verify": "node scripts/lean-emit.mjs DClutchSemantics.RefusalBandsV1 EmitRefusalBandsV1Ts.lean lib/generated/refusalBandsV1.ts --check",
     "abi:refusal-registry": "node scripts/generate-refusal-registry.mjs",
     "abi:refusal-registry:verify": "node scripts/generate-refusal-registry.mjs --check",
     "abi:capability-surface": "node scripts/generate-capability-surface.mjs",

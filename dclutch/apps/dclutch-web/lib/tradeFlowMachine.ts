@@ -43,7 +43,24 @@ import {
   inspectDirectMakerNoncePairV1,
   inspectDirectMakerNonceV1,
 } from '@dclutch/sdk/directMakerReplay';
-import { SolanaRpcClient } from '@dclutch/sdk/rpc';
+// THE SUBMITTING CLIENT, DELIBERATELY NOT THE PACKAGE'S.
+//
+// `@dclutch/sdk/rpc` ships a read-only client and `lib/publicSurface.test.ts`
+// enforces that: `sendRawTransaction` is on its forbidden list, asserted absent
+// from the root, the subpath, the prototype and an instance, and a synthetic
+// outside consumer is typechecked to prove calling it does not compile. The
+// package is a reader; submission belongs to a surface that owns a durable
+// journal. This file is one of those surfaces -- it writes the operation
+// journal before it sends and never resubmits on reload -- and the browser's
+// own `lib/rpc.ts` is the client that can send, which is exactly why that twin
+// is on the deliberate-divergence list rather than being absorbed.
+//
+// It was importing the reader anyway, so `submitSignedTransactionV1` was
+// handed a client structurally incapable of submitting and the whole Direct
+// trade could be signed and never sent. The only sign was a type error nobody
+// owned, and adding the method to the package instead would have broken the
+// invariant rather than the habit.
+import { SolanaRpcClient } from '@/lib/rpc';
 import { planDirectCrossingV1, type DirectCrossingPlanV1 } from '@dclutch/sdk/directTicket';
 import {
   prepareDirectWalletTransactionV1,

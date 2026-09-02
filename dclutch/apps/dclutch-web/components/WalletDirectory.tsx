@@ -147,13 +147,27 @@ export function useWalletDirectoryV1(): WalletDirectoryHandleV1 {
 export default function WalletDirectory({
   directory,
   onConnected,
+  purpose,
 }: Readonly<{
   directory: WalletDirectoryHandleV1;
   onConnected: (address: string) => void;
+  /**
+   * Why THIS panel wants a wallet, in the reader's own words.
+   *
+   * `PortfolioWorkspace` has been passing one since it grew a redemption mode
+   * -- "find the winning claims you hold" against "read one owner identity" --
+   * and this component never declared the prop, so React dropped it and the
+   * page asked a stranger to connect a wallet with no stated reason. The only
+   * sign was a type error nobody owned.
+   *
+   * Optional, because most panels sit under a heading that already says it.
+   */
+  purpose?: string;
 }>) {
   const { state, wallets, refusals } = directory;
   return <div className="wallet-directory">
     <span>Wallet</span>
+    {purpose !== undefined && <p>Connecting lets this page {purpose}. Nothing is signed here.</p>}
     {wallets.length > 0 && <div className="wallet-directory-list">
       {wallets.map((wallet) => (
         <button
