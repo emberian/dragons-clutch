@@ -2593,6 +2593,23 @@ mod tests {
         // The extended-heap policy list
         // -----------------------------------------------------------------
 
+        /// The SHIPPED policy: only the founding routes may declare it.
+        ///
+        /// `hot-cu-profile` deliberately suspends this policy --
+        /// [`hot_cu_profile_lifts_every_route_v1`] says so and says why -- so
+        /// this test is about the build that ships and its negative assertions
+        /// belong to that build. Without the gate below it is RED under
+        /// `--features hot-cu-profile` and therefore under `--all-features`, at
+        /// its very first line, and a lane running the suite that way reads a
+        /// policy regression that is not there. Measured 2026-09-02: green with
+        /// default features at every commit in the range, red at
+        /// `assert!(!declares_extended_heap_profile_v1(&[]))` with the profile
+        /// feature on, at every one of them.
+        ///
+        /// The feature's own contract is pinned beside it rather than skipped,
+        /// because a test that merely disappears under a feature says nothing
+        /// about what that feature does.
+        #[cfg(not(feature = "hot-cu-profile"))]
         #[test]
         fn only_the_founding_routes_declare_an_extended_heap_profile() {
             assert!(!declares_extended_heap_profile_v1(&[]));
@@ -2646,6 +2663,22 @@ mod tests {
                 assert!(crate::generic_founding_stages_v1::is_generic_market_open_v1(&open));
                 assert!(!declares_extended_heap_profile_v1(&open));
             }
+        }
+
+        /// The diagnostic build's contract, stated where its suspension is.
+        ///
+        /// `hot-cu-profile` lifts the ceiling for EVERY route, which is the
+        /// whole reason the phase table can be taken past the 32 KiB wall at
+        /// all. That is not a policy this program ships -- `hot_heap_frame_is_inert`
+        /// fails on an ELF carrying it -- but while the feature is on it is the
+        /// behaviour, and asserting it is what makes the sibling test's
+        /// `cfg(not(...))` a statement rather than a way to stop a red.
+        #[cfg(feature = "hot-cu-profile")]
+        #[test]
+        fn the_diagnostic_profile_lifts_every_route_including_the_empty_one() {
+            assert!(hot_cu_profile_lifts_every_route_v1());
+            assert!(declares_extended_heap_profile_v1(&[]));
+            assert!(declares_extended_heap_profile_v1(&[0xDC; 96]));
         }
     }
 

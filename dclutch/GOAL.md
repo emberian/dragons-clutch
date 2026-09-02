@@ -3583,3 +3583,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   window closed with no relay inside it); the cohort-14 runbook in-tree — close 13 → deploy ≥ {a517d27c, 90a8563f,
   e7ecfb2ef, the adapter} → both a Direct and a General-manifest market → fill → census → honest resolution → ATA payout →
   OpenBatch on chain.
+
+### Lane map delta — 2026-09-02 21:00 EDT
+- DEALER closed (`43106855a`, `0f0d7f57b`, `d4ba8ea71`, `45b48a43e`, `4741cb1c2`, `d89ba826e`; rows `225d64a0a`, `6a95a17ac`):
+  **the heap grant does not rise** — the partial Remove died 8,352 under the grant and the table said where: +13,064 inside
+  `runtime_transcript_digest_v3`, dead on return (a 7,104-byte owned-observation bank the tree's own doc had named as debt);
+  a borrowing digest, preimage byte-identical, peak 65,672 → **58,568** (6,968 under). **CU is not comparable across
+  commits of this campaign** — 235 of 307 figures move in 1,500-multiples from random bump draws. `Content` split at its
+  thirteen borrowed-witness sites (0x4024–0x4026) and **localized in one run to two first-party spellings of one fact**
+  (V4 release: "the sole owner of every borrowed range"; v3_artifacts.rs:502: route 1 carries it) — never reached because
+  every equity action ever run carried zero signed positions. Custody's 15-conjunct Replay split four ways (the prediction
+  of which gate refused was wrong and is recorded); the operator's two red pins re-pinned from runs (−5 per declaring span);
+  `hot-tail-table.py` rendered zero heap rows on any on-chain log; the extended-heap test is red only under the diagnostic
+  feature. → DEALER **`(spawned)`**: the ownership ruling, the Remove committing, the alias row as one series.
+  TIDY: genref for the seven new codes.
+- Cuts: `998e451ca`, `18bdd7853`.
