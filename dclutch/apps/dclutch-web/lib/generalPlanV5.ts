@@ -1049,7 +1049,13 @@ export async function reacquireGeneralSuccessorStatusV5(client: SolanaRpcClient,
   if (closedBatchState !== null && (closedBatchState.status === 'vacant' || closedBatchState.status.kind !== 'batch')) {
     throw new Error('CloseCandidate readonly evidence is not one exact materialized General Batch');
   }
-  const candidateClose = candidateCloseRouting === null || closedBatchState === null || closedBatchState.status === 'vacant' || closedBatchState.status.kind !== 'batch' ? null : Object.freeze({
+  // `status === 'vacant'` is gone and `.kind !== 'batch'` stays, which is not
+  // an inconsistency: the guard above narrowed the first away -- TypeScript
+  // reported the repeat as a comparison with no overlap -- and did NOT narrow
+  // the second, so that one is still the check that selects the Batch member
+  // for `closedBatch` below. Dropping both put the wide union back and moved
+  // the error two lines down rather than removing it.
+  const candidateClose = candidateCloseRouting === null || closedBatchState === null || closedBatchState.status.kind !== 'batch' ? null : Object.freeze({
     cranker: candidateCloseRouting.cranker.address,
     solver: candidateCloseRouting.solver.address,
     closedBatchAccount: candidateCloseRouting.closedBatch.address,

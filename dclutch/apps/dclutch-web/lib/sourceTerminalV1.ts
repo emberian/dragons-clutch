@@ -262,10 +262,22 @@ export async function acquireSourceTerminalV1(
 }
 
 /** Compile the Rust-owned admission with the wallet as its sole new authority. */
+/**
+ * The two fields a packet builder actually reads.
+ *
+ * `LatestBlockhashObservation` also carries the SLOT the blockhash was read
+ * at, and a builder must not take a slot from there: the slot that belongs in
+ * the packet is `acquisition.plan.observedSlot`, the authenticated floor the
+ * Rust plan was derived at. Demanding the whole observation invited a second
+ * slot next to that one, and every caller in this tree correctly declined to
+ * supply it -- which is why five call sites did not typecheck.
+ */
+export type PacketBlockhashV1 = Pick<LatestBlockhashObservation, 'blockhash' | 'lastValidBlockHeight'>;
+
 export function buildSourceTerminalTransactionV1(
   acquisition: SourceTerminalAcquisitionV1,
   payerAddress: string,
-  blockhash: LatestBlockhashObservation,
+  blockhash: PacketBlockhashV1,
 ): SourceTerminalTransactionV1 {
   if (acquisition.plan.route !== 'admit' || acquisition.plan.instruction === null) throw new Error('completed Source terminal plan has no wallet act');
   const payer = key(payerAddress, 'payer');

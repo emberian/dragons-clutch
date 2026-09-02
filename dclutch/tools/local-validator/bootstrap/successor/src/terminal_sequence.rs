@@ -5219,7 +5219,13 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         token_program,
         realm.raw,
         realm.staging,
-        pubkey(&plan.infrastructure_profile.address)?,
+        // The V2 domain. Core authenticates the succession profile and nothing
+        // else since `2951b226`; the sealed V1 is lineage evidence and is never
+        // an account in a live instruction. The founding path reaches this
+        // address through Found's own selection, and this path reads it from
+        // the plan, so the two must name the same account or a market founded
+        // on a born-at-V2 cohort could not be retired.
+        pubkey(&plan.genesis_infrastructure_profile.address)?,
         registry_artifact.0,
         registry_artifact.1,
         pubkey(&plan.registry.programdata_id)?,
@@ -5600,7 +5606,8 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
         collateral_token_program: token_program,
         realm_raw: realm.raw,
         realm_staging: realm.staging,
-        infrastructure_profile: pubkey(&plan.infrastructure_profile.address)?,
+        // The V2 domain, for the same reason as the aggregate graph above.
+        infrastructure_profile: pubkey(&plan.genesis_infrastructure_profile.address)?,
         registry_artifact_raw: registry_artifact.0,
         registry_artifact_staging: registry_artifact.1,
         registry_programdata: pubkey(&plan.registry.programdata_id)?,

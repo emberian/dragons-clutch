@@ -143,7 +143,10 @@ function twinArm(title: string, paths: ReadonlyArray<string>, diverged: Readonly
     for (const path of paths) {
       const reason = diverged[path];
       it(reason === undefined ? `${path} is byte-identical in both trees` : `${path} still diverges: ${reason}`, () => {
-        const identical = readFileSync(join(sdkRoot, path)).equals(readFileSync(join(webRoot, path)));
+        // `Buffer.compare`, not `Buffer.prototype.equals`: under this
+        // `@types/node`, `readFileSync` returns `NonSharedBuffer`, which the
+        // declarations give no `equals`. Same comparison, and it typechecks.
+        const identical = Buffer.compare(readFileSync(join(sdkRoot, path)), readFileSync(join(webRoot, path))) === 0;
         if (reason === undefined) {
           expect(
             identical,

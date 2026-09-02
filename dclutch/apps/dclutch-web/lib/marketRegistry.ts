@@ -1,7 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
 
 import registry from '@/fixtures/market-registry.devnet.json';
-import { shortAddressV1, type MarketCorePhaseV2 } from './marketDiscovery';
+import { type MarketCorePhaseV2 } from './marketCoreV2';
+import { shortAddressV1 } from './marketDiscovery';
 
 /**
  * The editorial half of a market page.

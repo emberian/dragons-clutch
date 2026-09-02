@@ -260,7 +260,10 @@ describe('General V5 operator-plan browser boundary', () => {
     batchState[body + Abi.GENERAL_BATCH_STATUS_OFFSET_V1] = Abi.GENERAL_BATCH_STATUS_CLOSED_V1;
     putU64(batchState, body + Abi.GENERAL_BATCH_CLOSED_ROOT_REVISION_OFFSET_V1, 10n);
     const decodedBatch = decodeGeneralLocalStateV3(batchState);
-    if (decodedBatch.status === 'vacant' || decodedBatch.status.kind !== 'batch') throw new Error('test Batch did not decode');
+    // `decodeGeneralLocalStateV3` never yields a vacant status -- only
+    // `decodeStateAccount` adds that arm, for a funded System account -- so the
+    // vacant disjunct this guard was copied with can never fire.
+    if (decodedBatch.status.kind !== 'batch') throw new Error('test Batch did not decode');
     const batchId = hexBytes(await generalBatchOccurrenceIdentityV1(decodedBatch.status));
     const considered = candidateState(candidate(Abi.GENERAL_SUBMISSION_STATUS_CONSIDERED_V1, 1, bytes(52), batchId));
     const submitted = candidateState(candidate(Abi.GENERAL_SUBMISSION_STATUS_SUBMITTED_V1, 1, bytes(52), batchId));

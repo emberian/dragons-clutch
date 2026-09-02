@@ -322,6 +322,7 @@ describe('wallet terminal payout v3', () => {
     const signature = 'saved-exact-payout-signature';
     const meta: TransactionMetaObservation = Object.freeze({
       signature, slot: '100', blockTime: null, succeeded: true, errorText: null,
+      error: null, computeUnits: null, innerInstructions: Object.freeze([]),
       feeLamports: '5', accountAddresses: Object.freeze([payer]),
       preBalances: Object.freeze(['100']), postBalances: Object.freeze(['95']),
       logMessages: Object.freeze([]),

@@ -2008,6 +2008,54 @@ fn observed_profile_state_v1(
     })
 }
 
+/// The succession state of a cohort whose plan carries NO ceremony.
+///
+/// This used to return `Complete` without reading anything, and the evidence
+/// had to carry a paragraph saying that was not a claim the ceremony had run.
+/// Since `c60b25e8` there is a fact on chain to read instead of a silence to
+/// explain: a born-at-V2 profile names the two genesis sentinels where a
+/// succeeded one names the two real predecessor artifact releases.
+///
+/// So `Complete` here means "there is nothing to execute, and the chain says
+/// so" -- the cohort was born at V2 and its one succession is unspent. Absence
+/// is the initialize stage not having run. And a V2 that is NOT born at V2 is a
+/// succession this plan does not describe, which is a conflict a resumed
+/// campaign must never write over -- a case the old unconditional `Complete`
+/// reported as done.
+fn born_at_v2_succession_state_v1(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<StageStateV1> {
+    let core = pubkey(&plan.core.program_id)?;
+    let address = pubkey(&plan.genesis_infrastructure_profile.address)?;
+    let Some(account) = rpc.account(address)? else {
+        return Ok(StageStateV1::Absent);
+    };
+    let expected = runtime::decode_hex(&plan.genesis_infrastructure_profile.body_hex)?;
+    if account.owner != core || account.executable {
+        return Ok(StageStateV1::Conflict(format!(
+            "the V2 infrastructure profile at {address} is not owned by this plan's Core"
+        )));
+    }
+    let Ok(profile) = ProtocolInfrastructureProfileV2::decode(&account.data) else {
+        return Ok(StageStateV1::Conflict(format!(
+            "the account at the V2 infrastructure domain {address} is not a decodable V2 profile"
+        )));
+    };
+    if !profile.born_at_v2() {
+        return Ok(StageStateV1::Conflict(
+            "a succession has already been spent at the V2 infrastructure domain, and this \
+             plan carries no ceremony describing it"
+                .into(),
+        ));
+    }
+    if account.data != expected {
+        return Ok(StageStateV1::Conflict(format!(
+            "a born-at-V2 profile exists at {address} whose {} bytes are not this plan's {}",
+            account.data.len(),
+            expected.len()
+        )));
+    }
+    Ok(StageStateV1::Complete)
+}
+
 struct SuccessionProjectionV1 {
     registry_release: ArtifactReleaseV1,
     registry_artifact_id: ArtifactReleaseIdV1,
@@ -2065,7 +2113,7 @@ fn succession_projection_v1(
 /// nor permanent devnet silently acquires a Loader write.
 pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<StageStateV1> {
     let Some(pin) = plan.infrastructure_succession.as_ref() else {
-        return Ok(StageStateV1::Complete);
+        return born_at_v2_succession_state_v1(rpc, plan);
     };
     if plan.checked_local_mutable_set.is_none() || plan.checked_upgrade_set.is_some() {
         return Ok(StageStateV1::Conflict(
@@ -4524,6 +4572,23 @@ fn execute_stages(
     for (stage, state) in states {
         if *stage > through {
             break;
+        }
+        // A cohort born at V2 has NO ceremony, and this is the one stage whose
+        // executor must therefore never be entered on any observed state. The
+        // detector reads the sentinels and can now honestly report `Absent`
+        // before initialize has run; that is a diagnostic about the chain, not
+        // an instruction to perform a succession this plan does not describe.
+        // Skipping here rather than inside the `Complete` arm is what keeps the
+        // two facts separate -- and it is deliberately not phrased as "already
+        // complete", because saying that about a stage that never executes
+        // reads as a claim that it did.
+        if *stage == StageV1::Succession && plan.infrastructure_succession.is_none() {
+            eprintln!(
+                "campaign stage succession: nothing to execute -- this cohort is born at V2 and \
+                 carries no ceremony; observed {}",
+                state.label()
+            );
+            continue;
         }
         if *state == StageStateV1::Complete {
             eprintln!("campaign stage {}: already complete, skipped", stage.name());

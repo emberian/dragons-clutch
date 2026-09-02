@@ -6303,6 +6303,24 @@ fn require_admitted_bank_matches_frame_v3(
     }
 }
 
+/// Execute the admitted accelerator as the sole candidate authority.
+///
+/// EVERY REFUSAL RAISED HERE NAMES ITS CAUSE. This function used to publish
+/// `Content` from twenty-five sites, and `Content` has 2,126 sites in this
+/// program: an honest equity Add and a hostile strategy substitution refused
+/// with the same code, which is what makes a hostile assertion a universal
+/// donor (ledger `M-38`) and an honest wall unlocalizable.
+///
+/// The three codes it needed already existed and it used none of them.
+/// `AdmittedFrame` 0x4017, `AdmittedTransport` 0x4018 and `AdmittedContext`
+/// 0x4019 were split out of `Content` for exactly this boundary, and their doc
+/// comments already describe these lines -- "an identity that is not a valid
+/// `ContentId`, or a strategy that names no certificate, admission, or artifact
+/// release" is the invocation context built below, verbatim. So this is not a
+/// new vocabulary, it is the existing one reaching the sites it was created
+/// for: the accelerator deployment pair and the eight strategy-owned evidence
+/// coordinates are `AdmittedFrame`, the context and its identities are
+/// `AdmittedContext`, and the bank-width binding is `AdmittedTransport`.
 fn execute_admitted_candidate_v3(
     view: AdmittedCandidateViewV3<'_, '_, '_, '_>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
@@ -6313,13 +6331,13 @@ fn execute_admitted_candidate_v3(
     let accelerator_program = view
         .strategy_extras
         .get(6)
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AdmittedFrame)?;
     let accelerator_programdata = view
         .strategy_extras
         .get(7)
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AdmittedFrame)?;
     let family_request_digest =
-        family_request_digest_v3(view.family_request).map_err(|_| TradingSbfError::Content)?;
+        family_request_digest_v3(view.family_request).map_err(|_| TradingSbfError::AdmittedContext)?;
     let runtime_observations_digest = runtime_transcript_digest_v3(
         view.observations,
         view.runtime_accounts,
@@ -6328,16 +6346,16 @@ fn execute_admitted_candidate_v3(
     let product_runtime = view.product_runtime_v3.runtime;
     let admitted_context = AdmittedInvocationContextV3 {
         release_set: ContentId::new(view.envelope.release_set())
-            .map_err(|_| TradingSbfError::Content)?,
-        market: ContentId::new(view.envelope.market()).map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
+        market: ContentId::new(view.envelope.market()).map_err(|_| TradingSbfError::AdmittedContext)?,
         root: ContentId::new(view.frame.root.key.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         registry_program: ContentId::new(view.frame.registry.key.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         trading_program: ContentId::new(view.program_id.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         accelerator_program: ContentId::new(accelerator_program.key.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         capability_program: view.selected_program,
         account_profile: view.descriptor.account_profile().program(),
         request_profile: view.descriptor.request_profile().program(),
@@ -6348,38 +6366,38 @@ fn execute_admitted_candidate_v3(
         certificate: view
             .strategy
             .certificate_program_id()
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AdmittedContext)?,
         admission: view
             .strategy
             .admission_program_id()
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AdmittedContext)?,
         artifact_release: view
             .strategy
             .artifact_release_id()
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AdmittedContext)?,
         config: view.context.selection().config(),
         product: ContentId::new(product_runtime.product_record.content_digest.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         portfolio: ContentId::new(product_runtime.portfolio_record.content_digest.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         linked_basis: ContentId::new(
             view.product_runtime_v3
                 .linked_basis_record
                 .content_digest
                 .to_bytes(),
         )
-        .map_err(|_| TradingSbfError::Content)?,
+        .map_err(|_| TradingSbfError::AdmittedContext)?,
         family_request_digest,
         runtime_observations_digest,
         root_prestate_digest: ContentId::new(view.root_prestate)
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
         selected_action: view.selected_action,
         tail_count: view.tail_count,
         account_count: u32::try_from(view.runtime_accounts.len())
-            .map_err(|_| TradingSbfError::Content)?,
-        scalar_count: u32::try_from(view.scalars.len()).map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
+        scalar_count: u32::try_from(view.scalars.len()).map_err(|_| TradingSbfError::AdmittedContext)?,
         identity_count: u32::try_from(view.identities.len())
-            .map_err(|_| TradingSbfError::Content)?,
+            .map_err(|_| TradingSbfError::AdmittedContext)?,
     };
     let execution = execute_admitted_aot_v3(
         view.program_id,
@@ -6399,27 +6417,27 @@ fn execute_admitted_candidate_v3(
             certificate_raw: view
                 .strategy_extras
                 .first()
-                .ok_or(TradingSbfError::Content)?,
+                .ok_or(TradingSbfError::AdmittedFrame)?,
             certificate_staging: view
                 .strategy_extras
                 .get(1)
-                .ok_or(TradingSbfError::Content)?,
+                .ok_or(TradingSbfError::AdmittedFrame)?,
             admission_raw: view
                 .strategy_extras
                 .get(2)
-                .ok_or(TradingSbfError::Content)?,
+                .ok_or(TradingSbfError::AdmittedFrame)?,
             admission_staging: view
                 .strategy_extras
                 .get(3)
-                .ok_or(TradingSbfError::Content)?,
+                .ok_or(TradingSbfError::AdmittedFrame)?,
             artifact_raw: view
                 .strategy_extras
                 .get(4)
-                .ok_or(TradingSbfError::Content)?,
+                .ok_or(TradingSbfError::AdmittedFrame)?,
             artifact_staging: view
                 .strategy_extras
                 .get(5)
-                .ok_or(TradingSbfError::Content)?,
+                .ok_or(TradingSbfError::AdmittedFrame)?,
             accelerator_program,
             accelerator_programdata,
         },

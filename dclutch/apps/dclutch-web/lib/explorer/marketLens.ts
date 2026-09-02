@@ -70,8 +70,18 @@ export type MarketLens = Readonly<{
   custodyProgramId: string | null;
   nodes: ReadonlyArray<LensNode>;
   edges: ReadonlyArray<LensEdge>;
-  /** The Market's own binding checks, carried through from the discovery join. */
-  bindings: MarketDetailV1['card'] extends { bindings: infer B } ? B : never;
+  /**
+   * The Market's own binding checks, carried through from the discovery join.
+   *
+   * `Extract`, not `extends ? :`. The card is a UNION -- decoded or refused --
+   * and a conditional type distributes over it, so `card extends { bindings }`
+   * asked whether the REFUSED arm has bindings, got no, and resolved the whole
+   * field to `never`. Both projections below then cast real arrays to `never`
+   * to satisfy it, which is how a field that is populated at runtime and
+   * rendered on the page typechecked as a thing that cannot exist -- and why
+   * `ChainExplorer` could not read its own `.length`.
+   */
+  bindings: Extract<MarketDetailV1['card'], Readonly<{ status: 'decoded' }>>['bindings'];
   /** What the lens could not show, and why. */
   gaps: ReadonlyArray<string>;
   detail: MarketDetailV1;
@@ -167,7 +177,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
       custodyProgramId: detail.custodyProgramId,
       nodes: Object.freeze(nodes),
       edges: Object.freeze(edges),
-      bindings: Object.freeze([]) as MarketLens['bindings'],
+      bindings: Object.freeze([]),
       gaps: Object.freeze(gaps),
       detail,
     });
@@ -457,7 +467,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
     custodyProgramId: detail.custodyProgramId,
     nodes: Object.freeze(nodes),
     edges: Object.freeze(edges),
-    bindings: card.bindings as MarketLens['bindings'],
+    bindings: card.bindings,
     gaps: Object.freeze(gaps),
     detail,
   });

@@ -45,7 +45,11 @@ describe('LawBand', () => {
    * pins that a differing cycle still splits the run where it differs.
    */
   it('collapses an unbroken run into one mark once the cells are too thin to separate', () => {
-    const long = Array.from({ length: 300 }, (_unused, index) => (index === 150 ? 'violated' : 'holds') as const);
+    // Typed at the binding rather than `as const` on the branch: a const
+    // assertion may only be applied to a literal, and a conditional is not one.
+    const long: ReadonlyArray<'violated' | 'holds'> = Array.from(
+      { length: 300 }, (_unused, index) => (index === 150 ? 'violated' : 'holds'),
+    );
     const dense = renderToStaticMarkup(<LawBand
       rows={[{ id: 'L1', statuses: long, held: 299, violated: 1, inapplicable: 0, detail: 'd' }]}
       cycles={long.map((_unused, index) => index + 1)}

@@ -253,10 +253,22 @@ export async function acquireSourceCloseFundV1(
 }
 
 /** Compile only the Rust-selected prepay or signer-free direct close. */
+/**
+ * The two fields a packet builder actually reads.
+ *
+ * `LatestBlockhashObservation` also carries the SLOT the blockhash was read
+ * at, and a builder must not take a slot from there: the slot that belongs in
+ * the packet is `acquisition.plan.observedSlot`, the authenticated floor the
+ * Rust plan was derived at. Demanding the whole observation invited a second
+ * slot next to that one, and every caller in this tree correctly declined to
+ * supply it -- which is why five call sites did not typecheck.
+ */
+export type PacketBlockhashV1 = Pick<LatestBlockhashObservation, 'blockhash' | 'lastValidBlockHeight'>;
+
 export function buildSourceCloseFundTransactionV1(
   acquisition: SourceCloseFundAcquisitionV1,
   payerAddress: string,
-  blockhash: LatestBlockhashObservation,
+  blockhash: PacketBlockhashV1,
 ): SourceCloseFundTransactionV1 {
   const payer = key(payerAddress, 'payer');
   const instructions = acquisition.plan.route === 'prepay'

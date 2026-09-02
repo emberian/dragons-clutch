@@ -497,11 +497,16 @@ export class SolanaRpcClient {
       length: exactUnsigned(dataSlice.length, 'account data-slice length'),
     };
     const raw = await this.request('getMultipleAccounts', [canonical, configuration]);
-    if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value) || raw.value.length !== canonical.length) throw new Error('getMultipleAccounts did not return one finalized value per address');
+    // Bound to a local, because narrowing `Array.isArray(raw.value)` does not
+    // survive the property accesses below: `raw` is an index-signature record,
+    // so each later `raw.value` is `unknown` again and the guard above buys
+    // nothing. Same check, same one refusal, and the reads are typed.
+    const values: unknown = plain(raw) ? raw.value : undefined;
+    if (!plain(raw) || !plain(raw.context) || !Array.isArray(values) || values.length !== canonical.length) throw new Error('getMultipleAccounts did not return one finalized value per address');
     const slot = String(exactUnsigned(raw.context.slot, 'multiple-account observation slot'));
     return Object.freeze({
       slot,
-      accounts: Object.freeze(canonical.map((address, index) => Object.freeze({ address, account: raw.value[index] === null ? null : parseAccount(raw.value[index], `multiple account ${index}`) }))),
+      accounts: Object.freeze(canonical.map((address, index) => Object.freeze({ address, account: values[index] === null ? null : parseAccount(values[index], `multiple account ${index}`) }))),
     });
   }
 
@@ -613,11 +618,12 @@ export class SolanaRpcClient {
       if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error('signature status polling requires canonical base58 signatures');
     }
     const raw = await this.request('getSignatureStatuses', [signatures, { searchTransactionHistory: true }]);
-    if (!plain(raw) || !Array.isArray(raw.value) || raw.value.length !== signatures.length) {
+    const values: unknown = plain(raw) ? raw.value : undefined;
+    if (!plain(raw) || !Array.isArray(values) || values.length !== signatures.length) {
       throw new Error('getSignatureStatuses did not return one status per signature');
     }
     return Object.freeze(signatures.map((signature, index) => {
-      const entry = raw.value[index];
+      const entry = values[index];
       if (entry === null || entry === undefined) {
         return Object.freeze({ signature, known: false, slot: null, confirmationStatus: null, succeeded: null, errorText: null });
       }
