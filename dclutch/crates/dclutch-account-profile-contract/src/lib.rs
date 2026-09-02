@@ -130,6 +130,22 @@ pub struct AccountObservationV1<'a> {
     writable: bool,
     executable: bool,
     adapter_authenticated_variable_data: bool,
+    /// SHA-256 over `data`, supplied by the adapter, or `None`.
+    ///
+    /// THE INTERPRETER NEVER COMPUTES THIS. This crate's module doc is explicit
+    /// that it does not hash content, and that is not a limitation to route
+    /// around: a digest is a fact the adapter establishes and hands over
+    /// alongside the key, the owner and the lamports, and `ProjectDataDigest`
+    /// projects it exactly as `ProjectKey` projects the key.
+    ///
+    /// `Option` rather than a required field because hashing every observed
+    /// account is a per-account SHA-256 that the overwhelming majority of
+    /// profiles never ask for, on an interpreter that runs inside a CU-bound
+    /// hot path. The adapter decodes the profile before it builds observations,
+    /// so it knows which coordinates carry a digest operation and can hash
+    /// exactly those. And it makes "the adapter established none" a REFUSAL
+    /// rather than a silently zero register.
+    data_digest: Option<&'a [u8; 32]>,
 }
 
 impl<'a> AccountObservationV1<'a> {
@@ -154,6 +170,7 @@ impl<'a> AccountObservationV1<'a> {
             writable,
             executable,
             adapter_authenticated_variable_data: false,
+            data_digest: None,
         }
     }
 
@@ -183,7 +200,29 @@ impl<'a> AccountObservationV1<'a> {
             writable,
             executable,
             adapter_authenticated_variable_data: true,
+            data_digest: None,
         }
+    }
+
+    /// Carry a data digest this observation's adapter has already computed.
+    ///
+    /// Follows the opt-in convention
+    /// [`Self::new_adapter_authenticated_variable_data`] set in this file: the
+    /// adapter chooses to establish the fact, and the selected profile still
+    /// decides whether it may be consumed. Carrying a digest grants no
+    /// projection authority on its own.
+    #[must_use]
+    pub const fn with_adapter_data_digest(self, digest: &'a [u8; 32]) -> Self {
+        Self {
+            data_digest: Some(digest),
+            ..self
+        }
+    }
+
+    /// Borrowed adapter-established SHA-256 over `data`, when there is one.
+    #[must_use]
+    pub const fn data_digest(self) -> Option<&'a [u8; 32]> {
+        self.data_digest
     }
 
     /// Account public key.
@@ -228,9 +267,14 @@ impl<'a> AccountObservationV1<'a> {
     /// in-progress plan reads differs from the authenticated observation in
     /// this one field. Every other fact — the borrowed key and owner, the exact
     /// data bytes, the signer/writable/executable privileges, and the adapter
-    /// variable-data authentication bit — is carried through unchanged, so a
-    /// caller can express the candidate bank as a lamport overlay on the
-    /// authenticated bank rather than as a second copy of it.
+    /// variable-data authentication bit, and the adapter data digest — is
+    /// carried through unchanged, so a caller can express the candidate bank as
+    /// a lamport overlay on the authenticated bank rather than as a second copy
+    /// of it.
+    ///
+    /// The digest survives because it is a digest of `data`, and `data` is what
+    /// this overlay does not touch. An overlay that dropped it would turn a
+    /// lamport move into a `DataDigestUnavailable` refusal three phases later.
     #[must_use]
     pub const fn at_lamports(self, lamports: u64) -> Self {
         Self {
@@ -242,6 +286,7 @@ impl<'a> AccountObservationV1<'a> {
             writable: self.writable,
             executable: self.executable,
             adapter_authenticated_variable_data: self.adapter_authenticated_variable_data,
+            data_digest: self.data_digest,
         }
     }
 

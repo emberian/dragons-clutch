@@ -6245,3 +6245,54 @@ proposition. **The heap checks renamed** to say *requested*, not *granted*. **Th
 exposure self-comparison** was already fixed by another lane with a better answer
 than either branch offered — the obvious repair was tried and **measured false
 against four fixtures**.
+
+## 2026-09-01 — the fixture was the fabricating author, and its own name convicted it
+
+The linked-basis staging cursor's two authors, settled from the adoption path rather
+than by editing the fixture. **The chain closes it**: `process_finalize` drains the
+cursor to the refund wallet, then **re-reads it and refuses unless `is_vacant`** —
+System-owned, empty, zero lamports (`registry-sbf/src/record_v1.rs:493-509,
+986-994`). **The record contract makes absence the definition**, not a consequence:
+*"the adapter must prove the canonical staging PDA is **absent** … the raw account's
+PDA and apparent payload alone never assert finality."* **Trading agrees from the
+consumer side**: the artifact seal *"is the durable proof that the real staging
+cursor was vacant when this exact raw body was admitted."*
+
+So the builder's `vacant(record.staging)` beside `finalized_raw(rent, record)` is
+one word in two halves, not a restatement. **The fixture was fabricating**:
+`add_finalized_record` funded the cursor with `Rent::minimum_balance(0)` — the
+*prefunded, not-yet-begun* state, the one state a record called finalized cannot be
+in. Withdrawn; `plan()` now **observes** the cursor through `vacant_or_account`.
+
+### A correction made too far, reverted the same day — and the one above it was wrong too
+
+`open_selected_v3.rs`'s `scalar_eq(coefficient, denominator)` is **not** an
+empty-satisfying-set guard. A Bearer descriptor is `D·e_k`, so the *selected*
+coordinate's coefficient **is** the denominator — `BearerDescriptorV2::authenticate`
+requires exactly that. The full-width guard demanded `D` of *every* coordinate; this
+one demands it of the **one** coordinate defined to have it.
+
+> **"I weakened a correct refusal on a false analogy."** Restored before anything
+> ran on it.
+
+**And the full-width replacement, `nonzero`, was not right either** — the crate's
+own fixture proves it: `representation_descriptor_v3` writes `[10, 0, 0]` against
+`D = 10`, a Bearer basis vector, which `nonzero` refuses at the zeros for the same
+reason `scalar_eq` did. The coordinator had accepted `nonzero` as *"a correction,
+not a deletion"*; **that acceptance was wrong.** The property both families share
+is **`coefficient <= D`** — a coordinate exceeding the denominator claims more than
+a whole unit of the underlying, which is unbacked issuance — and it is not vacuous.
+Now **executed, not read**, through the runtime's own `execute_fold_atomic`:
+`[10,0,0]/10` admitted, `[2,3,5]/7` admitted, `[8,3,5]/7` refused `CheckFailed`.
+**Both earlier spellings fail the first of those three.**
+
+### Why denominate → redeem → retire is not yet delivered, in one line
+
+`plan_denominate` refuses `NotBearer` — **a correct refusal, not a wall.** The
+chain **admits** fractional denominate on `[2,3,5]/7` (a real-ELF test passes
+today); the operator **refuses** it (`authenticate_chain_basis → NotBearer`); and
+the issue path has **no such gate**. **The operator will issue a receipt whose
+selected actions it then refuses to build.** Decided on a stated principle — *the
+operator must be able to build what the chain admits* — the Hot open-selected path
+gets a non-Bearer sibling with the specialization chosen by the descriptor.
+Overturnable if the code disagrees.

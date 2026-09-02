@@ -153,6 +153,20 @@ const OP_PROJECT_DATA_U16: u8 = 16;
 const OP_PROJECT_DATA_U8: u8 = 17;
 const OP_PROJECT_NONZERO_U64_TAIL_COUNT: u8 = 18;
 const OP_PROJECT_NONZERO_U64_TAIL_ROWS: u8 = 19;
+/// Project an ADAPTER-ESTABLISHED SHA-256 of an account's data into an identity.
+///
+/// The interpreter does not hash, and this operation does not make it. This
+/// crate's module doc is explicit -- it "does not inspect Solana accounts, hash
+/// content, derive PDAs, or authenticate Registry records" -- and that policy
+/// costs this operation nothing, because a digest is a fact the ADAPTER
+/// supplies alongside the key, the owner and the lamports. `OP_PROJECT_KEY`
+/// projects the key it was handed; this projects the digest it was handed.
+///
+/// Twenty-first opcode, the next free value. `OPERATION_BYTES` is unchanged and
+/// nothing is renumbered: the encoding is the `identity(..)` shape
+/// `OP_PROJECT_KEY` and `OP_PROJECT_OWNER` already use, with no data offset and
+/// no stride.
+const OP_PROJECT_DATA_DIGEST: u8 = 20;
 
 /// Encode one fixed-account `u8` data projection into a common `u64` scalar.
 ///
@@ -287,6 +301,16 @@ pub enum Error {
     InvalidDynamicSpan,
     /// An opaque-data observation asserted local data authority.
     InvalidOpaqueDataPrestate,
+    /// A digest projection ran against an observation whose adapter supplied none.
+    ///
+    /// The digest is optional on `AccountObservationV1` because hashing every
+    /// observed account is a per-account SHA-256 no profile but this one asks
+    /// for. That option is what makes this a refusal instead of a zero
+    /// register: an adapter that did not establish the fact has not established
+    /// it, and a profile that reads it anyway must stop rather than authenticate
+    /// against thirty-two zero bytes -- the exact defect class the registered
+    /// creation family shipped for months in its two `require_key` conjuncts.
+    DataDigestUnavailable,
     /// A fixed-data predicate was malformed, noncanonical, or targeted an ineligible rule.
     InvalidFixedDataPredicate,
     /// A live account did not satisfy an authenticated fixed-data predicate.
@@ -2838,6 +2862,7 @@ impl Operation {
                 | OP_REQUIRE_OWNER
                 | OP_PROJECT_KEY
                 | OP_PROJECT_OWNER
+                | OP_PROJECT_DATA_DIGEST
                 | OP_PROJECT_DATA_IDENTITY
                 | OP_PROJECT_DATA_IDENTITY_AFFINE
                 | OP_PROJECT_DATA_IDENTITY_SELECTED
@@ -2859,7 +2884,7 @@ impl Operation {
         }
         match self.opcode {
             OP_REQUIRE_KEY | OP_REQUIRE_OWNER | OP_PROJECT_KEY | OP_PROJECT_OWNER
-            | OP_PROJECT_LAMPORTS => {
+            | OP_PROJECT_LAMPORTS | OP_PROJECT_DATA_DIGEST => {
                 if self.data_offset != 0 || self.data_stride != 0 {
                     return Err(Error::NonCanonicalOperation);
                 }
@@ -3093,6 +3118,7 @@ impl Operation {
                 | OP_PROJECT_DATA_U8
                 | OP_PROJECT_TAIL_COUNT_U32
                 | OP_PROJECT_NONZERO_U64_TAIL_COUNT
+                | OP_PROJECT_DATA_DIGEST
         )
     }
 
@@ -3104,6 +3130,7 @@ impl Operation {
             self.opcode,
             OP_PROJECT_KEY
                 | OP_PROJECT_OWNER
+                | OP_PROJECT_DATA_DIGEST
                 | OP_PROJECT_DATA_IDENTITY
                 | OP_PROJECT_DATA_IDENTITY_AFFINE
                 | OP_PROJECT_DATA_IDENTITY_SELECTED
@@ -3212,6 +3239,11 @@ impl Operation {
                         .ok_or(Error::InvalidCoordinate)?,
             ),
             OP_PROJECT_KEY => write_identity(identities, identity()?, account.key()),
+            OP_PROJECT_DATA_DIGEST => write_identity(
+                identities,
+                identity()?,
+                *account.data_digest().ok_or(Error::DataDigestUnavailable)?,
+            ),
             OP_PROJECT_OWNER => write_identity(identities, identity()?, account.owner()),
             OP_PROJECT_LAMPORTS => write_scalar(scalars, scalar()?, account.lamports()),
             OP_PROJECT_DATA_U64 => {
@@ -4343,6 +4375,124 @@ mod tests {
             AccountObservationV1::new(second, &[1; 32], 4, &[], false, false, false),
             AccountObservationV1::new(&[0x32; 32], &[1; 32], 5, &[], false, false, false),
         ]
+    }
+
+    fn data_digest_profile_bytes() -> Vec<u8> {
+        let mut output = vec![0_u8; HEADER_BYTES + RULE_BYTES + OPERATION_BYTES];
+        put(&mut output, 0, &MAGIC);
+        for (offset, value) in [
+            (8, VERSION),
+            (10, ARTIFACT_PROFILE),
+            (12, 1),
+            (14, 0),
+            (16, 1),
+            (18, 0),
+            (20, 0),
+            (22, 0),
+            (24, 1),
+            (26, 0),
+        ] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+        put(&mut output, HEADER_BYTES, &rule(4));
+        put(
+            &mut output,
+            HEADER_BYTES + RULE_BYTES,
+            &operation(OP_PROJECT_DATA_DIGEST, false, 0, false, 0),
+        );
+        output
+    }
+
+    fn project_one_digest(
+        observation: AccountObservationV1<'_>,
+    ) -> Result<[u8; 32]> {
+        let bytes = data_digest_profile_bytes();
+        let profile = AccountProfileV2::decode(&bytes).expect("digest profile");
+        let accounts = [observation];
+        let mut scratch_identities = [[0_u8; 32]; 1];
+        let mut output_identities = [[9_u8; 32]; 1];
+        project_atomic(
+            profile,
+            0,
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &[],
+                input_identities: &[[0_u8; 32]],
+                scratch_scalars: &mut [],
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut [],
+                output_identities: &mut output_identities,
+            },
+        )?;
+        Ok(output_identities[0])
+    }
+
+    /// A digest the adapter did not establish is a REFUSAL, not a zero register.
+    ///
+    /// This is the whole reason `AccountObservationV1::data_digest` is an
+    /// `Option`. The interpreter does not hash -- this crate's module doc
+    /// forbids it, and the operation needs no exception, because a digest is an
+    /// adapter-supplied fact projected exactly as the key is. The cost of that
+    /// design is that the fact can be absent, and the only safe reading of
+    /// absent is to stop.
+    ///
+    /// Reading a zero register instead is not hypothetical. The registered
+    /// creation family shipped two `require_key` conjuncts comparing a real
+    /// account key against thirty-two zero bytes, unsatisfiable by any
+    /// transaction, for as long as no route reached them.
+    #[test]
+    fn a_digest_projection_refuses_an_observation_whose_adapter_supplied_none() {
+        let data = [0x5a_u8; 4];
+        let plain = AccountObservationV1::new(&[1; 32], &[2; 32], 0, &data, false, false, false);
+        assert_eq!(
+            project_one_digest(plain),
+            Err(Error::DataDigestUnavailable),
+            "a profile may not authenticate against a digest nobody established",
+        );
+
+        // The adapter-authenticated variable-data constructor is a DIFFERENT
+        // opt-in and carries no digest either. It refuses EARLIER and with
+        // another code, and that is worth pinning rather than forcing: an
+        // observation asserting variable-data authority against a rule that
+        // declares none is refused before any operation runs at all. Written
+        // expecting `DataDigestUnavailable` first, and the pass said otherwise --
+        // so the assertion moved to what actually fires, which is the stronger
+        // of the two and proves the opt-ins are independent AND ordered.
+        let variable = AccountObservationV1::new_adapter_authenticated_variable_data(
+            &[1; 32], &[2; 32], 0, &data, false, false, false,
+        );
+        assert_eq!(
+            project_one_digest(variable),
+            Err(Error::InvalidVariableDataPrestate),
+        );
+    }
+
+    /// The projection carries the adapter's digest, and follows it.
+    #[test]
+    fn a_digest_projection_writes_exactly_the_digest_the_adapter_established() {
+        let data = [0x5a_u8; 4];
+        let digest = [0xc7_u8; 32];
+        let observed = AccountObservationV1::new(&[1; 32], &[2; 32], 0, &data, false, false, false)
+            .with_adapter_data_digest(&digest);
+        assert_eq!(project_one_digest(observed), Ok(digest));
+
+        // The control that keeps the instrument honest: a different digest over
+        // the SAME bytes moves the register. The interpreter is projecting what
+        // it was handed, not deriving anything from `data`, and this is what
+        // says so -- a pass that ignored the field would report `digest` here
+        // too, or the zero it started from.
+        let forged = [0x3e_u8; 32];
+        let perturbed = AccountObservationV1::new(&[1; 32], &[2; 32], 0, &data, false, false, false)
+            .with_adapter_data_digest(&forged);
+        assert_eq!(project_one_digest(perturbed), Ok(forged));
+        assert_ne!(forged, digest);
+
+        // And the lamport overlay carries it, or a balance move would turn into
+        // a `DataDigestUnavailable` three phases later.
+        let overlaid = AccountObservationV1::new(&[1; 32], &[2; 32], 0, &data, false, false, false)
+            .with_adapter_data_digest(&digest)
+            .at_lamports(7);
+        assert_eq!(project_one_digest(overlaid), Ok(digest));
     }
 
     #[test]

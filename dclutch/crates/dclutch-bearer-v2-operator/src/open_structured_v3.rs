@@ -925,27 +925,38 @@ fn encode_transition(representation_outcome_count: u32) -> Result<Vec<u8>> {
         InstructionV3::nonzero(transition_common(SCALAR_QUANTITY)?),
         InstructionV3::nonzero(transition_common(SCALAR_DENOMINATOR)?),
     ]);
-    // NONZERO, not `scalar_eq(coefficient, denominator)`.
+    // AT MOST THE DENOMINATOR, per coordinate -- the one property both families
+    // this wire carries actually share.
     //
-    // The equality was here from this file's first commit and forced every
-    // coordinate's weight to `D/D`, which is the trivial representation and
-    // the only one the whole family cannot be. It refused the tree's own
-    // canonical fixture on real ELFs -- `COEFFICIENTS = [2, 3, 5]` against
-    // `DENOMINATOR = 7`, refused at prelude operation 4 with `CheckFailed`,
-    // register 9 (row 0's coefficient, 2) against register 3 (7). And a
-    // release that DID satisfy it could not survive the composition kernel:
-    // every numerator would equal `D`, so `gcd(D, numerators...) == D`, and
-    // `translation.rs:231` refuses anything but 1.
+    // The original `scalar_eq(coefficient[row], denominator)` forced EVERY
+    // coordinate's weight to `D/D`. It refused the campaign's own descriptor
+    // (`COEFFICIENTS = [2, 3, 5]` over `DENOMINATOR = 7`) at prelude operation
+    // 4, register 9 against register 3, on real ELFs -- and it refused a Bearer
+    // descriptor too, because a Bearer vector is `D * e_k` and its other `K-1`
+    // coordinates are ZERO.
     //
-    // `nonzero` is the check this register has in the sibling that executes
-    // (`rational-lifecycle-hot-v3/src/artifacts.rs:368-370`, the same
-    // per-coordinate coefficient), and it keeps a real refusal: a zero
-    // coefficient never reaches projection.
+    // `nonzero` was the first correction and it was half right: it admits the
+    // fractional descriptor, and it refuses the Bearer one for the same reason
+    // the equality did, at the zeros. This crate's own canonical fixture is a
+    // Bearer vector -- `representation_descriptor_v3` writes `10` into
+    // coefficient 0 and leaves coefficients 1 and 2 zero against `D = 10`
+    // (`test_open_fixture_v3.rs:241-246`) -- so a per-row guard that refuses a
+    // zero refuses the family this crate is named after.
+    //
+    // `coefficient <= D` holds for both: `D <= D` and `0 <= D` for a Bearer
+    // vector, `2, 3, 5 <= 7` for a fractional one. And it is not vacuous: a
+    // coordinate whose coefficient exceeds the denominator claims more than a
+    // whole unit of the underlying, which is unbacked issuance.
+    //
+    // The basis-vector property itself is NOT per-row and is not expressible
+    // here: it says exactly one coordinate is `D` and the rest are `0`, which a
+    // per-row instruction cannot see. Its owner is
+    // `BearerDescriptorV2::authenticate`.
     for row in 0..representation_outcome_count {
-        prelude.push(InstructionV3::nonzero(transition_common(row_scalar(
-            row,
-            ITEM_SCALAR_COEFFICIENT,
-        )?)?));
+        prelude.push(InstructionV3::scalar_le(
+            transition_common(row_scalar(row, ITEM_SCALAR_COEFFICIENT)?)?,
+            transition_common(SCALAR_DENOMINATOR)?,
+        ));
     }
     if prelude.len()
         != TRANSITION_BASE_INSTRUCTIONS + representation_outcome_count * TRANSITION_ROW_INSTRUCTIONS
@@ -1724,5 +1735,79 @@ mod tests {
         let mut bytes = vec![0_u8; REQUEST_HEADER_BYTES_V2 + rows.len()];
         request.encode_into(&mut bytes).expect("request bytes");
         bytes
+    }
+
+    /// THE PER-ROW COEFFICIENT GUARD, EXECUTED -- against both families the
+    /// full-width wire carries, and against the shape it must still refuse.
+    ///
+    /// A guard is not checked by reading it. This runs the emitted TransitionVM
+    /// program through the same public `execute_fold_atomic` the runtime uses,
+    /// over three register banks that differ only in the coefficients:
+    ///
+    /// - the Bearer vector `[10, 0, 0]` over `D = 10`, which is this crate's own
+    ///   canonical descriptor and which BOTH earlier spellings of this guard
+    ///   refused -- `scalar_eq` at the `D`s that are zero, `nonzero` at the same
+    ///   zeros;
+    /// - the campaign's fractional `[2, 3, 5]` over `D = 7`, which the original
+    ///   `scalar_eq` refused on real ELFs;
+    /// - an over-claiming `[8, 3, 5]` over `D = 7`, where one coordinate claims
+    ///   more than a whole unit of the underlying. That is unbacked issuance and
+    ///   it is still refused, which is what keeps this a guard rather than a
+    ///   deletion.
+    #[test]
+    fn the_row_coefficient_guard_admits_both_families_and_refuses_over_claiming() {
+        use dclutch_transition_vm::v3::{
+            ProgramV3 as TransitionProgram, RegisterInput, RegisterOutput, execute_fold_atomic,
+        };
+
+        let bytes = encode_transition(3).expect("transition");
+        let program = TransitionProgram::decode(&bytes).expect("transition program");
+        let scalars = structured_common_scalars(3).expect("scalar width");
+        let identities = structured_common_identities(3).expect("identity width");
+
+        let run = |denominator: u64, coefficients: [u64; 3]| {
+            let mut bank = vec![0_u64; scalars];
+            *bank.get_mut(SCALAR_QUANTITY).expect("quantity") = 1;
+            *bank.get_mut(SCALAR_DENOMINATOR).expect("denominator") = denominator;
+            *bank.get_mut(SCALAR_OUTCOME_COUNT).expect("outcome count") = 3;
+            *bank.get_mut(SCALAR_ASSET_COUNT).expect("asset count") = 3;
+            for (row, coefficient) in coefficients.into_iter().enumerate() {
+                let register = row_scalar(row, ITEM_SCALAR_COEFFICIENT).expect("row scalar");
+                *bank.get_mut(register).expect("coefficient") = coefficient;
+            }
+            let ids = vec![[0_u8; 32]; identities];
+            let mut scratch_scalars = bank.clone();
+            let mut scratch_ids = ids.clone();
+            let mut output_scalars = bank.clone();
+            let mut output_ids = ids.clone();
+            execute_fold_atomic(
+                program,
+                0,
+                RegisterInput {
+                    scalars: &bank,
+                    identities: &ids,
+                },
+                RegisterOutput {
+                    scalars: &mut scratch_scalars,
+                    identities: &mut scratch_ids,
+                },
+                RegisterOutput {
+                    scalars: &mut output_scalars,
+                    identities: &mut output_ids,
+                },
+            )
+        };
+
+        assert_eq!(run(10, [10, 0, 0]), Ok(()), "the Bearer basis vector");
+        assert_eq!(
+            run(7, [2, 3, 5]),
+            Ok(()),
+            "the campaign's fractional vector"
+        );
+        assert_eq!(
+            run(7, [8, 3, 5]),
+            Err(dclutch_transition_vm::v3::Error::CheckFailed),
+            "a coordinate may not claim more than one whole unit",
+        );
     }
 }

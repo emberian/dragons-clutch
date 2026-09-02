@@ -28,7 +28,8 @@ use super::{
     OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE, OP_PROJECT_DATA_U8, OP_PROJECT_DATA_U16,
     OP_PROJECT_DATA_U32, OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE,
     OP_PROJECT_DATA_U64_SELECTED, OP_PROJECT_DATA_U64_SELECTED_AFFINE, OP_PROJECT_KEY,
-    OP_PROJECT_LAMPORTS, OP_PROJECT_NONZERO_U64_TAIL_COUNT, OP_PROJECT_NONZERO_U64_TAIL_ROWS,
+    OP_PROJECT_DATA_DIGEST, OP_PROJECT_LAMPORTS, OP_PROJECT_NONZERO_U64_TAIL_COUNT,
+    OP_PROJECT_NONZERO_U64_TAIL_ROWS,
     OP_PROJECT_OWNER, OP_PROJECT_TAIL_COUNT_U32, OP_REQUIRE_KEY, OP_REQUIRE_OWNER,
     OP_SELECT_DATA_WINDOW, OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE,
     TRUSTED_BUILTIN_IDENTITY_OFFSET, TRUSTED_BUILTIN_KIND_OFFSET, TRUSTED_BUILTIN_SYSTEM_PROGRAM,
@@ -451,6 +452,19 @@ pub enum AccountOperationInputV2 {
     },
     /// Project account key.
     ProjectKey {
+        /// Account coordinate.
+        account: AccountCoordinateV2,
+        /// Destination identity coordinate.
+        destination: IdentityCoordinateV2,
+    },
+    /// Project an adapter-established SHA-256 of an account's data.
+    ///
+    /// The interpreter does not hash; see this crate's module doc. The digest
+    /// is a fact the adapter supplies alongside the key, the owner and the
+    /// lamports, and this projects it exactly as [`Self::ProjectKey`] projects
+    /// the key. An observation whose adapter established none refuses
+    /// `DataDigestUnavailable` rather than reading a zero register.
+    ProjectDataDigest {
         /// Account coordinate.
         account: AccountCoordinateV2,
         /// Destination identity coordinate.
@@ -1573,6 +1587,10 @@ impl AccountOperationInputV2 {
                 account,
                 destination,
             } => identity(OP_PROJECT_KEY, account, destination, 0, 0),
+            Self::ProjectDataDigest {
+                account,
+                destination,
+            } => identity(OP_PROJECT_DATA_DIGEST, account, destination, 0, 0),
             Self::ProjectOwner {
                 account,
                 destination,

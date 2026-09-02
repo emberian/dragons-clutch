@@ -934,6 +934,29 @@ mod common_hot_open {
             .unwrap_or_else(|| panic!("no account at {key}"))
     }
 
+    /// Observe one coordinate that is ALLOWED to hold nothing.
+    ///
+    /// A finalized record's staging cursor is absent by definition, and an
+    /// address holding nothing is exactly what the runtime materialises for a
+    /// frame slot: zero lamports, System-owned, empty. Reading it as `vacant`
+    /// is observing the chain rather than restating it -- and it is the reason
+    /// this helper is separate from `account`, which must still refuse for a
+    /// coordinate that is required to exist.
+    async fn vacant_or_account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
+        context
+            .banks_client
+            .get_account(key)
+            .await
+            .expect("account query")
+            .unwrap_or(Account {
+                lamports: 0,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            })
+    }
+
     async fn plan(
         context: &mut ProgramTestContext,
         fixture: &Fixture,
@@ -941,17 +964,17 @@ mod common_hot_open {
     ) -> Result<ConstructedHotOpenStructuredV3, ConstructedHotOpenSelectedV3> {
         let activation = account(context, fixture.activation_cache).await;
         let descriptor_raw = account(context, fixture.descriptor_raw).await;
-        let descriptor_staging = account(context, fixture.descriptor_staging).await;
+        let descriptor_staging = vacant_or_account(context, fixture.descriptor_staging).await;
         let graph_raw = account(context, fixture.graph_raw).await;
-        let graph_staging = account(context, fixture.graph_staging).await;
+        let graph_staging = vacant_or_account(context, fixture.graph_staging).await;
         let linked_raw = account(context, fixture.linked_basis_record).await;
-        let linked_staging = account(context, fixture.linked_basis_staging).await;
+        let linked_staging = vacant_or_account(context, fixture.linked_basis_staging).await;
         let product_raw = account(context, fixture.product_record).await;
-        let product_staging = account(context, fixture.product_staging).await;
+        let product_staging = vacant_or_account(context, fixture.product_staging).await;
         let domain_raw = account(context, fixture.result_domain_record).await;
-        let domain_staging = account(context, fixture.result_domain_staging).await;
+        let domain_staging = vacant_or_account(context, fixture.result_domain_staging).await;
         let portfolio_raw = account(context, fixture.portfolio_record).await;
-        let portfolio_staging = account(context, fixture.portfolio_staging).await;
+        let portfolio_staging = vacant_or_account(context, fixture.portfolio_staging).await;
         let market = account(context, fixture.market).await;
         let aggregate = account(context, fixture.aggregate).await;
         let replay = account(context, fixture.representation_replay).await;
@@ -1192,6 +1215,14 @@ mod common_hot_open {
             0
         };
         let profile = AccountProfileV2::decode(set.account_profile).expect("AccountProfile");
+        let staging_cursors = [
+            fixture.descriptor_staging,
+            fixture.graph_staging,
+            fixture.linked_basis_staging,
+            fixture.product_staging,
+            fixture.result_domain_staging,
+            fixture.portfolio_staging,
+        ];
         let mut bindings = Vec::new();
         for (child_index, meta) in claims_child.instruction.accounts.iter().enumerate() {
             let logical = 5_usize
@@ -1203,7 +1234,17 @@ mod common_hot_open {
             if representative != logical || child_index == 0 {
                 continue;
             }
-            let account = account(context, meta.pubkey).await;
+            // A staging cursor is the one child coordinate allowed to hold
+            // nothing, because a finalized record's cursor is absent by
+            // definition (`add_finalized_record`). Every other coordinate must
+            // exist, and `account` still refuses by name when it does not: the
+            // vacancy is granted to the six addresses that earned it, not to
+            // the loop.
+            let account = if staging_cursors.contains(&meta.pubkey) {
+                vacant_or_account(context, meta.pubkey).await
+            } else {
+                account(context, meta.pubkey).await
+            };
             bindings.push((logical, built(meta.pubkey, account)));
         }
 
@@ -1666,7 +1707,31 @@ fn add_finalized_record(
     let digest = hash(bytes).to_bytes();
     let (raw, staging) = finalized_record_keys(schema, digest);
     add_account(test, raw, REGISTRY_PROGRAM_ID, bytes.to_vec());
-    add_account(test, staging, system_program::ID, Vec::new());
+    // THE STAGING CURSOR IS NOT INSTALLED, because a finalized record does not
+    // have one. This function used to fund it with `Rent::minimum_balance(0)`,
+    // which is the PREFUNDED, NOT-YET-BEGUN state -- the one state a record
+    // called `finalized` cannot be in -- and its own name said so.
+    //
+    // The chain closes the cursor at finalization and says what that means in
+    // three places. `process_finalize` drains it to the refund wallet and then
+    // re-reads it, refusing unless `is_vacant`: System-owned, empty data, and
+    // ZERO LAMPORTS (`registry-sbf/src/record_v1.rs:493-509,986-994`). The
+    // record contract makes absence the DEFINITION rather than a consequence --
+    // `authenticate_finalized_raw_record_v1` is documented as "the adapter must
+    // prove the canonical staging PDA is absent ... thus the raw account's PDA
+    // and apparent payload alone never assert finality" (`lib.rs:1566-1571`).
+    // And Trading says the same from the consumer side: the artifact seal "is
+    // the durable proof that the real staging cursor was vacant when this exact
+    // raw body was admitted" (`hot_v3.rs:3290-3293`).
+    //
+    // Two authors stated this account's contents and only one of them could be
+    // right. The shared bundle builder pairs `finalized_raw(rent, record)` with
+    // `vacant(record.staging)` (`bundle-builder/src/bundle.rs:1057-1059`), which
+    // is not a restatement of a chain computation but the definition of the
+    // pair; `common_hot_open::install` wrote that model into the bank, the
+    // fabricated 890,880 lamports went to zero, and the account was purged
+    // before any transaction ran. Measured on 2026-09-01, both sides of the
+    // step. This is the fixture withdrawing its claim, not the model changing.
     (raw, staging, digest)
 }
 

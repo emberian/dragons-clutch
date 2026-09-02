@@ -681,24 +681,23 @@ fn encode_transition() -> Result<Vec<u8>> {
         InstructionV3::scalar_lt(s(SCALAR_SELECTED_OUTCOME), s(SCALAR_OUTCOME_COUNT)),
         InstructionV3::nonzero(s(SCALAR_QUANTITY)),
         InstructionV3::nonzero(s(SCALAR_DENOMINATOR)),
-        // NONZERO, not `scalar_eq(coefficient, denominator)` -- the identical
-        // correction the full-width sibling took, for the identical defect.
+        // THE BEARER BASIS VECTOR, restated at the one coordinate this request
+        // carries. A Bearer descriptor is `D * e_k`: the selected coordinate's
+        // coefficient IS the denominator and every other coordinate is zero,
+        // which `BearerDescriptorV2::authenticate` requires outright
+        // (`bearer-v2-contract/src/lib.rs:140-151`) and which
+        // `construct_chain_denominate` applies to every selected open action
+        // before it will build one (`lib.rs:167-178`). A selected request whose
+        // coefficient is not `D` therefore names a coordinate its own planner
+        // refuses as `NotBearer`, and this is where the artifact says so.
         //
-        // The equality forces the selected coordinate's weight to D/D, so it
-        // refuses every coefficient the tree's own fixture carries
-        // (`COEFFICIENTS = [2, 3, 5]` over `DENOMINATOR = 7`), and a release
-        // that satisfied it could not survive the composition kernel anyway:
-        // `translation.rs:231` requires `gcd(D, numerators...) == 1`, and the
-        // coefficients ARE the numerators.
-        //
-        // Landed even though nothing has yet run into it -- the selected
-        // actions sit behind the full-width issue in every fixture that drives
-        // them -- because a guard that refuses the tree's own fixture is wrong
-        // whether or not anything reaches it. `nonzero` is the check the
-        // executing sibling applies to the same register
-        // (`rational-lifecycle-hot-v3/src/artifacts.rs:368-370`), and a zero
-        // coefficient is still refused before projection.
-        InstructionV3::nonzero(s(SCALAR_COEFFICIENT)),
+        // It was briefly changed to `nonzero` on 2026-09-01 as the "same
+        // correction" the full-width sibling took, and that was wrong: the
+        // sibling's guard demanded `D` of EVERY coordinate, which no descriptor
+        // in either family can satisfy, while this one demands it of the ONE
+        // coordinate that is defined to have it. Restored the same day, before
+        // anything ran on it.
+        InstructionV3::scalar_eq(s(SCALAR_COEFFICIENT), s(SCALAR_DENOMINATOR)),
     ];
     let width = TRANSITION_HEADER_BYTES + TRANSITION_INSTRUCTIONS * TRANSITION_INSTRUCTION_BYTES;
     let mut scratch = vec![0_u8; width];
