@@ -5,6 +5,14 @@
 #   tools/genref/generate.sh            regenerate docs/reference/
 #   tools/genref/generate.sh --check    verify byte-identity, write nothing
 #
+# `--allow-dirty` and `GENREF_ALLOW_DIRTY=1` are the same escape spelled two
+# ways, and this script is its ONE author: the dirty-tree gate is a fact about
+# the working tree, which `generate.mjs` knows nothing about and must not be
+# handed. Until 2026-09-02 the flag was recognised here and then FORWARDED, so
+# `--allow-dirty` died in the generator as an unknown argument while the
+# environment variable worked -- an escape its own header documented and that
+# nobody could take. Every other argument still passes through untouched.
+#
 # The census inventory is produced fresh from the tree on every run (it is
 # the enumeration authority and is never checked in); everything else the
 # generator reads is already in-tree. `--check-unique` rides along, so a
@@ -18,7 +26,18 @@ set -euo pipefail
 # lane's landed refusal rows. Regenerate from a detached worktree at HEAD
 # (`git worktree add --detach <dir> HEAD`), or pass --allow-dirty when you have
 # read the diff and mean it.
-if [ "${GENREF_ALLOW_DIRTY:-0}" != "1" ] && ! printf '%s\n' "$@" | grep -qx -- '--allow-dirty'; then
+allow_dirty=0
+[ "${GENREF_ALLOW_DIRTY:-0}" = "1" ] && allow_dirty=1
+forward=()
+for argument in "$@"; do
+  if [ "$argument" = "--allow-dirty" ]; then
+    allow_dirty=1
+  else
+    forward+=("$argument")
+  fi
+done
+
+if [ "$allow_dirty" != "1" ]; then
   if [ -n "$(git -C "$(dirname "$0")/../.." status --porcelain 2>/dev/null)" ]; then
     echo "genref: refusing to regenerate from a dirty tree; use a detached worktree at HEAD, or --allow-dirty" >&2
     exit 3
@@ -46,4 +65,4 @@ trap 'rm -f "$INVENTORY"' EXIT
     --check-unique
 )
 
-exec node "$HERE/generate.mjs" --inventory "$INVENTORY" "$@"
+exec node "$HERE/generate.mjs" --inventory "$INVENTORY" ${forward+"${forward[@]}"}

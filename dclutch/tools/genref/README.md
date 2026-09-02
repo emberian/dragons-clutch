@@ -8,7 +8,12 @@ templates.
 ```sh
 tools/genref/generate.sh            # regenerate docs/reference/
 tools/genref/generate.sh --check    # byte-compare, write nothing, exit 1 on drift
+tools/genref/test.sh                # self-test the dirty-tree gate, seconds, no build
 ```
+
+It refuses a dirty tree. `--allow-dirty` and `GENREF_ALLOW_DIRTY=1` are the same
+escape spelled two ways, `generate.sh` is its only author, and neither spelling
+reaches `generate.mjs` -- which is what `test.sh` pins.
 
 ## Sources
 
