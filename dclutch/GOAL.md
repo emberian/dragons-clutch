@@ -2723,3 +2723,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   read before landing). Successor's order: **the fee-bearing fill's 115,003 CU overage of the 1.4M ceiling** (the only
   reason cohort-11's trade had to be gross ≤199), the parked patch, then resolution / redemption / every close / portable-ticket.
 - GENERAL successor owns the transport binding AND the 64 frame bytes it needs, as one unit.
+
+### Lane map delta — 2026-09-02 03:50
+- EMISSION `ab353370915da897e` stopped at its budget line → **`addb8204ef3d72bb0`** (GeneralV5Assurance corpus; then guard
+  the 15 unguarded emissions to 0). Landed since 02:45: `a00fc7c9` (infrastructure PDA domain Lean-owned), `ac9864c5` (Dealer
+  scenario solvency corpus — `maximumMerge` had no Lean name; a split one atom looser than least now reds). Trap recorded in
+  memory: positional `#[cfg(test)]` re-binds on `mod` insertion.
+- WITNESS `6a139c63`: ARuPAuyJ… (gen 1, Founding, aggregate vacant) and 3rBfDBpa… (gen 2, **Open**, aggregate exists) are both
+  Core Markets; the admissions landed on the right one; both dated records corrected by addendum. `41005b27`: **67 of 305**
+  refusal codes observed firing, derived from 21 campaigns' bindings (was hand-carried as 8 of 314). docs/reference green.
+- Cuts: `100dfaf49`, `6eec81e5d`, `8fd18304b`, `2f32a838b`.

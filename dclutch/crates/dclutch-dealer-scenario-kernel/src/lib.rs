@@ -485,5 +485,15 @@ const fn require_width(expected: usize, observed: usize) -> Result<()> {
     Ok(())
 }
 
+/// Lean-decided netting decision cases for `plan_scenario_netting`.
+///
+/// `DClutchSemantics.DealerScenarioSolvency` owns `minimumSplit` and the merge
+/// bound; the Rust stays a hand-written mirror and this corpus is what makes
+/// the two answerable. It is the math the Dealer accelerator's evaluate and
+/// settle routes execute on chain.
+#[cfg(test)]
+#[allow(dead_code, missing_docs)]
+mod generated_netting_corpus;
+
 #[cfg(test)]
 mod tests;

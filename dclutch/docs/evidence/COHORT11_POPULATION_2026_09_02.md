@@ -556,13 +556,19 @@ overwrite is undefined behaviour at execution, not a warning, so the candidate
 is right to withhold the artifact — and this is the hottest route the protocol
 has.
 
-**Still 3 at `5de38ef2`, and still 3 at `be67416e`**, each re-measured with a
+It was still 3 at `5de38ef2` and still 3 at `be67416e`, each re-measured with a
 targeted `dclutch-trading-sbf` build rather than a whole candidate run — the
-narrowest thing that could refute "still regressed". The only `hot_v3.rs` commit
-since `bfc8383f` is a profiling checkpoint, not the repair, so the release
-remains ungated on this and the trade command below remains blocked at step 2.
-Measured rather than inferred from the commit log, twice, because a dependency
-change can move a stack frame without touching the file.
+narrowest thing that could refute "still regressed", and measured rather than
+inferred from the commit log, because a dependency change can move a stack frame
+without touching the file.
+
+**`58b077f8` fixes it, and the count is zero.** Direct's repair — "restore
+`execute_authenticated_hot_v3`'s frame, and name what it cost" — was measured
+here the same way, at `83a8d0c7` (which contains it, with no later `hot_v3.rs`
+change): **0 frame-overwrite reports**. Independently confirmed by a full
+candidate run at that commit, whose `build-diagnostics.txt` reads zero for all
+twelve links, `trading=0` among them. The bisect table above is closed:
+`bfc8383f` broke it, `58b077f8` restored it.
 
 **The control is closed as a refusal, not as a pass.** That is worth more than
 another queueing: for two days it could not say anything, and now it names two

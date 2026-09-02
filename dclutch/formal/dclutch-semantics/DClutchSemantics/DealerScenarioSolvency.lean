@@ -146,4 +146,98 @@ theorem present_zero_capital_remains_below_zero_floor_with_one_obligation :
     ¬ floorAdmissible 0 0 0 1 := by
   simp [floorAdmissible, terminalEquity]
 
+/-! ## Netting decision corpus
+
+`plan_scenario_netting` in `dclutch-dealer-scenario-kernel` mirrors
+`minimumSplit` and the merge bound by hand, and it is the math the Dealer
+accelerator's evaluate and settle routes execute on chain. These vectors are
+the bridge: the least split and the largest admissible merge that this module
+decides, replayed byte-exact through the kernel.
+
+Outside the corpus, and named so a reader does not assume agreement: the
+kernel additionally refuses on present capital, on the locked-capital floor,
+and on bank-width disagreement. Those read a `CapitalObservation` and a basis
+scale that a `Scenario` does not carry, so they are the kernel's own conjuncts
+rather than this module's. -/
+
+/-- Largest equal complete-set merge no coordinate can over-deliver.
+
+The kernel takes the minimum of `fundedInventory` across the book; merging
+more than the tightest coordinate holds would drive that coordinate negative,
+which is the whole reason the bound is a minimum rather than a sum. -/
+def maximumMerge : List Scenario -> Nat -> Nat
+  | [], _ => 0
+  | [scenario], split => fundedInventory scenario split
+  | scenario :: tail, split => min (fundedInventory scenario split) (maximumMerge tail split)
+
+structure NettingVector where
+  name : String
+  book : List Scenario
+
+/-- Every netting decision the theorems above name. -/
+def nettingVectors : List NettingVector := [
+  { name := "netted_book_derives_least_five_atom_split", book := nettedBook },
+  { name := "inventory_covers_every_delivery_needs_no_split",
+    book := [{ inventory := 10, acquired := 0, delivered := 4,
+               obligationsBefore := 0, obligationsAfter := 0 },
+             { inventory := 7, acquired := 1, delivered := 4,
+               obligationsBefore := 0, obligationsAfter := 0 }] },
+  { name := "one_short_coordinate_sets_the_split",
+    book := [{ inventory := 1, acquired := 0, delivered := 9,
+               obligationsBefore := 0, obligationsAfter := 0 },
+             { inventory := 20, acquired := 0, delivered := 1,
+               obligationsBefore := 0, obligationsAfter := 0 }] },
+  { name := "the_deepest_shortfall_wins_not_their_sum",
+    book := [{ inventory := 0, acquired := 0, delivered := 3,
+               obligationsBefore := 0, obligationsAfter := 0 },
+             { inventory := 0, acquired := 0, delivered := 11,
+               obligationsBefore := 0, obligationsAfter := 0 },
+             { inventory := 0, acquired := 0, delivered := 6,
+               obligationsBefore := 0, obligationsAfter := 0 }] },
+  { name := "acquisition_retires_the_split_entirely",
+    book := [{ inventory := 0, acquired := 9, delivered := 9,
+               obligationsBefore := 0, obligationsAfter := 0 }] },
+  { name := "the_tightest_coordinate_bounds_the_merge",
+    book := [{ inventory := 50, acquired := 0, delivered := 0,
+               obligationsBefore := 0, obligationsAfter := 0 },
+             { inventory := 3, acquired := 0, delivered := 1,
+               obligationsBefore := 0, obligationsAfter := 0 }] }
+]
+
+def NettingVector.split (vector : NettingVector) : Nat := minimumSplit vector.book
+def NettingVector.merge (vector : NettingVector) : Nat :=
+  maximumMerge vector.book (minimumSplit vector.book)
+
+/-- The exact split and merge of every vector, pinned in order. -/
+theorem netting_vector_decisions_are_exact :
+    nettingVectors.map (fun vector => (vector.split, vector.merge)) =
+      [(5, 0), (0, 4), (8, 0), (11, 0), (0, 0), (0, 2)] := by
+  native_decide
+
+/-- The corpus is not one answer repeated: a split that is zero and one that is
+not, and a merge that is zero and one that is not, all occur. -/
+theorem netting_vectors_cover_both_decisions :
+    nettingVectors.any (fun vector => vector.split == 0) &&
+      nettingVectors.any (fun vector => vector.split != 0) &&
+      nettingVectors.any (fun vector => vector.merge == 0) &&
+      nettingVectors.any (fun vector => vector.merge != 0) := by
+  native_decide
+
+/-- On every vector the emitted merge is at most each coordinate's funded
+inventory: merging more than the tightest coordinate holds would drive that
+coordinate negative, which is why the bound is a minimum and not a sum. -/
+theorem netting_vector_merges_are_admissible :
+    nettingVectors.all (fun vector =>
+      vector.book.all (fun scenario =>
+        decide (vector.merge <= fundedInventory scenario vector.split))) := by
+  native_decide
+
+/-- Every emitted split is the LEAST one covering its book, which is
+`minimumSplit_is_least` arriving at the corpus. -/
+theorem netting_vector_splits_are_least :
+    nettingVectors.all (fun vector =>
+      vector.book.all (fun scenario =>
+        decide (scenario.delivered <= scenario.inventory + scenario.acquired + vector.split))) := by
+  native_decide
+
 end DClutch.DealerScenarioSolvency

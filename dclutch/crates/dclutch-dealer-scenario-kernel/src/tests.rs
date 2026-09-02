@@ -1,3 +1,5 @@
+extern crate std;
+
 use super::*;
 
 const MARKET: [u8; 32] = [1; 32];
@@ -308,4 +310,49 @@ fn empty_scenarios_and_revision_overflow_refuse_without_mutation() {
     );
     assert_eq!(post_inventory, [9]);
     assert_eq!(post_equity, [9]);
+}
+
+/// Replay every Lean-decided netting case through the kernel.
+///
+/// `DealerScenarioSolvency.lean` proves `minimumSplit` least and bounds the
+/// merge by the tightest coordinate; `plan_scenario_netting` mirrors both by
+/// hand and nothing checked one against the other. Capital, floor and basis
+/// scale are held at values that cannot refuse, so the only thing under test
+/// is the split-and-merge arithmetic the corpus decides.
+#[test]
+fn lean_netting_corpus_replays_through_the_kernel() {
+    use crate::generated_netting_corpus::DEALER_NETTING_VECTORS_V1;
+
+    for vector in DEALER_NETTING_VECTORS_V1 {
+        let width = vector.inventory.len();
+        let zeros = std::vec![0_u64; width];
+        let mut post_inventory = std::vec![0_u64; width];
+        let mut post_equity = std::vec![0_i128; width];
+        let plan = plan_scenario_netting(
+            ScenarioTransition {
+                position: observation(vector.inventory),
+                expected: expectation(),
+                present_capital: 1_000_000,
+                locked_capital_floor: 0,
+                obligations_before: &zeros,
+                acquired: vector.acquired,
+                delivered: vector.delivered,
+                obligations_after: &zeros,
+                basis_scale: 1,
+            },
+            &mut post_inventory,
+            &mut post_equity,
+        )
+        .expect(vector.name);
+        assert_eq!(
+            plan.minimum_complete_sets_to_split, vector.minimum_split,
+            "{} split",
+            vector.name
+        );
+        assert_eq!(
+            plan.maximum_complete_sets_to_merge, vector.maximum_merge,
+            "{} merge",
+            vector.name
+        );
+    }
 }
