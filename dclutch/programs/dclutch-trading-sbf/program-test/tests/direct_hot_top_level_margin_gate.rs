@@ -518,6 +518,68 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// executes at `5b6a5849` with 8,492 CU to spare -- 1,391,358 of 1,399,850 --
 /// and exhausts the meter at `371409f4`. That red is DOWNSTREAM of this one and
 /// is not a second defect: +26,466 is three times the headroom it had.
+/// # 2026-09-02: a further +6,233, bisected to a commit that changed no executed code
+///
+/// The entry above closes at `371409f4`. This statistic moved again after it --
+/// 1,292,895 -> 1,299,128 on the fee-bearing arm, +6,233 -- and the bisect of
+/// that increment is the reason this section is longer than the number
+/// deserves.
+///
+/// Method identical to the entry above and to this file's own assertion: five
+/// role ELFs built from the revision under test in a private worktree, 32 seeds
+/// per arm, `min over seeds of (CU - 1500 * modelled attempts)`. The window is
+/// the 54 commits in `371409f4..HEAD` that can change the Trading link, and the
+/// far end reproduces: `5b6a5849` reads its own 1,266,429 TO THE UNIT.
+///
+/// ```text
+///   371409f4  1,292,895   5ec149fa  1,293,701   9bdd1885  1,294,278
+///   397ef013  1,294,370   0ba29756  1,294,312   cbdecdb3  1,294,312  green
+///   5de38ef2  1,299,148  RED  <- +4,836 of the +6,233 in ONE commit
+/// ```
+///
+/// ## The commit changed nine lines, and eight of them are comments
+///
+/// `5de38ef2` *"hot: one checkpoint splits the candidate phase"* adds nine lines
+/// to `hot_v3.rs` and nothing else anywhere in the Trading link closure. Eight
+/// are a comment. The ninth is `hot_cu_checkpoint!("candidate-transcript")`,
+/// whose non-feature arm is `($phase:literal) => {};` -- it expands to nothing
+/// -- and it sits inside `execute_admitted_candidate_v3`, which the public
+/// Direct top-level fill does not call. Its message says "the macro is empty in
+/// every shipped build". That is true of the MACRO and false of the LINK.
+///
+/// The Trading ELF is 104 bytes larger and `.text`, `.rodata`, `.rel.dyn`,
+/// `.data.rel.ro` and `.dynamic` all differ; only `.dynstr`, `.dynsym` and
+/// `.shstrtab` are identical. The other four role ELFs are byte-identical
+/// across the pair, so the whole difference is Trading's.
+///
+/// **Positive control, because "the compiler is nondeterministic" is the
+/// obvious escape and it is wrong here.** `cbdecdb3`'s Trading ELF was rebuilt
+/// from a forced recompile in the same worktree and reproduced
+/// `bfd447d509756b1d...` byte for byte. The build is deterministic; the
+/// difference between the two revisions is real.
+///
+/// ## What that falsifies, which is worth more than the 4,836
+///
+/// The assertion below says this number "does not move when the keys or the
+/// bump depths move, so this red is a CODE change and nothing else". Across
+/// this pair it moved 4,836 CU with **both arms moving identically**, the
+/// fee-bearing arm's 131 CU gap intact to the unit, and the modelled search
+/// structure IDENTICAL on both sides -- seven distinct searched addresses over
+/// seven search instances, `all-first-try` moving by exactly the same 4,836.
+/// So the statistic carries a residual key-dependence its model does not
+/// capture: something whose cost follows the ELF DIGEST -- `release_set_id`
+/// hashes the five role ELFs and seeds every capability address under them --
+/// and that is not one of the seven searches the model counts.
+///
+/// **A red here is a code change OR a relink, and telling them apart costs one
+/// build.** Compare the five ELF digests across the pair first; if only the
+/// section layout moved, the number moved without anything being spent.
+///
+/// NOT PINNED, for that reason and the one the entry above gives. `5de38ef2` is
+/// convicted of MOVING this number and expressly not convicted of SPENDING it,
+/// and a constant raised over a movement whose mechanism is unnamed files an
+/// artifact as a settled cost. The remaining ~1,400 of the +6,233 is spread
+/// across the rest of the window and is not convicted to anything.
 const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_268_059;
 
 /// The protocol maximum a transaction may consume.
