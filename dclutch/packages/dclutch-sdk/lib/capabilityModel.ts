@@ -50,6 +50,7 @@ import {
   type MarketPhaseV1,
   type MarketReadinessV1,
   type RoutePhaseGateV1,
+  routeHasNoStateMachineV1,
   routeOtherMachineGateV1,
   routePhaseGateV1,
 } from './generated/marketPhaseAdmissionV1';
@@ -697,10 +698,17 @@ export function capabilityPhaseGateTextV1(gate: CapabilityPhaseGateV1): string {
       return 'the Market did not decode at this observation';
     case 'other-machine':
       return `gated on the ${gate.unobservableMachines.join(' and ')} state machine, which this observation does not read`;
-    case 'no-phase-gate':
-      return gate.routes.length === 0
-        ? 'no published gate; no census route is established for this act'
+    case 'no-phase-gate': {
+      if (gate.routes.length === 0) return 'no published gate; no census route is established for this act';
+      // "No gate was read" and "there is no state to read" are different
+      // answers, and only the second is final. A route in a program that
+      // persists no lifecycle discriminant will never acquire a gate, so a
+      // card that keeps saying "declares none" invites a reader to wait for
+      // one.
+      return gate.routes.every(routeHasNoStateMachineV1)
+        ? `no published gate; ${gate.routes.join(', ')} runs in a program that persists no lifecycle state to gate on`
         : `no published gate; ${gate.routes.join(', ')} declares none`;
+    }
   }
 }
 

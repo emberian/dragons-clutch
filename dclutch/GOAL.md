@@ -3520,3 +3520,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   links (phase-census's scenario admission machine, told). Three attribution errors in one afternoon, all "a true statement
   about one thing generalised to a pair" — the ratchet answers per commit. A `Lane:` trailer on lane.sh commits → CI-TARGETS.
 - Cuts: `d986da6b2`, `ba93e26e1`.
+- CI-TARGETS closed (`47c0ed143` the `root-targets` tier: **80 never-executed targets measured at 69.5 s warm** — the "ten
+  minutes" was a cold target dir; budget 8.00 s enforced on the committed tsv, not a stopwatch; a quarantined target going
+  green fails the tier by name; `never-run-tests.py --check` red-proven five ways; the wire-vector escape hatch closed on both
+  halves — a write branch refuses after it writes, and five reviewed digests are pinned in `wire-vector-pins.tsv` (five, not
+  three: the SDK copy of the bump hints was generated and never checked); `f0a69b2a4` the `Lane:` trailer from $DCLUTCH_LANE,
+  printed by `owed`). **Seven red: six are ONE live defect** — since 73ffb0108 (09-01) the Fractional V1 producer's grants
+  never met the Close arm's DEBIT|WRITE, so `build_fractional_finalized_artifact_bundle_v1` errs for every input, and it has
+  zero production callers; one stale test (`root_lifecycle_projection_v3`, General's frame after a517d27c).
+  → QUARANTINE **`(spawned)`**.
+- Cuts: `a9fb87828`.

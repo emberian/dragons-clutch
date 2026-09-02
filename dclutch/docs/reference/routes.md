@@ -31,8 +31,10 @@ Currently **16** of **169**
 routes are in that last group.
 
 The **phase** column is the route's own guard, not a summary of one. It is
-the named admission constant the guard checks against -- a
-`MarketAdmissionV1` or a `SourceAdmissionV1` -- read out of the Rust that
+the named admission constant the guard checks against -- one admission type
+per persisted state machine, `MarketAdmissionV1`,
+`SourceAdmissionV1`, `DealerScenarioCheckpointAdmissionV1` and
+`DealerScenarioReservationAdmissionV1` today -- read out of the Rust that
 enforces it, so a reader is reading the conjunct the program executes.
 `market: Founding+Ready` is an exact prestate; a bare `market: Retiring` is a
 guard that names no readiness and so admits every one. It is a NECESSARY
@@ -54,12 +56,24 @@ execution, so the route admits their INTERSECTION. A reader that treats the
 first as the second reports that a route admitting three phases admits none.
 
 **no phase gate** means no constant was read for that route -- an authoring
-route with no Market phase to consult, a guard still written inline, a guard
-reached only under a boolean branch, or a route the enumerator could not
-follow into. It does not mean the route admits every phase, and a consumer
-that treats the two alike is repeating the defect this column was added to
-close. **49** of **169** routes carry one
-today.
+route with no state to consult, a guard still written inline, a guard reached
+only under a boolean branch or inside a loop that may not be entered, a guard
+in a crate this program's dispatch does not reach, or a route the enumerator
+could not follow into. It does not mean the route admits every phase, and a
+consumer that treats the two alike is repeating the defect this column was
+added to close. **65** of **169** routes
+carry a gate today.
+
+**no state machine** is a DIFFERENT fact, and it is the program's own
+declaration rather than an absence: this program persists no lifecycle
+discriminant for any route to consult, so no amount of further naming will
+ever put a set in these cells. It is carried in the census with two checks --
+such a program must declare no admissible-state set, and its sources must name
+no known machine's discriminant -- so a state model that grows one makes the
+declaration unclassified in the same run. What those programs authenticate
+instead:
+
+- `registry`'s 11 routes: ownership, PDA derivation, account vacancy and digest identity; the Registry persists no lifecycle discriminant for a route to consult.
 
 ## claims
 
@@ -119,11 +133,11 @@ today.
 | `core/infrastructure::process_initialize` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:430` |
 | `core/infrastructure_v2::process_initialize_v2` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1`; magic `DCLTIIN2` | no phase gate | blocked by rule `core/infrastructure_v2::process_initialize_v2`: The V1 -> V2 infrastructure succession ceremony. | `programs/dclutch-core-sbf/src/lib.rs:426` |
 | `core/open_market::process#OpenMarket` | entry | variant `Action::OpenMarket`; length `open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1` | `market: Founding+Ready` | blocked by rule `core/open_market::process#OpenMarket`: The standalone `Action::OpenMarket` route. | `programs/dclutch-core-sbf/src/lib.rs:595` |
-| `core/process_found#FoundAndPermit` | action | variant `GenericFoundingStageV1::FoundAndPermit` | no phase gate | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:400` |
+| `core/process_found#FoundAndPermit` | action | variant `GenericFoundingStageV1::FoundAndPermit` | `projected-custody: HoardLocked` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:401` |
 | `core/process_instruction` | entry | -- | no phase gate | executed (claims-rational-representation-v2-programtest); executed (journey); executed (resolution-core-v3-programtest); executed (tier1); refused (journey); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:1` |
 | `core/process_instruction#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | no phase gate | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:671` |
 | `core/process_instruction#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1`; magic `DCLTCRQ1` | no phase gate | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:637` |
-| `core/process_open#Open` | action | variant `GenericFoundingStageV1::Open` | `market: Founding+Prepaid` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:407` |
+| `core/process_open#Open` | action | variant `GenericFoundingStageV1::Open` | `market: Founding+Prepaid` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:408` |
 | `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | action | tag `` | no phase gate | blocked by rule `core/resolution::authenticate_recovery_policy#(recovery_id,policy)`: STRUCTURALLY UNDRIVABLE, and the emptiness is convicted rather than asserted. | `programs/dclutch-core-sbf/src/resolution.rs:803` |
 | `core/resolution::process#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | `market: Open+Consumed, Terminal+Consumed` | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/resolution.rs:228` |
 | `core/resolution::process#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | no phase gate | blocked by rule `core/resolution::process#CloseFund`: NOT a dead arm any more, and no longer a coverage gap of the kind this file usually records. | `programs/dclutch-core-sbf/src/resolution.rs:221` |
@@ -134,7 +148,7 @@ today.
 | `core/retire_v1::process_checkpoint_prepare#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:644` |
 | `core/retire_v1::process_checkpoint_suffix` | entry | length `AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:399` |
 | `core/retirement_replay_handoff_v1::process` | entry | length `dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1`; magic `DCLCRH01` | `market: Retiring` | executed (retirement-replay-handoff-programtest); refused (retirement-replay-handoff-programtest) | `programs/dclutch-core-sbf/src/lib.rs:410` |
-| `core/series_consume::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLPCL01` | no phase gate | executed (tier4-series-occurrence-programtest); refused (tier4-series-occurrence-programtest) | `programs/dclutch-core-sbf/src/lib.rs:540` |
+| `core/series_consume::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLPCL01` | `projected-custody: HoardLocked` | executed (tier4-series-occurrence-programtest); refused (tier4-series-occurrence-programtest) | `programs/dclutch-core-sbf/src/lib.rs:540` |
 | `core/series_open::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLFDC05` | `market: Founding+Prepaid` | blocked by rule `core/series_open::process`: Series Core route; needs the Series family tier and a Claims FoundingV5 receipt. | `programs/dclutch-core-sbf/src/lib.rs:516` |
 | `core/series_permit_expiry::process` | entry | length `SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1`; magic `DCLTSFX1` | no phase gate | blocked by rule `core/series_permit_expiry::process`: Series permit expiry; needs an open Series Market. | `programs/dclutch-core-sbf/src/lib.rs:471` |
 | `core/series_permit_expiry_precommit_v1::process` | entry | length `SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1`; magic `DCLSUPE1` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:451` |
@@ -143,8 +157,8 @@ today.
 
 | route | kind | selector | phase | status | provenance |
 | --- | --- | --- | --- | --- | --- |
-| `custody/abort_open_and_close#AbortOpenAndClose` | action | variant `ProjectedCustodyOperationV1::AbortOpenAndClose` | no phase gate | blocked by rule `custody/abort_open_and_close#AbortOpenAndClose`: Projected-Custody abort path; reachable only after a projected compartment exists. | `programs/dclutch-custody-sbf/src/projected.rs:162` |
-| `custody/abort_source_and_close#AbortSourceAndClose` | action | variant `ProjectedCustodyOperationV1::AbortSourceAndClose` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:171` |
+| `custody/abort_open_and_close#AbortOpenAndClose` | action | variant `ProjectedCustodyOperationV1::AbortOpenAndClose` | `projected-custody: HoardOpen` | blocked by rule `custody/abort_open_and_close#AbortOpenAndClose`: Projected-Custody abort path; reachable only after a projected compartment exists. | `programs/dclutch-custody-sbf/src/projected.rs:162` |
+| `custody/abort_source_and_close#AbortSourceAndClose` | action | variant `ProjectedCustodyOperationV1::AbortSourceAndClose` | `projected-custody: SourceFunded` | executed (tier1); refused (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:171` |
 | `custody/close_replay#CloseReplay` | entry | variant `OperationV1::CloseReplay` | no phase gate | executed (custody-family-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:321` |
 | `custody/close_vault#CloseVault` | entry | variant `OperationV1::CloseVault` | no phase gate | executed (custody-family-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:319` |
 | `custody/dealer_reservation_v1::process` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:256` |
@@ -152,18 +166,18 @@ today.
 | `custody/execute_transfer#Transfer` | entry | variant `OperationV1::Transfer` | no phase gate | executed (custody-family-programtest); refused (custody-family-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:316` |
 | `custody/initialize#Initialize` | action | variant `ProjectedCustodyOperationV1::Initialize` | no phase gate | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:147` |
 | `custody/initialize_replay#InitializeReplay` | entry | variant `OperationV1::InitializeReplay` | no phase gate | executed (custody-family-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:312` |
-| `custody/lock_hoard#LockHoard` | action | variant `ProjectedCustodyOperationV1::LockHoard` | no phase gate | blocked by rule `custody/lock_hoard#LockHoard`: Projected-Custody `LockHoard`, the Series-shaped Lock that admits a `HoardOpen` prestate holding nothing. | `programs/dclutch-custody-sbf/src/projected.rs:153` |
-| `custody/lock_hoard_and_close_source#LockHoardAndCloseSource` | action | variant `ProjectedCustodyOperationV1::LockHoardAndCloseSource` | no phase gate | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:165` |
-| `custody/open_hoard#OpenHoard` | action | variant `ProjectedCustodyOperationV1::OpenHoard` | no phase gate | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:150` |
-| `custody/open_source_compartment#OpenSourceCompartment` | action | variant `ProjectedCustodyOperationV1::OpenSourceCompartment` | no phase gate | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:168` |
+| `custody/lock_hoard#LockHoard` | action | variant `ProjectedCustodyOperationV1::LockHoard` | `projected-custody: HoardOpen` | blocked by rule `custody/lock_hoard#LockHoard`: Projected-Custody `LockHoard`, the Series-shaped Lock that admits a `HoardOpen` prestate holding nothing. | `programs/dclutch-custody-sbf/src/projected.rs:153` |
+| `custody/lock_hoard_and_close_source#LockHoardAndCloseSource` | action | variant `ProjectedCustodyOperationV1::LockHoardAndCloseSource` | `projected-custody: HoardOpen, SourceFunded` | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:165` |
+| `custody/open_hoard#OpenHoard` | action | variant `ProjectedCustodyOperationV1::OpenHoard` | `projected-custody: Initialized` | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:150` |
+| `custody/open_source_compartment#OpenSourceCompartment` | action | variant `ProjectedCustodyOperationV1::OpenSourceCompartment` | `projected-custody: HoardOpen` | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:168` |
 | `custody/open_vault#OpenVault` | entry | variant `OperationV1::OpenVault` | no phase gate | executed (custody-family-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:314` |
 | `custody/process_instruction` | entry | -- | no phase gate | executed (custody-family-programtest); executed (tier1); refused (custody-family-programtest); refused (tier1) | `programs/dclutch-custody-sbf/src/lib.rs:1` |
 | `custody/projected::process` | entry | length `PROJECTED_CUSTODY_REQUEST_BYTES_V1`; magic `DCLPCQ01` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-custody-sbf/src/lib.rs:287` |
-| `custody/realize_and_close#RealizeAndClose` | action | variant `ProjectedCustodyOperationV1::RealizeAndClose` | no phase gate | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:159` |
-| `custody/refund_and_close#RefundAndClose` | action | variant `ProjectedCustodyOperationV1::RefundAndClose` | no phase gate | blocked by rule `custody/refund_and_close#RefundAndClose`: Projected-Custody refund path; reachable only after a projected compartment exists. | `programs/dclutch-custody-sbf/src/projected.rs:156` |
-| `custody/reserve#Reserve` | action | variant `DealerScenarioReservationActionV1::Reserve` | no phase gate | executed (dealer-checkpoint-programtest) | `programs/dclutch-custody-sbf/src/dealer_reservation_v1.rs:173` |
+| `custody/realize_and_close#RealizeAndClose` | action | variant `ProjectedCustodyOperationV1::RealizeAndClose` | `projected-custody: HoardLocked` | executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:159` |
+| `custody/refund_and_close#RefundAndClose` | action | variant `ProjectedCustodyOperationV1::RefundAndClose` | `projected-custody: HoardLocked` | blocked by rule `custody/refund_and_close#RefundAndClose`: Projected-Custody refund path; reachable only after a projected compartment exists. | `programs/dclutch-custody-sbf/src/projected.rs:156` |
+| `custody/reserve#Reserve` | action | variant `DealerScenarioReservationActionV1::Reserve` | `dealer-checkpoint: Evaluated` | executed (dealer-checkpoint-programtest) | `programs/dclutch-custody-sbf/src/dealer_reservation_v1.rs:179` |
 | `custody/retirement_replay_handoff_v1::process` | entry | length `dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1`; magic `DCLCRH01` | `market: Retiring` | executed (retirement-replay-handoff-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:268` |
-| `custody/rollback#Rollback` | action | variant `DealerScenarioReservationActionV1::Rollback` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-custody-sbf/src/dealer_reservation_v1.rs:176` |
+| `custody/rollback#Rollback` | action | variant `DealerScenarioReservationActionV1::Rollback` | `dealer-checkpoint: Reserved, RollingBack`; `dealer-reservation: Active` | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-custody-sbf/src/dealer_reservation_v1.rs:182` |
 
 ## dealer-accelerator
 
@@ -195,17 +209,17 @@ today.
 
 | route | kind | selector | phase | status | provenance |
 | --- | --- | --- | --- | --- | --- |
-| `registry/continuation_v1::process` | entry | magic `DCLRGCI1` | no phase gate | blocked by rule `registry/continuation_v1::process`: DCLRGCI1, the Registry continuation route. | `programs/dclutch-registry-sbf/src/lib.rs:388` |
-| `registry/hot_continuation_v2::process` | entry | magic `DCLTHOT3` | no phase gate | blocked by rule `registry/hot_continuation_v2::process`: No gauntlet campaign drives this route yet. | `programs/dclutch-registry-sbf/src/lib.rs:370` |
-| `registry/lineage_v1::process` | entry | magic `DCLRLND1` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/lib.rs:393` |
-| `registry/process_abort#4` | action | tag `` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/record_v1.rs:76` |
-| `registry/process_activate_role#ActivateRole` | entry | variant `RegistryInstructionV1::ActivateRole` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:397` |
-| `registry/process_append#2` | action | tag `` | no phase gate | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:70` |
-| `registry/process_begin#5` | action | tag `` | no phase gate | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:67` |
-| `registry/process_finalize#3` | action | tag `` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:73` |
-| `registry/process_instruction` | entry | -- | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
-| `registry/process_reauthenticate#Reauthenticate` | entry | variant `RegistryInstructionV1::Reauthenticate` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:400` |
-| `registry/record_v1::dispatch` | entry | magic `DCLTRIX1`; length `dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:380` |
+| `registry/continuation_v1::process` | entry | magic `DCLRGCI1` | no state machine | blocked by rule `registry/continuation_v1::process`: DCLRGCI1, the Registry continuation route. | `programs/dclutch-registry-sbf/src/lib.rs:388` |
+| `registry/hot_continuation_v2::process` | entry | magic `DCLTHOT3` | no state machine | blocked by rule `registry/hot_continuation_v2::process`: No gauntlet campaign drives this route yet. | `programs/dclutch-registry-sbf/src/lib.rs:370` |
+| `registry/lineage_v1::process` | entry | magic `DCLRLND1` | no state machine | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/lib.rs:393` |
+| `registry/process_abort#4` | action | tag `` | no state machine | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/record_v1.rs:76` |
+| `registry/process_activate_role#ActivateRole` | entry | variant `RegistryInstructionV1::ActivateRole` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:397` |
+| `registry/process_append#2` | action | tag `` | no state machine | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:70` |
+| `registry/process_begin#5` | action | tag `` | no state machine | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:67` |
+| `registry/process_finalize#3` | action | tag `` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:73` |
+| `registry/process_instruction` | entry | -- | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
+| `registry/process_reauthenticate#Reauthenticate` | entry | variant `RegistryInstructionV1::Reauthenticate` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:400` |
+| `registry/record_v1::dispatch` | entry | magic `DCLTRIX1`; length `dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:380` |
 
 ## rent
 
@@ -261,11 +275,11 @@ today.
 
 | route | kind | selector | phase | status | provenance |
 | --- | --- | --- | --- | --- | --- |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:750` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:742` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1` | entry | predicate `` | `dealer-checkpoint: Collecting, Evaluated, Reserved, RollingBack` | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:750` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1` | entry | predicate `` | `dealer-checkpoint: Reserved` | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:742` |
 | `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:702` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:718` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:710` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1` | entry | predicate `` | `dealer-checkpoint: Collecting` | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:718` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1` | entry | predicate `` | `dealer-checkpoint: Collecting` | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:710` |
 | `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:726` |
 | `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1` | entry | predicate `` | no phase gate | executed (dealer-checkpoint-programtest); refused (dealer-checkpoint-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:734` |
 | `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | entry | predicate `` | `market: Retiring` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:765` |

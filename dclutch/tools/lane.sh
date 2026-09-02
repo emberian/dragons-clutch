@@ -23,6 +23,38 @@ lane_die() {
   exit "${2:-1}"
 }
 
+# ---------------------------------------------------------------------------
+# The `Lane:` trailer.
+#
+# Every lane in this tree commits as the same git author, so `git log` can name
+# a commit and no instrument can name the lane that wrote it. On 2026-09-02
+# three lanes mis-attributed each other's commits in one afternoon, and
+# `frameguard.py owed` -- whose whole output is a ledger of WHO owes frame rows
+# -- could only ever print "ember arlynx" beside every debtor.
+#
+# A TRAILER, never message prose: a trailer is a parsed field
+# (`%(trailers:key=Lane)`), so a reader gets it without regexing a subject
+# line, and a lane cannot lose it to the backtick command-substitution hazard
+# that eats code spans out of shell-quoted messages.
+#
+# `DCLUTCH_LANE` is the lane's own name for itself and AGENTS.md tells every
+# prompt to set it. Falling back to a session id rather than refusing is
+# deliberate: an un-set variable must not be able to block a commit, and a
+# session id is still a discriminator -- two lanes with `unknown` are at least
+# known to be two DIFFERENT unknowns when their session ids differ. `unknown`
+# is the last resort and is honest about being one.
+lane_id() {
+  local id="${DCLUTCH_LANE:-}"
+  [[ -n "$id" ]] || id="${CLAUDE_CODE_SESSION_ID:-}"
+  [[ -n "$id" ]] || id="${TERM_SESSION_ID:-}"
+  [[ -n "$id" ]] || id="unknown"
+  # A trailer value is one line. Collapse any whitespace the environment
+  # carried in rather than emitting a malformed trailer that no parser sees.
+  id="$(printf '%s' "$id" | tr '\n\r\t' '   ' | sed 's/  */ /g; s/^ //; s/ $//')"
+  [[ -n "$id" ]] || id="unknown"
+  printf '%s' "$id"
+}
+
 lane_top_help() {
   cat <<'EOF'
 usage: lane.sh <subcommand> [args...]
@@ -49,7 +81,8 @@ usage: lane.sh commit <message> -- <path> [<path> ...]
 
 Runs exactly:
     git add -- <path> ...
-    git commit --only --no-gpg-sign -m <message> -- <path> ...
+    git commit --only --no-gpg-sign --trailer "Lane: $DCLUTCH_LANE" \
+        -m <message> -- <path> ...
 
 (the `git add` is scoped to exactly the named paths -- never `-A` -- and
 exists only so a brand-new file is visible to `--only` at all; it does not
@@ -66,6 +99,17 @@ Refuses:
     now", which is the exact hazard below.
   - being run outside the repository root (git rev-parse --show-prefix is
     non-empty).
+
+Every commit carries a `Lane:` trailer naming who made it. Every lane in this
+tree commits as the SAME git author, so before this a reader could name a
+commit and never its lane -- three lanes mis-attributed each other's commits
+in one afternoon, and `frameguard.py owed`, whose entire output is a ledger of
+who owes frame rows, printed the same name beside every debtor. Set
+`DCLUTCH_LANE` to your lane's name; unset, it falls back to the session id,
+and then to `unknown`. It is a trailer and not message prose so that
+`git log --format=%(trailers:key=Lane,valueonly)` reads it without parsing a
+subject line -- and so it cannot be eaten by the backtick command-substitution
+that takes code spans out of shell-quoted messages.
   - a post-commit readback that names paths you did not.
 
 Incident this prevents: WAVE.md's lane protocol (2026-08-26 -> 2026-08-27)
@@ -145,7 +189,7 @@ lane_cmd_commit() {
   git add -- "${paths[@]}" ||
     lane_die "commit: git add on the named paths failed" 1
 
-  git commit --only --no-gpg-sign -m "$msg" -- "${paths[@]}" ||
+  git commit --only --no-gpg-sign --trailer "Lane: $(lane_id)" -m "$msg" -- "${paths[@]}" ||
     lane_die "commit: git commit --only failed; nothing further to verify" 1
 
   local -a norm=()
@@ -197,7 +241,7 @@ usage: lane.sh commit-patch <message> <patch-file>
 Runs, in order:
     git apply --cached --check <patch-file>
     git apply --cached <patch-file>
-    git commit --no-gpg-sign -m <message>
+    git commit --no-gpg-sign --trailer "Lane: $DCLUTCH_LANE" -m <message>
 
 For a SHARED file that several lanes edit at once -- the workspace `members`
 list above all -- where `lane.sh commit` cannot help you.
@@ -315,7 +359,7 @@ lane_cmd_commit_patch() {
     exit 1
   fi
 
-  git commit --no-gpg-sign -m "$msg" ||
+  git commit --no-gpg-sign --trailer "Lane: $(lane_id)" -m "$msg" ||
     lane_die "commit-patch: git commit failed; nothing further to verify" 1
 
   local -a committed=()

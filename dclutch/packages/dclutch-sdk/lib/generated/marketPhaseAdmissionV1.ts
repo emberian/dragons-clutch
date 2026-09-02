@@ -94,13 +94,58 @@ export interface RouteOtherMachineGateV1 {
 }
 
 export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachineGateV1> = [
+  { route: "core/process_found#FoundAndPermit", machines: ["projected-custody"] },
+  { route: "core/series_consume::process", machines: ["projected-custody"] },
+  { route: "custody/abort_open_and_close#AbortOpenAndClose", machines: ["projected-custody"] },
+  { route: "custody/abort_source_and_close#AbortSourceAndClose", machines: ["projected-custody"] },
+  { route: "custody/lock_hoard#LockHoard", machines: ["projected-custody"] },
+  { route: "custody/lock_hoard_and_close_source#LockHoardAndCloseSource", machines: ["projected-custody"] },
+  { route: "custody/open_hoard#OpenHoard", machines: ["projected-custody"] },
+  { route: "custody/open_source_compartment#OpenSourceCompartment", machines: ["projected-custody"] },
+  { route: "custody/realize_and_close#RealizeAndClose", machines: ["projected-custody"] },
+  { route: "custody/refund_and_close#RefundAndClose", machines: ["projected-custody"] },
+  { route: "custody/reserve#Reserve", machines: ["dealer-checkpoint"] },
+  { route: "custody/rollback#Rollback", machines: ["dealer-checkpoint", "dealer-reservation"] },
   { route: "resolution/process_abandon#magic", machines: ["source"] },
   { route: "resolution/process_capture#Capture", machines: ["source"] },
   { route: "resolution/process_commit_failure#CommitFailure", machines: ["source"] },
   { route: "resolution/process_settle#Settle", machines: ["source"] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1", machines: ["dealer-checkpoint"] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", machines: ["dealer-checkpoint"] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", machines: ["dealer-checkpoint"] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1", machines: ["dealer-checkpoint"] },
 ];
 
 /** The machines gating one route that this table cannot state, if any. */
 export function routeOtherMachineGateV1(route: string): RouteOtherMachineGateV1 | null {
   return ROUTES_GATED_ON_ANOTHER_MACHINE_V1.find((entry) => entry.route === route) ?? null;
+}
+
+/**
+ * Routes whose program persists NO lifecycle discriminant for them to consult.
+ *
+ * Absent from `ROUTE_PHASE_GATES_V1` for a reason no further naming will
+ * change: the Registry authenticates ownership, PDA derivation, account
+ * vacancy and digest identity, and not one of those is a state byte. A client
+ * told only "no gate was read" waits forever for an answer that does not
+ * exist; a client told this can say so and move on. Still NOT an admission --
+ * every account, release and request check is ahead of the act regardless.
+ */
+export const ROUTES_WITHOUT_A_STATE_MACHINE_V1: ReadonlyArray<string> = [
+  "registry/continuation_v1::process",
+  "registry/hot_continuation_v2::process",
+  "registry/lineage_v1::process",
+  "registry/process_abort#4",
+  "registry/process_activate_role#ActivateRole",
+  "registry/process_append#2",
+  "registry/process_begin#5",
+  "registry/process_finalize#3",
+  "registry/process_instruction",
+  "registry/process_reauthenticate#Reauthenticate",
+  "registry/record_v1::dispatch",
+];
+
+/** Whether this route's program has no lifecycle discriminant at all. */
+export function routeHasNoStateMachineV1(route: string): boolean {
+  return ROUTES_WITHOUT_A_STATE_MACHINE_V1.includes(route);
 }

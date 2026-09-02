@@ -1,0 +1,16 @@
+# The reviewed digest of every two-sided wire vector, and the test that writes it.
+#
+# columns: sha256	path	authoring test
+#
+# A fixture here is written by a Rust encoder and re-derived by a TypeScript
+# one. Each authoring test accepts DCLUTCH_WRITE_WIRE_VECTOR=1, which rewrites
+# the fixture -- the right way for a deliberate move to land, and also the way
+# a wire moves with every gate still green. This column is the half a human has
+# to type. See tools/ci/wire-vector-pins.py.
+#
+# Captured at 0bac7f001a01da57a00fa235c15bf4f335838ce4.
+57d9cc7d4cf1f8d39561e32427dc72afd516a1f9aaa86d6e948150ab1ce394a0	apps/dclutch-web/fixtures/direct-hot-bump-hints.json	dclutch-operator --test browser_bump_hint_vector
+57d9cc7d4cf1f8d39561e32427dc72afd516a1f9aaa86d6e948150ab1ce394a0	packages/dclutch-sdk/fixtures/direct-hot-bump-hints.json	dclutch-operator --test browser_bump_hint_vector
+2089957ee7e2bdfeb2528bb8f0bb46f84d5a6841f71f751d8d2f5deccd21d156	apps/dclutch-web/fixtures/product-runtime-v2-admission-wire.json	dclutch-product-runtime-v2-admission --test browser_wire_vector
+d44f15c1df50f28dd6ac8b3c36cd876fc6bf3f209bc1b2554f76c9be70965d6d	apps/dclutch-web/fixtures/dealer-scenario-account-profile-v4.json	dclutch-trading-sbf --test dealer_scenario_profile_vector
+d44f15c1df50f28dd6ac8b3c36cd876fc6bf3f209bc1b2554f76c9be70965d6d	packages/dclutch-sdk/fixtures/dealer-scenario-account-profile-v4.json	dclutch-trading-sbf --test dealer_scenario_profile_vector

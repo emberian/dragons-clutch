@@ -1,0 +1,123 @@
+# What CI does with each root-workspace integration test target.
+#
+# columns: status	package	target	seconds	note
+#
+# `tools/release/check-all-workspaces.py` builds this workspace with
+# `--all-targets`, so every one of these COMPILES on every release check.
+# Until `tools/ci/run.sh root-targets` existed, none of them EXECUTED --
+# ba96d8527 enumerated 124 such targets across 40 packages and wired none,
+# because it had no measured runtime and a cold-target-dir loop had taken over
+# ten minutes. This file is that measurement, and the tier reads it.
+#
+# THE NUMBERS are a MINIMUM OF THREE full rounds at 0bac7f001, in a private
+# warm target directory, one `cargo test -p <pkg> --test <target>` each. A
+# minimum and not a mean because this is a co-tenant machine and load only
+# adds: browser_bump_hint_vector measured 39.95s, 9.80s and 6.48s in the three
+# rounds while other lanes built. Whole executed set: 69.5s. Nothing came near
+# the 120s per-target timeout; the largest resident set over all three rounds
+# was 766 MB, so memory excludes nothing here either.
+#
+# STATUS:
+#   run         must pass.
+#   quarantine  is RED today and must STAY red -- if it goes green the tier
+#               fails BY NAME, because the fix has landed and the row is now
+#               stale coverage. Delete the row in the commit that fixes it.
+#   slow        over the 8.00s per-target budget: excluded, with its number.
+#
+# `slow` IS EMPTY TODAY, and it is a shape rather than a dead branch: the
+# budget's job is to refuse a slow target somebody adds LATER. The budget is
+# 8.00s because that is where the measured gap is -- the three slowest
+# (browser_bump_hint_vector 6.48s, series_v2 5.50s,
+# dealer_scenario_profile_vector 4.89s) are one cluster of genuine work, PDA
+# bump mining and a 2,100-byte profile encoding, and the next target down is
+# 2.31s. A 5s line would split that cluster on less than one round's noise and
+# would exclude a wire-vector authoring test this same commit just armed.
+#
+# The budget is enforced by `never-run-tests.py --check` against the SECONDS
+# RECORDED HERE, not against a wall clock, so it is deterministic on a loaded
+# laptop: a lane adding a target has to measure it and write the number down.
+# The tier's own wall-clock assertion is the coarse backstop and says so.
+#
+# `lake` and ELF targets are NOT in this file. The census classifies those from
+# source text and the tier prints its answer; a copy here would be a second
+# author for a question that already has one.
+run	dclutch-account-profile-contract	lifecycle_external_funding_v3	0.60	
+run	dclutch-account-profile-contract	lifecycle_rent_quotes_v5	0.45	
+run	dclutch-account-profile-contract	lifecycle_v5_translation	0.53	
+run	dclutch-account-profile-contract	profile14_translation	0.43	
+run	dclutch-account-profile-contract	v2_abi_translation	0.54	
+run	dclutch-bearer-v2-contract	specialization	0.46	
+run	dclutch-capability-program-contract	v4_lifecycle_v5_selected	0.63	
+run	dclutch-chain-bundle-builder	general_dynamic_spans_v1	2.31	
+run	dclutch-direct-ticket	portable_ticket_v1	1.46	
+run	dclutch-effect-kernel	effect_v4_lean_translation	0.24	
+run	dclutch-fractional-claim-contract	activation_root_tail_v1	1.12	
+run	dclutch-fractional-claim-contract	contract	0.44	
+run	dclutch-fractional-claim-contract	fractional_v3	0.47	
+run	dclutch-fractional-claim-contract	hot_v2	0.44	
+run	dclutch-fractional-claim-contract	request_v2	0.42	
+run	dclutch-fractional-claim-kernel	exposure_v2	0.44	
+run	dclutch-fractional-claim-kernel	fractional_claims	0.46	
+run	dclutch-fractional-claim-kernel	projection_encode	0.40	
+run	dclutch-fractional-claim-kernel	terms_encode	0.43	
+run	dclutch-fractional-claim-operator	actions	1.14	
+quarantine	dclutch-fractional-claim-operator	artifacts	0.70	RED at 0bac7f001
+quarantine	dclutch-fractional-claim-operator	chain_artifacts	0.66	RED at 0bac7f001
+quarantine	dclutch-fractional-claim-operator	claims	0.65	RED at 0bac7f001
+quarantine	dclutch-fractional-claim-operator	composition	0.77	RED at 0bac7f001
+run	dclutch-fractional-claim-operator	exposure_action_v2	0.62	
+quarantine	dclutch-fractional-claim-operator	exposure_v3	0.69	RED at 0bac7f001
+run	dclutch-fractional-claim-operator	hot_v2	0.83	
+run	dclutch-fractional-claim-operator	selected_release_v4	0.89	
+quarantine	dclutch-fractional-claim-operator	token2022	0.76	RED at 0bac7f001
+run	dclutch-fractional-claim-operator	topology_v3	0.68	
+quarantine	dclutch-general-adapter-contract	root_lifecycle_projection_v3	0.67	RED at 0bac7f001
+run	dclutch-general-adapter-contract	selection_decision_corpus	0.47	
+run	dclutch-general-adapter-contract	unauthored_actions_v1	0.67	
+run	dclutch-liability-basis-v2-kernel	agreement	0.77	
+run	dclutch-liability-basis-v2-kernel	price_gate	1.11	
+run	dclutch-liability-basis-v2-kernel	spline	0.28	
+run	dclutch-market-core-codec	capability	0.49	
+run	dclutch-market-core-codec	lifecycle	0.54	
+run	dclutch-market-core-codec	physical	0.60	
+run	dclutch-market-core-codec	series_found_ack_v2	0.55	
+run	dclutch-operator	browser_bump_hint_vector	6.48	
+run	dclutch-operator	market_open_v1_api	1.39	
+run	dclutch-operator	provider_transport_v3_api	1.36	
+run	dclutch-operator	resolution_core_v3_api	0.93	
+run	dclutch-operator	series_projected_outer_packet_v2	0.82	
+run	dclutch-product-payoff-v2-codec	basis_corpus_v3	0.55	
+run	dclutch-product-payoff-v2-codec	price_gate_differential_v1	0.57	
+run	dclutch-product-payoff-v2-codec	spline_differential_v3	0.53	
+run	dclutch-product-runtime-v2	hostile	0.25	
+run	dclutch-product-runtime-v2	partition	0.57	
+run	dclutch-product-runtime-v2	runtime_width	0.39	
+run	dclutch-product-runtime-v2-admission	admission	0.31	
+run	dclutch-product-runtime-v2-admission	browser_wire_vector	0.40	
+run	dclutch-product-runtime-v2-operator	found	1.11	
+run	dclutch-product-runtime-v2-operator	interesting	0.81	
+run	dclutch-product-runtime-v2-operator	operator	0.66	
+run	dclutch-product-runtime-v2-operator	publication	0.81	
+run	dclutch-product-runtime-v2-svm-reader	reader	1.09	
+run	dclutch-rational-representation-v2-contract	hot_v3	0.59	
+run	dclutch-rational-representation-v2-contract	physical_contract	0.56	
+run	dclutch-rational-representation-v2-contract	rational_cross_domain_v3_lean_translation	0.51	
+run	dclutch-rational-representation-v2-contract	request_reexport	0.54	
+run	dclutch-rational-representation-v2-operator	operator	0.93	
+run	dclutch-representation-composition-v3-kernel	exposure_translation	0.29	
+run	dclutch-representation-composition-v3-kernel	lean_translation	0.23	
+run	dclutch-representation-composition-v3-kernel	translation_corpus	0.25	
+run	dclutch-representation-composition-v3-operator	operator	1.32	
+run	dclutch-structured-v2-contract	hot_v2	0.56	
+run	dclutch-structured-v2-contract	wire	0.49	
+run	dclutch-structured-v2-kernel	structured_v2	0.53	
+run	dclutch-structured-v2-operator	actions	1.58	
+run	dclutch-structured-v2-operator	artifacts	0.75	
+run	dclutch-structured-v2-operator	child_request	0.63	
+run	dclutch-structured-v2-operator	descriptor	0.68	
+run	dclutch-trading-sbf	dealer_scenario_profile_vector	4.89	
+run	dclutch-trading-sbf	dealer_v3_composer	0.68	
+run	dclutch-trading-sbf	dealer_v3_equity_dust	0.71	
+run	dclutch-trading-sbf	dealer_v3_multi_lp	0.69	
+run	dclutch-trading-sbf	dealer_v3_two_lp_life	0.71	
+run	dclutch-trading-sbf	series_v2	5.50	

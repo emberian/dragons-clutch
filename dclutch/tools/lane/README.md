@@ -25,6 +25,9 @@ history — the commit stays) if anything outside the given list was touched.
 Refuses: an empty or wildcard/whole-tree path list (`.`, `..`, `/`, `*`,
 `-A`, `--all`) and being run from anywhere but the repository root.
 
+Also writes a `Lane: $DCLUTCH_LANE` **trailer** on the commit, as does
+`commit-patch`. See "the `Lane:` trailer" below.
+
 Incident: the old protocol — inspect `git status`/`git diff --cached`, then
 `git commit` — is a race against every other lane's concurrent `git add` on
 the same shared index. WAVE.md records "two collisions on 2026-08-26" before
@@ -94,6 +97,32 @@ TA-SER entry ("TIER NUMBER COLLISION, my fault") where two lanes clobbered
 each other's `tools/gauntlet/tier2/` files for about fifteen minutes, and
 DA2's leaked-validator note that containment on a shared resource "was a
 lane remembering to be polite rather than something structural."
+
+### The `Lane:` trailer
+
+`commit` and `commit-patch` both add a `Lane: <id>` trailer, read from
+`$DCLUTCH_LANE` — the same variable `board` already requires. Unset, it falls
+back to the session id and then to `unknown`; unlike `board` it never refuses,
+because an unset variable must not be able to block a commit in a tree a dozen
+lanes are pushing through, and a session id still discriminates two lanes that
+both forgot.
+
+Read it back with `git log --format='%(trailers:key=Lane,valueonly)'`.
+`tools/frameguard/frameguard.py owed` prints it beside every debtor it names,
+and a commit made without this wrapper is printed as *unattributed* rather than
+guessed at.
+
+Incident: every lane in this tree commits as the same git author, so `git log`
+could name a commit and no instrument could name its lane. On 2026-09-02 three
+lanes mis-attributed each other's commits in one afternoon, and `owed` — whose
+entire output is a ledger of *who owes frame rows* — printed one identical
+author beside every row it accused.
+
+It is a trailer and not message prose for two reasons: a reader gets it from
+git's own parser instead of a second regex over subject lines, and a trailer
+written by the wrapper cannot be eaten by the backtick command-substitution
+that takes code spans out of shell-quoted `-m` messages (the hazard `AGENTS.md`
+records for both commit messages and board posts).
 
 ### `lane.sh guard-script <script> -- <cmd...>`
 

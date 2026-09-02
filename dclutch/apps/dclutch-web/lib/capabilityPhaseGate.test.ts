@@ -7,6 +7,7 @@ import {
   capabilityActPhaseGatesV1,
   capabilityActUnobservableMachinesV1,
   capabilityActsWithNoPhaseGateV1,
+  capabilityPhaseGateTextV1,
   capabilityRequiresMarketV1,
   evaluateCapabilityV1,
   type CapabilityMarketSnapshotV1,
@@ -15,6 +16,8 @@ import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
 import {
   ROUTE_PHASE_GATES_V1,
   ROUTES_GATED_ON_ANOTHER_MACHINE_V1,
+  ROUTES_WITHOUT_A_STATE_MACHINE_V1,
+  routeHasNoStateMachineV1,
   routeOtherMachineGateV1,
   routePhaseGateV1,
 } from '@dclutch/sdk/generated/marketPhaseAdmissionV1';
@@ -124,6 +127,42 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     expect(verdict.phaseGate.verdict).toBe('no-phase-gate');
   });
 
+  it('says a Registry route has no state to gate on, not that it declares none', () => {
+    // "No gate was read" and "there is no state to read" are different
+    // answers, and only the second is final. The Registry persists no
+    // lifecycle discriminant at all, which the census declares and the
+    // reference prints as its own column value; a card that kept saying
+    // "declares none" would invite a reader to wait for a gate that no
+    // further naming will ever produce.
+    //
+    // No shipped act declares a Registry route today, so this exercises the
+    // branch directly rather than through `evaluateCapabilityV1`. That is the
+    // whole point of exercising it: a branch with no caller and no test is a
+    // branch nobody has ever run.
+    expect(ROUTES_WITHOUT_A_STATE_MACHINE_V1.length).toBeGreaterThan(0);
+    const machineless = ROUTES_WITHOUT_A_STATE_MACHINE_V1[0]!;
+    expect(routeHasNoStateMachineV1(machineless)).toBe(true);
+    const gate = (routes: ReadonlyArray<string>) => capabilityPhaseGateTextV1({
+      routes, gates: [], verdict: 'no-phase-gate' as const, excludedBy: null, unobservableMachines: [],
+    });
+    expect(gate([machineless])).toContain('persists no lifecycle state to gate on');
+
+    // The control, without which the assertion above passes on any text: a
+    // route in a program that DOES persist a discriminant keeps saying that
+    // its guard was not read, because that one may still be named later.
+    const named = 'core/found::process#Found';
+    expect(routeHasNoStateMachineV1(named)).toBe(false);
+    expect(gate([named])).toContain('declares none');
+    expect(gate([named, machineless])).toContain('declares none');
+  });
+
+  it('publishes no route as both gated and machineless', () => {
+    for (const route of ROUTES_WITHOUT_A_STATE_MACHINE_V1) {
+      expect(routePhaseGateV1(route)).toBeNull();
+      expect(routeOtherMachineGateV1(route)).toBeNull();
+    }
+  });
+
   it('names exactly which acts carry no gate, so the coverage cannot be mistaken for total', () => {
     const ungated = capabilityActsWithNoPhaseGateV1();
     const gated = CAPABILITY_ACTIONS_V1.map((act) => act.id).filter((id) => !ungated.includes(id));
@@ -153,7 +192,14 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
  * act needs it rather than after.
  */
 describe('an act gated on a machine this observation cannot read', () => {
-  const sourceGated = ROUTES_GATED_ON_ANOTHER_MACHINE_V1[0];
+  // Named, not positional. This was `ROUTES_GATED_ON_ANOTHER_MACHINE_V1[0]`,
+  // which asserted a fact about ALPHABETICAL ORDER while reading as a fact
+  // about the Source machine: naming the Dealer checkpoint machine put two
+  // `custody/` rows ahead of it and turned three assertions red without any
+  // of them being about what changed. The route below is the one the
+  // assertions actually describe, and it is looked up by name.
+  const sourceGated = routeOtherMachineGateV1('resolution/process_capture#Capture');
+  expect(ROUTES_GATED_ON_ANOTHER_MACHINE_V1.length).toBeGreaterThan(0);
 
   const overRoute = (route: string) => {
     const base = standing('source.provider');

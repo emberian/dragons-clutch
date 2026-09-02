@@ -17,12 +17,13 @@ tools/ci/run.sh all --require             # the release answer
 
 | tier | cost | needs | what it gates |
 |---|---|---|---|
-| `census` | milliseconds | python3 | a generated file arriving with **no** re-emit guard, or losing one |
+| `census` | milliseconds | python3 | a generated file arriving with **no** re-emit guard, or losing one; and the three two-sided wire vectors still carrying their reviewed digests |
 | `seam` | ~20s | `ast-grep` | six structural seam defect classes, new findings against a triaged baseline |
 | `release` | ~5s | python3 | the four release-tooling **refusal** suites: build-freshness admission, the devnet activity and demo-pulse wrappers, the sponsored-market-open stager |
 | `web` | ~1 min | node | the web + SDK vitest suites |
 | `emission` | minutes | `lake` | every generated file still byte-matches the emitter that printed it |
 | `journey` | ~2 min | `cargo` | the journey campaign still **compiles** |
+| `root-targets` | ~4 min | `cargo` | the root-workspace integration tests `--all-targets` compiles and nothing ran |
 | `programs` | minutes | `cargo-build-sbf` | the programs build with no SBF stack-frame diagnostic, and the public Direct route holds its compute margin across 32 pinned seeds |
 | `suites` | ~15 min | `cargo-build-sbf` | the other SBF program-test suites: custody, core, claims, dealer |
 | `workspaces` | slow | `cargo` | **every** tracked Cargo workspace checks from an archived revision |
@@ -52,6 +53,75 @@ One honest limit: the stager suite re-runs its red controls against the last
 revision *before* its guards existed, which needs real git history. On a shallow
 clone, or in a vendored subtree whose history does not carry that path, it says
 so itself and two of its thirteen cases do not run.
+
+### `root-targets`, and the ten minutes that were a cold cache
+
+`tools/release/check-all-workspaces.py` builds the root workspace with
+`--all-targets`, so all 124 of its `tests/*.rs` **compile** on every release
+check. Until this tier, none of them **executed**. Every `cargo test` in this
+repository pointed somewhere else — the program-test workspaces, the journey
+workspace and `--bins` at that, the census workspace, or `cargo check` on
+purpose. `ba96d8527` enumerated the class, named the 80 that need neither
+`lake` nor a built ELF, and refused to wire them, because a per-target loop had
+"exceeded ten minutes locally" and it would not put an unmeasured multi-minute
+row into a tier three other lanes were pushing through. That refusal was the
+right call on the information it had.
+
+**The ten minutes was a cold target directory.** Each `cargo test -p X --test Y`
+was paying for a build, not for a re-resolve. Measured warm at `0bac7f001`, one
+execution each of all 80 is **69.5 s** — three full rounds, per-target minimum,
+because this machine is shared and load only adds. Nothing came near the 120 s
+timeout and the largest resident set was 766 MB, so neither time nor memory
+excludes anything. The build the tier does first is ~2.5 min cold and is the
+same build `--all-targets` was already paying.
+
+`tools/ci/root-targets.tsv` is the single authority for what happens to each
+target, and it carries each one's measured seconds. `never-run-tests.py
+--check` — the census that *found* the class — is the tier's control: it fails
+if a cheap target has no row, if a row names a target that no longer exists,
+if a `run` row records more than the 8 s budget, or if a `slow` row is not
+actually slow. It runs in milliseconds and times nothing.
+
+**Why the budget is checked against a committed number and not a stopwatch.**
+The same target measured 39.95 s, 9.80 s and 6.48 s in three consecutive rounds
+while other lanes built. A wall-clock gate on that is a gate whose red is
+usually somebody else's build, and this file already has a section about what
+those cost. So the exact budget is the number in the tsv, which a lane adding a
+target has to measure and write down; the tier's own wall-clock assertion is a
+deliberately loose backstop (`DCLUTCH_CI_TIME_SLACK`, 4 by default, 1 on a
+dedicated runner) and its failure text says which of the two it is.
+
+**The quarantine is the load-bearing part.** Seven targets are red today, and a
+tier that simply excluded them would be documenting debt rather than holding
+it. A `quarantine` row must **stay** red: if one goes green the tier fails by
+name, because the fix has landed and the row is now stale coverage. Deleting it
+is one line, in the commit that fixed it. That is `COVERAGE.md`'s ratchet
+applied to a failing test — the list only moves when somebody looks at it.
+
+### The `DCLUTCH_WRITE_WIRE_VECTOR` escape hatch, and why a test could not close it
+
+Three checked-in fixtures are written by a Rust encoder and re-derived
+independently by a TypeScript one, so a wire that moves goes red on the
+authoring side first. Each of the three Rust tests also accepts
+`DCLUTCH_WRITE_WIRE_VECTOR=1`, which overwrites the fixture and returned
+success. That is the correct way for a deliberate move to land — and it was
+also **one environment variable that made a moved wire green on both sides at
+once**: regenerate, and the encoder, the fixture and the browser mirror all
+agree again about bytes nobody read. The web tier would go green too, because
+it compares the mirror against the same regenerated file.
+
+A test cannot close that, because the test is the thing being regenerated. So
+there are two halves, in one commit:
+
+- each write branch now **refuses after it writes** — writing is not passing;
+- the reviewed digest is pinned in `tools/ci/wire-vector-pins.tsv`, which no
+  test can write, and `wire-vector-pins.py` checks it in the `census` tier for
+  the price of five `sha256`s.
+
+`--update` re-pins and prints every digest it moved, so the numbers can go in
+the commit message. The SDK copies are pinned too: the operator's write branch
+writes both and reads back only the `apps/` one, so the SDK copy was a file
+this repository generates and never checks.
 
 ### Why `journey` is a compile check and not a campaign
 
@@ -228,6 +298,12 @@ loudly which tree it measured, and counts the uncommitted files if there are any
 
 ## What is not wired, and what it would take
 
+- **The 33 `lake` and 11 ELF root-workspace targets.** `root-targets` runs the
+  80 cheap ones and names these as excluded, with the reason, from the census
+  rather than from a list of its own. The `lake` ones re-run a Lean emitter and
+  belong beside the `emission` tier; the ELF ones need a built program and
+  belong beside `suites`. Both are wiring work, not measurement work — the
+  classification already exists.
 - **The successor bootstrap campaign.** No runner script exists, it needs a
   real `solana-test-validator`, and its founding is ~13 minutes with **no
   resume** — `--work` must be a fresh absolute path, which is why the board

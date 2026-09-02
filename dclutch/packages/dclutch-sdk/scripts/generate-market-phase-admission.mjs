@@ -112,7 +112,17 @@ const gates = [];
 // resolution state is NOT ungated, and a client told it was ungated would
 // report an admission the chain refuses.
 const otherMachines = [];
+// Routes whose PROGRAM persists no lifecycle discriminant at all, as the
+// census declares it. A different fact from an absent gate, and it has to
+// travel: told "no gate was read", a client keeps waiting for an answer that
+// no future naming will produce, and shows the same "not checked" text
+// forever for a route where "nothing to check" is the truth.
+const noStateMachine = [];
 for (const entry of routes) {
+  if (entry.phase === 'no state machine') {
+    noStateMachine.push(entry.route);
+    continue;
+  }
   if (entry.phase === 'no phase gate') continue;
   let admitted = new Set(EVERY_PAIR);
   let sawMarket = false;
@@ -207,6 +217,25 @@ generated += '];\n\n';
 generated += `/** The machines gating one route that this table cannot state, if any. */
 export function routeOtherMachineGateV1(route: string): RouteOtherMachineGateV1 | null {
   return ROUTES_GATED_ON_ANOTHER_MACHINE_V1.find((entry) => entry.route === route) ?? null;
+}\n\n`;
+generated += `/**
+ * Routes whose program persists NO lifecycle discriminant for them to consult.
+ *
+ * Absent from \`ROUTE_PHASE_GATES_V1\` for a reason no further naming will
+ * change: the Registry authenticates ownership, PDA derivation, account
+ * vacancy and digest identity, and not one of those is a state byte. A client
+ * told only "no gate was read" waits forever for an answer that does not
+ * exist; a client told this can say so and move on. Still NOT an admission --
+ * every account, release and request check is ahead of the act regardless.
+ */
+export const ROUTES_WITHOUT_A_STATE_MACHINE_V1: ReadonlyArray<string> = [\n`;
+for (const route of noStateMachine) {
+  generated += `  ${ts(route)},\n`;
+}
+generated += '];\n\n';
+generated += `/** Whether this route's program has no lifecycle discriminant at all. */
+export function routeHasNoStateMachineV1(route: string): boolean {
+  return ROUTES_WITHOUT_A_STATE_MACHINE_V1.includes(route);
 }\n`;
 
 if (process.argv.includes('--check')) {

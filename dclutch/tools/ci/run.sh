@@ -137,8 +137,43 @@ tier_census() {
   fi
   local code=0
   (cd "$repo_root" && python3 "$tool" --verify) || code=$?
+
+  # THE WIRE-VECTOR PINS, in this tier because they cost milliseconds and need
+  # nothing but python3, and because they guard the same kind of thing: bytes
+  # that are checked in, generated, and otherwise nobody's to re-derive.
+  #
+  # Three two-sided fixtures are written by a Rust encoder and re-derived by a
+  # TypeScript one, and each authoring test accepts DCLUTCH_WRITE_WIRE_VECTOR=1
+  # to REWRITE its fixture. That is how a deliberate move is supposed to land.
+  # It is also one environment variable that makes a moved wire green on both
+  # sides at once -- regenerate, and the encoder, the fixture and the browser
+  # mirror all agree again about bytes nobody read. The Rust test cannot close
+  # that: it is the thing being regenerated. So the reviewed digest is pinned
+  # in a file no test writes, and a regeneration that does not move the pin in
+  # the same commit fails HERE.
+  local pins="$repo_root/tools/ci/wire-vector-pins.py"
+  local pin_code=0
+  if [ -f "$pins" ]; then
+    (cd "$repo_root" && python3 "$pins") || pin_code=$?
+    if [ "$pin_code" != 0 ]; then
+      note "A wire vector's bytes are not the bytes that were reviewed."
+      note "If the move was deliberate the fixture and its pin belong in ONE"
+      note "commit; \`tools/ci/wire-vector-pins.py --update\` prints the digests."
+    fi
+  else
+    note "tools/ci/wire-vector-pins.py is not in this tree -- the"
+    note "DCLUTCH_WRITE_WIRE_VECTOR escape hatch is UNGUARDED here."
+    pin_code=0
+  fi
+
   case "$code" in
-  0) record census $EXIT_PASS ;;
+  0)
+    if [ "$pin_code" = 0 ]; then
+      record census $EXIT_PASS
+    else
+      record census $EXIT_GATE_FAILED "a wire vector moved without its pin"
+    fi
+    ;;
   2)
     note "The census could not be taken -- it reads \`git ls-files\`, so it"
     note "needs a git checkout. An exported or vendored copy is not one."
@@ -1035,6 +1070,262 @@ tier_journey() {
 # a clean exit cleans up. A killed run does NOT -- each leaks 3-7 GB, and
 # /tmp/dclutch-* reached 373 GB and filled the volume once. If you interrupt
 # this tier, check /tmp yourself.
+# ---------------------------------------------------------------------------
+# root-targets -- the integration tests `--all-targets` compiles and nothing ran.
+#
+# `tools/release/check-all-workspaces.py` builds the root workspace with
+# `--all-targets`, so all 124 of its `tests/*.rs` COMPILE on every run. Until
+# this tier, none of them EXECUTED: `programs` and `suites` run the nested
+# program-test workspaces, `journey` runs the journey workspace and `--bins` at
+# that, `workspaces` is deliberately `cargo check`, and the gauntlet runs the
+# census workspace. `ba96d8527` enumerated the class and REFUSED to wire it,
+# for a stated reason: no measured runtime, and a per-target loop over the 80
+# cheap ones had "exceeded ten minutes locally".
+#
+# THAT NUMBER WAS A COLD TARGET DIRECTORY. Measured at `0bac7f001` in a private
+# warm target dir, one execution each of all 80 cheap targets is about three
+# minutes of EXECUTION -- the ten minutes was the build, which any tier pays
+# once and which `--all-targets` was already paying anyway. Nothing came near
+# the 120 s per-target timeout and nothing exceeded 766 MB, so neither the
+# timeout nor memory is what excludes anything here.
+#
+# `tools/ci/root-targets.tsv` is the single authority for what this tier does
+# with each target, and `never-run-tests.py --check` is its control: the census
+# that FOUND the class fails if a cheap target has no row, so a new integration
+# test cannot quietly join the compiled-never-run set. The tier does not hold
+# its own list, because a tier holding a copy of a census's answer is a value
+# duplicated instead of read.
+#
+# FOUR STATUSES, and `quarantine` is the load-bearing one:
+#
+#   run         must pass.
+#   quarantine  is RED today and must STAY red. A quarantined target that goes
+#               GREEN fails this tier by name -- because the fix has landed and
+#               its row is now stale coverage, and a quarantine that can only
+#               grow is how "known failure" becomes "nobody looks". One line to
+#               delete, in the commit that fixed it.
+#   slow        measured over the per-target budget; excluded, with its number.
+#   (lake/elf)  not in the tsv at all -- the census classifies those from source
+#               text and this tier prints its answer rather than restating it.
+#
+# THE BUDGET IS ENFORCED ON A COMMITTED NUMBER, NOT ON A WALL CLOCK, and that
+# is the load-bearing decision here. This is a co-tenant machine: the same
+# target measured 39.95 s, 9.80 s and 6.48 s in three consecutive rounds while
+# other lanes built. A wall-clock gate on those numbers is a gate whose red is
+# usually somebody else's build -- exactly the "fails for a reason unrelated to
+# what it gates" shape this file's README warns about, and the fix that makes
+# that red go away is always the wrong one.
+#
+# So the per-target budget lives in `never-run-tests.py --check`, which compares
+# the SECONDS RECORDED IN THE TSV against 8.00 s and never times anything. It
+# is deterministic, it costs milliseconds, and it puts the obligation in the
+# right place: a lane adding a target has to measure it and write the number
+# down, and a target that is genuinely slow is refused BY NAME at that moment
+# rather than by a stopwatch six pushes later. Each row's number is a MINIMUM
+# OF THREE rounds, the honest estimator under contention, since load only adds.
+#
+# The wall-clock assertion below is the COARSE BACKSTOP for the other half --
+# a target that got slower without anybody editing its row. It is deliberately
+# loose (`DCLUTCH_CI_TIME_SLACK`, 4 by default; set 1 on a dedicated runner)
+# and its failure text says so, because a tier that cries wolf about a loaded
+# laptop is worse than one that only catches a tenfold regression. The hard
+# per-target refusal is `timeout`: 120 s, measured against a set whose slowest
+# member is 6.5 s.
+readonly ROOT_TARGET_TIMEOUT_S=120
+readonly ROOT_TARGETS_TOTAL_S=70
+
+tier_root-targets() {
+  say "root-targets -- the root-workspace integration tests, executed"
+  if ! have cargo; then
+    record root-targets $EXIT_PREREQ_MISSING "cargo not on PATH"
+    return
+  fi
+  if ! have python3; then
+    record root-targets $EXIT_PREREQ_MISSING "python3 not on PATH"
+    return
+  fi
+
+  local root="$repo_root" archive_root=""
+  if [ -n "$commit_rev" ]; then
+    local resolved
+    resolved="$(cd "$repo_root" && git rev-parse --verify "$commit_rev^{commit}" 2>/dev/null)" || {
+      record root-targets $EXIT_PREREQ_MISSING "--commit $commit_rev does not name a commit"
+      return
+    }
+    archive_root="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-ci-root-targets.XXXXXX")"
+    note "running COMMIT $resolved (clean git archive)"
+    archive_revision "$resolved" "$archive_root"
+    root="$archive_root"
+  else
+    local dirty
+    dirty="$(cd "$repo_root" && git status --porcelain -- crates programs 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${dirty:-0}" != 0 ]; then
+      note "running the WORKING TREE, and it has $dirty uncommitted files under"
+      note "crates/ and programs/. A red here may belong to a neighbouring lane."
+      note "For a red you intend to REPORT, use --commit."
+    fi
+  fi
+
+  local tsv="$root/tools/ci/root-targets.tsv"
+  local census="$root/tools/ci/never-run-tests.py"
+  if [ ! -f "$tsv" ] || [ ! -f "$census" ]; then
+    record root-targets $EXIT_PREREQ_MISSING "tools/ci/root-targets.tsv or never-run-tests.py is not in this tree"
+    [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+    return
+  fi
+
+  # THE CONTROL FIRST, because it is the cheap one and because a tier that runs
+  # a stale list and reports green is the defect, not the gate. It exits 1 when
+  # a cheap target has no row or a row names nothing.
+  local check_out check_code=0
+  check_out="$(cd "$root" && python3 tools/ci/never-run-tests.py --check 2>&1)" || check_code=$?
+  printf '%s\n' "$check_out" | sed 's/^/    /'
+  if [ "$check_code" != 0 ]; then
+    note "The census and the tsv disagree about what exists. Fix the list"
+    note "before trusting anything below it."
+    record root-targets $EXIT_GATE_FAILED "cheap targets outside the tier"
+    [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+    return
+  fi
+
+  local -a run_pkg=() run_tgt=() run_status=()
+  local status package target secs rest
+  while IFS=$'\t' read -r status package target secs rest; do
+    case "$status" in
+    run | quarantine)
+      run_pkg+=("$package")
+      run_tgt+=("$target")
+      run_status+=("$status")
+      ;;
+    esac
+  done < <(grep -v '^[[:space:]]*#' "$tsv" | grep -v '^[[:space:]]*$')
+
+  if [ "${#run_pkg[@]}" = 0 ]; then
+    record root-targets $EXIT_PREREQ_MISSING "the tsv lists no runnable target"
+    [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+    return
+  fi
+
+  # ONE build for the whole set, then a per-target execution loop. The split is
+  # deliberate: the build is what `--all-targets` already pays elsewhere and is
+  # not what the budget below is about, and reporting them together is how the
+  # ten-minute figure that blocked this tier got made in the first place.
+  local -a build_args=()
+  local pkg
+  while read -r pkg; do
+    build_args+=(-p "$pkg")
+  done < <(printf '%s\n' "${run_pkg[@]}" | sort -u)
+  note "building ${#build_args[@]} package test targets in one invocation..."
+  local build_start build_end
+  build_start=$(date +%s)
+  if ! (cd "$root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+      cargo build --tests "${build_args[@]}" >/dev/null 2>&1); then
+    note "the root workspace's test targets do not COMPILE. That is a"
+    note "different and worse finding than anything this tier measures:"
+    note "\`--all-targets\` builds them on every release check, so a compile"
+    note "error here is already red somewhere else."
+    record root-targets $EXIT_GATE_FAILED "the cheap test targets do not compile"
+    [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+    return
+  fi
+  build_end=$(date +%s)
+  note "build: $((build_end - build_start))s (not budgeted)"
+
+  local slack="${DCLUTCH_CI_TIME_SLACK:-4}"
+  local total_max=$((ROOT_TARGETS_TOTAL_S * slack))
+  local timeout_bin=""
+  if have timeout; then timeout_bin=timeout; elif have gtimeout; then timeout_bin=gtimeout; fi
+  [ -n "$timeout_bin" ] || note "no timeout(1) on PATH -- a hung target will hang this tier"
+
+  local -a unexpected_red=() unexpected_green=() timed_out=()
+  local total=0 index=0 ran=0
+  while [ "$index" -lt "${#run_pkg[@]}" ]; do
+    package="${run_pkg[$index]}"
+    target="${run_tgt[$index]}"
+    status="${run_status[$index]}"
+    index=$((index + 1))
+    local start end elapsed code=0
+    start=$(date +%s)
+    if [ -n "$timeout_bin" ]; then
+      (cd "$root" && "$timeout_bin" "$ROOT_TARGET_TIMEOUT_S" \
+        cargo test -p "$package" --test "$target" -q >/dev/null 2>&1) || code=$?
+    else
+      (cd "$root" && cargo test -p "$package" --test "$target" -q >/dev/null 2>&1) || code=$?
+    fi
+    end=$(date +%s)
+    elapsed=$((end - start))
+    total=$((total + elapsed))
+    ran=$((ran + 1))
+    # 124 is timeout(1)'s "I killed it", and it is a different fact from a
+    # failing assertion: the target did not refuse anything, it never finished.
+    if [ "$code" = 124 ]; then
+      timed_out+=("$package --test $target (killed at ${ROOT_TARGET_TIMEOUT_S}s)")
+      continue
+    fi
+    if [ "$status" = run ] && [ "$code" != 0 ]; then
+      unexpected_red+=("$package --test $target")
+    fi
+    if [ "$status" = quarantine ] && [ "$code" = 0 ]; then
+      unexpected_green+=("$package --test $target")
+    fi
+  done
+
+  note "$ran targets executed in ${total}s (budget ${total_max}s = ${ROOT_TARGETS_TOTAL_S}s measured x ${slack} slack)"
+  local failed=0
+
+  if [ "${#unexpected_red[@]}" -gt 0 ]; then
+    note "FAILED -- ${#unexpected_red[@]} target(s) the tsv says should pass:"
+    printf '      %s\n' "${unexpected_red[@]}"
+    failed=1
+  fi
+  if [ "${#unexpected_green[@]}" -gt 0 ]; then
+    note "QUARANTINE IS STALE -- ${#unexpected_green[@]} target(s) marked red now PASS:"
+    printf '      %s\n' "${unexpected_green[@]}"
+    note "This is good news reported as a failure ON PURPOSE. Delete each row"
+    note "from tools/ci/root-targets.tsv, or change its status to \`run\`, in"
+    note "the commit that fixed it -- a quarantine that only ever grows is how"
+    note "a known failure becomes a failure nobody looks at."
+    failed=1
+  fi
+  if [ "${#timed_out[@]}" -gt 0 ]; then
+    note "TIMED OUT -- never finished, which is not the same as failed:"
+    printf '      %s\n' "${timed_out[@]}"
+    note "The slowest member of this set measures 6.5s, so ${ROOT_TARGET_TIMEOUT_S}s is not a"
+    note "close call. Either it hangs, or it is no longer the cheap target the"
+    note "census classified it as."
+    failed=1
+  fi
+  if [ "$total" -gt "$total_max" ]; then
+    note "OVER THE TIER'S WALL-CLOCK BACKSTOP: ${total}s > ${total_max}s"
+    note "(${ROOT_TARGETS_TOTAL_S}s measured x ${slack} slack). This is the LOOSE check, and on a"
+    note "machine other lanes are building on it can fire for their reasons."
+    note "Re-run on an idle host, or with DCLUTCH_CI_TIME_SLACK raised, before"
+    note "reporting it. The per-target budget is the exact one and it lives in"
+    note "\`never-run-tests.py --check\` against the seconds in the tsv."
+    failed=1
+  fi
+
+  # The exclusions, named, from the census rather than from a copy here.
+  note "excluded, and why:"
+  (cd "$root" && python3 tools/ci/never-run-tests.py 2>/dev/null) \
+    | sed -n '/^  excluded/p' | sed 's/^/    /'
+  local slow_rows
+  slow_rows="$(awk -F'\t' '$1=="slow" {printf "      %s --test %s (%ss) %s\n", $2, $3, $4, $5}' "$tsv")"
+  if [ -n "$slow_rows" ]; then
+    note "excluded, over the per-target budget:"
+    printf '%s\n' "$slow_rows"
+  else
+    note "  excluded for slowness: none -- the whole cheap set is inside the budget"
+  fi
+
+  [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+  if [ "$failed" = 0 ]; then
+    record root-targets $EXIT_PASS
+  else
+    record root-targets $EXIT_GATE_FAILED
+  fi
+}
+
 readonly SUITE_RUNNERS="\
 custody|programs/dclutch-custody-sbf/run-program-test.sh|Custody vault routes against a real caller link
 core|programs/dclutch-core-sbf/run-open-market-program-test.sh|every core program-test target, discovered from tests/
@@ -1685,7 +1976,11 @@ list_tiers() {
 tier      cost         prerequisite       what it gates
 
 census    milliseconds python3            a generated file arriving with no
-                                          re-emit guard, or losing one
+                                          re-emit guard, or losing one; and the
+                                          three two-sided wire vectors still
+                                          carrying their reviewed digests, so
+                                          DCLUTCH_WRITE_WIRE_VECTOR=1 cannot
+                                          green a moved wire on its own
 fmt       ~10s         cargo, rustfmt     rustfmt disagreeing with a file that
                                           is not in tools/ci/fmt-baseline.txt,
                                           or a baseline line that is no longer
@@ -1744,6 +2039,17 @@ journey   minutes      cargo              the journey campaign still COMPILES,
                                           each of the others has its own target
                                           directory and one exceeded 15 minutes
                                           cold on a loaded machine
+root-targets
+          ~4 min       cargo              the 124 root-workspace integration
+                                          tests `--all-targets` COMPILES and
+                                          nothing executed (ba96d8527). Runs
+                                          every cheap one, holds a quarantine
+                                          that must stay red, and refuses a
+                                          newly-slow target by name.
+                                          tools/ci/root-targets.tsv is the
+                                          list; `never-run-tests.py --check`
+                                          is the control that no cheap target
+                                          is outside it
 programs  minutes      cargo-build-sbf    the programs build with no SBF stack-
                                           frame diagnostic, and the public
                                           Direct route holds its compute margin
@@ -1761,14 +2067,20 @@ workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           fresh target dir per workspace, so it
                                           is not in `all`
 
-aliases:  cheap = census fmt seam runbooks release
-          all   = census fmt seam runbooks release sbom sbfcontracts web emission frameguard
-                  journey programs suites
+aliases:  cheap = census fmt locks seam runbooks release
+          all   = census fmt locks seam runbooks release sbom sbfcontracts web emission
+                  frameguard journey root-targets programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
 environment:
   DCLUTCH_CI_SUITES="core custody"   run only those rows of the suites tier
   CARGO_BUILD_JOBS=4                 honoured by the cargo tiers (default 4)
+  DCLUTCH_CI_TIME_SLACK=4            root-targets multiplies its measured
+                                     budgets by this. 4 by default because this
+                                     is a co-tenant machine and one target
+                                     measured 39.9s, 5.9s and 6.1s in three
+                                     rounds; set 1 on a dedicated runner, where
+                                     the strict gate is the point
 
 options:
   --commit REV   build and test a clean `git archive` of REV instead of the
@@ -1810,8 +2122,8 @@ main() {
       exit 0
       ;;
     cheap) tiers+=(census fmt locks seam runbooks release) ;;
-    all) tiers+=(census fmt locks seam runbooks release sbom sbfcontracts web emission frameguard journey programs suites) ;;
-    census | fmt | locks | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
+    all) tiers+=(census fmt locks seam runbooks release sbom sbfcontracts web emission frameguard journey root-targets programs suites) ;;
+    census | fmt | locks | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | root-targets | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

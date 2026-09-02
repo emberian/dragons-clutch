@@ -3,7 +3,16 @@
 use dclutch_market_core_codec::{CoreState, Phase, ProjectFoundReceiptV2};
 use dclutch_release_set_contract::ExecutionRoleV1;
 
-use crate::{CompartmentV1, CustodyReplayV1};
+use crate::{
+    CompartmentV1, CustodyReplayV1,
+    projected_admission_v1::{
+        PROJECTED_CUSTODY_FOUNDING_LOCK_ADMISSIBLE_STATES_V1,
+        PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1,
+        PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1,
+        PROJECTED_CUSTODY_OPEN_HOARD_ADMISSIBLE_STATES_V1,
+        PROJECTED_CUSTODY_SOURCE_FUNDED_ADMISSIBLE_STATES_V1,
+    },
+};
 
 /// Projected-custody request magic.
 pub const PROJECTED_CUSTODY_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLPCQ01";
@@ -922,7 +931,7 @@ impl ProjectedCustodyStateV2 {
         market_vacant: bool,
     ) -> Result<Self, ProjectedCustodyError> {
         self.authenticate_next(&request, request_digest)?;
-        if self.phase != ProjectedCustodyPhaseV1::Initialized
+        if !PROJECTED_CUSTODY_OPEN_HOARD_ADMISSIBLE_STATES_V1.admits(self.phase)
             || request.operation != ProjectedCustodyOperationV1::OpenHoard
             || vault_balance != 0
             || !market_vacant
@@ -973,7 +982,7 @@ impl ProjectedCustodyStateV2 {
         self.authenticate_next(&request, request_digest)?;
         nonzero(source_replay_key)?;
         nonzero(poststate_commitment)?;
-        if self.phase != ProjectedCustodyPhaseV1::HoardOpen
+        if !PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1.admits(self.phase)
             || request.operation != ProjectedCustodyOperationV1::OpenSourceCompartment
             || self.locked_amount != 0
             || !market_vacant
@@ -1013,7 +1022,7 @@ impl ProjectedCustodyStateV2 {
         market_vacant: bool,
     ) -> Result<Self, ProjectedCustodyError> {
         self.authenticate_next(&request, request_digest)?;
-        if self.phase != ProjectedCustodyPhaseV1::HoardOpen
+        if !PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1.admits(self.phase)
             || request.operation != ProjectedCustodyOperationV1::LockHoard
             || vault_before != 0
             || vault_before.checked_add(request.amount) != Some(vault_after)
@@ -1054,11 +1063,16 @@ impl ProjectedCustodyStateV2 {
         // `OpenSourceCompartment` put in the source vault. `SourceFunded` is a
         // value no previously reachable state can hold, so this admits nothing
         // that was refused before.
-        let source_prepared = match self.phase {
-            ProjectedCustodyPhaseV1::HoardOpen => self.locked_amount == 0,
-            ProjectedCustodyPhaseV1::SourceFunded => self.locked_amount == request.amount,
-            _ => false,
-        };
+        // The phase half is a set of TWO and it is named; the amount half
+        // differs between them, which is why a match stands beside the set
+        // rather than being folded into it. The set is what excludes the other
+        // two phases, so the match no longer has to.
+        let source_prepared = PROJECTED_CUSTODY_FOUNDING_LOCK_ADMISSIBLE_STATES_V1
+            .admits(self.phase)
+            && match self.phase {
+                ProjectedCustodyPhaseV1::SourceFunded => self.locked_amount == request.amount,
+                _ => self.locked_amount == 0,
+            };
         if !source_prepared
             || request.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
             || source_before != request.amount
@@ -1116,7 +1130,7 @@ impl ProjectedCustodyStateV2 {
         market_vacant: bool,
     ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
         self.authenticate_next(&request, request_digest)?;
-        if self.phase != ProjectedCustodyPhaseV1::HoardLocked
+        if !PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1.admits(self.phase)
             || request.operation != ProjectedCustodyOperationV1::RefundAndClose
             || current_slot <= self.request.expiry_slot
             || request.amount != self.locked_amount
@@ -1174,7 +1188,7 @@ impl ProjectedCustodyStateV2 {
         // `SourceFunded` and nothing else. The phase is the whole admission:
         // it is a value no previously reachable state can hold, so this admits
         // nothing that was refused before it existed.
-        if self.phase != ProjectedCustodyPhaseV1::SourceFunded
+        if !PROJECTED_CUSTODY_SOURCE_FUNDED_ADMISSIBLE_STATES_V1.admits(self.phase)
             || request.operation != ProjectedCustodyOperationV1::AbortSourceAndClose
             || current_slot <= self.request.expiry_slot
             || request.amount != self.locked_amount
@@ -1208,7 +1222,7 @@ impl ProjectedCustodyStateV2 {
         market_vacant: bool,
     ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
         self.authenticate_next(&request, request_digest)?;
-        if self.phase != ProjectedCustodyPhaseV1::HoardOpen
+        if !PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1.admits(self.phase)
             || request.operation != ProjectedCustodyOperationV1::AbortOpenAndClose
             || request.amount != 0
             || current_slot <= self.request.expiry_slot
@@ -1255,7 +1269,7 @@ impl ProjectedCustodyStateV2 {
         rent_credit: [u8; 32],
     ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
         self.authenticate_next(request, request_digest)?;
-        if self.phase != ProjectedCustodyPhaseV1::HoardLocked
+        if !PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1.admits(self.phase)
             || request.operation != ProjectedCustodyOperationV1::RealizeAndClose
             || request.amount != self.locked_amount
             || vault_balance != self.locked_amount

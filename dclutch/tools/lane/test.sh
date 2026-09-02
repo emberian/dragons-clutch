@@ -265,6 +265,90 @@ git -C "$CP" reset -q
 expect_refusal "commit-patch: refuses a patch file that does not exist" \
   in_dir "$CP" "$LANE_SH" commit-patch "msg" "$WORK/no-such.patch"
 
+echo "=== lane.sh Lane: trailer ==="
+
+# Every lane in this tree commits as the SAME git author, so a commit could be
+# named and its lane could not -- three lanes mis-attributed each other's
+# commits on 2026-09-02, and `frameguard.py owed` printed one identical name
+# beside every debtor it accused. These cases assert the trailer LANDS, that it
+# is a trailer and not subject prose (a reader parses `%(trailers:key=Lane)`,
+# never a subject line), and that an unset DCLUTCH_LANE degrades to a value
+# rather than blocking a commit.
+LN="$WORK/lane-trailer"
+mkdir -p "$LN"
+git -C "$LN" init -q
+git -C "$LN" config user.email "lane-test@example.invalid"
+git -C "$LN" config user.name "lane test"
+git -C "$LN" config commit.gpgsign false
+echo "seed" >"$LN/f.txt"
+git -C "$LN" add f.txt
+git -C "$LN" commit -q -m "initial"
+
+trailer_of() {
+  git -C "$1" log -1 --format='%(trailers:key=Lane,valueonly)' | tr -d '\n'
+}
+
+echo "named" >"$LN/f.txt"
+expect_success "trailer: commit with DCLUTCH_LANE set" \
+  in_dir "$LN" env DCLUTCH_LANE=CI-TARGETS "$LANE_SH" commit "lane test: named lane" -- f.txt
+if [[ "$(trailer_of "$LN")" == "CI-TARGETS" ]]; then
+  ok "trailer: commit carries Lane: CI-TARGETS"
+else
+  bad "trailer: commit carries Lane: CI-TARGETS (got '$(trailer_of "$LN")')"
+fi
+# A TRAILER, not message prose: the subject must be untouched, because a
+# reader that had to regex the subject is a second parser for a field git
+# already parses -- and a backticked span in a shell-quoted message is
+# command-substituted, which is how message prose loses exactly the parts
+# that made it precise.
+if [[ "$(git -C "$LN" log -1 --format='%s')" == "lane test: named lane" ]]; then
+  ok "trailer: the subject line is untouched (it is a trailer, not prose)"
+else
+  bad "trailer: the subject line is untouched (got '$(git -C "$LN" log -1 --format='%s')')"
+fi
+
+# Unset everything lane_id can read. An absent variable must never be able to
+# block a commit, so this degrades to a named last resort rather than refusing.
+echo "unset" >"$LN/f.txt"
+expect_success "trailer: commit with no lane variables at all" \
+  in_dir "$LN" env -u DCLUTCH_LANE -u CLAUDE_CODE_SESSION_ID -u TERM_SESSION_ID \
+    "$LANE_SH" commit "lane test: unattributed lane" -- f.txt
+if [[ "$(trailer_of "$LN")" == "unknown" ]]; then
+  ok "trailer: an unset DCLUTCH_LANE falls back to 'unknown', it does not refuse"
+else
+  bad "trailer: an unset DCLUTCH_LANE falls back to 'unknown' (got '$(trailer_of "$LN")')"
+fi
+
+# An empty DCLUTCH_LANE is not a lane name; it must reach a fallback and never
+# emit a malformed `Lane:` with no value.
+echo "empty" >"$LN/f.txt"
+expect_success "trailer: commit with an EMPTY DCLUTCH_LANE" \
+  in_dir "$LN" env -u CLAUDE_CODE_SESSION_ID -u TERM_SESSION_ID DCLUTCH_LANE= \
+    "$LANE_SH" commit "lane test: empty lane variable" -- f.txt
+if [[ "$(trailer_of "$LN")" == "unknown" ]]; then
+  ok "trailer: an empty DCLUTCH_LANE reaches the fallback, never a valueless trailer"
+else
+  bad "trailer: an empty DCLUTCH_LANE reaches the fallback (got '$(trailer_of "$LN")')"
+fi
+
+# commit-patch carries it too -- it is a separate `git commit` invocation, and
+# the shared-file case is exactly where attribution is most contested.
+printf 'p\nq\nr\n' >"$LN/g.txt"
+git -C "$LN" add g.txt
+git -C "$LN" commit -q -m "add g.txt"
+LN_WT="$WORK/lane-trailer-wt"
+git -C "$LN" worktree add -q --detach "$LN_WT" HEAD
+sed -i.bak 's/^q$/q-MINE/' "$LN_WT/g.txt" && rm -f "$LN_WT/g.txt.bak"
+git -C "$LN_WT" diff >"$WORK/lane-trailer.patch"
+git -C "$LN" worktree remove --force "$LN_WT"
+expect_success "trailer: commit-patch with DCLUTCH_LANE set" \
+  in_dir "$LN" env DCLUTCH_LANE=DEALER "$LANE_SH" commit-patch "lane test: patched" "$WORK/lane-trailer.patch"
+if [[ "$(trailer_of "$LN")" == "DEALER" ]]; then
+  ok "trailer: commit-patch carries Lane: DEALER"
+else
+  bad "trailer: commit-patch carries Lane: DEALER (got '$(trailer_of "$LN")')"
+fi
+
 echo "=== lane.sh fmt ==="
 
 mkdir -p "$WORK/fmtdir"

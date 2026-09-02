@@ -240,6 +240,17 @@ construction belong outside the kernel in explicitly named adapters.
   discipline (refusing empty/wildcard commit path lists, a post-commit
   readback, crate-root and mid-run-edit guards) so it isn't re-learned by
   hand each time. See `tools/lane/README.md`.
+- **Export `DCLUTCH_LANE=<your lane's name>` before your first commit.**
+  `lane.sh commit` and `commit-patch` write it as a `Lane:` trailer, and
+  `lane.sh board` already refuses without it. Every lane here commits as the
+  SAME git author, so without the trailer `git log` can name a commit and no
+  instrument can name the lane that wrote it — on 2026-09-02 three lanes
+  mis-attributed each other's commits in one afternoon, and
+  `frameguard.py owed`, whose whole output is a ledger of who owes frame rows,
+  printed one identical author beside every debtor. Unset, the trailer degrades
+  to a session id and then to `unknown` rather than blocking a commit; that is
+  a fallback, not the intent. Read it with
+  `git log --format='%(trailers:key=Lane,valueonly)'`.
 - **A backticked span in a shell-quoted message is command-substituted, and
   that includes BOARD POSTS.** zsh runs every `` `word` `` inside a double-quoted
   `git commit -m` *or* `lane.sh board` argument and silently substitutes the

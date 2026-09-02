@@ -36,17 +36,27 @@ describe('the browser half of the operator surface', () => {
     expect(redeem && evaluateCapabilityV1(redeem, null)).toMatchObject({ status: 'needs-chain' });
     const withoutMarket = { market: null } as unknown as OperatorSurfaceSnapshotV1;
     expect(redeem && evaluateCapabilityV1(redeem, withoutMarket)).toMatchObject({ status: 'needs-market' });
-    const withMarket = { market: { address: key(44) } } as unknown as OperatorSurfaceSnapshotV1;
-    expect(redeem && evaluateCapabilityV1(redeem, withMarket)).toMatchObject({ status: 'ready-to-preflight' });
-    expect(redeem && capabilityWorkspaceV1(redeem.action, withMarket)).toBe('/redeem');
+    // The snapshot carries the PHASE, because the ladder decides on it. This
+    // row used to be `{ market: { address } }` behind an `as unknown as`
+    // cast, which typechecked while omitting the only field the decision
+    // reads -- fine while `claims.redeem` was ungated, red from the moment
+    // `9438c8a1` named Claims' guards, and the cast is why the compiler could
+    // not say so. `terminal_settlement_v3` admits `Terminal` and `Retiring`.
+    const inTerminal = { market: { address: key(44), phase: 'Terminal', readiness: 'Consumed' } } as unknown as OperatorSurfaceSnapshotV1;
+    expect(redeem && evaluateCapabilityV1(redeem, inTerminal)).toMatchObject({ status: 'ready-to-preflight' });
+    expect(redeem && capabilityWorkspaceV1(redeem.action, inTerminal)).toBe('/redeem');
+    // The control, without which the row above passes on any verdict the
+    // ladder happens to produce: an Open Market refuses the same act.
+    const whileOpen = { market: { address: key(44), phase: 'Open', readiness: 'Consumed' } } as unknown as OperatorSurfaceSnapshotV1;
+    expect(redeem && evaluateCapabilityV1(redeem, whileOpen)).toMatchObject({ status: 'wrong-phase' });
 
     // A market-bound act has no address until a Market is read, and an act
     // with no venue never reaches the chain questions at all.
     const author = BROWSER_CAPABILITY_STANDINGS_V1.find((standing) => standing.action.id === 'direct.author');
     expect(author && capabilityWorkspaceV1(author.action, null)).toBeNull();
-    expect(author && capabilityWorkspaceV1(author.action, withMarket)).toBe(`/market?address=${key(44)}`);
+    expect(author && capabilityWorkspaceV1(author.action, inTerminal)).toBe(`/market?address=${key(44)}`);
     const walled = BROWSER_CAPABILITY_STANDINGS_V1.find((standing) => standing.action.id === 'dealer.trade');
-    expect(walled && evaluateCapabilityV1(walled, withMarket)).toMatchObject({ status: 'no-venue' });
+    expect(walled && evaluateCapabilityV1(walled, inTerminal)).toMatchObject({ status: 'no-venue' });
     expect(walled && capabilityActContractV1(walled).venue).toBe('Nothing here can build it yet');
   });
 });

@@ -34,7 +34,11 @@
 //! Regenerate with `DCLUTCH_WRITE_WIRE_VECTOR=1 cargo test -p
 //! dclutch-trading-sbf --test dealer_scenario_profile_vector`, and only when
 //! the profile deliberately moved. Regenerating is how a deliberate move lands;
-//! it is not a way to make a red go away.
+//! it is not a way to make a red go away -- and that sentence is now enforced
+//! rather than asserted: the write branch REFUSES after it writes, and the
+//! reviewed digest lives in tools/ci/wire-vector-pins.tsv, which no test can
+//! write. Finish a move with `python3 tools/ci/wire-vector-pins.py --update`
+//! and commit the fixtures and their pins together.
 
 use std::{env, fs, path::PathBuf};
 
@@ -102,7 +106,29 @@ fn browser_mirror_and_encoder_agree_on_every_profile_byte() {
         for path in vector_paths() {
             fs::write(&path, &rendered).expect("write the selector-9 profile vector");
         }
-        return;
+        // WRITING IS NOT PASSING. This branch exists so a deliberate move can
+        // land, and it used to `return` -- which made one environment variable
+        // enough to turn "the wire moved and nobody noticed" into a green run
+        // on BOTH sides at once: regenerate, and the encoder, the fixture and
+        // the browser mirror agree again about bytes nobody read. The test
+        // cannot verify its own regeneration, so it refuses instead, and the
+        // pin in tools/ci/wire-vector-pins.tsv -- which no test can write -- is
+        // what a human moves in the same commit.
+        panic!(
+            "DCLUTCH_WRITE_WIRE_VECTOR=1 wrote the regenerated vector. This is a \
+             REFUSAL, not a failure of the encoder.\n\
+             The checked-in bytes have changed and nothing has reviewed them yet. \
+             Run\n\
+             \n    python3 tools/ci/wire-vector-pins.py --update\n\n\
+             and commit the regenerated fixture AND the moved pin together, with \
+             the digests\n\
+             in the message. Separately, each half reads as an accident to \
+             whoever finds it next.\n\
+             Then re-run this test WITHOUT DCLUTCH_WRITE_WIRE_VECTOR to confirm \
+             the encoder and\n\
+             the fixture agree, and expect the browser mirror to stay red until \
+             it catches up."
+        );
     }
     for path in vector_paths() {
         let committed = fs::read_to_string(&path).unwrap_or_else(|error| {

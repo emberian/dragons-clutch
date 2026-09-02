@@ -27,7 +27,12 @@
 //!
 //! Regenerate with `DCLUTCH_WRITE_WIRE_VECTOR=1 cargo test -p
 //! dclutch-product-runtime-v2-admission --test browser_wire_vector`, and only
-//! when the wire deliberately moved.
+//! when the wire deliberately moved. THAT RUN REFUSES on purpose: it writes
+//! the file and then fails, because a test cannot review its own regeneration
+//! and the variable would otherwise be enough to green a moved wire on both
+//! sides at once. Finish the move with
+//! `python3 tools/ci/wire-vector-pins.py --update` and commit the fixture and
+//! its pin together.
 
 use std::{env, fs, path::PathBuf};
 
@@ -136,7 +141,29 @@ fn browser_wire_vector_matches_the_live_encoders() {
     let path = vector_path();
     if env::var_os("DCLUTCH_WRITE_WIRE_VECTOR").is_some() {
         fs::write(&path, &rendered).expect("write wire vector");
-        return;
+        // WRITING IS NOT PASSING. This branch exists so a deliberate move can
+        // land, and it used to `return` -- which made one environment variable
+        // enough to turn "the wire moved and nobody noticed" into a green run
+        // on BOTH sides at once: regenerate, and the encoder, the fixture and
+        // the browser mirror agree again about bytes nobody read. The test
+        // cannot verify its own regeneration, so it refuses instead, and the
+        // pin in tools/ci/wire-vector-pins.tsv -- which no test can write -- is
+        // what a human moves in the same commit.
+        panic!(
+            "DCLUTCH_WRITE_WIRE_VECTOR=1 wrote the regenerated vector. This is a \
+             REFUSAL, not a failure of the encoder.\n\
+             The checked-in bytes have changed and nothing has reviewed them yet. \
+             Run\n\
+             \n    python3 tools/ci/wire-vector-pins.py --update\n\n\
+             and commit the regenerated fixture AND the moved pin together, with \
+             the digests\n\
+             in the message. Separately, each half reads as an accident to \
+             whoever finds it next.\n\
+             Then re-run this test WITHOUT DCLUTCH_WRITE_WIRE_VECTOR to confirm \
+             the encoder and\n\
+             the fixture agree, and expect the browser mirror to stay red until \
+             it catches up."
+        );
     }
     let recorded = fs::read_to_string(&path).expect("wire vector is present");
     assert_eq!(

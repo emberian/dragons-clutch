@@ -27,9 +27,10 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_custody_contract::{
-    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1, PROJECTED_CUSTODY_STATE_BYTES_V2,
+    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1,
+    PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
+    ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, Admission, ChildEffectObservation, CoreState, FoundingIntentV5,
@@ -520,7 +521,7 @@ fn authenticate_projected_found_authority(
         .map_err(|_| CoreSbfError::Arithmetic)?;
     if expected != *frame.suffix.projected_replay.key
         || bump != projected.bump
-        || projected.phase != ProjectedCustodyPhaseV1::HoardLocked
+        || !PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1.admits(projected.phase)
         || projected.request.market != request.market().to_bytes()
         || projected.request.generation != request.generation()
         || projected.request.release_set != request.release_set().to_bytes()
@@ -1141,7 +1142,7 @@ fn authenticate_generic_projected(
         .map_err(|_| CoreSbfError::Arithmetic)?;
     if expected != *frame.suffix.projected_replay.key
         || bump != projected.bump
-        || projected.phase != ProjectedCustodyPhaseV1::HoardLocked
+        || !PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1.admits(projected.phase)
         || projected.request.market != request.market().to_bytes()
         || projected.request.generation != request.generation()
         || projected.request.realm != prepared.realm_id

@@ -8,8 +8,8 @@
 //! and retained only for the duration of the instruction.
 
 use dclutch_custody_contract::{
-    ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
-    ProjectedCustodyStateV2,
+    PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1, ProjectedCustodyOperationV1,
+    ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, Identity, ProjectFoundReceiptV2, Request, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
@@ -311,7 +311,7 @@ pub fn authenticate_series_found_span_v2(
 fn require_open_projected_state(
     state: ProjectedCustodyStateV2,
 ) -> Result<(), ProjectedMarketExecutionErrorV2> {
-    if state.phase != ProjectedCustodyPhaseV1::HoardOpen
+    if !PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1.admits(state.phase)
         || state.locked_amount != 0
         || state.request.operation != ProjectedCustodyOperationV1::OpenHoard
         || state.request.amount != 0

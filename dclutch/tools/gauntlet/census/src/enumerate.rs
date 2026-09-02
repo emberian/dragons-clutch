@@ -302,8 +302,18 @@ impl CrateIndex {
         } else {
             None
         };
+        // Free functions and associated functions only. An INHERENT METHOD is
+        // never what a path call names -- Rust resolves `open_hoard(..)` to
+        // the free function and `state.open_hoard(..)` to the method, and they
+        // routinely share a name because the adapter is named for the
+        // transition it drives. Indexing methods without this made every such
+        // pair ambiguous, and an ambiguous name is refused: Custody's five
+        // projected route handlers stopped resolving at all, silently, while
+        // the route count did not move. `resolve_from` reads a `Type::name`
+        // qualifier through `resolve_method` before it ever gets here.
         let mut matches = self.functions.iter().filter(|fact| {
-            fact.name == name
+            fact.self_type.is_none()
+                && fact.name == name
                 && match qualifier {
                     None => true,
                     Some(qualifier) => {
@@ -2197,5 +2207,87 @@ mod doc_tests {
         let (summary, detail) = split(parse_quote! { Undocumented = 2 });
         assert_eq!(summary, None);
         assert_eq!(detail, None);
+    }
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::index_source;
+
+    /// A bare call names the FREE function, never the inherent method that
+    /// shares its name.
+    ///
+    /// The adapter is routinely named for the transition it drives --
+    /// Custody's `open_hoard` handler calls `ProjectedCustodyStateV2::
+    /// open_hoard` -- so indexing methods without this rule made the pair
+    /// ambiguous and the CAUTIOUS resolver refused both. That is the worst
+    /// shape a refusal can take: five Custody route handlers stopped
+    /// resolving at all and the route count did not move, because a route
+    /// with no gate and a route whose handler could not be found print the
+    /// same cell.
+    #[test]
+    fn a_bare_call_resolves_to_the_free_function_and_a_typed_one_to_the_method() {
+        let index = index_source(
+            "projected",
+            "fn open_hoard() {}
+             struct State {}
+             impl State { fn open_hoard(&self) {} }",
+        );
+        let bare = index.resolve("open_hoard").expect("the free function");
+        assert!(bare.self_type.is_none());
+        let method = index
+            .resolve_from("projected", "State::open_hoard")
+            .expect("the method");
+        assert_eq!(method.self_type.as_deref(), Some("State"));
+        assert!(index.resolve_method("State", "open_hoard").is_some());
+        assert!(index.resolve_method("Other", "open_hoard").is_none());
+    }
+
+    /// A method name carried by two types is refused, not guessed.
+    #[test]
+    fn a_method_name_on_two_types_has_no_sole_owner() {
+        let index = index_source(
+            "m",
+            "struct A {}
+             impl A { fn validate(&self) {} }
+             struct B {}
+             impl B { fn validate(&self) {} }",
+        );
+        assert!(index.sole_method("validate").is_none());
+        assert!(index.resolve("validate").is_none());
+        assert!(index.resolve_method("A", "validate").is_some());
+    }
+
+    /// A trait impl contributes no method: one name over many types is a guess.
+    #[test]
+    fn a_trait_impl_contributes_no_method() {
+        let index = index_source(
+            "m",
+            "struct A {}
+             impl Decode for A { fn decode(&self) {} }",
+        );
+        assert!(index.resolve_method("A", "decode").is_none());
+        assert!(index.sole_method("decode").is_none());
+    }
+
+    /// A `Result<T>` return reads as `T`, which is what a `?` binds.
+    #[test]
+    fn a_return_type_is_unwrapped_through_one_generic_layer() {
+        let index = index_source(
+            "m",
+            "fn read_state() -> Result<StateV2, ProgramError> { todo!() }
+             struct StateV2 { inner: Inner }
+             struct Inner {}",
+        );
+        assert_eq!(
+            index
+                .resolve("read_state")
+                .expect("indexed")
+                .output
+                .as_deref(),
+            Some("StateV2")
+        );
+        assert_eq!(index.field_type("StateV2", "inner"), Some("Inner"));
+        assert_eq!(index.field_type("StateV2", "absent"), None);
     }
 }

@@ -62,6 +62,13 @@ SBPF_V0_FRAME_BYTES = 4096
 # build was still running.
 COMMIT_FIELD = "commit"
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
+# What `owed` prints for a commit made without `tools/lane.sh`, which is the
+# only way a commit here reaches HEAD with no `Lane:` trailer. It is named
+# rather than blank so the ledger distinguishes "no lane claimed this" from a
+# formatting hole.
+UNATTRIBUTED = "unattributed"
+
+
 # The attribution predicate for `owed`. A link's frames are a function of every
 # crate compiled INTO it, not only of the program crate: the codegen that moves
 # a frame is as often three edges down the path-dependency closure. That closure
@@ -540,6 +547,14 @@ def owed(repo: Path, since: str | None, baseline_path: Path | None, until: str) 
     recorded commit, so the gate answers "red, and here is the ledger" instead
     of "red".
 
+    Each debtor is printed with the `Lane:` trailer `tools/lane.sh` writes, so
+    the ledger names a LANE and not only a commit. Every lane here commits as
+    the same git author; before the trailer existed this output said "who owes
+    them" in the docstring and printed the identical name on every row, and on
+    2026-09-02 three lanes mis-attributed each other's commits in one
+    afternoon. A commit made without the wrapper has no trailer and is printed
+    as unattributed rather than guessed at.
+
     Attribution follows each link's PATH-DEPENDENCY CLOSURE, not just its own
     program crate. A frame moves wherever the compiler's input changed, and in
     this tree that is usually a crate two or three edges down: the +832 bytes on
@@ -608,10 +623,21 @@ def owed(repo: Path, since: str | None, baseline_path: Path | None, until: str) 
         reached = sorted(
             link for link, closure in closures.items() if closure & set(moved)
         )
-        subject = git(repo, "log", "-1", "--format=%s", revision).strip()
+        # Subject and lane in ONE `git log`, separated by a NUL that neither
+        # can contain. Every lane in this tree commits as the same author, so
+        # the author field cannot answer "who owes this" and this ledger --
+        # whose whole purpose is naming the debtor -- would otherwise print one
+        # identical name beside every row. `tools/lane.sh` writes the trailer.
+        recorded = git(
+            repo, "log", "-1",
+            "--format=%s%x00%(trailers:key=Lane,valueonly,separator=%x2C)",
+            revision,
+        ).strip("\n")
+        subject, _, lane = recorded.partition("\0")
+        lane = " ".join(lane.split()) or UNATTRIBUTED
         shown = moved[:4] + ([f"and {len(moved) - 4} more"] if len(moved) > 4 else [])
         debtors.append(
-            f"{revision[:8]} {subject}\n"
+            f"{revision[:8]} [lane {lane}] {subject}\n"
             f"      reaches {', '.join(reached)}\n"
             f"      via {', '.join(shown)}"
         )
@@ -634,6 +660,10 @@ def owed(repo: Path, since: str | None, baseline_path: Path | None, until: str) 
         + "\n".join(f"  {line}" for line in debtors)
         + "\n  Each owes a `tools/frameguard/run.sh --at <its commit>` recapture"
         " in its own commit, or an explicit statement that it leaves the ratchet red."
+        f"\n  `lane` is the commit's `Lane:` trailer; `{UNATTRIBUTED}` means it was"
+        " committed without `tools/lane.sh`,"
+        "\n  which every commit before 2026-09-02 was, so an old range says it about"
+        " every row."
     )
 
 

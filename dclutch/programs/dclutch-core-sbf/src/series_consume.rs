@@ -28,8 +28,8 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    PROJECTED_CUSTODY_STATE_BYTES_V2, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
-    ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
+    PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
+    PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
@@ -1087,7 +1087,7 @@ fn authenticate_projected_state(
         .map_err(|_| CoreSbfError::Reference)?;
     if expected != *suffix.projected_replay.key
         || bump != projected.bump
-        || projected.phase != ProjectedCustodyPhaseV1::HoardLocked
+        || !PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1.admits(projected.phase)
         || projected.request.market != frame.found.market.key.to_bytes()
         || projected.request.generation
             != request
