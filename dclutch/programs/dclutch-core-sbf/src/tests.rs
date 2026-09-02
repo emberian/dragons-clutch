@@ -375,3 +375,167 @@ fn the_recovery_weld_takes_no_route_from_a_fund_that_already_exists() {
         "the weld's refusal must stay inside Core's registered band"
     );
 }
+
+/// Every named admissible-prestate constant against the exact inline condition
+/// it replaced.
+///
+/// The named constants are the guards themselves, so this is not a second
+/// implementation kept in step with a first: it is the substitution's
+/// receipt. Each case writes out the boolean expression that stood at the
+/// guard site before the constant existed, and asserts agreement over all
+/// fifteen `(Phase, Readiness)` prestates. A rename that widened a set by one
+/// prestate would compile, pass every program test whose fixture never
+/// reaches that prestate, and fail here.
+mod admissible_prestates {
+    use dclutch_market_core_codec::{MarketAdmissionV1, Phase, Readiness};
+
+    use crate::{
+        execute_provider_v3::EXECUTE_PROVIDER_ADMISSIBLE_PRESTATES_V1,
+        generic_founding_v1::GENERIC_FOUNDING_OPEN_ADMISSIBLE_PRESTATES_V1,
+        open_market::OPEN_MARKET_ADMISSIBLE_PRESTATES_V1,
+        resolution::{
+            ADMIT_TERMINAL_ADMISSIBLE_PRESTATES_V1, CREATE_FUND_ADMISSIBLE_PRESTATES_V1,
+            VERIFY_FUND_READY_ADMISSIBLE_PRESTATES_V1,
+        },
+        retire_v1::{
+            RETIRE_ADMISSIBLE_PRESTATES_V1, RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1,
+        },
+        retirement_replay_handoff_v1::RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1,
+        series_open::SERIES_OPEN_ADMISSIBLE_PRESTATES_V1,
+    };
+
+    const ALL_PHASES: [Phase; 5] = [
+        Phase::Founding,
+        Phase::Open,
+        Phase::Terminal,
+        Phase::Retiring,
+        Phase::Retired,
+    ];
+    const ALL_READINESS: [Readiness; 3] =
+        [Readiness::Prepaid, Readiness::Ready, Readiness::Consumed];
+
+    /// Assert `declared` admits exactly the prestates `inline` accepts.
+    fn agrees(
+        name: &str,
+        declared: MarketAdmissionV1,
+        inline: impl Fn(Phase, Readiness) -> bool,
+    ) {
+        let mut admitted = 0;
+        for phase in ALL_PHASES {
+            for readiness in ALL_READINESS {
+                assert_eq!(
+                    declared.admits(phase, readiness),
+                    inline(phase, readiness),
+                    "{name} disagrees with the condition it replaced at {phase:?}/{readiness:?}"
+                );
+                if declared.admits(phase, readiness) {
+                    admitted += 1;
+                }
+            }
+        }
+        assert!(admitted > 0, "{name} admits nothing at all");
+    }
+
+    #[test]
+    fn open_market_admits_what_its_inline_guard_admitted() {
+        agrees(
+            "OPEN_MARKET_ADMISSIBLE_PRESTATES_V1",
+            OPEN_MARKET_ADMISSIBLE_PRESTATES_V1,
+            |phase, readiness| !(phase != Phase::Founding || readiness != Readiness::Ready),
+        );
+    }
+
+    #[test]
+    fn execute_provider_admits_what_its_inline_guard_admitted() {
+        agrees(
+            "EXECUTE_PROVIDER_ADMISSIBLE_PRESTATES_V1",
+            EXECUTE_PROVIDER_ADMISSIBLE_PRESTATES_V1,
+            |phase, readiness| !(phase != Phase::Open || readiness != Readiness::Consumed),
+        );
+    }
+
+    #[test]
+    fn resolution_fund_actions_admit_what_their_inline_guards_admitted() {
+        // `CreateFund`'s inline guard also required an absent terminal receipt.
+        // That conjunct is not a prestate and stays at the guard; what is
+        // declared here is the `matches!` half, exactly.
+        agrees(
+            "CREATE_FUND_ADMISSIBLE_PRESTATES_V1",
+            CREATE_FUND_ADMISSIBLE_PRESTATES_V1,
+            |phase, readiness| {
+                matches!(
+                    (phase, readiness),
+                    (Phase::Founding, Readiness::Prepaid) | (Phase::Open, Readiness::Consumed)
+                )
+            },
+        );
+        agrees(
+            "VERIFY_FUND_READY_ADMISSIBLE_PRESTATES_V1",
+            VERIFY_FUND_READY_ADMISSIBLE_PRESTATES_V1,
+            |phase, readiness| {
+                matches!(
+                    (phase, readiness),
+                    (Phase::Founding, Readiness::Prepaid)
+                        | (Phase::Founding, Readiness::Ready)
+                        | (Phase::Open, Readiness::Consumed)
+                )
+            },
+        );
+        agrees(
+            "ADMIT_TERMINAL_ADMISSIBLE_PRESTATES_V1",
+            ADMIT_TERMINAL_ADMISSIBLE_PRESTATES_V1,
+            |phase, readiness| {
+                matches!(phase, Phase::Open | Phase::Terminal) && readiness == Readiness::Consumed
+            },
+        );
+    }
+
+    #[test]
+    fn founding_open_stages_admit_what_their_inline_guards_admitted() {
+        for (name, declared) in [
+            (
+                "GENERIC_FOUNDING_OPEN_ADMISSIBLE_PRESTATES_V1",
+                GENERIC_FOUNDING_OPEN_ADMISSIBLE_PRESTATES_V1,
+            ),
+            (
+                "SERIES_OPEN_ADMISSIBLE_PRESTATES_V1",
+                SERIES_OPEN_ADMISSIBLE_PRESTATES_V1,
+            ),
+        ] {
+            agrees(name, declared, |phase, readiness| {
+                !(!matches!(phase, Phase::Founding) || readiness != Readiness::Prepaid)
+            });
+        }
+    }
+
+    #[test]
+    fn retirement_routes_admit_what_their_inline_guards_admitted() {
+        // These three guards named no readiness, so every readiness in
+        // `Retiring` was admitted and the declaration says so.
+        for (name, declared) in [
+            (
+                "RETIRE_ADMISSIBLE_PRESTATES_V1",
+                RETIRE_ADMISSIBLE_PRESTATES_V1,
+            ),
+            (
+                "RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1",
+                RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1,
+            ),
+            (
+                "RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1",
+                RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1,
+            ),
+        ] {
+            agrees(name, declared, |phase, _readiness| {
+                !(phase != Phase::Retiring)
+            });
+            for phase in ALL_PHASES {
+                assert_eq!(
+                    declared.admits_phase(phase),
+                    phase == Phase::Retiring,
+                    "{name} phase projection disagrees at {phase:?}"
+                );
+            }
+        }
+    }
+}

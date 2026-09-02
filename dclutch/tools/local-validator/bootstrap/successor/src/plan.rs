@@ -1939,6 +1939,26 @@ pub(crate) fn pubkey(value: &str) -> Result<Pubkey> {
 mod tests {
     use super::*;
 
+    /// A scratch path no other run can collide with.
+    ///
+    /// `Pubkey::new_unique()` is a per-PROCESS counter that restarts from the
+    /// same value in every test binary, so the names one run draws are exactly
+    /// the names the next run draws. A run that dies before its
+    /// `remove_dir_all` therefore poisons every later run: measured 2026-09-02,
+    /// eleven roots left by an earlier failure turned this module red at
+    /// `--test-threads=4` with `create test root: AlreadyExists`, while it
+    /// passed one test at a time -- which reads exactly like a concurrency bug
+    /// in the code under test and is not one. The process id makes the name
+    /// space per-run, so stale roots are inert; `direct_ticket.rs` already
+    /// spells it this way.
+    fn scratch_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "dclutch-successor-{label}-{}-{}",
+            std::process::id(),
+            Pubkey::new_unique()
+        ))
+    }
+
     fn write_test_elf(directory: &Path, name: &str, tag: u8) -> (PathBuf, String) {
         let path = directory.join(name);
         let bytes = [0x7f, b'E', b'L', b'F', tag];
@@ -2018,8 +2038,7 @@ mod tests {
 
     #[test]
     fn observed_payload_keeps_both_digests_and_binds_the_complete_live_tail() {
-        let observations =
-            std::env::temp_dir().join(format!("dclutch-successor-pad-{}", Pubkey::new_unique()));
+        let observations = scratch_root("pad");
         let former = Pubkey::new_unique();
         let raw = test_elf(1);
         let mut live = raw.to_vec();
@@ -2072,10 +2091,7 @@ mod tests {
 
     #[test]
     fn observed_payload_refuses_single_digest_ambiguity_and_wrong_live_digest() {
-        let observations = std::env::temp_dir().join(format!(
-            "dclutch-successor-pad-refuse-{}",
-            Pubkey::new_unique()
-        ));
+        let observations = scratch_root("pad-refuse");
         let former = Pubkey::new_unique();
         let raw = test_elf(1);
         let mut live = raw.to_vec();
@@ -2279,8 +2295,7 @@ mod tests {
         deployments: RoleDeploymentsV1,
         resolution_semantic_release_id: [u8; 32],
     ) -> (Result<SuccessorPlan>, PathBuf) {
-        let root =
-            std::env::temp_dir().join(format!("dclutch-successor-plan-{}", Pubkey::new_unique()));
+        let root = scratch_root("plan");
         fs::create_dir(&root).expect("create test root");
         let (registry_elf, registry_sha256) = write_test_elf(&root, "dclutch_registry_sbf.so", 1);
         let (core_elf, core_sha256) = write_test_elf(&root, "dclutch_core_sbf.so", 2);

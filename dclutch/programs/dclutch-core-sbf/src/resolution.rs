@@ -7,8 +7,8 @@ use dclutch_capability_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2, ChildEffectObservation,
-    CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Phase, Product,
-    Readiness, Request, Role, TerminalReceipt, admit_terminal, verify_readiness,
+    CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, MarketAdmissionV1, Phase,
+    Product, Readiness, Request, Role, TerminalReceipt, admit_terminal, verify_readiness,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_resolution_codec::{
@@ -45,6 +45,57 @@ use crate::{
     product_runtime_v2::{authenticate_selected_runtime_v2, project_core_product_v2},
     records::authenticate_finalized_record,
 };
+
+/// Market prestates in which a Market may still create and activate its
+/// Resolution Fund.
+///
+/// Two prestates are admissible and they are the same fact reached by the two
+/// founding routes.
+///
+/// `Founding + Prepaid` is the readiness ladder: Found, then `CreateFund`,
+/// then `VerifyFundReady` (which is what moves readiness to `Ready`), then a
+/// separate `OpenMarket`.
+///
+/// `Open + Consumed` is the atomic founding. Its commit-last stage runs
+/// `open_series_market`, which transitions `Founding + Prepaid` straight to
+/// `Open + Consumed` in one step, so a Market founded that way never passes
+/// through the ladder — and before this admission existed it had no route to
+/// its own Resolution Fund at all, which made every atomically founded Market
+/// permanently unresolvable.
+///
+/// Admitting the second prestate defers only Source-state creation, not
+/// authority. The capability manifest is an immutable seed of the Market
+/// address, and the Resolution subset ledger already exists before Market
+/// Found. `CreateFund` writes only the prepaid Source destination and
+/// authenticates the ledger byte-for-byte. Nothing here is a caller choice.
+pub const CREATE_FUND_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 = MarketAdmissionV1::prestates(&[
+    (Phase::Founding, Readiness::Prepaid),
+    (Phase::Open, Readiness::Consumed),
+]);
+
+/// Market prestates in which the Resolution Fund's readiness may be verified.
+///
+/// Three prestates, and two of them have no transition left to make:
+/// `commit_verified_readiness` is what decides that, and it is a guard rather
+/// than a refusal because re-presenting an activation this Market already
+/// accepted is not an error. Only `Founding + Prepaid` still moves.
+pub const VERIFY_FUND_READY_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::prestates(&[
+        (Phase::Founding, Readiness::Prepaid),
+        (Phase::Founding, Readiness::Ready),
+        (Phase::Open, Readiness::Consumed),
+    ]);
+
+/// Market prestates in which a terminal Product result may be admitted.
+///
+/// `Open` is the ordinary case. `Terminal` is admitted so that a re-presented
+/// admission of the receipt this Market already holds is idempotent rather
+/// than a refusal; the receipt itself is compared byte-for-byte downstream.
+pub const ADMIT_TERMINAL_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::prestates(&[
+        (Phase::Open, Readiness::Consumed),
+        (Phase::Terminal, Readiness::Consumed),
+    ]);
 
 /// Exact Resolution role request after the 280-byte Core envelope.
 pub const RESOLUTION_ROLE_REQUEST_BYTES_V1: usize =
@@ -396,56 +447,25 @@ fn authenticate_request_coordinates(
         return Err(CoreSbfError::Reference);
     }
     let valid_phase = match action {
-        ComposedResolutionActionV1::CreateFund => resolution_fund_prestate_admissible(state),
-        ComposedResolutionActionV1::VerifyFundReady => matches!(
-            (state.phase, state.readiness),
-            (Phase::Founding, Readiness::Prepaid)
-                | (Phase::Founding, Readiness::Ready)
-                | (Phase::Open, Readiness::Consumed)
-        ),
+        // A Market that has already minted a terminal receipt is refused from
+        // both directions. `Terminal`, `Retiring` and `Retired` are excluded by
+        // the declared prestates, and the receipt is also checked directly so
+        // that a phase added later cannot inherit this admission by accident.
+        ComposedResolutionActionV1::CreateFund => {
+            state.terminal_receipt.is_none()
+                && CREATE_FUND_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
+        }
+        ComposedResolutionActionV1::VerifyFundReady => {
+            VERIFY_FUND_READY_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
+        }
         ComposedResolutionActionV1::AdmitTerminal => {
-            matches!(state.phase, Phase::Open | Phase::Terminal)
-                && state.readiness == Readiness::Consumed
+            ADMIT_TERMINAL_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
         }
     };
     if !valid_phase {
         return Err(CoreSbfError::Transition);
     }
     Ok(())
-}
-
-/// Whether a Market may still create and activate its Resolution Fund.
-///
-/// Two prestates are admissible and they are the same fact reached by the two
-/// founding routes.
-///
-/// `Founding + Prepaid` is the readiness ladder: Found, then `CreateFund`,
-/// then `VerifyFundReady` (which is what moves readiness to `Ready`), then a
-/// separate `OpenMarket`.
-///
-/// `Open + Consumed` is the atomic founding. Its commit-last stage runs
-/// `open_series_market`, which transitions `Founding + Prepaid` straight to
-/// `Open + Consumed` in one step, so a Market founded that way never passes
-/// through the ladder — and before this admission existed it had no route to
-/// its own Resolution Fund at all, which made every atomically founded Market
-/// permanently unresolvable.
-///
-/// Admitting the second prestate defers only Source-state creation, not
-/// authority. The capability manifest is an immutable seed of the Market
-/// address, and the Resolution subset ledger already exists before Market
-/// Found. `CreateFund` writes only the prepaid Source destination and
-/// authenticates the ledger byte-for-byte. Nothing here is a caller choice.
-///
-/// A Market that has already minted a terminal receipt is refused from both
-/// directions. `Terminal`, `Retiring` and `Retired` are excluded by phase, and
-/// the receipt is also checked directly so that a phase added later cannot
-/// inherit this admission by accident.
-const fn resolution_fund_prestate_admissible(state: CoreState) -> bool {
-    state.terminal_receipt.is_none()
-        && matches!(
-            (state.phase, state.readiness),
-            (Phase::Founding, Readiness::Prepaid) | (Phase::Open, Readiness::Consumed)
-        )
 }
 
 /// Authenticate the immutable V7 activation receipt and its exact live Active ledger.

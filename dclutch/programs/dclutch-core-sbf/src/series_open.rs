@@ -7,8 +7,9 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_claims_svm::founding_v5::ClaimsFoundingReceiptV5;
 use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Readiness, Role, SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1,
-    STATE_BYTES, SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitV1,
+    CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Readiness, Role,
+    SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, STATE_BYTES, SeriesCoreAckV1, SeriesCoreActionV1,
+    SeriesCoreRequestV1, SeriesFoundingPermitV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
@@ -48,6 +49,14 @@ use crate::{
     records::authenticate_finalized_record,
     release::{authenticate_role, identity},
 };
+
+/// Market prestates in which the final Series Open is admissible.
+///
+/// One prestate: the Market its Series founding left at `Founding + Prepaid`.
+/// `open_series_market` is what takes it to `Open + Consumed` in one step,
+/// which is why no ladder readiness appears here.
+pub const SERIES_OPEN_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::prestates(&[(Phase::Founding, Readiness::Prepaid)]);
 
 /// Exact final-Series-Open account count.
 pub const SERIES_OPEN_ACCOUNT_COUNT_V1: usize = 37;
@@ -404,8 +413,7 @@ fn authenticate_market_and_roles(
                 .ok_or(CoreSbfError::Instruction)?
                 .to_bytes()
         || state.rent_beneficiary.to_bytes() != frame.rent_credit.key.to_bytes()
-        || !matches!(state.phase, dclutch_market_core_codec::Phase::Founding)
-        || state.readiness != Readiness::Prepaid
+        || !SERIES_OPEN_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
     {
         return Err(CoreSbfError::Market);
     }

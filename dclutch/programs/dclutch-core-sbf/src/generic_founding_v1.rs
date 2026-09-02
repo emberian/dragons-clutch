@@ -35,8 +35,8 @@ use dclutch_market_core_codec::{
     Action, Admission, ChildEffectObservation, CoreState, FoundingIntentV5,
     GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1, GENERIC_FOUNDING_MAX_FUNDING_STATES_V1,
     GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1, GenericFoundingAckV1, GenericFoundingRequestV1,
-    GenericFoundingStageV1, Identity, MarketCoreStateSeedsV2, Readiness, Request, Role,
-    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    GenericFoundingStageV1, Identity, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Readiness,
+    Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
     SeriesFoundingPermitV1, SeriesOpenObservation, generic_founding_funding_list_id_v1,
     open_series_market,
 };
@@ -76,6 +76,14 @@ pub use dclutch_market_core_codec::{
 
 const _: () =
     assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 2);
+
+/// Market prestates in which the generic founding's Open stage is admissible.
+///
+/// The Found stage of this same route CREATES the Market, so it has no
+/// prestate to declare; this is the second stage, which finds the Market its
+/// own Found stage left at `Founding + Prepaid` and opens it atomically.
+pub const GENERIC_FOUNDING_OPEN_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::prestates(&[(Phase::Founding, Readiness::Prepaid)]);
 
 struct GenericFoundAccounts<'accounts, 'info> {
     found: ProjectedFoundAccountsV2<'accounts, 'info>,
@@ -1433,8 +1441,7 @@ fn authenticate_generic_market(
         || state.identity.selected_release_set.to_bytes() != request.release_set().to_bytes()
         || state.identity.generation != request.generation()
         || state.rent_beneficiary.to_bytes() != frame.rent_credit.key.to_bytes()
-        || !matches!(state.phase, dclutch_market_core_codec::Phase::Founding)
-        || state.readiness != Readiness::Prepaid
+        || !GENERIC_FOUNDING_OPEN_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
     {
         return Err(CoreSbfError::Market);
     }

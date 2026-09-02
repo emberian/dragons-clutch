@@ -9,8 +9,8 @@ use dclutch_custody_contract::{
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_market_core_codec::{
-    Action, ChildEffectObservation, CollateralObservation, CoreState, Realm, Request, Role,
-    VacantAccount, open_market,
+    Action, ChildEffectObservation, CollateralObservation, CoreState, MarketAdmissionV1, Phase,
+    Readiness, Realm, Request, Role, VacantAccount, open_market,
 };
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_registry_svm::continuation_v1::{
@@ -37,6 +37,16 @@ use crate::{
     records::authenticate_finalized_record,
     release::{RoleDeploymentAccounts, authenticate_continuation_roles, identity},
 };
+
+/// Market prestates in which the commit-last `OpenMarket` transition is
+/// admissible.
+///
+/// One prestate, and the ladder is why: `Found` leaves a Market at
+/// `Founding + Prepaid`, `CreateFund` prepays it, and `VerifyFundReady` is the
+/// action that moves readiness to `Ready`. This route is what spends that
+/// readiness, so it is the only prestate that can reach it.
+pub const OPEN_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::prestates(&[(Phase::Founding, Readiness::Ready)]);
 
 /// Exact top-level instruction width for one canonical Custody creation effect.
 pub const OPEN_MARKET_INSTRUCTION_BYTES_V1: usize =
@@ -164,9 +174,7 @@ fn authenticate_open<'accounts, 'info>(
     let state =
         Box::new(CoreState::decode(state_bytes.as_ref()).map_err(|_| CoreSbfError::Market)?);
     authenticate_market(program_id, frame.market(), *state, request)?;
-    if state.phase != dclutch_market_core_codec::Phase::Founding
-        || state.readiness != dclutch_market_core_codec::Readiness::Ready
-    {
+    if !OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness) {
         return Err(CoreSbfError::Transition);
     }
     let continuation_digest = ContentId::new(hashv(&[request_bytes, custody_bytes]).to_bytes())

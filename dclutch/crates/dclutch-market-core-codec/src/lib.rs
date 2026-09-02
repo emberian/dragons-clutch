@@ -33,6 +33,7 @@ mod capability;
 mod capability_funding_v2;
 mod found_frame_v3;
 mod generic_founding_v1;
+mod market_admission_v1;
 mod physical;
 mod project_found;
 mod retirement_checkpoint_v1;
@@ -57,6 +58,7 @@ pub use generated_physical::{
     SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
 };
 pub use generic_founding_v1::*;
+pub use market_admission_v1::MarketAdmissionV1;
 pub use physical::*;
 pub use project_found::*;
 pub use retirement_checkpoint_v1::*;

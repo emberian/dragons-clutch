@@ -9,7 +9,7 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_market_core_codec::{
-    Action, CoreState, Phase, Product, Readiness, Request, Role, STATE_BYTES,
+    Action, CoreState, MarketAdmissionV1, Phase, Product, Readiness, Request, Role, STATE_BYTES,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -45,6 +45,14 @@ use crate::{
     product_runtime_v2::{authenticate_selected_runtime_v2, project_core_product_v2},
     release::{RoleDeploymentAccounts, authenticate_roles},
 };
+
+/// Market prestates in which Core composes one provider execution.
+///
+/// One prestate. The Market has opened, and its Resolution Fund readiness has
+/// been consumed by that opening, which is what makes a resolver's update the
+/// only remaining source of a terminal result.
+pub const EXECUTE_PROVIDER_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::prestates(&[(Phase::Open, Readiness::Consumed)]);
 
 /// Exact account count shared with the Resolution Core-caller profile.
 pub const EXECUTE_PROVIDER_ACCOUNT_COUNT_V3: usize = PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3;
@@ -167,8 +175,7 @@ fn authenticate_parent(
     provider: &ProviderExecutionRequestV3,
 ) -> Result<u8, CoreSbfError> {
     if request.action != Action::ExecuteProvider
-        || state.phase != Phase::Open
-        || state.readiness != Readiness::Consumed
+        || !EXECUTE_PROVIDER_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
         || provider.caller != ProviderCallerV3::Core
         || provider.generation != request.generation
         || provider.market != account(accounts, MARKET)?.key.to_bytes()

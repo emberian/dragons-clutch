@@ -39,8 +39,8 @@ use dclutch_market_core_codec::{
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1,
     AggregateRetirementCheckpointV1, AggregateRetirementPhaseV1,
     AggregateRetirementSuffixRequestV1, ChildEffectObservation, ClaimsClosedCheckpointInputV1,
-    ClaimsEffectObservation, CoreState, MarketCoreStateSeedsV2, Phase, REQUEST_BYTES,
-    RETIRED_CANDIDATE_DIGEST_DOMAIN_V1, RETIREMENT_BUNDLE_BYTES_V1,
+    ClaimsEffectObservation, CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase,
+    REQUEST_BYTES, RETIRED_CANDIDATE_DIGEST_DOMAIN_V1, RETIREMENT_BUNDLE_BYTES_V1,
     RETIREMENT_CUSTODY_RECEIPT_COUNT_V1, RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1,
     RETIREMENT_RECEIPT_BYTES_V1, RETIREMENT_ROLE_COUNT_V1, Request, RetirementBundleV1,
     RetirementReceiptInputV1, RetirementReceiptV1, Role, STATE_BYTES, retire,
@@ -70,6 +70,19 @@ use crate::{
     CoreSbfError, infrastructure,
     release::{RoleDeploymentAccounts, authenticate_continuation_roles, authenticate_roles},
 };
+
+/// Market phases in which the joined retirement is admissible.
+///
+/// `BeginRetiring` is what puts a terminal Market into `Retiring`, and this
+/// route is what finishes it. The written guard names no readiness because
+/// readiness carries no authority this late.
+pub const RETIRE_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::phases(&[Phase::Retiring]);
+
+/// Market phases in which the checkpointed retirement's Custody suffix is
+/// admissible. The same phase as the retirement it is a stage of.
+pub const RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::phases(&[Phase::Retiring]);
 
 /// Exact joined retirement instruction width.
 pub const RETIREMENT_INSTRUCTION_BYTES_V1: usize = REQUEST_BYTES
@@ -784,7 +797,7 @@ fn authenticate_checkpoint(
     .0;
     if frame.market.owner != program_id
         || frame.market.data_len() != STATE_BYTES
-        || state.phase != Phase::Retiring
+        || !RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
         || state.outstanding_capabilities != 0
         || state.identity.market_id.to_bytes() != frame.market.key.to_bytes()
         || suffix.market != frame.market.key.to_bytes()
@@ -1627,7 +1640,7 @@ fn authenticate_market(
     .0;
     if expected != *frame.market.key
         || frame.core_program.key != program_id
-        || state.phase != Phase::Retiring
+        || !RETIRE_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
         || state.identity.market_id.to_bytes() != bundle.market
         || state.identity.selected_release_set.to_bytes() != bundle.release_set
         || state.identity.generation != bundle.generation

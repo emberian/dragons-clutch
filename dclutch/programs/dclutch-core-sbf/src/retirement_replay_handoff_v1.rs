@@ -11,7 +11,9 @@ use dclutch_custody_contract::{
     RetirementReplayHandoffReceiptV1, RetirementReplayHandoffRequestV1,
     retirement_replay_handoff_accounts_v1::*,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, Role};
+use dclutch_market_core_codec::{
+    CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Role,
+};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -34,6 +36,14 @@ use crate::{
     CoreSbfError,
     release::{RoleDeploymentAccounts, authenticate_roles},
 };
+
+/// Market phases in which a retirement replay handoff is admissible.
+///
+/// The written guard names no readiness, and that is accurate rather than
+/// lax: readiness is spent long before a Market reaches `Retiring`, so it
+/// carries no further authority here.
+pub const RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::phases(&[Phase::Retiring]);
 
 /// Execute and verify one atomic retirement replay handoff.
 #[inline(never)]
@@ -113,7 +123,7 @@ fn authenticate_market(
         || state.identity.market_id.to_bytes() != request.market()
         || state.identity.registry_program.to_bytes() != accounts[REGISTRY].key.to_bytes()
         || state.identity.generation != request.generation()
-        || state.phase != Phase::Retiring
+        || !RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
     {
         return Err(CoreSbfError::Market.into());
     }
