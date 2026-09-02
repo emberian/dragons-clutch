@@ -135,24 +135,32 @@ export function checkedReleaseSetIdsV1(cut = PUBLIC_DEVNET_CUT_V1): ReadonlyArra
  * fragment and the staging tool ingests it, unchanged.
  */
 export type CheckedReleaseFragmentV1 = Readonly<{
-  schema: 'dclutch-checked-release-fragment-v1';
-  releaseSetId: string;
-  gateDigest: string;
-  sealedSet: string;
+  schema: 'dclutch-public-cut-checked-releases-fragment-v1';
+  /** Keyed exactly as the cut's own rows are, so ingestion is a copy. */
+  checkedReleases: Readonly<Record<string, PublicCutCheckedReleaseV1>>;
 }>;
 
-const FRAGMENT_SCHEMA = 'dclutch-checked-release-fragment-v1';
+const FRAGMENT_SCHEMA = 'dclutch-public-cut-checked-releases-fragment-v1';
 
 /** Parse a sealing driver's fragment, refusing any shape it does not know. */
 export function parseCheckedReleaseFragmentV1(value: unknown): CheckedReleaseFragmentV1 {
   const root = object(value, 'checked release fragment');
-  exactKeys(root, ['schema', 'releaseSetId', 'gateDigest', 'sealedSet'], 'checked release fragment');
+  exactKeys(root, ['schema', 'checkedReleases'], 'checked release fragment');
   if (root.schema !== FRAGMENT_SCHEMA) throw new Error('checked release fragment has another schema');
+  const rows = object(root.checkedReleases, 'checked release fragment checkedReleases');
   return Object.freeze({
     schema: FRAGMENT_SCHEMA,
-    releaseSetId: digest(root.releaseSetId, 'checked release fragment releaseSetId'),
-    gateDigest: digest(root.gateDigest, 'checked release fragment gateDigest'),
-    sealedSet: digest(root.sealedSet, 'checked release fragment sealedSet'),
+    checkedReleases: Object.freeze(Object.fromEntries(Object.entries(rows).map(([releaseSetId, entry]) => {
+      const body = object(entry, `checked release fragment ${releaseSetId}`);
+      exactKeys(body, ['gateDigest', 'sealedSet'], `checked release fragment ${releaseSetId}`);
+      return [
+        digest(releaseSetId, 'checked release fragment key'),
+        Object.freeze({
+          gateDigest: digest(body.gateDigest, `checked release fragment ${releaseSetId} gateDigest`),
+          sealedSet: digest(body.sealedSet, `checked release fragment ${releaseSetId} sealedSet`),
+        }),
+      ];
+    }))),
   });
 }
 
@@ -181,17 +189,23 @@ export function stageCheckedReleaseV1(
     throw new Error('a pending public cut names no Market, so no checked release can be about it');
   }
   const selected = digest(marketReleaseSetId, 'Market execution release set');
-  if (fragment.releaseSetId !== selected) {
-    throw new Error(
-      `this checked release fragment is for execution release set ${fragment.releaseSetId}, and the cut's Market ${cut.market} selects ${selected}`,
-    );
+  const named = Object.keys(fragment.checkedReleases);
+  const row = fragment.checkedReleases[selected] ?? null;
+  if (row === null) {
+    // An unsealed plan emits an EMPTY map rather than omitting the key, which
+    // is the producer stating "nothing is sealed" instead of staying silent --
+    // and it must not read as "stage nothing, quietly". Both arms name what
+    // was found so the operator sees which deployment the fragment is about.
+    throw new Error(named.length === 0
+      ? `this checked release fragment seals nothing, and the cut's Market ${cut.market} selects execution release set ${selected}`
+      : `this checked release fragment is for execution release set${named.length === 1 ? '' : 's'} ${named.join(', ')}, and the cut's Market ${cut.market} selects ${selected}`);
   }
   const existing = cut.checkedReleases[selected] ?? null;
-  if (existing !== null && (existing.gateDigest !== fragment.gateDigest || existing.sealedSet !== fragment.sealedSet)) {
+  if (existing !== null && (existing.gateDigest !== row.gateDigest || existing.sealedSet !== row.sealedSet)) {
     throw new Error(`this cut already names a different checked release for execution release set ${selected}`);
   }
   return Object.freeze({
     ...cut,
-    checkedReleases: Object.freeze({ ...cut.checkedReleases, [selected]: Object.freeze({ gateDigest: fragment.gateDigest, sealedSet: fragment.sealedSet }) }),
+    checkedReleases: Object.freeze({ ...cut.checkedReleases, [selected]: row }),
   });
 }

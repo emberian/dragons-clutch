@@ -3161,3 +3161,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Registry change if it lands within the hour), ladder, found at 50 bps with a ≥6 h window, activate, **seal in place**, two
   admissions, the fee-bearing trade and settlement, ledger-census across the fill.
 - Cuts: `2ecb7d1eb`.
+
+### Lane map delta — 2026-09-02 23:15
+- WEB (`b71d46a6`, `acbdec39`, `a81bd8eb`, `62535976`): /create's founding observation is a PRICE read through
+  crates/dclutch-source-provider-wasm's new `read_source_provider_price_update_v1` (the tree's one PriceUpdateV2 decoder; the
+  receiver program checked inside the wasm; exact BigInt arithmetic; the band's centre moves, its width stays the author's);
+  the cut ingests the seal tool's real `checkedReleases` fragment (a second, different release for a named set refuses; a
+  pending cut refuses); the copy on EQnY… says "No checked execution release exists" rather than "waits on". Parked on:
+  cohort-13's handoff, the phase table from PHASE-CENSUS, the two wallet-terminal wasm digests (dealer/direct codecs dirty).
+- Cuts: `23b2941e1`.

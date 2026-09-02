@@ -96,11 +96,12 @@ describe('public devnet cut staging', () => {
   describe('ingesting a sealing driver’s fragment', () => {
     const SELECTED = '797e83ac0522787898b24a963182b846f61f96c6968e4bfdbfbb8dc5bcf7e9a1';
     const OTHER = '6dcda322' + 'f'.repeat(56);
+    // The sealing driver's own file, shaped exactly as it writes it: a map
+    // keyed as the cut's own rows are, so ingestion is a copy and not a
+    // transcription.
     const fragment = (releaseSetId: string) => parseCheckedReleaseFragmentV1({
-      schema: 'dclutch-checked-release-fragment-v1',
-      releaseSetId,
-      gateDigest: 'a'.repeat(64),
-      sealedSet: 'b'.repeat(64),
+      schema: 'dclutch-public-cut-checked-releases-fragment-v1',
+      checkedReleases: { [releaseSetId]: { gateDigest: 'a'.repeat(64), sealedSet: 'b'.repeat(64) } },
     });
 
     it('stages a fragment for the set the cut’s Market selects', () => {
@@ -110,6 +111,16 @@ describe('public devnet cut staging', () => {
       // The shipped cut is untouched: staging returns a new cut and the caller
       // re-serializes it, so a refused stage cannot half-write a fixture.
       expect(PUBLIC_DEVNET_CUT_V1.checkedReleases).toEqual({});
+    });
+
+    it('refuses an unsealed plan’s empty map rather than staging nothing quietly', () => {
+      // The producer emits an EMPTY map for an unsealed plan rather than
+      // omitting the key -- the same "empty is the assertion" this cut makes.
+      // Ingesting it must not read as a successful no-op.
+      const empty = parseCheckedReleaseFragmentV1({
+        schema: 'dclutch-public-cut-checked-releases-fragment-v1', checkedReleases: {},
+      });
+      expect(() => stageCheckedReleaseV1(PUBLIC_DEVNET_CUT_V1, empty, SELECTED)).toThrow(/seals nothing/);
     });
 
     it('refuses a fragment for a set this cut’s Market does not select, and names both', () => {
@@ -124,8 +135,8 @@ describe('public devnet cut staging', () => {
     it('refuses a second, different release for a set it already names', () => {
       const staged = stageCheckedReleaseV1(PUBLIC_DEVNET_CUT_V1, fragment(SELECTED), SELECTED);
       expect(() => stageCheckedReleaseV1(staged, parseCheckedReleaseFragmentV1({
-        schema: 'dclutch-checked-release-fragment-v1',
-        releaseSetId: SELECTED, gateDigest: 'c'.repeat(64), sealedSet: 'd'.repeat(64),
+        schema: 'dclutch-public-cut-checked-releases-fragment-v1',
+        checkedReleases: { [SELECTED]: { gateDigest: 'c'.repeat(64), sealedSet: 'd'.repeat(64) } },
       }), SELECTED)).toThrow(/already names a different checked release/);
       // Idempotent for the identical fragment: re-running the staging tool is
       // not a conflict.
@@ -134,11 +145,12 @@ describe('public devnet cut staging', () => {
     });
 
     it('refuses a fragment that is not one, rather than reading three fields out of it', () => {
+      const row = { gateDigest: 'a'.repeat(64), sealedSet: 'b'.repeat(64) };
       for (const bad of [
-        { schema: 'other', releaseSetId: SELECTED, gateDigest: 'a'.repeat(64), sealedSet: 'b'.repeat(64) },
-        { schema: 'dclutch-checked-release-fragment-v1', releaseSetId: SELECTED, gateDigest: 'a'.repeat(64) },
-        { schema: 'dclutch-checked-release-fragment-v1', releaseSetId: SELECTED, gateDigest: 'a'.repeat(64), sealedSet: 'b'.repeat(64), extra: 1 },
-        { schema: 'dclutch-checked-release-fragment-v1', releaseSetId: SELECTED.toUpperCase(), gateDigest: 'a'.repeat(64), sealedSet: 'b'.repeat(64) },
+        { schema: 'other', checkedReleases: { [SELECTED]: row } },
+        { schema: 'dclutch-public-cut-checked-releases-fragment-v1', checkedReleases: { [SELECTED]: { gateDigest: 'a'.repeat(64) } } },
+        { schema: 'dclutch-public-cut-checked-releases-fragment-v1', checkedReleases: { [SELECTED]: row }, extra: 1 },
+        { schema: 'dclutch-public-cut-checked-releases-fragment-v1', checkedReleases: { [SELECTED.toUpperCase()]: row } },
       ]) expect(() => parseCheckedReleaseFragmentV1(bad)).toThrow();
     });
   });

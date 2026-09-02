@@ -154,6 +154,8 @@ describe('the gate that stands instead of the stepper', () => {
     const gate = marketGateV1([{ name: 'release', detail }]);
     expect(gate.kind === 'closed' && gate.wall).toBe('release');
     expect(gate.kind === 'closed' && gate.heading).toContain('checked execution release');
+    // "waits on" said pending, and for cohort-12's market it is permanent.
+    expect(gate.kind === 'closed' && gate.heading).not.toContain('waits');
     expect(gate.kind === 'closed' && gate.detail).toBe(detail);
   });
 

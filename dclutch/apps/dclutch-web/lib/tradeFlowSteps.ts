@@ -187,7 +187,13 @@ export type MarketGateV1 =
 const MARKET_GATE_HEADINGS_V1: Readonly<Record<string, string>> = Object.freeze({
   phase: 'This market is not open for trading.',
   activation: 'This market’s Direct trading was founded, but never switched on.',
-  release: 'Trading here waits on a checked execution release.',
+  // NOT "waits on". The seal lane established that a full-redeploy cohort's
+  // founded set embeds role ids minted from a hashed git revision, and nothing
+  // can re-mint them into a market already founded: for cohort-12's market the
+  // repair is forward-only and the fill is refused permanently, not pending.
+  // The spine cannot derive permanence -- that is a fact about how the set was
+  // minted -- so the heading states the absence and promises no arrival.
+  release: 'No checked execution release exists for this market.',
 });
 
 /** The market-level wall names, in the order a reader can act on them. */

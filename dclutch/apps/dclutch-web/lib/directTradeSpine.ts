@@ -298,7 +298,7 @@ export async function inspectDirectTradeSpineV1(
     if (request.checkedReleaseSetIds != null && !request.checkedReleaseSetIds.includes(market.identity.selectedReleaseSetId)) {
       walls.push(Object.freeze({
         name: 'release',
-        detail: `no checked execution release is on file for this Market’s execution release set ${market.identity.selectedReleaseSetId}, so a Direct fill refuses at the route admission boundary. Joining this market and putting collateral in are unaffected; the fill is what waits. Producing that release is the operator’s move, not yours.`,
+        detail: `no checked execution release is on file for this Market’s execution release set ${market.identity.selectedReleaseSetId}, so a Direct fill refuses at the route admission boundary. Joining this market and putting collateral in are unaffected. Whether a release for this set can ever be produced is a question about how the set was minted, not about this market, so nothing here promises one is coming.`,
       }));
     }
     const packetWall = directPacketWallV1(DIRECT_PACKET_BUDGET_EVIDENCE_V1.wireBytes);
