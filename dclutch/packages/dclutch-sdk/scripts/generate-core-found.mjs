@@ -19,9 +19,7 @@ const sources = Object.freeze({
   lifecycleRent: readFileSync(new URL('crates/dclutch-rent-contract/src/lifecycle_v2.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-product-runtime-v2-operator/src/found.rs', root), 'utf8'),
   splineAuthoring: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/spline_product.rs', root), 'utf8'),
-  claimsState: readFileSync(new URL('crates/dclutch-claims-svm/src/liability_basis_state_v2.rs', root), 'utf8'),
-  claimsPosition: readFileSync(new URL('crates/dclutch-claims-svm/src/protocol_position_v2.rs', root), 'utf8'),
-  claimsFounding: readFileSync(new URL('crates/dclutch-claims-svm/src/founding_v5.rs', root), 'utf8'),
+  claimsState: readFileSync(new URL('crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs', root), 'utf8'),
   custody: readFileSync(new URL('crates/dclutch-custody-contract/src/lib.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/coreFound.ts', import.meta.url);
@@ -245,11 +243,13 @@ for (const name of [
 // state, at PDAs derived from the Market and the owner. Without these the
 // browser can decode a Market and still have nothing true to say about its
 // economics.
+// The aggregate seed domain used to have THREE Rust spellings -- this module,
+// `founding_v4.rs` and `founding_v5.rs` -- and this generator carried a runtime
+// equality check between two of them because that was the only place the tree
+// could notice them parting. All three now derive from the Lean-emitted
+// constant, so the check has nothing left to compare and the class of defect it
+// watched for cannot be written.
 const aggregateSeed = byteString('claimsState', 'LIABILITY_BASIS_MARKET_SEED_V2');
-const foundingAggregateSeed = byteString('claimsFounding', 'CLAIMS_FOUNDING_AGGREGATE_SEED_V5');
-if (aggregateSeed !== foundingAggregateSeed) {
-  throw new Error(`the Claims aggregate seed domain has two spellings: ${aggregateSeed} vs ${foundingAggregateSeed}`);
-}
 output += '\n';
 output += array('LIABILITY_BASIS_MARKET_MAGIC_V2', bytes('claimsState', 'LIABILITY_BASIS_MARKET_MAGIC_V2'));
 output += array('LIABILITY_BASIS_POSITION_MAGIC_V2', bytes('claimsState', 'LIABILITY_BASIS_POSITION_MAGIC_V2'));
@@ -266,7 +266,7 @@ for (const name of [
   'POSITION_BASIS_OFFSET', 'POSITION_RESERVED_OFFSET',
 ]) output += `export const LIABILITY_BASIS_${name} = ${scalar('claimsState', name)} as const;\n`;
 output += `export const LIABILITY_BASIS_MARKET_SEED_V2 = new TextEncoder().encode('${aggregateSeed}');\n`;
-output += `export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().encode('${byteString('claimsPosition', 'PROTOCOL_POSITION_STATE_SEED_V2')}');\n`;
+output += `export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().encode('${byteString('claimsState', 'LIABILITY_BASIS_POSITION_SEED_V2')}');\n`;
 
 // --------------------------------------------- the Market's Custody namespace
 // The Hoard Vault address is NOT a fact of the Market root: it is

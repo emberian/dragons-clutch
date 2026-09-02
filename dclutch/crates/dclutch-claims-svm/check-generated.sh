@@ -41,3 +41,13 @@ grep -q '^pub const CLAIMS_MARKET_CLOSURE_VERSION_V1: u16 = 1;$' "$candidate"
 grep -q '^pub const CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1: usize = 256;$' "$candidate"
 grep -q '^pub const CLAIMS_MARKET_CLOSURE_RECEIPT_BYTES_V1: usize = 320;$' "$candidate"
 verify EmitClaimsMarketClosureV1Rust.lean generated_market_closure_v1.rs 40
+
+(
+  cd "$formal_dir"
+  lake build DClutchSemantics.ClaimsLiabilityBasisStateV2Abi >/dev/null
+  lake env lean --run EmitClaimsLiabilityBasisStateV2Rust.lean >"$candidate"
+)
+grep -q '^pub const LIABILITY_BASIS_MARKET_HEADER_BYTES_V2: usize = 256;$' "$candidate"
+grep -q '^pub const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2: usize = 128;$' "$candidate"
+grep -q '^pub const LIABILITY_BASIS_MARKET_SEED_V2: &\[u8\] = b"dclutch:lbv2:market";$' "$candidate"
+verify EmitClaimsLiabilityBasisStateV2Rust.lean generated_liability_basis_state_v2.rs 40

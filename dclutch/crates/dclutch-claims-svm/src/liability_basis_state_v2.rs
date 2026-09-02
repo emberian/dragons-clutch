@@ -6,62 +6,31 @@
 
 use core::convert::TryInto;
 
-/// LiabilityBasisV2 aggregate header bytes before `u64[claim_count]` supplies.
-pub const LIABILITY_BASIS_MARKET_HEADER_BYTES_V2: usize = 256;
-/// LiabilityBasisV2 Position header bytes before `u64[claim_count]` balances.
-pub const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2: usize = 128;
-/// Canonical Claims aggregate PDA seed domain.
-pub const LIABILITY_BASIS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
-/// Canonical aggregate magic.
-pub const LIABILITY_BASIS_MARKET_MAGIC_V2: [u8; 8] = *b"DCLLBM02";
-/// Canonical Position magic.
-pub const LIABILITY_BASIS_POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
-/// Implemented state ABI version.
-pub const LIABILITY_BASIS_STATE_VERSION_V2: u16 = 2;
-
-/// Offset of the aggregate's own canonical PDA bump.
-///
-/// The aggregate is created by the Claims program under
-/// `[LIABILITY_BASIS_MARKET_SEED_V2, logical_market]`, and every reader in that
-/// same program searches for the address again. The creator had to derive the
-/// bump in order to sign the account into existence, so it records it and the
-/// readers reproduce the address with `create_program_address` instead. A wrong
-/// byte reproduces a different address and refuses, so the byte is a memo of
-/// the program's own derivation and never an authority.
-///
-/// It is the first of the two canonical reserved bytes at offset 10, so the
-/// header width and every offset after it are unchanged.
-///
-/// **Zero means "written before this byte existed", not "invalid".**
-/// `find_program_address` walks 255 down to 1 and never returns 0, so a zero
-/// here is an older body and its reader falls back to the search it used to do
-/// unconditionally. That is what makes this deployable with no migration.
-pub const LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2: usize = 10;
-/// Offset of a Position's own canonical PDA bump.
-///
-/// The same carry as [`LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2`], for the
-/// `ProtocolPositionSeedsV2` address. It takes the first of the eight reserved
-/// bytes at [`POSITION_RESERVED_OFFSET`], which no layout projection publishes,
-/// so the header width and every published coordinate are unchanged.
-pub const LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2: usize = POSITION_RESERVED_OFFSET;
-
-const MARKET_CLAIM_COUNT_OFFSET: usize = 12;
-const MARKET_REVISION_OFFSET: usize = 16;
-const MARKET_LOGICAL_ID_OFFSET: usize = 24;
-const MARKET_RELEASE_SET_OFFSET: usize = 56;
-const MARKET_REGISTRY_OFFSET: usize = 88;
-const MARKET_PRODUCT_OFFSET: usize = 120;
-const MARKET_BASIS_OFFSET: usize = 152;
-const MARKET_REALM_OFFSET: usize = 184;
-const MARKET_CUSTODY_CONTEXT_OFFSET: usize = 216;
-const MARKET_GENERATION_OFFSET: usize = 248;
-
-const POSITION_CLAIM_COUNT_OFFSET: usize = 12;
-const POSITION_REVISION_OFFSET: usize = 16;
-const POSITION_MARKET_OFFSET: usize = 24;
-const POSITION_OWNER_OFFSET: usize = 56;
-const POSITION_BASIS_OFFSET: usize = 88;
-const POSITION_RESERVED_OFFSET: usize = 120;
+// Every coordinate, width, magic and seed domain below comes from
+// `formal/dclutch-semantics/DClutchSemantics/ClaimsLiabilityBasisStateV2Abi.lean`
+// through `EmitClaimsLiabilityBasisStateV2Rust.lean`, and `check-generated.sh`
+// byte-compares it. Both records are a shared five-field prologue -- magic,
+// version, a reserved span, the claim count, the revision -- followed by their
+// own identities, and `both_records_begin_with_the_prologue` is what this file
+// used to implement by writing 0, 8, 10, 12 and 16 twice.
+//
+// WHAT A ZERO PDA BUMP MEANS, and why the reserved spans are two and eight
+// bytes wide rather than one and seven.
+//
+// Each record is created by the Claims program under its own seed domain, and
+// every reader in that same program used to search for the address again. The
+// creator had to derive the bump in order to sign the account into existence,
+// so it records it in the FIRST byte of that record's reserved span and readers
+// reproduce the address with `create_program_address` instead. A wrong byte
+// reproduces a different address and refuses, so the byte is a memo of the
+// program's own derivation and never an authority.
+//
+// Zero means "written before this byte existed", NOT "invalid".
+// `find_program_address` walks 255 down to 1 and never returns 0, so a zero
+// here is an older body, and its reader falls back to the search it used to do
+// unconditionally. That is what makes the bump deployable with no migration.
+// Every reserved byte AFTER the bump stays zero-checked.
+include!("generated_liability_basis_state_v2.rs");
 
 /// Canonical patch/projection coordinates of a LiabilityBasisV2 aggregate.
 ///
@@ -95,7 +64,7 @@ impl LiabilityBasisMarketLayoutV2 {
     /// Runtime supply vector base; each entry is one little-endian `u64`.
     pub const SUPPLIES: usize = LIABILITY_BASIS_MARKET_HEADER_BYTES_V2;
     /// Runtime supply-vector element stride.
-    pub const SUPPLY_STRIDE: usize = 8;
+    pub const SUPPLY_STRIDE: usize = LIABILITY_BASIS_CLAIM_STRIDE_V2;
 
     /// Hostile-decode and atomically copy the aggregate revision.
     pub fn copy_revision_into(input: &[u8], output: &mut u64) -> Result<()> {
@@ -123,7 +92,7 @@ impl LiabilityBasisPositionLayoutV2 {
     /// Runtime balance vector base; each entry is one little-endian `u64`.
     pub const BALANCES: usize = LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
     /// Runtime balance-vector element stride.
-    pub const BALANCE_STRIDE: usize = 8;
+    pub const BALANCE_STRIDE: usize = LIABILITY_BASIS_CLAIM_STRIDE_V2;
 
     /// Hostile-decode and atomically copy the Position revision.
     pub fn copy_revision_into(input: &[u8], output: &mut u64) -> Result<()> {
@@ -289,11 +258,17 @@ impl LiabilityBasisMarketViewV2 {
             bytes,
             LIABILITY_BASIS_MARKET_MAGIC_V2,
             LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            MARKET_MAGIC_OFFSET,
+            MARKET_VERSION_OFFSET,
         )?;
         // Byte 10 is the aggregate's own PDA bump and is deliberately NOT
         // zero-checked; see `LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2`. Byte 11 is
         // what remains of the reserved field.
-        require_zero(bytes, LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2 + 1, 1)?;
+        require_zero(
+            bytes,
+            LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2 + 1,
+            MARKET_RESERVED_BYTES - 1,
+        )?;
         let value = Self {
             claim_count: read_u32(bytes, MARKET_CLAIM_COUNT_OFFSET)?,
             revision: read_u64(bytes, MARKET_REVISION_OFFSET)?,
@@ -363,12 +338,22 @@ impl LiabilityBasisPositionViewV2 {
             bytes,
             LIABILITY_BASIS_POSITION_MAGIC_V2,
             LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+            POSITION_MAGIC_OFFSET,
+            POSITION_VERSION_OFFSET,
         )?;
-        require_zero(bytes, 10, 2)?;
+        require_zero(
+            bytes,
+            POSITION_RESERVED_HEADER_OFFSET,
+            POSITION_RESERVED_HEADER_BYTES,
+        )?;
         // The first of these eight is the Position's own PDA bump; see
         // `LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2`. The other seven stay
         // reserved.
-        require_zero(bytes, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2 + 1, 7)?;
+        require_zero(
+            bytes,
+            LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2 + 1,
+            POSITION_RESERVED_BYTES - 1,
+        )?;
         let value = Self {
             claim_count: read_u32(bytes, POSITION_CLAIM_COUNT_OFFSET)?,
             revision: read_u64(bytes, POSITION_REVISION_OFFSET)?,
@@ -481,7 +466,7 @@ pub fn liability_basis_vector_width_v2(header: usize, claim_count: u32) -> Resul
     }
     usize::try_from(claim_count)
         .ok()
-        .and_then(|count| count.checked_mul(8))
+        .and_then(|count| count.checked_mul(LIABILITY_BASIS_CLAIM_STRIDE_V2))
         .and_then(|tail| header.checked_add(tail))
         .ok_or(LiabilityBasisStateErrorV2::InvalidClaimCount)
 }
@@ -509,8 +494,16 @@ pub fn encode_liability_basis_market_into_v2(
         return Err(LiabilityBasisStateErrorV2::InvalidLength);
     }
     output.fill(0);
-    put(output, 0, &LIABILITY_BASIS_MARKET_MAGIC_V2);
-    put(output, 8, &LIABILITY_BASIS_STATE_VERSION_V2.to_le_bytes());
+    put(
+        output,
+        MARKET_MAGIC_OFFSET,
+        &LIABILITY_BASIS_MARKET_MAGIC_V2,
+    );
+    put(
+        output,
+        MARKET_VERSION_OFFSET,
+        &LIABILITY_BASIS_STATE_VERSION_V2.to_le_bytes(),
+    );
     put(
         output,
         MARKET_CLAIM_COUNT_OFFSET,
@@ -556,8 +549,16 @@ pub fn encode_liability_basis_position_into_v2(
         return Err(LiabilityBasisStateErrorV2::InvalidLength);
     }
     output.fill(0);
-    put(output, 0, &LIABILITY_BASIS_POSITION_MAGIC_V2);
-    put(output, 8, &LIABILITY_BASIS_STATE_VERSION_V2.to_le_bytes());
+    put(
+        output,
+        POSITION_MAGIC_OFFSET,
+        &LIABILITY_BASIS_POSITION_MAGIC_V2,
+    );
+    put(
+        output,
+        POSITION_VERSION_OFFSET,
+        &LIABILITY_BASIS_STATE_VERSION_V2.to_le_bytes(),
+    );
     put(
         output,
         POSITION_CLAIM_COUNT_OFFSET,
@@ -589,20 +590,26 @@ pub fn read_claim_v2(
     }
     let offset = usize::try_from(claim_index)
         .ok()
-        .and_then(|index| index.checked_mul(8))
+        .and_then(|index| index.checked_mul(LIABILITY_BASIS_CLAIM_STRIDE_V2))
         .and_then(|relative| header.checked_add(relative))
         .ok_or(LiabilityBasisStateErrorV2::InvalidClaimIndex)?;
     read_u64(bytes, offset)
 }
 
-fn require_prefix(bytes: &[u8], magic: [u8; 8], header: usize) -> Result<()> {
+fn require_prefix(
+    bytes: &[u8],
+    magic: [u8; 8],
+    header: usize,
+    magic_offset: usize,
+    version_offset: usize,
+) -> Result<()> {
     if bytes.len() < header {
         return Err(LiabilityBasisStateErrorV2::InvalidLength);
     }
-    if read_array::<8>(bytes, 0)? != magic {
+    if read_array::<8>(bytes, magic_offset)? != magic {
         return Err(LiabilityBasisStateErrorV2::InvalidMagic);
     }
-    if read_u16(bytes, 8)? != LIABILITY_BASIS_STATE_VERSION_V2 {
+    if read_u16(bytes, version_offset)? != LIABILITY_BASIS_STATE_VERSION_V2 {
         return Err(LiabilityBasisStateErrorV2::UnsupportedVersion);
     }
     Ok(())
@@ -661,7 +668,7 @@ fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
 fn write_claims(output: &mut [u8], header: usize, values: &[u64]) {
     for (index, value) in values.iter().copied().enumerate() {
         if let Some(offset) = index
-            .checked_mul(8)
+            .checked_mul(LIABILITY_BASIS_CLAIM_STRIDE_V2)
             .and_then(|value| header.checked_add(value))
         {
             put(output, offset, &value.to_le_bytes());

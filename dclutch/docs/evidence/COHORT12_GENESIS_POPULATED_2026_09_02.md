@@ -504,3 +504,148 @@ from the campaign payer, never the deployer.
    participants.
 
 Devnet evidence. Not mainnet evidence.
+
+## Addendum, 2026-09-02: the sealing route was tried, and there are three more walls behind the first
+
+The coordinator's reading of the standing grant is right — condition (a) forbids a
+*partial* deploy, not an upgrade of the whole set, and cohorts 7–8 sealed exactly
+that way. So the route was attempted. **Every step below is a measurement, taken
+key-free with `--preflight`; nothing was signed, sent, or changed. The deployer
+sits at 36.564742699 SOL, unmoved, and every live program is byte-for-byte what
+section 2 recorded.**
+
+### First, two facts that reshape the goal
+
+**Any upgrade mints a new release set, even to identical bytes.** `release_facts`
+binds `(elf_sha256, deployment_slot, upgrade_authority)` (`plan.rs:1080-1117`), so
+the deployment slot alone moves `release_set_id`.
+
+**And the founded Market pins its release set immutably.** Read off chain at
+`STATE_SELECTED_RELEASE_SET_OFFSET = 208`:
+
+```
+EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1
+  selected_release_set = 797e83ac0522787898b24a963182b846f61f96c6968e4bfdbfbb8dc5bcf7e9a1
+  plan.release_set_id  = 797e83ac0522787898b24a963182b846f61f96c6968e4bfdbfbb8dc5bcf7e9a1   MATCH
+```
+
+So upgrading to seal would strand the market this file just founded and handed to
+the web lane: the fill would need a **second founding** under the new set. The
+activation account is per-release-set (`find_program_address([ACTIVATION_PDA_DOMAIN_V1,
+release_set_id], registry)`), so the old activation survives — the market stays
+Open and resolvable. It simply becomes unfillable, exactly as cohort-11's did, for
+a different reason.
+
+### Wall B: an upgrade may not re-upgrade to bytes already live
+
+Measured, as a positive control, by placing the gate's own trading ELF and
+re-running the custody preflight:
+
+```
+Error("current live payload already equals candidate without a bound receipt")
+```
+
+`upgrade.rs:4543`. So "upgrade the five to the same bytes to mint receipts
+cheaply" is refused by design. A receipt requires a payload that actually
+changes, which requires a **new checked gate at a new commit**.
+
+### Wall C: the checked gate can never authorize the trading bytes a cohort runs
+
+This is the deepest one, and it has nothing to do with redeploy-versus-upgrade.
+
+`checked-release-candidate.sh` builds `dclutch-trading-sbf` **with
+`--features hot-cu-profile`**, a diagnostic profile. `build-elfs.sh` deliberately
+does not — "a diagnostic profile and not what a cohort should run". So the gate's
+admitted trading artifact and the cohort's deployable trading artifact are
+different by construction:
+
+| | trading ELF SHA-256 |
+| --- | --- |
+| gate's `provenance/trading.json` `shipped_elf` | `5354b4cd78aa0bfd2e6ab838c2b52c3f6baee663be303108755a1ce3cb209336` |
+| deployed, and what cohort-12 runs | `b0cff55ab0ef162d7e427b8cb894f1468b1804d997ab35c52710df3268a8e3ed` |
+
+Six of the seven role ELFs are **identical** between candidate and cohort;
+trading alone differs, and only because of that feature flag.
+
+**The gate admits the release as a SET of twelve links, so this blocks every
+role, not only trading.** The custody preflight — custody's own bytes being
+identical to the candidate's — refuses:
+
+```
+Error("trading ELF bytes or SHA-256 changed after checked-release admission")
+```
+
+### Wall D: `AlreadyCurrent` is consumed by the tree and written by nothing in it
+
+There is an escape hatch that would solve all of this without a single upgrade.
+The deployment-set journal admits three dispositions, and the third is
+`already-current` — "admitted on **byte equality alone**" (`upgrade.rs:2091`),
+carrying a baseline and a dump, `receipt.sha256: null`, no transaction at all.
+Cohort-8's journal uses it for its resolution role.
+
+**Cohort-12's custody, resolution, claims and core all qualify today** — their
+live payload already equals the checked candidate. If they could be journaled
+`already-current`, no upgrade would run, no deployment slot would move,
+`release_set_id` would stay `797e83ac…`, and **the market already founded would
+become fillable in place.**
+
+The tree validates such a row, audits it live on every invocation, and builds the
+plan pin from it (`upgrade.rs:3457-3520`). What it does not have is anything that
+**writes** one. Cohort-8 produced its single `already-current` row with an
+out-of-tree patched binary — `~/jobs/dclutch-cohort8-20260831/bin/bootstrap-alreadycurrent`,
+built 2026-08-31 — driven by a hand-written `refresh-journal.py` that maintains
+the journal's digests by hand. That capability never landed in the tree; only its
+reader did.
+
+And even it would not save trading, whose live bytes can never equal a candidate
+built with a different feature set.
+
+### So the fix is two release-tool changes, and they are smaller than a cohort
+
+Named for an owner, because this is release tooling and not a cohort lane's work:
+
+1. **The checked candidate must ship the ORDINARY trading link.** The
+   `hot-cu-profile` build is a *measurement*, and measuring it is right; admitting
+   it as the shipped artifact is what makes the gate unable to authorize any
+   cohort's real bytes. Until this changes, **no cohort — redeployed or upgraded —
+   can be sealed against the bytes it actually runs.**
+2. **A writer for the `already-current` disposition.** The reader, the auditor and
+   the plan projection all exist. With a writer, a genesis cohort whose live
+   payload already equals the checked candidate seals with **no upgrade, no new
+   release set, and no second founding** — which is strictly better than the
+   upgrade route and leaves the market in this file fillable.
+
+With both, cohort-12 seals in place and the trade in section 8 runs against
+`EQnYCUMkz…` with nothing stranded. The earlier suggestion — teach `prepare` to
+accept a genesis deployment's receipts — is subsumed by (2), which the tree is
+already most of the way to.
+
+**The fee-bearing trade, its `DCLTDFS1` settlement, and `ledger-census` across the
+fill therefore remain undone, and the fill-boundary laws `49c8fa92` / `be67416e`
+remain unjudged by a real fill.** Everything else the trade needs is in place and
+recorded above: the 50-bps market, the exactly-delegated 201 atoms, both Direct
+token PDAs derived and vacant, and the census bindings.
+
+### The shape wall C shares with two other findings tonight
+
+Worth naming because it is the third instance in one night, in three subsystems,
+found by two lanes independently. The Redemption/web lane reports two of its own
+(its measurements, not re-verified here): a liveness test that asked the Program
+stub rather than the account holding the code, and a header check that had never
+followed the Registry's bump offset. Wall C is the same shape one level up —
+**a gate that certifies something adjacent to the thing it claims to certify.**
+The checked release gate does measure a real artifact, built from the real
+sources, with a real frame report; it simply measures the `hot-cu-profile`
+build, and no cohort runs that.
+
+AGENTS.md already carries the probe-level version — *"a probe measures what it
+touches, not what you meant"* — learned from a heap probe that measured
+`entrypoint!`'s hardcoded `HEAP_LENGTH` instead of the granted frame. This is
+that lesson at the **gate** level, and it is more expensive there, because a
+probe misleads one investigation while a gate silently authorizes nothing at all
+for as long as it stands. The cheap defence is the same one that caught it here:
+name the artifact the gate certifies and the artifact production runs, put the
+two digests side by side, and require them to be equal rather than merely both
+present.
+
+Devnet evidence. Not mainnet evidence.

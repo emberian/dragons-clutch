@@ -59,6 +59,10 @@ name = "emit-claim-vector"
 root = "EmitClaimVector"
 
 [[lean_exe]]
+name = "emit-claims-liability-basis-state-v2-rust"
+root = "EmitClaimsLiabilityBasisStateV2Rust"
+
+[[lean_exe]]
 name = "emit-claims-market-closure-v1-rust"
 root = "EmitClaimsMarketClosureV1Rust"
 

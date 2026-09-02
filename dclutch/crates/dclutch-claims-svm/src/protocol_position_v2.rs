@@ -28,7 +28,8 @@ pub const PROTOCOL_POSITION_WIRE_VERSION_V2: u16 = 2;
 /// Claims-owned admission PDA seed domain.
 pub const PROTOCOL_POSITION_ADMISSION_SEED_V2: &[u8] = b"dclutch:protocol-position:v2";
 /// Canonical LBV2 Position PDA seed domain.
-pub const PROTOCOL_POSITION_STATE_SEED_V2: &[u8] = b"dclutch:lbv2:position";
+pub const PROTOCOL_POSITION_STATE_SEED_V2: &[u8] =
+    crate::liability_basis_state_v2::LIABILITY_BASIS_POSITION_SEED_V2;
 /// Canonical Claims-owned rational capability owner PDA seed domain.
 pub const PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2: &[u8] = b"dclutch:rational-claims:v2";
 /// Domain binding both closed accounts and the credited RentCredit poststate.

@@ -1273,6 +1273,66 @@
       "program": "trading",
       "outcome": "executed",
       "note": "RESERVE. Trading's half of the reservation pair: it authenticates a Custody-owned receipt and joins it to the checkpoint at an ordinal. It is deliberately not the producer -- Custody moves the collateral -- so this stage's whole job is to refuse a receipt that does not belong to this checkpoint. Observed: 508-508 wire bytes over 1 transaction(s); programs invoked trading."
+    },
+    {
+      "label": "dealer accepted: a_rollback_receipt_is_ingestible_alone_after_a_lost_response -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The checkpoint this case rolls back has to exist first: create, six membership pages, evaluate, then a Custody reserve joined by Trading's ingest. Ordinary stages of the same shape every other case in this tier drives, bound here because they are this case's own transactions and an unbound label is how coverage rots."
+    },
+    {
+      "label": "dealer accepted: a_rollback_receipt_is_ingestible_alone_after_a_lost_response -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The checkpoint this case rolls back has to exist first: create, six membership pages, evaluate, then a Custody reserve joined by Trading's ingest. Ordinary stages of the same shape every other case in this tier drives, bound here because they are this case's own transactions and an unbound label is how coverage rots."
+    },
+    {
+      "label": "dealer accepted: a_rollback_receipt_is_ingestible_alone_after_a_lost_response -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The checkpoint this case rolls back has to exist first: create, six membership pages, evaluate, then a Custody reserve joined by Trading's ingest. Ordinary stages of the same shape every other case in this tier drives, bound here because they are this case's own transactions and an unbound label is how coverage rots."
+    },
+    {
+      "label": "dealer accepted: a_rollback_receipt_is_ingestible_alone_after_a_lost_response -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The checkpoint this case rolls back has to exist first: create, six membership pages, evaluate, then a Custody reserve joined by Trading's ingest. Ordinary stages of the same shape every other case in this tier drives, bound here because they are this case's own transactions and an unbound label is how coverage rots."
+    },
+    {
+      "label": "dealer accepted: a_rollback_receipt_is_ingestible_alone_after_a_lost_response -- executed",
+      "routes": [
+        "custody/dealer_reservation_v1::process",
+        "custody/rollback#Rollback"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "THE PRODUCER, ALONE. Custody's rollback submitted WITHOUT the Trading ingest that normally shares its transaction -- which the frames permit and nothing else in this tier does: Custody holds the checkpoint READONLY in the producer frame and has no instructions sysvar anywhere in its source, so it can neither see whether an ingest follows nor move the checkpoint. The invoke log corroborates exactly that and is why this row claims no Trading route: Custody at depth 1, SPL Token and System at depth 2, TRADING ABSENT. 258,888 CU in a 972-byte legacy frame. The label carries no route because `dealer_checkpoint_route_v1` names Trading's selectors and this transaction has none."
+    },
+    {
+      "label": "dealer accepted: a_rollback_receipt_is_ingestible_alone_after_a_lost_response -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "THE RECOVERY, and the reason this case exists. The rollback receipt written by the transaction above is ingested BY ITSELF, from `dclutch_operator::dealer_scenario_checkpoint_v1::build_dealer_scenario_checkpoint_rollback_v1` -- the builder that had NO CALLER IN THE TREE but its own unit test, while its Reserve twin was driven twice in this same file. The bundle builder's documentation claims either durable producer output \"remains independently ingestible after an RPC-response loss\"; this is that claim executed rather than asserted. 69,992 CU in a 508-byte legacy frame. It is admitted because the producer left the checkpoint untouched, so the receipt's `checkpoint_prestate_digest` still matches -- re-ingesting an ALREADY ingested receipt is a different and unreachable thing, and refuses `Transition` (0x4004) on a moved checkpoint. This row binds only what its own transaction ran: no `custody/rollback#Rollback`, because that leg committed in the separate transaction above."
     }
   ]
 }

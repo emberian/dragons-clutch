@@ -70,9 +70,9 @@ use dclutch_operator::{
         build_dealer_accepted_transcript_v4, build_dealer_scenario_activation_v1,
         build_dealer_scenario_checkpoint_cleanup_v1, build_dealer_scenario_checkpoint_create_v1,
         build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
-        build_dealer_scenario_checkpoint_reserve_v1, build_dealer_scenario_commit_v1,
-        build_dealer_scenario_reservation_bundle_v1, dealer_scenario_checkpoint_address_v1,
-        dealer_scenario_evaluation_receipt_address_v1,
+        build_dealer_scenario_checkpoint_reserve_v1, build_dealer_scenario_checkpoint_rollback_v1,
+        build_dealer_scenario_commit_v1, build_dealer_scenario_reservation_bundle_v1,
+        dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
         dealer_scenario_membership_manifest_address_v1,
         dealer_scenario_reservation_batch_address_v1, derive_dealer_scenario_evaluation_receipt_v1,
         encode_dealer_scenario_custody_effect_artifacts_v1,
@@ -3194,6 +3194,143 @@ async fn an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_coll
     );
 }
 
+/// A ROLLBACK RECEIPT IS INGESTIBLE ALONE, AFTER THE RESPONSE IS LOST.
+///
+/// `build_dealer_scenario_reservation_bundle_v1` documents the claim this case
+/// exists to test: "either durable producer output also remains independently
+/// ingestible after an RPC-response loss". The Reserve half of that claim has a
+/// driver -- `build_dealer_scenario_checkpoint_reserve_v1` runs twice in this
+/// file. Its Rollback twin had NO CALLER IN THE TREE but its own unit test, so
+/// the recovery path that had never been exercised was the one for the leg that
+/// gives somebody their collateral BACK.
+///
+/// The pair is split here, which the frames themselves permit and nothing else
+/// in this campaign does. Custody holds the checkpoint READONLY in the producer
+/// frame and has no instructions sysvar anywhere in its source, so it can
+/// neither observe whether an ingest follows nor move the checkpoint if it
+/// wanted to. Submitting the producer alone therefore returns the collateral
+/// and writes the receipt while the checkpoint still reads exactly as the
+/// reserve left it -- which is precisely the state a client occupies when the
+/// response to its bundle never came back. The standalone ingest then arrives
+/// on its own and the checkpoint catches up.
+///
+/// This is not a retry of an ingested receipt, which is a different and
+/// unreachable thing: once the checkpoint has moved, the receipt's
+/// `checkpoint_prestate_digest` no longer matches it and the route can only
+/// refuse. The recoverable case is the one where the checkpoint has NOT moved.
+#[tokio::test]
+async fn a_rollback_receipt_is_ingestible_alone_after_a_lost_response() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    prepare_through_evaluation(&mut context, &scenario).await;
+    let reservation = reserve_through_custody(&mut context, &scenario).await;
+    let delivery = &scenario.delivery;
+    let payer = context.payer.pubkey();
+    let checkpoint_reserved = checkpoint_body(&mut context, &scenario).await;
+
+    context
+        .warp_to_slot(SCENARIO_EXPIRES_AT + 8)
+        .expect("warp past expiry");
+
+    // The producer ALONE. The client sent the pair and never learned what
+    // happened to it.
+    let bundle = reservation_bundle_for(
+        &scenario,
+        payer,
+        DealerScenarioReservationActionV1::Rollback,
+    );
+    let produced = submit(&mut context, bundle.instructions[0].clone(), &[])
+        .await
+        .expect("ProgramTest processing");
+    assert!(
+        produced.result.is_ok(),
+        "Custody must roll back without Trading's ingest beside it: {:?} logs {:?}",
+        produced.result,
+        produced.metadata.as_ref().map(|value| &value.log_messages)
+    );
+
+    // The value is already home -- this is what makes the lost response
+    // survivable rather than merely detectable.
+    let escrow_after = account_body(&mut context, delivery.escrow).await;
+    assert_eq!(
+        escrow_after
+            .as_ref()
+            .map_or(0, |body| token_account_amount(body)),
+        0,
+        "the escrow must not still hold the lock"
+    );
+    assert_eq!(
+        account_body(&mut context, delivery.source)
+            .await
+            .expect("the trading-principal vault"),
+        delivery.source_prereservation_bytes(),
+        "the vault is byte-for-byte the body the reservation first found"
+    );
+    assert_eq!(
+        DealerScenarioReservationStateV1::decode(
+            &account_body(&mut context, reservation.reservation_state)
+                .await
+                .expect("the reservation state survives its own rollback"),
+        )
+        .expect("the reservation state decodes")
+        .status,
+        DealerScenarioReservationStateStatusV1::RolledBack,
+        "Custody rewrote the state on its own"
+    );
+    // And the checkpoint has NOT moved, which is the whole premise: the
+    // receipt is still joinable because nothing has consumed it.
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        checkpoint_reserved,
+        "the producer must leave the checkpoint byte-for-byte alone"
+    );
+
+    // The client comes back and ingests the receipt it can now see on chain,
+    // with the builder that exists for exactly this.
+    let packet = build_dealer_scenario_checkpoint_rollback_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        sysvar::clock::ID,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+        scenario.waist.registry,
+        reservation_receipt_address_for(&scenario, 0, DealerScenarioReservationActionV1::Rollback),
+        reservation.reservation_state,
+        TRADING,
+        EFFECTS,
+        EFFECT_BODY,
+        0,
+        Hash::default(),
+        &[],
+    )
+    .expect("rollback ingest packet");
+    assert_eq!(
+        packet.route,
+        DealerScenarioCheckpointRouteV1::Rollback(0),
+        "the rollback reverses the zeroth evaluated effect"
+    );
+    assert!(
+        packet.lock_census.unique_account_lock_count <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "the recovery ingest must be lock-bounded too"
+    );
+    let ingested = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert!(
+        ingested.result.is_ok(),
+        "the rollback receipt must be ingestible on its own: {:?} logs {:?}",
+        ingested.result,
+        ingested.metadata.as_ref().map(|value| &value.log_messages)
+    );
+    assert_ne!(
+        checkpoint_body(&mut context, &scenario).await,
+        checkpoint_reserved,
+        "the standalone ingest must advance the checkpoint the producer left alone"
+    );
+}
+
 /// Custody producer instruction, but asks Trading to ingest the resulting
 /// Reserve receipt as a Rollback receipt. Custody therefore runs to completion
 /// before Trading reaches the action join and refuses. The absent escrow,
@@ -5061,7 +5198,6 @@ mod lp_lifecycle {
     use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_V1;
     use dclutch_token_svm::ACCOUNT_BYTES as TOKEN_ACCOUNT_BYTES;
     use dclutch_trading_sbf::dealer::{
-        v4_equity_accelerator_accounts::DealerEquityAcceleratorErrorV4,
         v3_artifacts::{
             dealer_equity_request_profile_bytes_v3, dealer_equity_transition_bytes_v3,
             encode_dealer_equity_request_profile_v3, encode_dealer_equity_transition_v3,
@@ -5112,6 +5248,7 @@ mod lp_lifecycle {
             DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DealerScenarioAccountProfileInputV4,
             dealer_scenario_logical_frame_v4, encode_dealer_scenario_account_profile_v4_atomic,
         },
+        v4_equity_accelerator_accounts::DealerEquityAcceleratorErrorV4,
         v4_equity_release::{
             DEALER_EQUITY_LIFECYCLE_BYTES_V5, DealerEquityFinalizedArtifactsV4,
             dealer_equity_effect_bytes_v4, encode_dealer_equity_effect_v4,
@@ -8341,8 +8478,9 @@ mod lp_lifecycle {
         );
         let refused_logs = super::transaction_logs(&refused);
         assert!(
-            refused_logs.iter().any(|line| line
-                == DealerEquityAcceleratorErrorV4::Claims.refusal_name()),
+            refused_logs
+                .iter()
+                .any(|line| line == DealerEquityAcceleratorErrorV4::Claims.refusal_name()),
             "the refusal must name its own conjunct in the log: {refused_logs:?}"
         );
         for (key, before) in rollback_before {

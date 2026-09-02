@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**88 generated files from 82 emitters. 88 guarded (82 emitters), 0 unguarded (0 emitters).**
+**89 generated files from 83 emitters. 89 guarded (83 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -30,7 +30,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-capability-program-contract/tests/set_v2_generator_fresh.rs` | cargo-test | `EmitCapabilityProgramSetV2Rust.lean` |
 | `crates/dclutch-capability-program-contract/tests/v3_generator_fresh.rs` | cargo-test | `EmitCapabilityProgramV3AbiRust.lean` |
 | `crates/dclutch-capability-program-contract/tests/v4_generator_fresh.rs` | cargo-test | `EmitCapabilityProgramV4AbiRust.lean` |
-| `crates/dclutch-claims-svm/check-generated.sh` | shell | `EmitClaimsMarketClosureV1Rust.lean` |
+| `crates/dclutch-claims-svm/check-generated.sh` | shell | `EmitClaimsLiabilityBasisStateV2Rust.lean`, `EmitClaimsMarketClosureV1Rust.lean` |
 | `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerTradingProfileRust.lean` |
 | `crates/dclutch-dealer-scenario-kernel/tests/netting_corpus_generator_fresh.rs` | cargo-test | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/check-generated.sh` | shell | `EmitDirectProgramV2Rust.lean` |
@@ -108,6 +108,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-capability-program-contract/src/generated_set_v2.rs` | `EmitCapabilityProgramSetV2Rust.lean` |
 | `crates/dclutch-capability-program-contract/src/generated_v3.rs` | `EmitCapabilityProgramV3AbiRust.lean` |
 | `crates/dclutch-capability-program-contract/src/generated_v4.rs` | `EmitCapabilityProgramV4AbiRust.lean` |
+| `crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs` | `EmitClaimsLiabilityBasisStateV2Rust.lean` |
 | `crates/dclutch-claims-svm/src/generated_market_closure_v1.rs` | `EmitClaimsMarketClosureV1Rust.lean` |
 | `crates/dclutch-custody-contract/src/generated.rs` | `EmitCustodyAbiRust.lean` |
 | `crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs` | `EmitDealerLiquidityAbiRust.lean` |

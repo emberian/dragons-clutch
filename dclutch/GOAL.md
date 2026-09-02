@@ -2911,3 +2911,23 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   COHORT-12 `2613e7d6`: the preflight no longer writes the journal execute resumes. EMISSION `c65d5cca`: two more browser
   ABIs emitted; the terminal action byte loses two authors.
 - Cuts: `6bf9793ed`, `59d49c1ad`.
+
+### Lane map delta — 2026-09-02 11:30
+- K=5 lane `a9435d78baa5d7612` closed at ~755k → **`adfb985d94c714707`** lands it. In the worktree (`ce4b2cb1`): every
+  target compiles; the register question collapsed (a register is a pipe between parent and child wire, removed at both ends);
+  profile ceiling derived 3 → 6 (decision 0011 s3b corrected in place); structured request 968 → 576, selected 648 → 444,
+  terminal 648 → 508; child max outcomes kept at 3 until K=4/5 execute. Owed: TS twins, extent re-pins from a run, the
+  island, then the contiguous series onto the live tree.
+- COHORT-12 (`12b470e3`): the upgrade route refused four ways, key-free, deployer unmoved — any upgrade mints a new
+  release_set_id and strands the founded market; same-bytes upgrade refused by design; **Wall C: the checked candidate builds
+  Trading with `hot-cu-profile` while cohorts deploy the ordinary build, so the gate can never seal any cohort's real bytes**;
+  Wall D: the journal's `already-current` disposition (byte equality, no upgrade) has a reader and no writer. → the lane ships
+  the ordinary link in the candidate, writes `already-current`, seals cohort-12 in place, trades.
+- CLAIMS `5767be46`: **−100,414 CU** on the paying payout shape — the activation cache decoded twice per role (48,659 → 25,417
+  per call × 3) and a full frame re-parse before the same parse; budgets moved with reasons; Custody's own +12,504 unlocated;
+  the same 1,500-CU search-depth lottery under the Claims budgets → adopt Direct's modelled-attempts instrument.
+- DIRECT `48c89c57`/`7af004ef`: the symbol diff is identical (0 of 948 functions changed) — the 4,836 was the MEASUREMENT: the
+  gate's floor is a min over 32 seeds with unmodelled searches reseeded per relink (three pairs: +17 / 0 / +4,836). Fix
+  written and parked (the last unmodelled search, the Claims caller authority bump); applies when the tree is green.
+- WEB closed (`fc37c597`): a11y stops at 194 with the measured reason; two wasm verifies wait on execution-strategy-contract.
+- Cuts: `ec4993abc`, `7b961160a`.

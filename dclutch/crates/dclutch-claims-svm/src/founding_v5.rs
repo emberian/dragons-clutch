@@ -24,7 +24,8 @@ pub const CLAIMS_FOUNDING_WIRE_VERSION_V5: u16 = 5;
 /// Wire value fixing the admitted ProtocolPosition owner kind to `User`.
 pub const CLAIMS_FOUNDING_USER_OWNER_KIND_V5: u8 = 1;
 /// Canonical LiabilityBasisV2 aggregate PDA seed domain.
-pub const CLAIMS_FOUNDING_AGGREGATE_SEED_V5: &[u8] = b"dclutch:lbv2:market";
+pub const CLAIMS_FOUNDING_AGGREGATE_SEED_V5: &[u8] =
+    crate::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
 /// Domain for the ordered post-resource transcript.
 ///
 /// The adapter hashes this domain followed by the exact post aggregate,
