@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -61,11 +62,16 @@ SBPF_V0_FRAME_BYTES = 4096
 # build was still running.
 COMMIT_FIELD = "commit"
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
-# The attribution predicate for `owed`. A link's frames are a function of its
-# own crate sources above all; this names those commits exactly. It is a LOWER
-# BOUND on who moved a frame -- a `crates/` change reaches the links too -- so
-# an unattributed row is a finding, not proof of a phantom.
-PROGRAM_SOURCE = re.compile(r"^programs/[^/]+/src/")
+# The attribution predicate for `owed`. A link's frames are a function of every
+# crate compiled INTO it, not only of the program crate: the codegen that moves
+# a frame is as often three edges down the path-dependency closure. That closure
+# is read from `cargo metadata`, which already answers the question and answers
+# it the way the build does -- deriving it by hand from Cargo.toml would make
+# this file a second author for the dependency graph. Within a crate, only what
+# the compiler reads can move a frame: sources, the manifest that selects
+# features and dependencies, the lock that pins them, and a build script.
+CRATE_SOURCE_DIRECTORY = "src"
+CRATE_BUILD_INPUTS = ("Cargo.toml", "Cargo.lock", "build.rs")
 BASELINE_ROWS = "tools/frameguard/baseline.json"
 
 # Legacy Rust mangling ends in a crate/codegen hash. Rust v0 mangling carries
@@ -415,8 +421,115 @@ def git(repo: Path, *arguments: str) -> str:
     return finished.stdout
 
 
+def discover_links(repo: Path) -> list[str]:
+    """The link set, by the same rule `run.sh` inventories it: a manifest.
+
+    A bare directory is not a link. `programs/dclutch-dealer-sbf` survived its
+    crate's deletion as an empty directory full of build leavings, and counting
+    it made this report claim thirteen links and one unresolved closure.
+    """
+
+    programs = repo / "programs"
+    if not programs.is_dir():
+        raise MissingOrMalformed(f"no programs directory under {repo}")
+    return sorted(
+        entry.name
+        for entry in programs.iterdir()
+        if entry.is_dir() and not entry.is_symlink()
+        and (entry / "Cargo.toml").is_file()
+    )
+
+
+def path_dependency_closure(repo: Path, link: str) -> tuple[set[str], str | None]:
+    """The in-repo crates compiled into one link, as repository-relative dirs.
+
+    Returns the closure and, when it could not be resolved, the reason -- never
+    a silent narrowing. A link whose closure is unknown falls back to its own
+    directory, which is the pre-closure predicate: strictly weaker, and said out
+    loud rather than presented as an answer.
+    """
+
+    fallback = {f"programs/{link}"}
+    manifest = repo / "programs" / link / "Cargo.toml"
+    if not manifest.is_file():
+        return fallback, f"{link} has no Cargo.toml"
+    try:
+        finished = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1", "--offline",
+             "--manifest-path", str(manifest)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+    except OSError as error:
+        return fallback, f"cargo is not runnable ({error})"
+    if finished.returncode != 0:
+        detail = finished.stderr.strip().splitlines()
+        return fallback, f"cargo metadata failed for {link}" + (
+            f": {detail[0]}" if detail else ""
+        )
+    try:
+        metadata = json.loads(finished.stdout)
+        resolve = metadata["resolve"]
+        nodes = {node["id"]: node for node in resolve["nodes"]}
+        manifests = {
+            package["id"]: Path(package["manifest_path"])
+            for package in metadata["packages"]
+        }
+        root = resolve["root"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        return fallback, f"cargo metadata for {link} is unreadable: {error}"
+    if root is None:
+        return fallback, f"cargo metadata for {link} resolves no root package"
+
+    # Walk only THROUGH in-repo packages: a registry crate cannot depend on one
+    # of ours, so stopping there is both correct and what keeps this a walk over
+    # ~100 packages instead of ~850.
+    root_directory = repo.resolve()
+    closure: set[str] = set()
+    seen: set[str] = set()
+    stack = [root]
+    while stack:
+        identifier = stack.pop()
+        if identifier in seen or identifier not in nodes:
+            continue
+        seen.add(identifier)
+        manifest_path = manifests.get(identifier)
+        if manifest_path is None:
+            continue
+        try:
+            relative = manifest_path.parent.resolve().relative_to(root_directory)
+        except (ValueError, OSError):
+            continue
+        closure.add(relative.as_posix())
+        for dependency in nodes[identifier]["deps"]:
+            # DEV-DEPENDENCIES ARE NOT IN THE LINK. `cargo metadata` resolves
+            # them anyway, and following them put `programs/dclutch-trading-sbf`
+            # and two of its program-test crates inside the CLAIMS closure --
+            # which would have accused every trading commit of owing claims
+            # rows. Only what the cdylib compiles counts: normal edges, and
+            # build edges because a build script's output is a compiler input.
+            kinds = dependency.get("dep_kinds")
+            if kinds is not None and all(
+                kind.get("kind") == "dev" for kind in kinds
+            ):
+                continue
+            stack.append(dependency["pkg"])
+    if not closure:
+        return fallback, f"{link} resolved an empty closure"
+    return closure, None
+
+
+def reaches(name: str, crate: str) -> bool:
+    """Does this changed path feed the compiler for that crate?"""
+
+    prefix = f"{crate}/"
+    if not name.startswith(prefix):
+        return False
+    rest = name[len(prefix):]
+    return rest.startswith(f"{CRATE_SOURCE_DIRECTORY}/") or rest in CRATE_BUILD_INPUTS
+
+
 def owed(repo: Path, since: str | None, baseline_path: Path | None, until: str) -> None:
-    """Name the commits that moved program sources without carrying frame rows.
+    """Name the commits that moved a link's sources without carrying frame rows.
 
     An exact ratchet cannot be recaptured after the fact by a bystander in a
     busy tree: the four-minute double build is longer than the interval between
@@ -426,6 +539,12 @@ def owed(repo: Path, since: str | None, baseline_path: Path | None, until: str) 
     WHO owes them. That is this mode: the range is named by the baseline's own
     recorded commit, so the gate answers "red, and here is the ledger" instead
     of "red".
+
+    Attribution follows each link's PATH-DEPENDENCY CLOSURE, not just its own
+    program crate. A frame moves wherever the compiler's input changed, and in
+    this tree that is usually a crate two or three edges down: the +832 bytes on
+    claims `prepare_and_execute` came with a codec change, and a program-only
+    predicate would have let every such row hide behind a crate boundary.
     """
 
     if since is None:
@@ -448,32 +567,70 @@ def owed(repo: Path, since: str | None, baseline_path: Path | None, until: str) 
         raise MissingOrMalformed(f"{since}..{until} does not name two commits")
     revisions = git(repo, "rev-list", "--reverse", f"{base}..{head}").split()
 
+    # One `cargo metadata` per link, all at once: each is a subprocess that
+    # spends its time waiting, and twelve in series is the difference between a
+    # red gate that explains itself immediately and one that pauses first.
+    links = discover_links(repo)
+    if len(links) != EXPECTED_LINK_COUNT:
+        print(
+            f"frameguard: NOTE -- {len(links)} program manifests, not the"
+            f" admitted {EXPECTED_LINK_COUNT}; this ledger covers what it found",
+            file=sys.stderr,
+        )
+    closures: dict[str, set[str]] = {}
+    degraded: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        resolved = list(pool.map(
+            lambda link: (link, *path_dependency_closure(repo, link)), links
+        ))
+    for link, closure, reason in resolved:
+        closures[link] = closure
+        if reason is not None:
+            degraded.append(reason)
+    crates = sorted({crate for closure in closures.values() for crate in closure})
+
     debtors: list[str] = []
     for revision in revisions:
-        # No `-m`: a merge commit gets no accusation, because whatever program
-        # sources it brought in are attributed to the commits that made them,
-        # which `rev-list` has already put in this range.
+        # No `-m`: a merge commit gets no accusation, because whatever sources
+        # it brought in are attributed to the commits that made them, which
+        # `rev-list` has already put in this range.
         names = git(
             repo, "diff-tree", "--no-commit-id", "--name-only", "-r", revision
         ).splitlines()
-        moved = sorted({
-            name.split("/")[1] for name in names if PROGRAM_SOURCE.match(name)
-        })
-        if not moved or BASELINE_ROWS in names:
+        if BASELINE_ROWS in names:
             continue
+        moved = sorted({
+            crate for crate in crates
+            if any(reaches(name, crate) for name in names)
+        })
+        if not moved:
+            continue
+        reached = sorted(
+            link for link, closure in closures.items() if closure & set(moved)
+        )
         subject = git(repo, "log", "-1", "--format=%s", revision).strip()
-        debtors.append(f"{revision[:8]} {', '.join(moved)}: {subject}")
+        shown = moved[:4] + ([f"and {len(moved) - 4} more"] if len(moved) > 4 else [])
+        debtors.append(
+            f"{revision[:8]} {subject}\n"
+            f"      reaches {', '.join(reached)}\n"
+            f"      via {', '.join(shown)}"
+        )
 
     scope = f"{base[:8]}..{head[:8]} ({len(revisions)} commits)"
+    coverage = (
+        f"{len(links)} links over {len(crates)} first-party crates"
+        + (f"; {len(degraded)} closure(s) UNRESOLVED, falling back to the"
+           f" program crate alone: {'; '.join(degraded[:3])}" if degraded else "")
+    )
     if not debtors:
         print(
-            f"frameguard: {scope} -- no commit moved program sources without"
-            " carrying its baseline rows"
+            f"frameguard: {scope} -- no commit changed a link's compiled sources"
+            f" without carrying its baseline rows ({coverage})"
         )
         return
     raise Disagreement(
-        f"{len(debtors)} commit(s) in {scope} changed program sources and left the"
-        " frame ratchet to someone else:\n"
+        f"{len(debtors)} commit(s) in {scope} changed sources compiled into a"
+        f" link and left the frame ratchet to someone else ({coverage}):\n"
         + "\n".join(f"  {line}" for line in debtors)
         + "\n  Each owes a `tools/frameguard/run.sh --at <its commit>` recapture"
         " in its own commit, or an explicit statement that it leaves the ratchet red."

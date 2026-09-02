@@ -518,11 +518,12 @@ archive_revision() {
 # fact by a bystander in a busy tree -- the double build is longer than the
 # interval between program commits, so three correct recaptures were each
 # invalidated before they could be reviewed (2026-09-02). The rule is therefore
-# that a commit touching `programs/*/src/**` carries its own baseline rows or
-# says it leaves the gate red; `--repo` lets `run.sh` read the range back from
-# the baseline's own recorded commit and print the commits that did neither. So
-# a reader of a red frameguard tier learns WHO owes rows, not only that the
-# frames disagree.
+# that a commit changing any crate COMPILED INTO a link -- its whole cargo
+# path-dependency closure, not just `programs/*/src` -- carries its own baseline
+# rows or says it leaves the gate red; `--repo` lets `run.sh` read the range
+# back from the baseline's own recorded commit and print the commits that did
+# neither, with the links each reaches. So a reader of a red frameguard tier
+# learns WHO owes rows, not only that the frames disagree.
 # ---------------------------------------------------------------------------
 tier_frameguard() {
   say "frameguard -- exact per-function SBF frame ratchet"

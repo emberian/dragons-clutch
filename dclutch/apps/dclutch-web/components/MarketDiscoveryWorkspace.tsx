@@ -6,12 +6,13 @@ import Nav from '@/components/Nav';
 import MarketFilterBar from '@/components/MarketFilterBar';
 import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
 import { CORE_STATE_BYTES } from '@/lib/generated/coreFound';
 import { type DeploymentV1 } from '@/lib/deployments';
 import { SUPERSEDED_CORE_STATE_WIDTHS } from '@/lib/marketCoreV2';
 import { collateralDenominationV1 } from '@/lib/marketDenomination';
+import { inspectMarketQuestionsV1, type MarketQuestionV1 } from '@/lib/marketQuestion';
 import { formatQuantityV1 } from '@/lib/quantity';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { docsHrefV1 } from '@/lib/flags';
@@ -91,7 +92,54 @@ function CapabilityBadges({ capabilities, clock, nowMs }: Readonly<{ capabilitie
   </p>;
 }
 
+/**
+ * Every listed market's question, in two observations for the whole page.
+ *
+ * Display-only, so its failure mode is the fallback that was there before:
+ * a market whose records did not read keeps its registry row or its address,
+ * and one market's refusal costs the others nothing -- which is why the batch
+ * reports per market instead of throwing. A page that could not derive any of
+ * them still lists every market it read.
+ */
+async function listedMarketQuestionsV1(
+  client: SolanaRpcClient,
+  registryProgramId: string | null,
+  cards: ReadonlyArray<MarketDiscoveryCardV1>,
+): Promise<ReadonlyMap<string, MarketQuestionV1>> {
+  const decoded = cards.filter((card): card is Extract<MarketDiscoveryCardV1, { status: 'decoded' }> => card.status === 'decoded');
+  if (registryProgramId === null || decoded.length === 0) return new Map();
+  try {
+    const outcomes = await inspectMarketQuestionsV1(client, {
+      registryProgramId,
+      markets: decoded.map((card) => Object.freeze({
+        address: card.address,
+        productRecordId: card.identity.productRecordId,
+        resolutionPolicyId: card.identity.resolutionPolicyId,
+      })),
+    });
+    return new Map(outcomes.flatMap((outcome) => outcome.status === 'derived' ? [[outcome.question.address, outcome.question] as const] : []));
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * What each listed market's own records say it asks, keyed by address.
+ *
+ * A CONTEXT rather than a prop because a card is rendered from six places and
+ * threading a map through all six would put the same argument in six
+ * signatures for one reader. Empty by default, which is exactly the old
+ * behaviour: a card with no derived question falls back to its registry row
+ * and then to its address, and every surface that renders a card outside this
+ * page keeps working without knowing this exists.
+ */
+const MarketQuestionsContext = createContext<ReadonlyMap<string, MarketQuestionV1>>(new Map());
+
 function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCardV1 }> & SlotClockPropsV1) {
+  // Read before the refused early-return below: a hook after a conditional
+  // return is a hook that runs in one order for a decoded card and another for
+  // a refused one.
+  const questions = useContext(MarketQuestionsContext);
   if (card.status === 'refused') {
     return <article className="market-discovery-card refused">
       <div className="market-card-top"><span className="provenance-chip refused">{provenanceChipV1(card.provenance)}</span><span className="phase-chip">no phase</span></div>
@@ -111,7 +159,7 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
   // rather than editing the phase into something the accounts never claimed.
   const outlook = marketActivationOutlookV1(card);
   const denomination = collateralDenominationV1(card.hoard, card.collateral);
-  const narrative = marketNarrativeV1(card.address, card.phase, editorial, null);
+  const narrative = marketNarrativeV1(card.address, card.phase, editorial, questions.get(card.address) ?? null);
   return <article className={`market-discovery-card${outlook.status === 'never' ? ' never-trades' : ''}`}>
     <div className="market-card-top">
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
@@ -120,10 +168,9 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
     </div>
     {/* One merge point for what a market is called, shared with the market
         page: the registry where it names one, the market's own records where
-        the page has read them, the address last. The list does not perform the
-        record read -- it would be two extra round trips per card -- so an
-        unregistered market still lists by address here and gains its derived
-        title on the page it links to. */}
+        this page has read them, the address last. The read is BATCHED -- two
+        observations for the whole list rather than two per card -- which is
+        what made deriving here affordable at all. */}
     <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{narrative.title}</Anchor></h3>
     {narrative.question !== null && <p className="market-question">{narrative.question}</p>}
     <p className="market-card-address" title={card.address}>{shortAddressV1(card.address, 10)}</p>
@@ -351,6 +398,7 @@ export default function MarketDiscoveryWorkspace() {
   // first client render carry no time strings at all — every estimate appears
   // only once it can actually be estimated.
   const [clock, setClock] = useState<SlotClockV1 | null>(null);
+  const [questions, setQuestions] = useState<ReadonlyMap<string, MarketQuestionV1>>(new Map());
   const [nowMs, setNowMs] = useState<number | null>(null);
   // Narrowing state. Both start empty, so the page a reader lands on is the
   // whole listing in the chain's own order — the control changes what you see
@@ -373,6 +421,7 @@ export default function MarketDiscoveryWorkspace() {
   const load = useCallback(async () => {
     setState({ kind: 'loading', message: `Reading every ${deployment.label} market…` });
     setClock(null);
+    setQuestions(new Map());
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -386,6 +435,7 @@ export default function MarketDiscoveryWorkspace() {
         enumeration: enumeration.mode === 'program-scan' ? enumeration : undefined,
       });
       setState({ kind: 'ready', discovery: next, facts, message: next.reason });
+      setQuestions(await listedMarketQuestionsV1(client, deployment.programs.registry, next.cards));
       // After the content is on screen: measure the cluster's slot rate so
       // deadline slots can carry a wall-clock phrase. Display-only, so its
       // failure mode is the labelled nominal-rate assumption, never an error.
@@ -433,7 +483,8 @@ export default function MarketDiscoveryWorkspace() {
     : Object.freeze([]);
   const asideCount = wholeListing === null ? 0 : wholeListing.founding.length + wholeListing.untradeable.length + wholeListing.settled.length + wholeListing.unreadable.length + incompatible.length;
 
-  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
+  return <MarketQuestionsContext.Provider value={questions}>
+    <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
 
     <section className="trade-v3-hero hero-solo">
       <div>
@@ -481,5 +532,6 @@ export default function MarketDiscoveryWorkspace() {
     {discovery !== null && listing !== null && state.kind === 'ready'
       && <RestOfTheRecord listing={listing} incompatible={incompatible} clock={clock} nowMs={nowMs} />}
 
-  </PageShell>;
+  </PageShell>
+  </MarketQuestionsContext.Provider>;
 }

@@ -712,6 +712,31 @@ function infrastructureEqual(left: ProtocolInfrastructureInspectionV1, right: Pr
     && JSON.stringify(left.rent) === JSON.stringify(right.rent);
 }
 
+/**
+ * One finalized raw record, authenticated exactly as `prepareCoreFoundV2` does:
+ * owner, executable bit, and the schema/content PDA it must hash to.
+ *
+ * Extracted because two callers need the identical refusal and only one of them
+ * can afford a round trip per record. It takes the ACCOUNT rather than an
+ * address and a client, so a caller that read fifty records in one observation
+ * authenticates each of them by exactly the rule a caller that read one does.
+ */
+export async function authenticateFinalizedRawRecordV2(
+  account: RpcAccount | null,
+  address: string,
+  registryProgram: string,
+  schema: Uint8Array,
+  field: string,
+): Promise<Readonly<{ bytes: Uint8Array; digest: Uint8Array }>> {
+  if (account === null) throw new Error(`${field} does not exist at ${address}`);
+  if (account.owner !== registryProgram || account.executable) throw new Error(`${field} is not a nonexecutable Registry-owned raw record`);
+  const digest = await sha256(account.data);
+  if (deriveFinalizedRecordAddressesV1(registryProgram, schema, digest).record !== address) {
+    throw new Error(`${field} is not the schema/content-derived Registry raw PDA`);
+  }
+  return Object.freeze({ bytes: account.data, digest });
+}
+
 /** The five dependent record addresses, and the parent each came out of. */
 export type CoreFoundDerivedRecordsV2 = Readonly<{
   resultDomainRecord: string;
@@ -801,21 +826,8 @@ export async function deriveCoreFoundRecordsV2(
   const observation = await client.multipleAccounts([productRecord, sourceMaterialRecord], observedSlot);
   const accounts = accountMap(observation);
 
-  // Both parents are authenticated exactly as `prepareCoreFoundV2` does: owner,
-  // executable bit, and the schema/content PDA. This is the refusal the four
-  // derived addresses stand on, so it happens here and not later.
-  const parent = async (address: string, schema: Uint8Array, field: string) => {
-    const account = required(accounts, address, field);
-    if (account.owner !== registry || account.executable) throw new Error(`${field} is not a nonexecutable Registry-owned raw record`);
-    const digest = await sha256(account.data);
-    if (deriveFinalizedRecordAddressesV1(registry, schema, digest).record !== address) {
-      throw new Error(`${field} is not the schema/content-derived Registry raw PDA`);
-    }
-    return Object.freeze({ bytes: account.data, digest });
-  };
-
-  const product = await parent(productRecord, PRODUCT_RECORD_SCHEMA_ID_V2, 'Product');
-  const source = await parent(sourceMaterialRecord, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, 'Source material');
+  const product = await authenticateFinalizedRawRecordV2(accounts.get(productRecord) ?? null, productRecord, registry, PRODUCT_RECORD_SCHEMA_ID_V2, 'Product');
+  const source = await authenticateFinalizedRawRecordV2(accounts.get(sourceMaterialRecord) ?? null, sourceMaterialRecord, registry, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, 'Source material');
   // The two parents must be about each other before either can name a child.
   validateCoreFoundSourceMaterialV3(source.bytes, product.digest);
   validateProductRootHeaderV2(product.bytes);

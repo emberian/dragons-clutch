@@ -1,16 +1,21 @@
-import { fromHex, i64, isZero, sha256 } from './bytes';
+import { fromHex, i64, isZero, slice } from './bytes';
 import {
+  acquireFinalizedAccountsInChunksV1,
+  authenticateFinalizedRawRecordV2,
   decodeCoreFoundProductGraphV2,
   decodeResultDomainV2,
-  deriveCoreFoundRecordsV2,
+  validateCoreFoundSourceMaterialV3,
   type ResultDomainV2,
 } from './coreFound';
 import { formatTicksV1 } from './founding/rangeProtection';
 import {
   PORTFOLIO_SCHEMA_ID_V2,
+  PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2,
+  PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   RESULT_DOMAIN_SCHEMA_ID_V2,
   SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+  SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3,
   WINDOW_SPEC_BYTES_V1,
   WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
   WINDOW_SPEC_MAGIC,
@@ -201,95 +206,179 @@ export type MarketQuestionRequestV1 = Readonly<{
   resolutionPolicyId: string;
 }>;
 
-function record(accounts: ReadonlyMap<string, RpcAccount | null>, address: string, registry: string, field: string): Uint8Array {
-  const account = accounts.get(address) ?? null;
-  if (account === null) throw new Error(`${field} does not exist at ${address}`);
-  if (account.owner !== registry || account.executable) throw new Error(`${field} is not a nonexecutable Registry-owned raw record`);
-  return account.data;
+/**
+ * What one market's read produced: its question, or the reason there is none.
+ *
+ * A batch answers per market. One market whose product record was never
+ * published must not cost the other nineteen their questions, and a batch that
+ * threw would do exactly that.
+ */
+export type MarketQuestionOutcomeV1 =
+  | Readonly<{ status: 'derived'; question: MarketQuestionV1 }>
+  | Readonly<{ status: 'refused'; address: string; reason: string }>;
+
+/** One error, as a sentence, without letting a non-Error reach a reader raw. */
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * Read one market's partition and window from the chain.
+ * Read many markets' partitions and windows in two round trips, not two each.
  *
- * Two round trips. The first is `deriveCoreFoundRecordsV2`, which is the
- * semantic owner of "authenticate the two parents, then derive the children
- * they name" — it re-hashes both parents against their own schema/content
- * PDAs and refuses a SourceMaterialV3 that is about a different Product before
- * any child address exists. The second reads the three children and proves
- * each is the record its parent named, by hashing it and re-deriving the same
- * PDA.
+ * The market LIST needs this. A page of twenty cards deriving one at a time is
+ * forty sequential round trips, which is why the list carried registry titles
+ * only and an unregistered market listed by its address while the page it
+ * linked to knew better. Two observations serve any number of markets: the
+ * parents in the first, every child in the second, both through the 32-key
+ * chunker so a long list does not exceed the RPC bound.
  *
- * The Product root is re-read in the second round on purpose:
- * `decodeCoreFoundProductGraphV2` is the check that the domain and portfolio
- * here are the ones this product SELECTS, and it needs the root's bytes to
- * say so. A cheaper version that trusted the first round's derivation would be
- * trusting the same client that produced the addresses.
+ * The authentication is unchanged and is per record, not per batch: every
+ * parent is `authenticateFinalizedRawRecordV2` -- owner, executable bit, and
+ * the schema/content PDA it must hash to -- every SourceMaterialV3 must be
+ * about its own Product, and every child must hash to the address its parent
+ * named. Reading fifty records in one call buys latency and buys nothing else.
+ */
+export async function inspectMarketQuestionsV1(
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  request: Readonly<{ registryProgramId: string; markets: ReadonlyArray<Omit<MarketQuestionRequestV1, 'registryProgramId'>> }>,
+): Promise<ReadonlyArray<MarketQuestionOutcomeV1>> {
+  const registry = request.registryProgramId;
+  if (request.markets.length === 0) return Object.freeze([]);
+
+  type Pending = {
+    address: string;
+    productRecord: string;
+    sourceMaterialRecord: string;
+    productBytes: Uint8Array | null;
+    children: Readonly<{ domain: string; portfolio: string; window: string }> | null;
+    reason: string | null;
+  };
+  const pending: Pending[] = request.markets.map((market) => {
+    try {
+      const productDigest = fromHex(market.productRecordId, 'Market product record identity');
+      const sourceDigest = fromHex(market.resolutionPolicyId, 'Market resolution policy identity');
+      if (isZero(productDigest) || isZero(sourceDigest)) throw new Error('this Market names an all-zero record identity');
+      return {
+        address: market.address,
+        productRecord: deriveFinalizedRecordAddressesV1(registry, PRODUCT_RECORD_SCHEMA_ID_V2, productDigest).record,
+        sourceMaterialRecord: deriveFinalizedRecordAddressesV1(registry, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, sourceDigest).record,
+        productBytes: null, children: null, reason: null,
+      };
+    } catch (error) {
+      return { address: market.address, productRecord: '', sourceMaterialRecord: '', productBytes: null, children: null, reason: message(error) };
+    }
+  });
+
+  const floor = await client.finalizedSlot();
+  const parentAddresses = [...new Set(pending.filter((entry) => entry.reason === null).flatMap((entry) => [entry.productRecord, entry.sourceMaterialRecord]))];
+  if (parentAddresses.length > 0) {
+    const observation = await acquireFinalizedAccountsInChunksV1(client, parentAddresses, floor);
+    const accounts = new Map(observation.accounts.map((entry) => [entry.address, entry.account]));
+    for (const entry of pending) {
+      if (entry.reason !== null) continue;
+      try {
+        if (entry.productRecord === entry.sourceMaterialRecord) throw new Error('Product and SourceMaterialV3 cannot be the same record');
+        const product = await authenticateFinalizedRawRecordV2(accounts.get(entry.productRecord) ?? null, entry.productRecord, registry, PRODUCT_RECORD_SCHEMA_ID_V2, 'Product record');
+        const source = await authenticateFinalizedRawRecordV2(accounts.get(entry.sourceMaterialRecord) ?? null, entry.sourceMaterialRecord, registry, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, 'Source material record');
+        validateCoreFoundSourceMaterialV3(source.bytes, product.digest);
+        const at = (bytes: Uint8Array, offset: number, field: string): Uint8Array => {
+          const digest = slice(bytes, offset, 32);
+          if (isZero(digest)) throw new Error(`${field} is the all-zero identity`);
+          return digest;
+        };
+        const derive = (schema: Uint8Array, digest: Uint8Array): string => deriveFinalizedRecordAddressesV1(registry, schema, digest).record;
+        entry.productBytes = product.bytes;
+        entry.children = Object.freeze({
+          domain: derive(RESULT_DOMAIN_SCHEMA_ID_V2, at(product.bytes, PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2, 'result domain digest')),
+          portfolio: derive(PORTFOLIO_SCHEMA_ID_V2, at(product.bytes, PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2, 'portfolio digest')),
+          window: derive(WINDOW_SPEC_SCHEMA_ID_V1, at(source.bytes, SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3, 'window spec digest')),
+        });
+      } catch (error) {
+        entry.reason = message(error);
+      }
+    }
+  }
+
+  const childAddresses = [...new Set(pending.flatMap((entry) => entry.children === null ? [] : [entry.children.domain, entry.children.portfolio, entry.children.window]))];
+  const childAccounts = childAddresses.length === 0
+    ? new Map<string, RpcAccount | null>()
+    : new Map((await acquireFinalizedAccountsInChunksV1(client, childAddresses, floor)).accounts.map((entry) => [entry.address, entry.account]));
+
+  const results: MarketQuestionOutcomeV1[] = [];
+  for (const entry of pending) {
+    if (entry.reason !== null || entry.children === null || entry.productBytes === null) {
+      results.push(Object.freeze({ status: 'refused' as const, address: entry.address, reason: entry.reason ?? 'the market’s records were not read' }));
+      continue;
+    }
+    try {
+      const domain = (await authenticateFinalizedRawRecordV2(childAccounts.get(entry.children.domain) ?? null, entry.children.domain, registry, RESULT_DOMAIN_SCHEMA_ID_V2, 'result domain record'));
+      const portfolio = (await authenticateFinalizedRawRecordV2(childAccounts.get(entry.children.portfolio) ?? null, entry.children.portfolio, registry, PORTFOLIO_SCHEMA_ID_V2, 'portfolio record'));
+      // The full join, by the founding's own decoder: the Product root selects
+      // exactly these two children, the domain carries the product identity,
+      // the portfolio joins on both, its coefficients are gcd-normalized, and
+      // the outcome width is regions + 1.
+      const graph = decodeCoreFoundProductGraphV2(entry.productBytes, domain.bytes, portfolio.bytes, domain.digest, portfolio.digest);
+      const partition: ResultDomainV2 = decodeResultDomainV2(domain.bytes);
+
+      // The window is allowed to be absent on its own. Every market has a
+      // partition -- a Found refuses without one -- but a market whose window
+      // record was never published is a real state, and losing the whole
+      // question over it would be the wrong trade.
+      let window: MarketWindowV1 | null = null;
+      let windowRefusal: string | null = null;
+      try {
+        const record = await authenticateFinalizedRawRecordV2(childAccounts.get(entry.children.window) ?? null, entry.children.window, registry, WINDOW_SPEC_SCHEMA_ID_V1, 'window record');
+        window = decodeWindowSpecV1(record.bytes);
+      } catch (error) {
+        windowRefusal = message(error);
+      }
+
+      results.push(Object.freeze({
+        status: 'derived' as const,
+        question: Object.freeze({
+          address: entry.address,
+          observedSlot: floor,
+          productRecord: entry.productRecord,
+          sourceMaterialRecord: entry.sourceMaterialRecord,
+          resultDomainRecord: entry.children.domain,
+          portfolioRecord: entry.children.portfolio,
+          windowSpecRecord: entry.children.window,
+          cutDenominator: partition.denominator,
+          cuts: partition.cuts,
+          regionCount: partition.regionCount,
+          outcomeCount: graph.outcomeCount,
+          window,
+          windowRefusal,
+        }),
+      }));
+    } catch (error) {
+      results.push(Object.freeze({ status: 'refused' as const, address: entry.address, reason: message(error) }));
+    }
+  }
+  return Object.freeze(results);
+}
+
+/**
+ * Read one market's partition and window.
+ *
+ * The batch with one element, so the market page and the market list cannot
+ * disagree about what a market asks: one reader, one authentication path, one
+ * set of refusal words. It throws where the batch reports, because a detail
+ * page asking about exactly one market wants the reason, not a list of one.
  */
 export async function inspectMarketQuestionV1(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
   request: MarketQuestionRequestV1,
 ): Promise<MarketQuestionV1> {
-  const registry = request.registryProgramId;
-  const productDigest = fromHex(request.productRecordId, 'Market product record identity');
-  const sourceDigest = fromHex(request.resolutionPolicyId, 'Market resolution policy identity');
-  if (isZero(productDigest) || isZero(sourceDigest)) throw new Error('this Market names an all-zero record identity');
-  const productRecord = deriveFinalizedRecordAddressesV1(registry, PRODUCT_RECORD_SCHEMA_ID_V2, productDigest).record;
-  const sourceMaterialRecord = deriveFinalizedRecordAddressesV1(registry, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, sourceDigest).record;
-
-  const derived = await deriveCoreFoundRecordsV2(client, { registryProgram: registry, productRecord, sourceMaterialRecord });
-
-  const addresses = [productRecord, derived.resultDomainRecord, derived.portfolioRecord, derived.windowSpecRecord];
-  const observation = await client.multipleAccounts(addresses, derived.observedSlot);
-  const accounts = new Map(observation.accounts.map((entry) => [entry.address, entry.account]));
-
-  const product = record(accounts, productRecord, registry, 'Product record');
-  const domain = record(accounts, derived.resultDomainRecord, registry, 'result domain record');
-  const portfolio = record(accounts, derived.portfolioRecord, registry, 'portfolio record');
-  const domainDigest = await sha256(domain);
-  const portfolioDigest = await sha256(portfolio);
-
-  // The full join, by the founding's own decoder: the Product root selects
-  // exactly these two children, the domain carries the product identity, the
-  // portfolio joins on both, its coefficients are gcd-normalized, and the
-  // outcome width is regions + 1.
-  const graph = decodeCoreFoundProductGraphV2(product, domain, portfolio, domainDigest, portfolioDigest);
-  const partition: ResultDomainV2 = decodeResultDomainV2(domain);
-
-  // The window is decoded separately and is allowed to be absent. Every
-  // market has a partition — a Found refuses without one — but a window
-  // record is published beside the founding rather than consumed by it, so a
-  // market whose window record was never published is a real state, and the
-  // page says so rather than dropping the whole derivation.
-  let window: MarketWindowV1 | null = null;
-  let windowRefusal: string | null = null;
-  try {
-    const bytes = record(accounts, derived.windowSpecRecord, registry, 'window record');
-    if (deriveFinalizedRecordAddressesV1(registry, WINDOW_SPEC_SCHEMA_ID_V1, await sha256(bytes)).record !== derived.windowSpecRecord) {
-      throw new Error('the window record is not the schema/content-derived Registry raw PDA');
-    }
-    window = decodeWindowSpecV1(bytes);
-  } catch (error) {
-    windowRefusal = error instanceof Error ? error.message : String(error);
-  }
-
-  if (deriveFinalizedRecordAddressesV1(registry, RESULT_DOMAIN_SCHEMA_ID_V2, domainDigest).record !== derived.resultDomainRecord
-    || deriveFinalizedRecordAddressesV1(registry, PORTFOLIO_SCHEMA_ID_V2, portfolioDigest).record !== derived.portfolioRecord) {
-    throw new Error('a child record is not the schema/content-derived Registry raw PDA');
-  }
-
-  return Object.freeze({
-    address: request.address,
-    observedSlot: observation.slot,
-    productRecord,
-    sourceMaterialRecord,
-    resultDomainRecord: derived.resultDomainRecord,
-    portfolioRecord: derived.portfolioRecord,
-    windowSpecRecord: derived.windowSpecRecord,
-    cutDenominator: partition.denominator,
-    cuts: partition.cuts,
-    regionCount: partition.regionCount,
-    outcomeCount: graph.outcomeCount,
-    window,
-    windowRefusal,
+  const [outcome] = await inspectMarketQuestionsV1(client, {
+    registryProgramId: request.registryProgramId,
+    markets: [Object.freeze({
+      address: request.address,
+      productRecordId: request.productRecordId,
+      resolutionPolicyId: request.resolutionPolicyId,
+    })],
   });
+  if (outcome === undefined) throw new Error('the market question read returned no answer for the market it was asked about');
+  if (outcome.status === 'refused') throw new Error(outcome.reason);
+  return outcome.question;
 }

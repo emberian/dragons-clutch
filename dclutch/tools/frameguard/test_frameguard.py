@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,7 +51,14 @@ def manifest(commit: str | None = FIRST_COMMIT) -> dict:
 
 
 def repository(root: Path) -> None:
-    """A tiny history whose only interesting property is which paths moved."""
+    """A tiny cargo dependency graph with a history over it.
+
+    alpha-sbf -> crates/mid -> crates/leaf is the shape that matters: `leaf` is
+    TWO EDGES from the link, compiled into it, and invisible to any predicate
+    that only watches `programs/*/src`. crates/unrelated is in the tree and in
+    nobody\'s closure, which is what makes a quiet commit quiet rather than
+    merely unnoticed.
+    """
 
     environment = {
         **os.environ,
@@ -74,21 +82,51 @@ def repository(root: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
+    def crate(directory: str, name: str, dependency: str | None = None) -> None:
+        manifest = (
+            "[package]\n"
+            f'name = "{name}"\n'
+            'version = "0.1.0"\n'
+            'edition = "2021"\n'
+            "\n[workspace]\n"
+            "\n[dependencies]\n"
+        )
+        if dependency is not None:
+            manifest += dependency + "\n"
+        write(f"{directory}/Cargo.toml", manifest)
+        write(f"{directory}/src/lib.rs", "// one\n")
+
+    def commit(message: str) -> None:
+        run("add", "-A")
+        run("-c", "commit.gpgsign=false", "commit", "-q", "-m", message)
+
     run("init", "-q")
     write("tools/frameguard/baseline.json", "{}\n")
-    write("programs/alpha-sbf/src/lib.rs", "// one\n")
-    run("add", "-A")
-    run("-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+    crate("crates/leaf", "leaf")
+    crate("crates/mid", "mid", 'leaf = { path = "../leaf" }')
+    crate("crates/unrelated", "unrelated")
+    crate("programs/alpha-sbf", "alpha-sbf", 'mid = { path = "../../crates/mid" }')
+    crate("programs/beta-sbf", "beta-sbf")
+    commit("base")
+
     write("programs/alpha-sbf/src/lib.rs", "// two\n")
-    run("add", "-A")
-    run("-c", "commit.gpgsign=false", "commit", "-q", "-m", "alpha moves a frame")
-    write("crates/somewhere/src/lib.rs", "// three\n")
-    run("add", "-A")
-    run("-c", "commit.gpgsign=false", "commit", "-q", "-m", "not a program source")
-    write("programs/beta-sbf/src/lib.rs", "// four\n")
+    commit("alpha moves a frame")
+
+    write("crates/unrelated/src/lib.rs", "// two\n")
+    commit("not in any closure")
+
+    write("programs/beta-sbf/src/lib.rs", "// two\n")
     write("tools/frameguard/baseline.json", '{"n": 1}\n')
-    run("add", "-A")
-    run("-c", "commit.gpgsign=false", "commit", "-q", "-m", "beta carries its rows")
+    commit("beta carries its rows")
+
+    write("crates/leaf/src/lib.rs", "// two\n")
+    commit("leaf is two edges from the link")
+
+    write("crates/leaf/README.md", "not a compiler input\n")
+    commit("documentation beside a compiled crate")
+
+
+HAVE_CARGO = shutil.which("cargo") is not None
 
 
 class FrameGuardTests(unittest.TestCase):
@@ -226,30 +264,68 @@ class FrameGuardTests(unittest.TestCase):
             self.assertIn("names the commit it measured", result.stderr)
             self.assertFalse(output.exists())
 
-    def test_owed_names_the_commit_that_left_its_rows_to_someone_else(self) -> None:
+    def owed_over(self, root: Path, *arguments: str):
+        repository(root)
+        base = subprocess.run(
+            ["git", "-C", str(root), "rev-list", "--max-parents=0", "HEAD"],
+            check=True, text=True, stdout=subprocess.PIPE,
+        ).stdout.strip()
+        return self.run_tool("owed", "--repo", str(root), "--since", base, *arguments)
+
+    @unittest.skipUnless(HAVE_CARGO, "the closure is read from `cargo metadata`")
+    def test_owed_follows_the_links_path_dependency_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = self.owed_over(root)
+            self.assertEqual(result.returncode, 1)
+
+            # The point of the closure: a crate TWO EDGES from the link, which
+            # a `programs/*/src` predicate cannot see at all.
+            self.assertIn("leaf is two edges from the link", result.stderr)
+            self.assertIn("crates/leaf", result.stderr)
+            self.assertIn("reaches alpha-sbf", result.stderr)
+            self.assertIn("alpha moves a frame", result.stderr)
+
+            # A crate in the tree and in nobody's closure, a commit that carried
+            # its rows, and a file the compiler never reads are all settled.
+            self.assertNotIn("not in any closure", result.stderr)
+            self.assertNotIn("beta carries its rows", result.stderr)
+            self.assertNotIn("documentation beside a compiled crate", result.stderr)
+
+    @unittest.skipUnless(HAVE_CARGO, "the closure is read from `cargo metadata`")
+    def test_owed_names_only_the_links_a_change_actually_reaches(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = self.owed_over(root)
+            self.assertEqual(result.returncode, 1)
+            # beta-sbf depends on nothing, so no leaf or mid commit may accuse
+            # it -- an over-broad closure would name every link for every change,
+            # which is how dev-dependencies put trading inside claims.
+            for line in result.stderr.splitlines():
+                if "reaches" in line:
+                    self.assertNotIn("beta-sbf", line)
+            # Four, not five: crates/unrelated is in the tree and in no
+            # closure, so it is not among the crates this gate watches.
+            self.assertIn("2 links over 4 first-party crates", result.stderr)
+
+    def test_owed_says_so_when_a_closure_cannot_be_resolved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repository(root)
+            # A manifest cargo cannot read must degrade LOUDLY to the program
+            # crate alone, never silently to a narrower gate.
+            (root / "programs" / "alpha-sbf" / "Cargo.toml").write_text("not toml {\n")
             base = subprocess.run(
                 ["git", "-C", str(root), "rev-list", "--max-parents=0", "HEAD"],
                 check=True, text=True, stdout=subprocess.PIPE,
             ).stdout.strip()
             result = self.run_tool("owed", "--repo", str(root), "--since", base)
             self.assertEqual(result.returncode, 1)
+            self.assertIn("UNRESOLVED", result.stderr)
             self.assertIn("alpha moves a frame", result.stderr)
-            self.assertIn("alpha-sbf", result.stderr)
-            # A commit that carried its rows, and one that touched no program
-            # source at all, are both settled and must not be accused.
-            self.assertNotIn("beta carries its rows", result.stderr)
-            self.assertNotIn("not a program source", result.stderr)
-
-            head = subprocess.run(
-                ["git", "-C", str(root), "rev-parse", "HEAD"],
-                check=True, text=True, stdout=subprocess.PIPE,
-            ).stdout.strip()
-            result = self.run_tool("owed", "--repo", str(root), "--since", head)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("no commit moved program sources", result.stdout)
+            # Fallen back to the program crate, so the two-edge commit is now
+            # invisible -- which is exactly what the notice is warning about.
+            self.assertNotIn("leaf is two edges from the link", result.stderr)
 
     def test_owed_reads_its_range_from_the_baselines_own_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -266,6 +342,14 @@ class FrameGuardTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1)
             self.assertIn("alpha moves a frame", result.stderr)
+
+            head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, text=True, stdout=subprocess.PIPE,
+            ).stdout.strip()
+            result = self.run_tool("owed", "--repo", str(root), "--since", head)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("no commit changed a link's compiled sources", result.stdout)
 
             unnamed = root / "unnamed.json"
             self.write(unnamed, {**manifest(None), "schema": MODULE.BASELINE_SCHEMA})

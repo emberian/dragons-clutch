@@ -56,11 +56,12 @@ admit quietly.
 
 ## Who owes rows
 
-The rule that follows is that **a commit touching `programs/*/src/**` either
-carries its baseline rows or says it leaves the ratchet red** -- the recapture
-has to ride with the commit that moves the frame. `owed` is that rule as a
-tool rather than as prose: it reads the range back from the baseline's own
-recorded commit and names the commits that did neither.
+The rule that follows is that **a commit changing any crate compiled into an
+SBF link either carries its baseline rows or says it leaves the ratchet red** --
+the recapture has to ride with the commit that moves the frame. `owed` is that
+rule as a tool rather than as prose: it reads the range back from the
+baseline's own recorded commit and names the commits that did neither, with the
+links each reaches and the crates it reached them through.
 
 ```sh
 tools/frameguard/frameguard.py owed --repo . --baseline tools/frameguard/baseline.json
@@ -72,6 +73,28 @@ read (a baseline captured before this field existed names no commit). `run.sh`
 runs it automatically when the frame comparison goes red, so the CI tier
 reports who owes rather than only that the frames disagree.
 
-It is a **lower bound on authorship**: a `crates/` change reaches the links too
-and is not named here. An unattributed changed row is a finding to report, not
-evidence of a phantom.
+**The unit of attribution is the link's path-dependency closure, not its
+program crate.** A frame moves wherever the compiler's input changed, and in
+this tree that is usually a crate two or three edges down -- the +832 bytes on
+claims `prepare_and_execute` arrived with a codec change, and a
+`programs/*/src` predicate would have let every such row hide behind a crate
+boundary. The closure comes from one `cargo metadata` per link (twelve, in
+parallel, about ten seconds), because that command already answers the question
+and answers it the way the build does. Two things it taught us:
+
+- **Dev-dependencies are not in the link.** `cargo metadata` resolves them
+  anyway, and following those edges put `programs/dclutch-trading-sbf` and two
+  of its program-test crates inside the CLAIMS closure. Only normal and build
+  edges are walked.
+- **A bare directory is not a link.** `programs/dclutch-dealer-sbf` outlived
+  its crate as an empty directory of build leavings; links are inventoried by
+  manifest, the same rule `run.sh` uses.
+
+Within a crate, a change counts when it is under `src/`, or is `Cargo.toml`,
+`Cargo.lock`, or `build.rs` -- what the compiler reads. A README beside a
+compiled crate is not an accusation.
+
+What remains outside: the toolchain, `.cargo` configuration, and a workspace
+lockfile no link's closure contains. A closure that cannot be resolved falls
+back to the program crate alone and **says so** in the report; an unattributed
+changed row is still a finding to report rather than evidence of a phantom.

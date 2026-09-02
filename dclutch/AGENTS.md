@@ -309,8 +309,10 @@ construction belong outside the kernel in explicitly named adapters.
   lists what the browser still states in its own words; every generated module
   carries an `abi:*:verify` that `npm test` runs, so a surface with neither is
   a surface with no authority behind it.
-- **A commit touching `programs/*/src/**` carries its frameguard baseline rows
-  or says in its message that it leaves the ratchet red** -- the exact
+- **A commit changing any crate compiled into an SBF link carries its
+  frameguard baseline rows or says in its message that it leaves the ratchet
+  red** -- the link is its whole path-dependency closure, not its program
+  crate, so a codec change three edges down owes rows too; the exact
   per-function frame manifest cannot be recaptured after the fact by a
   bystander, because the double build is longer than this tree's interval
   between program commits (three correct recaptures were each invalidated
