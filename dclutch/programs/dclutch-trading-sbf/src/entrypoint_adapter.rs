@@ -207,7 +207,45 @@ pub(crate) fn get_return_data_into_v1(
         }
         let returned = usize::try_from(returned).map_err(|_| TradingSbfError::Transition)?;
         if returned > capacity {
-            return Err(TradingSbfError::Transition.into());
+            // THE RETURN IS WIDER THAN THE BORROWED BUFFER, which is a fact
+            // about this allocation and NOT about the child. Refusing here read
+            // "the checked data-defined transition refused" for a callee that
+            // had just succeeded, and it cost a whole terminal redemption:
+            // common Hot lends its CHILD REQUEST buffer to receive the child's
+            // receipt, so the optimisation silently required
+            // request_bytes >= receipt_bytes. That held at 648 against a
+            // 592-byte representation receipt and stopped holding when physical
+            // ABI v3 cut the terminal request to 508. Nothing was wrong with the
+            // receipt; the buffer was too small, and only this function could
+            // tell the difference.
+            //
+            // `sol_get_return_data` reports the FULL length whatever it managed
+            // to copy, so the exact shortfall is known here and the fix is to
+            // grow once and re-read. The optimisation still applies whenever the
+            // request is the wider of the two, which is every other route.
+            // `reserve` takes an amount ADDITIONAL TO THE LENGTH, and `clear`
+            // above set the length to zero, so the argument is the whole width.
+            // Passing the shortfall asks for a capacity the buffer already has
+            // and the call does nothing at all.
+            output.reserve(returned);
+            let grown = output.capacity();
+            let again = unsafe {
+                solana_program::syscalls::sol_get_return_data(
+                    output.as_mut_ptr(),
+                    u64::try_from(grown).map_err(|_| TradingSbfError::Content)?,
+                    &mut producer,
+                )
+            };
+            let again = usize::try_from(again).map_err(|_| TradingSbfError::Transition)?;
+            if again != returned || again > grown {
+                // The return data changed between two reads of the same
+                // invocation, or the grown buffer still cannot hold it. Neither
+                // is a width the caller chose, and both are genuinely a refusal.
+                return Err(TradingSbfError::Transition.into());
+            }
+            // SAFETY: as below, over the grown allocation.
+            unsafe { output.set_len(again) };
+            return Ok(Some(producer));
         }
         // SAFETY: `sol_get_return_data` initialized exactly `returned` bytes
         // in this allocation, and the checked branch above proves that range

@@ -3070,3 +3070,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   and DIRECT. Owed: a `release` wall derived from the public cut; /workbench's 27 acts need phase declarations from the
   census; the list's per-card derivation; the wasm digests on clean codecs.
 - Cuts: `3ca11322e`.
+
+### Lane map delta — 2026-09-02 18:45
+- STRUCTURED landing closed (~745k) → **`a34e3fac8f919aa78`**. `6ca28de0`: **the terminal Hot redemption EXECUTES** — the
+  cause was entrypoint_adapter.rs:210's get_return_data_into_v1 lending the child REQUEST buffer (508 B after v3) to receive a
+  592-B receipt; it grows once and re-reads. Measured, K=3, v0 + live ALT: IssueStructured 1,197 B / 720,278 CU, Denominate
+  1,049 / 646,113, RedeemTerminal 1,137 / 1,007,425 — **every action of the family is submittable on common-Hot for the
+  first time**; the 74-vs-72 formula derives (structured is 4 B wider than selected); packet and artifact walls agree at K=6.
+  **A soundness gap** the v3 revision exposed by making a dead assertion true: a receipt Mint substituted for a coordinate
+  Mint in the account metas COMMITS — the shard-Mint alias property left the wire and never entered the account frame →
+  successor's first item; witness re-pin from green; the `Transition` split (380 sites, 14 files; five-build bisect makes
+  the case).
+- Cuts: `ff5af604f`.

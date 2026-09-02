@@ -4920,13 +4920,22 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         eprintln!("IssueStructured refusal logs:\n{}", issued.logs.join("\n"));
     }
     assert!(issued.accepted, "IssueStructured must commit");
-    // NOT `<= PACKET_LIMIT`. At the K = 3 campaign basis the full-width frame
-    // is over the cluster's packet limit and this campaign says so out loud;
-    // ProgramTest has no MTU, so the SEMANTICS below still execute against real
-    // ELFs while the wire measurement records what a cluster would refuse.
+    // THE WALL IS GONE, and this assertion is the one that had to invert to say
+    // so. It read `> PACKET_LIMIT` and was true every day of its life: the K = 3
+    // full-width Claims-direct frame measured 1,397 bytes against a 1,232-byte
+    // cluster packet limit with the ALT already applied, so a K = 3 Product
+    // could be denominated and redeemed on a cluster and never issued or
+    // unwrapped there. Physical ABI v3 cut the request from 968 bytes to 576 --
+    // an action-conditional header AND three re-derived per-coordinate keys off
+    // the wire -- and the frame is now UNDER the limit. Recorded as an equality
+    // against the limit rather than a bare `<=`, for the same reason its
+    // predecessor was an inequality it stated out loud: a bound that only says
+    // the route works cannot report the day it stops.
     assert!(
-        issued.wire_bytes > PACKET_LIMIT,
-        "the K = 3 full-width frame is measured over the limit, not under it"
+        issued.wire_bytes <= PACKET_LIMIT,
+        "the K = 3 full-width frame is measured at {} bytes, over the {PACKET_LIMIT}-byte limit \
+         it was under; the packet wall this campaign recorded as gone has come back",
+        issued.wire_bytes,
     );
     assert!(
         issued
@@ -5551,10 +5560,25 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
     // transaction below commits and its conservation is real evidence; what
     // this number says is that the same transaction does not cross a cluster at
     // K = 3.
+    // AND NOW IT DOES FIT. This assertion has been rewritten twice, and both
+    // rewrites are the same discipline: an EQUALITY, so that the number moving
+    // is itself the failure. It first read `wire_bytes <= PACKET_LIMIT` and had
+    // never been evaluated, because the route refused upstream every day of its
+    // life; the first run that reached it measured 1,253 against 1,232 and the
+    // assertion became the exact pair below. Physical ABI v3 then took the
+    // Denominate request from 648 bytes to 444 -- an action-conditional header
+    // and three re-derived per-coordinate keys off the wire -- and the frame
+    // measures 1,049. It is under the limit by 183 bytes, on a v0 message
+    // against a live Address Lookup Table, carrying the set_compute_unit_limit a
+    // real transaction always pays.
     assert_eq!(
         (denominated.wire_bytes, PACKET_LIMIT),
-        (1253, 1232),
+        (1049, 1232),
         "the Trading common-Hot Denominate frame moved",
+    );
+    assert!(
+        denominated.wire_bytes <= PACKET_LIMIT,
+        "the common-Hot Denominate frame is submittable at the K = 3 campaign basis",
     );
     let after_denominate = snapshot(&mut context, &fixture).await;
     assert_eq!(replay_revision(&after_denominate.replay), 2);
@@ -5777,7 +5801,7 @@ const PER_COORDINATE_WIRE_BYTES: usize = ASSET_BYTES_V3 + 2 * RATIONAL_ASSET_ACC
 /// The ceiling is DERIVED here rather than asserted, from two measurements of
 /// the same fixture and one constant, so the number moves when the frame does.
 #[test]
-fn the_full_width_structured_frame_does_not_fit_a_packet_at_k_three() {
+fn the_full_width_structured_frame_now_fits_a_packet_at_k_three() {
     let (_test, fixture) = fixture(false);
     let payer = Pubkey::new_from_array([0x90; 32]);
     let table = Pubkey::new_from_array([0x91; 32]);
@@ -5817,50 +5841,87 @@ fn the_full_width_structured_frame_does_not_fit_a_packet_at_k_three() {
         selected.data.len(),
         1 + REQUEST_SELECTED_HEADER_BYTES_V3 + ASSET_BYTES_V3
     );
-    // One coordinate costs exactly what the constant says it costs.
+    // THE CLASS HEADER DELTA, which is new and is why the old form of this
+    // assertion was four bytes short.
+    //
+    // It read `full_bytes - selected_bytes == (K - 1) * PER_COORDINATE_WIRE_BYTES`
+    // and was exact for two years, because version two gave every action ONE
+    // 488-byte header and the only thing separating a full-width frame from a
+    // selected one was its extra coordinates. Physical ABI v3 made the header
+    // action-conditional, so these two frames no longer share a header: the
+    // structured class carries a 32-byte receipt Account where the selected
+    // class carries three revisions and an outcome, and it is four bytes wider.
+    // The difference is now a SUM of two terms, and reading it as one term made
+    // a coordinate look like it cost 74 bytes when it costs 72.
+    const CLASS_HEADER_DELTA: usize =
+        REQUEST_STRUCTURED_HEADER_BYTES_V3 - REQUEST_SELECTED_HEADER_BYTES_V3;
     assert_eq!(
         full_bytes - selected_bytes,
-        (K - 1) * PER_COORDINATE_WIRE_BYTES,
-        "a coordinate's wire cost must be its asset row plus its four account indexes"
+        CLASS_HEADER_DELTA + (K - 1) * PER_COORDINATE_WIRE_BYTES,
+        "a full-width frame costs its class header delta plus one coordinate's \
+         asset row and four account indexes for each coordinate past the first"
     );
     assert!(
         selected_bytes <= PACKET_LIMIT,
         "the selected-outcome frame fits at every K: {selected_bytes} bytes"
     );
     assert!(
-        full_bytes > PACKET_LIMIT,
-        "the K = {K} full-width frame is measured over the packet limit"
+        full_bytes <= PACKET_LIMIT,
+        "the K = {K} full-width frame is measured at {full_bytes} bytes, over the packet limit"
     );
     // The largest full-width K a cluster could actually carry.
-    let executable_full_width_k = 1 + (PACKET_LIMIT - selected_bytes) / PER_COORDINATE_WIRE_BYTES;
+    //
+    // The baseline is a STRUCTURED frame at K = 1, not the selected frame: the
+    // selected frame is a different header class and is the wrong zero for this
+    // arithmetic by exactly `CLASS_HEADER_DELTA`.
+    let structured_k1_bytes = selected_bytes + CLASS_HEADER_DELTA;
+    let executable_full_width_k =
+        1 + (PACKET_LIMIT - structured_k1_bytes) / PER_COORDINATE_WIRE_BYTES;
+    // SIX, and it was TWO. Every term of that move is named: the base fell from
+    // 34 operations to 22 and the row from six to five when the header became
+    // action-conditional and the three re-derived keys left the asset row, and
+    // the frame fell from 1,397 bytes to under the limit with them.
     assert_eq!(
-        executable_full_width_k, 2,
-        "the packet caps IssueStructured/UnwrapStructured one coordinate BELOW \
-         the RequestProfile ceiling decision 0011 §3b called hard"
+        executable_full_width_k, 6,
+        "the packet ceiling on IssueStructured/UnwrapStructured moved"
     );
     // WHICH WALL BINDS, as a checked fact rather than a sentence.
     //
-    // The artifact ceiling was the number the cliff doctrine chartered a lift
-    // against (raise `finalizedRecordMaxBytes`, regenerate, widen K). This
-    // assertion is why that lift does not pay: the packet already caps
-    // full-width issuance strictly below the artifact ceiling, so widening the
-    // RequestProfile bound admits descriptors that can be published and
-    // denominated but never issued or unwrapped. Read against the real
-    // constant, so raising the bound cannot quietly make this comment false.
-    let artifact_ceiling_k =
-        usize::try_from(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2).expect("artifact ceiling");
+    // It used to be the packet, one coordinate BELOW the RequestProfile ceiling
+    // decision 0011 s3b called hard, and that is why widening the artifact bound
+    // did not pay: it would have admitted descriptors that could be published
+    // and denominated but never issued. THAT IS NO LONGER TRUE. The packet now
+    // admits six coordinates, the artifact admits six, and the binding number is
+    // the Structured child ceiling of three -- which is neither of them, and is
+    // PROVISIONAL rather than derived.
+    //
+    // So the lift the cliff doctrine chartered is now worth costing, and what it
+    // costs is a campaign run at K = 4 and K = 5, not a constant edit: fitting
+    // the packet and the RequestProfile is necessary and not sufficient, because
+    // a wider K also costs compute units that only a run can measure.
+    let artifact_ceiling_k = usize::try_from(
+        dclutch_bearer_v2_operator::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+    )
+    .expect("artifact ceiling");
+    let child_ceiling_k =
+        usize::try_from(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2).expect("child ceiling");
+    assert_eq!(
+        executable_full_width_k, artifact_ceiling_k,
+        "the packet and the artifact now cap full-width issuance at the same K; if they \
+         diverge again, whichever is lower is the one a lift has to move first"
+    );
     assert!(
-        executable_full_width_k < artifact_ceiling_k,
-        "the packet ceiling ({executable_full_width_k}) must be reported as the binding one \
-         against the artifact ceiling ({artifact_ceiling_k}); if this ever inverts, the \
-         RequestProfile bound became binding again and a lift is worth re-costing"
+        child_ceiling_k < executable_full_width_k,
+        "the Structured child ceiling ({child_ceiling_k}) is the binding one against a packet \
+         and artifact that both admit {executable_full_width_k}; it is PROVISIONAL, and the \
+         plan for lifting it is a K = 4 and K = 5 campaign run"
     );
     eprintln!(
         "Rational V2 K={K} packet wall: full-width-v0-live-ALT={full_bytes}, \
-selected-v0-live-ALT={selected_bytes}, limit={PACKET_LIMIT}, over-by={}, \
+selected-v0-live-ALT={selected_bytes}, limit={PACKET_LIMIT}, under-by={}, \
 per-coordinate={PER_COORDINATE_WIRE_BYTES}, executable-full-width-K={executable_full_width_k}, \
 request-profile-ceiling-K={artifact_ceiling_k}",
-        full_bytes - PACKET_LIMIT,
+        PACKET_LIMIT - full_bytes,
     );
 }
 
@@ -6001,18 +6062,28 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
     );
     let receipt_backed = {
         let request = receipt_backed_by_receipt_request(&fixture);
-        // The REQUEST GRAMMAR refuses it: a shard Mint may not alias the receipt
-        // Mint, so these bytes are not a decodable request at all. That is where
-        // this hostile dies, and the campaign records WHERE rather than
-        // pretending Claims caught it: every caller must decode the request to
-        // derive its own Trading authority (`CallerAuthoritySeedsV1` over the
-        // request's `parent_context`), so a request the grammar rejects cannot
-        // acquire a signer and cannot reach the CPI. Submitted below anyway, so
-        // the refusal is a chain observation instead of a host assertion.
-        assert_eq!(
-            RepresentationRequestV2::decode(&request).err(),
-            Some(RationalRequestError::AccountAlias),
-            "the request grammar must refuse a receipt backed by itself"
+        // THE OWNER OF THIS REFUSAL MOVED, and the campaign says so rather than
+        // dropping the hostile. The request grammar used to refuse these bytes
+        // outright -- a shard Mint may not alias the receipt Mint -- because the
+        // shard Mint rode the wire and `decode` could compare the two. Physical
+        // ABI v3 takes the shard Mint OFF the wire and has the Claims adapter
+        // derive it, so the grammar has nothing to compare and these bytes are
+        // now a perfectly decodable request. Asserting `AccountAlias` here would
+        // be asserting a check that no longer exists.
+        //
+        // What the hostile still does is the half that always mattered: it
+        // substitutes the receipt Mint for the coordinate Mint IN THE ACCOUNT
+        // METAS below and submits, so the refusal is observed on chain against
+        // the real frame. That is where the property belongs now.
+        //
+        // OWED: the shard Mint alias property, stated in the account frame, so
+        // this has a NAMED owner rather than whichever conjunct the adapter's
+        // own derivation happens to reach first. It is the same debt the Rust
+        // `authenticate_asset` and the browser's deleted `distinct` helper both
+        // record; three hostiles are waiting on it.
+        assert!(
+            RepresentationRequestV2::decode(&request).is_ok(),
+            "v3 leaves the grammar nothing to compare: the shard Mint is derived, not sent"
         );
         let mut instruction = wrapper_instruction_from_request(
             &fixture,
