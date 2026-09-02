@@ -892,23 +892,23 @@ fn authenticate_direct_close_release(
     request: &DirectFundingCloseRequestV1,
 ) -> ProgramResult {
     if direct.activated_release_set.owner != direct.registry_program.key {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activation_data = direct
         .activated_release_set
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if activation_data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let release_set_id = activated
         .execution_release_set_id()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let core = activated
         .role(ExecutionRoleV1::Core)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivatedRole)?;
     let resolution = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
@@ -918,8 +918,13 @@ fn authenticate_direct_close_release(
             direct.registry_program.key,
         )
         .0 != *direct.activated_release_set.key
-        || core.release().program().to_bytes() != direct.core_program.key.to_bytes()
-        || resolution.release().program().to_bytes() != program_id.to_bytes()
+    {
+        return Err(ResolutionError::ActivationCache.into());
+    }
+    if core.release().program().to_bytes() != direct.core_program.key.to_bytes() {
+        return Err(ResolutionError::ActivatedRole.into());
+    }
+    if resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
             != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
@@ -1083,23 +1088,23 @@ fn authenticate_direct_activation(
     request: &FundingActivationRequestV1,
 ) -> ProgramResult {
     if direct.activated_release_set.owner != direct.registry_program.key {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activation_data = direct
         .activated_release_set
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if activation_data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let release_set_id = activated
         .execution_release_set_id()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let core = activated
         .role(ExecutionRoleV1::Core)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivatedRole)?;
     let resolution = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
@@ -1109,8 +1114,13 @@ fn authenticate_direct_activation(
             direct.registry_program.key,
         )
         .0 != *direct.activated_release_set.key
-        || core.release().program().to_bytes() != direct.core_program.key.to_bytes()
-        || resolution.release().program().to_bytes() != program_id.to_bytes()
+    {
+        return Err(ResolutionError::ActivationCache.into());
+    }
+    if core.release().program().to_bytes() != direct.core_program.key.to_bytes() {
+        return Err(ResolutionError::ActivatedRole.into());
+    }
+    if resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
             != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
@@ -1675,11 +1685,11 @@ fn authenticate_core(
     }
     let caller_seeds = envelope
         .caller_authority_seeds()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::CallerAuthority)?;
     let expected_caller =
         Pubkey::find_program_address(&caller_seeds.as_slices(), common.core_program.key).0;
     if common.caller_authority.key != &expected_caller {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::CallerAuthority.into());
     }
 
     if common.market.owner != common.core_program.key || common.market.executable {
@@ -1777,20 +1787,20 @@ fn authenticate_activation(
     if common.activated_release_set.owner != common.registry_program.key
         || common.activated_release_set.executable
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activation_data = common
         .activated_release_set
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if activation_data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let release_set_id = activated
         .execution_release_set_id()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if release_set_id.to_bytes() != envelope.release_set().to_bytes()
         || Pubkey::find_program_address(
             &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
@@ -1798,16 +1808,18 @@ fn authenticate_activation(
         )
         .0 != *common.activated_release_set.key
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let core = activated
         .role(ExecutionRoleV1::Core)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivatedRole)?;
     let resolution = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
-    if core.release().program().to_bytes() != common.core_program.key.to_bytes()
-        || resolution.release().program().to_bytes() != program_id.to_bytes()
+    if core.release().program().to_bytes() != common.core_program.key.to_bytes() {
+        return Err(ResolutionError::ActivatedRole.into());
+    }
+    if resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
             != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {

@@ -19,8 +19,9 @@ use alloc::vec;
 use dclutch_capability_program_contract::hot_v3::HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, AcceleratorAckV2,
-    AcceleratorRequestV2,
+    ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2,
+    ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3, AcceleratorAckV2, AcceleratorOutputPageAckV3,
+    AdmittedAcceleratorRequestV2,
 };
 use dclutch_trading_sbf::{
     TradingSbfError,
@@ -40,7 +41,7 @@ use dclutch_trading_sbf::{
         },
     },
     entrypoint_adapter::admitted_heap_frame_bytes_v1,
-    hot_v3::authenticate_accelerator_invocation_v4,
+    hot_v3::{AuthenticatedAcceleratorInvocationV4, authenticate_accelerator_invocation_v4},
 };
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
@@ -83,6 +84,28 @@ pub enum DealerAcceleratorSbfErrorV4 {
     /// with no code at all -- which is exactly what this route produced on
     /// 2026-09-02 before the ceiling was lifted.
     HeapCeilingNotLifted = 0xD007,
+    /// The output page this program was handed is not one it can write.
+    ///
+    /// Wrong owner, not marked writable, executable, a signer, or a data
+    /// borrow this program could not take. All five are one accusation --
+    /// *the page is not mine to write* -- and a program that faulted on them
+    /// instead would publish `ProgramFailedToComplete` with no code at all,
+    /// which is what an out-of-bounds account index already cost this route
+    /// once.
+    OutputPageUnwritable = 0xD008,
+    /// The output page repeats another account in this CPI frame.
+    ///
+    /// Its own code because it is its own hazard: **CPI privileges union on a
+    /// repeated key**, so a page whose key equals a read-only frame account
+    /// would carry write authority into that account. Trading refuses this
+    /// before the CPI; refusing it again here is not ceremony, it is the
+    /// program that would DO the writing declining to be the instrument.
+    OutputPageAliasesFrame = 0xD009,
+    /// The candidate bank is wider than the page provisioned for it.
+    ///
+    /// A provisioning fact, not an authentication one, and it is the only one
+    /// of the three that a correct caller can hit by growing a Product.
+    OutputPageTooNarrow = 0xD00A,
 }
 
 impl DealerAcceleratorSbfErrorV4 {
@@ -91,8 +114,10 @@ impl DealerAcceleratorSbfErrorV4 {
     /// This is what the band assertions below read. It is kept honest by
     /// [`DealerAcceleratorSbfErrorV4::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
-    /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 8] = [
+    /// arm that satisfies the assertions is its own index in this array. The
+    /// three output-page variants are what that mechanism is for: they landed
+    /// as a contiguous run at the end and had to be answered for twice.
+    pub const ALL: [Self; 11] = [
         Self::InvalidRequest,
         Self::InvalidInvocation,
         Self::InvalidAcknowledgement,
@@ -101,6 +126,9 @@ impl DealerAcceleratorSbfErrorV4 {
         Self::InvalidArtifact,
         Self::InvalidRuntimeView,
         Self::HeapCeilingNotLifted,
+        Self::OutputPageUnwritable,
+        Self::OutputPageAliasesFrame,
+        Self::OutputPageTooNarrow,
     ];
 
     /// This refusal's position in [`DealerAcceleratorSbfErrorV4::ALL`].
@@ -118,6 +146,9 @@ impl DealerAcceleratorSbfErrorV4 {
             Self::InvalidArtifact => 5,
             Self::InvalidRuntimeView => 6,
             Self::HeapCeilingNotLifted => 7,
+            Self::OutputPageUnwritable => 8,
+            Self::OutputPageAliasesFrame => 9,
+            Self::OutputPageTooNarrow => 10,
         }
     }
 }
@@ -212,75 +243,164 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     lift_admitted_heap_frame_v4(accounts)?;
-    let request = AcceleratorRequestV2::decode(instruction_data)
+    let request = AdmittedAcceleratorRequestV2::decode(instruction_data)
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let bank_bytes = usize::try_from(request.total_bank_bytes())
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let invocation = authenticate_accelerator_invocation_v4(program_id, accounts, instruction_data)
         .map_err(accelerator_invocation_refusal_v4)?;
-    let mut candidate = vec![0_u8; bank_bytes];
+    let request_digest = content(instruction_data)?;
+    match request {
+        AdmittedAcceleratorRequestV2::ChunkedBankV2(chunked) => {
+            let mut candidate = vec![0_u8; bank_bytes];
+            let accepted = evaluate_selected_family_v4(&invocation, &mut candidate);
+            let acknowledgement = if accepted {
+                let bank_digest = content(&candidate)?;
+                let start = usize::try_from(chunked.chunk_offset())
+                    .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+                let remaining = candidate
+                    .len()
+                    .checked_sub(start)
+                    .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+                let payload_bytes = remaining.min(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2);
+                let end = start
+                    .checked_add(payload_bytes)
+                    .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+                let payload = candidate
+                    .get(start..end)
+                    .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+                AcceleratorAckV2::accepted(chunked, request_digest, bank_digest, payload)
+                    .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?
+            } else {
+                AcceleratorAckV2::refused(chunked, request_digest)
+            };
+            let output_bytes = ACCELERATOR_ACK_HEADER_BYTES_V2
+                .checked_add(acknowledgement.payload().len())
+                .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+            let mut output = vec![0_u8; output_bytes];
+            acknowledgement
+                .encode_into(&mut output)
+                .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+            set_return_data(&output);
+        }
+        AdmittedAcceleratorRequestV2::OutputPageV3(page_request) => {
+            // The page is admitted BEFORE the family runs, so a page this
+            // program cannot write costs the caller the authentication it
+            // already paid and not the evaluation on top of it.
+            let page = admit_output_page_v4(program_id, accounts, &invocation, bank_bytes)?;
+            let acknowledgement = {
+                // THE EVALUATOR WRITES THE ACCOUNT, with no candidate buffer in
+                // between. That is the transport: the bank is 1,392 bytes for
+                // an equity Add and there is no reason for this program to hold
+                // a second copy of it on a heap whose `dealloc` is a no-op.
+                let mut data = page
+                    .try_borrow_mut_data()
+                    .map_err(|_| DealerAcceleratorSbfErrorV4::OutputPageUnwritable)?;
+                let window = data
+                    .get_mut(..bank_bytes)
+                    .ok_or(DealerAcceleratorSbfErrorV4::OutputPageTooNarrow)?;
+                if evaluate_selected_family_v4(&invocation, window) {
+                    // Hashed from the account, not from what this program
+                    // believes it wrote. Trading hashes the same bytes out of
+                    // the same account after the CPI returns, so a digest taken
+                    // over anything else would simply not match.
+                    AcceleratorOutputPageAckV3::accepted(
+                        page_request,
+                        request_digest,
+                        content(window)?,
+                    )
+                } else {
+                    // A refusal writes no digest, so whatever the evaluator left
+                    // in the page is bytes nothing can bind. Trading refuses on
+                    // the disposition before it ever reads them.
+                    AcceleratorOutputPageAckV3::refused(page_request, request_digest)
+                }
+            };
+            let mut output = vec![0_u8; ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3];
+            acknowledgement
+                .encode_into(&mut output)
+                .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+            set_return_data(&output);
+        }
+    }
+    Ok(())
+}
+
+/// Admit the one account this program is ever handed write authority over.
+///
+/// Three refusals, one accusation each, and none of them is authentication:
+/// common Trading already refused a page it did not build. This is the program
+/// that would do the writing declining to do it blind -- the ownership it
+/// asserts is its OWN (a page owned by anyone else is not this program's to
+/// write), the aliasing is the privilege union a repeated key would create, and
+/// the width is a provisioning fact a growing Product can reach honestly.
+fn admit_output_page_v4<'a, 'info>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'info>],
+    invocation: &AuthenticatedAcceleratorInvocationV4<'_, 'a, 'info>,
+    bank_bytes: usize,
+) -> Result<&'a AccountInfo<'info>, DealerAcceleratorSbfErrorV4> {
+    let page = invocation
+        .output_page()
+        .ok_or(DealerAcceleratorSbfErrorV4::OutputPageUnwritable)?;
+    if page.owner != program_id || !page.is_writable || page.is_signer || page.executable {
+        return Err(DealerAcceleratorSbfErrorV4::OutputPageUnwritable);
+    }
+    if accounts
+        .iter()
+        .filter(|account| account.key == page.key)
+        .count()
+        != 1
+    {
+        return Err(DealerAcceleratorSbfErrorV4::OutputPageAliasesFrame);
+    }
+    if page.data_len() < bank_bytes {
+        return Err(DealerAcceleratorSbfErrorV4::OutputPageTooNarrow);
+    }
+    Ok(page)
+}
+
+/// Run the one family the authenticated selection names, naming its refusal.
+///
+/// Lifted out of `process_instruction` unchanged when the second transport
+/// arrived, because a dispatch written twice is a dispatch that can disagree
+/// with itself about which family a request selects.
+fn evaluate_selected_family_v4(
+    invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
+    candidate: &mut [u8],
+) -> bool {
     let family_magic = invocation.family_request().get(..8);
     let selected_action = invocation.selected_action();
     // Dispatch only after common Hot authenticated the top-level request,
     // ProgramSet selection and invocation context. Both magic and selected
     // action must name the same family wire; a cross-family combination is a
     // semantic refusal rather than an alternate decoder choice.
-    let accepted = if family_magic == Some(DEALER_MULTI_LP_REQUEST_MAGIC_V3.as_slice())
+    if family_magic == Some(DEALER_MULTI_LP_REQUEST_MAGIC_V3.as_slice())
         && matches!(selected_action, 7 | 8)
     {
         accepted_or_named_v4(
-            evaluate_authenticated_dealer_lp_v4(&invocation, &mut candidate)
+            evaluate_authenticated_dealer_lp_v4(invocation, candidate)
                 .map_err(DealerLpAcceleratorErrorV4::refusal_name),
         )
     } else if family_magic == Some(DEALER_EQUITY_REQUEST_MAGIC_V3.as_slice())
         && matches!(selected_action, 1..=6)
     {
         accepted_or_named_v4(
-            evaluate_authenticated_dealer_equity_v4(&invocation, &mut candidate)
+            evaluate_authenticated_dealer_equity_v4(invocation, candidate)
                 .map_err(DealerEquityAcceleratorErrorV4::refusal_name),
         )
     } else if family_magic == Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
         && selected_action == u32::from(DEALER_SCENARIO_TRADE_ACTION_V3)
     {
         accepted_or_named_v4(
-            evaluate_authenticated_dealer_scenario_v4(&invocation, &mut candidate)
+            evaluate_authenticated_dealer_scenario_v4(invocation, candidate)
                 .map_err(DealerScenarioAcceleratorErrorV4::refusal_name),
         )
     } else {
         solana_program::log::sol_log(FAMILY_REFUSAL_LOG_PREFIX_V4);
         solana_program::log::sol_log("dispatch:NoFamily");
         false
-    };
-    let request_digest = content(instruction_data)?;
-    let acknowledgement = if accepted {
-        let bank_digest = content(&candidate)?;
-        let start = usize::try_from(request.chunk_offset())
-            .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-        let remaining = candidate
-            .len()
-            .checked_sub(start)
-            .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-        let payload_bytes = remaining.min(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2);
-        let end = start
-            .checked_add(payload_bytes)
-            .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-        let payload = candidate
-            .get(start..end)
-            .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-        AcceleratorAckV2::accepted(request, request_digest, bank_digest, payload)
-            .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?
-    } else {
-        AcceleratorAckV2::refused(request, request_digest)
-    };
-    let output_bytes = ACCELERATOR_ACK_HEADER_BYTES_V2
-        .checked_add(acknowledgement.payload().len())
-        .ok_or(DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-    let mut output = vec![0_u8; output_bytes];
-    acknowledgement
-        .encode_into(&mut output)
-        .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
-    set_return_data(&output);
-    Ok(())
+    }
 }
 
 /// The line a reader greps for the family evaluator's own word.

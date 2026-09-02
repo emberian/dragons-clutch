@@ -287,7 +287,7 @@ pub(crate) fn authenticate_market(
 
     let activation_data = activation
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if activation.owner != &registry_program
         || activation_data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
         || activation.key
@@ -297,20 +297,22 @@ pub(crate) fn authenticate_market(
             )
             .0
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let selected = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     if activated
         .execution_release_set_id()
-        .map_err(|_| ResolutionError::ResolutionRelease)?
+        .map_err(|_| ResolutionError::ActivationCache)?
         .to_bytes()
         != release_set
-        || selected.release().program().to_bytes() != program_id.to_bytes()
     {
+        return Err(ResolutionError::ActivationCache.into());
+    }
+    if selected.release().program().to_bytes() != program_id.to_bytes() {
         return Err(ResolutionError::ResolutionRelease.into());
     }
     drop(activation_data);

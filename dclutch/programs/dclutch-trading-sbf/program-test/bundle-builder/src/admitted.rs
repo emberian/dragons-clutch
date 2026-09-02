@@ -4,18 +4,20 @@
 //! come from the Registry schemas and their content joins through the selected
 //! descriptor, strategy, certificate, admission and artifact release. Caller
 //! authorities similarly come from the exact accelerator request bytes, one
-//! per canonical candidate-bank chunk.
+//! per accelerator invocation -- which is one per candidate-bank chunk under
+//! the chunked transport, and exactly one under the output-page transport.
 
 use dclutch_capability_program_contract::v4::CapabilityProgramV4;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
     encode_register_bank_into,
     v2::{
-        ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorRequestV2,
-        AuthenticatedInterpreterArtifactsV2, BankTransportV2,
+        AcceleratorOutputPageRequestV3, AcceleratorRequestV2, AcceleratorTransportProfileV2,
+        AdmittedAcceleratorRequestV2, AuthenticatedInterpreterArtifactsV2, BankTransportV2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         ExecutionStrategyAdmissionV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
-        RequestTransportV2, classify_bank_transport_v2, validate_admitted_aot_v4,
+        RequestTransportV2, accelerator_invocation_count_v2, classify_bank_transport_v2,
+        validate_admitted_aot_v4,
     },
 };
 use dclutch_registry_contract::{
@@ -86,9 +88,12 @@ pub struct AdmittedAuthorityInputV1<'a> {
     pub capability_program: ContentId,
     /// Complete authenticated invocation-context digest.
     pub invocation_context: ContentId,
-    /// Artifact-derived input transport. Output chunking remains independently
-    /// derived from the complete bank width.
+    /// Artifact-derived input transport. Output transport is independent of it.
     pub transport: RequestTransportV2,
+    /// Strategy-selected output transport.
+    pub profile: AcceleratorTransportProfileV2,
+    /// Immutable admitted accelerator program, which owns any output page.
+    pub accelerator_program: Pubkey,
     /// Product-authoritative runtime tail count.
     pub tail_count: u32,
     /// Exact pre-transition scalar bank.
@@ -117,7 +122,9 @@ pub struct DerivedAdmittedAuthoritiesV1 {
     pub input_bank: Vec<u8>,
     /// Inline or authenticated-scratch transport selected from bank width.
     pub transport: RequestTransportV2,
-    /// One entry per canonical output chunk.
+    /// Accelerator-owned output page, under `OutputPageV3` only.
+    pub output_page: Option<Pubkey>,
+    /// One entry per accelerator invocation this bank costs.
     pub entries: Vec<DerivedAdmittedAuthorityV1>,
 }
 
@@ -230,30 +237,72 @@ pub fn derive_admitted_authorities_v1(
         }
         BankTransportV2::AuthenticatedScratchPages { page_count, .. } => page_count,
     };
-    let mut entries =
-        Vec::with_capacity(usize::try_from(chunk_count).map_err(|_| BuilderError::Arithmetic)?);
+    // The host derives what the producer derives: one invocation per output
+    // chunk, or exactly one under the output-page transport whatever the bank
+    // costs. `accelerator_invocation_count_v2` is the same function Trading and
+    // the operator read, so a frame built here and a frame carved there cannot
+    // disagree about the span's width.
+    let invocation_count =
+        accelerator_invocation_count_v2(input.profile, scalar_count, identity_count)
+            .map_err(|_| BuilderError::Arithmetic)?;
+    let output_page = match input.profile {
+        AcceleratorTransportProfileV2::OutputPageV3 => Some(admitted_output_page_address_v1(
+            &input.accelerator_program,
+            &input.root,
+        )),
+        AcceleratorTransportProfileV2::ChunkedBankV2
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => {
+            if invocation_count != chunk_count {
+                return Err(BuilderError::Artifact);
+            }
+            None
+        }
+    };
+    let mut entries = Vec::with_capacity(
+        usize::try_from(invocation_count).map_err(|_| BuilderError::Arithmetic)?,
+    );
     let mut chunk_index = 0_u32;
-    while chunk_index < chunk_count {
-        let request = AcceleratorRequestV2::new(
-            input.transport,
-            input.strategy_program,
-            input.certificate_program,
-            input.capability_program,
-            input.invocation_context,
-            input_bank_digest,
-            input.tail_count,
-            scalar_count,
-            identity_count,
-            chunk_index,
-            match input.transport {
-                RequestTransportV2::Inline => &input_bank,
-                RequestTransportV2::ScratchPages => &[],
-            },
-        )
+    while chunk_index < invocation_count {
+        let request = match input.profile {
+            AcceleratorTransportProfileV2::OutputPageV3 => AcceleratorOutputPageRequestV3::new(
+                input.transport,
+                input.strategy_program,
+                input.certificate_program,
+                input.capability_program,
+                input.invocation_context,
+                input_bank_digest,
+                input.tail_count,
+                scalar_count,
+                identity_count,
+                match input.transport {
+                    RequestTransportV2::Inline => &input_bank,
+                    RequestTransportV2::ScratchPages => &[],
+                },
+            )
+            .map(AdmittedAcceleratorRequestV2::OutputPageV3),
+            AcceleratorTransportProfileV2::ChunkedBankV2
+            | AcceleratorTransportProfileV2::ShadowTranscriptV3 => AcceleratorRequestV2::new(
+                input.transport,
+                input.strategy_program,
+                input.certificate_program,
+                input.capability_program,
+                input.invocation_context,
+                input_bank_digest,
+                input.tail_count,
+                scalar_count,
+                identity_count,
+                chunk_index,
+                match input.transport {
+                    RequestTransportV2::Inline => &input_bank,
+                    RequestTransportV2::ScratchPages => &[],
+                },
+            )
+            .map(AdmittedAcceleratorRequestV2::ChunkedBankV2),
+        }
         .map_err(|_| BuilderError::Artifact)?;
-        let request_len = ACCELERATOR_REQUEST_HEADER_BYTES_V2
-            .checked_add(request.inline_bank().len())
-            .ok_or(BuilderError::Arithmetic)?;
+        let request_len = request
+            .encoded_len()
+            .map_err(|_| BuilderError::Arithmetic)?;
         let mut request_bytes = vec![0_u8; request_len];
         request
             .encode_into(&mut request_bytes)
@@ -278,8 +327,35 @@ pub fn derive_admitted_authorities_v1(
     Ok(DerivedAdmittedAuthoritiesV1 {
         input_bank,
         transport: input.transport,
+        output_page,
         entries,
     })
+}
+
+/// Domain for the address a test or client provisions as an accelerator page.
+///
+/// NOT A PDA, and it cannot be one: a program-derived address can only be
+/// created by its own program, and this account is created by whoever is
+/// willing to pay its rent, with a plain `SystemProgram::CreateAccount` that
+/// assigns it to the accelerator. What it is instead is a DETERMINISTIC address
+/// this harness and its genesis installer both derive the same way, so the page
+/// a bundle names and the page a fixture installs cannot drift apart.
+pub const ADMITTED_OUTPUT_PAGE_ADDRESS_DOMAIN_V1: &[u8] =
+    b"dclutch:test-accelerator-output-page:v3";
+
+/// Derive the deterministic per-root output-page address for this harness.
+pub fn admitted_output_page_address_v1(accelerator_program: &Pubkey, root: &Pubkey) -> Pubkey {
+    Pubkey::new_from_array(
+        hash(
+            &[
+                ADMITTED_OUTPUT_PAGE_ADDRESS_DOMAIN_V1,
+                accelerator_program.as_ref(),
+                root.as_ref(),
+            ]
+            .concat(),
+        )
+        .to_bytes(),
+    )
 }
 
 /// Require an observed authority slice to equal the derived request sequence.
@@ -670,12 +746,15 @@ mod tests {
             capability_program: id(0x57),
             invocation_context: id(0x58),
             transport: RequestTransportV2::ScratchPages,
+            profile: AcceleratorTransportProfileV2::ChunkedBankV2,
+            accelerator_program: Pubkey::new_from_array([0x59; 32]),
             tail_count: 258,
             scalars: &scalars,
             identities: &identities,
         };
         let derived = derive_admitted_authorities_v1(input).expect("multi-page authorities");
         assert_eq!(derived.transport, RequestTransportV2::ScratchPages);
+        assert_eq!(derived.output_page, None);
         assert!(derived.entries.len() > 1);
         for (index, entry) in derived.entries.iter().enumerate() {
             let request = AcceleratorRequestV2::decode(&entry.request).expect("request");
@@ -699,5 +778,45 @@ mod tests {
         let mut substituted = exact;
         substituted[1] = Pubkey::new_from_array([0x99; 32]);
         assert!(validate_admitted_authority_keys_v1(&derived, &substituted).is_err());
+    }
+
+    /// The same bank, the same widths, the other transport: one authority, one
+    /// page, and a request that carries no chunk coordinate to be wrong about.
+    #[test]
+    fn the_output_page_transport_derives_one_authority_and_one_page() {
+        let scalars = vec![7_u64; 120];
+        let identities = vec![[8_u8; 32]; 2];
+        let accelerator_program = Pubkey::new_from_array([0x59; 32]);
+        let root = Pubkey::new_from_array([0x54; 32]);
+        let derived = derive_admitted_authorities_v1(AdmittedAuthorityInputV1 {
+            trading_program: Pubkey::new_from_array([0x51; 32]),
+            release_set: id(0x52),
+            market: Pubkey::new_from_array([0x53; 32]),
+            root,
+            strategy_program: id(0x55),
+            certificate_program: id(0x56),
+            capability_program: id(0x57),
+            invocation_context: id(0x58),
+            transport: RequestTransportV2::ScratchPages,
+            profile: AcceleratorTransportProfileV2::OutputPageV3,
+            accelerator_program,
+            tail_count: 258,
+            scalars: &scalars,
+            identities: &identities,
+        })
+        .expect("output-page authorities");
+        assert_eq!(derived.entries.len(), 1);
+        assert_eq!(
+            derived.output_page,
+            Some(admitted_output_page_address_v1(&accelerator_program, &root))
+        );
+        let entry = derived.entries.first().expect("the one entry");
+        assert_eq!(entry.chunk_index, 0);
+        let request =
+            AcceleratorOutputPageRequestV3::decode(&entry.request).expect("output page request");
+        assert_eq!(request.total_bank_bytes(), 120 * 8 + 2 * 32);
+        assert_eq!(hash(&entry.request).to_bytes(), entry.request_digest);
+        // The chunked decoder is not a fallback for it, in either direction.
+        assert!(AcceleratorRequestV2::decode(&entry.request).is_err());
     }
 }

@@ -771,4 +771,90 @@ same commit — two builds, two roots, one digest. **That is the property the wh
 repair exists for: the gate now certifies an artifact a cohort would actually
 deploy.**
 
+## Addendum: the seal route was run to its end, and the root cause is one hardcoded list
+
+The coordinator's branch plan was right on its own terms, and it was executed.
+
+**The premise held exactly.** Neither tool commit touches `programs/` or
+`crates/`, so a branch at `e39efbb0` carrying them builds the same program bytes.
+Branch `seal/cohort-12`, both commits cherry-picked (unsigned — 1Password
+declined, which AGENTS.md names as the honest signal of autonomous work), differs
+from `e39efbb0` in **five `tools/` files and nothing else**. The ordinary Trading
+build on that branch:
+
+```
+seal branch ordinary trading: b0cff55ab0ef162d7e427b8cb894f1468b1804d997ab35c52710df3268a8e3ed  (2308320 bytes)
+cohort-12 DEPLOYED trading:   b0cff55ab0ef162d7e427b8cb894f1468b1804d997ab35c52710df3268a8e3ed  (2308320 bytes)
+```
+
+**Equal.** And the full candidate at `96a3b04e` is green — `SEAL_CANDIDATE_EXIT=0`,
+gate `82298c60…`, whose Trading link is `b0cff55a…`, **the deployed bytes**. Its
+profiled measurement reproduces `5354b4cd…`, the original candidate's digest,
+which independently confirms the source is unchanged. The repaired gate now
+certifies exactly what cohort-12 runs.
+
+Two further walls were cleared on the way, both recorded because they will recur:
+
+- **`require_rent_exempt` compares against `Rent::default()`, not the live Rent
+  sysvar** (`release_capture.rs:1043`). Devnet's live rate is lower, so every
+  account `solana program deploy` funds today is judged not rent exempt: the
+  36-byte program accounts hold 1,038,612 and the check demands 1,141,440.
+  Cohort-8's held exactly 1,141,440, and the third-party Pyth accounts — created
+  when the rate was higher — still pass. Cleared operationally rather than by
+  changing a security check: the seven closure accounts were topped up to the
+  stricter threshold for **0.236906854 + 0.000441376 SOL**, which over-funds and
+  weakens nothing. The real fix is to read the sysvar, and it is queued, not done.
+- With that, `devnet-carry-forward-capture-v1` **succeeds** (507,321 bytes), and
+  all five upgrade baselines capture clean.
+
+### And then the root cause, which none of the previous addenda had reached
+
+The deployment-set journal refuses cohort-12 at its first role:
+
+```
+Error("set journal target at index 0 is not exact permanent devnet
+       registry:Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj:ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz")
+```
+
+`PERMANENT_DEVNET_UPGRADE_TARGETS_V1` (`upgrade.rs:129`) **hardcodes seven
+program/ProgramData id pairs** — cohort-7/8's — and the capture family "accepts
+no caller-supplied Program set". So the entire checked-upgrade lineage is scoped
+to one fixed substrate.
+
+**Condition (a) of the standing grant requires FRESH IDENTITIES. The sealing
+machinery requires THE PERMANENT IDENTITIES. They are mutually exclusive by
+construction**, and no fix to the candidate, no already-current writer and no
+rent top-up can bridge them.
+
+And the pinned substrate is gone:
+
+```
+Error: Program Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj has been closed
+```
+
+Closed by the very redeploy discipline condition (a) mandates. **So the
+deployment set can seal neither cohort-12 (wrong ids) nor the permanent set (no
+longer exists). It is unreachable for every cohort, present and future, until
+that constant is re-pointed** — which is decision 0012's territory and not a
+cohort lane's to decide. That, not the feature flag and not the missing writer, is
+why no devnet Direct fill has ever executed.
+
+**So the fee-bearing trade, its `DCLTDFS1` settlement, and `ledger-census` across
+the fill remain undone, and `49c8fa92` / `be67416e` remain unjudged by a real
+fill.** Cohort-13 from HEAD does not change this: it too would have fresh ids.
+The unblocking change is one of:
+
+1. make the permanent target set an authenticated input rather than a constant —
+   the journal already re-reads every row against the chain, so the constant adds
+   no safety a fresh observation does not; or
+2. re-point `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` at a live cohort and hold that
+   cohort's identities stable across redeploys, which is a decision about what
+   "permanent" means.
+
+What this lane leaves ready for whoever takes it: the repaired candidate, the
+already-current writer with its tests, branch `seal/cohort-12` at `96a3b04e`, a
+green gate whose Trading link equals the deployed bytes, a captured carry-forward
+closure, five clean baselines, and a journal skeleton — every input the seal needs
+except an admissible identity set.
+
 Devnet evidence. Not mainnet evidence.

@@ -127,6 +127,16 @@ const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x74; 32]);
 /// Fixture-local seed domain for the Market rent beneficiary; see its use below.
 const RENT_BENEFICIARY_FIXTURE_DOMAIN: &[u8] = b"dclutch/test-rent-beneficiary";
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x75; 32]);
+/// The REAL Trading and Claims programs, distinct from every other role.
+///
+/// Until 2026-09-02 this campaign had neither. It satisfied the five-role
+/// execution release set with THREE ELFs wearing five hats -- the Core program
+/// activated in the Claims role and the Custody program in the Trading role --
+/// which is enough to resolve a Core Market and is not enough to resolve a
+/// market carrying a capability root, because a root is a PDA of the Trading
+/// role and the walk authenticates the release-selected program per role.
+const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x78; 32]);
+const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x79; 32]);
 const GENERATION: u64 = 7;
 const TERMINAL_SEQUENCE: u64 = 1;
 const TERMINAL_TIME: i64 = 1_787_431_680;
@@ -146,6 +156,8 @@ struct Elves {
     custody: Vec<u8>,
     registry: Vec<u8>,
     resolution: Vec<u8>,
+    trading: Vec<u8>,
+    claims: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -166,6 +178,7 @@ struct Fixture {
     registry_artifact: RecordPair,
     core_programdata: Pubkey,
     custody_programdata: Pubkey,
+    trading_programdata: Pubkey,
     resolution_programdata: Pubkey,
     realm: [u8; 32],
     realm_record: RecordPair,
@@ -254,6 +267,8 @@ fn artifacts() -> Elves {
         registry: fs::read(directory.join("dclutch_registry_sbf.so")).expect("Registry ELF"),
         resolution: fs::read(directory.join("dclutch_resolution_proof_sbf.so"))
             .expect("Resolution ELF"),
+        trading: fs::read(directory.join("dclutch_trading_sbf.so")).expect("Trading ELF"),
+        claims: fs::read(directory.join("dclutch_claims_sbf.so")).expect("Claims ELF"),
     }
 }
 
@@ -332,40 +347,26 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     )
 }
 
-/// The activated five-role release set, satisfied by THREE ELFs wearing five hats.
+/// The activated five-role release set, with FIVE REAL PROGRAMS in it.
 ///
-/// `binding(core)` stands in the Claims slot and `binding(custody)` in the
-/// Trading slot, and the role loop below activates the same two substitutes.
-/// That is sound for what this campaign does -- it resolves a Core Market and
-/// invokes neither role -- and it is load-bearing to say so, because it is
-/// exactly what stops this campaign from resolving a market that carries a
-/// DIRECT capability root, whose address is a PDA of the Trading role.
-///
-/// **Measured 2026-09-02, so the cost of the substitution is a number and not a
-/// worry.** Giving Claims and Trading their own real ELFs and their own releases
-/// -- six programs in the bank, five real roles in the set -- takes this file
-/// from 5 of 5 green to 3 of 5. Both failures are `Custom(32773)`,
-/// `ResolutionSbfError::ResolutionRelease` (0x8005): the terminal-certificate
-/// case refuses outright, and `current_resolution_creates_and_activates_exact_funding`
-/// stops reaching its own subject -- it asks for a `FinalizedRecord` refusal and
-/// gets the release one instead, which is the universal-donor shape `AGENTS.md`
-/// warns about.
-///
-/// 0x8005 is raised at **92 sites across seven files** in
-/// `dclutch-resolution-proof-sbf`, so it names the accusation and not the
-/// conjunct; localizing it is the first real step of C-04's resolution clause
-/// and wants the surfacing treatment, not another guess. The working change that
-/// produces the 3-of-5 is parked rather than landed, because a campaign that
-/// goes red teaches nobody anything it does not already say here.
+/// It used to be built from three: `binding(core)` stood in the Claims slot and
+/// `binding(custody)` in the Trading slot, and the role loop activated the same
+/// two substitutes. That is sound for a campaign that only resolves a Core
+/// Market -- neither role is invoked -- and it is exactly what stopped this
+/// campaign from resolving a market that carries a Direct capability root,
+/// whose address is a PDA of the TRADING role and whose walk authenticates the
+/// release-selected program for each role it enters.
 fn activation(
     core: ArtifactReleaseV1,
+    claims: ArtifactReleaseV1,
+    trading: ArtifactReleaseV1,
     resolution: ArtifactReleaseV1,
     custody: ArtifactReleaseV1,
 ) -> ([u8; 32], Vec<u8>) {
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
-        binding(core),
-        binding(custody),
+        binding(claims),
+        binding(trading),
         binding(resolution),
         binding(custody),
     )
@@ -376,8 +377,8 @@ fn activation(
     initialize_activation_cache_v1(&mut bytes, content).expect("activation cache");
     for (role, selected) in [
         (ExecutionRoleV1::Core, core),
-        (ExecutionRoleV1::Claims, core),
-        (ExecutionRoleV1::Trading, custody),
+        (ExecutionRoleV1::Claims, claims),
+        (ExecutionRoleV1::Trading, trading),
         (ExecutionRoleV1::Resolution, resolution),
         (ExecutionRoleV1::Custody, custody),
     ] {
@@ -711,7 +712,22 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     pyth_provider::assert_all_fixture_hashes();
     pyth_provider::add_upgraded_provider_programs(&mut test, provider);
 
+    add_program(
+        &mut test,
+        "dclutch_claims_sbf",
+        CLAIMS_PROGRAM_ID,
+        &elves.claims,
+    );
+    add_program(
+        &mut test,
+        "dclutch_trading_sbf",
+        TRADING_PROGRAM_ID,
+        &elves.trading,
+    );
+
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
+    let claims_release = release(CLAIMS_PROGRAM_ID, [0x47; 32], &elves.claims);
+    let trading_release = release(TRADING_PROGRAM_ID, [0x48; 32], &elves.trading);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
         RESOLUTION_CONTROLLER_RELEASE_ID_V7,
@@ -719,8 +735,13 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     );
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
     let registry_release = release(REGISTRY_PROGRAM_ID, [0x43; 32], &elves.registry);
-    let (release_set, activation_data) =
-        activation(core_release, resolution_release, custody_release);
+    let (release_set, activation_data) = activation(
+        core_release,
+        claims_release,
+        trading_release,
+        resolution_release,
+        custody_release,
+    );
     let activation = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
         &REGISTRY_PROGRAM_ID,
@@ -1359,6 +1380,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         registry_artifact,
         core_programdata: programdata(CORE_PROGRAM_ID),
         custody_programdata: programdata(CUSTODY_PROGRAM_ID),
+        trading_programdata: programdata(TRADING_PROGRAM_ID),
         resolution_programdata: programdata(RESOLUTION_PROGRAM_ID),
         realm,
         realm_record,
@@ -1938,8 +1960,13 @@ fn provider_execute_deployment(fixture: &Fixture) -> ProviderExecuteDeploymentV3
         registry_artifact: fixture.registry_artifact.raw,
         registry_artifact_staging: fixture.registry_artifact.staging,
         core_programdata: fixture.core_programdata,
-        trading_program: CUSTODY_PROGRAM_ID,
-        trading_programdata: fixture.custody_programdata,
+        // The Trading slot of the shared Resolution frame, and the one position
+        // the three-hat activation let this campaign get wrong for free: it used
+        // to name `CUSTODY_PROGRAM_ID`, which was correct precisely because the
+        // Trading role was activated as the Custody program. Against a release
+        // set with a real Trading role the frame refuses `0x8019 ActivatedRole`.
+        trading_program: TRADING_PROGRAM_ID,
+        trading_programdata: fixture.trading_programdata,
         resolution_program: RESOLUTION_PROGRAM_ID,
         resolution_programdata: fixture.resolution_programdata,
         receiver_config: fixture.provider.config,

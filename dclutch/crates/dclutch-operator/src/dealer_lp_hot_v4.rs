@@ -374,7 +374,17 @@ fn validate_strategy_geometry(
     state: &DealerLpHotStateV4,
     descriptor: CapabilityProgramV4,
 ) -> Result<(), DealerLpHotOperatorErrorV4> {
+    // The LP route is chunked, and that is READ rather than assumed: the record
+    // this function already decodes below is the authority for it, so it is
+    // decoded first and its profile is what sizes the caller-authority span.
+    let strategy = ExecutionStrategyProgramV2::decode(
+        &fixed(state, HOT_STRATEGY_RAW_ACCOUNT_V3)?.account.data,
+    )
+    .map_err(|_| DealerLpHotOperatorErrorV4::StrategyGeometry)?;
     let callers = admitted_caller_authority_count_v3(
+        strategy
+            .transport_profile()
+            .map_err(|_| DealerLpHotOperatorErrorV4::StrategyGeometry)?,
         u32::from(DEALER_LP_SCALAR_COUNT_V3),
         u32::from(DEALER_LP_IDENTITY_COUNT_V3),
     )
@@ -393,10 +403,6 @@ fn validate_strategy_geometry(
     {
         return Err(DealerLpHotOperatorErrorV4::StrategyGeometry);
     }
-    let strategy = ExecutionStrategyProgramV2::decode(
-        &fixed(state, HOT_STRATEGY_RAW_ACCOUNT_V3)?.account.data,
-    )
-    .map_err(|_| DealerLpHotOperatorErrorV4::StrategyGeometry)?;
     if strategy.disposition() != StrategyDispositionV2::AdmittedAot
         || strategy.transport_profile() != Ok(AcceleratorTransportProfileV2::ChunkedBankV2)
     {

@@ -528,20 +528,20 @@ fn authenticate_market_and_infrastructure(
     .0;
     let infrastructure_data = infrastructure
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::InfrastructureProfile)?;
     if infrastructure.key != &expected_infrastructure
         || infrastructure.owner != frame.account(11).key
         || infrastructure.executable
         || infrastructure_data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         || !rent.is_exempt(infrastructure.lamports(), infrastructure_data.len())
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::InfrastructureProfile.into());
     }
     let profile = ProtocolInfrastructureProfileV2::decode(&infrastructure_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::InfrastructureProfile)?;
     drop(infrastructure_data);
     if profile.registry().program().to_bytes() != frame.registry_program().key.to_bytes() {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::InfrastructureProfile.into());
     }
     let artifact_data = frame
         .account(9)
@@ -558,11 +558,11 @@ fn authenticate_market_and_infrastructure(
         ARTIFACT_RELEASE_BYTES_V1,
     )?;
     let artifact = ArtifactReleaseV1::decode(&artifact_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::InfrastructureProfile)?;
     if artifact.program().to_bytes() != frame.registry_program().key.to_bytes() {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::InfrastructureProfile.into());
     }
-    require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::ResolutionRelease)?;
+    require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::InfrastructureProfile)?;
     let observation =
         cached_deployment_observation(frame.registry_program(), frame.account(8), artifact)?;
     artifact
@@ -583,7 +583,7 @@ fn authenticate_activation_and_caller(
     let activation_data = frame
         .account(5)
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if frame.account(5).owner != frame.registry_program().key
         || frame.account(5).executable
         || activation_data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
@@ -593,17 +593,17 @@ fn authenticate_activation_and_caller(
         )
         .0 != *frame.account(5).key
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activation = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if activation
         .execution_release_set_id()
-        .map_err(|_| ResolutionError::ResolutionRelease)?
+        .map_err(|_| ResolutionError::ActivationCache)?
         .to_bytes()
         != request.release_set
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     for (role, program, programdata) in [
         (ExecutionRoleV1::Core, frame.account(11), frame.account(12)),
@@ -618,13 +618,21 @@ fn authenticate_activation_and_caller(
             frame.account(16),
         ),
     ] {
-        let activated = activation
-            .role(role)
-            .map_err(|_| ResolutionError::ResolutionRelease)?;
+        let resolution_role = role == ExecutionRoleV1::Resolution;
+        let activated = activation.role(role).map_err(|_| {
+            if resolution_role {
+                ResolutionError::ResolutionRelease
+            } else {
+                ResolutionError::ActivatedRole
+            }
+        })?;
         if activated.release().program().to_bytes() != program.key.to_bytes() {
-            return Err(ResolutionError::ResolutionRelease.into());
+            if resolution_role {
+                return Err(ResolutionError::ResolutionRelease.into());
+            }
+            return Err(ResolutionError::ActivatedRole.into());
         }
-        if role == ExecutionRoleV1::Resolution
+        if resolution_role
             && (program.key != program_id
                 || activated.release().semantic_release_id().to_bytes()
                     != RESOLUTION_CONTROLLER_RELEASE_ID_V7)
@@ -655,7 +663,7 @@ fn authenticate_activation_and_caller(
                 .map_err(|_| ResolutionError::Instruction)?
                 != request.parent_request_digest)
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::CallerAuthority.into());
     }
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         request.release_set,
@@ -664,11 +672,11 @@ fn authenticate_activation_and_caller(
         request.source_state,
         request.parent_request_digest,
     )
-    .map_err(|_| ResolutionError::ResolutionRelease)?;
+    .map_err(|_| ResolutionError::CallerAuthority)?;
     if Pubkey::find_program_address(&seeds.as_slices(), caller_program.key).0
         != *frame.account(0).key
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::CallerAuthority.into());
     }
     if request.caller == ProviderCallerV3::Trading {
         let set_data = frame

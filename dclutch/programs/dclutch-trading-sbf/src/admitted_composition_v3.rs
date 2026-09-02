@@ -40,17 +40,19 @@ use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
     admitted_v3::{
         ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_HOT_FIXED_START_V3,
+        ADMITTED_OUTPUT_PAGE_ACCOUNT_V3, ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3,
         ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
         ADMITTED_STRATEGY_EVIDENCE_START_V3, AdmittedInvocationContextV3,
-        admitted_invocation_context_digest_v3,
+        admitted_invocation_context_digest_v3, admitted_runtime_accounts_start_v3,
     },
     v2::{
-        ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
-        AcceleratorDispositionV2, AcceleratorRequestV2, AcceleratorTransportProfileV2,
-        AuthenticatedScratchPageV2, BankTransportV2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
+        ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3, AcceleratorAckV2,
+        AcceleratorDispositionV2, AcceleratorOutputPageAckV3, AcceleratorOutputPageRequestV3,
+        AcceleratorRequestV2, AcceleratorTransportProfileV2, AdmittedAcceleratorRequestV2,
+        AuthenticatedScratchPageV2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
         ExecutionCandidateV2, RequestTransportV2, StrategyDispositionV2,
-        classify_bank_transport_v2, register_bank_bytes_v2, resolve_execution_candidate_v2,
+        accelerator_invocation_count_v2, register_bank_bytes_v2, resolve_execution_candidate_v2,
     },
 };
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
@@ -114,6 +116,21 @@ pub const ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4: usize =
 /// First expanded AccountProfile-ordered logical runtime observation.
 pub const ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4: usize =
     ADMITTED_RUNTIME_ACCOUNTS_START_V3;
+/// Accelerator-owned candidate output page, under `OutputPageV3` only.
+pub const ADMITTED_ACCELERATOR_OUTPUT_PAGE_ACCOUNT_V4: usize = ADMITTED_OUTPUT_PAGE_ACCOUNT_V3;
+/// First logical runtime observation under `OutputPageV3`, displaced by the page.
+pub const ADMITTED_ACCELERATOR_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V4: usize =
+    ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3;
+
+/// Where an admitted accelerator CPI frame's runtime slice begins, by transport.
+///
+/// An alias, like the five coordinates above it: the contract is the author and
+/// this is the producer's end of the same wire.
+pub const fn admitted_runtime_accounts_start_v4(
+    profile: AcceleratorTransportProfileV2,
+) -> Option<usize> {
+    admitted_runtime_accounts_start_v3(profile)
+}
 
 /// Exact fixed evidence passed before the AccountProfile-ordered runtime slice.
 #[derive(Clone, Copy)]
@@ -158,6 +175,16 @@ pub struct AdmittedCpiFrameV3<'a, 'info> {
     pub accelerator_program: &'a AccountInfo<'info>,
     /// Exact admitted accelerator ProgramData.
     pub accelerator_programdata: &'a AccountInfo<'info>,
+    /// Accelerator-owned candidate output page, `Some` only under `OutputPageV3`.
+    ///
+    /// The one writable account any admitted accelerator has ever been handed,
+    /// and it is handed one because the alternative is paying a whole
+    /// re-authentication and re-evaluation per 880 bytes of candidate. It is
+    /// bound by the digest the acknowledgement carries and by nothing else:
+    /// Trading does not check its owner, because a page the accelerator could
+    /// not write holds bytes whose hash is not the digest of the bank it just
+    /// computed.
+    pub output_page: Option<&'a AccountInfo<'info>>,
 }
 
 /// Complete authoritative admitted candidate plus its ordered CPI transcript.
@@ -171,24 +198,22 @@ pub struct AdmittedExecutionV3 {
 }
 
 /// Return the exact caller-authority count for an admitted candidate bank.
+///
+/// ONE PER OUTPUT INVOCATION, which is what it always meant and what the
+/// chunked profile made look like a bank-width law. Under `OutputPageV3` there
+/// is exactly one invocation whatever the bank costs, so the count is one and
+/// the frame carving, the operator and the accelerator all read it here rather
+/// than each deciding what a page implies.
 pub fn admitted_caller_authority_count_v3(
+    profile: AcceleratorTransportProfileV2,
     scalar_count: u32,
     identity_count: u32,
 ) -> Result<usize, ProgramError> {
-    match classify_bank_transport_v2(scalar_count, identity_count)
-        .map_err(|_| TradingSbfError::AdmittedTransport)?
-    {
-        BankTransportV2::InlineReturnData { bank_bytes } => {
-            if bank_bytes == 0 {
-                Err(TradingSbfError::AdmittedTransport.into())
-            } else {
-                Ok(1)
-            }
-        }
-        BankTransportV2::AuthenticatedScratchPages { page_count, .. } => {
-            usize::try_from(page_count).map_err(|_| TradingSbfError::AdmittedTransport.into())
-        }
-    }
+    usize::try_from(
+        accelerator_invocation_count_v2(profile, scalar_count, identity_count)
+            .map_err(|_| TradingSbfError::AdmittedTransport)?,
+    )
+    .map_err(|_| TradingSbfError::AdmittedTransport.into())
 }
 
 /// Execute an admitted accelerator as the sole candidate authority.
@@ -221,40 +246,34 @@ pub fn execute_admitted_aot_v3<'info>(
     }
     let input_bank = encode_register_bank(input_scalars, input_identities)?;
     let input_bank_digest = content(&input_bank)?;
-    let chunk_count = match classify_bank_transport_v2(scalar_count, identity_count)
-        .map_err(|_| TradingSbfError::AdmittedTransport)?
-    {
-        BankTransportV2::InlineReturnData { bank_bytes } => {
-            if bank_bytes == 0 {
-                return Err(TradingSbfError::AdmittedTransport.into());
-            }
-            1_usize
-        }
-        BankTransportV2::AuthenticatedScratchPages {
-            bank_bytes,
-            page_count,
-        } => {
-            if usize::try_from(bank_bytes).map_err(|_| TradingSbfError::AdmittedTransport)?
-                != input_bank.len()
-            {
-                return Err(TradingSbfError::AdmittedTransport.into());
-            }
-            usize::try_from(page_count).map_err(|_| TradingSbfError::AdmittedTransport)?
-        }
-    };
-    // Input transport and output return-data chunking are orthogonal. The V2
-    // contract deliberately permits a complete inline input bank to yield
-    // several bounded output acknowledgements. Scratch input is selected only
-    // when the authenticated outer supplies its complete canonical page set.
+    let bank_bytes = usize::try_from(
+        register_bank_bytes_v2(scalar_count, identity_count)
+            .map_err(|_| TradingSbfError::AdmittedTransport)?,
+    )
+    .map_err(|_| TradingSbfError::AdmittedTransport)?;
+    if bank_bytes == 0 || bank_bytes != input_bank.len() {
+        return Err(TradingSbfError::AdmittedTransport.into());
+    }
+    let profile = authenticated
+        .strategy()
+        .transport_profile()
+        .map_err(|_| TradingSbfError::AdmittedFrame)?;
+    // Input transport and output transport are orthogonal. The V2 contract
+    // deliberately permits a complete inline input bank to yield several
+    // bounded output acknowledgements, and the output page changes nothing
+    // about the input side. Scratch input is selected only when the
+    // authenticated outer supplies its complete canonical page set.
     let transport = if input_scratch_pages.is_empty() {
         RequestTransportV2::Inline
     } else {
         RequestTransportV2::ScratchPages
     };
-    if frame.caller_authorities.len() != chunk_count {
+    let caller_count = admitted_caller_authority_count_v3(profile, scalar_count, identity_count)?;
+    if frame.caller_authorities.len() != caller_count {
         return Err(TradingSbfError::AdmittedTransport.into());
     }
     let first_request = accelerator_request(
+        profile,
         transport,
         authenticated,
         invocation_context,
@@ -275,94 +294,157 @@ pub fn execute_admitted_aot_v3<'info>(
         )?;
     }
 
-    let mut candidate = vec![0_u8; input_bank.len()];
-    let mut accepted_digest = None;
     let mut transcript = hash(ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3).to_bytes();
-    // One buffer set for every chunk. See `AdmittedChunkBuffersV4` for the
+    // One buffer set for every invocation. See `AdmittedCpiBuffersV4` for the
     // measurement that made this necessary; `first_request` sizes the request
-    // buffer because every chunk's request is the same width, which
-    // `invoke_admitted_chunk` refuses rather than assumes.
-    let mut chunk_buffers = AdmittedChunkBuffersV4::new(
+    // buffer because every invocation's request is the same width, which
+    // `invoke_admitted_accelerator_v3` refuses rather than assumes.
+    let mut buffers = AdmittedCpiBuffersV4::new(
         frame,
         runtime_accounts,
         frame
             .caller_authorities
             .first()
             .ok_or(TradingSbfError::AdmittedTransport)?,
-        ACCELERATOR_REQUEST_HEADER_BYTES_V2
-            .checked_add(first_request.inline_bank().len())
-            .ok_or(TradingSbfError::AdmittedTransport)?,
+        first_request
+            .encoded_len()
+            .map_err(|_| TradingSbfError::AdmittedTransport)?,
     )?;
-    for chunk_index in 0..chunk_count {
-        let chunk_index_u32 =
-            u32::try_from(chunk_index).map_err(|_| TradingSbfError::AdmittedTransport)?;
-        let request = accelerator_request(
-            transport,
-            authenticated,
-            invocation_context,
-            input_bank_digest,
-            context.tail_count,
-            scalar_count,
-            identity_count,
-            chunk_index_u32,
-            &input_bank,
-        )?;
-        let authority = frame
-            .caller_authorities
-            .get(chunk_index)
-            .ok_or(TradingSbfError::AdmittedTransport)?;
-        let (ack_bytes, request_digest) = invoke_admitted_chunk(
-            program_id,
-            &mut chunk_buffers,
-            frame,
-            authority,
-            context,
-            request,
-        )?;
-        let ack = AcceleratorAckV2::decode(&ack_bytes).map_err(|_| TradingSbfError::Transition)?;
-        ack.validate_request(request, request_digest)
-            .map_err(|_| TradingSbfError::Transition)?;
-        if ack.disposition() != AcceleratorDispositionV2::Accepted {
-            return Err(TradingSbfError::Transition.into());
+    let (scalars, identities) = match profile {
+        AcceleratorTransportProfileV2::ChunkedBankV2 => {
+            let mut candidate = vec![0_u8; input_bank.len()];
+            let mut accepted_digest = None;
+            for chunk_index in 0..caller_count {
+                let chunk_index_u32 =
+                    u32::try_from(chunk_index).map_err(|_| TradingSbfError::AdmittedTransport)?;
+                let request = accelerator_request(
+                    profile,
+                    transport,
+                    authenticated,
+                    invocation_context,
+                    input_bank_digest,
+                    context.tail_count,
+                    scalar_count,
+                    identity_count,
+                    chunk_index_u32,
+                    &input_bank,
+                )?;
+                let AdmittedAcceleratorRequestV2::ChunkedBankV2(chunked) = request else {
+                    return Err(TradingSbfError::AdmittedTransport.into());
+                };
+                let authority = frame
+                    .caller_authorities
+                    .get(chunk_index)
+                    .ok_or(TradingSbfError::AdmittedTransport)?;
+                let (ack_bytes, request_digest) = invoke_admitted_accelerator_v3(
+                    program_id,
+                    &mut buffers,
+                    frame,
+                    authority,
+                    context,
+                    request,
+                    ACCELERATOR_ACK_HEADER_BYTES_V2,
+                )?;
+                let ack = AcceleratorAckV2::decode(&ack_bytes)
+                    .map_err(|_| TradingSbfError::Transition)?;
+                ack.validate_request(chunked, request_digest)
+                    .map_err(|_| TradingSbfError::Transition)?;
+                if ack.disposition() != AcceleratorDispositionV2::Accepted {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                let bank_digest = ack.total_bank_digest().ok_or(TradingSbfError::Transition)?;
+                if accepted_digest.is_some_and(|expected| expected != bank_digest) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                accepted_digest = Some(bank_digest);
+                let start =
+                    usize::try_from(ack.chunk_offset()).map_err(|_| TradingSbfError::Transition)?;
+                let end = start
+                    .checked_add(ack.payload().len())
+                    .ok_or(TradingSbfError::Transition)?;
+                candidate
+                    .get_mut(start..end)
+                    .ok_or(TradingSbfError::Transition)?
+                    .copy_from_slice(ack.payload());
+                transcript = hashv(&[
+                    ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3,
+                    &transcript,
+                    ack.request_digest().as_bytes(),
+                    &ack_bytes,
+                ])
+                .to_bytes();
+            }
+            if accepted_digest != Some(content(&candidate)?) {
+                return Err(TradingSbfError::Transition.into());
+            }
+            resolve_and_decode_candidate_v3(
+                authenticated,
+                &candidate,
+                scalar_count,
+                identity_count,
+            )?
         }
-        let bank_digest = ack.total_bank_digest().ok_or(TradingSbfError::Transition)?;
-        if accepted_digest.is_some_and(|expected| expected != bank_digest) {
-            return Err(TradingSbfError::Transition.into());
+        AcceleratorTransportProfileV2::OutputPageV3 => {
+            let AdmittedAcceleratorRequestV2::OutputPageV3(page_request) = first_request else {
+                return Err(TradingSbfError::AdmittedTransport.into());
+            };
+            let page = frame
+                .output_page
+                .ok_or(TradingSbfError::AdmittedTransport)?;
+            let authority = frame
+                .caller_authorities
+                .first()
+                .ok_or(TradingSbfError::AdmittedTransport)?;
+            let (ack_bytes, request_digest) = invoke_admitted_accelerator_v3(
+                program_id,
+                &mut buffers,
+                frame,
+                authority,
+                context,
+                first_request,
+                ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3,
+            )?;
+            let ack = AcceleratorOutputPageAckV3::decode(&ack_bytes)
+                .map_err(|_| TradingSbfError::Transition)?;
+            ack.validate_request(page_request, request_digest)
+                .map_err(|_| TradingSbfError::Transition)?;
+            if ack.disposition() != AcceleratorDispositionV2::Accepted {
+                return Err(TradingSbfError::Transition.into());
+            }
+            let bank_digest = ack.total_bank_digest().ok_or(TradingSbfError::Transition)?;
+            // THIS IS THE WHOLE BINDING, and it is the check the chunked
+            // profile already made: the digest arrived in return data the
+            // runtime attributes to the accelerator program, so the bytes it
+            // covers are the bank that accelerator computed. Reading them out
+            // of a page rather than out of a payload changes where they were,
+            // not what authenticates them -- and a page the accelerator could
+            // not write holds bytes whose hash is not this digest.
+            let data = page
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::AdmittedTransport)?;
+            let written = data
+                .get(..input_bank.len())
+                .ok_or(TradingSbfError::AdmittedTransport)?;
+            if content(written)? != bank_digest {
+                return Err(TradingSbfError::Transition.into());
+            }
+            transcript = hashv(&[
+                ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3,
+                &transcript,
+                ack.request_digest().as_bytes(),
+                &ack_bytes,
+            ])
+            .to_bytes();
+            // Decoded straight out of the account, with no candidate buffer in
+            // between. On a heap whose `dealloc` is a no-op a 1,392-byte copy
+            // of bytes that are already addressable is pure cost, and this
+            // route finishes eight compute units under its ceiling.
+            resolve_and_decode_candidate_v3(authenticated, written, scalar_count, identity_count)?
         }
-        accepted_digest = Some(bank_digest);
-        let start = usize::try_from(ack.chunk_offset()).map_err(|_| TradingSbfError::Transition)?;
-        let end = start
-            .checked_add(ack.payload().len())
-            .ok_or(TradingSbfError::Transition)?;
-        candidate
-            .get_mut(start..end)
-            .ok_or(TradingSbfError::Transition)?
-            .copy_from_slice(ack.payload());
-        transcript = hashv(&[
-            ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3,
-            &transcript,
-            ack.request_digest().as_bytes(),
-            &ack_bytes,
-        ])
-        .to_bytes();
-    }
-    if accepted_digest != Some(content(&candidate)?) {
-        return Err(TradingSbfError::Transition.into());
-    }
-    let admitted = authenticated
-        .admitted_authorization()
-        .ok_or(TradingSbfError::AdmittedFrame)?;
-    let resolved = resolve_execution_candidate_v2(
-        StrategyDispositionV2::AdmittedAot,
-        None,
-        Some(ExecutionCandidateV2::Accepted(&candidate)),
-        Some(admitted),
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
-    let ExecutionCandidateV2::Accepted(bank) = resolved else {
-        return Err(TradingSbfError::Transition.into());
+        AcceleratorTransportProfileV2::ShadowTranscriptV3 => {
+            return Err(TradingSbfError::AdmittedFrame.into());
+        }
     };
-    let (scalars, identities) = decode_register_bank(bank, scalar_count, identity_count)?;
     Ok(AdmittedExecutionV3 {
         scalars,
         identities,
@@ -370,8 +452,38 @@ pub fn execute_admitted_aot_v3<'info>(
     })
 }
 
+/// Take the accelerator's candidate through the V2 resolution and decode it.
+///
+/// Both transports end here, and they end here rather than each decoding for
+/// itself: `resolve_execution_candidate_v2` is the contract's statement that an
+/// admitted route consumes the accelerator's bank and no interpreter's, and a
+/// transport that skipped it would be a second place that decides what an
+/// admitted candidate is.
+fn resolve_and_decode_candidate_v3(
+    authenticated: AuthenticatedExecutionStrategyV2,
+    candidate: &[u8],
+    scalar_count: u32,
+    identity_count: u32,
+) -> Result<(Vec<u64>, Vec<[u8; 32]>), ProgramError> {
+    let admitted = authenticated
+        .admitted_authorization()
+        .ok_or(TradingSbfError::AdmittedFrame)?;
+    let resolved = resolve_execution_candidate_v2(
+        StrategyDispositionV2::AdmittedAot,
+        None,
+        Some(ExecutionCandidateV2::Accepted(candidate)),
+        Some(admitted),
+    )
+    .map_err(|_| TradingSbfError::Transition)?;
+    let ExecutionCandidateV2::Accepted(bank) = resolved else {
+        return Err(TradingSbfError::Transition.into());
+    };
+    decode_register_bank(bank, scalar_count, identity_count)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn accelerator_request<'a>(
+    profile: AcceleratorTransportProfileV2,
     transport: RequestTransportV2,
     authenticated: AuthenticatedExecutionStrategyV2,
     invocation_context: ContentId,
@@ -381,29 +493,57 @@ fn accelerator_request<'a>(
     identity_count: u32,
     chunk_index: u32,
     input_bank: &'a [u8],
-) -> Result<AcceleratorRequestV2<'a>, ProgramError> {
-    AcceleratorRequestV2::new(
-        transport,
-        authenticated.strategy_program_id(),
-        authenticated
-            .certificate_program_id()
-            .ok_or(TradingSbfError::AdmittedTransport)?,
-        authenticated.capability_program_id(),
-        invocation_context,
-        input_bank_digest,
-        tail_count,
-        scalar_count,
-        identity_count,
-        chunk_index,
-        match transport {
-            RequestTransportV2::Inline => input_bank,
-            RequestTransportV2::ScratchPages => &[],
-        },
-    )
-    .map_err(|_| TradingSbfError::AdmittedTransport.into())
+) -> Result<AdmittedAcceleratorRequestV2<'a>, ProgramError> {
+    let certificate = authenticated
+        .certificate_program_id()
+        .ok_or(TradingSbfError::AdmittedTransport)?;
+    let inline_bank = match transport {
+        RequestTransportV2::Inline => input_bank,
+        RequestTransportV2::ScratchPages => &[],
+    };
+    match profile {
+        AcceleratorTransportProfileV2::ChunkedBankV2 => AcceleratorRequestV2::new(
+            transport,
+            authenticated.strategy_program_id(),
+            certificate,
+            authenticated.capability_program_id(),
+            invocation_context,
+            input_bank_digest,
+            tail_count,
+            scalar_count,
+            identity_count,
+            chunk_index,
+            inline_bank,
+        )
+        .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
+        .map_err(|_| TradingSbfError::AdmittedTransport.into()),
+        // A whole-bank request has no chunk index to carry, so a caller that
+        // asks for one other than zero is asking for a coordinate this wire
+        // does not have rather than for a different chunk.
+        AcceleratorTransportProfileV2::OutputPageV3 if chunk_index == 0 => {
+            AcceleratorOutputPageRequestV3::new(
+                transport,
+                authenticated.strategy_program_id(),
+                certificate,
+                authenticated.capability_program_id(),
+                invocation_context,
+                input_bank_digest,
+                tail_count,
+                scalar_count,
+                identity_count,
+                inline_bank,
+            )
+            .map(AdmittedAcceleratorRequestV2::OutputPageV3)
+            .map_err(|_| TradingSbfError::AdmittedTransport.into())
+        }
+        AcceleratorTransportProfileV2::OutputPageV3
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => {
+            Err(TradingSbfError::AdmittedTransport.into())
+        }
+    }
 }
 
-/// The one CPI buffer set, rented across every chunk instead of rebuilt per chunk.
+/// The one CPI buffer set, rented across every invocation instead of rebuilt.
 ///
 /// WHY THIS EXISTS, in numbers. `invoke_admitted_chunk` used to allocate its
 /// request bytes, its `AccountMeta` vector and its `AccountInfo` vector fresh on
@@ -426,13 +566,13 @@ fn accelerator_request<'a>(
 /// Only two things differ between chunks, and both are overwritten in place:
 /// the caller authority at index 0, and the request bytes. Their LENGTHS are
 /// identical, which is a conjunct rather than an assumption -- see the refusal
-/// in [`invoke_admitted_chunk`].
-struct AdmittedChunkBuffersV4<'info> {
+/// in [`invoke_admitted_accelerator_v3`].
+struct AdmittedCpiBuffersV4<'info> {
     instruction: Instruction,
     infos: Vec<AccountInfo<'info>>,
 }
 
-impl<'info> AdmittedChunkBuffersV4<'info> {
+impl<'info> AdmittedCpiBuffersV4<'info> {
     /// Build the buffers once, shaped by the frame every chunk shares.
     ///
     /// `authority` seeds index zero only so the vectors have the right length
@@ -443,7 +583,7 @@ impl<'info> AdmittedChunkBuffersV4<'info> {
         authority: &AccountInfo<'info>,
         request_len: usize,
     ) -> Result<Self, ProgramError> {
-        let capacity = ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
+        let capacity = ADMITTED_ACCELERATOR_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V4
             .checked_add(runtime_accounts.len())
             .ok_or(TradingSbfError::AdmittedTransport)?;
         let mut metas = Vec::with_capacity(capacity);
@@ -452,6 +592,13 @@ impl<'info> AdmittedChunkBuffersV4<'info> {
                 .enumerate()
                 .map(|(index, account)| AccountMeta::new_readonly(*account.key, index == 0)),
         );
+        // THE ONE WRITABLE ACCOUNT IN ANY ADMITTED FRAME, and it is appended
+        // where `ADMITTED_OUTPUT_PAGE_ACCOUNT_V3` says: after the evidence
+        // suffix, before the runtime slice. Its absence under the chunked
+        // profile is what keeps that frame byte-identical to what it was.
+        if let Some(page) = frame.output_page {
+            metas.push(AccountMeta::new(*page.key, false));
+        }
         metas.extend(
             runtime_accounts
                 .iter()
@@ -459,6 +606,9 @@ impl<'info> AdmittedChunkBuffersV4<'info> {
         );
         let mut infos = Vec::with_capacity(capacity);
         infos.extend(fixed_cpi_accounts(frame, authority).cloned());
+        if let Some(page) = frame.output_page {
+            infos.push(page.clone());
+        }
         infos.extend(runtime_accounts.iter().map(|account| (*account).clone()));
         Ok(Self {
             instruction: Instruction {
@@ -471,21 +621,23 @@ impl<'info> AdmittedChunkBuffersV4<'info> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn invoke_admitted_chunk<'info>(
+fn invoke_admitted_accelerator_v3<'info>(
     program_id: &Pubkey,
-    buffers: &mut AdmittedChunkBuffersV4<'info>,
+    buffers: &mut AdmittedCpiBuffersV4<'info>,
     frame: AdmittedCpiFrameV3<'_, 'info>,
     caller_authority: &AccountInfo<'info>,
     context: &AdmittedInvocationContextV3,
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
+    minimum_ack_bytes: usize,
 ) -> Result<(Vec<u8>, ContentId), ProgramError> {
-    let request_len = ACCELERATOR_REQUEST_HEADER_BYTES_V2
-        .checked_add(request.inline_bank().len())
-        .ok_or(TradingSbfError::AdmittedTransport)?;
-    // The reuse rests on this being the same every chunk, so it is CHECKED
-    // rather than assumed: a transport whose per-chunk request width varied
-    // would otherwise be encoded into a buffer sized for a different one.
+    let request_len = request
+        .encoded_len()
+        .map_err(|_| TradingSbfError::AdmittedTransport)?;
+    // The reuse rests on this being the same every invocation, so it is CHECKED
+    // rather than assumed: a transport whose per-invocation request width
+    // varied would otherwise be encoded into a buffer sized for a different one.
     if request_len != buffers.instruction.data.len() {
         return Err(TradingSbfError::AdmittedTransport.into());
     }
@@ -539,9 +691,7 @@ fn invoke_admitted_chunk<'info>(
     )
     .map_err(|_| TradingSbfError::Transition)?;
     let (producer, ack_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
-    if producer != *frame.accelerator_program.key
-        || ack_bytes.len() < ACCELERATOR_ACK_HEADER_BYTES_V2
-    {
+    if producer != *frame.accelerator_program.key || ack_bytes.len() < minimum_ack_bytes {
         return Err(TradingSbfError::Transition.into());
     }
     Ok((ack_bytes, request_digest))
@@ -565,10 +715,10 @@ fn fixed_cpi_accounts<'a, 'info>(
         ])
 }
 
-fn validate_authenticated_frame(
+fn validate_authenticated_frame<'a, 'info>(
     program_id: &Pubkey,
-    frame: AdmittedCpiFrameV3<'_, '_>,
-    runtime_accounts: &[&AccountInfo<'_>],
+    frame: AdmittedCpiFrameV3<'a, 'info>,
+    runtime_accounts: &[&'a AccountInfo<'info>],
     context: &AdmittedInvocationContextV3,
     authenticated: AuthenticatedExecutionStrategyV2,
 ) -> Result<(), ProgramError> {
@@ -577,12 +727,22 @@ fn validate_authenticated_frame(
     let artifact = authenticated
         .artifact_release()
         .ok_or(TradingSbfError::AdmittedFrame)?;
+    let profile = strategy
+        .transport_profile()
+        .map_err(|_| TradingSbfError::AdmittedFrame)?;
+    // The page is present exactly when the profile names it, and the frame
+    // carries no coordinate for it otherwise. A chunked route that acquired a
+    // writable account, or a page route that did not, is a frame this program
+    // did not build.
+    match (profile, frame.output_page) {
+        (AcceleratorTransportProfileV2::ChunkedBankV2, None) => {}
+        (AcceleratorTransportProfileV2::OutputPageV3, Some(page)) => {
+            validate_output_page(frame, runtime_accounts, page)?;
+        }
+        _ => return Err(TradingSbfError::AdmittedFrame.into()),
+    }
     if frame.hot_fixed_accounts.len() != ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4
         || strategy.disposition() != StrategyDispositionV2::AdmittedAot
-        || strategy
-            .transport_profile()
-            .map_err(|_| TradingSbfError::AdmittedFrame)?
-            != AcceleratorTransportProfileV2::ChunkedBankV2
         || authenticated.admitted_authorization().is_none()
         || context.registry_program.to_bytes() != frame.registry.key.to_bytes()
         || context.trading_program.to_bytes() != program_id.to_bytes()
@@ -670,6 +830,44 @@ fn validate_authenticated_frame(
     Ok(())
 }
 
+/// Hold the accelerator's output page to the two things Trading owes it.
+///
+/// PRIVILEGE, and UNIQUENESS. Everything else about this account is the
+/// accelerator's business and the digest's: Trading does not check its owner,
+/// its length, or its contents, because the acknowledgement it will check
+/// carries a digest of the bank the accelerator computed and no other bytes can
+/// have that hash.
+///
+/// Uniqueness is not defence in depth, it is the reason this check exists at
+/// all. **CPI privileges union on a repeated key**: an account named twice in
+/// one instruction, once read-only and once writable, is writable in the
+/// callee. So a page whose key equals any other account in this frame would
+/// silently hand the accelerator write authority over a Registry record, a
+/// sysvar view, or a runtime observation -- the exact authority the module
+/// invariant says it does not have. The scan is over the WHOLE frame, fixed
+/// prefix and runtime slice both.
+fn validate_output_page<'a, 'info>(
+    frame: AdmittedCpiFrameV3<'a, 'info>,
+    runtime_accounts: &[&'a AccountInfo<'info>],
+    page: &'a AccountInfo<'info>,
+) -> Result<(), ProgramError> {
+    if !page.is_writable || page.is_signer || page.executable {
+        return Err(TradingSbfError::AdmittedFrame.into());
+    }
+    // `fixed_cpi_accounts` is fed the page itself at the caller-authority slot
+    // only to give the iterator a shape; the authority a real invocation uses
+    // is compared separately in `invoke_admitted_accelerator_v3`. Every OTHER
+    // account it yields is the frame, and the page must differ from all of them.
+    if fixed_cpi_accounts(frame, page)
+        .skip(1)
+        .chain(runtime_accounts.iter().copied())
+        .any(|account| account.key == page.key)
+    {
+        return Err(TradingSbfError::AdmittedFrame.into());
+    }
+    Ok(())
+}
+
 fn exact_deployment_keys_v3(
     admitted_program: [u8; 32],
     admitted_programdata: [u8; 32],
@@ -737,12 +935,17 @@ fn validate_input_scratch_pages(
     program_id: &Pubkey,
     runtime_accounts: &[&AccountInfo<'_>],
     pages: &[&AccountInfo<'_>],
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
     input_bank: &[u8],
 ) -> Result<(), ProgramError> {
-    if pages.len()
-        != usize::try_from(request.chunk_count()).map_err(|_| TradingSbfError::AdmittedTransport)?
-    {
+    // Derived from the input bank width under both transports. The chunked
+    // request's `chunk_count` happened to equal this because input and output
+    // banks share a width; reading the OUTPUT field for the INPUT count was a
+    // coincidence, and the page transport has no such field to misread.
+    let page_count = request
+        .input_page_count()
+        .map_err(|_| TradingSbfError::AdmittedTransport)?;
+    if pages.len() != usize::try_from(page_count).map_err(|_| TradingSbfError::AdmittedTransport)? {
         return Err(TradingSbfError::AdmittedTransport.into());
     }
     let trading =
@@ -907,11 +1110,52 @@ mod tests {
         assert!(decode_register_bank(truncated, 3, 2).is_err());
     }
 
+    /// One authority per output invocation, and the two profiles disagree about
+    /// how many invocations a wide bank costs -- which is the whole point.
     #[test]
-    fn authority_count_tracks_canonical_return_data_chunking() {
-        assert_eq!(admitted_caller_authority_count_v3(1, 1), Ok(1));
-        assert!(admitted_caller_authority_count_v3(0, 0).is_err());
-        assert!(admitted_caller_authority_count_v3(120, 2).expect("multi chunk") > 1);
+    fn authority_count_tracks_the_profile_not_only_the_bank_width() {
+        use AcceleratorTransportProfileV2::{ChunkedBankV2, OutputPageV3, ShadowTranscriptV3};
+
+        // The Dealer equity Add bank: 26 scalars and 37 identities, 1,392
+        // bytes, two chunks against an 880-byte payload and one page.
+        assert_eq!(
+            admitted_caller_authority_count_v3(ChunkedBankV2, 26, 37),
+            Ok(2)
+        );
+        assert_eq!(
+            admitted_caller_authority_count_v3(OutputPageV3, 26, 37),
+            Ok(1)
+        );
+        // Dealer equity Remove: three chunks, still one page.
+        assert_eq!(
+            admitted_caller_authority_count_v3(ChunkedBankV2, 35, 53),
+            Ok(3)
+        );
+        assert_eq!(
+            admitted_caller_authority_count_v3(OutputPageV3, 35, 53),
+            Ok(1)
+        );
+        // A bank that already fits one chunk costs one under both.
+        assert_eq!(
+            admitted_caller_authority_count_v3(ChunkedBankV2, 1, 1),
+            Ok(1)
+        );
+        assert_eq!(
+            admitted_caller_authority_count_v3(OutputPageV3, 1, 1),
+            Ok(1)
+        );
+        // A bank of no bytes is refused under both, because a page with nothing
+        // written to it has no digest that could bind it either.
+        assert!(admitted_caller_authority_count_v3(ChunkedBankV2, 0, 0).is_err());
+        assert!(admitted_caller_authority_count_v3(OutputPageV3, 0, 0).is_err());
+        // Shadow AOT never uses this frame and gets no answer rather than the
+        // chunked one.
+        assert!(admitted_caller_authority_count_v3(ShadowTranscriptV3, 26, 37).is_err());
+        assert_eq!(admitted_runtime_accounts_start_v4(ShadowTranscriptV3), None);
+        assert_eq!(
+            admitted_runtime_accounts_start_v4(OutputPageV3),
+            admitted_runtime_accounts_start_v4(ChunkedBankV2).map(|start| start + 1)
+        );
     }
 
     #[test]

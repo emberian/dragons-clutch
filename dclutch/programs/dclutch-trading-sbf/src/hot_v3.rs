@@ -132,7 +132,7 @@ use dclutch_execution_strategy_contract::{
         ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
     },
     v2::{
-        AcceleratorRequestV2, AcceleratorTransportProfileV2, AuthenticatedScratchPageV2,
+        AcceleratorTransportProfileV2, AdmittedAcceleratorRequestV2, AuthenticatedScratchPageV2,
         BankTransportV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2, ExecutionStrategyProgramV2,
         RequestTransportV2, StrategyDispositionV2, classify_bank_transport_v2,
         register_bank_bytes_v2,
@@ -210,10 +210,11 @@ use crate::{
     TradingSbfError,
     admitted_composition_v3::{
         ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4, ADMITTED_ACCELERATOR_HOT_FIXED_START_V4,
-        ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4,
+        ADMITTED_ACCELERATOR_OUTPUT_PAGE_ACCOUNT_V4,
         ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
         ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4, AdmittedCpiFrameV3,
-        admitted_caller_authority_count_v3, execute_admitted_aot_v3,
+        admitted_caller_authority_count_v3, admitted_runtime_accounts_start_v4,
+        execute_admitted_aot_v3,
     },
     child_authority_v4::PreflightedCallerBumpV4,
     child_receipt_v3::{
@@ -688,15 +689,34 @@ pub const HOT_ADMITTED_CALLER_AUTHORITIES_START_V3: usize =
 /// acknowledgement chunk; the width follows only authenticated register
 /// geometry and the chain return-data limit.
 pub fn hot_admitted_runtime_accounts_start_v3(
+    profile: AcceleratorTransportProfileV2,
     scalar_count: u32,
     identity_count: u32,
 ) -> Result<usize, ProgramError> {
     HOT_ADMITTED_CALLER_AUTHORITIES_START_V3
         .checked_add(admitted_caller_authority_count_v3(
+            profile,
             scalar_count,
             identity_count,
         )?)
+        .and_then(|start| start.checked_add(hot_admitted_output_page_accounts_v3(profile)))
         .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+/// Accounts the output page occupies in the TOP-LEVEL Hot frame: one, or none.
+///
+/// The page sits in the same relative place in both frames -- immediately
+/// before the AccountProfile-ordered runtime slice -- so the two shapes agree
+/// by construction rather than by two authors happening to write the same
+/// thing. In the CPI frame that place is named by
+/// `ADMITTED_OUTPUT_PAGE_ACCOUNT_V3`; here it is one account past the
+/// caller-authority span, which is one account long under this profile.
+pub const fn hot_admitted_output_page_accounts_v3(profile: AcceleratorTransportProfileV2) -> usize {
+    match profile {
+        AcceleratorTransportProfileV2::OutputPageV3 => 1,
+        AcceleratorTransportProfileV2::ChunkedBankV2
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => 0,
+    }
 }
 
 /// Descriptor artifact class exposed by one authenticated accelerator view.
@@ -723,9 +743,10 @@ pub enum AcceleratorArtifactClassV4 {
 /// top-level Hot instruction; the view owns that loaded instruction only so an
 /// external accelerator can borrow its exact request slice after this helper
 /// has rejoined the caller PDA, activation, records, Product, runtime digest,
-/// and AcceleratorRequestV2 invocation-context digest.
+/// and the accelerator request invocation-context digest.
 pub struct AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
-    request: AcceleratorRequestV2<'request>,
+    request: AdmittedAcceleratorRequestV2<'request>,
+    output_page: Option<&'accounts AccountInfo<'info>>,
     envelope: HotExecutionEnvelopeV3,
     hot_instruction: Vec<u8>,
     strategy: Box<AuthenticatedExecutionStrategyV2>,
@@ -802,9 +823,22 @@ impl AuthenticatedAcceleratorCallerV4 {
 }
 
 impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
-    /// Exact canonical AcceleratorRequestV2 supplied by Trading.
-    pub const fn request(&self) -> AcceleratorRequestV2<'request> {
+    /// Exact canonical accelerator request supplied by Trading, under its
+    /// Strategy record's own output transport.
+    pub const fn request(&self) -> AdmittedAcceleratorRequestV2<'request> {
         self.request
+    }
+
+    /// The accelerator's own output page, `Some` only under `OutputPageV3`.
+    ///
+    /// Resolved once, at the coordinate `admitted_v3` names, so a callback does
+    /// not index the frame a second time with its own arithmetic. What the
+    /// callback still owes is the part this helper deliberately does NOT do:
+    /// it is Trading authenticating an invocation, not Trading vouching for an
+    /// account another program owns, so the owner, the width and the aliasing
+    /// are the accelerator's own refusals in its own band.
+    pub const fn output_page(&self) -> Option<&'accounts AccountInfo<'info>> {
+        self.output_page
     }
 
     /// Exact authenticated common Hot envelope.
@@ -918,7 +952,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],
     request_bytes: &'request [u8],
 ) -> Result<Box<AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info>>, ProgramError> {
-    let request = AcceleratorRequestV2::decode(request_bytes)
+    let request = AdmittedAcceleratorRequestV2::decode(request_bytes)
         .map_err(|_| TradingSbfError::AcceleratorFrame)?;
     let caller_authority = account(accounts, 0)?;
     let fixed = accounts
@@ -934,14 +968,33 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
                     + ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
         )
         .ok_or(TradingSbfError::AcceleratorFrame)?;
+    // The runtime slice begins one account later under the output-page profile,
+    // because the page is APPENDED to the frame the chunked profile already
+    // had. Both coordinates come from `admitted_v3`, so this is a lookup and
+    // not a second table.
+    let runtime_start = admitted_runtime_accounts_start_v4(request.profile())
+        .ok_or(TradingSbfError::AcceleratorFrame)?;
+    let output_page = match request.profile() {
+        AcceleratorTransportProfileV2::OutputPageV3 => Some(account(
+            accounts,
+            ADMITTED_ACCELERATOR_OUTPUT_PAGE_ACCOUNT_V4,
+        )?),
+        AcceleratorTransportProfileV2::ChunkedBankV2
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => None,
+    };
     let runtime_accounts = accounts
-        .get(ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4..)
+        .get(runtime_start..)
         .ok_or(TradingSbfError::AcceleratorFrame)?;
     hot_cu_checkpoint!("acc-enter");
     let trading_program = account(fixed, HOT_TRADING_PROGRAM_ACCOUNT_V3)?;
     let frame = HotFrameV3::parse_accelerator_readonly(trading_program.key, fixed)?;
-    let hot_instruction =
-        authenticate_accelerator_top_level_v4(frame, strategy_evidence, caller_authority, request)?;
+    let hot_instruction = authenticate_accelerator_top_level_v4(
+        frame,
+        strategy_evidence,
+        caller_authority,
+        output_page,
+        request,
+    )?;
     let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
         .map_err(|_| TradingSbfError::AcceleratorFrame)?;
     let accelerator_program_evidence = account(
@@ -1177,6 +1230,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     hot_cu_checkpoint!("acc-context");
     Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
         request,
+        output_page,
         envelope,
         hot_instruction,
         strategy,
@@ -1253,7 +1307,7 @@ fn authenticate_accelerator_artifacts_v4(
     rent: &Rent,
     descriptor: &CapabilityProgramV4,
     strategy: &AuthenticatedExecutionStrategyV2,
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
     family_request: &[u8],
     runtime_account_count: usize,
     scalars: &[u64],
@@ -1410,7 +1464,7 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
     descriptor: &CapabilityProgramV4,
     strategy: &AuthenticatedExecutionStrategyV2,
     product_runtime: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
     family_request: &[u8],
     runtime_accounts: &[AccountInfo<'info>],
     representatives: &[usize],
@@ -1542,7 +1596,8 @@ fn authenticate_accelerator_top_level_v4(
     frame: HotFrameV3<'_, '_>,
     strategy_evidence: &[AccountInfo<'_>],
     caller_authority: &AccountInfo<'_>,
-    request: AcceleratorRequestV2<'_>,
+    output_page: Option<&AccountInfo<'_>>,
+    request: AdmittedAcceleratorRequestV2<'_>,
 ) -> Result<Vec<u8>, ProgramError> {
     let (current_index, sysvar) = borrow_authenticated_instructions_v1(frame.instructions)?;
     let observed = SysvarInstructionV1::read(current_index, &sysvar)?;
@@ -1736,30 +1791,60 @@ fn authenticate_accelerator_top_level_v4(
     {
         return Err(TradingSbfError::NativeSignature.into());
     }
-    let caller_count =
-        admitted_caller_authority_count_v3(request.scalar_count(), request.identity_count())?;
+    let caller_count = admitted_caller_authority_count_v3(
+        request.profile(),
+        request.scalar_count(),
+        request.identity_count(),
+    )?;
     if caller_count
-        != usize::try_from(request.chunk_count()).map_err(|_| TradingSbfError::Content)?
+        != usize::try_from(
+            request
+                .caller_authority_count()
+                .map_err(|_| TradingSbfError::Content)?,
+        )
+        .map_err(|_| TradingSbfError::Content)?
     {
         return Err(TradingSbfError::Content.into());
     }
     let caller_index = caller_start
-        .checked_add(usize::try_from(request.chunk_index()).map_err(|_| TradingSbfError::Content)?)
+        .checked_add(
+            usize::try_from(request.caller_authority_index())
+                .map_err(|_| TradingSbfError::Content)?,
+        )
         .ok_or(TradingSbfError::Content)?;
     let caller_meta = observed
         .metas()
         .get(caller_index)
         .ok_or(TradingSbfError::NativeSignature)?;
+    let page_start = caller_start
+        .checked_add(caller_count)
+        .ok_or(TradingSbfError::Content)?;
     if caller_meta.pubkey != caller_authority.key.as_array()
         || caller_meta.is_signer
         || caller_meta.is_writable
-        || caller_start
-            .checked_add(caller_count)
-            .ok_or(TradingSbfError::Content)?
-            > observed.account_count()
+        || page_start > observed.account_count()
         || envelope.market() == [0; 32]
     {
         return Err(TradingSbfError::NativeSignature.into());
+    }
+    // THE TOP-LEVEL FRAME AND THE CPI FRAME ARE TWO SHAPES, joined here. This
+    // helper exists because an accelerator that trusts the CPI frame it was
+    // handed trusts the caller to have built it; under the output-page profile
+    // that frame carries a WRITABLE account, so the one meta that grants write
+    // authority is exactly the one worth re-reading out of the runtime's own
+    // serialization of Trading's top-level instruction. It must be the page
+    // this accelerator was handed, writable and unsigned, immediately after the
+    // caller-authority span -- which is where `ADMITTED_OUTPUT_PAGE_ACCOUNT_V3`
+    // puts it in the CPI frame.
+    if let Some(page) = output_page {
+        let page_meta = observed
+            .metas()
+            .get(page_start)
+            .ok_or(TradingSbfError::NativeSignature)?;
+        if page_meta.pubkey != page.key.as_array() || page_meta.is_signer || !page_meta.is_writable
+        {
+            return Err(TradingSbfError::NativeSignature.into());
+        }
     }
     Ok(hot_instruction)
 }
@@ -1982,15 +2067,19 @@ fn authenticate_accelerator_activation_v4(
 }
 
 fn authenticate_accelerator_input_bank_v4(
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
     runtime_accounts: &[AccountInfo<'_>],
     trading_program: &Pubkey,
 ) -> Result<Vec<u8>, ProgramError> {
     let bank = match request.transport() {
         RequestTransportV2::Inline => request.inline_bank().to_vec(),
         RequestTransportV2::ScratchPages => {
-            let page_count =
-                usize::try_from(request.chunk_count()).map_err(|_| TradingSbfError::Content)?;
+            let page_count = usize::try_from(
+                request
+                    .input_page_count()
+                    .map_err(|_| TradingSbfError::Content)?,
+            )
+            .map_err(|_| TradingSbfError::Content)?;
             let mut pages = vec![None; page_count];
             for account in runtime_accounts {
                 if account.owner != trading_program
@@ -2052,7 +2141,7 @@ fn authenticate_accelerator_input_bank_v4(
 }
 
 fn decode_accelerator_register_bank_v4(
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
     bank: &[u8],
 ) -> Result<(Vec<u64>, Vec<[u8; 32]>), ProgramError> {
     let expected = register_bank_bytes_v2(request.scalar_count(), request.identity_count())
@@ -2114,7 +2203,7 @@ fn decode_accelerator_register_bank_v4(
 fn accelerator_runtime_observations_digest_v4(
     runtime_accounts: &[AccountInfo<'_>],
     representatives: &[usize],
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
     trading_program: &Pubkey,
     selected_config: [u8; 32],
     product_root: [u8; 32],
@@ -3782,58 +3871,19 @@ fn execute_authenticated_hot_v3(
     let provisional_identity_count = effect
         .identity_count(product_outcome_count)
         .map_err(|_| TradingSbfError::Content)?;
-    let (shadow_caller_authority, admitted_caller_authorities, runtime_start) =
-        match strategy.strategy().disposition() {
-            StrategyDispositionV2::Interpreted => (None, None, strategy_extras_end),
-            StrategyDispositionV2::ShadowAot => {
-                let expected = HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3
-                    .checked_add(
-                        invocation
-                            .strategy_extras_start
-                            .checked_sub(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3)
-                            .ok_or(TradingSbfError::Content)?,
-                    )
-                    .ok_or(TradingSbfError::Content)?;
-                if strategy_extras_end != expected {
-                    return Err(TradingSbfError::Content.into());
-                }
-                let caller = accounts
-                    .get(strategy_extras_end)
-                    .ok_or(TradingSbfError::Content)?;
-                (
-                    Some(caller),
-                    None,
-                    strategy_extras_end
-                        .checked_add(1)
-                        .ok_or(TradingSbfError::Content)?,
-                )
-            }
-            StrategyDispositionV2::AdmittedAot => {
-                let admitted_start = HOT_ADMITTED_CALLER_AUTHORITIES_START_V3
-                    .checked_add(
-                        invocation
-                            .strategy_extras_start
-                            .checked_sub(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3)
-                            .ok_or(TradingSbfError::Content)?,
-                    )
-                    .ok_or(TradingSbfError::Content)?;
-                if strategy_extras_end != admitted_start {
-                    return Err(TradingSbfError::Content.into());
-                }
-                let runtime_start = admitted_start
-                    .checked_add(admitted_caller_authority_count_v3(
-                        u32::try_from(provisional_scalar_count)
-                            .map_err(|_| TradingSbfError::Content)?,
-                        u32::try_from(provisional_identity_count)
-                            .map_err(|_| TradingSbfError::Content)?,
-                    )?)
-                    .ok_or(TradingSbfError::Content)?;
-                let callers = accounts
-                    .get(admitted_start..runtime_start)
-                    .ok_or(TradingSbfError::Content)?;
-                (None, Some(callers), runtime_start)
-            }
-        };
+    let StrategyFrameSpanV3 {
+        shadow_caller_authority,
+        admitted_caller_authorities,
+        admitted_output_page,
+        runtime_start,
+    } = carve_strategy_frame_span_v3(
+        accounts,
+        &strategy,
+        invocation.strategy_extras_start,
+        strategy_extras_end,
+        provisional_scalar_count,
+        provisional_identity_count,
+    )?;
     let expected_shadow_runtime = HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3
         .checked_add(
             invocation
@@ -4179,6 +4229,7 @@ fn execute_authenticated_hot_v3(
                 .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
                 .ok_or(TradingSbfError::Content)?,
             caller_authorities,
+            output_page: admitted_output_page,
             strategy_extras,
             runtime_accounts: &runtime_accounts,
             input_scratch_pages,
@@ -5392,14 +5443,26 @@ fn authenticate_strategy_for_accelerator_boxed_v4<'accounts, 'info>(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    // BOTH candidate-bank transports, and `UnsupportedContent` rather than
+    // `Content`. This gate cost a localization on 2026-09-02: an admitted route
+    // whose Strategy named the output-page pair died here at 574,606 CU with
+    // `Content` 0x4003, one of 2,126 sites, and the checkpoint trail said only
+    // "somewhere between root-product and artifacts-strategy-effect". The
+    // Shadow gate immediately above says the same thing about its own
+    // disposition and says it as `UnsupportedContent`, which is what this is:
+    // the pairing decoded fine and names a transport this disposition does not
+    // admit.
     if strategy.strategy().disposition() == StrategyDispositionV2::AdmittedAot
-        && strategy
-            .strategy()
-            .transport_profile()
-            .map_err(|_| TradingSbfError::Content)?
-            != AcceleratorTransportProfileV2::ChunkedBankV2
+        && !matches!(
+            strategy
+                .strategy()
+                .transport_profile()
+                .map_err(|_| TradingSbfError::UnsupportedContent)?,
+            AcceleratorTransportProfileV2::ChunkedBankV2
+                | AcceleratorTransportProfileV2::OutputPageV3
+        )
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::UnsupportedContent.into());
     }
     Ok((Box::new(strategy), strategy_extras_end))
 }
@@ -5462,14 +5525,26 @@ fn authenticate_strategy_from_sealed_boxed_v3<'accounts, 'info>(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    // BOTH candidate-bank transports, and `UnsupportedContent` rather than
+    // `Content`. This gate cost a localization on 2026-09-02: an admitted route
+    // whose Strategy named the output-page pair died here at 574,606 CU with
+    // `Content` 0x4003, one of 2,126 sites, and the checkpoint trail said only
+    // "somewhere between root-product and artifacts-strategy-effect". The
+    // Shadow gate immediately above says the same thing about its own
+    // disposition and says it as `UnsupportedContent`, which is what this is:
+    // the pairing decoded fine and names a transport this disposition does not
+    // admit.
     if strategy.strategy().disposition() == StrategyDispositionV2::AdmittedAot
-        && strategy
-            .strategy()
-            .transport_profile()
-            .map_err(|_| TradingSbfError::Content)?
-            != AcceleratorTransportProfileV2::ChunkedBankV2
+        && !matches!(
+            strategy
+                .strategy()
+                .transport_profile()
+                .map_err(|_| TradingSbfError::UnsupportedContent)?,
+            AcceleratorTransportProfileV2::ChunkedBankV2
+                | AcceleratorTransportProfileV2::OutputPageV3
+        )
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::UnsupportedContent.into());
     }
     Ok((Box::new(strategy), strategy_extras_end))
 }
@@ -5479,6 +5554,7 @@ struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     frame: &'a HotFrameV3<'accounts, 'info>,
     hot_fixed_accounts: &'a [AccountInfo<'info>],
     caller_authorities: &'a [AccountInfo<'info>],
+    output_page: Option<&'a AccountInfo<'info>>,
     strategy_extras: &'a [AccountInfo<'info>],
     runtime_accounts: &'a [&'accounts AccountInfo<'info>],
     input_scratch_pages: &'a [&'accounts AccountInfo<'info>],
@@ -6873,6 +6949,117 @@ fn funding_allows_created_state_write_v5(funding: EffectProgramV5<'_>, coordinat
     false
 }
 
+/// The disposition-dependent span between the strategy extras and the runtime.
+struct StrategyFrameSpanV3<'a, 'info> {
+    shadow_caller_authority: Option<&'a AccountInfo<'info>>,
+    admitted_caller_authorities: Option<&'a [AccountInfo<'info>]>,
+    admitted_output_page: Option<&'a AccountInfo<'info>>,
+    runtime_start: usize,
+}
+
+/// Carve the caller-authority span, and the output page when there is one.
+///
+/// The admitted arm refuses `AdmittedFrame` rather than `Content`. Every
+/// coordinate it computes is an admitted-frame coordinate, `Content` has 2,126
+/// sites in this program, and a route that dies here with `Content` is a route
+/// whose reader has to bisect. The Interpreted and Shadow arms keep the code
+/// they always raised.
+///
+/// `#[inline(never)]`, and that is a MEASURED constraint rather than a
+/// preference. Inlined, this arithmetic is 64 bytes over
+/// `execute_authenticated_hot_v3`'s 4,096-byte frame -- `cargo build-sbf`
+/// reported "Estimated function frame size: 4160 bytes" on the commit that
+/// added the page to the carving, and a frame diagnostic is a wall this tree
+/// keeps at zero. Its own frame is where these locals belong anyway: nothing
+/// below the return needs them.
+#[inline(never)]
+fn carve_strategy_frame_span_v3<'a, 'info>(
+    accounts: &'a [AccountInfo<'info>],
+    strategy: &AuthenticatedExecutionStrategyV2,
+    strategy_extras_start: usize,
+    strategy_extras_end: usize,
+    provisional_scalar_count: usize,
+    provisional_identity_count: usize,
+) -> Result<StrategyFrameSpanV3<'a, 'info>, ProgramError> {
+    let displacement = strategy_extras_start
+        .checked_sub(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3)
+        .ok_or(TradingSbfError::Content)?;
+    match strategy.strategy().disposition() {
+        StrategyDispositionV2::Interpreted => Ok(StrategyFrameSpanV3 {
+            shadow_caller_authority: None,
+            admitted_caller_authorities: None,
+            admitted_output_page: None,
+            runtime_start: strategy_extras_end,
+        }),
+        StrategyDispositionV2::ShadowAot => {
+            let expected = HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3
+                .checked_add(displacement)
+                .ok_or(TradingSbfError::Content)?;
+            if strategy_extras_end != expected {
+                return Err(TradingSbfError::Content.into());
+            }
+            Ok(StrategyFrameSpanV3 {
+                shadow_caller_authority: Some(
+                    accounts
+                        .get(strategy_extras_end)
+                        .ok_or(TradingSbfError::Content)?,
+                ),
+                admitted_caller_authorities: None,
+                admitted_output_page: None,
+                runtime_start: strategy_extras_end
+                    .checked_add(1)
+                    .ok_or(TradingSbfError::Content)?,
+            })
+        }
+        StrategyDispositionV2::AdmittedAot => {
+            let admitted_start = HOT_ADMITTED_CALLER_AUTHORITIES_START_V3
+                .checked_add(displacement)
+                .ok_or(TradingSbfError::AdmittedFrame)?;
+            if strategy_extras_end != admitted_start {
+                return Err(TradingSbfError::AdmittedFrame.into());
+            }
+            let profile = strategy
+                .strategy()
+                .transport_profile()
+                .map_err(|_| TradingSbfError::AdmittedFrame)?;
+            let callers_end = admitted_start
+                .checked_add(admitted_caller_authority_count_v3(
+                    profile,
+                    u32::try_from(provisional_scalar_count)
+                        .map_err(|_| TradingSbfError::AdmittedFrame)?,
+                    u32::try_from(provisional_identity_count)
+                        .map_err(|_| TradingSbfError::AdmittedFrame)?,
+                )?)
+                .ok_or(TradingSbfError::AdmittedFrame)?;
+            // The page is carved in the same relative place the CPI frame puts
+            // it: after the caller-authority span, before the runtime slice.
+            // Under the chunked profile that span is zero accounts wide and
+            // this line is the identity.
+            let runtime_start = callers_end
+                .checked_add(hot_admitted_output_page_accounts_v3(profile))
+                .ok_or(TradingSbfError::AdmittedFrame)?;
+            Ok(StrategyFrameSpanV3 {
+                shadow_caller_authority: None,
+                admitted_caller_authorities: Some(
+                    accounts
+                        .get(admitted_start..callers_end)
+                        .ok_or(TradingSbfError::AdmittedFrame)?,
+                ),
+                admitted_output_page: match profile {
+                    AcceleratorTransportProfileV2::OutputPageV3 => Some(
+                        accounts
+                            .get(callers_end)
+                            .ok_or(TradingSbfError::AdmittedFrame)?,
+                    ),
+                    AcceleratorTransportProfileV2::ChunkedBankV2
+                    | AcceleratorTransportProfileV2::ShadowTranscriptV3 => None,
+                },
+                runtime_start,
+            })
+        }
+    }
+}
+
 #[inline(never)]
 /// Refuse a bank whose width is not the width the account frame was carved for.
 ///
@@ -7034,6 +7221,7 @@ fn execute_admitted_candidate_v3(
         view.program_id,
         AdmittedCpiFrameV3 {
             caller_authorities: view.caller_authorities,
+            output_page: view.output_page,
             hot_fixed_accounts: view.hot_fixed_accounts,
             activation: view.frame.activation_cache,
             registry: view.frame.registry,
@@ -14819,6 +15007,8 @@ pub fn is_hot_execution_v3(instruction_data: &[u8]) -> bool {
 mod tests {
     use alloc::boxed::Box;
 
+    use dclutch_execution_strategy_contract::v2::AcceleratorRequestV2;
+
     use super::*;
 
     use dclutch_account_profile_contract::lifecycle_v3::{
@@ -16118,6 +16308,7 @@ mod tests {
             0,
             &bank,
         )
+        .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
         .expect("inline request");
         assert_eq!(
             authenticate_accelerator_input_bank_v4(request, &[], &Pubkey::new_unique())
@@ -16142,6 +16333,7 @@ mod tests {
             0,
             &bank,
         )
+        .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
         .expect("hostile request shape");
         assert!(
             authenticate_accelerator_input_bank_v4(wrong_digest, &[], &Pubkey::new_unique())
@@ -16248,6 +16440,7 @@ mod tests {
         )
         .expect("inline request");
         assert_eq!(request.chunk_count(), 1);
+        let request = AdmittedAcceleratorRequestV2::ChunkedBankV2(request);
 
         let strategy_keys = (0..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
             .map(|_| Pubkey::new_unique())
@@ -16325,6 +16518,7 @@ mod tests {
                 frame,
                 &strategy_evidence,
                 &caller_authority,
+                None,
                 request,
             )
             .expect("canonical accelerator top level"),
@@ -16350,6 +16544,7 @@ mod tests {
                     frame,
                     &strategy_evidence,
                     &caller_authority,
+                    None,
                     request,
                 )
                 .is_err(),
@@ -16373,6 +16568,7 @@ mod tests {
                     .get(..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4 - 1)
                     .expect("short evidence vector"),
                 &caller_authority,
+                None,
                 request,
             )
             .is_err()
@@ -18692,12 +18888,34 @@ mod tests {
         );
     }
 
+    /// One authority per invocation, plus the page when the profile has one.
+    ///
+    /// The chunked rows are unchanged, which is the load-bearing half: adding a
+    /// transport must not move the frame of the transport already on chain.
     #[test]
-    fn admitted_runtime_follows_the_exact_chunk_authority_vector() {
+    fn admitted_runtime_follows_the_authority_vector_and_the_output_page() {
+        use AcceleratorTransportProfileV2::{ChunkedBankV2, OutputPageV3};
+
         assert_eq!(HOT_ADMITTED_CALLER_AUTHORITIES_START_V3, 47);
-        assert_eq!(hot_admitted_runtime_accounts_start_v3(1, 1), Ok(48));
-        assert_eq!(hot_admitted_runtime_accounts_start_v3(120, 2), Ok(49));
-        assert!(hot_admitted_runtime_accounts_start_v3(0, 0).is_err());
+        assert_eq!(
+            hot_admitted_runtime_accounts_start_v3(ChunkedBankV2, 1, 1),
+            Ok(48)
+        );
+        assert_eq!(
+            hot_admitted_runtime_accounts_start_v3(ChunkedBankV2, 120, 2),
+            Ok(49)
+        );
+        assert!(hot_admitted_runtime_accounts_start_v3(ChunkedBankV2, 0, 0).is_err());
+
+        // One authority and one page, whatever the bank costs: the Dealer
+        // equity Add at two chunks and Remove at three both carve 49.
+        for (scalars, identities) in [(1_u32, 1_u32), (26, 37), (35, 53)] {
+            assert_eq!(
+                hot_admitted_runtime_accounts_start_v3(OutputPageV3, scalars, identities),
+                Ok(49)
+            );
+        }
+        assert!(hot_admitted_runtime_accounts_start_v3(OutputPageV3, 0, 0).is_err());
     }
 
     fn leaked_readonly_account(
@@ -18874,6 +19092,7 @@ mod tests {
             0,
             &inline_bank,
         )
+        .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
         .expect("inline request");
         let trading_program = Pubkey::new_from_array([0x76; 32]);
 

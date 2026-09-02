@@ -13,6 +13,8 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
 };
 use dclutch_core_contract::ContentId;
+
+use crate::v2::AcceleratorTransportProfileV2;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 use dclutch_sha256_adapter::digestv;
 
@@ -129,6 +131,29 @@ pub const ADMITTED_OUTPUT_PAGE_ACCOUNT_V3: usize = ADMITTED_ACCELERATOR_PROGRAMD
 /// First AccountProfile-ordered runtime account under the output-page transport.
 pub const ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3: usize =
     ADMITTED_OUTPUT_PAGE_ACCOUNT_V3 + 1;
+
+/// Where an admitted accelerator CPI frame's runtime slice begins, by transport.
+///
+/// ONE READER FOR THE DISPLACEMENT. Trading's producer, both accelerators, the
+/// operator and the host bundle builder all need this number, and the last time
+/// an admitted frame coordinate had one copy per party the copies agreed with
+/// each other and none of them agreed with the producer -- `0xC00A`, and the
+/// note at the top of this file.
+///
+/// `None` for Shadow AOT rather than the chunked answer: Shadow has its own
+/// six-account prefix in [`crate::shadow_v3`] and does not use this frame at
+/// all, so there is no coordinate to give it.
+pub const fn admitted_runtime_accounts_start_v3(
+    profile: AcceleratorTransportProfileV2,
+) -> Option<usize> {
+    match profile {
+        AcceleratorTransportProfileV2::ChunkedBankV2 => Some(ADMITTED_RUNTIME_ACCOUNTS_START_V3),
+        AcceleratorTransportProfileV2::OutputPageV3 => {
+            Some(ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3)
+        }
+        AcceleratorTransportProfileV2::ShadowTranscriptV3 => None,
+    }
+}
 
 // The evidence suffix is the one span this file states rather than derives, so
 // it is pinned to the accounts that occupy it: the last named coordinate must be

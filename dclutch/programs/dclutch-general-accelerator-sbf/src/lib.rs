@@ -13,7 +13,7 @@
 extern crate alloc;
 extern crate std;
 
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 
 use dclutch_capability_program_contract::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_RUNTIME_CONFIG_COORDINATE_V3,
@@ -26,10 +26,12 @@ use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
     admitted_v3::{
         ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
-        ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
+        ADMITTED_OUTPUT_PAGE_ACCOUNT_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
+        admitted_runtime_accounts_start_v3,
     },
     v2::{
-        ACCELERATOR_ACK_HEADER_BYTES_V2, AcceleratorAckV2, AcceleratorRequestV2,
+        ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3, AcceleratorAckV2,
+        AcceleratorOutputPageAckV3, AcceleratorTransportProfileV2, AdmittedAcceleratorRequestV2,
         AuthenticatedScratchPageV2, RequestTransportV2,
     },
 };
@@ -172,6 +174,23 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     /// naming it is an allocation that dies of an out-of-memory abort naming
     /// nothing at all -- which is the exact failure this whole change removes.
     HeapCeilingNotLifted = 0xC013,
+    /// The output page this program was handed is not one it can write.
+    ///
+    /// Wrong owner, not marked writable, executable, a signer, or a data borrow
+    /// this program could not take. One accusation -- *the page is not mine to
+    /// write* -- and a fault instead of a refusal would publish
+    /// `ProgramFailedToComplete` with no code at all.
+    OutputPageUnwritable = 0xC014,
+    /// The output page repeats another account in this CPI frame.
+    ///
+    /// Its own code because it is its own hazard: **CPI privileges union on a
+    /// repeated key**, so a page whose key equals a read-only frame account
+    /// would carry write authority into that account. Trading refuses this
+    /// before the CPI; the program that would DO the writing declines to be
+    /// the instrument.
+    OutputPageTooNarrow = 0xC015,
+    /// The candidate bank is wider than the page provisioned for it.
+    OutputPageAliasesFrame = 0xC016,
 }
 
 impl GeneralAcceleratorSbfErrorV3 {
@@ -181,7 +200,7 @@ impl GeneralAcceleratorSbfErrorV3 {
     /// [`GeneralAcceleratorSbfErrorV3::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::InvalidRequest,
         Self::InvalidFrame,
         Self::InvalidTopLevelInstruction,
@@ -202,6 +221,9 @@ impl GeneralAcceleratorSbfErrorV3 {
         Self::ScratchBankDigest,
         Self::ScratchBankLength,
         Self::HeapCeilingNotLifted,
+        Self::OutputPageUnwritable,
+        Self::OutputPageTooNarrow,
+        Self::OutputPageAliasesFrame,
     ];
 
     /// This refusal's position in [`GeneralAcceleratorSbfErrorV3::ALL`].
@@ -231,6 +253,9 @@ impl GeneralAcceleratorSbfErrorV3 {
             Self::ScratchBankDigest => 17,
             Self::ScratchBankLength => 18,
             Self::HeapCeilingNotLifted => 19,
+            Self::OutputPageUnwritable => 20,
+            Self::OutputPageTooNarrow => 21,
+            Self::OutputPageAliasesFrame => 22,
         }
     }
 }
@@ -515,12 +540,12 @@ fn program_entrypoint(
 /// refused acknowledgement, allowing Trading to distinguish transport failure
 /// from a failure-atomic semantic refusal.
 pub fn process_instruction(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
     heap_mark!("entry");
-    let request = AcceleratorRequestV2::decode(instruction_data)
+    let request = AdmittedAcceleratorRequestV2::decode(instruction_data)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?;
     // THE GEOMETRY IS VALIDATED AFTER THE ACTION IS KNOWN, and the order is the
     // point: `validate_request_geometry` decides how wide the bank this
@@ -534,23 +559,84 @@ pub fn process_instruction(
         general_account_profile_fixed_count_v3(controller.action)
             .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFrame)?,
     );
-    validate_frame(accounts, request, fixed_count)?;
+    // The runtime slice begins one account later under the output-page
+    // transport, because the page is APPENDED to the frame the chunked
+    // transport already had. Both coordinates come from `admitted_v3`.
+    let runtime_start = admitted_runtime_accounts_start_v3(request.profile())
+        .ok_or(GeneralAcceleratorSbfErrorV3::InvalidFrame)?;
+    validate_frame(accounts, request, fixed_count, runtime_start)?;
     heap_mark!("frame-validated");
-    let mut candidate = assemble_input_bank(accounts, request, fixed_count)?;
-    heap_mark!("input-bank");
+    let bank_len = usize::try_from(request.total_bank_bytes())
+        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?;
+    let input_page_start = runtime_start
+        .checked_add(fixed_count)
+        .ok_or(GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
     let request_digest = content(instruction_data)?;
+    if let AdmittedAcceleratorRequestV2::OutputPageV3(page_request) = request {
+        // The page is admitted BEFORE anything is assembled into it, so a page
+        // this program cannot write costs the caller the authentication it
+        // already paid and not the input walk on top of it.
+        let page = admit_output_page_v3(program_id, accounts, bank_len)?;
+        let ack = {
+            // THE PAGE IS THE WORKING BANK. General's input arrives on Trading
+            // scratch pages and its candidate replaces it in place, so on this
+            // transport there is no reason for a heap copy of either -- the
+            // input is assembled straight into the account, evaluated there,
+            // and hashed there. That matters more here than anywhere: this
+            // program's heap peak is set by exactly this bank, and its
+            // allocator never frees.
+            let mut data = page
+                .try_borrow_mut_data()
+                .map_err(|_| GeneralAcceleratorSbfErrorV3::OutputPageUnwritable)?;
+            let window = data
+                .get_mut(..bank_len)
+                .ok_or(GeneralAcceleratorSbfErrorV3::OutputPageTooNarrow)?;
+            assemble_input_bank_into(accounts, request, input_page_start, window)?;
+            heap_mark!("input-bank");
+            match evaluate_candidate(
+                controller,
+                &family_request,
+                request.tail_count(),
+                runtime_accounts(accounts, runtime_start, fixed_count)?,
+                window,
+            ) {
+                Ok(()) => AcceleratorOutputPageAckV3::accepted(
+                    page_request,
+                    request_digest,
+                    content(window)?,
+                ),
+                Err(cause) => {
+                    sol_log(cause.log_line());
+                    AcceleratorOutputPageAckV3::refused(page_request, request_digest)
+                }
+            }
+        };
+        heap_mark!("evaluated");
+        let mut output = [0_u8; ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3];
+        ack.encode_into(&mut output)
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
+        heap_mark!("acknowledged");
+        set_return_data(&output);
+        return Ok(());
+    }
+    let AdmittedAcceleratorRequestV2::ChunkedBankV2(chunked) = request else {
+        return Err(GeneralAcceleratorSbfErrorV3::InvalidRequest.into());
+    };
+    let mut candidate = vec![0_u8; bank_len];
+    assemble_input_bank_into(accounts, request, input_page_start, &mut candidate)?;
+    heap_mark!("input-bank");
     let evaluation = evaluate_candidate(
         controller,
         &family_request,
         request.tail_count(),
-        runtime_accounts(accounts, fixed_count)?,
+        runtime_accounts(accounts, runtime_start, fixed_count)?,
         &mut candidate,
     );
     heap_mark!("evaluated");
     let bank_digest = content(&candidate)?;
     let ack = match evaluation {
         Ok(()) => {
-            let start = usize::try_from(request.chunk_offset())
+            let start = usize::try_from(chunked.chunk_offset())
                 .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
             let remaining = candidate
                 .len()
@@ -566,7 +652,7 @@ pub fn process_instruction(
                             .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?,
                 )
                 .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
-            AcceleratorAckV2::accepted(request, request_digest, bank_digest, payload)
+            AcceleratorAckV2::accepted(chunked, request_digest, bank_digest, payload)
                 .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?
         }
         Err(cause) => {
@@ -577,7 +663,7 @@ pub fn process_instruction(
             // there was none -- ninety-six refusal sites collapsed into three
             // variants collapsed into one `Refused` ack that named nothing.
             sol_log(cause.log_line());
-            AcceleratorAckV2::refused(request, request_digest)
+            AcceleratorAckV2::refused(chunked, request_digest)
         }
     };
     let ack_len = ACCELERATOR_ACK_HEADER_BYTES_V2
@@ -612,7 +698,10 @@ pub fn process_instruction(
 /// the actions that still have a per-outcome tail -- refusing `OpenBatch` and
 /// `CloseBatch` outright, and doing it in the one place the accelerator decides
 /// how wide the bank it is about to assemble is.
-fn validate_request_geometry(action: Action, request: AcceleratorRequestV2<'_>) -> ProgramResult {
+fn validate_request_geometry(
+    action: Action,
+    request: AdmittedAcceleratorRequestV2<'_>,
+) -> ProgramResult {
     let tail_count = request.tail_count();
     if request.transport() != RequestTransportV2::ScratchPages
         || tail_count == 0
@@ -633,20 +722,39 @@ fn validate_request_geometry(action: Action, request: AcceleratorRequestV2<'_>) 
 
 fn validate_frame(
     accounts: &[AccountInfo<'_>],
-    request: AcceleratorRequestV2<'_>,
+    request: AdmittedAcceleratorRequestV2<'_>,
     fixed_count: usize,
+    runtime_start: usize,
 ) -> ProgramResult {
-    let pages = usize::try_from(request.chunk_count())
-        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFrame)?;
-    let expected = ADMITTED_RUNTIME_ACCOUNTS_START_V3
+    // Derived from the bank width, which is what the INPUT page count always
+    // was. The chunked request's `chunk_count` happened to equal it because
+    // input and output banks share a width; the output-page request has no
+    // such field to misread.
+    let pages = usize::try_from(
+        request
+            .input_page_count()
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFrame)?,
+    )
+    .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFrame)?;
+    let expected = runtime_start
         .checked_add(fixed_count)
         .and_then(|value| value.checked_add(pages))
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidFrame)?;
     if accounts.len() != expected {
         return Err(GeneralAcceleratorSbfErrorV3::InvalidFrame.into());
     }
+    // EXACTLY ONE WRITABLE ACCOUNT, and only under the transport that has one.
+    // This loop used to read "no account is writable", which was the honest
+    // statement of the invariant while the accelerator owned nothing; the
+    // output page is the one account it does own, and it sits at the one
+    // coordinate `admitted_v3` names for it.
+    let writable = match request.profile() {
+        AcceleratorTransportProfileV2::OutputPageV3 => Some(ADMITTED_OUTPUT_PAGE_ACCOUNT_V3),
+        AcceleratorTransportProfileV2::ChunkedBankV2
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => None,
+    };
     for (index, account) in accounts.iter().enumerate() {
-        if account.is_writable
+        if account.is_writable != (writable == Some(index))
             || account.is_signer != (index == ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3)
         {
             return Err(GeneralAcceleratorSbfErrorV3::InvalidFrame.into());
@@ -774,22 +882,34 @@ fn authenticate_top_level(
     Ok((family_copy, request))
 }
 
-fn assemble_input_bank(
+/// Reassemble the Trading-owned input pages into a caller-supplied bank.
+///
+/// The destination is a parameter because the two transports put the bank in
+/// different places -- a heap vector under the chunked one, the accelerator's
+/// own page under the output-page one -- and the walk that authenticates the
+/// pages is the same walk either way. It was a `-> Vec<u8>` until the second
+/// transport arrived; making the caller own the destination is what stops
+/// there being two copies of this authentication.
+fn assemble_input_bank_into(
     accounts: &[AccountInfo<'_>],
-    request: AcceleratorRequestV2<'_>,
-    fixed_count: usize,
-) -> Result<Vec<u8>, ProgramError> {
-    let page_count = usize::try_from(request.chunk_count())
-        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
-    let page_start = ADMITTED_RUNTIME_ACCOUNTS_START_V3
-        .checked_add(fixed_count)
-        .ok_or(GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
+    request: AdmittedAcceleratorRequestV2<'_>,
+    page_start: usize,
+    output: &mut [u8],
+) -> ProgramResult {
+    let page_count = usize::try_from(
+        request
+            .input_page_count()
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?,
+    )
+    .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
     let trading = account(accounts, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3)?;
     let trading_id = ContentId::new(trading.key.to_bytes())
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
     let bank_len = usize::try_from(request.total_bank_bytes())
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
-    let mut output = vec![0_u8; bank_len];
+    if output.len() != bank_len {
+        return Err(GeneralAcceleratorSbfErrorV3::ScratchBankLength.into());
+    }
     let mut cursor = 0_usize;
     for page_index in 0..page_count {
         let page_account = account(
@@ -833,20 +953,54 @@ fn assemble_input_bank(
     if cursor != output.len() {
         return Err(GeneralAcceleratorSbfErrorV3::ScratchBankLength.into());
     }
-    if content(&output)? != request.input_bank_digest() {
+    if content(output)? != request.input_bank_digest() {
         return Err(GeneralAcceleratorSbfErrorV3::ScratchBankDigest.into());
     }
-    Ok(output)
+    Ok(())
+}
+
+/// Admit the one account this program is ever handed write authority over.
+///
+/// Three refusals, one accusation each, and none of them is authentication:
+/// common Trading refuses a page it did not build before it ever makes the CPI.
+/// This is the program that would do the writing declining to do it blind --
+/// the ownership it asserts is its OWN, the aliasing is the privilege union a
+/// repeated key would create, and the width is a provisioning fact a growing
+/// batch can reach honestly.
+fn admit_output_page_v3<'a, 'info>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'info>],
+    bank_len: usize,
+) -> Result<&'a AccountInfo<'info>, GeneralAcceleratorSbfErrorV3> {
+    let page = accounts
+        .get(ADMITTED_OUTPUT_PAGE_ACCOUNT_V3)
+        .ok_or(GeneralAcceleratorSbfErrorV3::OutputPageUnwritable)?;
+    if page.owner != program_id || !page.is_writable || page.is_signer || page.executable {
+        return Err(GeneralAcceleratorSbfErrorV3::OutputPageUnwritable);
+    }
+    if accounts
+        .iter()
+        .filter(|account| account.key == page.key)
+        .count()
+        != 1
+    {
+        return Err(GeneralAcceleratorSbfErrorV3::OutputPageAliasesFrame);
+    }
+    if page.data_len() < bank_len {
+        return Err(GeneralAcceleratorSbfErrorV3::OutputPageTooNarrow);
+    }
+    Ok(page)
 }
 
 fn runtime_accounts<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
+    runtime_start: usize,
     fixed_count: usize,
 ) -> Result<&'a [AccountInfo<'info>], ProgramError> {
     accounts
         .get(
-            ADMITTED_RUNTIME_ACCOUNTS_START_V3
-                ..ADMITTED_RUNTIME_ACCOUNTS_START_V3
+            runtime_start
+                ..runtime_start
                     .checked_add(fixed_count)
                     .ok_or(GeneralAcceleratorSbfErrorV3::InvalidFrame)?,
         )
@@ -1619,6 +1773,8 @@ fn content(bytes: &[u8]) -> Result<ContentId, ProgramError> {
 
 #[cfg(test)]
 mod tests {
+    use dclutch_execution_strategy_contract::v2::AcceleratorRequestV2;
+
     use super::*;
 
     fn id(value: u8) -> ContentId {
@@ -1629,7 +1785,7 @@ mod tests {
         action: Action,
         outcome_count: u32,
         transport: RequestTransportV2,
-    ) -> AcceleratorRequestV2<'static> {
+    ) -> AdmittedAcceleratorRequestV2<'static> {
         AcceleratorRequestV2::new(
             transport,
             id(1),
@@ -1650,6 +1806,7 @@ mod tests {
                 RequestTransportV2::ScratchPages => &[],
             },
         )
+        .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
         .expect("request")
     }
 
@@ -1668,7 +1825,7 @@ mod tests {
                 general_hot_candidate_bank_len_v3(Action::Consider, outcome_count)
                     .expect("General bank")
             );
-            assert!(request.chunk_count() > 1);
+            assert!(request.input_page_count().expect("page count") > 1);
         }
     }
 
@@ -1726,7 +1883,10 @@ mod tests {
         )
         .expect("transport permits syntactic zero");
         assert_eq!(
-            validate_request_geometry(Action::Consider, zero),
+            validate_request_geometry(
+                Action::Consider,
+                AdmittedAcceleratorRequestV2::ChunkedBankV2(zero)
+            ),
             Err(GeneralAcceleratorSbfErrorV3::InvalidRequest.into())
         );
     }

@@ -614,6 +614,18 @@ fn finish_admitted_bundle(
         } else {
             dclutch_execution_strategy_contract::v2::RequestTransportV2::Inline
         },
+        // Read out of the Strategy record this bundle installs, never chosen
+        // here: the record is the only authority for which transport a route
+        // is on, and a host that picked its own would build a frame no
+        // deployed Strategy asks for.
+        profile: dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2::decode(
+            &bundle.artifacts.strategy.bytes,
+        )
+        .and_then(
+            dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2::transport_profile,
+        )
+        .map_err(|_| BuilderError::Artifact)?,
+        accelerator_program: evidence.accelerator_program.key,
         tail_count,
         scalars: &bundle.engine.input_scalars,
         identities: &bundle.engine.input_identities,
@@ -916,9 +928,39 @@ fn insert_admitted_suffix(
             .iter()
             .map(|entry| vacant(entry.authority)),
     );
+    // The output page, if this transport has one, and it is the ONLY writable
+    // account this suffix carries. It is provisioned here the way a client
+    // provisions one on a live chain -- an account owned by the accelerator,
+    // wide enough for the bank, created once and reused -- and its data is
+    // left as whatever the last transaction wrote, because a page that is not
+    // zeroed between runs is exactly the case the digest has to bind.
+    let page_index = extras.len();
+    if let Some(page) = authorities.output_page {
+        extras.push(BuiltAccountV1 {
+            key: page,
+            account: Account {
+                lamports: input
+                    .rent
+                    .minimum_balance(authorities.input_bank.len())
+                    .max(1),
+                data: vec![0_u8; authorities.input_bank.len()],
+                owner: evidence.accelerator_program.key,
+                executable: false,
+                rent_epoch: 0,
+            },
+            observed: None,
+        });
+    }
     let metas = extras
         .iter()
-        .map(|account| AccountMeta::new_readonly(account.key, false))
+        .enumerate()
+        .map(|(index, account)| {
+            if authorities.output_page.is_some() && index == page_index {
+                AccountMeta::new(account.key, false)
+            } else {
+                AccountMeta::new_readonly(account.key, false)
+            }
+        })
         .collect::<Vec<_>>();
     bundle.hot_instruction.accounts.splice(
         HOT_FIXED_ACCOUNT_COUNT_V3..HOT_FIXED_ACCOUNT_COUNT_V3,

@@ -7,8 +7,16 @@
 //! The caller exists only to provide the real instructions-sysvar relationship
 //! of a top-level Trading-shaped request invoking the accelerator by CPI. It
 //! reads an exact accelerator request from account zero, forwards the remaining
-//! frame read-only, signs only the canonical caller-authority PDA, and relays
-//! the accelerator's typed return data. It owns no protocol semantics or state.
+//! frame WITH THE PRIVILEGES IT WAS HANDED, signs only the canonical
+//! caller-authority PDA, and relays the accelerator's typed return data. It owns
+//! no protocol semantics or state.
+//!
+//! It forwarded the frame flattened to read-only until the accelerator acquired
+//! an output page, which is the one account any admitted accelerator is handed
+//! writable. Flattening was never the caller deciding anything: real Trading
+//! decides privileges and this program relays them, so relaying them is the
+//! honest shape and a hard-coded `false` was a second author of a decision made
+//! one frame up.
 
 extern crate alloc;
 
@@ -165,7 +173,7 @@ pub fn process_instruction(
         .map(|(index, account)| AccountMeta {
             pubkey: *account.key,
             is_signer: index == 0,
-            is_writable: false,
+            is_writable: account.is_writable,
         })
         .collect::<Vec<_>>();
     let instruction = Instruction {

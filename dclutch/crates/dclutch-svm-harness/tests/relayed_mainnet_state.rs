@@ -2427,7 +2427,7 @@ fn refused(result: Result<(), BanksClientError>) -> TransactionError {
 /// would have left them silently naming the wrong guard rather than failing.
 /// They come from the adapter now.
 const REFUSAL_MARKET_AUTHORITY: u32 = ResolutionError::MarketAuthority as u32;
-const REFUSAL_RESOLUTION_RELEASE: u32 = ResolutionError::ResolutionRelease as u32;
+const REFUSAL_ACTIVATION_CACHE: u32 = ResolutionError::ActivationCache as u32;
 const REFUSAL_SOURCE_MATERIAL: u32 = ResolutionError::SourceMaterial as u32;
 const REFUSAL_TRANSITION: u32 = ResolutionError::Transition as u32;
 
@@ -2471,7 +2471,7 @@ async fn the_hostile_corpus_is_refused_by_the_real_adapter() {
                 activation: Some(fixture.decoy_activation),
                 ..CreateSubstitution::default()
             },
-            REFUSAL_RESOLUTION_RELEASE,
+            REFUSAL_ACTIVATION_CACHE,
         ),
         (
             "a rent beneficiary the Market does not name",

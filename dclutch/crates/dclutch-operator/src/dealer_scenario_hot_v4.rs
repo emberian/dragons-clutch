@@ -22,6 +22,7 @@ use dclutch_capability_program_contract::hot_v3::{
     HotExecutionEnvelopeV3,
 };
 use dclutch_dealer_codec::config_v4::DEALER_CONFIG_BYTES_V4;
+use dclutch_execution_strategy_contract::v2::AcceleratorTransportProfileV2;
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
     dealer::{
@@ -363,7 +364,14 @@ pub fn project_dealer_scenario_hot_semantics_v4(
     if usize::from(profile.dynamic_fixed_span_count()) != DEALER_SCENARIO_PROFILE_SPANS_V4 {
         return Err(DealerScenarioHotMetaErrorV4::AccountProfile);
     }
+    // NAMED, not assumed, and the difference is the debt. This report is a
+    // semantic computation with no Strategy record in view, so unlike the
+    // equity and LP builders it cannot READ its transport and states the one
+    // the scenario route is deployed under. A scenario Strategy moved to
+    // `OutputPageV3` would need this call to take the profile from its caller;
+    // until one exists there is nothing to take it from.
     let caller_authority_count = admitted_caller_authority_count_v3(
+        AcceleratorTransportProfileV2::ChunkedBankV2,
         u32::try_from(scalar_count).map_err(|_| DealerScenarioHotMetaErrorV4::Arithmetic)?,
         u32::try_from(identity_count).map_err(|_| DealerScenarioHotMetaErrorV4::Arithmetic)?,
     )

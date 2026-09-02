@@ -5180,7 +5180,8 @@ mod lp_lifecycle {
         root_tail::{ROOT_TAIL_BYTES, RootTail},
     };
     use dclutch_execution_strategy_contract::v2::{
-        ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+        ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_ID_V3,
+        ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_ID_V3, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         ExecutionStrategyAdmissionV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
         StrategyDispositionV2,
@@ -5834,8 +5835,13 @@ mod lp_lifecycle {
             Some(certificate_id),
             core_id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2),
             Some(core_id(hash(&admission).to_bytes())),
-            core_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2),
-            core_id(ACCELERATOR_ACK_SCHEMA_ID_V2),
+            // THE EQUITY ROUTE IS THE OUTPUT-PAGE ROUTE. Its candidate bank is
+            // 1,392 bytes -- two 880-byte chunks, and this test failed on the
+            // second one at `ComputationalBudgetExceeded` for as long as the
+            // pair below named the chunked transport. One page, one caller
+            // authority, one CPI.
+            core_id(ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_ID_V3),
+            core_id(ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_ID_V3),
         )
         .expect("admitted equity strategy")
         .to_bytes()
@@ -8500,6 +8506,21 @@ mod lp_lifecycle {
         )
         .await
         .expect("submit equity Add");
+        // ONE CPI, and it is asserted before the route's own weight is, because
+        // it is the transport's claim and the two are separable. Under the
+        // chunked pair this bank was 1,392 bytes against an 880-byte payload:
+        // two invocations, each re-authenticating and re-evaluating from zero,
+        // and the second never had the budget to run. Under the output-page
+        // pair the accelerator appears exactly once in the log, writes the
+        // whole bank into the account it owns, and Trading takes the digest.
+        let accelerator_invocations = super::transaction_logs(&accepted)
+            .iter()
+            .filter(|line| line.starts_with(&std::format!("Program {ACCELERATOR} invoke [")))
+            .count();
+        assert_eq!(
+            accelerator_invocations, 1,
+            "the output-page transport is one invocation whatever the bank costs"
+        );
         assert!(accepted.result.is_ok(), "equity Add: {:?}", accepted.result);
         let invoked = super::invoked_programs(&accepted);
         assert!(invoked.contains(&TRADING));

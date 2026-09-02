@@ -225,13 +225,25 @@ impl ExecutionStrategyProgramV2 {
             return Err(Error::UnsupportedSchema);
         }
         let transport = transport_profile(request_schema, ack_schema)?;
+        // The disposition constrains which transports are even sayable.
+        // Interpreted invokes no accelerator at all, so a transport that
+        // describes an accelerator writing an account is not a choice it gets
+        // to make; Shadow has its own read-only transcript pair; and only
+        // admitted AOT -- the disposition whose whole content is "one
+        // authenticated accelerator produced this candidate" -- can name
+        // either candidate-bank transport.
         let transport_matches_disposition = match disposition {
             StrategyDispositionV2::ShadowAot => {
                 transport == AcceleratorTransportProfileV2::ShadowTranscriptV3
             }
-            StrategyDispositionV2::Interpreted | StrategyDispositionV2::AdmittedAot => {
+            StrategyDispositionV2::Interpreted => {
                 transport == AcceleratorTransportProfileV2::ChunkedBankV2
             }
+            StrategyDispositionV2::AdmittedAot => matches!(
+                transport,
+                AcceleratorTransportProfileV2::ChunkedBankV2
+                    | AcceleratorTransportProfileV2::OutputPageV3
+            ),
         };
         if !transport_matches_disposition {
             return Err(Error::UnsupportedSchema);
@@ -1001,6 +1013,49 @@ pub fn classify_bank_transport_v2(
             bank_bytes,
             page_count,
         })
+    }
+}
+
+/// Exact number of accelerator invocations one candidate bank costs.
+///
+/// ONE PER OUTPUT INVOCATION, which is what the admitted frame's
+/// caller-authority span has always counted and what the chunked profile made
+/// look like a bank-width law. Under [`AcceleratorTransportProfileV2::OutputPageV3`]
+/// there is exactly one invocation whatever the bank costs.
+///
+/// It lives here, in the contract, because four parties need the same answer --
+/// the Trading producer carving its frame, the operator validating a caller's,
+/// the host bundle builder deriving one, and the accelerator re-reading the
+/// top-level instruction -- and the last time a frame law had one copy per
+/// party the copies agreed with each other and none of them agreed with the
+/// producer.
+pub fn accelerator_invocation_count_v2(
+    profile: AcceleratorTransportProfileV2,
+    scalar_count: u32,
+    identity_count: u32,
+) -> Result<u32> {
+    // The bank is classified under every profile, because a zero-width bank is
+    // refused under every profile and the classification is where that lives.
+    let transport = classify_bank_transport_v2(scalar_count, identity_count)?;
+    let (BankTransportV2::InlineReturnData { bank_bytes }
+    | BankTransportV2::AuthenticatedScratchPages { bank_bytes, .. }) = transport;
+    if bank_bytes == 0 {
+        return Err(Error::InvalidLength);
+    }
+    match (profile, transport) {
+        (AcceleratorTransportProfileV2::OutputPageV3, _)
+        | (
+            AcceleratorTransportProfileV2::ChunkedBankV2,
+            BankTransportV2::InlineReturnData { .. },
+        ) => Ok(1),
+        (
+            AcceleratorTransportProfileV2::ChunkedBankV2,
+            BankTransportV2::AuthenticatedScratchPages { page_count, .. },
+        ) => Ok(page_count),
+        // Shadow AOT never uses the admitted frame: it has its own six-account
+        // prefix in `shadow_v3`. Answering with the chunked count would be a
+        // coordinate invented for a transport that never asks for one.
+        (AcceleratorTransportProfileV2::ShadowTranscriptV3, _) => Err(Error::UnsupportedSchema),
     }
 }
 
@@ -1949,6 +2004,185 @@ impl AcceleratorOutputPageAckV3 {
     }
 }
 
+/// One admitted-accelerator request, under whichever transport its Strategy names.
+///
+/// The two wires are separate codecs on purpose -- the request/ack pair IS the
+/// transport identity -- but everything an accelerator authenticates a request
+/// AGAINST is common to both, and a caller that re-derived the common fields
+/// would become a third author of two layouts. This is the dispatcher instead:
+/// it decodes on the leading magic and forwards. It owns no offsets, no widths
+/// and no checks of its own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdmittedAcceleratorRequestV2<'a> {
+    /// Chunked candidate bank; this invocation answers exactly one chunk.
+    ChunkedBankV2(AcceleratorRequestV2<'a>),
+    /// Whole candidate bank; this invocation writes the accelerator's page.
+    OutputPageV3(AcceleratorOutputPageRequestV3<'a>),
+}
+
+impl<'a> AdmittedAcceleratorRequestV2<'a> {
+    /// Hostile-decode whichever request the leading magic names.
+    ///
+    /// A magic that names neither is [`Error::InvalidMagic`], not a fallthrough
+    /// to one decoder: a caller must never learn that a request "did not parse"
+    /// when what happened is that it belongs to another transport.
+    pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        match read_array::<8>(bytes, HEADER_MAGIC_OFFSET_V2)? {
+            magic if magic == ACCELERATOR_REQUEST_MAGIC_V2 => {
+                Ok(Self::ChunkedBankV2(AcceleratorRequestV2::decode(bytes)?))
+            }
+            magic if magic == ACCELERATOR_OUTPUT_PAGE_REQUEST_MAGIC_V3 => Ok(Self::OutputPageV3(
+                AcceleratorOutputPageRequestV3::decode(bytes)?,
+            )),
+            _ => Err(Error::InvalidMagic),
+        }
+    }
+
+    /// Output transport this request's own magic selected.
+    ///
+    /// A caller that has BOTH a Strategy record and a request must require this
+    /// to equal [`ExecutionStrategyProgramV2::transport_profile`]; the two are
+    /// separate authorities and agreeing is a conjunct, not a given.
+    pub const fn profile(self) -> AcceleratorTransportProfileV2 {
+        match self {
+            Self::ChunkedBankV2(_) => AcceleratorTransportProfileV2::ChunkedBankV2,
+            Self::OutputPageV3(_) => AcceleratorTransportProfileV2::OutputPageV3,
+        }
+    }
+
+    /// Input transport, which is orthogonal to the output transport above.
+    pub const fn transport(self) -> RequestTransportV2 {
+        match self {
+            Self::ChunkedBankV2(request) => request.transport(),
+            Self::OutputPageV3(request) => request.transport(),
+        }
+    }
+    /// Exact finalized Strategy content identity.
+    pub const fn strategy_program(self) -> ContentId {
+        match self {
+            Self::ChunkedBankV2(request) => request.strategy_program(),
+            Self::OutputPageV3(request) => request.strategy_program(),
+        }
+    }
+    /// Exact finalized Certificate content identity.
+    pub const fn certificate_program(self) -> ContentId {
+        match self {
+            Self::ChunkedBankV2(request) => request.certificate_program(),
+            Self::OutputPageV3(request) => request.certificate_program(),
+        }
+    }
+    /// Exact CapabilityProgram descriptor content identity.
+    pub const fn capability_program(self) -> ContentId {
+        match self {
+            Self::ChunkedBankV2(request) => request.capability_program(),
+            Self::OutputPageV3(request) => request.capability_program(),
+        }
+    }
+    /// Exact invocation-context digest.
+    pub const fn invocation_context(self) -> ContentId {
+        match self {
+            Self::ChunkedBankV2(request) => request.invocation_context(),
+            Self::OutputPageV3(request) => request.invocation_context(),
+        }
+    }
+    /// Exact input-bank digest.
+    pub const fn input_bank_digest(self) -> ContentId {
+        match self {
+            Self::ChunkedBankV2(request) => request.input_bank_digest(),
+            Self::OutputPageV3(request) => request.input_bank_digest(),
+        }
+    }
+    /// Product-authoritative semantic tail count.
+    pub const fn tail_count(self) -> u32 {
+        match self {
+            Self::ChunkedBankV2(request) => request.tail_count(),
+            Self::OutputPageV3(request) => request.tail_count(),
+        }
+    }
+    /// Runtime scalar count.
+    pub const fn scalar_count(self) -> u32 {
+        match self {
+            Self::ChunkedBankV2(request) => request.scalar_count(),
+            Self::OutputPageV3(request) => request.scalar_count(),
+        }
+    }
+    /// Runtime identity count.
+    pub const fn identity_count(self) -> u32 {
+        match self {
+            Self::ChunkedBankV2(request) => request.identity_count(),
+            Self::OutputPageV3(request) => request.identity_count(),
+        }
+    }
+    /// Exact whole-bank byte width.
+    pub const fn total_bank_bytes(self) -> u64 {
+        match self {
+            Self::ChunkedBankV2(request) => request.total_bank_bytes(),
+            Self::OutputPageV3(request) => request.total_bank_bytes(),
+        }
+    }
+    /// Borrow exact inline input bank, empty for scratch input transport.
+    pub const fn inline_bank(self) -> &'a [u8] {
+        match self {
+            Self::ChunkedBankV2(request) => request.inline_bank(),
+            Self::OutputPageV3(request) => request.inline_bank(),
+        }
+    }
+
+    /// Exact canonical INPUT scratch-page count for this request's bank.
+    ///
+    /// Derived from the bank width under both transports, which is what it
+    /// always was: the chunked request's `chunk_count` happens to equal it
+    /// because input and output banks share a width, and a reader who took the
+    /// output field as the input count was reading a coincidence. Input
+    /// transport is orthogonal to output transport, so the output-page profile
+    /// pages its input exactly as the chunked one does.
+    pub fn input_page_count(self) -> Result<u32> {
+        chunk_count(self.total_bank_bytes())
+    }
+
+    /// Index into the caller-authority span this invocation is signed by.
+    ///
+    /// The chunked profile signs chunk `k` with authority `k`; the output-page
+    /// profile has one invocation and one authority, so the index is zero and
+    /// the span it indexes is one long.
+    pub const fn caller_authority_index(self) -> u32 {
+        match self {
+            Self::ChunkedBankV2(request) => request.chunk_index(),
+            Self::OutputPageV3(_) => 0,
+        }
+    }
+
+    /// Exact encoded width: the header for this transport, plus any inline bank.
+    pub fn encoded_len(self) -> Result<usize> {
+        let header = match self {
+            Self::ChunkedBankV2(_) => ACCELERATOR_REQUEST_HEADER_BYTES_V2,
+            Self::OutputPageV3(_) => ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
+        };
+        header
+            .checked_add(self.inline_bank().len())
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Encode this request into caller-owned instruction bytes.
+    pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
+        match self {
+            Self::ChunkedBankV2(request) => request.encode_into(output),
+            Self::OutputPageV3(request) => request.encode_into(output),
+        }
+    }
+
+    /// Exact number of release-pinned caller authorities this bank needs.
+    ///
+    /// One per output chunk under the chunked profile; exactly one under the
+    /// output-page profile, because there is exactly one invocation.
+    pub fn caller_authority_count(self) -> Result<u32> {
+        match self {
+            Self::ChunkedBankV2(request) => Ok(request.chunk_count()),
+            Self::OutputPageV3(_) => Ok(1),
+        }
+    }
+}
+
 /// Trading-owned authenticated scratch-page kind.
 ///
 /// ONE KIND, AND THE SECOND ONE IS GONE. `Candidate` sat here from the day the
@@ -2142,17 +2376,17 @@ impl<'a> AuthenticatedScratchPageV2<'a> {
     pub fn validate_request_input(
         self,
         trading_program: ContentId,
-        request: AcceleratorRequestV2<'_>,
+        request: AdmittedAcceleratorRequestV2<'_>,
     ) -> Result<()> {
-        if request.transport != RequestTransportV2::ScratchPages
+        if request.transport() != RequestTransportV2::ScratchPages
             || self.kind != ScratchPageKindV2::Input
             || self.trading_program != trading_program
-            || self.strategy_program != request.strategy_program
-            || self.invocation_context != request.invocation_context
-            || self.total_bank_digest != request.input_bank_digest
-            || self.tail_count != request.tail_count
-            || self.scalar_count != request.scalar_count
-            || self.identity_count != request.identity_count
+            || self.strategy_program != request.strategy_program()
+            || self.invocation_context != request.invocation_context()
+            || self.total_bank_digest != request.input_bank_digest()
+            || self.tail_count != request.tail_count()
+            || self.scalar_count != request.scalar_count()
+            || self.identity_count != request.identity_count()
         {
             Err(Error::BindingMismatch)
         } else {

@@ -25,8 +25,17 @@ use dclutch_rent_contract::lifecycle_v2::{
 };
 use spl_token_interface::state::{Account as SplAccount, AccountState};
 
-const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x76; 32]);
-const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x77; 32]);
+/// This campaign's OWN Claims and Trading programs, and its own release set.
+///
+/// The base campaign gained five real roles of its own on 2026-09-02
+/// (`JOINED_CLAIMS_PROGRAM_ID` 0x78, `JOINED_TRADING_PROGRAM_ID` 0x79). These ids stay
+/// distinct from those deliberately: a joined fixture that shared the base's
+/// release set would share its Market address too, and the base's `fixture()`
+/// account and this campaign's `set_account` would then be two authors of one
+/// account. Two release sets, two Market addresses, one activation builder.
+const JOINED_CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x76; 32]);
+const JOINED_TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x77; 32]);
+
 const CLAIMS_REVISION: u64 = 11;
 const CUSTODY_REVISION: u64 = 2;
 
@@ -53,45 +62,6 @@ struct JoinedSnapshot {
     refund_wallet: Option<Account>,
 }
 
-fn joined_activation(
-    core: ArtifactReleaseV1,
-    claims: ArtifactReleaseV1,
-    trading: ArtifactReleaseV1,
-    resolution: ArtifactReleaseV1,
-    custody: ArtifactReleaseV1,
-) -> ([u8; 32], Vec<u8>) {
-    let release_set = ExecutionReleaseSetV1::new(
-        binding(core),
-        binding(claims),
-        binding(trading),
-        binding(resolution),
-        binding(custody),
-    )
-    .expect("joined execution release set");
-    let release_set_id = hash(&release_set.to_bytes()).to_bytes();
-    let content = id(release_set_id);
-    let mut bytes = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
-    initialize_activation_cache_v1(&mut bytes, content).expect("joined activation cache");
-    for (role, selected) in [
-        (ExecutionRoleV1::Core, core),
-        (ExecutionRoleV1::Claims, claims),
-        (ExecutionRoleV1::Trading, trading),
-        (ExecutionRoleV1::Resolution, resolution),
-        (ExecutionRoleV1::Custody, custody),
-    ] {
-        activate_execution_role_into_v1(
-            &mut bytes,
-            content,
-            &release_set,
-            role,
-            &activation_input(selected),
-        )
-        .expect("activate joined role");
-    }
-    ActivatedExecutionReleaseSetV1::decode(&bytes).expect("complete joined activation cache");
-    (release_set_id, bytes)
-}
-
 fn set_account(context: &mut ProgramTestContext, key: Pubkey, account: Account) {
     context.set_account(&key, &AccountSharedData::from(account));
 }
@@ -99,23 +69,28 @@ fn set_account(context: &mut ProgramTestContext, key: Pubkey, account: Account) 
 async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let mut base = fixture(MarketPrestateV1::Terminal);
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
-    let claims_elf = fs::read(directory.join("dclutch_claims_sbf.so")).expect("Claims ELF");
-    let trading_elf = fs::read(directory.join("dclutch_trading_sbf.so")).expect("Trading ELF");
     let rent_elf = fs::read(directory.join("dclutch_rent_sbf.so")).expect("Rent ELF");
     let elves = artifacts();
     let test = base.test.as_mut().expect("unstarted ProgramTest");
-    add_program(test, "dclutch_claims_sbf", CLAIMS_PROGRAM_ID, &claims_elf);
+    let claims_elf = fs::read(directory.join("dclutch_claims_sbf.so")).expect("Claims ELF");
+    let trading_elf = fs::read(directory.join("dclutch_trading_sbf.so")).expect("Trading ELF");
+    add_program(
+        test,
+        "dclutch_claims_sbf",
+        JOINED_CLAIMS_PROGRAM_ID,
+        &claims_elf,
+    );
     add_program(
         test,
         "dclutch_trading_sbf",
-        TRADING_PROGRAM_ID,
+        JOINED_TRADING_PROGRAM_ID,
         &trading_elf,
     );
     add_program(test, "dclutch_rent_sbf", RENT_PROGRAM_ID, &rent_elf);
 
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
-    let claims_release = release(CLAIMS_PROGRAM_ID, [0x43; 32], &claims_elf);
-    let trading_release = release(TRADING_PROGRAM_ID, [0x46; 32], &trading_elf);
+    let claims_release = release(JOINED_CLAIMS_PROGRAM_ID, [0x43; 32], &claims_elf);
+    let trading_release = release(JOINED_TRADING_PROGRAM_ID, [0x46; 32], &trading_elf);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
         RESOLUTION_CONTROLLER_RELEASE_ID_V7,
@@ -124,7 +99,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
     let rent_release = release(RENT_PROGRAM_ID, [0x44; 32], &rent_elf);
     let registry_release = release(REGISTRY_PROGRAM_ID, [0x45; 32], &elves.registry);
-    let (release_set, activation_data) = joined_activation(
+    let (release_set, activation_data) = activation(
         core_release,
         claims_release,
         trading_release,
@@ -347,7 +322,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     .0;
     let claims_aggregate = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()],
-        &CLAIMS_PROGRAM_ID,
+        &JOINED_CLAIMS_PROGRAM_ID,
     )
     .0;
     const RETIREMENT_CLAIM_COUNT: u32 = 5;
@@ -378,7 +353,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     set_account(
         &mut context,
         claims_aggregate,
-        protocol_account(CLAIMS_PROGRAM_ID, aggregate_bytes),
+        protocol_account(JOINED_CLAIMS_PROGRAM_ID, aggregate_bytes),
     );
 
     base.release_set = release_set;
@@ -398,8 +373,8 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     (
         JoinedFixture {
             base,
-            claims_programdata: programdata(CLAIMS_PROGRAM_ID),
-            trading_programdata: programdata(TRADING_PROGRAM_ID),
+            claims_programdata: programdata(JOINED_CLAIMS_PROGRAM_ID),
+            trading_programdata: programdata(JOINED_TRADING_PROGRAM_ID),
             rent_programdata: programdata(RENT_PROGRAM_ID),
             refund_wallet,
             claims_aggregate,
@@ -571,7 +546,7 @@ fn hostile_registry_retirement_continuation(
         AccountMeta::new_readonly(fixture.base.activation, false),
         AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.base.core_programdata, false),
-        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+        AccountMeta::new_readonly(JOINED_CLAIMS_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.claims_programdata, false),
         AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.base.resolution_programdata, false),
@@ -601,7 +576,7 @@ async fn retirement_operator_snapshot(
         registry_program: required_observed(context, REGISTRY_PROGRAM_ID).await,
         core_program: required_observed(context, CORE_PROGRAM_ID).await,
         core_programdata: required_observed(context, fixture.base.core_programdata).await,
-        claims_program: required_observed(context, CLAIMS_PROGRAM_ID).await,
+        claims_program: required_observed(context, JOINED_CLAIMS_PROGRAM_ID).await,
         claims_programdata: required_observed(context, fixture.claims_programdata).await,
         resolution_program: required_observed(context, RESOLUTION_PROGRAM_ID).await,
         resolution_programdata: required_observed(context, fixture.base.resolution_programdata)
@@ -915,7 +890,7 @@ async fn execute_same_lineage_real_provider(
     .await
     .expect("prepay terminal certificate and distinct resolver");
     let execute_deployment = ProviderExecuteDeploymentV3 {
-        trading_program: TRADING_PROGRAM_ID,
+        trading_program: JOINED_TRADING_PROGRAM_ID,
         trading_programdata: fixture.trading_programdata,
         ..provider_execute_deployment(&fixture.base)
     };
@@ -1417,7 +1392,7 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         "prepare replay refusal is byte/lamport atomic"
     );
     let mut substituted_checkpoint_owner = prepared_account.clone();
-    substituted_checkpoint_owner.owner = CLAIMS_PROGRAM_ID;
+    substituted_checkpoint_owner.owner = JOINED_CLAIMS_PROGRAM_ID;
     set_account(
         &mut context,
         fixture.claims_aggregate,

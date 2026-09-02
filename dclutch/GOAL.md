@@ -2985,3 +2985,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the commit it is handed; deployed Trading is e39efbb0's ordinary build) → **seal from a branch at e39efbb0 + the two tool
   commits**, then the fee-bearing trade; if the digests differ, cohort-13 from HEAD. Evidence `d4433646`. Deployer 36.56 SOL.
 - Cuts: `af9aaa60f`.
+
+### Lane map delta — 2026-09-02 15:00
+- COHORT-12 `a3889c0783d45215b` closed (~670k). The seal branch reproduced the deployed Trading bytes to the byte
+  (`b0cff55a…`, candidate green at `96a3b04e`), `require_rent_exempt` compares against `Rent::default()` not the live sysvar
+  (cleared operationally, 0.2373 SOL; real fix owed), and **the root of why no devnet fill has ever run:**
+  `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` (`upgrade.rs:129`) hardcodes cohort-7/8's seven ids (now closed) and the capture family
+  accepts no caller-supplied set — condition (a)'s fresh identities and the sealing machinery's permanent identities are
+  mutually exclusive by construction. Evidence `0ea1366a`. Deployer 36.33 SOL.
+- **RULING (under the standing goal; ember may reverse): the target set becomes an authenticated INPUT** from the plan the
+  ladder already authenticated, with the journal's per-row chain re-read as the safety and an explicit refusal when plan and
+  chain disagree; decision 0012 amended by one paragraph; the Lean admission model verified not to name the constant first.
+  → SEAL **`a4794424565254512`**: the amendment, the rent fix, seal cohort-12 from the branch, the fee-bearing trade, settlement,
+  ledger-census across the fill.
+- Cuts: `c18efc5c9`.

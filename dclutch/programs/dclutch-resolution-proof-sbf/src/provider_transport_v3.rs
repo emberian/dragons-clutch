@@ -648,7 +648,7 @@ fn authenticate_infrastructure<'info>(
 ) -> ProgramResult {
     let profile_data = infrastructure
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::InfrastructureProfile)?;
     if infrastructure.owner != core.key
         || infrastructure.key
             != &Pubkey::find_program_address(
@@ -659,12 +659,12 @@ fn authenticate_infrastructure<'info>(
         || profile_data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         || !rent.is_exempt(infrastructure.lamports(), profile_data.len())
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::InfrastructureProfile.into());
     }
     let profile = ProtocolInfrastructureProfileV2::decode(&profile_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::InfrastructureProfile)?;
     if profile.registry().program().to_bytes() != registry.key.to_bytes() {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::InfrastructureProfile.into());
     }
     drop(profile_data);
     let artifact_data = registry_artifact
@@ -681,11 +681,11 @@ fn authenticate_infrastructure<'info>(
         ARTIFACT_RELEASE_BYTES_V1,
     )?;
     let artifact = ArtifactReleaseV1::decode(&artifact_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::InfrastructureProfile)?;
     if artifact.program().to_bytes() != registry.key.to_bytes() {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::InfrastructureProfile.into());
     }
-    require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::ResolutionRelease)?;
+    require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::InfrastructureProfile)?;
     artifact
         .authenticate_deployment(cached_deployment_observation(
             registry,
@@ -695,7 +695,7 @@ fn authenticate_infrastructure<'info>(
         .map_err(pinned_deployment_refusal)?;
     let activation_data = activation
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if activation.owner != registry.key
         || activation.data_len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
         || activation.key
@@ -705,17 +705,17 @@ fn authenticate_infrastructure<'info>(
             )
             .0
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if activated
         .execution_release_set_id()
-        .map_err(|_| ResolutionError::ResolutionRelease)?
+        .map_err(|_| ResolutionError::ActivationCache)?
         .to_bytes()
         != release_set
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     for (role, role_program, programdata) in [
         (ExecutionRoleV1::Core, core, core_programdata),
@@ -725,16 +725,24 @@ fn authenticate_infrastructure<'info>(
             resolution_programdata,
         ),
     ] {
-        let selected = activated
-            .role(role)
-            .map_err(|_| ResolutionError::ResolutionRelease)?;
-        if selected.release().program().to_bytes() != role_program.key.to_bytes()
-            || (role == ExecutionRoleV1::Resolution
-                && (role_program.key != program_id
-                    || selected.release().semantic_release_id().to_bytes()
-                        != RESOLUTION_CONTROLLER_RELEASE_ID_V7))
-        {
-            return Err(ResolutionError::ResolutionRelease.into());
+        let resolution_role = role == ExecutionRoleV1::Resolution;
+        let selected = activated.role(role).map_err(|_| {
+            if resolution_role {
+                ResolutionError::ResolutionRelease
+            } else {
+                ResolutionError::ActivatedRole
+            }
+        })?;
+        if resolution_role {
+            if selected.release().program().to_bytes() != role_program.key.to_bytes()
+                || role_program.key != program_id
+                || selected.release().semantic_release_id().to_bytes()
+                    != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+            {
+                return Err(ResolutionError::ResolutionRelease.into());
+            }
+        } else if selected.release().program().to_bytes() != role_program.key.to_bytes() {
+            return Err(ResolutionError::ActivatedRole.into());
         }
         selected
             .authenticate_current_deployment(cached_deployment_observation(
@@ -1207,7 +1215,7 @@ fn authenticate_reclaim_release(
     lifecycle: ProviderUpdateLifecycleV3,
 ) -> ProgramResult {
     if frame.account(7).key.to_bytes() != lifecycle.registry_program {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let expected_registry_programdata = Pubkey::find_program_address(
         &[frame.account(7).key.as_ref()],
@@ -1239,7 +1247,7 @@ fn authenticate_reclaim_release(
     let activation_data = frame
         .account(6)
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if frame.account(6).owner != frame.account(7).key
         || frame.account(6).data_len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
         || frame.account(6).key
@@ -1249,19 +1257,22 @@ fn authenticate_reclaim_release(
             )
             .0
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let selected = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     if activated
         .execution_release_set_id()
-        .map_err(|_| ResolutionError::ResolutionRelease)?
+        .map_err(|_| ResolutionError::ActivationCache)?
         .to_bytes()
         != release_set
-        || selected.release().program().to_bytes() != program_id.to_bytes()
+    {
+        return Err(ResolutionError::ActivationCache.into());
+    }
+    if selected.release().program().to_bytes() != program_id.to_bytes()
         || selected.release().semantic_release_id().to_bytes()
             != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {

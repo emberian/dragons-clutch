@@ -330,31 +330,54 @@ fn validate_strategy_geometry(
     scalars: usize,
     identities: usize,
 ) -> Result<(), DealerEquityHotOperatorErrorV3> {
+    // THE RECORD DECIDES THE SHAPE, so it is read before the shape is measured
+    // rather than after. The suffix is eight evidence accounts, then one caller
+    // authority per output invocation, then the accelerator's output page if
+    // the transport has one -- and the page is the only account in this whole
+    // instruction besides the root that is writable.
+    let strategy = ExecutionStrategyProgramV2::decode(
+        &fixed(state, HOT_STRATEGY_RAW_ACCOUNT_V3)?.account.data,
+    )
+    .map_err(|_| DealerEquityHotOperatorErrorV3::StrategyGeometry)?;
+    let profile = strategy
+        .transport_profile()
+        .map_err(|_| DealerEquityHotOperatorErrorV3::StrategyGeometry)?;
+    let pages = match profile {
+        AcceleratorTransportProfileV2::ChunkedBankV2 => 0,
+        AcceleratorTransportProfileV2::OutputPageV3 => 1,
+        AcceleratorTransportProfileV2::ShadowTranscriptV3 => {
+            return Err(DealerEquityHotOperatorErrorV3::StrategyGeometry);
+        }
+    };
+    if strategy.disposition() != StrategyDispositionV2::AdmittedAot {
+        return Err(DealerEquityHotOperatorErrorV3::StrategyGeometry);
+    }
     let callers = admitted_caller_authority_count_v3(
+        profile,
         u32::try_from(scalars).map_err(|_| DealerEquityHotOperatorErrorV3::Arithmetic)?,
         u32::try_from(identities).map_err(|_| DealerEquityHotOperatorErrorV3::Arithmetic)?,
     )
     .map_err(|_| DealerEquityHotOperatorErrorV3::StrategyGeometry)?;
-    if state.strategy_accounts.len() != ADMITTED_AOT_FIXED_EXTRAS_V3 + callers
+    let page_index = ADMITTED_AOT_FIXED_EXTRAS_V3
+        .checked_add(callers)
+        .ok_or(DealerEquityHotOperatorErrorV3::Arithmetic)?;
+    if state.strategy_accounts.len()
+        != page_index
+            .checked_add(pages)
+            .ok_or(DealerEquityHotOperatorErrorV3::Arithmetic)?
         || state
             .strategy_accounts
             .iter()
-            .any(|account| account.is_signer || account.is_writable)
+            .enumerate()
+            .any(|(index, account)| {
+                account.is_signer || account.is_writable != (pages == 1 && index == page_index)
+            })
         || !state
             .strategy_accounts
             .get(ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3)
             .ok_or(DealerEquityHotOperatorErrorV3::StrategyGeometry)?
             .account
             .executable
-    {
-        return Err(DealerEquityHotOperatorErrorV3::StrategyGeometry);
-    }
-    let strategy = ExecutionStrategyProgramV2::decode(
-        &fixed(state, HOT_STRATEGY_RAW_ACCOUNT_V3)?.account.data,
-    )
-    .map_err(|_| DealerEquityHotOperatorErrorV3::StrategyGeometry)?;
-    if strategy.disposition() != StrategyDispositionV2::AdmittedAot
-        || strategy.transport_profile() != Ok(AcceleratorTransportProfileV2::ChunkedBankV2)
     {
         return Err(DealerEquityHotOperatorErrorV3::StrategyGeometry);
     }

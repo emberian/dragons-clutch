@@ -377,13 +377,13 @@ fn authenticate_release_and_caller(
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let cache_data = cache
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     if cache.owner != registry.key
         || activated
             .execution_release_set_id()
-            .map_err(|_| ResolutionError::ResolutionRelease)?
+            .map_err(|_| ResolutionError::ActivationCache)?
             .to_bytes()
             != request.release_set
         || Pubkey::find_program_address(
@@ -392,17 +392,19 @@ fn authenticate_release_and_caller(
         )
         .0 != *cache.key
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let trading = activated
         .role(ExecutionRoleV1::Trading)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivatedRole)?;
     let resolution = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let caller = account(accounts, CALLER_PROGRAM)?;
-    if trading.release().program().to_bytes() != caller.key.to_bytes()
-        || resolution.release().program().to_bytes() != program_id.to_bytes()
+    if trading.release().program().to_bytes() != caller.key.to_bytes() {
+        return Err(ResolutionError::ActivatedRole.into());
+    }
+    if resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
             != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
@@ -429,11 +431,11 @@ fn authenticate_release_and_caller(
         request.manifest,
         hash(&request.encode().map_err(|_| ResolutionError::Instruction)?).to_bytes(),
     )
-    .map_err(|_| ResolutionError::ResolutionRelease)?;
+    .map_err(|_| ResolutionError::CallerAuthority)?;
     if Pubkey::find_program_address(&seeds.as_slices(), caller.key).0
         != *account(accounts, CALLER_AUTHORITY)?.key
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::CallerAuthority.into());
     }
     Ok(())
 }

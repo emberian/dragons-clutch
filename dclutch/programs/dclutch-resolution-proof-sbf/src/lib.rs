@@ -149,6 +149,48 @@ pub enum ResolutionError {
     /// means "right route, wrong moment". A reader who saw `OutputState` would
     /// go hunting a malformed account that is not there.
     SubmissionStillConsumable = 0x8017,
+    /// The account offered as this Market's activation is not the canonical
+    /// Registry-owned cache for the release set the frame names.
+    ///
+    /// Owner, executable state, width, borrow, decode, the cache's own
+    /// `execution_release_set_id`, its equality with the release set the
+    /// request or Core-effect envelope names, and the
+    /// `ACTIVATION_PDA_DOMAIN_V1` address under the Registry in the frame.
+    /// Every one of these is answered before a single role is projected, and
+    /// what they say together is "this is not the activation you named" --
+    /// which is a different accusation from "the activation named a different
+    /// program for a role", and used to be the same code as it.
+    ActivationCache = 0x8018,
+    /// The activation is canonical, and the program brought for a role OTHER
+    /// than Resolution is not the one that activation selected for it.
+    ///
+    /// Core, Trading, Claims or Custody: the role projection is missing from
+    /// the cache, or the program account standing in that slot is not the one
+    /// the release set binds. This is the conjunct a caller hits when it
+    /// executes against a release set whose roles it did not actually deploy,
+    /// and it is deliberately NOT
+    /// [`ResolutionError::ResolutionRelease`] -- that one is about this
+    /// program's own release, and a reader who cannot tell them apart cannot
+    /// tell "you brought the wrong Trading program" from "you are running the
+    /// wrong Resolution controller".
+    ActivatedRole = 0x8019,
+    /// The calling role's authority PDA is not the one the frame's own seeds
+    /// derive.
+    ///
+    /// The `CallerAuthoritySeedsV1` construction, the account the caller
+    /// offered as its authority, and the caller-program/parent-digest identity
+    /// the seeds are built from. It means the composition is unauthenticated
+    /// at the CALLER, not that any release was wrong.
+    CallerAuthority = 0x801A,
+    /// The Core-owned protocol infrastructure profile, or the Registry release
+    /// it names, did not authenticate.
+    ///
+    /// The profile's PDA, owner, width and rent exemption, its decode, the
+    /// Registry program it names, and the `ArtifactReleaseV1` reached through
+    /// it including its slot pin. This is upstream of every activation
+    /// question: it is how a frame learns WHICH Registry to believe, so a
+    /// failure here means the frame never got as far as a release set.
+    InfrastructureProfile = 0x801B,
 }
 
 impl ResolutionError {
@@ -158,7 +200,7 @@ impl ResolutionError {
     /// [`ResolutionError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 28] = [
         Self::AccountFrame,
         Self::Instruction,
         Self::OutputState,
@@ -183,6 +225,10 @@ impl ResolutionError {
         Self::SponsoredPush,
         Self::RecordStillConsumable,
         Self::SubmissionStillConsumable,
+        Self::ActivationCache,
+        Self::ActivatedRole,
+        Self::CallerAuthority,
+        Self::InfrastructureProfile,
     ];
 
     /// This refusal's position in [`ResolutionError::ALL`].
@@ -216,6 +262,10 @@ impl ResolutionError {
             Self::SponsoredPush => 21,
             Self::RecordStillConsumable => 22,
             Self::SubmissionStillConsumable => 23,
+            Self::ActivationCache => 24,
+            Self::ActivatedRole => 25,
+            Self::CallerAuthority => 26,
+            Self::InfrastructureProfile => 27,
         }
     }
 }

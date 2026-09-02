@@ -408,9 +408,9 @@ fn authenticate_release_and_caller(
         .ok_or(ResolutionError::AccountFrame)?;
     let data = cache
         .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivationCache)?;
     // Successful Core ProjectFound already authenticated this exact read-only
     // cache's Registry owner and PDA against the receipt's release-set ID.
     // Resolution re-decodes the unchanged bytes because it owns the Trading
@@ -418,23 +418,25 @@ fn authenticate_release_and_caller(
     if cache.owner != registry.key
         || activated
             .execution_release_set_id()
-            .map_err(|_| ResolutionError::ResolutionRelease)?
+            .map_err(|_| ResolutionError::ActivationCache)?
             .to_bytes()
             != receipt.release_set.to_bytes()
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::ActivationCache.into());
     }
     let trading = activated
         .role(ExecutionRoleV1::Trading)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+        .map_err(|_| ResolutionError::ActivatedRole)?;
     let resolution = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let caller_program = accounts
         .get(CALLER_PROGRAM)
         .ok_or(ResolutionError::AccountFrame)?;
-    if trading.release().program().to_bytes() != caller_program.key.to_bytes()
-        || resolution.release().program().to_bytes() != program_id.to_bytes()
+    if trading.release().program().to_bytes() != caller_program.key.to_bytes() {
+        return Err(ResolutionError::ActivatedRole.into());
+    }
+    if resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
             != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
@@ -471,7 +473,7 @@ fn authenticate_release_and_caller(
         request.manifest,
         digest,
     )
-    .map_err(|_| ResolutionError::ResolutionRelease)?;
+    .map_err(|_| ResolutionError::CallerAuthority)?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), caller_program.key).0;
     if accounts
         .get(CALLER_AUTHORITY)
@@ -479,7 +481,7 @@ fn authenticate_release_and_caller(
         .key
         != &expected
     {
-        return Err(ResolutionError::ResolutionRelease.into());
+        return Err(ResolutionError::CallerAuthority.into());
     }
     Ok(())
 }

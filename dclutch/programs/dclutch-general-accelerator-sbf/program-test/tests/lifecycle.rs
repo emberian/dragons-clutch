@@ -9,12 +9,15 @@ use dclutch_capability_program_contract::{
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::admitted_v3::{
     ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
-    ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
+    ADMITTED_OUTPUT_PAGE_ACCOUNT_V3, ADMITTED_RUNTIME_ACCOUNTS_START_V3,
+    ADMITTED_TRADING_PROGRAM_ACCOUNT_V3, admitted_runtime_accounts_start_v3,
 };
 use dclutch_execution_strategy_contract::v2::{
-    ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
-    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
-    SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
+    ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3,
+    ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2, AcceleratorDispositionV2,
+    AcceleratorOutputPageAckV3, AcceleratorOutputPageRequestV3, AcceleratorRequestV2,
+    AcceleratorTransportProfileV2, AdmittedAcceleratorRequestV2, AuthenticatedScratchPageV2,
+    RequestTransportV2, SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
 use dclutch_general_accelerator_sbf::GeneralAcceleratorSbfErrorV3;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
@@ -121,6 +124,7 @@ struct RealSbfFixture {
     test: ProgramTest,
     instruction: Instruction,
     request_bytes: Vec<u8>,
+    output_page: Option<Pubkey>,
     observed_accounts: Vec<(Pubkey, Vec<u8>)>,
     /// Census label for this transaction, and whether it is recorded.
     ///
@@ -1129,8 +1133,37 @@ fn real_sbf_fixture_wire_chunk(
     action: Action,
     family_request: [u8; 64],
     bank: Vec<u8>,
-    mut runtime_data: BTreeMap<u16, Vec<u8>>,
+    runtime_data: BTreeMap<u16, Vec<u8>>,
     output_chunk: u32,
+) -> RealSbfFixture {
+    real_sbf_fixture_wire_transport(
+        width,
+        action,
+        family_request,
+        bank,
+        runtime_data,
+        OutputTransportV1::Chunk(output_chunk),
+    )
+}
+
+/// Which output transport a fixture puts on the wire.
+///
+/// The chunked variant carries the chunk this invocation answers; the page
+/// variant carries nothing, because there is one invocation and it writes the
+/// whole bank into the account the accelerator owns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputTransportV1 {
+    Chunk(u32),
+    Page,
+}
+
+fn real_sbf_fixture_wire_transport(
+    width: u32,
+    action: Action,
+    family_request: [u8; 64],
+    bank: Vec<u8>,
+    mut runtime_data: BTreeMap<u16, Vec<u8>>,
+    output: OutputTransportV1,
 ) -> RealSbfFixture {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1171,27 +1204,46 @@ fn real_sbf_fixture_wire_chunk(
 
     let bank_digest = ContentId::new(hash(&bank).to_bytes()).expect("bank digest");
     let scalar_count = general_hot_scalar_count_v3(action, width).expect("scalar count");
-    let request = AcceleratorRequestV2::new(
-        RequestTransportV2::ScratchPages,
-        content(1),
-        content(2),
-        content(3),
-        content(4),
-        bank_digest,
-        width,
-        scalar_count,
-        GENERAL_HOT_COMMON_IDENTITIES_V3,
-        output_chunk,
-        &[],
-    )
-    .expect("accelerator request");
-    let mut request_bytes = vec![0_u8; ACCELERATOR_REQUEST_HEADER_BYTES_V2];
+    let request = match output {
+        OutputTransportV1::Chunk(output_chunk) => AcceleratorRequestV2::new(
+            RequestTransportV2::ScratchPages,
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            bank_digest,
+            width,
+            scalar_count,
+            GENERAL_HOT_COMMON_IDENTITIES_V3,
+            output_chunk,
+            &[],
+        )
+        .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
+        .expect("accelerator request"),
+        OutputTransportV1::Page => AcceleratorOutputPageRequestV3::new(
+            RequestTransportV2::ScratchPages,
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            bank_digest,
+            width,
+            scalar_count,
+            GENERAL_HOT_COMMON_IDENTITIES_V3,
+            &[],
+        )
+        .map(AdmittedAcceleratorRequestV2::OutputPageV3)
+        .expect("output page request"),
+    };
+    let mut request_bytes = vec![0_u8; request.encoded_len().expect("request width")];
     request
         .encode_into(&mut request_bytes)
         .expect("request bytes");
     add_account(&mut test, REQUEST_ACCOUNT, CALLER, request_bytes.clone());
 
-    let page_count = request.chunk_count();
+    // The INPUT page count is derived from the bank width under both output
+    // transports, because input transport and output transport are orthogonal.
+    let page_count = request.input_page_count().expect("input page count");
     let mut page_keys = Vec::with_capacity(usize::try_from(page_count).expect("page count"));
     for page_index in 0..page_count {
         let page_request = AcceleratorRequestV2::new(
@@ -1247,7 +1299,11 @@ fn real_sbf_fixture_wire_chunk(
     // action with `0xC00A InstructionsSysvarAccount` and `freeze.rs`, which had
     // been made to derive all three in `ecc43002`, needed no edit at all. The
     // comment was right; it just was not applied to the line under it.
-    let mut frame = vec![DUMMY; ADMITTED_RUNTIME_ACCOUNTS_START_V3 + fixed_count];
+    // One reader for the displacement, and the page transport moves the runtime
+    // slice by exactly the page.
+    let runtime_start = admitted_runtime_accounts_start_v3(request.profile())
+        .expect("an admitted transport has a runtime coordinate");
+    let mut frame = vec![DUMMY; runtime_start + fixed_count];
     *frame
         .get_mut(ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3)
         .expect("authority frame") = authority;
@@ -1262,19 +1318,38 @@ fn real_sbf_fixture_wire_chunk(
         let key = runtime_key(action, coordinate);
         add_account(&mut test, key, CALLER, data.clone());
         *frame
-            .get_mut(ADMITTED_RUNTIME_ACCOUNTS_START_V3 + usize::from(coordinate))
+            .get_mut(runtime_start + usize::from(coordinate))
             .expect("runtime coordinate") = key;
         observed_accounts.push((key, data));
     }
+    // The accelerator's own output page, provisioned the way a client would on
+    // a live chain: an ordinary account owned by the accelerator, wide enough
+    // for the bank, created once. Not a PDA -- a program-derived address can
+    // only be created by its own program, and this one is created by whoever
+    // pays its rent. It is left ZEROED here on purpose: a page whose stale
+    // bytes are not the bank is exactly the case the digest has to bind.
+    let output_page = match output {
+        OutputTransportV1::Page => {
+            let key = Pubkey::new_from_array(hash(b"general-accelerator-output-page").to_bytes());
+            add_account(&mut test, key, ACCELERATOR, vec![0_u8; bank.len()]);
+            *frame
+                .get_mut(ADMITTED_OUTPUT_PAGE_ACCOUNT_V3)
+                .expect("output page coordinate") = key;
+            Some(key)
+        }
+        OutputTransportV1::Chunk(_) => None,
+    };
     frame.extend(page_keys);
     let mut metas = Vec::with_capacity(frame.len() + 2);
     metas.push(AccountMeta::new_readonly(REQUEST_ACCOUNT, false));
     metas.push(AccountMeta::new_readonly(ACCELERATOR, false));
-    metas.extend(
-        frame
-            .into_iter()
-            .map(|key| AccountMeta::new_readonly(key, false)),
-    );
+    metas.extend(frame.into_iter().map(|key| {
+        if output_page == Some(key) {
+            AccountMeta::new(key, false)
+        } else {
+            AccountMeta::new_readonly(key, false)
+        }
+    }));
     RealSbfFixture {
         test,
         instruction: Instruction {
@@ -1283,6 +1358,7 @@ fn real_sbf_fixture_wire_chunk(
             data: top_level_data,
         },
         request_bytes,
+        output_page,
         observed_accounts,
         // The label a census binding matches. It names the action and the
         // width and nothing else: which DISPOSITION the accelerator returned is
@@ -1512,6 +1588,121 @@ async fn execute(
         scratch_pages: request.chunk_count(),
     };
     (ack, context, evidence)
+}
+
+/// Execute one output-page invocation and read the page it wrote.
+///
+/// The acknowledgement is a header and nothing else, so the candidate is not in
+/// it: it is in the account, and what comes back binds those bytes. This helper
+/// checks the same conjunct common Trading checks after its CPI -- the page's
+/// bytes hash to the digest the producer-tagged acknowledgement carried -- and
+/// hands the caller the page so a test can read the candidate out of it.
+async fn execute_output_page(
+    fixture: RealSbfFixture,
+) -> (AcceleratorOutputPageAckV3, Vec<u8>, ExecutionEvidence) {
+    let AdmittedAcceleratorRequestV2::OutputPageV3(request) =
+        AdmittedAcceleratorRequestV2::decode(&fixture.request_bytes).expect("request decode")
+    else {
+        panic!("this fixture is not on the output-page transport");
+    };
+    let (_, family_request) =
+        HotExecutionEnvelopeV3::split_instruction(&fixture.instruction.data).expect("Hot request");
+    let controller = decode_general_request_v3(family_request).expect("controller request");
+    let request_digest =
+        ContentId::new(hash(&fixture.request_bytes).to_bytes()).expect("request digest");
+    let page_key = fixture.output_page.expect("output page fixture");
+    let observed = fixture.observed_accounts;
+    let mut context = fixture.test.start_with_context().await;
+    let before = context
+        .banks_client
+        .get_account(page_key)
+        .await
+        .expect("page query")
+        .expect("page account");
+    assert!(
+        before.data.iter().all(|byte| *byte == 0),
+        "the page starts as stale zeroes, so a candidate found in it was written here"
+    );
+    let (processed, instruction_accounts, packet_bytes) = submit(
+        &mut context,
+        fixture.instruction,
+        &fixture.label,
+        false,
+        TopLevelPreludeV3::HeapThenLimit,
+    )
+    .await
+    .expect("ProgramTest processing");
+    assert!(
+        processed.result.is_ok(),
+        "authenticated output-page transport must execute: {:?}",
+        processed.result
+    );
+    let logs = processed
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.log_messages.clone())
+        .unwrap_or_default();
+    let invocations = logs
+        .iter()
+        .filter(|line| line.starts_with(&format!("Program {ACCELERATOR} invoke [")))
+        .count();
+    assert_eq!(
+        invocations, 1,
+        "the output-page transport is one invocation whatever the bank costs"
+    );
+    let metadata = processed.metadata.expect("transaction metadata");
+    let compute_units = metadata.compute_units_consumed;
+    let returned = metadata.return_data.expect("typed accelerator ack");
+    assert_eq!(returned.program_id, CALLER);
+    assert_eq!(
+        returned.data.len(),
+        ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3,
+        "a whole-bank acknowledgement is a header and nothing else"
+    );
+    let ack = AcceleratorOutputPageAckV3::decode(&returned.data).expect("ack decode");
+    ack.validate_request(request, request_digest)
+        .expect("ack/request binding");
+    let page = context
+        .banks_client
+        .get_account(page_key)
+        .await
+        .expect("page query")
+        .expect("page account");
+    for (key, before) in observed {
+        let after = context
+            .banks_client
+            .get_account(key)
+            .await
+            .expect("runtime query")
+            .expect("runtime account");
+        assert_eq!(
+            after.data, before,
+            "the runtime observations stay readonly: the page is the ONE account this \
+             accelerator writes"
+        );
+    }
+    if ack.disposition() == AcceleratorDispositionV2::Accepted {
+        let width = usize::try_from(ack.total_bank_bytes()).expect("bank width");
+        let written = page.data.get(..width).expect("page holds the whole bank");
+        // THE BINDING, checked the way Trading checks it: the page's bytes hash
+        // to the digest the runtime attributed to the accelerator.
+        assert_eq!(
+            ContentId::new(hash(written).to_bytes()).expect("page digest"),
+            ack.total_bank_digest().expect("accepted digest"),
+            "the page is the digest's preimage"
+        );
+    }
+    let evidence = ExecutionEvidence {
+        action: controller.action,
+        outcome_count: request.tail_count(),
+        compute_units,
+        instruction_accounts,
+        packet_bytes,
+        scratch_pages: AdmittedAcceleratorRequestV2::OutputPageV3(request)
+            .input_page_count()
+            .expect("input page count"),
+    };
+    (ack, page.data, evidence)
 }
 
 fn read_payload_scalar(payload: &[u8], coordinate: u32) -> u64 {
@@ -2510,6 +2701,132 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
             BEST_CANDIDATE
         );
     }
+}
+
+/// OpenBatch at N=2 through ONE CPI, with the candidate in the accelerator's
+/// own account instead of in four acknowledgements.
+///
+/// The bank is 2,744 bytes at N=2 (163 scalars, 45 identities), which is four
+/// 880-byte chunks -- four invocations, each of which re-authenticates the
+/// whole frame and re-evaluates the whole family to slice 880 bytes out of the
+/// same answer. This is the same fixture, the same runtime accounts and the
+/// same family request, on the transport that removes the bound rather than
+/// the work.
+///
+/// What it proves is stated three ways and none of them is the disposition
+/// alone: the accelerator appears exactly ONCE in the log, the acknowledgement
+/// is exactly the 144-byte header with no payload in it, and the page's bytes
+/// hash to the digest that header carries -- which is the conjunct common
+/// Trading checks after its own CPI. The page starts zeroed, so a candidate
+/// found in it was written by this invocation.
+#[tokio::test]
+async fn real_sbf_open_batch_at_width_two_writes_one_page_through_one_cpi() {
+    let width = 2_u32;
+    let config_id = hash(&config(width)).to_bytes();
+    let root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
+    let mut root_data = vec![0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + GENERAL_ROOT_BYTES_V2];
+    root_data[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(&root.to_bytes());
+    let mut runtime = BTreeMap::new();
+    runtime.insert(0, root_data);
+    runtime.insert(1, config(width));
+    runtime.insert(2, PRODUCT_RECORD.to_vec());
+    let mut preflight_root = root;
+    let preflight_revision = preflight_root.revision();
+    let batch_id = GeneralBatchV1::open(
+        &mut preflight_root,
+        GeneralBatchOpeningV1 {
+            outcome_count: width,
+            sequence: root.next_batch_sequence(),
+            generation: 9,
+            market: [3; 32],
+            product_id: product_id(),
+            config_id,
+            price_scale: u64::from(width),
+            collection_close_slot: 11,
+            settlement_close_slot: 31,
+            max_orders: 4,
+        },
+        preflight_revision,
+        1,
+    )
+    .expect("preflight batch")
+    .batch_id();
+    let controller = ControllerRequestV3 {
+        action: ControllerActionV3::OpenBatch,
+        expected_revision: root.revision(),
+        subject_id: Some(batch_id),
+        page_index: 0,
+        execution_index: 0,
+        manifest_order_index: 0,
+        primary_state_bump: 1,
+        secondary_state_bump: 0,
+        result_state_bump: 0,
+    };
+    let bank = open_batch_bank(width, root);
+    let bank_len = bank.len();
+
+    // The same request on the chunked transport, for the number this replaces.
+    let (chunked_ack, _, chunked_evidence) = execute(real_sbf_fixture_v3(
+        width,
+        controller,
+        bank.clone(),
+        runtime.clone(),
+    ))
+    .await;
+    assert_eq!(
+        chunked_ack.disposition(),
+        AcceleratorDispositionV2::Accepted
+    );
+    let chunk_count = chunked_ack.chunk_count();
+    assert!(
+        chunk_count > 1,
+        "N=2 is a multi-chunk bank on the chunked transport, or this comparison is vacuous"
+    );
+
+    let (ack, page, evidence) = execute_output_page(real_sbf_fixture_wire_transport(
+        width,
+        Action::OpenBatch,
+        controller.to_bytes().expect("controller request"),
+        bank,
+        runtime,
+        OutputTransportV1::Page,
+    ))
+    .await;
+    assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+    assert_eq!(
+        usize::try_from(ack.total_bank_bytes()).expect("bank width"),
+        bank_len
+    );
+
+    // The candidate is in the page, and it is the SAME candidate: the chunked
+    // acknowledgement's chunk zero is a prefix of what the page holds. Two
+    // transports, one answer, which is the claim a transport change has to
+    // make and the one a disposition alone does not.
+    let payload = chunked_ack.payload();
+    assert_eq!(
+        page.get(..payload.len()).expect("page holds chunk zero"),
+        payload,
+        "the page and the first chunk are the same candidate bytes"
+    );
+    assert_eq!(read_payload_scalar(&page, scalar::ACTION), 7);
+    assert_eq!(read_payload_scalar(&page, scalar::ROOT_POST_REVISION), 2);
+    assert_eq!(
+        read_payload_scalar(&page, scalar::ROOT_POST_BATCH_SEQUENCE),
+        1
+    );
+    assert_eq!(
+        read_payload_scalar(&page, scalar::ROOT_POST_OPEN_BATCHES),
+        1
+    );
+
+    eprintln!(
+        "general-output-page action=OpenBatch N={width} bank={bank_len} \
+         chunked_chunks={chunk_count} chunked_cu={} page_cu={} accounts={} legacy_packet={}",
+        chunked_evidence.compute_units,
+        evidence.compute_units,
+        evidence.instruction_accounts,
+        evidence.packet_bytes,
+    );
 }
 
 #[tokio::test]
