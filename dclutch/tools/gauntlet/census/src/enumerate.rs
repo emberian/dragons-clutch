@@ -15,17 +15,20 @@ use proc_macro2::Span;
 use quote_min::{render, render_path};
 use syn::{Attribute, BinOp, Block, Expr, File, Item, ItemEnum, Pat, Stmt, spanned::Spanned};
 
-use crate::model::{
-    Entrypoint, Inventory, ProgramSurface, Provenance, Refusal, Route, RouteKind, Selector,
-    Unclassified,
+use crate::{
+    model::{
+        Entrypoint, Inventory, ProgramSurface, Provenance, Refusal, Route, RouteKind, Selector,
+        Unclassified,
+    },
+    phases::{AdmissionIndex, GuardMap},
 };
 
 /// Minimal token rendering. `syn`'s `printing` feature gives us
 /// `ToTokens`; we only ever need a one-line human-readable form.
-mod quote_min {
+pub(crate) mod quote_min {
     use quote::ToTokens;
 
-    pub fn render<T: ToTokens>(value: &T) -> String {
+    pub(crate) fn render<T: ToTokens>(value: &T) -> String {
         let text = value.to_token_stream().to_string();
         let mut collapsed = String::with_capacity(text.len());
         let mut last_space = false;
@@ -47,7 +50,7 @@ mod quote_min {
     /// identities must be stable and readable, and — more importantly — the
     /// selector classifier matches on path segments, so `a :: is_x` must
     /// normalise to `a::is_x` or a recogniser is silently missed.
-    pub fn render_path<T: ToTokens>(value: &T) -> String {
+    pub(crate) fn render_path<T: ToTokens>(value: &T) -> String {
         let joined = render(value)
             .replace(" :: ", "::")
             .replace(":: ", "::")
@@ -227,22 +230,22 @@ pub(crate) fn rust_sources(base: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(found)
 }
 
-fn relative(root: &Path, path: &Path) -> String {
+pub(crate) fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
 }
 
-fn at(relative: &str, span: Span) -> Provenance {
+pub(crate) fn at(relative: &str, span: Span) -> Provenance {
     format!("{relative}:{}", span.start().line)
 }
 
 /// One function the enumerator can follow into, keyed by module path.
-struct FunctionFact {
-    module: String,
-    name: String,
-    block: Block,
+pub(crate) struct FunctionFact {
+    pub(crate) module: String,
+    pub(crate) name: String,
+    pub(crate) block: Block,
     relative: String,
     /// The function exists only when compiling for the SBF target.
     ///
@@ -255,7 +258,7 @@ struct FunctionFact {
 }
 
 /// A parsed program crate: every function in it, indexed for call resolution.
-struct CrateIndex {
+pub(crate) struct CrateIndex {
     functions: Vec<FunctionFact>,
 }
 
@@ -263,7 +266,7 @@ impl CrateIndex {
     /// Resolve `a::b::name` (or bare `name`) to a function in this crate.
     /// A path whose module qualifier does not match anything is unresolved,
     /// which the caller reports rather than guessing at.
-    fn resolve(&self, path: &str) -> Option<&FunctionFact> {
+    pub(crate) fn resolve(&self, path: &str) -> Option<&FunctionFact> {
         let segments: Vec<&str> = path.split("::").collect();
         let name = *segments.last()?;
         let qualifier = if segments.len() >= 2 {
@@ -289,6 +292,32 @@ impl CrateIndex {
             return None;
         }
         Some(first)
+    }
+
+    /// Resolve a call written inside `module`, preferring that module's own
+    /// item.
+    ///
+    /// A bare `authenticate_market(..)` in `retire_v1` names `retire_v1`'s
+    /// function, not `fixed_role`'s and not the handoff module's, and Rust
+    /// resolves it that way. [`CrateIndex::resolve`] cannot: three functions
+    /// share the name, so it refuses to guess -- correctly, for a dispatch
+    /// forward it is asked to follow from nowhere in particular. A guard scan
+    /// walking a known function's body does know where it stands, so it can
+    /// answer what the compiler answers. Falls back to the cautious rule when
+    /// the caller's own module has no such item.
+    pub(crate) fn resolve_from(&self, module: &str, path: &str) -> Option<&FunctionFact> {
+        if !path.contains("::") {
+            let mut local = self
+                .functions
+                .iter()
+                .filter(|fact| fact.name == path && fact.module == module);
+            if let Some(first) = local.next()
+                && local.next().is_none()
+            {
+                return Some(first);
+            }
+        }
+        self.resolve(path)
     }
 }
 
@@ -575,7 +604,9 @@ impl DispatchWalk<'_> {
                     if let Some(init) = &local.init
                         && local_initialiser_dispatches(&init.expr)
                     {
-                        self.walk_expr(&init.expr, relative, context, depth, parent, inherited, cfg);
+                        self.walk_expr(
+                            &init.expr, relative, context, depth, parent, inherited, cfg,
+                        );
                     }
                 }
                 Stmt::Item(_) | Stmt::Macro(_) => {}
@@ -833,6 +864,7 @@ impl DispatchWalk<'_> {
             selectors: Vec::new(),
             provenance: format!("{}:1", dispatch.relative),
             cfg: Vec::new(),
+            admissible_prestates: Vec::new(),
         });
     }
 
@@ -875,6 +907,7 @@ impl DispatchWalk<'_> {
             selectors: selectors.to_vec(),
             provenance: at(relative, span),
             cfg: cfg.to_vec(),
+            admissible_prestates: Vec::new(),
         });
     }
 
@@ -934,6 +967,7 @@ impl DispatchWalk<'_> {
             selectors: selectors.to_vec(),
             provenance: at(relative, span),
             cfg: cfg.to_vec(),
+            admissible_prestates: Vec::new(),
         });
         id
     }
@@ -1290,6 +1324,7 @@ pub fn enumerate(
     root: &Path,
     targets: &[ProgramTarget],
     constants: &ConstantIndex,
+    admissions: &AdmissionIndex,
     source_revision: Option<String>,
 ) -> Result<Inventory, String> {
     let mut programs = Vec::new();
@@ -1396,7 +1431,30 @@ pub fn enumerate(
 
         let mut routes = walk.routes;
         routes.sort_by(|left, right| left.id.cmp(&right.id));
+
+        // A route's phase gate is read from the constants its OWN guards check
+        // against, following its handler's calls and stopping at the next
+        // route boundary. A route the walk finds no constant for carries none,
+        // and the census says exactly that rather than inferring one.
+        let mut guards = GuardMap::new(admissions, &index, &routes);
+        let attributed: Vec<Vec<crate::model::PhaseAdmission>> =
+            routes.iter().map(|route| guards.for_route(route)).collect();
+        for (route, admissible) in routes.iter_mut().zip(attributed) {
+            route.admissible_prestates = admissible;
+        }
+
         let mut unclassified = walk.unclassified;
+        // A constant of the admission type written in a shape the reader does
+        // not understand is reported here rather than dropped: an enumerator
+        // that silently under-counts is the mirror failure one level up.
+        let package_prefix = format!("programs/{}/", target.package);
+        unclassified.extend(
+            admissions
+                .unreadable
+                .iter()
+                .filter(|entry| entry.provenance.starts_with(&package_prefix))
+                .cloned(),
+        );
         unclassified.sort_by(|left, right| left.provenance.cmp(&right.provenance));
 
         programs.push(ProgramSurface {

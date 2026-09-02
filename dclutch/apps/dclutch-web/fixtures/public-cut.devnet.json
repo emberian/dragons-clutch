@@ -1,7 +1,7 @@
 {
   "schema": "dclutch-public-cut-v1",
   "cluster": "devnet",
-  "market": "EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1",
+  "market": null,
   "activity": {
     "found": null,
     "trade": null,

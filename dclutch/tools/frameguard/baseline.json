@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "d6c9a7b147b7a22f095d8ab270cc4204312972a3",
+  "commit": "271ce0edb87255b1d13de016bdc4e7e53e48bf01",
   "link_count": 12,
   "links": [
     {
@@ -4420,7 +4420,7 @@
       "package": "dclutch-product-runtime-v2-sbf"
     },
     {
-      "frame_count": 60,
+      "frame_count": 61,
       "functions": [
         {
           "frames_bytes": [
@@ -4611,7 +4611,7 @@
         },
         {
           "frames_bytes": [
-            1152
+            1216
           ],
           "symbol": "_ZN20dclutch_registry_sbf9record_v116process_finalize17h<hash>E"
         },
@@ -4656,6 +4656,12 @@
             256
           ],
           "symbol": "_ZN20dclutch_registry_sbf9record_v134require_canonical_record_addresses17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1088
+          ],
+          "symbol": "_ZN20dclutch_registry_sbf9record_v138observe_artifact_release_deployment_v117h<hash>E"
         },
         {
           "frames_bytes": [

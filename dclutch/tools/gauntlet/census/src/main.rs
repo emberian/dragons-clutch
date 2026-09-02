@@ -22,6 +22,7 @@ mod enumerate;
 mod ledger;
 mod magics;
 mod model;
+mod phases;
 mod preimages;
 mod report;
 
@@ -261,6 +262,12 @@ fn command_inventory(options: &Options) -> Result<(), String> {
 
     eprintln!("census: indexing constants under {}", root_path.display());
     let constants = enumerate::index_constants(&root_path)?;
+    let admissions = phases::index_admissions(&root_path)?;
+    eprintln!(
+        "census: {} admissible-prestate constants, {} unreadable",
+        admissions.len(),
+        admissions.unreadable.len()
+    );
     let targets: Vec<enumerate::ProgramTarget> = TARGETS
         .iter()
         .filter(|(package, _)| present.iter().any(|found| found == package))
@@ -274,6 +281,7 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         &root_path,
         &targets,
         &constants,
+        &admissions,
         options.get("revision").cloned(),
     )?;
 
@@ -292,8 +300,18 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         .iter()
         .map(|program| program.unclassified.len())
         .sum();
+    let gated: usize = inventory
+        .programs
+        .iter()
+        .flat_map(|program| &program.routes)
+        .filter(|route| !route.admissible_prestates.is_empty())
+        .count();
     eprintln!(
         "census: {routes} routes, {refusals} refusal codes, {unclassified} unclassified positions"
+    );
+    eprintln!(
+        "census: {gated} routes carry a named phase gate, {} carry none",
+        routes.saturating_sub(gated)
     );
 
     let mut bytes = serde_json::to_vec_pretty(&inventory)

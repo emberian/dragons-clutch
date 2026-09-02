@@ -36,6 +36,17 @@ const report = (line: string) => {
 };
 
 describe('live devnet Direct trade spine', () => {
+  /*
+    A SUITE THAT REGISTERS NOTHING IS NOT A SKIPPED SUITE, it is a file that
+    fails to collect -- which is how this case behaved the moment the cut went
+    pending between cohorts, reported as a red file with no failing test in it.
+    "Failed" and "never ran" are different numbers and a suite has to be able to
+    say which one it is, so the absence of a featured market registers an
+    explicitly skipped case that names the reason.
+  */
+  if (FEATURED === null) {
+    it.skip('has no featured market to inspect: the public cut is pending between cohorts', () => {});
+  }
   const featured = FEATURED === null ? [] : [Object.freeze({ name: 'the featured market', address: FEATURED })];
   for (const market of featured) {
     live(`reaches inspection for ${market.name} instead of refusing its descriptor`, async () => {

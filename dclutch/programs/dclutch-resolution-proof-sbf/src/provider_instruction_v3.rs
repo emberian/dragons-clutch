@@ -11,9 +11,16 @@ use core::cell::Ref;
 use alloc::boxed::Box;
 
 use dclutch_capability_program_contract::{
-    set_v1::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1, CapabilityProgramSetV1},
-    v3::{CapabilityProgramV3, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V3},
+    set_v2::{
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
+        CapabilityProgramSetV2,
+    },
+    v4::{
+        CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
+        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    },
 };
+use dclutch_core_contract::ContentId as CapabilityContentId;
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, Readiness as CoreReadiness,
 };
@@ -134,7 +141,7 @@ pub(crate) fn process_provider_resolution_v3(
     let rent = authenticate_rent(frame.rent())?;
     let clock = authenticate_clock(frame.clock())?;
     let market = authenticate_market_and_infrastructure(program_id, &request, frame, &rent)?;
-    authenticate_activation_and_caller(program_id, &request, request_bytes, frame)?;
+    authenticate_activation_and_caller(program_id, &request, frame)?;
     let source_records = boxed_source_records(&request, frame, &rent)?;
     let product_runtime = boxed_product_runtime(&request, frame, &rent)?;
     if market.identity.product_record.to_bytes() != request.product_record
@@ -577,7 +584,6 @@ fn authenticate_market_and_infrastructure(
 fn authenticate_activation_and_caller(
     program_id: &Pubkey,
     request: &ProviderExecutionRequestV3,
-    request_bytes: &[u8],
     frame: ProviderFrameV3<'_, '_>,
 ) -> ProgramResult {
     let activation_data = frame
@@ -679,55 +685,123 @@ fn authenticate_activation_and_caller(
         return Err(ResolutionError::CallerAuthority.into());
     }
     if request.caller == ProviderCallerV3::Trading {
-        let set_data = frame
-            .account(37)
-            .try_borrow_data()
-            .map_err(|_| ResolutionError::FinalizedRecord)?;
-        authenticate_record(
+        authenticate_trading_capability_records(
             frame.registry_program().key,
             frame.account(37),
             frame.account(38),
-            &authenticate_rent(frame.rent())?,
-            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1,
-            request.capability_program_set,
-            &set_data,
-            set_data.len(),
-        )?;
-        let set = CapabilityProgramSetV1::decode_selected(
-            request.capability_program_set,
-            hash(&set_data).to_bytes(),
-            &set_data,
-        )
-        .map_err(|_| ResolutionError::FinalizedRecord)?;
-        if set
-            .select(request_bytes)
-            .map_err(|_| ResolutionError::FinalizedRecord)?
-            .to_bytes()
-            != request.selected_capability_program
-        {
-            return Err(ResolutionError::FinalizedRecord.into());
-        }
-        let descriptor_data = frame
-            .account(39)
-            .try_borrow_data()
-            .map_err(|_| ResolutionError::FinalizedRecord)?;
-        authenticate_record(
-            frame.registry_program().key,
             frame.account(39),
             frame.account(40),
             &authenticate_rent(frame.rent())?,
-            CAPABILITY_PROGRAM_SCHEMA_ID_V3,
-            request.selected_capability_program,
-            &descriptor_data,
-            dclutch_capability_program_contract::v3::CAPABILITY_PROGRAM_V3_BYTES,
+            request,
         )?;
-        let descriptor = CapabilityProgramV3::decode(&descriptor_data)
-            .map_err(|_| ResolutionError::FinalizedRecord)?;
-        if descriptor.request_schema().to_bytes() != PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3 {
-            return Err(ResolutionError::FinalizedRecord.into());
-        }
     }
     Ok(())
+}
+
+/// Authenticate the two Registry records a Trading caller binds: the program
+/// set its Market selected, and the capability descriptor the request names.
+///
+/// The schemas are not a choice made here. `ProviderCallerV3::Trading` has
+/// exactly one producer in the protocol -- `resolution_composition_v3` in the
+/// Trading program, reachable only from common Hot -- and the values it puts in
+/// `capability_program_set` and `selected_capability_program` are the ones
+/// common Hot itself authenticated: a set under
+/// `CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2` and a descriptor under
+/// `v4::SCHEMA_RELEASE_ID`. Authenticating them under any other schema is not a
+/// stricter check, it is an unsatisfiable one: the schema is a SEED of the
+/// finalized record's own address, and the descriptor's expected width is
+/// joined to a digest of bytes that are 600 wide.
+///
+/// What this route can prove about the selection, and what it cannot. Common
+/// Hot chooses the entry by reading the set's selector out of the FAMILY
+/// request; that byte string is not in this frame and never will be -- only its
+/// digest is, as `parent_request_digest`. So the strongest satisfiable
+/// statement here is MEMBERSHIP: the descriptor the request names is one this
+/// authenticated set admits, under the schema this route decodes. Which entry
+/// selected it is Trading's conjunct, bound to this request by the parent
+/// digest the caller-authority seeds already carry.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_trading_capability_records(
+    registry: &Pubkey,
+    set_raw: &AccountInfo<'_>,
+    set_staging: &AccountInfo<'_>,
+    descriptor_raw: &AccountInfo<'_>,
+    descriptor_staging: &AccountInfo<'_>,
+    rent: &Rent,
+    request: &ProviderExecutionRequestV3,
+) -> ProgramResult {
+    let set_data = set_raw
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        set_raw,
+        set_staging,
+        rent,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        request.capability_program_set,
+        &set_data,
+        set_data.len(),
+    )?;
+    let set = CapabilityProgramSetV2::decode_selected(
+        request.capability_program_set,
+        hash(&set_data).to_bytes(),
+        &set_data,
+    )
+    .map_err(|_| ResolutionError::FinalizedRecord)?;
+    let admitted = CapabilityDescriptorReferenceV2::new(
+        CapabilityContentId::new(CAPABILITY_PROGRAM_SCHEMA_ID_V4)
+            .map_err(|_| ResolutionError::FinalizedRecord)?,
+        CapabilityContentId::new(request.selected_capability_program)
+            .map_err(|_| ResolutionError::FinalizedRecord)?,
+    );
+    let mut index = 0_u16;
+    let mut member = false;
+    while index < set.entry_count() {
+        member |= set
+            .entry(index)
+            .map_err(|_| ResolutionError::FinalizedRecord)?
+            .descriptor()
+            == admitted;
+        index = index
+            .checked_add(1)
+            .ok_or(ResolutionError::FinalizedRecord)?;
+    }
+    if !member {
+        return Err(ResolutionError::FinalizedRecord.into());
+    }
+    drop(set_data);
+    let descriptor_data = descriptor_raw
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        descriptor_raw,
+        descriptor_staging,
+        rent,
+        CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        request.selected_capability_program,
+        &descriptor_data,
+        CAPABILITY_PROGRAM_V4_BYTES,
+    )?;
+    if boxed_capability_program_v4(&descriptor_data)?
+        .request_schema()
+        .to_bytes()
+        != PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3
+    {
+        return Err(ResolutionError::FinalizedRecord.into());
+    }
+    Ok(())
+}
+
+/// Out of line and boxed: the decoded descriptor is 600 bytes wide, and this
+/// route's callers are already the deepest frames in the program.
+#[inline(never)]
+fn boxed_capability_program_v4(bytes: &[u8]) -> Result<Box<CapabilityProgramV4>, ProgramError> {
+    CapabilityProgramV4::decode(bytes)
+        .map(Box::new)
+        .map_err(|_| ResolutionError::FinalizedRecord.into())
 }
 
 const fn caller_executes_role(caller: ProviderCallerV3, role: ExecutionRoleV1) -> bool {
@@ -1113,6 +1187,13 @@ fn initialize_certificate<'info>(
 mod tests {
     use std::{boxed::Box, vec::Vec};
 
+    use dclutch_capability_program_contract::{
+        set_v2::{
+            CapabilityProgramSetEntryV2, SelectorWidthV2, encode_program_set_v2,
+            encoded_program_set_bytes_v2,
+        },
+        v4::{ArtifactReferenceV4, CapabilityArtifactsV4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5},
+    };
     use dclutch_resolution_codec::PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3;
     use dclutch_source_contract::{
         PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
@@ -1196,6 +1277,265 @@ mod tests {
             )),
             "the infrastructure profile's finalized ArtifactRelease identity remains authoritative",
         );
+    }
+
+    fn capability_content(tag: u8) -> CapabilityContentId {
+        CapabilityContentId::new([tag; 32]).expect("nonzero fixture identity")
+    }
+
+    /// One exact V4 descriptor, built the way every family's bundle builds one.
+    fn trading_descriptor(request_schema: [u8; 32]) -> [u8; CAPABILITY_PROGRAM_V4_BYTES] {
+        CapabilityProgramV4::new(
+            capability_content(0x11),
+            capability_content(0x12),
+            CapabilityContentId::new(request_schema).expect("request schema"),
+            capability_content(0x14),
+            capability_content(0x15),
+            capability_content(0x16),
+            CapabilityArtifactsV4 {
+                account_profile: ArtifactReferenceV4::new(
+                    capability_content(0x21),
+                    capability_content(0x22),
+                ),
+                request_profile: ArtifactReferenceV4::new(
+                    capability_content(0x23),
+                    capability_content(0x24),
+                ),
+                lifecycle: ArtifactReferenceV4::new(
+                    CapabilityContentId::new(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5)
+                        .expect("production lifecycle schema"),
+                    capability_content(0x26),
+                ),
+                strategy: ArtifactReferenceV4::new(
+                    capability_content(0x27),
+                    capability_content(0x28),
+                ),
+                transition: ArtifactReferenceV4::new(
+                    capability_content(0x29),
+                    capability_content(0x2a),
+                ),
+                effect: ArtifactReferenceV4::new(
+                    capability_content(0x2b),
+                    capability_content(0x2c),
+                ),
+            },
+            64,
+        )
+        .expect("V4 descriptor")
+        .encode()
+    }
+
+    fn trading_program_set(entries: &[CapabilityProgramSetEntryV2]) -> Vec<u8> {
+        let mut bytes =
+            std::vec![0_u8; encoded_program_set_bytes_v2(entries.len()).expect("set width")];
+        // Offset 8 of the FAMILY request, four bytes: the shape every family's
+        // own set uses. Nothing in this frame can read that request, which is
+        // exactly why this route proves membership rather than selection.
+        encode_program_set_v2(8, SelectorWidthV2::U32, entries, &mut bytes).expect("encoded set");
+        bytes
+    }
+
+    fn trading_request(
+        capability_program_set: [u8; 32],
+        selected_capability_program: [u8; 32],
+    ) -> ProviderExecutionRequestV3 {
+        ProviderExecutionRequestV3 {
+            caller: ProviderCallerV3::Trading,
+            generation: 7,
+            terminal_sequence: 1,
+            market: [41; 32],
+            source_state: [42; 32],
+            certificate_account: [43; 32],
+            source_material: [44; 32],
+            source_spec: [45; 32],
+            product_record: [46; 32],
+            result_domain: [47; 32],
+            provider_release: [48; 32],
+            update_account: [49; 32],
+            expected_update_digest: [50; 32],
+            provider_submitter: [51; 32],
+            resolver: [52; 32],
+            caller_program: [53; 32],
+            release_set: [54; 32],
+            capability_program_set,
+            selected_capability_program,
+            parent_request_digest: [55; 32],
+            post_params_body_digest: [56; 32],
+        }
+    }
+
+    /// Place one finalized record at the Registry address its schema and digest
+    /// derive, and return the raw/staging pair.
+    fn finalized_record(
+        registry: &Pubkey,
+        schema: [u8; 32],
+        bytes: &[u8],
+    ) -> (AccountInfo<'static>, AccountInfo<'static>) {
+        let digest = hash(bytes).to_bytes();
+        let raw_key =
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry).0;
+        let staging_key =
+            Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry)
+                .0;
+        (
+            test_account(
+                raw_key,
+                Rent::default().minimum_balance(bytes.len()),
+                Vec::from(bytes),
+                *registry,
+            ),
+            test_account(staging_key, 0, Vec::new(), system_program::ID),
+        )
+    }
+
+    /// The Trading caller's two record conjuncts, on the exact artifacts common
+    /// Hot authenticates before it composes a Resolution invocation.
+    ///
+    /// This route had no test and no reachable caller for six days, and in that
+    /// window it went unsatisfiable: `017033a2` wrote it against
+    /// `set_v1`/`v3::CapabilityProgramV3` at 02:09 on 2026-08-26, `f99b5334`
+    /// introduced the schema-bound successors at 07:02, and `50ce684b` moved
+    /// Trading's own selection onto them at 07:45 without it. Both halves of
+    /// the old check were then impossible, and the second one provably so: the
+    /// digest a Trading caller carries is `hash` of a 600-byte descriptor, and
+    /// the check joined it to an expected width of 408.
+    #[test]
+    fn a_trading_caller_authenticates_the_schema_bound_records_common_hot_produces() {
+        let registry = Pubkey::new_from_array([0xd7; 32]);
+        let rent = Rent::default();
+        let descriptor_bytes = trading_descriptor(PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3);
+        let descriptor_id = hash(&descriptor_bytes).to_bytes();
+        let descriptor_schema =
+            CapabilityContentId::new(CAPABILITY_PROGRAM_SCHEMA_ID_V4).expect("V4 schema");
+        let set_bytes = trading_program_set(&[
+            CapabilityProgramSetEntryV2::new(
+                3,
+                CapabilityDescriptorReferenceV2::new(descriptor_schema, capability_content(0x31)),
+            ),
+            CapabilityProgramSetEntryV2::new(
+                9,
+                CapabilityDescriptorReferenceV2::new(
+                    descriptor_schema,
+                    CapabilityContentId::new(descriptor_id).expect("descriptor identity"),
+                ),
+            ),
+        ]);
+        let set_id = hash(&set_bytes).to_bytes();
+        let (set_raw, set_staging) = finalized_record(
+            &registry,
+            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            &set_bytes,
+        );
+        let (descriptor_raw, descriptor_staging) = finalized_record(
+            &registry,
+            CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+            &descriptor_bytes,
+        );
+
+        assert_eq!(
+            authenticate_trading_capability_records(
+                &registry,
+                &set_raw,
+                &set_staging,
+                &descriptor_raw,
+                &descriptor_staging,
+                &rent,
+                &trading_request(set_id, descriptor_id),
+            ),
+            Ok(()),
+            "the exact set and descriptor common Hot authenticates are the ones this route admits",
+        );
+
+        // The membership conjunct: a descriptor this authenticated set does not
+        // admit is refused even though its own record authenticates perfectly.
+        let stranger_bytes = trading_descriptor([0x63; 32]);
+        let stranger_id = hash(&stranger_bytes).to_bytes();
+        let (stranger_raw, stranger_staging) =
+            finalized_record(&registry, CAPABILITY_PROGRAM_SCHEMA_ID_V4, &stranger_bytes);
+        assert_eq!(
+            authenticate_trading_capability_records(
+                &registry,
+                &set_raw,
+                &set_staging,
+                &stranger_raw,
+                &stranger_staging,
+                &rent,
+                &trading_request(set_id, stranger_id),
+            ),
+            Err(ProgramError::Custom(
+                ResolutionError::FinalizedRecord as u32
+            )),
+            "a descriptor outside the Market-selected set is not a Trading capability",
+        );
+
+        // The request-schema conjunct: a descriptor the set does admit, whose
+        // request schema is some other family's, is not a provider request.
+        let wrong_schema_bytes = trading_descriptor([0x64; 32]);
+        let wrong_schema_id = hash(&wrong_schema_bytes).to_bytes();
+        let wrong_schema_set = trading_program_set(&[CapabilityProgramSetEntryV2::new(
+            9,
+            CapabilityDescriptorReferenceV2::new(
+                descriptor_schema,
+                CapabilityContentId::new(wrong_schema_id).expect("descriptor identity"),
+            ),
+        )]);
+        let wrong_schema_set_id = hash(&wrong_schema_set).to_bytes();
+        let (wrong_set_raw, wrong_set_staging) = finalized_record(
+            &registry,
+            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            &wrong_schema_set,
+        );
+        let (wrong_raw, wrong_staging) = finalized_record(
+            &registry,
+            CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+            &wrong_schema_bytes,
+        );
+        assert_eq!(
+            authenticate_trading_capability_records(
+                &registry,
+                &wrong_set_raw,
+                &wrong_set_staging,
+                &wrong_raw,
+                &wrong_staging,
+                &rent,
+                &trading_request(wrong_schema_set_id, wrong_schema_id),
+            ),
+            Err(ProgramError::Custom(
+                ResolutionError::FinalizedRecord as u32
+            )),
+            "only a descriptor whose request schema is the provider request is executable here",
+        );
+    }
+
+    /// Why the superseded labels could not have been a stricter check.
+    ///
+    /// The schema is a SEED of the finalized record's address, so authenticating
+    /// the same bytes under a different schema label does not fail a comparison,
+    /// it looks at a different account entirely; and the descriptor half is
+    /// second-preimage hard, not merely wrong.
+    #[test]
+    fn the_superseded_capability_labels_address_other_accounts_entirely() {
+        let registry = Pubkey::new_from_array([0xd8; 32]);
+        let set_bytes = trading_program_set(&[CapabilityProgramSetEntryV2::new(
+            9,
+            CapabilityDescriptorReferenceV2::new(
+                CapabilityContentId::new(CAPABILITY_PROGRAM_SCHEMA_ID_V4).expect("V4 schema"),
+                capability_content(0x33),
+            ),
+        )]);
+        let digest = hash(&set_bytes).to_bytes();
+        let under = |schema: [u8; 32]| {
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0
+        };
+        assert_ne!(
+            under(CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2),
+            under(dclutch_capability_program_contract::set_v1::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1),
+        );
+        assert_eq!(
+            dclutch_capability_program_contract::v3::CAPABILITY_PROGRAM_V3_BYTES,
+            408,
+        );
+        assert_eq!(CAPABILITY_PROGRAM_V4_BYTES, 600);
     }
 
     #[test]

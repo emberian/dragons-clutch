@@ -479,9 +479,29 @@ reachable inside an entry route's request.
 
 // ---- routes.md
 
+// A route's admissible Market prestates, as the guard's own named constant
+// declares them. The census reads the constant structurally; this renders it.
+// An empty list is NOT "every phase" -- it is "no phase gate was read here" --
+// and the two must not print the same, because a client that cannot tell them
+// apart is the defect this column exists to close.
+function phaseGate(route) {
+  const gates = route.admissible_prestates ?? [];
+  if (gates.length === 0) return "no phase gate";
+  return gates
+    .map((g) => {
+      const body =
+        g.prestates && g.prestates.length > 0
+          ? g.prestates.map((s) => `${s.phase}+${s.readiness}`).join(", ")
+          : g.phases.join(", ");
+      return `\`${body}\``;
+    })
+    .join("; ");
+}
+
 {
   const sections = [];
   const neverExecuted = [];
+  let gatedRoutes = 0;
   for (const p of programs) {
     const routes = [...p.routes].sort((a, b) => (a.id < b.id ? -1 : 1));
     const rows = routes.map((r) => {
@@ -501,17 +521,22 @@ reachable inside an entry route's request.
         .join("; ");
       const st = routeStatus(r.id);
       if (st.kind === "none") neverExecuted.push(r.id);
+      if ((r.admissible_prestates ?? []).length > 0) gatedRoutes += 1;
       return [
         `\`${r.id}\``,
         r.kind,
         sel || "--",
+        phaseGate(r),
         st.text,
         `\`${r.provenance}\``,
       ];
     });
     sections.push(
       `## ${p.label}\n\n` +
-        table(["route", "kind", "selector", "status", "provenance"], rows),
+        table(
+          ["route", "kind", "selector", "phase", "status", "provenance"],
+          rows,
+        ),
     );
   }
 
@@ -560,6 +585,22 @@ stands:
 
 Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}**
 routes are in that last group.
+
+The **phase** column is the route's own guard, not a summary of one. It is
+the named \`MarketAdmissionV1\` constant the guard checks against, read out
+of the Rust that enforces it, so a reader is reading the conjunct the program
+executes. \`Founding+Ready\` is an exact prestate; a bare \`Retiring\` is a
+guard that names no readiness and so admits every one. It is a NECESSARY
+condition and never a sufficient one: an act whose prestate is excluded cannot
+succeed, and an act whose prestate is admitted still has every account,
+release and request check ahead of it.
+
+**no phase gate** means no constant was read for that route -- an authoring
+route with no Market phase to consult, a guard still written inline, or a
+route the enumerator could not follow into. It does not mean the route admits
+every phase, and a consumer that treats the two alike is repeating the defect
+this column was added to close. **${gatedRoutes}** of
+**${inventoryRouteIds.size}** routes carry one today.
 
 ` +
       sections.join("\n\n") +

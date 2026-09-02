@@ -74,6 +74,57 @@ pub struct Route {
     pub provenance: Provenance,
     /// `cfg` attributes in force on the dispatch branch, verbatim.
     pub cfg: Vec<String>,
+    /// Market prestates this route admits, read from the named constants its
+    /// own guards check against.
+    ///
+    /// Empty means NO PHASE GATE WAS FOUND, which is a different claim from
+    /// "admits every phase" and consumers must keep them apart: an authoring
+    /// route with no Market at all, a route whose guard is still written
+    /// inline, and a route the enumerator could not follow into all look the
+    /// same from here. The census says only what it read.
+    ///
+    /// More than one entry is a conjunction: every gate on the path admits, so
+    /// the route's admissible set is their intersection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub admissible_prestates: Vec<PhaseAdmission>,
+}
+
+/// One named admissible-prestate constant, as the guard declares it.
+///
+/// The constant is the check the program executes, not a description of it, so
+/// this is a reading of the protocol rather than a second author's account.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PhaseAdmission {
+    /// The constant's bare name, e.g. `OPEN_MARKET_ADMISSIBLE_PRESTATES_V1`.
+    pub constant: String,
+    /// How the constant was written.
+    pub kind: AdmissionKind,
+    /// Phase variants the constant admits, in declaration order. This is the
+    /// projection every phase-only consumer wants, and it is derived here from
+    /// the same initializer the exact pairs come from.
+    pub phases: Vec<String>,
+    /// Exact `(Phase, Readiness)` pairs, when the constant names pairs. Empty
+    /// for a constant written over phases alone, which admits every readiness.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prestates: Vec<Prestate>,
+    pub provenance: Provenance,
+}
+
+/// Whether a constant names exact prestates or whole phases.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AdmissionKind {
+    /// `MarketAdmissionV1::prestates(&[(Phase::X, Readiness::Y), ..])`.
+    Prestates,
+    /// `MarketAdmissionV1::phases(&[Phase::X, ..])` -- every readiness.
+    Phases,
+}
+
+/// One `(Phase, Readiness)` pair a constant names.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Prestate {
+    pub phase: String,
+    pub readiness: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

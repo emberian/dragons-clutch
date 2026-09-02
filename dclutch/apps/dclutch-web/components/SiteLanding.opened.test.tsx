@@ -19,6 +19,7 @@ vi.mock('@/lib/publicCutStaging', async () => {
     cluster: 'devnet',
     market: MARKET,
     activity: { found: FOUND, trade: null, resolve: null, redeem: null },
+    checkedReleases: {},
   });
   return { ...actual, PUBLIC_DEVNET_CUT_V1: cut };
 });
