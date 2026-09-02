@@ -3614,3 +3614,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   clippy at all** (Cargo.toml's deny table is enforced by a human), and **the SDK has no route-census generator or verify**.
   → CI-LINT **`(spawned)`**.
 - Cuts: `647b856c0`.
+- FRACTIONAL-V1 closed (`53d73d4ee`, `1967f8282`, `898c87f62`, `c5d2e41d6`): **SUPERSEDED — deleted as a closed cluster
+  (6,428 lines, 5 modules, 7 targets, 3 orphaned deps)**; identical seven-action space to V4 at the same discriminants; only
+  V4 is authenticated on chain and only V4 founds a market; the three actions V1 alone compiled have no handler in any
+  generation. No SBF program linked the operator (the absent signal was checked against a crate that IS linked). The
+  lifecycle fold's `Result<(), ()>` became a typed error and the file executed its own claim for the first time. Owed:
+  `dclutch-fractional-claim-contract`'s artifacts.rs now has only its own test as a consumer (second wave, named);
+  `tools/gauntlet/relayed-vertical` does not compile against today's successor sources and no tier builds it → COHORT-14 PREP.
+- Scratch: closed lanes' private directories removed twice (53 → 23 GB; 158 GiB free).
+- Cuts: `35c566e94`, `df4845c15`.

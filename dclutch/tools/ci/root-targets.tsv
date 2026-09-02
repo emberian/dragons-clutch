@@ -53,7 +53,7 @@
 # the V1 producer; FRACTIONAL-V1 then read what it was a producer FOR and found
 # the superseded generation of one family, not a second family. `actions` went
 # with them -- it drove `plan_fractional_action_v1`, the same generation, and was
-# not quarantined only because it never touched the builder. Seven rows, 4.85s
+# not quarantined only because it never touched the builder. Seven rows, 5.96s
 # of the budget, removed with 6,428 lines and zero ELF bytes.
 #
 # `lake` and ELF targets are NOT in this file. The census classifies those from
