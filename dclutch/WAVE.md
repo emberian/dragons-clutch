@@ -6413,3 +6413,92 @@ configuration: it dies there too. Neither retracts; the population needed statin
 that allocator ceiling from the forced budget's mapping, because both were 32,768
 and there was one instrument.** The grant was never honoured in that harness
 either. **Right about the allocator; wrong that 64 KiB sat mapped underneath it.**
+
+## 2026-09-01 — wall C falls and the registered creation campaign completes
+
+Behind the wall-A probe, at worktree `8553f0e8`:
+
+```
+REGSELL   368,334 CU   executes
+REGBUY  1,159,689 CU   executes -- every assertion in the file passes
+  InitializeReplay 123,796   OpenVault 141,105   delegated deposit 136,253
+```
+
+A registered Sell and a registered Buy on one bank, with the Buy creating its
+maker replay and record, opening a Custody replay and a TradingPrincipal vault,
+moving the maker's collateral into it through SPL Token, and committing exact
+root, maker-replay and record poststates with Claims conservation held. **Only
+wall A remains, and it is a missing implementation, not a gate.**
+
+### Wall C: the commit's lamport plan had no word for "a child made this"
+
+`output_lamports` is seeded from the OBSERVED prestate. The Custody replay is
+vacant then, so the plan said zero, and `commit_output_lamports_v3` wrote that
+zero back over the rent the child had just deposited — then refused its own
+postcondition on the account it had emptied. It exempted only coordinates an
+`EffectProgramV5` FUNDING ACTION names, and funding actions describe accounts
+**Trading** creates through the rent lifecycle. Registered creation is the first
+route in the protocol whose child CPI creates and funds a frame account, so
+nothing had ever needed the other exemption.
+
+The repair is structural rather than a list, and the structure was already
+there. `require_child_disjoint_from_local` walks exactly the windows a child
+invocation reaches, to prove they do not overlap the Effect's local operations.
+It now RECORDS that reach on the same pass, into the same bank that carries the
+local-mutation marks — so **the fact the commit relies on and the fact that makes
+relying on it sound cannot come to be looking at different coordinates.** The
+disjointness refusal is not relaxed by a byte; it is what makes the exemption
+sound, because a child-reached coordinate is never a local-effect target, so the
+plan for it IS its own prestate and applying it could only ever revert the child.
+The local-`TransferLamports` alternative is refused by that same check.
+
+`committed_lamports_v3` states all four arms. `Unexplained` is a guard that used
+to be ACCIDENTAL: the old walk wrote the prestate back over any unexplained
+movement and the runtime rejected the result as unbalanced — a real refusal that
+named nothing and pointed nowhere.
+
+### Two guards that compared a value to itself
+
+- **The admitted transport.** The account frame's caller-authority span is
+  carved from the EFFECT's declared bank widths, before any bank exists; the
+  transport chunks the bank it is handed. One caller authority per chunk is the
+  whole contract, and the only guard was `scalar_count != context.scalar_count`
+  where both sides are `view.scalars.len()` — the context field is assigned from
+  it twenty lines above the call. Same class as the scholar's `exposure.rs:274`.
+  `require_admitted_bank_matches_frame_v3` states the contract.
+- **The rent credit's `owner_program`.** A test demanded `Content` for an
+  "unrelated" owner and got `Ok`. Not a hole: the argument is `frame.registry`
+  at all four call sites and the function reads only its privileges — the pin
+  was removed deliberately in `686bf2e5` after being measured unsatisfiable. The
+  test asserted a property the function had given up, while **the substitution
+  that IS the attack — a credit under a foreign owner — had no test at all.**
+
+### A control that lied, and the shape of the lie
+
+A value-only change should leave an ELF byte-identical. Aliasing the admitted
+frame constants moved it, `311d22d0` → `6c45fdd0`, and that looked like the
+finding. It was not. The build is deterministic (the unmodified file rebuilt to
+`311d22d0` twice, once cold and once warm), and then a perturbation carrying
+**only twenty-one comment lines** rebuilt to `6c45fdd0` — the same hash as the
+alias. `core::panic::Location` embeds line numbers.
+
+> **ELF identity is not a valid control for any edit that changes a file's LINE
+> COUNT.** The valid control is a line-count-matched comment-only build. The
+> ledger already says a byte-identical artifact after a real change means the
+> build did not happen; this is the converse trap, and it is easier to fall for
+> because it produces a finding rather than a silence.
+
+### Also
+
+`execute_admitted_candidate_v3` published `Content` from twenty-five sites, and
+`Content` has 2,126 in this program. The three codes it needed —
+`AdmittedFrame`, `AdmittedTransport`, `AdmittedContext` — already existed, split
+out of `Content` for exactly this boundary, and it used none of them. No
+vocabulary added; the existing one reached the sites it was made for.
+
+`ProjectDataDigest` (opcode 20) lands the General lane's design: the interpreter
+still does not hash, because a digest is an adapter-supplied fact projected
+exactly as the key is. `DataDigestUnavailable` makes an unestablished digest a
+refusal rather than a zero register — proved red by making the arm read
+`unwrap_or(&[0; 32])`, which is the same defect the registered family shipped in
+its two `require_key` conjuncts.

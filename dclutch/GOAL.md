@@ -2473,3 +2473,52 @@ digest; its own unit, for a lane with `formal/` authority and budget.
 ### Lane map delta — 20:55
 
 - `a84c8bf71f714d16c` CLEANUPS — **closed.** Five landed; the sixth (`BumpHeapV1` extraction) **built, measured, discarded by its own control** — a lifted heap ceiling turned a named OOM into an unnamed access violation because the grant never arrived. Artifacts preserved under `scratchpad/h6/`; the budget-forcing question is with General. Two generated registers now stale on my side (`docs/reference/refusals.md:291` spells `HeapFrameNotGranted`; `capabilitySurfaceV1` lists the deleted codec) — regenerate from a clean worktree at HEAD when the lanes quiesce.
+
+## PARSIMONY CLOSEOUT — 2026-09-01, end of session
+
+**The attractor** — the tree this is trying to become:
+*every rule is a tool, every fact has one author, and the ledger is the commit log.*
+
+- **One adjudicated-exemption register**, implemented once — verdict required,
+  set pinned, stale entries fail — used by seams, magics, blocked routes, and
+  citations. Today: four implementations of the same three rules.
+- **One browser boundary scaffold** — digest pin, constant-name canary, post-load
+  width re-check — instantiated per compiled planner. Today: four hand-built
+  instances (admission, payout operator, payout wasm, payoff evaluator).
+- **`tools/lane.sh commit` as the only commit path.** It already exists. Today:
+  186 lines of remembered rules added to `AGENTS.md`, two of which restated it.
+- **`WAVE.md` carries only cross-lane *class* syntheses** (the instances of
+  guards-whose-two-sides-move-together; instruments catching their authors).
+  Per-defect records live in the commit and the evidence doc. Today: **+4,994
+  lines**, most of them prose retellings of lane reports that already exist as
+  commit messages and transcripts. A year of this is a write-only ledger.
+- **`GOAL.md` is the ruling queue and standing authority.** Lane maps are
+  session-scoped and belong in the scratchpad. Today: +1,488 lines doing three
+  jobs.
+- **Evidence docs are dated and never edited; a reversed verdict gets an
+  in-place addendum** (the non-price lane's §9 is the model), never a second doc.
+
+**Trajectory: the protocol is on track; the coordination layer is drifting.**
+462 commits, ~30 new refusal codes, 5 new crates — every one a convicted defect or
+a missing route, none decoration. But each finding now exists in four copies
+(commit → lane report → WAVE entry → coordinator reply), four registers implement
+one pattern, four boundaries implement one scaffold, and the rules that broke four
+times tonight were the attention-enforced ones.
+
+**The single change that most bends the curve:** stop writing per-report `WAVE.md`
+entries, and route every lane through `lane.sh commit`. Both are behaviour, not
+code. Landed tonight: the `AGENTS.md` commit prose deleted in favour of the tool
+pointer, with the one limit `--only` genuinely has (two lanes, one file).
+
+**Deletions rejected, and the invariant each one taught:**
+- `WAVE.md` history — it is history; the direction is to stop adding, not to
+  delete what lanes cite by line.
+- `ARCHITECT_SCHOLAR_2026_09_01.md` despite two reversed verdicts — a dated
+  reading is evidence of what was believed; the reversal belongs as an addendum
+  (owed: §B4's coefficient verdict and §A3's "operator wrong").
+- The lane map in this file — mid-session, eight lanes were relaunched pointing at
+  it; moving it under them would have cost more than it saves.
+
+**Threads under the attractor, for the next session:** the register library; the
+boundary scaffold; the V2 AccountProfile vocabulary's Lean model; moving the lane
+map to the scratchpad at session start rather than session end.

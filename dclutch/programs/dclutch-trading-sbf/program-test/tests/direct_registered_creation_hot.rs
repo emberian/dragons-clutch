@@ -46,29 +46,42 @@
 //! one_policy_serves_both_registered_creation_actions`. A recorded wall decays
 //! exactly like a recorded total; this one did.
 //!
-//! **Wall C, measured 2026-09-01, is the commit's lamport plan.** Behind the
-//! wall-A probe, on a `hot-cu-profile` build (so these figures are diagnostic
-//! and not comparable with the production numbers below), the registered Sell
-//! executes and the registered Buy now runs ALL THREE of its Custody children
-//! to success -- `InitializeReplay` 123,796 CU, `OpenVault` 141,105 CU, the
-//! delegated deposit 136,253 CU -- and then refuses `Commit` 0x4005 at
-//! 1,205,519 CU in `require_committed_rent_exemption_v3`, on **coordinate 20,
-//! the Custody replay: 0 lamports against 288 bytes needing 2,895,360**.
+//! **Wall C is CROSSED, and behind the wall-A probe THE CAMPAIGN COMPLETES.**
+//! It was the commit's lamport plan: `output_lamports` is seeded from the
+//! OBSERVED prestate, the Custody replay is vacant then, and
+//! `commit_output_lamports_v3` wrote that zero back over the rent the child had
+//! just deposited -- then refused its own postcondition,
+//! `require_committed_rent_exemption_v3`, on the account it had emptied.
+//! Coordinate 20, 0 lamports against 288 bytes needing 2,895,360, `Commit`
+//! 0x4005 at 1,205,519 CU. `CoordinateParticipationV3` closed it: the walk that
+//! proves a child invocation disjoint from the Effect's local operations now
+//! records, on the same pass, which coordinates that invocation reaches, and the
+//! commit leaves a child-reached coordinate at the child's poststate. See
+//! `hot_v3::committed_lamports_v3`.
 //!
-//! The cause is one line up. `output_lamports` is seeded from the OBSERVED
-//! prestate, and at observation the replay is vacant, so the plan says zero;
-//! `commit_output_lamports_v3` then writes that zero back over the rent the
-//! Custody child just deposited. It skips only coordinates an
-//! `EffectProgramV5` FUNDING ACTION names, and funding actions describe
-//! accounts TRADING creates through the rent lifecycle -- the maker replay and
-//! the record. Nothing in the declaration says "this coordinate is created and
-//! funded by a child route," which no family needed before: the inline family
-//! opens no Custody account, and registered creation is the first route in the
-//! protocol that does. Declaring it as a local `TransferLamports` is not the
-//! repair -- `require_child_disjoint_from_local` refuses a child invocation
-//! that reaches a coordinate the Effect's own operations mutate, and
-//! coordinate 20 is in the child's frame. The missing thing is an exemption,
-//! and it is family-neutral machinery, not a Direct artifact.
+//! Measured behind the wall-A probe on a `hot-cu-profile` build (diagnostic
+//! figures, not comparable with the production numbers below), worktree at
+//! `8553f0e8`:
+//!
+//! ```text
+//! REGSELL   368,334 CU   executes
+//! REGBUY  1,159,689 CU   executes -- and every assertion in this file passes
+//!   InitializeReplay 123,796 CU   OpenVault 141,105 CU   deposit 136,253 CU
+//! ```
+//!
+//! A registered Sell and a registered Buy, two transactions on one bank, with
+//! the Buy creating its maker replay and registered record, opening a Custody
+//! replay and a TradingPrincipal vault, moving the maker's collateral into it
+//! through the SPL Token program, and committing exact root, maker-replay and
+//! record poststates with Claims conservation held. That had never happened.
+//!
+//! **Only wall A remains**, and it is a missing implementation rather than a
+//! gate: `DirectInlineHotCrosscheckV3` is the Direct planner's independent
+//! re-derivation of every account's expected poststate, and a crosscheck that
+//! cannot check an action must refuse it. Crossing it means writing the
+//! registered analogue -- which is what the 1,604 uncalled lines of
+//! `src/direct/{sell,buy}_escrow.rs` are the input to -- not relaxing the
+//! refusal.
 //!
 //! Neither wall may be relaxed to make a campaign pass.
 //! `registered_sell_then_buy_execute_on_current_elves` below is the complete
@@ -519,17 +532,18 @@ fn table(case: &CreationCase) -> Vec<Pubkey> {
 /// Registry/Rent ELFs. The Buy now creates its maker replay and registered
 /// record, opens a Custody replay and a TradingPrincipal vault, and moves the
 /// maker's collateral into that vault -- three child CPIs, all successful --
-/// before wall C stops it in the commit's lamport plan. See the file header.
+/// and COMMITS. Every assertion below passes behind that one probe. See the
+/// file header.
 ///
 /// Remove `#[ignore]` when the walls close and this file states whether the
 /// campaign completes -- do not soften an assertion to get there.
 #[tokio::test]
-#[ignore = "blocked: hot_v3 admits only InlineOrdinary through the Direct \
-            crosscheck (wall A -- a missing registered crosscheck, not a gate \
-            to remove), and behind that probe the Buy refuses Commit 0x4005 \
-            because commit_output_lamports_v3 writes the observed-vacant zero \
-            over the rent the Custody child deposited into coordinate 20 \
-            (wall C). See this file's header."]
+#[ignore = "blocked on wall A ALONE: hot_v3 admits only InlineOrdinary through \
+            the Direct crosscheck, which is a missing registered crosscheck and \
+            not a gate to remove. Behind that one probe this case PASSES end to \
+            end -- Sell 368,334 CU, Buy 1,159,689 CU, three Custody children. \
+            Writing the registered DirectInlineHotCrosscheckV3 is the one edit \
+            that makes it live. See this file's header."]
 async fn registered_sell_then_buy_execute_on_current_elves() {
     let (mut context, case) = started().await;
     let fixture = &case.fixture;
