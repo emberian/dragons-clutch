@@ -580,6 +580,53 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// and a constant raised over a movement whose mechanism is unnamed files an
 /// artifact as a settled cost. The remaining ~1,400 of the +6,233 is spread
 /// across the rest of the window and is not convicted to anything.
+///
+/// ### RETRACTION, same day: the paragraph above blames the wrong thing
+///
+/// The two paragraphs above infer that this statistic carries a residual
+/// dependence on the ELF DIGEST. **A control refutes that inference**, and it
+/// is recorded here rather than quietly fixed because the inference is what
+/// sent the next reader looking in the wrong place.
+///
+/// The control is a genuine relink: two five-ELF sets differing in Trading
+/// alone, the other four byte-identical, across a real source change
+/// (`2c51ecd1`, which restructures `direct_fee_settlement_v1` and touches
+/// nothing the fill executes). Every modelled bump depth redrew -- at seed 0
+/// the root went 3 -> 1, the two maker replays 1,4 -> 4,1, the Custody replay
+/// 1 -> 3 -- and the activation cache went 254 -> 255.
+///
+/// ```text
+///   floor, zero-fee      1,299,259 -> 1,299,276   +17
+///   floor, fee-bearing   1,299,128 -> 1,299,145   +17
+///   the 131 CU gap between the arms                 intact
+/// ```
+///
+/// **Seventeen compute units.** So the statistic IS key-independent across a
+/// relink to within 17 CU, and the assertion below stands as written.
+///
+/// Two consequences. First, THE ACTIVATION CACHE IS CLEARED: its depth changed
+/// by a whole attempt across this pair and cost 17 CU, not 1,500, because the
+/// Registry records that bump and the six readers reproduce the address with
+/// `create_program_address` instead of searching (`waist.rs`, and the census in
+/// `direct_hot_pda_depth_census.rs` says the same). A fix that added it to the
+/// model was written against this file and REVERTED before landing once the
+/// carried bump was read; it would have subtracted a cost nobody pays.
+///
+/// Second, `5de38ef2`'s +4,836 is therefore very likely REAL. That makes it
+/// more interesting, not less: nine lines, eight of them comments, and the
+/// ninth a macro whose non-feature arm expands to nothing, inside
+/// `execute_admitted_candidate_v3` -- which the public fill does not call. This
+/// route is documented as inlining-sensitive to exactly that magnitude at
+/// `hot_v3.rs`, where extracting one function's checks out of line took the
+/// canonical trade from passing to `consumed 1399850 of 1399850`.
+///
+/// **The next experiment, named so it is not re-derived a fourth time:** build
+/// Trading at `cbdecdb3` and at `5de38ef2` and diff the SYMBOL TABLE, not the
+/// ELF digest -- per-symbol sizes and stack frames over the functions the fill
+/// actually executes. If those symbols are identical the CU cannot differ and
+/// the measurement is what is wrong; if they differ, codegen moved and the
+/// 4,836 is a recoverable accident rather than a conjunct the route needed.
+/// Still NOT PINNED until that says which.
 const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_268_059;
 
 /// The protocol maximum a transaction may consume.
