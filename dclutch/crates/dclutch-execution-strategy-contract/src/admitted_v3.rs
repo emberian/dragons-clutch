@@ -321,12 +321,96 @@ mod tests {
         }
     }
 
+    /// The prefix is one authority, the whole Hot fixed frame, then a
+    /// contiguous evidence suffix, then the runtime slice.
+    ///
+    /// THIS TEST ASSERTED FIVE LITERALS -- `0`, `1`, `17`, `18`, `18` -- and
+    /// when `68f7c849` derived these coordinates from the producer's own
+    /// `HOT_*` table, four of them became snapshots of a frame nothing emits:
+    /// it asserted `1` where the constant now reads 23, and `18` where it reads
+    /// 48. **A pin written as the number it is pinning cannot notice the thing
+    /// it exists to notice** -- it just becomes the last place the old value
+    /// survives, and it went red on the commit that made the constants right.
+    ///
+    /// Derived from the same constants now, so it asserts the SHAPE rather than
+    /// a reading of it, and a future displacement moves the test with the table.
     #[test]
     fn cpi_prefix_is_contiguous_and_runtime_readonly_tail_follows() {
         assert_eq!(ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, 0);
-        assert_eq!(ADMITTED_ACTIVATION_ACCOUNT_V3, 1);
-        assert_eq!(ADMITTED_ARTIFACT_STAGING_ACCOUNT_V3 + 1, 17);
-        assert_eq!(ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1, 18);
-        assert_eq!(ADMITTED_RUNTIME_ACCOUNTS_START_V3, 18);
+        assert_eq!(
+            ADMITTED_HOT_FIXED_START_V3,
+            ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3 + 1
+        );
+
+        // Every prefix coordinate is its Hot coordinate, displaced by exactly
+        // the caller authority. This is the conjunct the literals could not
+        // state, and it is the one the `0xC00A` wall was made of.
+        for (admitted, hot) in [
+            (
+                ADMITTED_ACTIVATION_ACCOUNT_V3,
+                HOT_ACTIVATION_CACHE_ACCOUNT_V3,
+            ),
+            (
+                ADMITTED_REGISTRY_ACCOUNT_V3,
+                HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
+            ),
+            (ADMITTED_RENT_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3),
+            (
+                ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
+                HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+            ),
+            (
+                ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
+                HOT_TRADING_PROGRAM_ACCOUNT_V3,
+            ),
+            (
+                ADMITTED_TRADING_PROGRAMDATA_ACCOUNT_V3,
+                HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
+            ),
+            (
+                ADMITTED_CAPABILITY_RAW_ACCOUNT_V3,
+                HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+            ),
+            (
+                ADMITTED_CAPABILITY_STAGING_ACCOUNT_V3,
+                HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+            ),
+            (
+                ADMITTED_STRATEGY_RAW_ACCOUNT_V3,
+                HOT_STRATEGY_RAW_ACCOUNT_V3,
+            ),
+            (
+                ADMITTED_STRATEGY_STAGING_ACCOUNT_V3,
+                HOT_STRATEGY_STAGING_ACCOUNT_V3,
+            ),
+        ] {
+            assert_eq!(admitted, ADMITTED_HOT_FIXED_START_V3 + hot);
+        }
+
+        // The evidence suffix begins where the Hot fixed frame ends, is
+        // contiguous and in order, and its last account is immediately before
+        // the runtime slice.
+        assert_eq!(
+            ADMITTED_STRATEGY_EVIDENCE_START_V3,
+            ADMITTED_HOT_FIXED_START_V3 + HOT_FIXED_ACCOUNT_COUNT_V3
+        );
+        let evidence = [
+            ADMITTED_CERTIFICATE_RAW_ACCOUNT_V3,
+            ADMITTED_CERTIFICATE_STAGING_ACCOUNT_V3,
+            ADMITTED_ADMISSION_RAW_ACCOUNT_V3,
+            ADMITTED_ADMISSION_STAGING_ACCOUNT_V3,
+            ADMITTED_ARTIFACT_RAW_ACCOUNT_V3,
+            ADMITTED_ARTIFACT_STAGING_ACCOUNT_V3,
+            ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3,
+            ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3,
+        ];
+        assert_eq!(evidence.len(), ADMITTED_STRATEGY_EVIDENCE_COUNT_V3);
+        for (index, coordinate) in evidence.iter().enumerate() {
+            assert_eq!(*coordinate, ADMITTED_STRATEGY_EVIDENCE_START_V3 + index);
+        }
+        assert_eq!(
+            ADMITTED_RUNTIME_ACCOUNTS_START_V3,
+            ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1
+        );
     }
 }

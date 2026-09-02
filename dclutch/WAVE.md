@@ -6514,3 +6514,79 @@ twenty-one comment lines and no value change** rebuilt to the identical `6c45fdd
 
 > **ELF identity is not a valid control for any edit that changes a file's line
 > count. The valid control is a line-count-matched comment-only build.**
+
+## 2026-09-01 - the allocator lands, and the accelerator keeps forbidding unsafe
+
+**`fe254e9f`.** The extraction the cleanups lane built and correctly discarded is
+in. Their control had been measuring the harness — the accelerator program-test
+forced the compute budget, so a per-transaction `RequestHeapFrame` was never
+consulted and their lifted ceiling handed out addresses the VM had not mapped.
+`1fd56fce` removed the forcing; the A/B on their own preserved trees then said
+BASE dies and WORK passes N=258 at 579,699 CU with zero violations.
+
+`crates/dclutch-sbf-bump-heap` is the whole `unsafe` surface of the program heap
+in one auditable file — a **named adapter** under the kernel policy, not kernel
+code. Trading consumes it instead of defining it. The accelerator turns
+`custom-heap` on by default and installs it, which is the entire point:
+`entrypoint!` installs the SDK's hardcoded 32,768 allocator *unless the calling
+crate declares a feature by that exact name*, and this crate declared it and
+implemented nothing.
+
+> **The accelerator still carries `#![forbid(unsafe_code)]`. That is not a
+> detail — it is the reason the allocator had to become a crate instead of a
+> second copy.**
+
+**The accelerator ELF reproduces theirs byte for byte: `e477df34`.** I ported
+their work rather than rewriting it, and the hash is what says so.
+
+### Controls
+
+| | before | after |
+|---|---|---|
+| accelerator program-test | 22 passed / 3 failed | **25 / 0** |
+| allocation failures | 3 | **0** |
+| access violations | 0 | 0 |
+| CU exhaustion | 0 | 0 |
+
+First time the whole binary has been green with the real frame. `freeze` stays
+2/2 at both widths.
+
+### Costs, reported as costs
+
+Not compute-neutral on either side. Same harness, only the allocator differing:
+`freeze`'s accelerator CPI goes **27,130 → 27,517** CU at width 1 and **51,780 →
+52,531** at width 258 (+387, +751). The Trading ELF goes **2,290,368 →
+2,287,512**, −2,856 whole-file at this HEAD; the cleanups lane measured `.text`
+−3,120 and 1,316,326 → 1,307,305 CU at theirs. **A frameguard re-capture is owed
+for the renamed symbol and is not done here.**
+
+### Two reds the move caused, both mine to fix
+
+`GlobalAlloc` had been in scope file-wide in Trading's adapter; narrowing the
+import to `Layout` left the allocator tests unable to name `alloc`, so the trait
+is scoped to the tests that call it. A test helper read the now-private `base`,
+so the crate exposes `base()` — the address, not the ability to move it, and
+public because a test binding the allocator to its own buffer has no other way
+to say where a block *should* have landed without agreeing with the allocator by
+construction. **42 adapter tests pass.**
+
+### And a pin of mine that went red on the commit that made it right
+
+`admitted_v3.rs`'s `cpi_prefix_is_contiguous_and_runtime_readonly_tail_follows`
+asserted five literals — `0`, `1`, `17`, `18`, `18`. `68f7c849` derived those
+coordinates from the producer's own `HOT_*` table and did not follow the pin, so
+it measured 23 where it asserted 1 and 48 where it asserted 18.
+
+> **A pin written as the number it is pinning cannot notice the thing it exists
+> to notice. It becomes the last place the old value survives.**
+
+Derived now: every prefix coordinate equals its Hot coordinate displaced by the
+caller authority, the evidence suffix is contiguous and in order, and the runtime
+slice starts immediately after it. **That displacement conjunct is what the
+`0xC00A` wall was made of, and five literals could not state it.**
+
+**Pins, stated as a rule (2026-09-01):** *a pin written as the number it is pinning
+cannot notice the thing it exists to notice.* Five literals in `admitted_v3.rs`
+measured 23 where they asserted 1 after the table they pinned was derived; the pin
+is now the displacement conjunct itself. Same family as the restated constant, one
+level up.

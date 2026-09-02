@@ -1,0 +1,118 @@
+{
+  "campaign": "retirement-checkpoint-programtest",
+  "note": "Real-ELF ProgramTest for the CHECKPOINTED aggregate-retirement chain -- the four-instruction terminal lifecycle of a market: prepare hands the Claims aggregate to Core, close-vault closes HoardPrincipal, close-replay closes the Custody replay, finish closes the checkpoint, the Market and the RentCredit and pays every classified rent lamport to the immutable refund wallet. Campaign: crates/dclutch-svm-harness/tests/market_retirement_v1_lifecycle.rs, test `checkpointed_retirement_is_packet_bounded_resumable_and_conserving`. It has passed against real Core, Claims, Custody, Registry, Resolution, Trading and Rent ELFs since it landed and was INVISIBLE to the census the whole time, because it called record() for nothing. EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE, NEVER FROM WHAT THE CAMPAIGN OUGHT TO TOUCH: the outcomes, the invoked programs and the refusal codes are the ones the runtime reported in a 12-transaction fold, and each label was checked to carry exactly one outcome AND one refusal code before it was written down. Two conservatisms are deliberate. (1) `core/commit_checkpoint#<magic>` and `core/finish_checkpoint_retirement#...` are bound ONLY to the transactions that COMMITTED. A suffix that refuses inside execute_direct_custody_suffix entered the arm but never reached the commit those route ids name, and binding it there would credit a commit that did not happen. (2) `program` is `core` on every row, because every transaction here is a top-level Core instruction; the Claims, Custody, Rent and SPL Token frames the chain drives by CPI are named in each row's note and, where a Claims refusal is the last word, in the refusal id itself.",
+  "bindings": [
+    {
+      "label": "retirement checkpoint: prepare against a Claims aggregate reassigned to the System program",
+      "routes": [
+        "core/process_instruction#Retire",
+        "core/retire_v1::process_checkpoint_prepare#Retire",
+        "claims/market_closure_v1::process_checkpoint_handoff"
+      ],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsMarketClosureSbfErrorV1::Identity",
+      "note": "HOSTILE, and the first census evidence of the Claims handoff route of any kind. Core dispatches the DCLTCRQ1 prepare, authenticates the market and the four roles, and CPIs into Claims, which refuses the reassigned aggregate as Custom(0x5502) after 210,440 CU. Claims AND Core appear in the finalized logs, which is what makes the handoff a corroborated route rather than an inference from the instruction data."
+    },
+    {
+      "label": "retirement checkpoint: close-vault suffix before the Claims handoff",
+      "routes": ["core/retire_v1::process_checkpoint_suffix"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Market",
+      "note": "HOSTILE. A suffix cannot mint authority before the prepare: the checkpoint account is still the live Claims aggregate, and Core refuses as Custom(0x3005) at 32,300 CU with no other program in the frame. This is the phase ordering of the chain stated as a refusal."
+    },
+    {
+      "label": "retirement checkpoint: prepare hands the Claims aggregate to Core",
+      "routes": [
+        "core/process_instruction#Retire",
+        "core/retire_v1::process_checkpoint_prepare#Retire",
+        "claims/market_closure_v1::process_checkpoint_handoff"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The chain's first act, accepted: 225,798 CU, Claims and Core in the frame. Afterwards the aggregate is Core-owned, 256 bytes, and holds the SAME lamports it held as a Claims account -- the campaign asserts that equality and that the RentCredit did not move, so the refund is retained in the handed-off account rather than relabelled."
+    },
+    {
+      "label": "retirement checkpoint: prepare replayed against a ClaimsClosed checkpoint",
+      "routes": [
+        "core/process_instruction#Retire",
+        "core/retire_v1::process_checkpoint_prepare#Retire"
+      ],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::ChildAck",
+      "note": "HOSTILE, and an observation worth the row on its own: the replayed prepare refuses as Custom(0x300b) at 88,128 CU with CLAIMS NEVER INVOKED. The guard fires inside Core, before the handoff CPI -- so the Claims route is deliberately NOT bound here, and the replay costs a third of the accepted prepare rather than the whole of it."
+    },
+    {
+      "label": "retirement checkpoint: close-vault against a checkpoint reassigned away from Core",
+      "routes": ["core/retire_v1::process_checkpoint_suffix"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Market",
+      "note": "HOSTILE. The ClaimsClosed checkpoint reassigned to the Claims program: Custom(0x3005), 34,213 CU, Core alone. The campaign asserts the refusal closes and refunds nothing across Core, Claims, Custody and Rent state."
+    },
+    {
+      "label": "retirement checkpoint: close-replay before the HoardPrincipal vault closes",
+      "routes": ["core/retire_v1::process_checkpoint_suffix"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Market",
+      "note": "HOSTILE. The two suffixes are ORDERED: the Custody replay cannot close while the HoardPrincipal vault is live. Custom(0x3005), 34,561 CU, Core alone."
+    },
+    {
+      "label": "retirement checkpoint: close-vault closes the HoardPrincipal vault",
+      "routes": [
+        "core/retire_v1::process_checkpoint_suffix",
+        "core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "229,762 CU across Core, Custody and the runtime's SPL Token program (TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA). The HoardPrincipal vault is gone afterwards while the Market and the RentCredit are still there -- the chain closes one compartment per transaction and is resumable between them, which is the whole point of checkpointing it."
+    },
+    {
+      "label": "retirement checkpoint: close-vault replayed against a HoardVaultClosed checkpoint",
+      "routes": ["core/retire_v1::process_checkpoint_suffix"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Market",
+      "note": "HOSTILE. The checkpoint has advanced, so the same instruction is now out of phase: Custom(0x3005), 34,554 CU. The campaign asserts the refusal is byte- and lamport-atomic across the whole joined snapshot."
+    },
+    {
+      "label": "retirement checkpoint: close-replay closes the Custody replay",
+      "routes": [
+        "core/retire_v1::process_checkpoint_suffix",
+        "core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "220,472 CU, Core and Custody. No SPL Token frame this time: the replay is a state account, not a token vault, which is visible in the logs and is the difference between the two suffixes the shared CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1 length hides."
+    },
+    {
+      "label": "retirement checkpoint: close-replay replayed against a CustodyReplayClosed checkpoint",
+      "routes": ["core/retire_v1::process_checkpoint_suffix"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Market",
+      "note": "HOSTILE. Custom(0x3005), 34,550 CU. Four distinct hostiles in this campaign share this code and each carries its own label, because the code alone cannot tell them apart and a shared label would let the census read all four off whichever ran first."
+    },
+    {
+      "label": "retirement checkpoint: finish with the immutable refund wallet substituted",
+      "routes": ["core/retire_v1::process_checkpoint_suffix"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::AccountFrame",
+      "note": "HOSTILE, and the cheapest refusal in the chain: Custom(0x3001) at 7,845 CU. The refund wallet is pinned by the frame itself, so substituting it dies in account-frame validation before any magic arm runs -- which is why `core/finish_checkpoint_retirement#...` is NOT bound to this row."
+    },
+    {
+      "label": "retirement checkpoint: finish closes checkpoint, Market and RentCredit",
+      "routes": [
+        "core/retire_v1::process_checkpoint_suffix",
+        "core/finish_checkpoint_retirement#AGGREGATE_RETIREMENT_FINISH_MAGIC_V1"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The terminal act: 166,219 CU across Core and Rent. Afterwards the checkpoint, the Market, the RentCredit, the Custody replay and the Hoard vault are all gone, the Source receipt is byte-identical to its prestate, and the immutable refund wallet has gained exactly the plan's expected_refund_delta -- every classified rent lamport arriving exactly once."
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "campaign": "retirement-checkpoint-programtest",
+  "witnesses": [
+    {
+      "id": "retirement-checkpoint-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours, and the ProgramTest ceiling this campaign runs under is set to exactly it and never raised."
+    },
+    {
+      "id": "retirement-checkpoint-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A null `wire_bytes` is the emitter's word for 'did not measure', which is honest but is not a claim that the frame fits. It matters more than usual here, because the next witness is where the campaign's real packet position is written down."
+    },
+    {
+      "id": "every-submitted-frame-is-over-the-legacy-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes > 1232)] | length | tostring",
+      "expect": "12",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES); ProgramTest submits no packet and cannot enforce it. ALL TWELVE transactions this campaign submits are LEGACY messages of 2,005-2,157 bytes and none of them could be submitted to a validator as they stand. That is not a contradiction of the campaign's packet claim, and the pairing must not be lost: `packet_census` in the campaign compiles each of the four instructions as a v0 message over a dedicated Address Lookup Table and measures 1,135 / 1,191 / 1,191 / 1,071 bytes, all under the maximum, and asserts that. So the chain is packet-bounded THROUGH AN ALT and is not packet-bounded without one. This witness records the submitted extent so that the distinction cannot quietly disappear; a validator tier owes the ALT frame, not this one."
+    },
+    {
+      "id": "every-retirement-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every one of this campaign's eight refusals is a decision Core or Claims made on a named field, so a bare runtime refusal appearing here would mean a hostile case stopped being about the retirement chain."
+    },
+    {
+      "id": "the-chain-is-exactly-four-accepted-acts",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error == null)] | length | tostring",
+      "expect": "4",
+      "provenance": "CHECKPOINT_RETIREMENT_* declares four instruction shapes -- prepare, close-vault, close-replay, finish -- and `build_checkpoint_market_retirement_v1` returns exactly those four. A fifth accepted transaction would mean the campaign found a second way into the terminal state; a fourth becoming a third would mean a stage stopped being reachable."
+    },
+    {
+      "id": "the-claims-handoff-is-the-only-act-that-invokes-claims",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select([.logs[] | select(test(\"^Program 8yRstXxCnC3jTgWtUFVRLJ51ojpkUW1kw9eRsrHhAK4R invoke\"))] | length > 0) | .label] | length | tostring",
+      "expect": "2",
+      "provenance": "Claims is handed off exactly once, by the prepare. Only two of the twelve transactions may reach the Claims program at all -- the accepted prepare and the hostile whose aggregate owner was substituted -- and in particular the REPLAYED prepare must not, because a replay that re-entered the handoff would be spending Claims compute to discover a fact Core already holds in its own checkpoint. The address is this tier's gauntlet-local Claims id from programs.json."
+    }
+  ]
+}

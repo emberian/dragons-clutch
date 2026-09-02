@@ -2088,6 +2088,7 @@ dependencies = [
  "dclutch-general-codec",
  "dclutch-general-config-contract",
  "dclutch-refusal-registry",
+ "dclutch-sbf-bump-heap",
  "solana-compute-budget-interface",
  "solana-instructions-sysvar 3.0.1",
  "solana-program",
@@ -2745,6 +2746,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-sbf-bump-heap"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-series-shadow-sbf"
 version = "0.1.0"
 dependencies = [
@@ -2930,6 +2938,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
+ "dclutch-sbf-bump-heap",
  "dclutch-series-v3-kernel",
  "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",

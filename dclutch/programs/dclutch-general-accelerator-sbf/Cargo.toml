@@ -11,13 +11,22 @@ crate-type = ["cdylib", "lib"]
 path = "src/lib.rs"
 
 [features]
-default = []
+# `custom-heap` is ON by default, and that is what makes the granted heap frame
+# reachable at all. `solana_program::entrypoint!` expands `custom_heap_default!`,
+# which installs `BumpAllocator::with_fixed_address_range(HEAP_START_ADDRESS,
+# HEAP_LENGTH)` -- a hardcoded 32,768 that bumps DOWN from a compile-time
+# ceiling -- unless THIS crate declares a feature by that exact name. The
+# feature was declared here and never implemented, so for as long as that stood
+# the program ran on 32 KiB while its transactions granted 65,536: half the
+# frame it paid for was never addressable. Turning the feature off hands the
+# heap back to the SDK's allocator and reinstates that ceiling.
+default = ["custom-heap"]
 no-entrypoint = []
-custom-heap = []
+custom-heap = ["dep:dclutch-sbf-bump-heap"]
 custom-panic = []
-# Diagnostic-only. Logs the default bump allocator's outstanding bytes against
-# the ceiling it actually enforces, which is NOT the granted heap frame. Never
-# enabled in a shipped artifact; the campaign builds without it.
+# Diagnostic-only. Logs the program allocator's outstanding bytes against the
+# ceiling it actually enforces -- which, with `custom-heap` on, IS the lifted
+# frame. Never enabled in a shipped artifact; the campaign builds without it.
 heap-profile = []
 
 [dependencies]
@@ -32,6 +41,7 @@ solana-compute-budget-interface = "=3.1.0"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
+dclutch-sbf-bump-heap = { path = "../../crates/dclutch-sbf-bump-heap", optional = true }
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 [lints.rust]
 missing_docs = "deny"

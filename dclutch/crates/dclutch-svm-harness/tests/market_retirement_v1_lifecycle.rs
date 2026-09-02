@@ -1308,7 +1308,7 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let substituted_owner_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit(&mut context, std::slice::from_ref(&plan.prepare))
+        submit_recorded(&mut context, std::slice::from_ref(&plan.prepare), &[], "retirement checkpoint: prepare against a Claims aggregate reassigned to the System program")
             .await
             .is_err(),
         "Claims handoff refuses a substituted aggregate owner"
@@ -1320,16 +1320,26 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     set_account(&mut context, fixture.claims_aggregate, claims_prestate);
     assert!(
-        submit(&mut context, std::slice::from_ref(&plan.close_vault))
-            .await
-            .is_err(),
+        submit_recorded(
+            &mut context,
+            std::slice::from_ref(&plan.close_vault),
+            &[],
+            "retirement checkpoint: close-vault suffix before the Claims handoff"
+        )
+        .await
+        .is_err(),
         "a suffix cannot mint authority before Claims handoff"
     );
     assert_eq!(joined_snapshot(&mut context, &fixture).await, before);
 
-    submit(&mut context, std::slice::from_ref(&plan.prepare))
-        .await
-        .expect("Claims handoff and ClaimsClosed checkpoint");
+    submit_recorded(
+        &mut context,
+        std::slice::from_ref(&plan.prepare),
+        &[],
+        "retirement checkpoint: prepare hands the Claims aggregate to Core",
+    )
+    .await
+    .expect("Claims handoff and ClaimsClosed checkpoint");
     let prepared = required_observed(&mut context, fixture.claims_aggregate).await;
     let prepared_account = observed(&mut context, fixture.claims_aggregate)
         .await
@@ -1358,9 +1368,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let prepared_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit(&mut context, std::slice::from_ref(&plan.prepare))
-            .await
-            .is_err(),
+        submit_recorded(
+            &mut context,
+            std::slice::from_ref(&plan.prepare),
+            &[],
+            "retirement checkpoint: prepare replayed against a ClaimsClosed checkpoint"
+        )
+        .await
+        .is_err(),
         "ClaimsClosed cannot replay prepare"
     );
     assert_eq!(
@@ -1377,9 +1392,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let substituted_checkpoint_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit(&mut context, std::slice::from_ref(&plan.close_vault))
-            .await
-            .is_err(),
+        submit_recorded(
+            &mut context,
+            std::slice::from_ref(&plan.close_vault),
+            &[],
+            "retirement checkpoint: close-vault against a checkpoint reassigned away from Core"
+        )
+        .await
+        .is_err(),
         "a suffix refuses a checkpoint reassigned away from Core"
     );
     assert_eq!(
@@ -1389,9 +1409,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     set_account(&mut context, fixture.claims_aggregate, prepared_account);
     assert!(
-        submit(&mut context, std::slice::from_ref(&plan.close_replay))
-            .await
-            .is_err(),
+        submit_recorded(
+            &mut context,
+            std::slice::from_ref(&plan.close_replay),
+            &[],
+            "retirement checkpoint: close-replay before the HoardPrincipal vault closes"
+        )
+        .await
+        .is_err(),
         "Custody replay cannot close before the HoardPrincipal vault"
     );
     assert_eq!(
@@ -1400,9 +1425,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         "phase refusal is byte/lamport atomic"
     );
 
-    submit(&mut context, std::slice::from_ref(&plan.close_vault))
-        .await
-        .expect("HoardPrincipal close and HoardVaultClosed checkpoint");
+    submit_recorded(
+        &mut context,
+        std::slice::from_ref(&plan.close_vault),
+        &[],
+        "retirement checkpoint: close-vault closes the HoardPrincipal vault",
+    )
+    .await
+    .expect("HoardPrincipal close and HoardVaultClosed checkpoint");
     assert!(observed(&mut context, fixture.base.vault).await.is_none());
     assert!(observed(&mut context, fixture.base.market).await.is_some());
     assert!(
@@ -1412,9 +1442,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let vault_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit(&mut context, std::slice::from_ref(&plan.close_vault))
-            .await
-            .is_err(),
+        submit_recorded(
+            &mut context,
+            std::slice::from_ref(&plan.close_vault),
+            &[],
+            "retirement checkpoint: close-vault replayed against a HoardVaultClosed checkpoint"
+        )
+        .await
+        .is_err(),
         "HoardVaultClosed cannot replay close-vault"
     );
     assert_eq!(
@@ -1422,9 +1457,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         vault_closed_snapshot,
         "close-vault replay refusal is byte/lamport atomic"
     );
-    submit(&mut context, std::slice::from_ref(&plan.close_replay))
-        .await
-        .expect("Custody replay close and CustodyReplayClosed checkpoint");
+    submit_recorded(
+        &mut context,
+        std::slice::from_ref(&plan.close_replay),
+        &[],
+        "retirement checkpoint: close-replay closes the Custody replay",
+    )
+    .await
+    .expect("Custody replay close and CustodyReplayClosed checkpoint");
     assert!(observed(&mut context, fixture.base.replay).await.is_none());
     assert!(observed(&mut context, fixture.base.market).await.is_some());
     assert!(
@@ -1434,9 +1474,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let replay_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit(&mut context, std::slice::from_ref(&plan.close_replay))
-            .await
-            .is_err(),
+        submit_recorded(
+            &mut context,
+            std::slice::from_ref(&plan.close_replay),
+            &[],
+            "retirement checkpoint: close-replay replayed against a CustodyReplayClosed checkpoint"
+        )
+        .await
+        .is_err(),
         "CustodyReplayClosed cannot replay close-replay"
     );
     assert_eq!(
@@ -1453,7 +1498,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         .expect("finish refund-wallet meta")
         .pubkey = context.payer.pubkey();
     assert!(
-        submit(&mut context, &[substituted_refund]).await.is_err(),
+        submit_recorded(
+            &mut context,
+            &[substituted_refund],
+            &[],
+            "retirement checkpoint: finish with the immutable refund wallet substituted"
+        )
+        .await
+        .is_err(),
         "finish refuses substitution of the immutable refund wallet"
     );
     assert_eq!(
@@ -1467,9 +1519,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         .as_ref()
         .expect("refund wallet prestate")
         .lamports;
-    submit(&mut context, std::slice::from_ref(&plan.finish))
-        .await
-        .expect("checkpoint then Core then Rent close");
+    submit_recorded(
+        &mut context,
+        std::slice::from_ref(&plan.finish),
+        &[],
+        "retirement checkpoint: finish closes checkpoint, Market and RentCredit",
+    )
+    .await
+    .expect("checkpoint then Core then Rent close");
     let after = joined_snapshot(&mut context, &fixture).await;
     assert!(after.claims_aggregate.is_none());
     assert!(after.market.is_none());

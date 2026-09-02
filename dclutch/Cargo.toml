@@ -66,6 +66,7 @@ members = [
     "crates/dclutch-rent-contract",
     "crates/dclutch-representation-composition-v3-kernel",
     "crates/dclutch-representation-composition-v3-operator",
+    "crates/dclutch-sbf-bump-heap",
     "crates/dclutch-series-v3-kernel",
     "crates/dclutch-sha256-adapter",
     "crates/dclutch-shadow-accelerator-auth-v4",

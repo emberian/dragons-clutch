@@ -124,9 +124,13 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     /// caller did not ASK, never that the runtime did not give. It was called
     /// `HeapFrameNotRequested` until 2026-09-01, and its numeric value is
     /// unchanged, so a code already seen in a log still means what it meant.
-    /// Harmless here in a way it is not in Trading: this program runs on the
-    /// stock `solana_program::entrypoint!`, whose BumpAllocator never reads the
-    /// request, so it cannot use an extended heap either way.
+    ///
+    /// It was ALSO documented here, for most of that same day, as harmless
+    /// because this program ran on the stock `entrypoint!` allocator and could
+    /// not use an extended heap either way. That stopped being true later the
+    /// same day: `custom-heap` is implemented now, the request this scan finds
+    /// is what raises this program's own ceiling, and a caller who does not ask
+    /// gets 32,768 rather than the 65,536 the route needs.
     HeapFrameNotRequested = 0xC006,
     /// The current top-level instruction was not the admitted Trading program's.
     TopLevelProgramNotTrading = 0xC007,
@@ -157,6 +161,17 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     /// a digest mismatch means they add up exactly and carry different bytes.
     /// One is a transport arithmetic fault and the other is a content fault.
     ScratchBankLength = 0xC012,
+    /// The declared heap frame could not be installed as this program's ceiling.
+    ///
+    /// Unreachable by construction and refused by name anyway. The only value
+    /// ever offered is `DIRECT_HOT_HEAP_FRAME_BYTES_V1`, a compile-time
+    /// constant the assertion beside this enum pins inside the allocator's
+    /// accepted range and on its 1,024-byte granularity, and the ceiling starts
+    /// at the protocol default which is below it. A refusal here would mean one
+    /// of those facts has changed under a later edit, and the alternative to
+    /// naming it is an allocation that dies of an out-of-memory abort naming
+    /// nothing at all -- which is the exact failure this whole change removes.
+    HeapCeilingNotLifted = 0xC013,
 }
 
 impl GeneralAcceleratorSbfErrorV3 {
@@ -166,7 +181,7 @@ impl GeneralAcceleratorSbfErrorV3 {
     /// [`GeneralAcceleratorSbfErrorV3::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::InvalidRequest,
         Self::InvalidFrame,
         Self::InvalidTopLevelInstruction,
@@ -186,6 +201,7 @@ impl GeneralAcceleratorSbfErrorV3 {
         Self::ScratchPageOrder,
         Self::ScratchBankDigest,
         Self::ScratchBankLength,
+        Self::HeapCeilingNotLifted,
     ];
 
     /// This refusal's position in [`GeneralAcceleratorSbfErrorV3::ALL`].
@@ -214,6 +230,7 @@ impl GeneralAcceleratorSbfErrorV3 {
             Self::ScratchPageOrder => 16,
             Self::ScratchBankDigest => 17,
             Self::ScratchBankLength => 18,
+            Self::HeapCeilingNotLifted => 19,
         }
     }
 }
@@ -268,23 +285,84 @@ impl From<GeneralAcceleratorSbfErrorV3> for ProgramError {
     }
 }
 
-/// Log the bump allocator's outstanding bytes against the ceiling it enforces.
+/// The requested frame in the allocator's unit.
+///
+/// `ComputeBudgetInstruction::request_heap_frame` takes a `u32` and a heap
+/// ceiling is a `usize`; on every target this program is built for that is a
+/// widening.
+#[cfg(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+))]
+#[allow(clippy::cast_possible_truncation)]
+const DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE: usize = DIRECT_HOT_HEAP_FRAME_BYTES_V1 as usize;
+
+// What makes `HeapCeilingNotLifted` unreachable rather than merely unlikely.
+// `lift_ceiling` refuses a value below the protocol default, above the runtime
+// maximum, or off the 1,024-byte granularity the runtime sanitizes requests to,
+// and the only value this program ever offers it is the constant below. These
+// are the three conjuncts, checked where the constant is, so a later edit to
+// the frame size is a compile error rather than a refusal in production.
+#[cfg(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+))]
+const _: () = {
+    assert!(
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE >= dclutch_sbf_bump_heap::DEFAULT_HEAP_BYTES_V1,
+        "the declared heap frame is below the protocol default the allocator starts at"
+    );
+    assert!(
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE <= dclutch_sbf_bump_heap::MAX_HEAP_BYTES_V1,
+        "the declared heap frame is above the largest frame the runtime will grant"
+    );
+    assert!(
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE
+            .is_multiple_of(dclutch_sbf_bump_heap::HEAP_FRAME_GRANULARITY_BYTES_V1),
+        "the declared heap frame is not on the granularity the runtime sanitizes requests to"
+    );
+};
+
+/// Log the program allocator's outstanding bytes against the ceiling it enforces.
 ///
 /// WHICH QUESTION THIS ANSWERS, because a heap probe answers only one. It does
-/// NOT measure the granted heap frame -- the ledger's rule is that only a raw
-/// write into the heap region does that, and this crate forbids `unsafe`. It
-/// measures what THIS PROGRAM'S ALLOCATOR has handed out and the ceiling that
-/// allocator will refuse past, which is exactly the pair that decides whether
-/// an allocation fails.
+/// NOT measure the granted heap frame -- only a raw write into the heap region
+/// does that, and this crate forbids `unsafe`. It measures what THIS PROGRAM'S
+/// ALLOCATOR has handed out and the ceiling that allocator will refuse past,
+/// which is exactly the pair that decides whether an allocation fails.
 ///
-/// `solana_program::entrypoint!` installs `BumpAllocator` over
-/// `HEAP_START_ADDRESS .. + HEAP_LENGTH` and bumps DOWNWARD from the top, so a
-/// one-byte probe allocation sits at the current position and the bytes
-/// outstanding are the ceiling minus that address.
+/// It used to answer it by ALLOCATING a one-byte probe and reading its address
+/// against the SDK allocator's hardcoded `HEAP_LENGTH`. Two things were wrong
+/// with that once this program installed its own allocator: the ceiling it
+/// printed was a constant rather than the lifted one, and the instrument moved
+/// what it measured. Both readings now come from the allocator itself, which
+/// keeps them in its heap header and allocates nothing to report them.
+///
+/// The three logged words are: bytes outstanding, the ceiling actually
+/// enforced, and the frame the transport requests. Before 2026-09-01 the middle
+/// word was always 32,768 no matter what the transaction paid for; after the
+/// lift it is 65,536, and the gap between the second and third is what the
+/// program was throwing away.
 #[cfg(feature = "heap-profile")]
 fn heap_mark(label: &str) {
-    #[cfg(target_os = "solana")]
+    #[cfg(all(target_os = "solana", feature = "custom-heap"))]
     {
+        sol_log(label);
+        solana_program::log::sol_log_64(
+            u64::try_from(PROGRAM_HEAP_V1.bytes_used()).unwrap_or(u64::MAX),
+            u64::try_from(PROGRAM_HEAP_V1.bytes_capacity()).unwrap_or(u64::MAX),
+            u64::from(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+            0,
+            0,
+        );
+    }
+    #[cfg(all(target_os = "solana", not(feature = "custom-heap")))]
+    {
+        // The SDK's allocator keeps no readable state, so the probe is the only
+        // instrument available on this build -- and it measures against the
+        // hardcoded ceiling, which is the point of the build.
         let probe = vec![0_u8; 1];
         let ceiling = usize::try_from(solana_program::entrypoint::HEAP_START_ADDRESS)
             .unwrap_or(0)
@@ -294,7 +372,7 @@ fn heap_mark(label: &str) {
         solana_program::log::sol_log_64(
             u64::try_from(used).unwrap_or(u64::MAX),
             u64::try_from(solana_program::entrypoint::HEAP_LENGTH).unwrap_or(u64::MAX),
-            u64::try_from(DIRECT_HOT_HEAP_FRAME_BYTES_V1).unwrap_or(u64::MAX),
+            u64::from(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
             0,
             0,
         );
@@ -373,6 +451,50 @@ impl GeneralAcceleratorSemanticErrorV3 {
         }
     }
 }
+
+/// This program's heap, over the frame its transaction actually grants.
+///
+/// `solana_program::entrypoint!` expands `custom_heap_default!`, which installs
+/// the SDK's `BumpAllocator` over `HEAP_START_ADDRESS .. + HEAP_LENGTH` -- a
+/// hardcoded 32,768 -- and bumps DOWN from that compile-time ceiling, so
+/// `ComputeBudget::RequestHeapFrame` is inert against it. The macro elides that
+/// allocator exactly when the calling crate declares a feature named
+/// `custom-heap`. This crate declared it and, until 2026-09-01, implemented
+/// nothing, so the program ran on 32 KiB while every transport that reaches it
+/// requests 65,536: at runtime width 258 it died of an out-of-memory abort with
+/// 26,515 outstanding, and an abort names nothing -- not the route, not the
+/// budget, not the instruction the caller did supply.
+///
+/// [`dclutch_sbf_bump_heap::program_heap_v1`] is Trading's allocator, which
+/// bumps UPWARD so the ceiling is a comparison rather than an origin and can be
+/// raised mid-invocation. It is a shared crate rather than a second copy
+/// precisely so this one can keep `#![forbid(unsafe_code)]`: the constructor is
+/// safe because the address it binds is the platform's, not a caller's.
+///
+/// The ceiling is still the protocol default until
+/// [`authenticate_top_level`] proves the request and raises it.
+///
+/// WHAT MAKES THIS SOUND ACROSS THE CPI BOUNDARY, and it is the one fact the
+/// whole change rests on. This program is invoked by Trading, not top-level,
+/// so it needs two guarantees that Trading's own adapter already states as
+/// trust-surface assumptions 5 and 6
+/// (`dclutch-trading-sbf/src/entrypoint_adapter.rs`): the heap region is
+/// zero-filled at the start of EVERY invocation *including each CPI depth* --
+/// so this allocator reads its own fresh header rather than the caller's bump
+/// position -- and a validated `RequestHeapFrame(n)` maps a heap of exactly `n`
+/// bytes for EVERY invocation in the transaction, so the frame the transport
+/// requested is mapped under this frame too. Without the first, the header is
+/// somebody else's; without the second, raising the ceiling would just move the
+/// fault. Both are the runtime's, not this program's, and both are what the
+/// scan in `authenticate_top_level` is entitled to conclude from.
+#[cfg(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+))]
+#[global_allocator]
+static PROGRAM_HEAP_V1: dclutch_sbf_bump_heap::BumpHeapV1 =
+    dclutch_sbf_bump_heap::program_heap_v1();
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(program_entrypoint);
@@ -523,6 +645,33 @@ fn validate_frame(
     Ok(())
 }
 
+/// Raise this program's heap ceiling to the frame the transaction requested.
+///
+/// A no-op on any build without the custom heap -- the host test build, and the
+/// build that hands the heap back to the SDK's allocator -- because there is no
+/// ceiling of ours to raise there.
+#[cfg(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+))]
+fn lift_declared_heap_frame_v1() -> ProgramResult {
+    PROGRAM_HEAP_V1
+        .lift_ceiling(DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE)
+        .map(|_| ())
+        .map_err(|_| GeneralAcceleratorSbfErrorV3::HeapCeilingNotLifted.into())
+}
+
+/// See the `target_os = "solana"` arm: there is no ceiling of ours to raise.
+#[cfg(not(all(
+    target_os = "solana",
+    feature = "custom-heap",
+    not(feature = "no-entrypoint")
+)))]
+fn lift_declared_heap_frame_v1() -> ProgramResult {
+    Ok(())
+}
+
 fn authenticate_top_level(
     accounts: &[AccountInfo<'_>],
 ) -> Result<([u8; CONTROLLER_REQUEST_BYTES_V2], GeneralDecodedRequestV3), ProgramError> {
@@ -576,6 +725,22 @@ fn authenticate_top_level(
     if !heap_frame_requested {
         return Err(GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested.into());
     }
+    // AND THE REQUEST IS NOW WORTH SOMETHING. Until 2026-09-01 this scan proved
+    // a request that nothing in the program could spend: the allocator's
+    // ceiling was the SDK's hardcoded 32,768 and stayed there. The same
+    // instruction that satisfies the conjunct above now raises this program's
+    // own ceiling to what it asks for, and it happens HERE because everything
+    // expensive -- `validate_frame`, `assemble_input_bank`, the transition --
+    // runs after `authenticate_top_level` returns, while the decode above it
+    // fits the default with room to spare.
+    //
+    // What this does NOT claim: that the runtime GRANTED the frame. A program
+    // cannot observe its granted heap -- `create_vm!` maps exactly
+    // `heap_size` bytes and every access above faults -- so this is the
+    // sanitized REQUEST, exactly as `HeapFrameNotRequested` says. A request the
+    // runtime accepted and did not apply still faults rather than refusing;
+    // that is a platform property, not something this line can fix.
+    lift_declared_heap_frame_v1()?;
     let instruction = load_instruction_at_checked(usize::from(index), instructions)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
     let trading = account(accounts, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3)?;

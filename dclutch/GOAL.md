@@ -2522,3 +2522,7 @@ pointer, with the one limit `--only` genuinely has (two lanes, one file).
 **Threads under the attractor, for the next session:** the register library; the
 boundary scaffold; the V2 AccountProfile vocabulary's Lean model; moving the lane
 map to the scratchpad at session start rather than session end.
+
+### Lane map delta — 21:20
+- GENERAL: `crates/dclutch-sbf-bump-heap` landed (`fe254e9f`); accelerator **25/0 with the real frame**, first time; the Trading-side frameguard re-capture for the renamed symbol is **owed**. Fourth conjunct unblocked by `ProjectDataDigest` (`a5bb4390`, Direct). 
+- DIRECT: wall C crossed, campaign completes behind the wall-A probe; on the registered crosscheck.
