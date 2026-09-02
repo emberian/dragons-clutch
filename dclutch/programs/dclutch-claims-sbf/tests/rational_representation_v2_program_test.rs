@@ -75,11 +75,12 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
+    ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
     RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2,
     RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
-    RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, REQUEST_HEADER_BYTES_V2, RepresentationActionV2,
+    RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, REQUEST_SELECTED_HEADER_BYTES_V3,
+    REQUEST_STRUCTURED_HEADER_BYTES_V3, REQUEST_TERMINAL_HEADER_BYTES_V3, RepresentationActionV2,
     RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
@@ -133,7 +134,7 @@ use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as Sp
 
 use dclutch_rational_representation_v2_request_contract::{
     Error as RationalRequestError,
-    generated::{ASSET_COEFFICIENT_OFFSET, ASSET_SHARD_MINT_OFFSET},
+    generated::ASSET_COEFFICIENT_OFFSET_V3,
 };
 use dclutch_structured_v2_operator::Error as StructuredOperatorError;
 use dclutch_structured_v2_operator::STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2;
@@ -2500,7 +2501,7 @@ fn request_bytes_from(
         u32::MAX
     };
     let asset_count = if selected_action { 1 } else { OUTCOME_COUNT };
-    let mut rows = vec![0; usize::try_from(asset_count).expect("asset width") * ASSET_BYTES_V2];
+    let mut rows = vec![0; usize::try_from(asset_count).expect("asset width") * ASSET_BYTES_V3];
     let requested = if selected_action {
         vec![(
             selected_outcome,
@@ -2538,7 +2539,7 @@ fn request_bytes_from(
                 .expect("structured balance"),
         }
         .encode_into(
-            rows.get_mut(row * ASSET_BYTES_V2..(row + 1) * ASSET_BYTES_V2)
+            rows.get_mut(row * ASSET_BYTES_V3..(row + 1) * ASSET_BYTES_V3)
                 .expect("asset row"),
         )
         .expect("encode asset");
@@ -2601,7 +2602,7 @@ fn request_bytes_from(
         &rows,
     )
     .expect("canonical representation request");
-    let mut output = vec![0; REQUEST_HEADER_BYTES_V2 + rows.len()];
+    let mut output = vec![0; request.wire_len().expect("class width")];
     request
         .encode_into(&mut output)
         .expect("encode representation request");
@@ -4843,7 +4844,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     );
     assert_eq!(
         issue.data.len(),
-        1 + REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2
+        1 + REQUEST_STRUCTURED_HEADER_BYTES_V3 + K * ASSET_BYTES_V3
     );
     let payer = context.payer.pubkey();
     let addresses = lookup_addresses(
@@ -4872,7 +4873,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         packet_measurements(payer, &issue, blockhash, table, &addresses);
     eprintln!(
         "Rational V2 structured packet preflight: request={}, claims-frame={}, outer-metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, ALT-CU={lookup_cu:?}",
-        REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2,
+        REQUEST_STRUCTURED_HEADER_BYTES_V3 + K * ASSET_BYTES_V3,
         RATIONAL_BASE_ACCOUNT_COUNT_V2
             + usize::try_from(OUTCOME_COUNT).expect("outcome width")
                 * RATIONAL_ASSET_ACCOUNT_COUNT_V2,
@@ -5094,7 +5095,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     }
     eprintln!(
         "Rational V2 open: request={}, claims-frame={}, outer-metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, issue-v0={}, issue-CU={}, unwrap-v0={}, unwrap-CU={}, denominate-v0={}, denominate-CU={}, reconstitute-v0={}, reconstitute-CU={}, ALT-CU={lookup_cu:?}",
-        REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2,
+        REQUEST_STRUCTURED_HEADER_BYTES_V3 + K * ASSET_BYTES_V3,
         RATIONAL_BASE_ACCOUNT_COUNT_V2
             + usize::try_from(OUTCOME_COUNT).expect("outcome width")
                 * RATIONAL_ASSET_ACCOUNT_COUNT_V2,
@@ -5744,10 +5745,10 @@ async fn account_of(context: &mut ProgramTestContext, key: Pubkey) -> Account {
 
 /// One representation coordinate's cost on the wire.
 ///
-/// `ASSET_BYTES_V2` of request tail, plus two bytes per materialized account:
+/// `ASSET_BYTES_V3` of request tail, plus two bytes per materialized account:
 /// one index in the instruction's account-index array and one index in the v0
 /// message's lookup list. Nothing compresses either.
-const PER_COORDINATE_WIRE_BYTES: usize = ASSET_BYTES_V2 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2;
+const PER_COORDINATE_WIRE_BYTES: usize = ASSET_BYTES_V3 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2;
 
 /// THE PACKET WALL, measured on the executing route, and it is not §3b's wall.
 ///
@@ -5810,11 +5811,11 @@ fn the_full_width_structured_frame_does_not_fit_a_packet_at_k_three() {
     // The published width, restated by the encoder rather than by §3b's prose.
     assert_eq!(
         full_width.data.len(),
-        1 + REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2
+        1 + REQUEST_STRUCTURED_HEADER_BYTES_V3 + K * ASSET_BYTES_V3
     );
     assert_eq!(
         selected.data.len(),
-        1 + REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2
+        1 + REQUEST_SELECTED_HEADER_BYTES_V3 + ASSET_BYTES_V3
     );
     // One coordinate costs exactly what the constant says it costs.
     assert_eq!(
@@ -5921,21 +5922,32 @@ fn one_atom_skew_request(fixture: &Fixture, coordinate: usize) -> Vec<u8> {
         .expect("one-atom skew");
     put_u64(
         &mut request,
-        REQUEST_HEADER_BYTES_V2 + coordinate * ASSET_BYTES_V2 + ASSET_COEFFICIENT_OFFSET,
+        REQUEST_STRUCTURED_HEADER_BYTES_V3 + coordinate * ASSET_BYTES_V3 + ASSET_COEFFICIENT_OFFSET_V3,
         skewed,
     );
     request
 }
 
 /// A coordinate backed by the RECEIPT Mint: a receipt backed by itself.
+///
+/// RETIRED ON THE WIRE by physical ABI v3, and named as debt rather than
+/// deleted quietly. This hostile overwrote row zero's inlined shard Mint with
+/// the receipt Mint and was refused by `RepresentationRequestV2::validate`'s
+/// alias check. The Mint is now DERIVED from
+/// `(program_id, descriptor_id, outcome)`, so a coordinate cannot name the
+/// receipt Mint on the wire at all: the alias is unrepresentable rather than
+/// refused, and there is no longer a request byte to corrupt.
+///
+/// The property is still real and now lives one layer down, in the ACCOUNT
+/// frame: hand the coordinate the receipt Mint account and
+/// `authenticate_asset_identities` refuses `ClaimsSbfError::Identity` on
+/// `accounts.mint.key != &mint`. OWED: that frame-side substitution, because
+/// this fixture builds request bytes and the caller assembles the frame. Until
+/// it is written the property is checked by the derivation alone, which is one
+/// side where there used to be two.
+#[allow(dead_code)]
 fn receipt_backed_by_receipt_request(fixture: &Fixture) -> Vec<u8> {
-    let mut request = request_bytes(fixture, RepresentationActionV2::IssueStructured, 0);
-    put(
-        &mut request,
-        REQUEST_HEADER_BYTES_V2 + ASSET_SHARD_MINT_OFFSET,
-        fixture.receipt_mint.as_ref(),
-    );
-    request
+    request_bytes(fixture, RepresentationActionV2::IssueStructured, 0)
 }
 
 /// THE STRUCTURED FAMILY HOSTILES, every one of them through the real wire.
@@ -6315,7 +6327,7 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
     assert_eq!(positive.accounts.len(), 1 + expected_claims_accounts);
     assert_eq!(
         positive.data.len(),
-        1 + REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2
+        1 + REQUEST_TERMINAL_HEADER_BYTES_V3 + ASSET_BYTES_V3
     );
     let payer = context.payer.pubkey();
     let instructions = [
@@ -6341,7 +6353,7 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         packet_measurements(payer, &positive, blockhash, table, &addresses);
     eprintln!(
         "Rational V2 terminal packet preflight: request={}, claims-frame={}, outer-metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, ALT-CU={lookup_cu:?}",
-        REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2,
+        REQUEST_TERMINAL_HEADER_BYTES_V3 + ASSET_BYTES_V3,
         expected_claims_accounts,
         positive.accounts.len(),
         unique_account_count(&positive),
@@ -6576,7 +6588,7 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
     );
     eprintln!(
         "Rational V2 terminal: request={}, claims-frame={}, outer-metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, positive-v0={}, positive-CU={}, late-v0={}, late-CU={}, ALT-CU={lookup_cu:?}",
-        REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2,
+        REQUEST_TERMINAL_HEADER_BYTES_V3 + ASSET_BYTES_V3,
         expected_claims_accounts,
         positive.accounts.len(),
         unique_account_count(&positive),
@@ -6725,7 +6737,7 @@ async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
     );
     eprintln!(
         "Rational V2 zero terminal: selected=0, request={}, outer-metas={}, v0={}, CU={}, ALT-CU={lookup_cu:?}",
-        REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2,
+        REQUEST_TERMINAL_HEADER_BYTES_V3 + ASSET_BYTES_V3,
         losing.accounts.len(),
         accepted.wire_bytes,
         accepted.compute_units,

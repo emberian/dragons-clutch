@@ -45,9 +45,9 @@ use dclutch_product_payoff_v2_codec::runtime_v3::{
     BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
 };
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AuthenticatedTokenBehaviorV2, CallerRoleV2,
+    ASSET_BYTES_V3, AuthenticatedTokenBehaviorV2, CallerRoleV2,
     OPEN_REPRESENTATION_HOT_MAGIC_V3, OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3,
-    OPEN_REPRESENTATION_HOT_VERSION_V3, PHYSICAL_ABI_VERSION_V2, REQUEST_HEADER_BYTES_V2,
+    OPEN_REPRESENTATION_HOT_VERSION_V3, PHYSICAL_ABI_VERSION_V3, REQUEST_STRUCTURED_HEADER_BYTES_V3,
     REQUEST_MAGIC_V2, RepresentationActionV2,
 };
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
@@ -83,9 +83,9 @@ pub const RATIONAL_OPEN_STRUCTURED_ITEM_ACCOUNTS_V3: u16 = 4;
 /// Common request registers plus trusted current Trading before descriptor-K rows.
 pub const RATIONAL_OPEN_STRUCTURED_COMMON_IDENTITIES_V3: usize = 11;
 /// Per-coordinate descriptor-K identity width, flattened into common registers.
-pub const RATIONAL_OPEN_STRUCTURED_ITEM_IDENTITIES_V3: usize = 4;
+pub const RATIONAL_OPEN_STRUCTURED_ITEM_IDENTITIES_V3: usize = 1;
 /// Common request scalars, Product N, and trusted current slot before descriptor-K rows.
-pub const RATIONAL_OPEN_STRUCTURED_COMMON_SCALARS_V3: usize = 9;
+pub const RATIONAL_OPEN_STRUCTURED_COMMON_SCALARS_V3: usize = 8;
 /// Per-coordinate descriptor-K scalar width, flattened into common registers.
 pub const RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3: usize = 4;
 /// Largest descriptor K admitted by the current exact RequestProfile V1 artifact.
@@ -95,7 +95,7 @@ pub const RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3: usize = 4;
 /// and the canonical fixed projection costs
 /// `RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3 +
 /// RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3 * K`, so K is exactly
-/// what the artifact bound leaves room for. It evaluates to 3 against today's
+/// what the artifact bound leaves room for. It evaluates to 6 against today's
 /// `REQUEST_PROFILE_MAX_BYTES_V1 = 1312` and moves by itself if any of the four
 /// inputs moves. It was a hand-written `3` with the arithmetic living only in
 /// this comment until 2026-08-31; a restated bound is a bound that drifts.
@@ -104,18 +104,23 @@ pub const RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3: usize = 4;
 /// `structured_actions_keep_descriptor_k_independent_from_product_n`, which
 /// builds K = 3 against a 258-outcome Product.
 ///
-/// **It is also not the binding wall, and raising it would not help.** A
-/// transaction carrying `IssueStructured` or `UnwrapStructured` at K = 3 is
-/// 1,397 bytes as a v0 message with the Address Lookup Table already applied,
-/// against a 1,232-byte packet limit (1,357 until `7b80869d` made every wire
-/// measurement carry the `set_compute_unit_limit` a real transaction always
-/// pays: +40 bytes, same conclusion); the packet caps full-width issuance at
-/// K = 2, one coordinate BELOW this artifact ceiling
-/// (`the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`, which
-/// derives the 2 rather than asserting it). Widening the RequestProfile bound
-/// therefore admits descriptors that can be published and denominated but never
-/// issued. The lift this cliff wants is commit-don't-inline or staged issuance,
-/// not a wider record. See `CapabilityProgramAbi.finalizedRecordMaxBytes`.
+/// **It stopped being the lower of the two walls on 2026-09-02.** It was 3
+/// while the RequestProfile projected eight operations per coordinate, and the
+/// note here said the packet capped full-width issuance at K = 2 -- one
+/// coordinate BELOW this ceiling -- so widening the bound alone would admit
+/// descriptors that could be published and denominated but never issued. The
+/// lift it named was commit-don't-inline, and that is what physical ABI v3
+/// did: three derived keys left the wire, taking the row cost from eight
+/// operations to five and the base from 29 to 22, and the same arithmetic then
+/// yields 6.
+///
+/// So the packet is now the binding wall in every frame rather than this
+/// artifact. Full-width issuance is 1,005 bytes on the Claims-direct frame at
+/// K = 3 and 1,149 at K = 5, against a 1,232-byte limit that K = 6 misses by
+/// one byte once the house builder's unconditional `set_compute_unit_price` is
+/// counted; on the Trading common-Hot route the same action is 1,197 and caps
+/// at K = 3. A descriptor this ceiling admits can be issued at last.
+/// See `CapabilityProgramAbi.finalizedRecordMaxBytes`.
 pub const RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3: u32 =
     rational_open_structured_maximum_coordinates_v3();
 
@@ -155,10 +160,12 @@ const ID_AUTHORITY: usize = 8;
 const ID_TOKEN: usize = 9;
 const ID_CURRENT_TRADING: usize = 10;
 
-const ITEM_ID_SHARD_MINT: usize = 0;
-const ITEM_ID_ACTOR_SHARDS: usize = 1;
-const ITEM_ID_STRUCTURED_CUSTODY: usize = 2;
-const ITEM_ID_CLAIMS_CUSTODY_OWNER: usize = 3;
+// Physical ABI v3 sends one key per coordinate. The shard Mint, the Structured
+// custody Account and the Claims custody owner are derived by the Claims
+// adapter, so they are neither read from the parent request nor written into
+// the child: these registers were a pipe between two wires that both lost the
+// field, and the pipe goes with them.
+const ITEM_ID_ACTOR_SHARDS: usize = 0;
 
 const SCALAR_REPRESENTATION_REVISION: usize = 0;
 const SCALAR_GENERATION: usize = 1;
@@ -166,9 +173,11 @@ const SCALAR_QUANTITY: usize = 2;
 const SCALAR_DENOMINATOR: usize = 3;
 const SCALAR_RECEIPT_SUPPLY: usize = 4;
 const SCALAR_OUTCOME_COUNT: usize = 5;
-const SCALAR_ASSET_COUNT: usize = 6;
-const SCALAR_PRODUCT_OUTCOME_COUNT: usize = 7;
-const SCALAR_CURRENT_SLOT: usize = 8;
+// `assetCount` is derived from the action and the outcome count in v3, so it is
+// on neither wire. The transition asserted `asset_count == outcome_count`; that
+// equality is now structural and the register it compared is gone.
+const SCALAR_PRODUCT_OUTCOME_COUNT: usize = 6;
+const SCALAR_CURRENT_SLOT: usize = 7;
 
 const ITEM_SCALAR_COEFFICIENT: usize = 0;
 const ITEM_SCALAR_SHARD_SUPPLY: usize = 1;
@@ -182,16 +191,16 @@ const ITEM_SCALAR_STRUCTURED_SHARDS: usize = 3;
 /// `K = 3` is 53 operations and 1,304 bytes and `K = 4` is 61 and 1,496, which
 /// the encoder refuses. A consumer that wants to state that cliff must import
 /// the arithmetic rather than restate the numbers.
-pub const RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3: usize = 29;
+pub const RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3: usize = 22;
 /// Projection operations one descriptor coordinate adds to the RequestProfile.
-pub const RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3: usize = 8;
+pub const RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3: usize = 5;
 
 use RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3 as REQUEST_BASE_INSTRUCTIONS;
 use RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3 as REQUEST_ROW_INSTRUCTIONS;
-const TRANSITION_BASE_INSTRUCTIONS: usize = 4;
+const TRANSITION_BASE_INSTRUCTIONS: usize = 3;
 const TRANSITION_ROW_INSTRUCTIONS: usize = 1;
-const EFFECT_BASE_INSTRUCTIONS: usize = 17;
-const EFFECT_ROW_INSTRUCTIONS: usize = 8;
+const EFFECT_BASE_INSTRUCTIONS: usize = 16;
+const EFFECT_ROW_INSTRUCTIONS: usize = 5;
 
 /// Release-owned coordinates and exact fixed/item account data widths.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,8 +319,13 @@ pub fn build_rational_open_structured_selected_bundle_v6(
         ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountProfileInput)?;
     let representation_width = usize::try_from(input.representation_outcome_count)
         .map_err(|_| Error::AccountProfileInput)?;
+    if input.representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3 {
+        return Err(Error::CoordinateCeiling {
+            requested: input.representation_outcome_count,
+            ceiling: RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+        });
+    }
     if input.representation_outcome_count == 0
-        || input.representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3
         || input.fixed_data_lengths.len() != usize::from(RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3)
         || input.fixed_data_lengths.get(4).copied() != u32::try_from(input.product_basis.len()).ok()
         || input.fixed_data_lengths.get(29).copied()
@@ -469,9 +483,13 @@ pub fn validate_rational_open_structured_hot_bundle_v3(
 ) -> Result<()> {
     let representation_outcome_count = usize::try_from(bundle.representation_outcome_count)
         .map_err(|_| Error::ArtifactGeometry)?;
-    if bundle.representation_outcome_count == 0
-        || bundle.representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3
-    {
+    if bundle.representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3 {
+        return Err(Error::CoordinateCeiling {
+            requested: bundle.representation_outcome_count,
+            ceiling: RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+        });
+    }
+    if bundle.representation_outcome_count == 0 {
         return Err(Error::ArtifactGeometry);
     }
     let logical_accounts = structured_logical_accounts(representation_outcome_count)?;
@@ -745,53 +763,42 @@ fn encode_request_profile(
     );
     fixed.extend([
         RequestInstructionV1::require_u64(
-            req_fixed(wire::REQUEST_MAGIC_OFFSET)?,
+            req_fixed(wire::REQUEST_MAGIC_OFFSET_V3)?,
             u64::from_le_bytes(OPEN_REPRESENTATION_HOT_MAGIC_V3),
         ),
         RequestInstructionV1::require_u16(
-            req_fixed(wire::REQUEST_VERSION_OFFSET)?,
+            req_fixed(wire::REQUEST_VERSION_OFFSET_V3)?,
             OPEN_REPRESENTATION_HOT_VERSION_V3,
         ),
-        RequestInstructionV1::require_u8(req_fixed(wire::REQUEST_ACTION_OFFSET)?, action as u8),
+        RequestInstructionV1::require_u8(req_fixed(wire::REQUEST_ACTION_OFFSET_V3)?, action as u8),
         RequestInstructionV1::require_u8(
-            req_fixed(wire::REQUEST_CALLER_ROLE_OFFSET)?,
+            req_fixed(wire::REQUEST_CALLER_ROLE_OFFSET_V3)?,
             CallerRoleV2::Trading as u8,
         ),
-        RequestInstructionV1::require_zero(req_fixed(wire::REQUEST_RESERVED_HEADER_OFFSET)?, 4),
-        RequestInstructionV1::require_zero(req_fixed(wire::REQUEST_PARENT_CONTEXT_OFFSET)?, 32),
-        RequestInstructionV1::require_zero(req_fixed(wire::REQUEST_REALM_OFFSET)?, 64),
-        RequestInstructionV1::require_u64(
-            req_fixed(wire::REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET)?,
-            ABSENT_REVISION,
+        RequestInstructionV1::require_zero(req_fixed(wire::REQUEST_RESERVED_HEADER_OFFSET_V3)?, 4),
+        RequestInstructionV1::require_zero(req_fixed(wire::REQUEST_PARENT_CONTEXT_OFFSET_V3)?, 32),
+        // The eight constraints that stood here asserted realm, the collateral
+        // recipient, four absent revisions and a u32::MAX selected outcome. The
+        // structured header class does not carry any of them in v3, so what
+        // they checked is now unrepresentable rather than merely checked.
+        RequestInstructionV1::require_zero(
+            req_fixed(wire::STRUCTURED_REQUEST_RESERVED_TAIL_OFFSET_V3)?,
+            4,
         ),
-        RequestInstructionV1::require_u64(
-            req_fixed(wire::REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET)?,
-            ABSENT_REVISION,
-        ),
-        RequestInstructionV1::require_u64(
-            req_fixed(wire::REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET)?,
-            ABSENT_REVISION,
-        ),
-        RequestInstructionV1::require_u64(
-            req_fixed(wire::REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET)?,
-            ABSENT_REVISION,
-        ),
-        RequestInstructionV1::require_u32(
-            req_fixed(wire::REQUEST_SELECTED_OUTCOME_OFFSET)?,
-            u32::MAX,
-        ),
-        RequestInstructionV1::require_zero(req_fixed(wire::REQUEST_RESERVED_TAIL_OFFSET)?, 4),
     ]);
     for (offset, register) in [
-        (wire::REQUEST_RELEASE_SET_OFFSET, ID_RELEASE),
-        (wire::REQUEST_MARKET_OFFSET, ID_MARKET),
-        (wire::REQUEST_GRAPH_ID_OFFSET, ID_GRAPH),
-        (wire::REQUEST_DESCRIPTOR_ID_OFFSET, ID_DESCRIPTOR),
-        (wire::REQUEST_ACTOR_OFFSET, ID_ACTOR),
-        (wire::REQUEST_RECEIPT_MINT_OFFSET, ID_RECEIPT_MINT),
-        (wire::REQUEST_RECEIPT_ACCOUNT_OFFSET, ID_RECEIPT_ACCOUNT),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET, ID_AUTHORITY),
-        (wire::REQUEST_TOKEN_PROGRAM_OFFSET, ID_TOKEN),
+        (wire::REQUEST_RELEASE_SET_OFFSET_V3, ID_RELEASE),
+        (wire::REQUEST_MARKET_OFFSET_V3, ID_MARKET),
+        (wire::REQUEST_GRAPH_ID_OFFSET_V3, ID_GRAPH),
+        (wire::REQUEST_DESCRIPTOR_ID_OFFSET_V3, ID_DESCRIPTOR),
+        (wire::REQUEST_ACTOR_OFFSET_V3, ID_ACTOR),
+        (wire::REQUEST_RECEIPT_MINT_OFFSET_V3, ID_RECEIPT_MINT),
+        (
+            wire::STRUCTURED_REQUEST_RECEIPT_ACCOUNT_OFFSET_V3,
+            ID_RECEIPT_ACCOUNT,
+        ),
+        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
     ] {
         fixed.push(RequestInstructionV1::project_identity(
             req_fixed(offset)?,
@@ -800,14 +807,14 @@ fn encode_request_profile(
     }
     for (offset, register) in [
         (
-            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET,
+            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET_V3,
             SCALAR_REPRESENTATION_REVISION,
         ),
-        (wire::REQUEST_GENERATION_OFFSET, SCALAR_GENERATION),
-        (wire::REQUEST_QUANTITY_OFFSET, SCALAR_QUANTITY),
-        (wire::REQUEST_DENOMINATOR_OFFSET, SCALAR_DENOMINATOR),
+        (wire::REQUEST_GENERATION_OFFSET_V3, SCALAR_GENERATION),
+        (wire::REQUEST_QUANTITY_OFFSET_V3, SCALAR_QUANTITY),
+        (wire::REQUEST_DENOMINATOR_OFFSET_V3, SCALAR_DENOMINATOR),
         (
-            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET,
+            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3,
             SCALAR_RECEIPT_SUPPLY,
         ),
     ] {
@@ -816,34 +823,23 @@ fn encode_request_profile(
             scalar_common(register)?,
         ));
     }
-    for (offset, register) in [
-        (wire::REQUEST_OUTCOME_COUNT_OFFSET, SCALAR_OUTCOME_COUNT),
-        (wire::REQUEST_ASSET_COUNT_OFFSET, SCALAR_ASSET_COUNT),
-    ] {
+    for (offset, register) in [(wire::REQUEST_OUTCOME_COUNT_OFFSET_V3, SCALAR_OUTCOME_COUNT)] {
         fixed.push(RequestInstructionV1::project_u32(
             req_fixed(offset)?,
             scalar_common(register)?,
         ));
     }
     for row in 0..representation_outcome_count {
-        let row_offset = REQUEST_HEADER_BYTES_V2
+        let row_offset = REQUEST_STRUCTURED_HEADER_BYTES_V3
             .checked_add(
-                row.checked_mul(ASSET_BYTES_V2)
+                row.checked_mul(ASSET_BYTES_V3)
                     .ok_or(Error::ArtifactGeometry)?,
             )
             .ok_or(Error::ArtifactGeometry)?;
-        for (offset, register) in [
-            (wire::ASSET_SHARD_MINT_OFFSET, ITEM_ID_SHARD_MINT),
-            (wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET, ITEM_ID_ACTOR_SHARDS),
-            (
-                wire::ASSET_STRUCTURED_CUSTODY_ACCOUNT_OFFSET,
-                ITEM_ID_STRUCTURED_CUSTODY,
-            ),
-            (
-                wire::ASSET_CLAIMS_CUSTODY_OWNER_OFFSET,
-                ITEM_ID_CLAIMS_CUSTODY_OWNER,
-            ),
-        ] {
+        for (offset, register) in [(
+            wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
+            ITEM_ID_ACTOR_SHARDS,
+        )] {
             fixed.push(RequestInstructionV1::project_identity(
                 req_fixed(
                     row_offset
@@ -854,17 +850,17 @@ fn encode_request_profile(
             ));
         }
         for (offset, register) in [
-            (wire::ASSET_COEFFICIENT_OFFSET, ITEM_SCALAR_COEFFICIENT),
+            (wire::ASSET_COEFFICIENT_OFFSET_V3, ITEM_SCALAR_COEFFICIENT),
             (
-                wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET,
+                wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET_V3,
                 ITEM_SCALAR_SHARD_SUPPLY,
             ),
             (
-                wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET,
+                wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET_V3,
                 ITEM_SCALAR_ACTOR_SHARDS,
             ),
             (
-                wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET,
+                wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
                 ITEM_SCALAR_STRUCTURED_SHARDS,
             ),
         ] {
@@ -917,10 +913,9 @@ fn encode_transition(representation_outcome_count: u32) -> Result<Vec<u8>> {
             .ok_or(Error::ArtifactGeometry)?,
     );
     prelude.extend([
-        InstructionV3::scalar_eq(
-            transition_common(SCALAR_ASSET_COUNT)?,
-            transition_common(SCALAR_OUTCOME_COUNT)?,
-        ),
+        // `scalar_eq(asset_count, outcome_count)` stood here. In v3 the decoder
+        // DERIVES the asset count from the outcome count for a Structured
+        // action, so the equality this asserted is what the encoding means.
         InstructionV3::nonzero(transition_common(SCALAR_OUTCOME_COUNT)?),
         InstructionV3::nonzero(transition_common(SCALAR_QUANTITY)?),
         InstructionV3::nonzero(transition_common(SCALAR_DENOMINATOR)?),
@@ -995,36 +990,23 @@ fn encode_effect(
     let mut fixed_template = vec![0_u8; request_bytes];
     put(
         &mut fixed_template,
-        wire::REQUEST_MAGIC_OFFSET,
+        wire::REQUEST_MAGIC_OFFSET_V3,
         &REQUEST_MAGIC_V2,
     )?;
     put(
         &mut fixed_template,
-        wire::REQUEST_VERSION_OFFSET,
-        &PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+        wire::REQUEST_VERSION_OFFSET_V3,
+        &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
     )?;
     put(
         &mut fixed_template,
-        wire::REQUEST_ACTION_OFFSET,
+        wire::REQUEST_ACTION_OFFSET_V3,
         &[action as u8],
     )?;
     put(
         &mut fixed_template,
-        wire::REQUEST_CALLER_ROLE_OFFSET,
+        wire::REQUEST_CALLER_ROLE_OFFSET_V3,
         &[CallerRoleV2::Trading as u8],
-    )?;
-    for offset in [
-        wire::REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET,
-        wire::REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET,
-        wire::REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET,
-        wire::REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET,
-    ] {
-        put(&mut fixed_template, offset, &ABSENT_REVISION.to_le_bytes())?;
-    }
-    put(
-        &mut fixed_template,
-        wire::REQUEST_SELECTED_OUTCOME_OFFSET,
-        &u32::MAX.to_le_bytes(),
     )?;
     let route = [RouteInputV3 {
         role: FixedRole::Claims,
@@ -1046,16 +1028,19 @@ fn encode_effect(
         EFFECT_BASE_INSTRUCTIONS + representation_outcome_count * EFFECT_ROW_INSTRUCTIONS,
     );
     for (offset, register) in [
-        (wire::REQUEST_PARENT_CONTEXT_OFFSET, ID_PARENT),
-        (wire::REQUEST_RELEASE_SET_OFFSET, ID_RELEASE),
-        (wire::REQUEST_MARKET_OFFSET, ID_MARKET),
-        (wire::REQUEST_GRAPH_ID_OFFSET, ID_GRAPH),
-        (wire::REQUEST_DESCRIPTOR_ID_OFFSET, ID_DESCRIPTOR),
-        (wire::REQUEST_ACTOR_OFFSET, ID_ACTOR),
-        (wire::REQUEST_RECEIPT_MINT_OFFSET, ID_RECEIPT_MINT),
-        (wire::REQUEST_RECEIPT_ACCOUNT_OFFSET, ID_RECEIPT_ACCOUNT),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET, ID_AUTHORITY),
-        (wire::REQUEST_TOKEN_PROGRAM_OFFSET, ID_TOKEN),
+        (wire::REQUEST_PARENT_CONTEXT_OFFSET_V3, ID_PARENT),
+        (wire::REQUEST_RELEASE_SET_OFFSET_V3, ID_RELEASE),
+        (wire::REQUEST_MARKET_OFFSET_V3, ID_MARKET),
+        (wire::REQUEST_GRAPH_ID_OFFSET_V3, ID_GRAPH),
+        (wire::REQUEST_DESCRIPTOR_ID_OFFSET_V3, ID_DESCRIPTOR),
+        (wire::REQUEST_ACTOR_OFFSET_V3, ID_ACTOR),
+        (wire::REQUEST_RECEIPT_MINT_OFFSET_V3, ID_RECEIPT_MINT),
+        (
+            wire::STRUCTURED_REQUEST_RECEIPT_ACCOUNT_OFFSET_V3,
+            ID_RECEIPT_ACCOUNT,
+        ),
+        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
     ] {
         fixed.push(EffectInstructionV3::write_request_identity(
             0,
@@ -1066,14 +1051,14 @@ fn encode_effect(
     }
     for (offset, register) in [
         (
-            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET,
+            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET_V3,
             SCALAR_REPRESENTATION_REVISION,
         ),
-        (wire::REQUEST_GENERATION_OFFSET, SCALAR_GENERATION),
-        (wire::REQUEST_QUANTITY_OFFSET, SCALAR_QUANTITY),
-        (wire::REQUEST_DENOMINATOR_OFFSET, SCALAR_DENOMINATOR),
+        (wire::REQUEST_GENERATION_OFFSET_V3, SCALAR_GENERATION),
+        (wire::REQUEST_QUANTITY_OFFSET_V3, SCALAR_QUANTITY),
+        (wire::REQUEST_DENOMINATOR_OFFSET_V3, SCALAR_DENOMINATOR),
         (
-            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET,
+            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3,
             SCALAR_RECEIPT_SUPPLY,
         ),
     ] {
@@ -1084,10 +1069,7 @@ fn encode_effect(
             effect_scalar_common(register)?,
         ));
     }
-    for (offset, register) in [
-        (wire::REQUEST_OUTCOME_COUNT_OFFSET, SCALAR_OUTCOME_COUNT),
-        (wire::REQUEST_ASSET_COUNT_OFFSET, SCALAR_ASSET_COUNT),
-    ] {
+    for (offset, register) in [(wire::REQUEST_OUTCOME_COUNT_OFFSET_V3, SCALAR_OUTCOME_COUNT)] {
         fixed.push(EffectInstructionV3::write_request_u32(
             0,
             RequestSpaceV3::Fixed,
@@ -1096,24 +1078,16 @@ fn encode_effect(
         ));
     }
     for row in 0..representation_outcome_count {
-        let row_offset = REQUEST_HEADER_BYTES_V2
+        let row_offset = REQUEST_STRUCTURED_HEADER_BYTES_V3
             .checked_add(
-                row.checked_mul(ASSET_BYTES_V2)
+                row.checked_mul(ASSET_BYTES_V3)
                     .ok_or(Error::ArtifactGeometry)?,
             )
             .ok_or(Error::ArtifactGeometry)?;
-        for (offset, register) in [
-            (wire::ASSET_SHARD_MINT_OFFSET, ITEM_ID_SHARD_MINT),
-            (wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET, ITEM_ID_ACTOR_SHARDS),
-            (
-                wire::ASSET_STRUCTURED_CUSTODY_ACCOUNT_OFFSET,
-                ITEM_ID_STRUCTURED_CUSTODY,
-            ),
-            (
-                wire::ASSET_CLAIMS_CUSTODY_OWNER_OFFSET,
-                ITEM_ID_CLAIMS_CUSTODY_OWNER,
-            ),
-        ] {
+        for (offset, register) in [(
+            wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
+            ITEM_ID_ACTOR_SHARDS,
+        )] {
             fixed.push(EffectInstructionV3::write_request_identity(
                 0,
                 RequestSpaceV3::Fixed,
@@ -1126,17 +1100,17 @@ fn encode_effect(
             ));
         }
         for (offset, register) in [
-            (wire::ASSET_COEFFICIENT_OFFSET, ITEM_SCALAR_COEFFICIENT),
+            (wire::ASSET_COEFFICIENT_OFFSET_V3, ITEM_SCALAR_COEFFICIENT),
             (
-                wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET,
+                wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET_V3,
                 ITEM_SCALAR_SHARD_SUPPLY,
             ),
             (
-                wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET,
+                wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET_V3,
                 ITEM_SCALAR_ACTOR_SHARDS,
             ),
             (
-                wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET,
+                wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
                 ITEM_SCALAR_STRUCTURED_SHARDS,
             ),
         ] {
@@ -1261,8 +1235,8 @@ fn structured_logical_accounts(representation_outcome_count: usize) -> Result<us
 
 fn structured_request_bytes(representation_outcome_count: usize) -> Result<usize> {
     representation_outcome_count
-        .checked_mul(ASSET_BYTES_V2)
-        .and_then(|tail| REQUEST_HEADER_BYTES_V2.checked_add(tail))
+        .checked_mul(ASSET_BYTES_V3)
+        .and_then(|tail| REQUEST_STRUCTURED_HEADER_BYTES_V3.checked_add(tail))
         .ok_or(Error::ArtifactGeometry)
 }
 
@@ -1272,8 +1246,13 @@ fn require_representation_width(input: RationalOpenStructuredHotBundleInputV3<'_
     let representation_outcome_count = input.representation_descriptor.outcome_count();
     let representation_width =
         usize::try_from(representation_outcome_count).map_err(|_| Error::AccountProfileInput)?;
+    if representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3 {
+        return Err(Error::CoordinateCeiling {
+            requested: representation_outcome_count,
+            ceiling: RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+        });
+    }
     if representation_outcome_count == 0
-        || representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3
         || input.fixed_data_lengths.len() != usize::from(RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3)
         || input.representation_descriptor.descriptor_id()
             != input.authenticated_token_behavior.descriptor_id()
@@ -1331,6 +1310,7 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 
 #[cfg(test)]
 mod tests {
+    use dclutch_rational_representation_v2_contract::ABSENT_REVISION;
     use super::*;
     use dclutch_claims_svm::composition_v3::{
         ClaimsCompositionErrorV3, ClaimsCompositionParentV3, ClaimsCompositionV3,
@@ -1451,21 +1431,40 @@ mod tests {
             }
             let effect = EffectProgramV4::decode(&bundle.effect).expect("effect");
             let effect = effect.base();
+            // Every width here is read from the constant that defines it, with
+            // the fixture's K = 3 as the only literal. Restated numbers are how
+            // this assertion went stale: physical ABI v3 dropped four absent
+            // revisions, the selected outcome and the derived asset count from
+            // the structured class, and dropped three of the four per-coordinate
+            // identity keys -- the shard Mint, the Structured custody Account
+            // and the Claims custody owner, all now derived by the Claims
+            // adapter. The scalar bank shrank 9 -> 8 and the per-row identity
+            // stride 4 -> 1, and both literals stayed behind. The accounts did
+            // NOT shrink, which is the point: the three keys stopped riding the
+            // wire, they did not stop existing on chain.
             assert_eq!(
                 effect.account_count(258).expect("account width"),
-                37 + 4 * 3
+                usize::from(
+                    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3
+                        + RATIONAL_OPEN_STRUCTURED_ITEM_ACCOUNTS_V3 * 3
+                )
             );
-            assert_eq!(effect.scalar_count(258).expect("scalar width"), 9 + 4 * 3);
+            assert_eq!(
+                effect.scalar_count(258).expect("scalar width"),
+                RATIONAL_OPEN_STRUCTURED_COMMON_SCALARS_V3
+                    + RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3 * 3
+            );
             assert_eq!(
                 effect.identity_count(258).expect("identity width"),
-                11 + 4 * 3
+                RATIONAL_OPEN_STRUCTURED_COMMON_IDENTITIES_V3
+                    + RATIONAL_OPEN_STRUCTURED_ITEM_IDENTITIES_V3 * 3
             );
             let (fixed, item) = effect.route_template(0).expect("templates");
-            assert_eq!(fixed.len(), REQUEST_HEADER_BYTES_V2 + 3 * ASSET_BYTES_V2);
+            assert_eq!(fixed.len(), REQUEST_STRUCTURED_HEADER_BYTES_V3 + 3 * ASSET_BYTES_V3);
             assert!(item.is_empty());
             assert_eq!(
                 fixed
-                    .get(wire::REQUEST_ACTION_OFFSET)
+                    .get(wire::REQUEST_ACTION_OFFSET_V3)
                     .copied()
                     .expect("action"),
                 action as u8
@@ -1679,7 +1678,7 @@ mod tests {
     }
 
     fn full_width_issue_request(assets: u32) -> Vec<u8> {
-        let mut rows = vec![0_u8; usize::try_from(assets).expect("width") * ASSET_BYTES_V2];
+        let mut rows = vec![0_u8; usize::try_from(assets).expect("width") * ASSET_BYTES_V3];
         for row in 0..assets {
             let seed = u8::try_from(row).expect("small width");
             let index = usize::try_from(row).expect("small width");
@@ -1694,7 +1693,7 @@ mod tests {
                 expected_structured_shards: 0,
             }
             .encode_into(
-                rows.get_mut(index * ASSET_BYTES_V2..(index + 1) * ASSET_BYTES_V2)
+                rows.get_mut(index * ASSET_BYTES_V3..(index + 1) * ASSET_BYTES_V3)
                     .expect("asset row"),
             )
             .expect("asset");
@@ -1732,7 +1731,7 @@ mod tests {
             &rows,
         )
         .expect("full-width request");
-        let mut bytes = vec![0_u8; REQUEST_HEADER_BYTES_V2 + rows.len()];
+        let mut bytes = vec![0_u8; REQUEST_STRUCTURED_HEADER_BYTES_V3 + rows.len()];
         request.encode_into(&mut bytes).expect("request bytes");
         bytes
     }
@@ -1770,7 +1769,6 @@ mod tests {
             *bank.get_mut(SCALAR_QUANTITY).expect("quantity") = 1;
             *bank.get_mut(SCALAR_DENOMINATOR).expect("denominator") = denominator;
             *bank.get_mut(SCALAR_OUTCOME_COUNT).expect("outcome count") = 3;
-            *bank.get_mut(SCALAR_ASSET_COUNT).expect("asset count") = 3;
             for (row, coefficient) in coefficients.into_iter().enumerate() {
                 let register = row_scalar(row, ITEM_SCALAR_COEFFICIENT).expect("row scalar");
                 *bank.get_mut(register).expect("coefficient") = coefficient;

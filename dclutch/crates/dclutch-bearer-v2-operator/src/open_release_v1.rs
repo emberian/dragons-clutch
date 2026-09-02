@@ -75,7 +75,7 @@ use dclutch_capability_program_contract::{
 use dclutch_effect_kernel::v4::ProgramV4 as EffectProgramV4;
 use dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2;
 use dclutch_rational_representation_v2_contract::RepresentationActionV2;
-use dclutch_rational_representation_v2_request_contract::generated::REQUEST_ACTION_OFFSET;
+use dclutch_rational_representation_v2_request_contract::generated::REQUEST_ACTION_OFFSET_V3;
 use dclutch_request_profile_contract::RequestProfileV1;
 use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2};
 use solana_program::hash::hash;
@@ -194,7 +194,7 @@ pub fn authenticate_open_capability_release_v1(
 
     let set = CapabilityProgramSetV2::decode(bytes.program_set).map_err(Error::CapabilityProgramSet)?;
     let selector_offset =
-        u32::try_from(REQUEST_ACTION_OFFSET).map_err(|_| Error::ArtifactGeometry)?;
+        u32::try_from(REQUEST_ACTION_OFFSET_V3).map_err(|_| Error::ArtifactGeometry)?;
     if set.selector_offset() != selector_offset
         || set.selector_width() != SelectorWidthV2::U8
         || usize::from(set.entry_count()) != OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1
@@ -331,7 +331,7 @@ fn join_artifacts(
         .base()
         .route_template(0)
         .map_err(Error::EffectArtifact)?;
-    if fixed.get(REQUEST_ACTION_OFFSET).copied() != Some(action as u8) {
+    if fixed.get(REQUEST_ACTION_OFFSET_V3).copied() != Some(action as u8) {
         return Err(Error::ArtifactGeometry);
     }
 

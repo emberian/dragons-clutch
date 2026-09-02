@@ -14,7 +14,7 @@ use dclutch_effect_kernel::v4::{
 use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, RepresentationActionV2,
 };
-use dclutch_rational_representation_v2_request_contract::generated::REQUEST_ACTION_OFFSET;
+use dclutch_rational_representation_v2_request_contract::generated::REQUEST_ACTION_OFFSET_V3;
 use dclutch_token_svm::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
@@ -271,8 +271,8 @@ fn validate_open_capability_program_set_core(
         if actual != expected {
             return Err(Error::ArtifactGeometry);
         }
-        let mut request = [0_u8; REQUEST_ACTION_OFFSET + 1];
-        request[REQUEST_ACTION_OFFSET] =
+        let mut request = [0_u8; REQUEST_ACTION_OFFSET_V3 + 1];
+        request[REQUEST_ACTION_OFFSET_V3] =
             u8::try_from(expected.selector()).map_err(|_| Error::ArtifactGeometry)?;
         set.require_descriptor(
             &request,
@@ -308,7 +308,7 @@ fn assemble_open_capability_program_set(
         encoded_program_set_bytes_v2(descriptors.len()).map_err(Error::CapabilityProgramSet)?;
     let mut program_set = vec![0_u8; width];
     encode_program_set_v2(
-        u32::try_from(REQUEST_ACTION_OFFSET).map_err(|_| Error::ArtifactGeometry)?,
+        u32::try_from(REQUEST_ACTION_OFFSET_V3).map_err(|_| Error::ArtifactGeometry)?,
         SelectorWidthV2::U8,
         &descriptors,
         &mut program_set,
@@ -366,7 +366,7 @@ fn descriptor_entry_inner(
         .base()
         .route_template(0)
         .map_err(Error::EffectArtifact)?;
-    if fixed.get(REQUEST_ACTION_OFFSET).copied() != Some(expected_action as u8) {
+    if fixed.get(REQUEST_ACTION_OFFSET_V3).copied() != Some(expected_action as u8) {
         return Err(Error::ArtifactGeometry);
     }
     Ok(CapabilityProgramSetEntryV2::new(

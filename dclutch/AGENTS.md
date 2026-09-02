@@ -309,6 +309,14 @@ construction belong outside the kernel in explicitly named adapters.
   lists what the browser still states in its own words; every generated module
   carries an `abi:*:verify` that `npm test` runs, so a surface with neither is
   a surface with no authority behind it.
+- **A commit touching `programs/*/src/**` carries its frameguard baseline rows
+  or says in its message that it leaves the ratchet red** -- the exact
+  per-function frame manifest cannot be recaptured after the fact by a
+  bystander, because the double build is longer than this tree's interval
+  between program commits (three correct recaptures were each invalidated
+  within minutes on 2026-09-02), so capture with `tools/frameguard/run.sh --at
+  <commit>` in the same commit, and `frameguard.py owed --repo . --baseline
+  tools/frameguard/baseline.json` names who has not.
 - Every fixed bound is labeled as mathematical, chain-derived, measured-profile,
   or provisional. Provisional bounds require a lifting plan.
 - Add adversarial tests with each invariant or parser. Do not weaken a refusal

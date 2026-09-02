@@ -1,7 +1,7 @@
 //! Adversarial corpus for the Rational terminal Hot V3 specialization.
 
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, Error, RATIONAL_TERMINAL_HOT_MAGIC_V3,
+    ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, Error, RATIONAL_TERMINAL_HOT_MAGIC_V3,
     RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RationalTerminalHotRequestV3, RepresentationActionV2,
     RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
@@ -46,8 +46,8 @@ fn terminal_child<'a>(asset_bytes: &'a [u8]) -> RepresentationRequestV2<'a> {
     .expect("terminal child")
 }
 
-fn asset_bytes() -> [u8; ASSET_BYTES_V2] {
-    let mut output = [0_u8; ASSET_BYTES_V2];
+fn asset_bytes() -> [u8; ASSET_BYTES_V3] {
+    let mut output = [0_u8; ASSET_BYTES_V3];
     AssetV2 {
         shard_mint: id(20),
         actor_shard_account: id(21),
@@ -84,18 +84,33 @@ fn terminal_hot_specializes_exact_child_without_fixed_point() {
     assert_eq!(specialized.header().parent_context, family_digest);
     assert_eq!(specialized.header().outcome_count, 258);
     assert_eq!(specialized.header().selected_outcome, 257);
-    assert_eq!(specialized.asset(0).expect("asset").shard_mint, id(20));
+    // The shard Mint left the wire in physical ABI v3: the child cannot carry
+    // it and the adapter derives it. What the specialization is still
+    // answerable for is the one key a caller names.
+    assert_eq!(
+        specialized.asset_row(0).expect("asset").actor_shard_account,
+        id(21)
+    );
 
     let registers = family
         .project_registers(family_digest, 258)
         .expect("canonical register projection");
     assert_eq!(registers.identity(0), Ok(family_digest));
-    assert_eq!(registers.identity(11), Ok(id(20)));
-    assert_eq!(registers.scalar(9), Ok(258));
-    assert_eq!(registers.scalar(10), Ok(257));
-    assert_eq!(registers.identity(15), Err(Error::InvalidWidth));
-    assert_eq!(registers.scalar(16), Ok(258));
-    assert_eq!(registers.scalar(17), Err(Error::InvalidWidth));
+    // Register 11 was the shard Mint and is now the actor shard Account: the
+    // three derived keys left the bank with the wire that carried them, and the
+    // survivors renumbered. `RATIONAL_TERMINAL_IDENTITY_ACTOR_SHARD_ACCOUNT_V3`
+    // is 11 where it was 12.
+    assert_eq!(registers.identity(11), Ok(id(21)));
+    assert_eq!(registers.scalar(8), Ok(258));
+    assert_eq!(registers.scalar(9), Ok(257));
+    // The banks shrank with the slots that lost both their source and their
+    // reader: identities 15 -> 12, scalars 17 -> 15. Two scalars went: the
+    // derived asset count, and the actor-Position revision, which the terminal
+    // class does not carry because it is ABSENT_REVISION for every terminal
+    // redemption. The Product tail count is the last scalar and moved 16 -> 14.
+    assert_eq!(registers.identity(12), Err(Error::InvalidWidth));
+    assert_eq!(registers.scalar(14), Ok(258));
+    assert_eq!(registers.scalar(15), Err(Error::InvalidWidth));
     assert_eq!(
         family.project_registers(family_digest, 1),
         Err(Error::InvalidWidth)
@@ -141,7 +156,10 @@ fn specialization_refuses_zero_digest_and_wrong_width() {
         Err(Error::ZeroIdentity)
     );
     assert_eq!(
-        family.specialize_child_into(id(1), &mut output[..647]),
+        // One byte short of the v3 terminal family request, which is 508:
+        // a 444-byte terminal header over one 64-byte asset row, where v2 was
+        // 488 over 160 for 648.
+        family.specialize_child_into(id(1), &mut output[..507]),
         Err(Error::InvalidLength)
     );
 }

@@ -4,9 +4,9 @@ use crate::{
     Error, RepresentationActionV2, RepresentationRequestV2, Result, array_at, byte_at,
     generated::{
         ACTION_DENOMINATE, ACTION_ISSUE_STRUCTURED, ACTION_RECONSTITUTE, ACTION_UNWRAP_STRUCTURED,
-        CALLER_ROLE_TRADING, PHYSICAL_ABI_VERSION_V2, REQUEST_ACTION_OFFSET,
-        REQUEST_ASSET_COUNT_OFFSET, REQUEST_CALLER_ROLE_OFFSET, REQUEST_MAGIC_OFFSET,
-        REQUEST_MAGIC_V2, REQUEST_PARENT_CONTEXT_OFFSET, REQUEST_VERSION_OFFSET,
+        CALLER_ROLE_TRADING, PHYSICAL_ABI_VERSION_V3, REQUEST_ACTION_OFFSET_V3,
+        REQUEST_CALLER_ROLE_OFFSET_V3, REQUEST_MAGIC_OFFSET_V3, REQUEST_MAGIC_V2,
+        REQUEST_OUTCOME_COUNT_OFFSET_V3, REQUEST_PARENT_CONTEXT_OFFSET_V3, REQUEST_VERSION_OFFSET_V3,
     },
     is_zero, put, put_byte, require_zero, u16_at, u32_at,
 };
@@ -40,25 +40,25 @@ impl<'a> OpenRepresentationHotRequestV3<'a> {
         if input.len() != scratch.len() {
             return Err(Error::InvalidLength);
         }
-        if array_at::<8>(input, REQUEST_MAGIC_OFFSET)? != OPEN_REPRESENTATION_HOT_MAGIC_V3 {
+        if array_at::<8>(input, REQUEST_MAGIC_OFFSET_V3)? != OPEN_REPRESENTATION_HOT_MAGIC_V3 {
             return Err(Error::InvalidMagic);
         }
-        if u16_at(input, REQUEST_VERSION_OFFSET)? != OPEN_REPRESENTATION_HOT_VERSION_V3 {
+        if u16_at(input, REQUEST_VERSION_OFFSET_V3)? != OPEN_REPRESENTATION_HOT_VERSION_V3 {
             return Err(Error::UnsupportedVersion);
         }
-        if byte_at(input, REQUEST_CALLER_ROLE_OFFSET)? != CALLER_ROLE_TRADING {
+        if byte_at(input, REQUEST_CALLER_ROLE_OFFSET_V3)? != CALLER_ROLE_TRADING {
             return Err(Error::InvalidActionShape);
         }
-        require_zero(input, REQUEST_PARENT_CONTEXT_OFFSET, 32)?;
-        let action = decode_open_action(byte_at(input, REQUEST_ACTION_OFFSET)?)?;
+        require_zero(input, REQUEST_PARENT_CONTEXT_OFFSET_V3, 32)?;
+        let action = decode_open_action(byte_at(input, REQUEST_ACTION_OFFSET_V3)?)?;
         scratch.copy_from_slice(input);
-        put(scratch, REQUEST_MAGIC_OFFSET, &REQUEST_MAGIC_V2)?;
+        put(scratch, REQUEST_MAGIC_OFFSET_V3, &REQUEST_MAGIC_V2)?;
         put(
             scratch,
-            REQUEST_VERSION_OFFSET,
-            &PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+            REQUEST_VERSION_OFFSET_V3,
+            &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
         )?;
-        put(scratch, REQUEST_PARENT_CONTEXT_OFFSET, &[1_u8; 32])?;
+        put(scratch, REQUEST_PARENT_CONTEXT_OFFSET_V3, &[1_u8; 32])?;
         let child = RepresentationRequestV2::decode(scratch)?;
         if child.header().action != action {
             return Err(Error::InvalidActionShape);
@@ -75,16 +75,16 @@ impl<'a> OpenRepresentationHotRequestV3<'a> {
         child.encode_into(output)?;
         put(
             output,
-            REQUEST_MAGIC_OFFSET,
+            REQUEST_MAGIC_OFFSET_V3,
             &OPEN_REPRESENTATION_HOT_MAGIC_V3,
         )?;
         put(
             output,
-            REQUEST_VERSION_OFFSET,
+            REQUEST_VERSION_OFFSET_V3,
             &OPEN_REPRESENTATION_HOT_VERSION_V3.to_le_bytes(),
         )?;
         output
-            .get_mut(REQUEST_PARENT_CONTEXT_OFFSET..REQUEST_PARENT_CONTEXT_OFFSET + 32)
+            .get_mut(REQUEST_PARENT_CONTEXT_OFFSET_V3..REQUEST_PARENT_CONTEXT_OFFSET_V3 + 32)
             .ok_or(Error::InvalidLength)?
             .fill(0);
         Ok(OpenRepresentationHotRequestV3 { bytes: output })
@@ -103,25 +103,33 @@ impl<'a> OpenRepresentationHotRequestV3<'a> {
             return Err(Error::InvalidLength);
         }
         output.copy_from_slice(self.bytes);
-        put(output, REQUEST_MAGIC_OFFSET, &REQUEST_MAGIC_V2)?;
+        put(output, REQUEST_MAGIC_OFFSET_V3, &REQUEST_MAGIC_V2)?;
         put(
             output,
-            REQUEST_VERSION_OFFSET,
-            &PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+            REQUEST_VERSION_OFFSET_V3,
+            &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
         )?;
-        put(output, REQUEST_PARENT_CONTEXT_OFFSET, &family_digest)?;
-        put_byte(output, REQUEST_CALLER_ROLE_OFFSET, CALLER_ROLE_TRADING)?;
+        put(output, REQUEST_PARENT_CONTEXT_OFFSET_V3, &family_digest)?;
+        put_byte(output, REQUEST_CALLER_ROLE_OFFSET_V3, CALLER_ROLE_TRADING)?;
         RepresentationRequestV2::decode(output)
     }
 
     /// Selected open action.
     pub fn action(self) -> Result<RepresentationActionV2> {
-        decode_open_action(byte_at(self.bytes, REQUEST_ACTION_OFFSET)?)
+        decode_open_action(byte_at(self.bytes, REQUEST_ACTION_OFFSET_V3)?)
     }
 
     /// Exact number of canonical asset rows.
+    ///
+    /// Derived, not read: version three does not send `assetCount`. A selected
+    /// action carries one row and a Structured action carries the complete
+    /// outcome set, which is the same rule the request decoder applies.
     pub fn asset_count(self) -> Result<u32> {
-        u32_at(self.bytes, REQUEST_ASSET_COUNT_OFFSET)
+        if self.action()?.selected_outcome() {
+            Ok(1)
+        } else {
+            u32_at(self.bytes, REQUEST_OUTCOME_COUNT_OFFSET_V3)
+        }
     }
 
     /// Whether this request spans the complete Product outcome set.
@@ -154,7 +162,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RepresentationRequestHeaderV2,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, RepresentationRequestHeaderV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -168,7 +176,7 @@ mod tests {
             RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured
         );
         let count = if structured { 2 } else { 1 };
-        let mut rows = alloc::vec![0_u8; count * ASSET_BYTES_V2];
+        let mut rows = alloc::vec![0_u8; count * ASSET_BYTES_V3];
         for index in 0..count {
             AssetV2 {
                 shard_mint: id(20 + u8::try_from(index).expect("small index")),
@@ -181,7 +189,7 @@ mod tests {
                 expected_structured_shards: if structured { 20 } else { 0 },
             }
             .encode_into(
-                rows.get_mut(index * ASSET_BYTES_V2..(index + 1) * ASSET_BYTES_V2)
+                rows.get_mut(index * ASSET_BYTES_V3..(index + 1) * ASSET_BYTES_V3)
                     .expect("row"),
             )
             .expect("asset");
@@ -218,7 +226,8 @@ mod tests {
             &rows,
         )
         .expect("child");
-        let mut bytes = alloc::vec![0_u8; crate::REQUEST_HEADER_BYTES_V2 + rows.len()];
+        // The header width is class-dependent in physical ABI v3.
+        let mut bytes = alloc::vec![0_u8; child.wire_len().expect("wire width")];
         child.encode_into(&mut bytes).expect("request bytes");
         bytes
     }
@@ -262,7 +271,7 @@ mod tests {
         let mut family_bytes = alloc::vec![0_u8; child_bytes.len()];
         OpenRepresentationHotRequestV3::from_child_into(child, &mut family_bytes).expect("family");
         let mut scratch = alloc::vec![0_u8; family_bytes.len()];
-        for offset in [REQUEST_MAGIC_OFFSET, REQUEST_PARENT_CONTEXT_OFFSET] {
+        for offset in [REQUEST_MAGIC_OFFSET_V3, REQUEST_PARENT_CONTEXT_OFFSET_V3] {
             let mut hostile = family_bytes.clone();
             *hostile.get_mut(offset).expect("hostile byte") ^= 1;
             assert!(
@@ -271,7 +280,7 @@ mod tests {
             );
         }
         let mut terminal = family_bytes;
-        *terminal.get_mut(REQUEST_ACTION_OFFSET).expect("action") =
+        *terminal.get_mut(REQUEST_ACTION_OFFSET_V3).expect("action") =
             crate::generated::ACTION_REDEEM_TERMINAL;
         assert!(
             OpenRepresentationHotRequestV3::decode_with_scratch(&terminal, &mut scratch).is_err()

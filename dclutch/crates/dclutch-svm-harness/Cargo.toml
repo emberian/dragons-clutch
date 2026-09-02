@@ -24,6 +24,7 @@ dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" }

@@ -235,7 +235,7 @@ mod tests {
         HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
     };
     use dclutch_rational_representation_v2_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, REQUEST_HEADER_BYTES_V2,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_STRUCTURED_HEADER_BYTES_V3,
         RepresentationRequestHeaderV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
@@ -249,10 +249,10 @@ mod tests {
     }
 
     fn structured() -> ConstructedHotOpenStructuredV3 {
-        let mut rows = vec![0_u8; ASSET_BYTES_V2 * usize::try_from(OUTCOMES).expect("width")];
+        let mut rows = vec![0_u8; ASSET_BYTES_V3 * usize::try_from(OUTCOMES).expect("width")];
         for index in 0..OUTCOMES {
             let index_u8 = u8::try_from(index).expect("index");
-            let start = usize::try_from(index).expect("index") * ASSET_BYTES_V2;
+            let start = usize::try_from(index).expect("index") * ASSET_BYTES_V3;
             AssetV2 {
                 shard_mint: key(20 + index_u8).to_bytes(),
                 actor_shard_account: key(30 + index_u8).to_bytes(),
@@ -264,7 +264,7 @@ mod tests {
                 expected_structured_shards: 20,
             }
             .encode_into(
-                rows.get_mut(start..start + ASSET_BYTES_V2)
+                rows.get_mut(start..start + ASSET_BYTES_V3)
                     .expect("asset row"),
             )
             .expect("asset");
@@ -301,7 +301,7 @@ mod tests {
             &rows,
         )
         .expect("template");
-        let request_len = REQUEST_HEADER_BYTES_V2 + rows.len();
+        let request_len = REQUEST_STRUCTURED_HEADER_BYTES_V3 + rows.len();
         let mut family_request = vec![0_u8; request_len];
         let family = OpenRepresentationHotRequestV3::from_child_into(template, &mut family_request)
             .expect("family");

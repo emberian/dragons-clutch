@@ -40,10 +40,11 @@ describe('Rational open Hot V3 / CapabilityV4 compiler', () => {
       expectedCustodyPositionRevision: 13n, assets: [asset(14)],
     };
     const compiled = await compileRationalOpenHotV3(input);
-    expect(compiled.familyBytes).toHaveLength(Abi.REQUEST_HEADER_BYTES_V2 + Abi.ASSET_BYTES_V2);
+    // Reconstitute is a SELECTED action, so its header is the selected class.
+    expect(compiled.familyBytes).toHaveLength(Abi.REQUEST_SELECTED_HEADER_BYTES_V3 + Abi.ASSET_BYTES_V3);
     expect(new TextDecoder().decode(compiled.familyBytes.slice(0, 8))).toBe('DCRROH03');
     expect(compiled.childRequest.slice(0, 8)).toEqual(Abi.REQUEST_MAGIC_V2);
-    expect(compiled.childRequest.slice(Abi.REQUEST_PARENT_CONTEXT_OFFSET, Abi.REQUEST_PARENT_CONTEXT_OFFSET + 32)).toEqual(compiled.familyDigest);
+    expect(compiled.childRequest.slice(Abi.REQUEST_PARENT_CONTEXT_OFFSET_V3, Abi.REQUEST_PARENT_CONTEXT_OFFSET_V3 + 32)).toEqual(compiled.familyDigest);
     expect(compiled.claimsAccountCount).toBe(36);
     expect(compiled.rawShardDeltas).toEqual([20n]);
     expect(compiled.rawReceiptDelta).toBe(0n);
@@ -57,13 +58,18 @@ describe('Rational open Hot V3 / CapabilityV4 compiler', () => {
       expectedCustodyPositionRevision: RATIONAL_OPEN_ABSENT_REVISION_V3,
       assets: [asset(11), asset(12), asset(13)],
     });
-    expect(compiled.familyBytes).toHaveLength(Abi.REQUEST_HEADER_BYTES_V2 + 3 * Abi.ASSET_BYTES_V2);
+    expect(compiled.familyBytes).toHaveLength(Abi.REQUEST_STRUCTURED_HEADER_BYTES_V3 + 3 * Abi.ASSET_BYTES_V3);
     expect(compiled.assetCount).toBe(3);
     expect(compiled.claimsAccountCount).toBe(44);
     expect(compiled.rawReceiptDelta).toBe(2n);
     expect(compiled.rawShardDeltas).toEqual([22n, 24n, 26n]);
-    expect(new DataView(compiled.familyBytes.buffer).getUint32(Abi.REQUEST_ASSET_COUNT_OFFSET, true)).toBe(3);
-    expect(new DataView(compiled.familyBytes.buffer).getUint32(Abi.REQUEST_SELECTED_OUTCOME_OFFSET, true)).toBe(0xffff_ffff);
+    // The asset count and the selected outcome are no longer READ BACK OFF THE
+    // WIRE here, because the structured class of physical ABI v3 carries
+    // neither. The asset count is derived from the action and the outcome
+    // count, and the selected outcome was always u32::MAX for a Structured
+    // action -- a field whose only value the action already determines. What
+    // the codec promises is still checked, one line above: `compiled.assetCount`
+    // is three.
   });
 
   it('keeps zero-coefficient Structured coordinates in exact Product-N order as zero raw deltas', async () => {

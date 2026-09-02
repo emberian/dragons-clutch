@@ -12,6 +12,7 @@
 //! other outcomes.
 
 use dclutch_rational_representation_v2_contract::{
+    CoordinateIdentitiesV3, ResolvedRequestV2,
     AssetV2, Error as RepresentationError, PreparedRepresentationV2, RepresentationActionV2,
     RepresentationRequestV2, prepare as prepare_representation,
 };
@@ -256,7 +257,22 @@ pub fn prepare<'a>(
     if header.selected_outcome != bearer.selected_outcome || header.asset_count != 1 {
         return Err(Error::AssetMismatch);
     }
-    let asset = request.asset(0).map_err(Error::Representation)?;
+    // The three derived identities left the wire in physical ABI v3, and the
+    // Bearer descriptor is one of the two independent derivations of them.
+    // Resolving the request from THIS derivation and then checking the wire's
+    // actor Account and coefficient keeps every check that still has two
+    // sides; the adapter's own derivation is checked against the account frame
+    // where it is made.
+    let resolved = ResolvedRequestV2::selected(
+        request,
+        CoordinateIdentitiesV3 {
+            shard_mint: asset_identity.shard_mint,
+            structured_custody_account: asset_identity.structured_custody_account,
+            claims_custody_owner: asset_identity.claims_custody_owner,
+        },
+    )
+    .map_err(Error::Representation)?;
+    let asset = resolved.asset(0).map_err(Error::Representation)?;
     authenticate_asset(asset, asset_identity, bearer.denominator())?;
     if header.action == RepresentationActionV2::RedeemTerminal {
         match resolution {
@@ -267,19 +283,30 @@ pub fn prepare<'a>(
             }
         }
     }
-    prepare_representation(request, bearer.descriptor, projection, bearer.exposure)
+    prepare_representation(resolved, bearer.descriptor, projection, bearer.exposure)
         .map_err(Error::Representation)
 }
 
+/// Check the asset row against the two authorities that still disagree.
+///
+/// Three conjuncts were deleted here, and deleting them is the honest half of
+/// physical ABI v3 rather than a weakened refusal. `shard_mint`,
+/// `structured_custody_account` and `claims_custody_owner` used to arrive
+/// twice -- once on the wire and once from the Bearer descriptor -- and
+/// comparing them was a real check. v3 drops the wire copy, and `prepare`
+/// builds `resolved` FROM `identity`, so reading those three back out of it
+/// and comparing them to `identity` compares a value with itself. They passed
+/// for anything, including a hostile that substituted the shard Mint.
+///
+/// **OWED**: the shard Mint's second authority now belongs in the account
+/// frame -- the Mint alias property -- and until that lands, a substituted
+/// shard Mint is caught by the Claims adapter's own derivation and not here.
 fn authenticate_asset(
     asset: AssetV2,
     identity: BearerAssetIdentityV2,
     denominator: u64,
 ) -> Result<()> {
-    if asset.shard_mint != identity.shard_mint
-        || asset.actor_shard_account != identity.actor_shard_account
-        || asset.structured_custody_account != identity.structured_custody_account
-        || asset.claims_custody_owner != identity.claims_custody_owner
+    if asset.actor_shard_account != identity.actor_shard_account
         || asset.coefficient != denominator
     {
         return Err(Error::AssetMismatch);

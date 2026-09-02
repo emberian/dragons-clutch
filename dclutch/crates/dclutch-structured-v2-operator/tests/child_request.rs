@@ -379,9 +379,10 @@ fn structured_terminal_redeem_is_not_one_child_request() {
 #[test]
 fn the_executable_ceiling_is_three_outcomes_and_a_fourth_refuses() {
     assert_eq!(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, 3);
-    // 488 header + 160 per asset row.
-    assert_eq!(structured_child_request_bytes_v2(3), Ok(968));
-    assert_eq!(structured_child_request_bytes_v2(1), Ok(648));
+    // Physical ABI v3: a 384-byte structured header over 64-byte asset rows,
+    // where v2 was 488 over 160. K = 3 is 576 bytes where it was 968.
+    assert_eq!(structured_child_request_bytes_v2(3), Ok(576));
+    assert_eq!(structured_child_request_bytes_v2(1), Ok(448));
     for hostile in [0, 4, 257] {
         assert_eq!(
             structured_child_request_bytes_v2(hostile),
@@ -410,7 +411,8 @@ fn an_issue_encodes_and_decodes_as_the_exact_rational_request() {
         receipt_atoms,
     )
     .expect("encode");
-    assert_eq!(encoded.len(), 968);
+    // 384 structured header + 3 * 64 asset rows.
+    assert_eq!(encoded.len(), 576);
     assert_eq!(encoded.get(..8), Some(REQUEST_MAGIC_V2.as_slice()));
 
     let request = RepresentationRequestV2::decode(&encoded).expect("decode");
@@ -433,12 +435,19 @@ fn an_issue_encodes_and_decodes_as_the_exact_rational_request() {
     assert_eq!(header.realm, [0; 32]);
     assert_eq!(header.collateral_recipient, [0; 32]);
 
-    let mints = shard_mints(WIDTH);
     for row in 0..width {
         let index = usize::try_from(row).expect("row");
-        let asset = request.asset(row).expect("asset");
+        let asset = request.asset_row(row).expect("asset");
         assert_eq!(asset.coefficient, *COEFFICIENTS.get(index).expect("c"));
-        assert_eq!(asset.shard_mint, *mints.get(index).expect("mint"));
+        // The shard Mint assertion that stood here is gone with the field:
+        // physical ABI v3 derives the Mint from
+        // `(program_id, descriptor_id, outcome)` and does not send it, so what
+        // the encoder is still answerable for at this row is the ONE key a
+        // caller chooses, which the fixture lays out at 0x70 + row.
+        assert_eq!(
+            asset.actor_shard_account,
+            identity(0x70 + u8::try_from(row).expect("row"))
+        );
         // The callee recomputes K_i = c_i * S itself (plan.rs). The encoder
         // must publish the coefficient it will agree with.
         assert_eq!(
@@ -448,7 +457,7 @@ fn an_issue_encodes_and_decodes_as_the_exact_rational_request() {
     }
     // The inert coordinate rides the wire at coefficient zero and will execute
     // a zero-amount transfer rather than being skipped.
-    assert_eq!(request.asset(2).expect("inert").coefficient, 0);
+    assert_eq!(request.asset_row(2).expect("inert").coefficient, 0);
 }
 
 #[test]
@@ -475,7 +484,7 @@ fn an_unwrap_carries_the_pre_action_custody_the_release_draws_down() {
     );
     for row in 0..u32::try_from(WIDTH).expect("width") {
         let index = usize::try_from(row).expect("row");
-        let asset = request.asset(row).expect("asset");
+        let asset = request.asset_row(row).expect("asset");
         let movement = plan.get(index).expect("movement");
         // Releasing draws custody DOWN, so pre-action custody is the required
         // post-action backing plus whatever this action moves out. The callee
@@ -520,8 +529,8 @@ fn issue_and_unwrap_move_custody_in_opposite_directions() {
     for row in 0..u32::try_from(WIDTH).expect("width") {
         let index = usize::try_from(row).expect("row");
         let moved = plan.get(index).expect("movement").shard_atoms;
-        let issued = issue.asset(row).expect("asset").expected_structured_shards;
-        let unwrapped = unwrap.asset(row).expect("asset").expected_structured_shards;
+        let issued = issue.asset_row(row).expect("asset").expected_structured_shards;
+        let unwrapped = unwrap.asset_row(row).expect("asset").expected_structured_shards;
         // Same plan, opposite sign: locking starts below the post-action
         // backing by exactly what it locks, releasing starts above it by
         // exactly what it releases.

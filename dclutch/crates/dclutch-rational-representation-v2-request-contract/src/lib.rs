@@ -22,8 +22,9 @@ pub use frame::{
     REPRESENTATION_TERMINAL_COORDINATES_V2, RepresentationCoordinateV2, RepresentationSegmentV2,
 };
 pub use generated::{
-    ASSET_BYTES_V2, PHYSICAL_ABI_VERSION_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
-    REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
+    ASSET_BYTES_V3, PHYSICAL_ABI_VERSION_V3, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
+    REQUEST_COMMON_PREFIX_BYTES_V3, REQUEST_MAGIC_V2, REQUEST_SELECTED_HEADER_BYTES_V3,
+    REQUEST_STRUCTURED_HEADER_BYTES_V3, REQUEST_TERMINAL_HEADER_BYTES_V3,
 };
 pub use open_hot_v3::{
     OPEN_REPRESENTATION_HOT_MAGIC_V3, OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3,
@@ -31,8 +32,8 @@ pub use open_hot_v3::{
     OpenRepresentationHotRequestV3,
 };
 pub use request::{
-    AssetV2, CallerRoleV2, RepresentationActionV2, RepresentationRequestHeaderV2,
-    RepresentationRequestV2,
+    AssetRowV2, AssetV2, CallerRoleV2, CoordinateIdentitiesV3, RepresentationActionV2,
+    RepresentationRequestHeaderV2, RepresentationRequestV2, RequestClassV3, ResolvedRequestV2,
 };
 
 /// Exact absent revision sentinel shared with canonical Claims packets.

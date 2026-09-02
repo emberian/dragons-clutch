@@ -14,7 +14,8 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
 use dclutch_rational_representation_v2_contract::{
-    AffineBatchContextV2, CompletionEvidenceV2, PreparedRepresentationV2,
+    AffineBatchContextV2, CompletionEvidenceV2, CoordinateIdentitiesV3,
+    PreparedRepresentationV2, ResolvedRequestV2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
     RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, RationalReplayV2, RepresentationActionV2,
     RepresentationRequestV2, TokenEffectStyleV2, finalize, prepare,
@@ -520,10 +521,16 @@ fn prepare_and_execute<'accounts, 'info>(
     .map_err(|_| ClaimsSbfError::Representation)?;
 
     let replay_fresh = authenticate_or_allocate_replay(program_id, base, request)?;
-    let projection_bytes = build_projection(program_id, account_infos, base, request, descriptor)?;
+    let (projection_bytes, identities) =
+        build_projection(program_id, account_infos, base, request, descriptor)?;
     let projection = StructuredProjectionV2::decode(&projection_bytes)
         .map_err(|_| ClaimsSbfError::Representation)?;
-    let prepared = prepare(request, descriptor, projection, exposure)
+    // Physical ABI v3 sends no per-coordinate program address, so the request
+    // is joined HERE, to the derivation that just authenticated the account
+    // frame, and nothing downstream can read an identity nobody derived.
+    let resolved = ResolvedRequestV2::new(request, &identities)
+        .map_err(|_| ClaimsSbfError::Representation)?;
+    let prepared = prepare(resolved, descriptor, projection, exposure)
         .map_err(|_| ClaimsSbfError::Representation)?;
 
     execute_prepared(
@@ -588,7 +595,8 @@ fn finalize_execution(
     let request = prepared.request();
     let (post_asset_observations, post_receipt_supply) =
         post_token_observations(account_infos, base, prepared)?;
-    let post_resource_digest = post_resource_digest(account_infos, base, request, custody)?;
+    let post_resource_digest =
+        post_resource_digest(account_infos, base, prepared.request().request(), custody)?;
     let affine_packet = if matches!(
         request.header().action,
         RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute
@@ -623,7 +631,7 @@ fn finalize_execution(
         post_resource_digest,
     };
     let receipt_bytes = build_receipt_bytes(prepared, evidence)?;
-    commit_replay(base, request, replay_fresh)?;
+    commit_replay(base, prepared.request().request(), replay_fresh)?;
     set_return_data(&receipt_bytes);
     Ok(())
 }
@@ -993,7 +1001,7 @@ fn build_projection(
     base: BaseAccounts<'_, '_>,
     request: RepresentationRequestV2<'_>,
     descriptor: RepresentationDescriptorV2<'_>,
-) -> Result<Vec<u8>, ProgramError> {
+) -> Result<(Vec<u8>, Vec<CoordinateIdentitiesV3>), ProgramError> {
     let header = request.header();
     let receipt = parse_behavior_mint(
         base.receipt_mint,
@@ -1026,6 +1034,9 @@ fn build_projection(
         .and_then(|tail| STRUCTURED_HEADER_BYTES.checked_add(tail))
         .ok_or(ClaimsSbfError::Representation)?;
     let mut projection = vec![0; projection_width];
+    let mut identities = Vec::with_capacity(
+        usize::try_from(header.asset_count).map_err(|_| ClaimsSbfError::Representation)?,
+    );
     StructuredProjectionV2::write_header(
         &mut projection,
         StructuredProjectionHeaderV2 {
@@ -1047,10 +1058,10 @@ fn build_projection(
             row
         };
         let requested = request
-            .asset(row)
+            .asset_row(row)
             .map_err(|_| ClaimsSbfError::Instruction)?;
         let accounts = asset_accounts(account_infos, row)?;
-        let identities = authenticate_asset_identities(
+        let identities_for_row = authenticate_asset_identities(
             program_id,
             base,
             header.descriptor_id,
@@ -1071,7 +1082,7 @@ fn build_projection(
             .map_err(|_| ClaimsSbfError::Accounts)?;
         let market = MarketViewV2::decode(&market_data).map_err(|_| ClaimsSbfError::Economic)?;
         if position_view.market_account != base.aggregate.key.to_bytes()
-            || position_view.owner != identities.claims_custody_owner
+            || position_view.owner != identities_for_row.claims_custody_owner
             || position_view.basis_id != market.basis_id
             || position_view.claim_count != header.outcome_count
         {
@@ -1096,7 +1107,7 @@ fn build_projection(
         let mint = parse_behavior_mint(
             accounts.mint,
             base.token_program,
-            identities.shard_mint,
+            identities_for_row.shard_mint,
             header.representation_authority,
             requested.expected_shard_supply,
         )?
@@ -1104,7 +1115,7 @@ fn build_projection(
         let actor = parse_behavior_token_account(
             accounts.actor_token,
             base.token_program,
-            identities.shard_mint,
+            identities_for_row.shard_mint,
             header.actor,
             requested.expected_actor_shards,
         )?
@@ -1112,7 +1123,7 @@ fn build_projection(
         let structured = parse_behavior_token_account(
             accounts.structured_token,
             base.token_program,
-            identities.shard_mint,
+            identities_for_row.shard_mint,
             header.representation_authority,
             requested.expected_structured_shards,
         )?
@@ -1142,16 +1153,16 @@ fn build_projection(
             },
         )
         .map_err(|_| ClaimsSbfError::Representation)?;
+        identities.push(identities_for_row);
         row = row.checked_add(1).ok_or(ClaimsSbfError::Representation)?;
     }
-    Ok(projection)
+    Ok((projection, identities))
 }
 
-#[derive(Clone, Copy)]
-struct CoordinateIdentities {
-    shard_mint: [u8; 32],
-    claims_custody_owner: [u8; 32],
-}
+/// The Structured custody Account joined the two keys this already returned
+/// when physical ABI v3 stopped sending any of them: the adapter's derivation
+/// is now their ONLY author, so it must hand back everything downstream reads.
+type CoordinateIdentities = CoordinateIdentitiesV3;
 
 #[allow(clippy::too_many_arguments)]
 fn authenticate_asset_identities(
@@ -1160,7 +1171,7 @@ fn authenticate_asset_identities(
     descriptor: [u8; 32],
     action: RepresentationActionV2,
     outcome: u32,
-    requested: Option<dclutch_rational_representation_v2_contract::AssetV2>,
+    requested: Option<dclutch_rational_representation_v2_contract::AssetRowV2>,
     accounts: AssetAccounts<'_, '_>,
 ) -> Result<CoordinateIdentities, ProgramError> {
     let outcome_bytes = outcome.to_le_bytes();
@@ -1196,10 +1207,10 @@ fn authenticate_asset_identities(
         return Err(ClaimsSbfError::Identity.into());
     }
     if let Some(requested) = requested {
-        if requested.shard_mint != mint.to_bytes()
-            || requested.claims_custody_owner != custody_owner.to_bytes()
-            || requested.structured_custody_account != structured.to_bytes()
-            || accounts.actor_token.key.to_bytes() != requested.actor_shard_account
+        // The three derived keys are no longer on the wire to compare against;
+        // the account-frame equalities above ARE the comparison, and the actor
+        // Account is the one key the caller still names.
+        if accounts.actor_token.key.to_bytes() != requested.actor_shard_account
             || accounts.actor_token.owner != base.token_program.key
         {
             return Err(ClaimsSbfError::Identity.into());
@@ -1238,6 +1249,7 @@ fn authenticate_asset_identities(
     }
     Ok(CoordinateIdentities {
         shard_mint: mint.to_bytes(),
+        structured_custody_account: structured.to_bytes(),
         claims_custody_owner: custody_owner.to_bytes(),
     })
 }
@@ -1259,7 +1271,7 @@ fn token_effect_digest(prepared: PreparedRepresentationV2<'_>) -> Result<[u8; 32
 
 fn pre_effect_mint_facts(
     base: BaseAccounts<'_, '_>,
-    request: RepresentationRequestV2<'_>,
+    request: ResolvedRequestV2<'_>,
     mint: &AccountInfo<'_>,
 ) -> Result<Token2022BehaviorMintFactsV2, ProgramError> {
     parse_behavior_mint(
@@ -1272,7 +1284,7 @@ fn pre_effect_mint_facts(
 }
 
 fn expected_pre_mint_supply(
-    request: RepresentationRequestV2<'_>,
+    request: ResolvedRequestV2<'_>,
     mint: [u8; 32],
 ) -> Result<u64, ProgramError> {
     let header = request.header();
@@ -1613,7 +1625,7 @@ fn execute_claims_if_any<'accounts, 'info>(
             program_id,
             account_infos,
             base,
-            request,
+            request.request(),
             request_digest,
             authenticated,
         );

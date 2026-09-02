@@ -500,7 +500,7 @@ archive_revision() {
 }
 
 # ---------------------------------------------------------------------------
-# frameguard -- all thirteen SBF links, complete per-function frame map.
+# frameguard -- all twelve SBF links, complete per-function frame map.
 #
 # The diagnostic grep in `programs` catches a frame only once it reaches the
 # 4,096-byte SBPF wall. It is silent at 4,095 and was silent when one ordinary
@@ -513,6 +513,16 @@ archive_revision() {
 # This runner only selects which source tree is measured and reads that answer.
 # A committed revision is archived because a shared-tree measurement is useful
 # to an author but not quoteable evidence.
+#
+# RED HERE NAMES ITS DEBTORS. An exact ratchet cannot be recaptured after the
+# fact by a bystander in a busy tree -- the double build is longer than the
+# interval between program commits, so three correct recaptures were each
+# invalidated before they could be reviewed (2026-09-02). The rule is therefore
+# that a commit touching `programs/*/src/**` carries its own baseline rows or
+# says it leaves the gate red; `--repo` lets `run.sh` read the range back from
+# the baseline's own recorded commit and print the commits that did neither. So
+# a reader of a red frameguard tier learns WHO owes rows, not only that the
+# frames disagree.
 # ---------------------------------------------------------------------------
 tier_frameguard() {
   say "frameguard -- exact per-function SBF frame ratchet"
@@ -550,8 +560,12 @@ tier_frameguard() {
     return
   fi
 
+  # `--repo` is the LIVE repository even when the measured source is an
+  # unpacked archive: the archive has no `.git`, and the attribution question
+  # ("which commits since the baseline moved a frame") is about history, not
+  # about the bytes being compiled.
   local code=0
-  (cd "$build_root" && bash "$dir/run.sh" --source "$build_root") || code=$?
+  (cd "$build_root" && bash "$dir/run.sh" --source "$build_root" --repo "$repo_root") || code=$?
   case "$code" in
   0) record frameguard $EXIT_PASS ;;
   2) record frameguard $EXIT_PREREQ_MISSING "the exact frame measurement could not run (its exit 2)" ;;
@@ -1677,9 +1691,13 @@ sbom      ~3 min       cargo, python3     the dependency/licence closure over
 web       ~1 min       node               the web + SDK vitest suites
 emission  minutes      lake (Lean)        every generated file still byte-
                                           matches the emitter that printed it
-frameguard minutes     cargo-build-sbf    every function in the exact thirteen
+frameguard minutes     cargo-build-sbf    every function in the exact twelve
                                           SBF links retains its admitted frame;
-                                          catches growth below the 4,096 wall
+                                          catches growth below the 4,096 wall,
+                                          and names the commits since the
+                                          baseline's own recorded commit that
+                                          moved program sources without
+                                          carrying frame rows
 journey   minutes      cargo              the journey campaign still COMPILES,
                                           and so does every other workspace
                                           under tools/gauntlet and

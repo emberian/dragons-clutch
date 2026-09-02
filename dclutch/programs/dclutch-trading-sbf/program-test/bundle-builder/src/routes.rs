@@ -101,7 +101,8 @@ mod tests {
         ProjectedCustodyRequestV1,
     };
     use dclutch_rational_representation_v2_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, REQUEST_HEADER_BYTES_V2,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2,
+        REQUEST_SELECTED_HEADER_BYTES_V3,
         RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
@@ -185,7 +186,7 @@ mod tests {
     }
 
     fn rational_request(caller_role: CallerRoleV2) -> Vec<u8> {
-        let mut asset = [0_u8; ASSET_BYTES_V2];
+        let mut asset = [0_u8; ASSET_BYTES_V3];
         AssetV2 {
             shard_mint: id(20),
             actor_shard_account: id(21),
@@ -230,7 +231,7 @@ mod tests {
             &asset,
         )
         .expect("request");
-        let mut bytes = vec![0_u8; REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2];
+        let mut bytes = vec![0_u8; REQUEST_SELECTED_HEADER_BYTES_V3 + ASSET_BYTES_V3];
         request.encode_into(&mut bytes).expect("encode");
         bytes
     }
@@ -309,7 +310,8 @@ mod tests {
         );
 
         let mut noncanonical = bytes;
-        noncanonical[REQUEST_HEADER_BYTES_V2 - 1] = 1;
+        // Still the last byte of the class's canonically zero reserved tail.
+        noncanonical[REQUEST_SELECTED_HEADER_BYTES_V3 - 1] = 1;
         assert_eq!(
             claims_context(&noncanonical),
             Err(BuilderError::UnsupportedRoute)

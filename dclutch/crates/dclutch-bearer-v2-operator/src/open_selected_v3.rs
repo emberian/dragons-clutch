@@ -47,7 +47,7 @@ use dclutch_product_payoff_v2_codec::runtime_v3::{
 use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3,
     OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
-    PHYSICAL_ABI_VERSION_V2, REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2, RepresentationActionV2,
+    PHYSICAL_ABI_VERSION_V3, REQUEST_SELECTED_HEADER_BYTES_V3, REQUEST_MAGIC_V2, RepresentationActionV2,
 };
 use dclutch_rational_representation_v2_request_contract::generated as wire;
 use dclutch_request_profile_contract::{
@@ -92,24 +92,29 @@ const ID_ACTOR: usize = 5;
 const ID_RECEIPT_MINT: usize = 6;
 const ID_AUTHORITY: usize = 7;
 const ID_TOKEN: usize = 8;
-const ID_SHARD_MINT: usize = 11;
+// Physical ABI v3 sends one key per coordinate. The shard Mint, the Structured
+// custody Account and the Claims custody owner are derived by the Claims
+// adapter, so the parent no longer carries them and the child no longer wants
+// them: these registers piped a field between two wires that both lost it.
+// Their indices stay vacant rather than renumbering the bank -- 9 and 10 were
+// already vacant, so a gap is the bank's normal shape, and renumbering would
+// move registers this change has no business touching.
 const ID_ACTOR_SHARDS: usize = 12;
-const ID_STRUCTURED_CUSTODY: usize = 13;
-const ID_CLAIMS_CUSTODY_OWNER: usize = 14;
 const ID_CURRENT_TRADING: usize = 15;
 
 const SCALAR_REPRESENTATION_REVISION: usize = 0;
 const SCALAR_CLAIMS_REVISION: usize = 1;
 const SCALAR_ACTOR_POSITION_REVISION: usize = 2;
 const SCALAR_CUSTODY_POSITION_REVISION: usize = 3;
-const SCALAR_CUSTODY_REPLAY_REVISION: usize = 4;
+// Absent for every selected action, so v3 does not carry it and nothing fills
+// register 4.
 const SCALAR_GENERATION: usize = 5;
 const SCALAR_QUANTITY: usize = 6;
 const SCALAR_DENOMINATOR: usize = 7;
 const SCALAR_RECEIPT_SUPPLY: usize = 8;
 const SCALAR_OUTCOME_COUNT: usize = 9;
 const SCALAR_SELECTED_OUTCOME: usize = 10;
-const SCALAR_ASSET_COUNT: usize = 11;
+// Derived from the action in v3; register 11 stays vacant.
 const SCALAR_COEFFICIENT: usize = 12;
 const SCALAR_SHARD_SUPPLY: usize = 13;
 const SCALAR_ACTOR_SHARDS: usize = 14;
@@ -117,10 +122,10 @@ const SCALAR_STRUCTURED_SHARDS: usize = 15;
 const SCALAR_PRODUCT_OUTCOME_COUNT: usize = 16;
 const SCALAR_CURRENT_SLOT: usize = 17;
 
-const REQUEST_INSTRUCTIONS: usize = 39;
+const REQUEST_INSTRUCTIONS: usize = 30;
 const TRANSITION_INSTRUCTIONS: usize = 5;
-const EFFECT_INSTRUCTIONS: usize = 29;
-const REQUEST_BYTES: usize = REQUEST_HEADER_BYTES_V2 + wire::ASSET_BYTES_V2;
+const EFFECT_INSTRUCTIONS: usize = 24;
+const REQUEST_BYTES: usize = REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_BYTES_V3;
 
 /// Release-owned coordinates plus one finalized deployment's account widths.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -536,50 +541,41 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
     let mut fixed = Vec::with_capacity(REQUEST_INSTRUCTIONS);
     fixed.extend([
         RequestInstructionV1::require_u64(
-            req(wire::REQUEST_MAGIC_OFFSET)?,
+            req(wire::REQUEST_MAGIC_OFFSET_V3)?,
             u64::from_le_bytes(OPEN_REPRESENTATION_HOT_MAGIC_V3),
         ),
         RequestInstructionV1::require_u16(
-            req(wire::REQUEST_VERSION_OFFSET)?,
+            req(wire::REQUEST_VERSION_OFFSET_V3)?,
             OPEN_REPRESENTATION_HOT_VERSION_V3,
         ),
-        RequestInstructionV1::require_u8(req(wire::REQUEST_ACTION_OFFSET)?, action as u8),
+        RequestInstructionV1::require_u8(req(wire::REQUEST_ACTION_OFFSET_V3)?, action as u8),
         RequestInstructionV1::require_u8(
-            req(wire::REQUEST_CALLER_ROLE_OFFSET)?,
+            req(wire::REQUEST_CALLER_ROLE_OFFSET_V3)?,
             CallerRoleV2::Trading as u8,
         ),
-        RequestInstructionV1::require_zero(req(wire::REQUEST_RESERVED_HEADER_OFFSET)?, 4),
-        RequestInstructionV1::require_zero(req(wire::REQUEST_PARENT_CONTEXT_OFFSET)?, 32),
-        RequestInstructionV1::require_zero(req(wire::REQUEST_RECEIPT_ACCOUNT_OFFSET)?, 32),
-        RequestInstructionV1::require_zero(req(wire::REQUEST_REALM_OFFSET)?, 32),
-        RequestInstructionV1::require_zero(req(wire::REQUEST_COLLATERAL_RECIPIENT_OFFSET)?, 32),
-        RequestInstructionV1::require_u32(req(wire::REQUEST_ASSET_COUNT_OFFSET)?, 1),
-        RequestInstructionV1::require_zero(req(wire::REQUEST_RESERVED_TAIL_OFFSET)?, 4),
+        RequestInstructionV1::require_zero(req(wire::REQUEST_RESERVED_HEADER_OFFSET_V3)?, 4),
+        RequestInstructionV1::require_zero(req(wire::REQUEST_PARENT_CONTEXT_OFFSET_V3)?, 32),
+        // Four constraints stood here: a zero receipt Account, a zero realm, a
+        // zero collateral recipient and an asset count of one. The selected
+        // header class carries none of them in v3, so each is unrepresentable
+        // rather than checked.
+        RequestInstructionV1::require_zero(
+            req(wire::SELECTED_REQUEST_RESERVED_TAIL_OFFSET_V3)?,
+            4,
+        ),
     ]);
     for (offset, register) in [
-        (wire::REQUEST_RELEASE_SET_OFFSET, ID_RELEASE),
-        (wire::REQUEST_MARKET_OFFSET, ID_MARKET),
-        (wire::REQUEST_GRAPH_ID_OFFSET, ID_GRAPH),
-        (wire::REQUEST_DESCRIPTOR_ID_OFFSET, ID_DESCRIPTOR),
-        (wire::REQUEST_ACTOR_OFFSET, ID_ACTOR),
-        (wire::REQUEST_RECEIPT_MINT_OFFSET, ID_RECEIPT_MINT),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET, ID_AUTHORITY),
-        (wire::REQUEST_TOKEN_PROGRAM_OFFSET, ID_TOKEN),
+        (wire::REQUEST_RELEASE_SET_OFFSET_V3, ID_RELEASE),
+        (wire::REQUEST_MARKET_OFFSET_V3, ID_MARKET),
+        (wire::REQUEST_GRAPH_ID_OFFSET_V3, ID_GRAPH),
+        (wire::REQUEST_DESCRIPTOR_ID_OFFSET_V3, ID_DESCRIPTOR),
+        (wire::REQUEST_ACTOR_OFFSET_V3, ID_ACTOR),
+        (wire::REQUEST_RECEIPT_MINT_OFFSET_V3, ID_RECEIPT_MINT),
+        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_SHARD_MINT_OFFSET,
-            ID_SHARD_MINT,
-        ),
-        (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
             ID_ACTOR_SHARDS,
-        ),
-        (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_STRUCTURED_CUSTODY_ACCOUNT_OFFSET,
-            ID_STRUCTURED_CUSTODY,
-        ),
-        (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_CLAIMS_CUSTODY_OWNER_OFFSET,
-            ID_CLAIMS_CUSTODY_OWNER,
         ),
     ] {
         fixed.push(RequestInstructionV1::project_identity(
@@ -589,46 +585,42 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
     }
     for (offset, register) in [
         (
-            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET,
+            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET_V3,
             SCALAR_REPRESENTATION_REVISION,
         ),
         (
-            wire::REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET,
+            wire::SELECTED_REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET_V3,
             SCALAR_CLAIMS_REVISION,
         ),
         (
-            wire::REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET,
+            wire::SELECTED_REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET_V3,
             SCALAR_ACTOR_POSITION_REVISION,
         ),
         (
-            wire::REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET,
+            wire::SELECTED_REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET_V3,
             SCALAR_CUSTODY_POSITION_REVISION,
         ),
+        (wire::REQUEST_GENERATION_OFFSET_V3, SCALAR_GENERATION),
+        (wire::REQUEST_QUANTITY_OFFSET_V3, SCALAR_QUANTITY),
+        (wire::REQUEST_DENOMINATOR_OFFSET_V3, SCALAR_DENOMINATOR),
         (
-            wire::REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET,
-            SCALAR_CUSTODY_REPLAY_REVISION,
-        ),
-        (wire::REQUEST_GENERATION_OFFSET, SCALAR_GENERATION),
-        (wire::REQUEST_QUANTITY_OFFSET, SCALAR_QUANTITY),
-        (wire::REQUEST_DENOMINATOR_OFFSET, SCALAR_DENOMINATOR),
-        (
-            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET,
+            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3,
             SCALAR_RECEIPT_SUPPLY,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_COEFFICIENT_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_COEFFICIENT_OFFSET_V3,
             SCALAR_COEFFICIENT,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET_V3,
             SCALAR_SHARD_SUPPLY,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET_V3,
             SCALAR_ACTOR_SHARDS,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
             SCALAR_STRUCTURED_SHARDS,
         ),
     ] {
@@ -638,12 +630,11 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
         ));
     }
     for (offset, register) in [
-        (wire::REQUEST_OUTCOME_COUNT_OFFSET, SCALAR_OUTCOME_COUNT),
+        (wire::REQUEST_OUTCOME_COUNT_OFFSET_V3, SCALAR_OUTCOME_COUNT),
         (
-            wire::REQUEST_SELECTED_OUTCOME_OFFSET,
+            wire::SELECTED_REQUEST_SELECTED_OUTCOME_OFFSET_V3,
             SCALAR_SELECTED_OUTCOME,
         ),
-        (wire::REQUEST_ASSET_COUNT_OFFSET, SCALAR_ASSET_COUNT),
     ] {
         fixed.push(RequestInstructionV1::project_u32(
             req(offset)?,
@@ -651,7 +642,10 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
         ));
     }
     if fixed.len() != REQUEST_INSTRUCTIONS {
-        return Err(Error::ArtifactGeometry);
+        return Err(Error::InstructionCount {
+            declared: REQUEST_INSTRUCTIONS,
+            built: fixed.len(),
+        });
     }
     let width = REQUEST_PROFILE_HEADER_BYTES + fixed.len() * REQUEST_OPERATION_BYTES;
     let mut scratch = vec![0_u8; width];
@@ -728,16 +722,16 @@ fn encode_transition() -> Result<Vec<u8>> {
 
 fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
     let mut template = vec![0_u8; REQUEST_BYTES];
-    put(&mut template, wire::REQUEST_MAGIC_OFFSET, &REQUEST_MAGIC_V2)?;
+    put(&mut template, wire::REQUEST_MAGIC_OFFSET_V3, &REQUEST_MAGIC_V2)?;
     put(
         &mut template,
-        wire::REQUEST_VERSION_OFFSET,
-        &PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+        wire::REQUEST_VERSION_OFFSET_V3,
+        &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
     )?;
-    put(&mut template, wire::REQUEST_ACTION_OFFSET, &[action as u8])?;
+    put(&mut template, wire::REQUEST_ACTION_OFFSET_V3, &[action as u8])?;
     put(
         &mut template,
-        wire::REQUEST_CALLER_ROLE_OFFSET,
+        wire::REQUEST_CALLER_ROLE_OFFSET_V3,
         &[CallerRoleV2::Trading as u8],
     )?;
     let route = [RouteInputV3 {
@@ -755,30 +749,18 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
     }];
     let mut instructions = Vec::with_capacity(EFFECT_INSTRUCTIONS);
     for (offset, register) in [
-        (wire::REQUEST_RELEASE_SET_OFFSET, ID_RELEASE),
-        (wire::REQUEST_MARKET_OFFSET, ID_MARKET),
-        (wire::REQUEST_GRAPH_ID_OFFSET, ID_GRAPH),
-        (wire::REQUEST_DESCRIPTOR_ID_OFFSET, ID_DESCRIPTOR),
-        (wire::REQUEST_PARENT_CONTEXT_OFFSET, ID_PARENT),
-        (wire::REQUEST_ACTOR_OFFSET, ID_ACTOR),
-        (wire::REQUEST_RECEIPT_MINT_OFFSET, ID_RECEIPT_MINT),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET, ID_AUTHORITY),
-        (wire::REQUEST_TOKEN_PROGRAM_OFFSET, ID_TOKEN),
+        (wire::REQUEST_RELEASE_SET_OFFSET_V3, ID_RELEASE),
+        (wire::REQUEST_MARKET_OFFSET_V3, ID_MARKET),
+        (wire::REQUEST_GRAPH_ID_OFFSET_V3, ID_GRAPH),
+        (wire::REQUEST_DESCRIPTOR_ID_OFFSET_V3, ID_DESCRIPTOR),
+        (wire::REQUEST_PARENT_CONTEXT_OFFSET_V3, ID_PARENT),
+        (wire::REQUEST_ACTOR_OFFSET_V3, ID_ACTOR),
+        (wire::REQUEST_RECEIPT_MINT_OFFSET_V3, ID_RECEIPT_MINT),
+        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_SHARD_MINT_OFFSET,
-            ID_SHARD_MINT,
-        ),
-        (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
             ID_ACTOR_SHARDS,
-        ),
-        (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_STRUCTURED_CUSTODY_ACCOUNT_OFFSET,
-            ID_STRUCTURED_CUSTODY,
-        ),
-        (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_CLAIMS_CUSTODY_OWNER_OFFSET,
-            ID_CLAIMS_CUSTODY_OWNER,
         ),
     ] {
         instructions.push(EffectInstructionV3::write_request_identity(
@@ -790,46 +772,42 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
     }
     for (offset, register) in [
         (
-            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET,
+            wire::REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET_V3,
             SCALAR_REPRESENTATION_REVISION,
         ),
         (
-            wire::REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET,
+            wire::SELECTED_REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET_V3,
             SCALAR_CLAIMS_REVISION,
         ),
         (
-            wire::REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET,
+            wire::SELECTED_REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET_V3,
             SCALAR_ACTOR_POSITION_REVISION,
         ),
         (
-            wire::REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET,
+            wire::SELECTED_REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET_V3,
             SCALAR_CUSTODY_POSITION_REVISION,
         ),
+        (wire::REQUEST_GENERATION_OFFSET_V3, SCALAR_GENERATION),
+        (wire::REQUEST_QUANTITY_OFFSET_V3, SCALAR_QUANTITY),
+        (wire::REQUEST_DENOMINATOR_OFFSET_V3, SCALAR_DENOMINATOR),
         (
-            wire::REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET,
-            SCALAR_CUSTODY_REPLAY_REVISION,
-        ),
-        (wire::REQUEST_GENERATION_OFFSET, SCALAR_GENERATION),
-        (wire::REQUEST_QUANTITY_OFFSET, SCALAR_QUANTITY),
-        (wire::REQUEST_DENOMINATOR_OFFSET, SCALAR_DENOMINATOR),
-        (
-            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET,
+            wire::REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3,
             SCALAR_RECEIPT_SUPPLY,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_COEFFICIENT_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_COEFFICIENT_OFFSET_V3,
             SCALAR_COEFFICIENT,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_SHARD_SUPPLY_OFFSET_V3,
             SCALAR_SHARD_SUPPLY,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_ACTOR_SHARDS_OFFSET_V3,
             SCALAR_ACTOR_SHARDS,
         ),
         (
-            wire::REQUEST_HEADER_BYTES_V2 + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
             SCALAR_STRUCTURED_SHARDS,
         ),
     ] {
@@ -841,12 +819,11 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
         ));
     }
     for (offset, register) in [
-        (wire::REQUEST_OUTCOME_COUNT_OFFSET, SCALAR_OUTCOME_COUNT),
+        (wire::REQUEST_OUTCOME_COUNT_OFFSET_V3, SCALAR_OUTCOME_COUNT),
         (
-            wire::REQUEST_SELECTED_OUTCOME_OFFSET,
+            wire::SELECTED_REQUEST_SELECTED_OUTCOME_OFFSET_V3,
             SCALAR_SELECTED_OUTCOME,
         ),
-        (wire::REQUEST_ASSET_COUNT_OFFSET, SCALAR_ASSET_COUNT),
     ] {
         instructions.push(EffectInstructionV3::write_request_u32(
             0,
@@ -856,7 +833,10 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
         ));
     }
     if instructions.len() != EFFECT_INSTRUCTIONS {
-        return Err(Error::ArtifactGeometry);
+        return Err(Error::InstructionCount {
+            declared: EFFECT_INSTRUCTIONS,
+            built: instructions.len(),
+        });
     }
     let width = EFFECT_HEADER_BYTES
         + EFFECT_ROUTE_BYTES
@@ -1069,7 +1049,7 @@ mod tests {
             assert_eq!(item, []);
             assert_eq!(
                 template
-                    .get(wire::REQUEST_ACTION_OFFSET)
+                    .get(wire::REQUEST_ACTION_OFFSET_V3)
                     .copied()
                     .expect("action"),
                 action as u8
@@ -1077,8 +1057,8 @@ mod tests {
             assert_eq!(
                 template
                     .get(
-                        wire::REQUEST_PARENT_CONTEXT_OFFSET
-                            ..wire::REQUEST_PARENT_CONTEXT_OFFSET + 32
+                        wire::REQUEST_PARENT_CONTEXT_OFFSET_V3
+                            ..wire::REQUEST_PARENT_CONTEXT_OFFSET_V3 + 32
                     )
                     .expect("parent"),
                 [0_u8; 32]

@@ -5,11 +5,19 @@ import * as Abi from './generated/rationalTerminalHotV3';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 
+/**
+ * One asset row of a terminal request.
+ *
+ * Physical ABI v3 cut this row from 160 bytes to 64. The shard Mint, the
+ * Structured custody Account and the Claims custody owner were all RE-DERIVED
+ * by the Claims adapter from coordinates the request already carries, so
+ * sending them was asking the wallet to restate three PDAs the program
+ * recomputes anyway -- and a wallet that got one wrong was writing a key the
+ * program would then disagree with. They are gone from the type as well as
+ * from the wire, so a caller that still has them cannot quietly pass them.
+ */
 export type RationalTerminalAssetV3 = Readonly<{
-  shardMint: string;
   actorShardAccount: string;
-  structuredCustodyAccount: string;
-  claimsCustodyOwner: string;
   coefficient: bigint;
   expectedShardSupply: bigint;
   expectedActorShards: bigint;
@@ -308,10 +316,18 @@ function putU64(output: Uint8Array, offset: number, value: bigint): void {
   new DataView(output.buffer, output.byteOffset + offset, 8).setBigUint64(0, unsigned(value, `u64 at ${offset}`), true);
 }
 
-function distinct(values: ReadonlyArray<Uint8Array>, field: string): void {
-  const keys = values.map((value) => new PublicKey(value).toBase58());
-  if (new Set(keys).size !== keys.length) throw new Error(`${field} aliases two distinct roles`);
-}
+// `distinct` lived here and checked that the shard Mint, the actor shard
+// Account and the Structured custody Account named three different roles. Its
+// three operands became one when physical ABI v3 stopped carrying the two
+// derived keys, and a one-element uniqueness check is a check of nothing, so
+// the helper is deleted rather than left to pass forever.
+//
+// OWED, and it is the same debt the Rust `authenticate_asset` records: the
+// shard Mint's identity now has exactly one author on this path, the Claims
+// adapter's own derivation, and the second authority belongs in the account
+// frame as the Mint alias property. Until that lands, no wallet-side check
+// stands between a caller and a substituted Mint -- the adapter's derivation
+// does, on chain, and nothing here does.
 
 export function encodeRationalTerminalHotRequestV3(input: RationalTerminalHotInputV3): Uint8Array {
   if (!Number.isInteger(input.outcomeCount) || input.outcomeCount <= 0 || input.outcomeCount > 0xffff_ffff
@@ -330,50 +346,58 @@ export function encodeRationalTerminalHotRequestV3(input: RationalTerminalHotInp
   putU16(output, Abi.RATIONAL_TERMINAL_HOT_VERSION_OFFSET_V3, Abi.RATIONAL_TERMINAL_HOT_VERSION_V3);
   output[Abi.RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3] = Abi.ACTION_REDEEM_TERMINAL;
   output[Abi.RATIONAL_TERMINAL_HOT_CALLER_ROLE_OFFSET_V3] = Abi.CALLER_ROLE_TRADING;
+  // Every coordinate below is a RATIONAL_TERMINAL_HOT_* name, which is the
+  // terminal class of the action-conditional v3 header already resolved. The
+  // class-free REQUEST_*_OFFSET names this used to spell no longer exist for
+  // the fields that moved: `realm` and `collateralRecipient` sit at 348 and 380
+  // in a terminal request and are absent from the other two classes entirely,
+  // so a class-free name for them could only have been read against the wrong
+  // action.
   const identities: ReadonlyArray<readonly [number, Uint8Array]> = [
-    [Abi.REQUEST_RELEASE_SET_OFFSET, identity(input.releaseSet, 'release set')],
-    [Abi.REQUEST_MARKET_OFFSET, key(input.market, 'Market')],
-    [Abi.REQUEST_GRAPH_ID_OFFSET, identity(input.graphId, 'representation graph')],
-    [Abi.REQUEST_DESCRIPTOR_ID_OFFSET, identity(input.descriptorId, 'representation descriptor')],
-    [Abi.REQUEST_ACTOR_OFFSET, key(input.actor, 'actor')],
-    [Abi.REQUEST_RECEIPT_MINT_OFFSET, key(input.receiptMint, 'receipt Mint')],
-    [Abi.REQUEST_REPRESENTATION_AUTHORITY_OFFSET, key(input.representationAuthority, 'representation authority')],
-    [Abi.REQUEST_TOKEN_PROGRAM_OFFSET, key(input.tokenProgram, 'Token program')],
-    [Abi.REQUEST_REALM_OFFSET, key(input.realm, 'Realm')],
-    [Abi.REQUEST_COLLATERAL_RECIPIENT_OFFSET, key(input.collateralRecipient, 'collateral recipient')],
+    [Abi.RATIONAL_TERMINAL_HOT_RELEASE_SET_OFFSET_V3, identity(input.releaseSet, 'release set')],
+    [Abi.RATIONAL_TERMINAL_HOT_MARKET_OFFSET_V3, key(input.market, 'Market')],
+    [Abi.RATIONAL_TERMINAL_HOT_GRAPH_ID_OFFSET_V3, identity(input.graphId, 'representation graph')],
+    [Abi.RATIONAL_TERMINAL_HOT_DESCRIPTOR_ID_OFFSET_V3, identity(input.descriptorId, 'representation descriptor')],
+    [Abi.RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3, key(input.actor, 'actor')],
+    [Abi.RATIONAL_TERMINAL_HOT_RECEIPT_MINT_OFFSET_V3, key(input.receiptMint, 'receipt Mint')],
+    [Abi.RATIONAL_TERMINAL_HOT_REPRESENTATION_AUTHORITY_OFFSET_V3, key(input.representationAuthority, 'representation authority')],
+    [Abi.RATIONAL_TERMINAL_HOT_TOKEN_PROGRAM_OFFSET_V3, key(input.tokenProgram, 'Token program')],
+    [Abi.RATIONAL_TERMINAL_HOT_REALM_OFFSET_V3, key(input.realm, 'Realm')],
+    [Abi.RATIONAL_TERMINAL_HOT_COLLATERAL_RECIPIENT_OFFSET_V3, key(input.collateralRecipient, 'collateral recipient')],
   ];
   for (const [offset, value] of identities) output.set(value, offset);
   // Receipt Account and parent context are canonically absent in this terminal
   // family request; the authenticated Hot adapter owns the latter digest.
+  // The actor-Position revision is NOT written. A terminal redemption has no
+  // actor Position, so its revision was always the absent sentinel; v3 stopped
+  // carrying a field whose value the action already determines, and the decoder
+  // supplies it. Writing MAX_U64 here would now land on the request magic.
   const scalars: ReadonlyArray<readonly [number, bigint]> = [
-    [Abi.REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET, input.expectedRepresentationRevision],
-    [Abi.REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET, input.expectedClaimsMarketRevision],
-    [Abi.REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET, MAX_U64],
-    [Abi.REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET, input.expectedCustodyPositionRevision],
-    [Abi.REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET, input.expectedCustodyReplayRevision],
-    [Abi.REQUEST_GENERATION_OFFSET, input.generation], [Abi.REQUEST_QUANTITY_OFFSET, input.quantity],
-    [Abi.REQUEST_DENOMINATOR_OFFSET, input.denominator], [Abi.REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET, input.expectedReceiptSupply],
+    [Abi.RATIONAL_TERMINAL_HOT_EXPECTED_REPRESENTATION_REVISION_OFFSET_V3, input.expectedRepresentationRevision],
+    [Abi.RATIONAL_TERMINAL_HOT_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET_V3, input.expectedClaimsMarketRevision],
+    [Abi.RATIONAL_TERMINAL_HOT_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET_V3, input.expectedCustodyPositionRevision],
+    [Abi.RATIONAL_TERMINAL_HOT_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET_V3, input.expectedCustodyReplayRevision],
+    [Abi.RATIONAL_TERMINAL_HOT_GENERATION_OFFSET_V3, input.generation],
+    [Abi.RATIONAL_TERMINAL_HOT_QUANTITY_OFFSET_V3, input.quantity],
+    [Abi.RATIONAL_TERMINAL_HOT_DENOMINATOR_OFFSET_V3, input.denominator],
+    [Abi.RATIONAL_TERMINAL_HOT_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3, input.expectedReceiptSupply],
   ];
   for (const [offset, value] of scalars) putU64(output, offset, value);
-  putU32(output, Abi.REQUEST_OUTCOME_COUNT_OFFSET, input.outcomeCount);
-  putU32(output, Abi.REQUEST_SELECTED_OUTCOME_OFFSET, input.selectedOutcome);
-  putU32(output, Abi.REQUEST_ASSET_COUNT_OFFSET, Abi.RATIONAL_TERMINAL_HOT_FIXED_ASSET_COUNT_V3);
-  const assetOffset = Abi.REQUEST_HEADER_BYTES_V2;
-  const assetIdentities = [
-    key(input.asset.shardMint, 'shard Mint'), key(input.asset.actorShardAccount, 'actor shard account'),
-    key(input.asset.structuredCustodyAccount, 'Structured custody account'), key(input.asset.claimsCustodyOwner, 'Claims custody owner'),
-  ];
-  distinct(assetIdentities.slice(0, 3), 'terminal asset');
-  output.set(assetIdentities[0], assetOffset + Abi.ASSET_SHARD_MINT_OFFSET);
-  output.set(assetIdentities[1], assetOffset + Abi.ASSET_ACTOR_SHARD_ACCOUNT_OFFSET);
-  output.set(assetIdentities[2], assetOffset + Abi.ASSET_STRUCTURED_CUSTODY_ACCOUNT_OFFSET);
-  output.set(assetIdentities[3], assetOffset + Abi.ASSET_CLAIMS_CUSTODY_OWNER_OFFSET);
+  putU32(output, Abi.RATIONAL_TERMINAL_HOT_OUTCOME_COUNT_OFFSET_V3, input.outcomeCount);
+  putU32(output, Abi.RATIONAL_TERMINAL_HOT_SELECTED_OUTCOME_OFFSET_V3, input.selectedOutcome);
+  // The asset count is not written either: v3 derives it from the action, which
+  // for a terminal request is exactly RATIONAL_TERMINAL_HOT_FIXED_ASSET_COUNT_V3.
+  // The asset coordinates below are already absolute within the family request.
+  output.set(
+    key(input.asset.actorShardAccount, 'actor shard account'),
+    Abi.RATIONAL_TERMINAL_HOT_ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
+  );
   for (const [offset, value] of [
-    [Abi.ASSET_COEFFICIENT_OFFSET, input.asset.coefficient],
-    [Abi.ASSET_EXPECTED_SHARD_SUPPLY_OFFSET, input.asset.expectedShardSupply],
-    [Abi.ASSET_EXPECTED_ACTOR_SHARDS_OFFSET, input.asset.expectedActorShards],
-    [Abi.ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET, input.asset.expectedStructuredShards],
-  ] as const) putU64(output, assetOffset + offset, value);
+    [Abi.RATIONAL_TERMINAL_HOT_ASSET_COEFFICIENT_OFFSET_V3, input.asset.coefficient],
+    [Abi.RATIONAL_TERMINAL_HOT_ASSET_EXPECTED_SHARD_SUPPLY_OFFSET_V3, input.asset.expectedShardSupply],
+    [Abi.RATIONAL_TERMINAL_HOT_ASSET_EXPECTED_ACTOR_SHARDS_OFFSET_V3, input.asset.expectedActorShards],
+    [Abi.RATIONAL_TERMINAL_HOT_ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3, input.asset.expectedStructuredShards],
+  ] as const) putU64(output, offset, value);
   if (input.asset.expectedActorShards < rawShardBurn) {
     throw new Error('actor shard balance cannot fund exact terminal burn');
   }
@@ -386,14 +410,22 @@ export async function specializeRationalTerminalChildV2(family: Uint8Array): Pro
 }>> {
   if (family.length !== Abi.RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3
       || !family.slice(0, 8).every((value, index) => value === Abi.RATIONAL_TERMINAL_HOT_MAGIC_V3[index])
-      || !family.slice(Abi.REQUEST_PARENT_CONTEXT_OFFSET, Abi.REQUEST_PARENT_CONTEXT_OFFSET + 32).every((value) => value === 0)) {
+      || !family
+        .slice(
+          Abi.RATIONAL_TERMINAL_HOT_PARENT_CONTEXT_OFFSET_V3,
+          Abi.RATIONAL_TERMINAL_HOT_PARENT_CONTEXT_OFFSET_V3 + 32,
+        )
+        .every((value) => value === 0)) {
     throw new Error('Rational terminal family bytes are not canonical Hot V3');
   }
   const familyDigest = await sha256(family);
   const childRequest = family.slice();
-  childRequest.set(Abi.REQUEST_MAGIC_V2, Abi.REQUEST_MAGIC_OFFSET);
-  putU16(childRequest, Abi.REQUEST_VERSION_OFFSET, Abi.PHYSICAL_ABI_VERSION_V2);
-  childRequest.set(familyDigest, Abi.REQUEST_PARENT_CONTEXT_OFFSET);
+  // Magic, version and parent context are all in the COMMON PREFIX, placed
+  // identically in all three classes, so the class-free names are the honest
+  // ones here: this rewrite is the same edit whatever the action.
+  childRequest.set(Abi.REQUEST_MAGIC_V2, Abi.REQUEST_MAGIC_OFFSET_V3);
+  putU16(childRequest, Abi.REQUEST_VERSION_OFFSET_V3, Abi.PHYSICAL_ABI_VERSION_V3);
+  childRequest.set(familyDigest, Abi.REQUEST_PARENT_CONTEXT_OFFSET_V3);
   return Object.freeze({ familyDigest, childRequest });
 }
 

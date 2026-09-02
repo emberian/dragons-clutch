@@ -7,7 +7,7 @@
 mod generated;
 
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, Error,
+    ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, Error,
     RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RATIONAL_TERMINAL_SCALAR_OUTCOME_COUNT_V3,
     RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalTerminalHotRequestV3,
     RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
@@ -87,7 +87,7 @@ fn id(value: u8) -> [u8; 32] {
 fn family_for(
     observation: CrossDomainObservation,
 ) -> Result<[u8; RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3], Error> {
-    let mut asset = [0_u8; ASSET_BYTES_V2];
+    let mut asset = [0_u8; ASSET_BYTES_V3];
     AssetV2 {
         shard_mint: id(20),
         actor_shard_account: id(21),

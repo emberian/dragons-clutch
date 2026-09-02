@@ -4,7 +4,7 @@ use crate::{
     Error, RepresentationActionV2, RepresentationReceiptV2, RepresentationRequestV2, Result,
     array_at, byte_at,
     generated::{
-        ACTION_REDEEM_TERMINAL, CALLER_ROLE_TRADING, PHYSICAL_ABI_VERSION_V2,
+        ACTION_REDEEM_TERMINAL, CALLER_ROLE_TRADING, PHYSICAL_ABI_VERSION_V3,
         RECEIPT_CLAIMS_PROGRAM_OFFSET, RECEIPT_REPRESENTATION_PROGRAM_OFFSET, REQUEST_MAGIC_V2,
     },
     generated_hot_v3::*,
@@ -36,9 +36,9 @@ pub struct RationalTerminalHotRegistersV3 {
 }
 
 /// Exact common identity-bank width for terminal Rational Hot V3.
-pub const RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3: usize = 15;
+pub const RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3: usize = 12;
 /// Exact common scalar-bank width for terminal Rational Hot V3.
-pub const RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3: usize = 17;
+pub const RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3: usize = 15;
 
 /// Identity register containing SHA-256 of the exact family request.
 pub const RATIONAL_TERMINAL_IDENTITY_PARENT_DIGEST_V3: usize = 0;
@@ -62,49 +62,53 @@ pub const RATIONAL_TERMINAL_IDENTITY_TOKEN_PROGRAM_V3: usize = 8;
 pub const RATIONAL_TERMINAL_IDENTITY_REALM_V3: usize = 9;
 /// Identity register containing the holder's collateral recipient.
 pub const RATIONAL_TERMINAL_IDENTITY_COLLATERAL_RECIPIENT_V3: usize = 10;
-/// Identity register containing the selected outcome shard Mint.
-pub const RATIONAL_TERMINAL_IDENTITY_SHARD_MINT_V3: usize = 11;
+// Three identity registers stood at 11, 13 and 14: the shard Mint, the
+// Structured custody Account and the Claims custody owner. Physical ABI v3
+// sends none of them -- the Claims adapter derives all three -- so the parent
+// wire cannot fill them and the child wire has nowhere to put them. They are
+// DELETED rather than left vacant, because a name a producer no longer fills
+// is a zero waiting to be read, and deleting the name makes every consumer a
+// compile error instead.
 /// Identity register containing the holder shard Token Account.
-pub const RATIONAL_TERMINAL_IDENTITY_ACTOR_SHARD_ACCOUNT_V3: usize = 12;
-/// Identity register containing the inactive Structured custody Token Account.
-pub const RATIONAL_TERMINAL_IDENTITY_STRUCTURED_CUSTODY_V3: usize = 13;
-/// Identity register containing the canonical Claims custody owner.
-pub const RATIONAL_TERMINAL_IDENTITY_CLAIMS_CUSTODY_OWNER_V3: usize = 14;
+pub const RATIONAL_TERMINAL_IDENTITY_ACTOR_SHARD_ACCOUNT_V3: usize = 11;
 
 /// Scalar register containing the representation replay revision.
 pub const RATIONAL_TERMINAL_SCALAR_REPRESENTATION_REVISION_V3: usize = 0;
 /// Scalar register containing the Claims Market revision.
 pub const RATIONAL_TERMINAL_SCALAR_CLAIMS_MARKET_REVISION_V3: usize = 1;
-/// Scalar register containing the absent actor-Position sentinel.
-pub const RATIONAL_TERMINAL_SCALAR_ACTOR_POSITION_REVISION_V3: usize = 2;
+// A scalar register stood at 2: the actor-Position revision. The terminal
+// class of physical ABI v3 does not carry that field -- it is ABSENT_REVISION
+// for every terminal redemption, and the decoder derives it -- so the parent
+// filled this register with a constant and the child wire had nowhere to put
+// it. The register is DELETED rather than left vacant.
 /// Scalar register containing the Claims custody-Position revision.
-pub const RATIONAL_TERMINAL_SCALAR_CUSTODY_POSITION_REVISION_V3: usize = 3;
+pub const RATIONAL_TERMINAL_SCALAR_CUSTODY_POSITION_REVISION_V3: usize = 2;
 /// Scalar register containing the Custody replay revision.
-pub const RATIONAL_TERMINAL_SCALAR_CUSTODY_REPLAY_REVISION_V3: usize = 4;
+pub const RATIONAL_TERMINAL_SCALAR_CUSTODY_REPLAY_REVISION_V3: usize = 3;
 /// Scalar register containing the immutable Market generation.
-pub const RATIONAL_TERMINAL_SCALAR_GENERATION_V3: usize = 5;
+pub const RATIONAL_TERMINAL_SCALAR_GENERATION_V3: usize = 4;
 /// Scalar register containing exact terminal native-claim quantity.
-pub const RATIONAL_TERMINAL_SCALAR_QUANTITY_V3: usize = 6;
+pub const RATIONAL_TERMINAL_SCALAR_QUANTITY_V3: usize = 5;
 /// Scalar register containing the exact shard denominator.
-pub const RATIONAL_TERMINAL_SCALAR_DENOMINATOR_V3: usize = 7;
+pub const RATIONAL_TERMINAL_SCALAR_DENOMINATOR_V3: usize = 6;
 /// Scalar register containing pre-execution receipt-Mint supply.
-pub const RATIONAL_TERMINAL_SCALAR_RECEIPT_SUPPLY_V3: usize = 8;
+pub const RATIONAL_TERMINAL_SCALAR_RECEIPT_SUPPLY_V3: usize = 7;
 /// Scalar register containing Product-owned runtime outcome count.
-pub const RATIONAL_TERMINAL_SCALAR_OUTCOME_COUNT_V3: usize = 9;
+pub const RATIONAL_TERMINAL_SCALAR_OUTCOME_COUNT_V3: usize = 8;
 /// Scalar register containing selected runtime outcome.
-pub const RATIONAL_TERMINAL_SCALAR_SELECTED_OUTCOME_V3: usize = 10;
-/// Scalar register containing the fixed one-row asset count.
-pub const RATIONAL_TERMINAL_SCALAR_ASSET_COUNT_V3: usize = 11;
+pub const RATIONAL_TERMINAL_SCALAR_SELECTED_OUTCOME_V3: usize = 9;
+// The fixed one-row asset count stood at 11. v3 derives the asset count from
+// the action, so it is on neither wire and the register is deleted.
 /// Scalar register containing the selected portfolio coefficient.
-pub const RATIONAL_TERMINAL_SCALAR_COEFFICIENT_V3: usize = 12;
+pub const RATIONAL_TERMINAL_SCALAR_COEFFICIENT_V3: usize = 10;
 /// Scalar register containing the shard-Mint pre-supply.
-pub const RATIONAL_TERMINAL_SCALAR_SHARD_SUPPLY_V3: usize = 13;
+pub const RATIONAL_TERMINAL_SCALAR_SHARD_SUPPLY_V3: usize = 11;
 /// Scalar register containing the holder's pre-burn shard balance.
-pub const RATIONAL_TERMINAL_SCALAR_ACTOR_SHARDS_V3: usize = 14;
+pub const RATIONAL_TERMINAL_SCALAR_ACTOR_SHARDS_V3: usize = 12;
 /// Scalar register containing the inactive Structured custody balance.
-pub const RATIONAL_TERMINAL_SCALAR_STRUCTURED_SHARDS_V3: usize = 15;
+pub const RATIONAL_TERMINAL_SCALAR_STRUCTURED_SHARDS_V3: usize = 13;
 /// Scalar register containing the independently authenticated Product tail count.
-pub const RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3: usize = 16;
+pub const RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3: usize = 14;
 
 impl RationalTerminalHotRegistersV3 {
     /// Read one exact common identity register.
@@ -167,7 +171,7 @@ impl<'a> RationalTerminalHotRequestV3<'a> {
         put(
             &mut child,
             RATIONAL_TERMINAL_HOT_VERSION_OFFSET_V3,
-            &PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+            &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
         )?;
         put(
             &mut child,
@@ -241,7 +245,7 @@ impl<'a> RationalTerminalHotRequestV3<'a> {
         put(
             output,
             RATIONAL_TERMINAL_HOT_VERSION_OFFSET_V3,
-            &PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+            &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
         )?;
         put(
             output,
@@ -280,7 +284,7 @@ impl<'a> RationalTerminalHotRequestV3<'a> {
         let mut child_bytes = [0_u8; RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3];
         let child = self.specialize_child_into(family_digest, &mut child_bytes)?;
         let header = child.header();
-        let asset = child.asset(0)?;
+        let asset = child.asset_row(0)?;
         let mut identities = [[0_u8; 32]; RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3];
         identities[RATIONAL_TERMINAL_IDENTITY_PARENT_DIGEST_V3] = family_digest;
         identities[RATIONAL_TERMINAL_IDENTITY_RELEASE_SET_V3] = header.release_set;
@@ -295,19 +299,13 @@ impl<'a> RationalTerminalHotRequestV3<'a> {
         identities[RATIONAL_TERMINAL_IDENTITY_REALM_V3] = header.realm;
         identities[RATIONAL_TERMINAL_IDENTITY_COLLATERAL_RECIPIENT_V3] =
             header.collateral_recipient;
-        identities[RATIONAL_TERMINAL_IDENTITY_SHARD_MINT_V3] = asset.shard_mint;
         identities[RATIONAL_TERMINAL_IDENTITY_ACTOR_SHARD_ACCOUNT_V3] = asset.actor_shard_account;
-        identities[RATIONAL_TERMINAL_IDENTITY_STRUCTURED_CUSTODY_V3] =
-            asset.structured_custody_account;
-        identities[RATIONAL_TERMINAL_IDENTITY_CLAIMS_CUSTODY_OWNER_V3] = asset.claims_custody_owner;
 
         let mut scalars = [0_u64; RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3];
         scalars[RATIONAL_TERMINAL_SCALAR_REPRESENTATION_REVISION_V3] =
             header.expected_representation_revision;
         scalars[RATIONAL_TERMINAL_SCALAR_CLAIMS_MARKET_REVISION_V3] =
             header.expected_claims_market_revision;
-        scalars[RATIONAL_TERMINAL_SCALAR_ACTOR_POSITION_REVISION_V3] =
-            header.expected_actor_position_revision;
         scalars[RATIONAL_TERMINAL_SCALAR_CUSTODY_POSITION_REVISION_V3] =
             header.expected_custody_position_revision;
         scalars[RATIONAL_TERMINAL_SCALAR_CUSTODY_REPLAY_REVISION_V3] =
@@ -318,7 +316,6 @@ impl<'a> RationalTerminalHotRequestV3<'a> {
         scalars[RATIONAL_TERMINAL_SCALAR_RECEIPT_SUPPLY_V3] = header.expected_receipt_supply;
         scalars[RATIONAL_TERMINAL_SCALAR_OUTCOME_COUNT_V3] = u64::from(header.outcome_count);
         scalars[RATIONAL_TERMINAL_SCALAR_SELECTED_OUTCOME_V3] = u64::from(header.selected_outcome);
-        scalars[RATIONAL_TERMINAL_SCALAR_ASSET_COUNT_V3] = u64::from(header.asset_count);
         scalars[RATIONAL_TERMINAL_SCALAR_COEFFICIENT_V3] = asset.coefficient;
         scalars[RATIONAL_TERMINAL_SCALAR_SHARD_SUPPLY_V3] = asset.expected_shard_supply;
         scalars[RATIONAL_TERMINAL_SCALAR_ACTOR_SHARDS_V3] = asset.expected_actor_shards;

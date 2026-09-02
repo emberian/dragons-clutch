@@ -10,7 +10,9 @@ use dclutch_custody_contract::{
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
 };
 
-use crate::request::{CallerRoleV2, RepresentationActionV2, RepresentationRequestV2};
+use crate::request::{
+    CallerRoleV2, RepresentationActionV2, RepresentationRequestV2, ResolvedRequestV2,
+};
 use crate::{
     ABSENT_REVISION, Error, Result, array_at, byte_at,
     generated::*,
@@ -110,7 +112,7 @@ impl RepresentationReceiptV2 {
         if array_at::<8>(input, RECEIPT_MAGIC_OFFSET)? != RECEIPT_MAGIC_V2 {
             return Err(Error::InvalidMagic);
         }
-        if u16_at(input, RECEIPT_VERSION_OFFSET)? != PHYSICAL_ABI_VERSION_V2 {
+        if u16_at(input, RECEIPT_VERSION_OFFSET)? != PHYSICAL_ABI_VERSION_V3 {
             return Err(Error::UnsupportedVersion);
         }
         require_zero(input, RECEIPT_RESERVED_HEADER_OFFSET, 4)?;
@@ -173,7 +175,7 @@ impl RepresentationReceiptV2 {
         put(
             &mut output,
             RECEIPT_VERSION_OFFSET,
-            &PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+            &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
         )?;
         put_byte(&mut output, RECEIPT_ACTION_OFFSET, self.action as u8)?;
         put_byte(
@@ -811,7 +813,7 @@ pub struct SignedDeltaTerminalCompletionV3 {
 /// receipt boundary; those facts are authenticated by the Product V3 reader
 /// and typed Custody request respectively.
 pub fn validate_signed_delta_terminal_v3(
-    request: RepresentationRequestV2<'_>,
+    request: ResolvedRequestV2<'_>,
     evidence: SignedDeltaTerminalEvidenceV3<'_>,
 ) -> Result<SignedDeltaTerminalCompletionV3> {
     let header = request.header();

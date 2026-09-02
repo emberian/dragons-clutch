@@ -7,8 +7,7 @@ use std::str::FromStr;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use dclutch_rational_representation_v2_request_contract::{
     AssetV2, CallerRoleV2, OpenRepresentationHotRequestV3, RepresentationActionV2,
-    RepresentationRequestHeaderV2, RepresentationRequestV2, ABSENT_REVISION, ASSET_BYTES_V2,
-    REQUEST_HEADER_BYTES_V2,
+    RepresentationRequestHeaderV2, RepresentationRequestV2, ABSENT_REVISION, ASSET_BYTES_V3,
 };
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -195,16 +194,16 @@ pub fn plan_rational_open_json_v1(source: &[u8]) -> Result<String, String> {
         .enumerate()
         .map(|(index, asset)| parse_asset(action, quantity, denominator, index, asset))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut asset_bytes = vec![0_u8; parsed_assets.len() * ASSET_BYTES_V2];
+    let mut asset_bytes = vec![0_u8; parsed_assets.len() * ASSET_BYTES_V3];
     for (index, asset) in parsed_assets.iter().enumerate() {
         let start = index
-            .checked_mul(ASSET_BYTES_V2)
+            .checked_mul(ASSET_BYTES_V3)
             .ok_or_else(|| "Rational open asset byte width overflowed".to_owned())?;
         asset
             .value
             .encode_into(
                 asset_bytes
-                    .get_mut(start..start + ASSET_BYTES_V2)
+                    .get_mut(start..start + ASSET_BYTES_V3)
                     .ok_or_else(|| "Rational open asset byte span changed".to_owned())?,
             )
             .map_err(|error| format!("Rational open asset {index}: {error:?}"))?;
@@ -246,9 +245,10 @@ pub fn plan_rational_open_json_v1(source: &[u8]) -> Result<String, String> {
     };
     let child_template = RepresentationRequestV2::new(header, &asset_bytes)
         .map_err(|error| format!("Rational open request owner: {error:?}"))?;
-    let request_bytes = REQUEST_HEADER_BYTES_V2
-        .checked_add(asset_bytes.len())
-        .ok_or_else(|| "Rational open request width overflowed".to_owned())?;
+    // The header width is a function of the action's class in physical ABI v3.
+    let request_bytes = child_template
+        .wire_len()
+        .map_err(|error| format!("Rational open request width: {error:?}"))?;
     let mut template_bytes = vec![0_u8; request_bytes];
     child_template
         .encode_into(&mut template_bytes)

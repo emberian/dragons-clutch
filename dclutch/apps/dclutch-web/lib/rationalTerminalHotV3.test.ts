@@ -14,8 +14,7 @@ function input() {
     collateralRecipient: key(10), expectedRepresentationRevision: 4n, expectedClaimsMarketRevision: 5n,
     expectedCustodyPositionRevision: 6n, expectedCustodyReplayRevision: 7n, generation: 8n,
     quantity: 2n, denominator: 10n, expectedReceiptSupply: 0n, outcomeCount: 258, selectedOutcome: 257,
-    asset: { shardMint: key(11), actorShardAccount: key(12), structuredCustodyAccount: key(13),
-      claimsCustodyOwner: key(14), coefficient: 1n, expectedShardSupply: 100n,
+    asset: { actorShardAccount: key(12), coefficient: 1n, expectedShardSupply: 100n,
       expectedActorShards: 20n, expectedStructuredShards: 0n },
   } as const;
 }
@@ -50,17 +49,25 @@ describe('Rational terminal Hot V3 codec', () => {
     expect(family).toHaveLength(Abi.RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3);
     expect(family.slice(0, 8)).toEqual(Abi.RATIONAL_TERMINAL_HOT_MAGIC_V3);
     expect(family.slice(144, 176)).toEqual(new Uint8Array(32));
-    expect(new DataView(family.buffer).getUint32(Abi.REQUEST_OUTCOME_COUNT_OFFSET, true)).toBe(258);
-    expect(new DataView(family.buffer).getUint32(Abi.REQUEST_SELECTED_OUTCOME_OFFSET, true)).toBe(257);
+    expect(new DataView(family.buffer).getUint32(Abi.RATIONAL_TERMINAL_HOT_OUTCOME_COUNT_OFFSET_V3, true)).toBe(258);
+    expect(new DataView(family.buffer).getUint32(Abi.RATIONAL_TERMINAL_HOT_SELECTED_OUTCOME_OFFSET_V3, true)).toBe(257);
     const specialized = await specializeRationalTerminalChildV2(family);
     expect(specialized.childRequest.slice(0, 8)).toEqual(Abi.REQUEST_MAGIC_V2);
     expect(specialized.childRequest.slice(144, 176)).toEqual(specialized.familyDigest);
   });
 
-  it('refuses unfunded burns, selected-outcome overflow, and asset aliasing', () => {
+  // The asset-aliasing hostile that stood here is GONE, not weakened: it
+  // substituted the actor shard Account for the shard Mint and expected the
+  // builder to refuse two roles naming one key. Physical ABI v3 leaves exactly
+  // one identity on the asset row, so there is no second role to alias and the
+  // check it exercised no longer exists. Restating it against the surviving
+  // field would have been a test that passes for every input.
+  //
+  // OWED: the shard Mint alias property, in the account frame. See the note on
+  // the deleted `distinct` helper in the module this tests.
+  it('refuses unfunded burns, selected-outcome overflow, and non-canonical u64', () => {
     expect(() => encodeRationalTerminalHotRequestV3({ ...input(), asset: { ...input().asset, expectedActorShards: 19n } })).toThrow(/cannot fund/);
     expect(() => encodeRationalTerminalHotRequestV3({ ...input(), selectedOutcome: 258 })).toThrow(/runtime u32/);
-    expect(() => encodeRationalTerminalHotRequestV3({ ...input(), asset: { ...input().asset, actorShardAccount: input().asset.shardMint } })).toThrow(/aliases/);
     expect(() => encodeRationalTerminalHotRequestV3({ ...input(), quantity: 18_446_744_073_709_551_615n })).toThrow(/outside canonical u64/);
   });
 

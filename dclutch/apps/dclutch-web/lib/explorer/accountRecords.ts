@@ -568,44 +568,56 @@ import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V2,
 } from '../generated/protocolInfrastructure';
 import {
-  ASSET_BYTES_V2,
   RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3,
   RATIONAL_TERMINAL_HOT_CALLER_ROLE_OFFSET_V3,
   RATIONAL_TERMINAL_HOT_MAGIC_V3,
   RATIONAL_TERMINAL_HOT_PARENT_CONTEXT_OFFSET_V3,
   RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3,
   RATIONAL_TERMINAL_HOT_VERSION_OFFSET_V3,
-  REQUEST_ACTION_OFFSET,
-  REQUEST_ACTOR_OFFSET,
-  REQUEST_ASSET_COUNT_OFFSET,
-  REQUEST_CALLER_ROLE_OFFSET,
-  REQUEST_COLLATERAL_RECIPIENT_OFFSET,
-  REQUEST_DENOMINATOR_OFFSET,
-  REQUEST_DESCRIPTOR_ID_OFFSET,
-  REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET,
-  REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET,
-  REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET,
-  REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET,
-  REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET,
-  REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET,
-  REQUEST_GENERATION_OFFSET,
-  REQUEST_GRAPH_ID_OFFSET,
-  REQUEST_HEADER_BYTES_V2,
+  ACTION_DENOMINATE,
+  ACTION_ISSUE_STRUCTURED,
+  ACTION_RECONSTITUTE,
+  ACTION_REDEEM_TERMINAL,
+  ACTION_UNWRAP_STRUCTURED,
+  ASSET_BYTES_V3,
+  REQUEST_ACTION_OFFSET_V3,
+  REQUEST_ACTOR_OFFSET_V3,
+  REQUEST_CALLER_ROLE_OFFSET_V3,
+  REQUEST_COMMON_PREFIX_BYTES_V3,
+  REQUEST_DENOMINATOR_OFFSET_V3,
+  REQUEST_DESCRIPTOR_ID_OFFSET_V3,
+  REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3,
+  REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET_V3,
+  REQUEST_GENERATION_OFFSET_V3,
+  REQUEST_GRAPH_ID_OFFSET_V3,
   REQUEST_MAGIC_V2,
-  REQUEST_MARKET_OFFSET,
-  REQUEST_OUTCOME_COUNT_OFFSET,
-  REQUEST_PARENT_CONTEXT_OFFSET,
-  REQUEST_QUANTITY_OFFSET,
-  REQUEST_REALM_OFFSET,
-  REQUEST_RECEIPT_ACCOUNT_OFFSET,
-  REQUEST_RECEIPT_MINT_OFFSET,
-  REQUEST_RELEASE_SET_OFFSET,
-  REQUEST_REPRESENTATION_AUTHORITY_OFFSET,
-  REQUEST_RESERVED_HEADER_OFFSET,
-  REQUEST_RESERVED_TAIL_OFFSET,
-  REQUEST_SELECTED_OUTCOME_OFFSET,
-  REQUEST_TOKEN_PROGRAM_OFFSET,
-  REQUEST_VERSION_OFFSET,
+  REQUEST_MARKET_OFFSET_V3,
+  REQUEST_OUTCOME_COUNT_OFFSET_V3,
+  REQUEST_PARENT_CONTEXT_OFFSET_V3,
+  REQUEST_QUANTITY_OFFSET_V3,
+  REQUEST_RECEIPT_MINT_OFFSET_V3,
+  REQUEST_RELEASE_SET_OFFSET_V3,
+  REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3,
+  REQUEST_RESERVED_HEADER_OFFSET_V3,
+  REQUEST_SELECTED_HEADER_BYTES_V3,
+  REQUEST_STRUCTURED_HEADER_BYTES_V3,
+  REQUEST_TERMINAL_HEADER_BYTES_V3,
+  REQUEST_TOKEN_PROGRAM_OFFSET_V3,
+  REQUEST_VERSION_OFFSET_V3,
+  SELECTED_REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET_V3,
+  SELECTED_REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET_V3,
+  SELECTED_REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET_V3,
+  SELECTED_REQUEST_RESERVED_TAIL_OFFSET_V3,
+  SELECTED_REQUEST_SELECTED_OUTCOME_OFFSET_V3,
+  STRUCTURED_REQUEST_RECEIPT_ACCOUNT_OFFSET_V3,
+  STRUCTURED_REQUEST_RESERVED_TAIL_OFFSET_V3,
+  TERMINAL_REQUEST_COLLATERAL_RECIPIENT_OFFSET_V3,
+  TERMINAL_REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET_V3,
+  TERMINAL_REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET_V3,
+  TERMINAL_REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET_V3,
+  TERMINAL_REQUEST_REALM_OFFSET_V3,
+  TERMINAL_REQUEST_RESERVED_TAIL_OFFSET_V3,
+  TERMINAL_REQUEST_SELECTED_OUTCOME_OFFSET_V3,
 } from '../generated/rationalTerminalHotV3';
 import {
   POSITION_BASE_BYTES_V1,
@@ -728,6 +740,31 @@ export type RecordField = Readonly<{
   note?: string;
 }>;
 
+/**
+ * How many rows follow a class header.
+ *
+ * `u32-at` reads a count the wire sends. `fixed` is a count the ACTION already
+ * determines, which the wire therefore stopped sending -- the explorer derives
+ * it exactly as the program does rather than reading a field that is not there.
+ */
+export type RecordRowCount =
+  | Readonly<{ kind: 'fixed'; count: number }>
+  | Readonly<{ kind: 'u32-at'; offset: number }>;
+
+/** One action class of a record whose header depends on its action byte. */
+export type RecordActionClass = Readonly<{
+  /** What this class is called where the reader can see it. */
+  name: string;
+  /** The action bytes that select it. */
+  actions: ReadonlyArray<number>;
+  headerBytes: number;
+  strideBytes: number;
+  rowLabel: string;
+  rows: RecordRowCount;
+  /** What this class carries BEYOND the common prefix in `RecordSpec.fields`. */
+  fields: ReadonlyArray<RecordField>;
+}>;
+
 /** How wide the record is, and how that width is known. */
 export type RecordWidth =
   | Readonly<{ kind: 'fixed'; bytes: number }>
@@ -738,6 +775,24 @@ export type RecordWidth =
       countOffset: number;
       countKind: 'u8' | 'u16' | 'u32';
       rowLabel: string;
+    }>
+  /**
+   * A record whose header layout depends on its own action byte.
+   *
+   * The Rational representation request became this in physical ABI v3: one
+   * common prefix placed identically for every action, then a tail that differs
+   * by class. Reading it with a single flat field list -- which is what this
+   * file did -- produced a plausible number for every field past the prefix no
+   * matter which action was on the wire, because every offset still landed
+   * inside the account. Nothing was out of range, so nothing looked wrong.
+   */
+  | Readonly<{
+      kind: 'action-classes';
+      /** Where the selecting action byte lives. In the common prefix, always. */
+      actionOffset: number;
+      /** Where the common prefix ends, which is where `span` fields stop. */
+      commonPrefixBytes: number;
+      classes: ReadonlyArray<RecordActionClass>;
     }>
   | Readonly<{ kind: 'header-only'; headerBytes: number; note: string }>;
 
@@ -766,6 +821,15 @@ const CORE_PHASES: ReadonlyArray<EnumTag> = Object.freeze([
   Object.freeze({ tag: CORE_PHASE_TERMINAL_TAG, name: 'Terminal' }),
   Object.freeze({ tag: CORE_PHASE_RETIRING_TAG, name: 'Retiring' }),
   Object.freeze({ tag: CORE_PHASE_RETIRED_TAG, name: 'Retired' }),
+]);
+
+/** The five Rational representation actions, which also select the header class. */
+const RATIONAL_ACTIONS: ReadonlyArray<EnumTag> = Object.freeze([
+  Object.freeze({ tag: ACTION_DENOMINATE, name: 'Denominate' }),
+  Object.freeze({ tag: ACTION_RECONSTITUTE, name: 'Reconstitute' }),
+  Object.freeze({ tag: ACTION_ISSUE_STRUCTURED, name: 'Issue structured' }),
+  Object.freeze({ tag: ACTION_UNWRAP_STRUCTURED, name: 'Unwrap structured' }),
+  Object.freeze({ tag: ACTION_REDEEM_TERMINAL, name: 'Redeem terminal' }),
 ]);
 
 const CORE_READINESS: ReadonlyArray<EnumTag> = Object.freeze([
@@ -1922,43 +1986,87 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     family: 'Claims',
     summary: 'Wraps claims into a token that can be moved on its own, or unwraps them back.',
     width: {
-      kind: 'header-and-rows',
-      headerBytes: REQUEST_HEADER_BYTES_V2,
-      strideBytes: ASSET_BYTES_V2,
-      countOffset: REQUEST_ASSET_COUNT_OFFSET,
-      countKind: 'u32',
-      rowLabel: 'asset',
+      kind: 'action-classes',
+      actionOffset: REQUEST_ACTION_OFFSET_V3,
+      commonPrefixBytes: REQUEST_COMMON_PREFIX_BYTES_V3,
+      classes: [
+        {
+          name: 'Structured',
+          actions: [ACTION_ISSUE_STRUCTURED, ACTION_UNWRAP_STRUCTURED],
+          headerBytes: REQUEST_STRUCTURED_HEADER_BYTES_V3,
+          strideBytes: ASSET_BYTES_V3,
+          rowLabel: 'asset',
+          // One asset row per Product outcome. The wire used to send an asset
+          // count as well; it could only ever equal this, so v3 stopped sending
+          // it and the reader derives it the same way the program does.
+          rows: { kind: 'u32-at', offset: REQUEST_OUTCOME_COUNT_OFFSET_V3 },
+          fields: [
+            field('Receipt account', STRUCTURED_REQUEST_RECEIPT_ACCOUNT_OFFSET_V3, 'pubkey'),
+            field('Reserved', STRUCTURED_REQUEST_RESERVED_TAIL_OFFSET_V3, 'reserved'),
+          ],
+        },
+        {
+          name: 'Selected outcome',
+          actions: [ACTION_DENOMINATE, ACTION_RECONSTITUTE],
+          headerBytes: REQUEST_SELECTED_HEADER_BYTES_V3,
+          strideBytes: ASSET_BYTES_V3,
+          rowLabel: 'asset',
+          rows: { kind: 'fixed', count: 1 },
+          fields: [
+            field('Expected Claims market revision', SELECTED_REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET_V3, 'u64'),
+            field('Expected actor position revision', SELECTED_REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET_V3, 'u64'),
+            field('Expected custody position revision', SELECTED_REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET_V3, 'u64'),
+            field('Selected outcome', SELECTED_REQUEST_SELECTED_OUTCOME_OFFSET_V3, 'u32'),
+            field('Reserved', SELECTED_REQUEST_RESERVED_TAIL_OFFSET_V3, 'reserved'),
+          ],
+        },
+        {
+          name: 'Redeem terminal',
+          actions: [ACTION_REDEEM_TERMINAL],
+          headerBytes: REQUEST_TERMINAL_HEADER_BYTES_V3,
+          strideBytes: ASSET_BYTES_V3,
+          rowLabel: 'asset',
+          rows: { kind: 'fixed', count: 1 },
+          fields: [
+            // The Realm and the collateral recipient are HERE and nowhere else:
+            // a terminal redemption is the only action that pays collateral out,
+            // and the other two classes do not carry these thirty-two-byte keys
+            // at all. Reading them at a structured request's offset 348 -- which
+            // is where the receipt account lives -- is exactly the mistake the
+            // flat v2 field list made possible.
+            field('Realm identity', TERMINAL_REQUEST_REALM_OFFSET_V3, 'identity'),
+            field('Collateral recipient', TERMINAL_REQUEST_COLLATERAL_RECIPIENT_OFFSET_V3, 'pubkey'),
+            field('Expected Claims market revision', TERMINAL_REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET_V3, 'u64'),
+            field('Expected custody position revision', TERMINAL_REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET_V3, 'u64'),
+            field('Expected custody replay revision', TERMINAL_REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET_V3, 'u64'),
+            field('Selected outcome', TERMINAL_REQUEST_SELECTED_OUTCOME_OFFSET_V3, 'u32'),
+            field('Reserved', TERMINAL_REQUEST_RESERVED_TAIL_OFFSET_V3, 'reserved'),
+          ],
+        },
+      ],
     },
+    // The COMMON PREFIX only: every field below is at the same offset whatever
+    // the action. Everything action-dependent is in a class above.
     fields: [
-      version(REQUEST_VERSION_OFFSET),
-      field('Action', REQUEST_ACTION_OFFSET, 'u8'),
-      field('Caller role', REQUEST_CALLER_ROLE_OFFSET, 'u8'),
-      field('Reserved', REQUEST_RESERVED_HEADER_OFFSET, 'reserved'),
-      field('Release set', REQUEST_RELEASE_SET_OFFSET, 'identity'),
-      field('Market', REQUEST_MARKET_OFFSET, 'pubkey'),
-      field('Graph identity', REQUEST_GRAPH_ID_OFFSET, 'identity'),
-      field('Descriptor identity', REQUEST_DESCRIPTOR_ID_OFFSET, 'identity'),
-      field('Parent context', REQUEST_PARENT_CONTEXT_OFFSET, 'identity'),
-      field('Actor', REQUEST_ACTOR_OFFSET, 'pubkey'),
-      field('Receipt mint', REQUEST_RECEIPT_MINT_OFFSET, 'pubkey'),
-      field('Receipt account', REQUEST_RECEIPT_ACCOUNT_OFFSET, 'pubkey'),
-      field('Representation authority', REQUEST_REPRESENTATION_AUTHORITY_OFFSET, 'pubkey'),
-      field('Token program', REQUEST_TOKEN_PROGRAM_OFFSET, 'pubkey'),
-      field('Realm identity', REQUEST_REALM_OFFSET, 'identity'),
-      field('Collateral recipient', REQUEST_COLLATERAL_RECIPIENT_OFFSET, 'pubkey'),
-      field('Expected representation revision', REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET, 'u64'),
-      field('Expected Claims market revision', REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET, 'u64'),
-      field('Expected actor position revision', REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET, 'u64'),
-      field('Expected custody position revision', REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET, 'u64'),
-      field('Expected custody replay revision', REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET, 'u64'),
-      field('Generation', REQUEST_GENERATION_OFFSET, 'u64'),
-      field('Quantity', REQUEST_QUANTITY_OFFSET, 'u64'),
-      field('Denominator', REQUEST_DENOMINATOR_OFFSET, 'u64'),
-      field('Expected receipt supply', REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET, 'u64'),
-      field('Outcome count', REQUEST_OUTCOME_COUNT_OFFSET, 'u32'),
-      field('Selected outcome', REQUEST_SELECTED_OUTCOME_OFFSET, 'u32'),
-      field('Asset count', REQUEST_ASSET_COUNT_OFFSET, 'u32'),
-      field('Reserved', REQUEST_RESERVED_TAIL_OFFSET, 'reserved'),
+      version(REQUEST_VERSION_OFFSET_V3),
+      field('Action', REQUEST_ACTION_OFFSET_V3, 'enum', { tags: RATIONAL_ACTIONS }),
+      field('Caller role', REQUEST_CALLER_ROLE_OFFSET_V3, 'u8'),
+      field('Reserved', REQUEST_RESERVED_HEADER_OFFSET_V3, 'reserved'),
+      field('Release set', REQUEST_RELEASE_SET_OFFSET_V3, 'identity'),
+      field('Market', REQUEST_MARKET_OFFSET_V3, 'pubkey'),
+      field('Graph identity', REQUEST_GRAPH_ID_OFFSET_V3, 'identity'),
+      field('Descriptor identity', REQUEST_DESCRIPTOR_ID_OFFSET_V3, 'identity'),
+      field('Parent context', REQUEST_PARENT_CONTEXT_OFFSET_V3, 'identity'),
+      field('Actor', REQUEST_ACTOR_OFFSET_V3, 'pubkey'),
+      field('Receipt mint', REQUEST_RECEIPT_MINT_OFFSET_V3, 'pubkey'),
+      field('Representation authority', REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, 'pubkey'),
+      field('Token program', REQUEST_TOKEN_PROGRAM_OFFSET_V3, 'pubkey'),
+      field('Expected representation revision', REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET_V3, 'u64'),
+      field('Generation', REQUEST_GENERATION_OFFSET_V3, 'u64'),
+      field('Quantity', REQUEST_QUANTITY_OFFSET_V3, 'u64'),
+      field('Denominator', REQUEST_DENOMINATOR_OFFSET_V3, 'u64'),
+      field('Expected receipt supply', REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET_V3, 'u64'),
+      field('Outcome count', REQUEST_OUTCOME_COUNT_OFFSET_V3, 'u32'),
     ],
     note: null,
   },
@@ -2174,6 +2282,11 @@ export type DecodedRecord = Readonly<{
   accountBytes: number;
   /** Whether the observed width matches what the schema says it should be. */
   widthCheck: Readonly<{ ok: boolean; expected: string; observed: number }>;
+  /**
+   * Which action class the bytes were read as, for an `action-classes` record;
+   * `null` for every other record and for an action byte no class claims.
+   */
+  actionClass: string | null;
   fields: ReadonlyArray<DecodedField>;
   rows: DecodedRows | null;
 }>;
@@ -2232,12 +2345,19 @@ function fieldWidth(spec: RecordSpec, index: number, headerEnd: number): number 
   }
 }
 
-function headerEndOf(width: RecordWidth): number {
+/**
+ * Where a record's DECLARED fields stop. For an action-conditional record that
+ * is the common prefix: the class tails are declared per class, and each is
+ * bounded by that class's own header.
+ */
+export function headerEndOf(width: RecordWidth): number {
   switch (width.kind) {
     case 'fixed':
       return width.bytes;
     case 'header-and-rows':
       return width.headerBytes;
+    case 'action-classes':
+      return width.commonPrefixBytes;
     case 'header-only':
       return width.headerBytes;
   }
@@ -2297,11 +2417,29 @@ function decodeValue(field_: RecordField, data: Uint8Array, width: number): Deco
   }
 }
 
+/**
+ * Which class an `action-classes` record's bytes select, or `null` when the
+ * record is not action-conditional or the byte names no class.
+ */
+function selectActionClass(width: RecordWidth, data: Uint8Array): RecordActionClass | null {
+  if (width.kind !== 'action-classes') return null;
+  const action = data[width.actionOffset];
+  if (action === undefined) return null;
+  return width.classes.find((entry) => entry.actions.includes(action)) ?? null;
+}
+
 /** Decode one account's bytes against its spec. Never throws. */
 export function decodeAgainstSpec(spec: RecordSpec, data: Uint8Array): DecodedRecord {
-  const headerEnd = headerEndOf(spec.width);
-  const fields = spec.fields.map((declared, index) => {
-    const width = fieldWidth(spec, index, headerEnd);
+  const selected = selectActionClass(spec.width, data);
+  // The class tail is appended to the common prefix, so a field belongs to the
+  // reading only when the action on the wire actually carries it.
+  const effective: RecordSpec =
+    selected === null
+      ? spec
+      : Object.freeze({ ...spec, fields: Object.freeze([...spec.fields, ...selected.fields]) });
+  const headerEnd = selected === null ? headerEndOf(spec.width) : selected.headerBytes;
+  const fields = effective.fields.map((declared, index) => {
+    const width = fieldWidth(effective, index, headerEnd);
     return Object.freeze({
       label: declared.label,
       offset: declared.offset,
@@ -2323,6 +2461,38 @@ export function decodeAgainstSpec(spec: RecordSpec, data: Uint8Array): DecodedRe
       expected = `at least ${spec.width.headerBytes} bytes (${spec.width.note})`;
       ok = data.length >= spec.width.headerBytes;
       break;
+    case 'action-classes': {
+      if (selected === null) {
+        const named = spec.width.classes.map((entry) => entry.name).join(', ');
+        expected = `an action byte at ${spec.width.actionOffset} naming one of: ${named}`;
+        ok = false;
+        break;
+      }
+      const { headerBytes, strideBytes, rowLabel } = selected;
+      const count =
+        selected.rows.kind === 'fixed'
+          ? selected.rows.count
+          : selected.rows.offset + SCALAR_WIDTHS.u32 <= data.length
+            ? Number(readUnsigned(data, selected.rows.offset, SCALAR_WIDTHS.u32))
+            : null;
+      if (count === null) {
+        expected = `${headerBytes} bytes plus ${rowLabel} rows`;
+        ok = false;
+        break;
+      }
+      const total = headerBytes + count * strideBytes;
+      const how = selected.rows.kind === 'fixed' ? ', derived from the action' : '';
+      expected = `${selected.name}: ${headerBytes} + ${count} × ${strideBytes} = ${total} bytes${how}`;
+      ok = data.length === total;
+      rows = Object.freeze({
+        label: rowLabel,
+        count,
+        strideBytes,
+        offset: headerBytes,
+        scalars: null,
+      });
+      break;
+    }
     case 'header-and-rows': {
       const { headerBytes, strideBytes, countOffset, countKind, rowLabel } = spec.width;
       if (countOffset + SCALAR_WIDTHS[countKind] > data.length) {
@@ -2352,6 +2522,7 @@ export function decodeAgainstSpec(spec: RecordSpec, data: Uint8Array): DecodedRe
     magic: magicText(spec.magic),
     accountBytes: data.length,
     widthCheck: Object.freeze({ ok, expected, observed: data.length }),
+    actionClass: selected?.name ?? null,
     fields: Object.freeze(fields),
     rows,
   });

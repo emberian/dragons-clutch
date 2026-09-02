@@ -5,6 +5,17 @@
 #         the complete canonical manifest matches the committed ratchet.
 # Exit 1: this tree has a build/diagnostic/frame disagreement.
 # Exit 2: a prerequisite or measurement artifact is missing; nothing proved.
+#
+# A CAPTURE NAMES ITS COMMIT. `--at <commit>` builds a detached worktree at that
+# commit and records it in the manifest, so the diff a reviewer reads is between
+# two named commits. Without `--at`, a capture is admitted only from a clean
+# tree (whose HEAD is then recorded) and REFUSED from a dirty one -- because an
+# exact ratchet captured from ambient uncommitted state names no base, and
+# nobody can review it afterwards. Measured on 2026-09-02: three correct
+# recaptures of this baseline were each invalidated within minutes by a program
+# commit that landed while the four-minute double build was still running, and
+# the last would have admitted 26 changed rows of which 2 belonged to its
+# author. A capture must ride with a commit, or name one.
 
 set -uo pipefail
 
@@ -23,15 +34,41 @@ here="$(cd "$(dirname "$0")" && pwd)"
 source_root="$(cd "$here/../.." && pwd)"
 baseline=""
 capture=""
+at=""
+repo=""
+tools=""
+worktree=""
+measured_commit=""
+
+cleanup() {
+    if [ -n "$worktree" ] && [ -n "$repo" ]; then
+        git -C "$repo" worktree remove --force "$worktree" >/dev/null 2>&1 || true
+        git -C "$repo" worktree prune >/dev/null 2>&1 || true
+    fi
+    [ -n "${scratch:-}" ] && rm -rf -- "$scratch"
+}
 
 usage() {
     cat <<'EOF'
-usage: tools/frameguard/run.sh [--source DIR] [--baseline FILE]
-                               [--capture FILE]
+usage: tools/frameguard/run.sh [--source DIR] [--repo DIR] [--at COMMIT]
+                               [--baseline FILE] [--capture FILE]
 
-Without --capture, freshly measure DIR and compare it with the baseline. With
---capture, write the canonical candidate manifest without admitting it. A
-baseline must be made from TWO such fresh captures with:
+Without --capture, freshly measure the tree and compare it with the baseline.
+With --capture, write the canonical candidate manifest without admitting it.
+
+--at COMMIT measures a detached worktree at COMMIT and records it in the
+manifest. A capture from a dirty tree with no --at is REFUSED: the manifest
+would name no base, and an exact ratchet with no base cannot be reviewed.
+
+--repo DIR names the git repository used for --at and for attributing a red
+gate; it defaults to the measured source, which is right unless the source is
+an unpacked archive (as `tools/ci/run.sh --commit` builds).
+
+--tools DIR names the tree the CHECKER and FRAME PARSER are read from. It
+defaults to the tree this script itself lives in -- the instrument is the one
+you invoked -- while --source/--at choose only the program sources compiled.
+
+A baseline must be made from TWO fresh captures of the SAME commit with:
 
   frameguard.py accept --first A --second B --output baseline.json
 EOF
@@ -57,6 +94,24 @@ while [ "$#" -gt 0 ]; do
         capture="$1"
         ;;
     --capture=*) capture="${1#--capture=}" ;;
+    --at)
+        shift
+        [ "$#" -gt 0 ] || { usage >&2; exit 64; }
+        at="$1"
+        ;;
+    --at=*) at="${1#--at=}" ;;
+    --repo)
+        shift
+        [ "$#" -gt 0 ] || { usage >&2; exit 64; }
+        repo="$1"
+        ;;
+    --repo=*) repo="${1#--repo=}" ;;
+    --tools)
+        shift
+        [ "$#" -gt 0 ] || { usage >&2; exit 64; }
+        tools="$1"
+        ;;
+    --tools=*) tools="${1#--tools=}" ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'frameguard: unknown argument %s\n' "$1" >&2; usage >&2; exit 64 ;;
     esac
@@ -67,16 +122,7 @@ source_root="$(cd "$source_root" 2>/dev/null && pwd)" || {
     printf 'frameguard: source directory is missing: %s\n' "$source_root" >&2
     exit "$EXIT_PREREQ_MISSING"
 }
-tool="$source_root/tools/frameguard/frameguard.py"
-parser="$source_root/tools/sbf-frame-sizes.py"
-[ -f "$tool" ] && [ ! -L "$tool" ] || {
-    printf 'frameguard: checker is missing from measured source: %s\n' "$tool" >&2
-    exit "$EXIT_PREREQ_MISSING"
-}
-[ -f "$parser" ] && [ ! -L "$parser" ] || {
-    printf 'frameguard: frame parser is missing from measured source: %s\n' "$parser" >&2
-    exit "$EXIT_PREREQ_MISSING"
-}
+
 command -v python3 >/dev/null 2>&1 || {
     printf 'frameguard: python3 is not on PATH\n' >&2
     exit "$EXIT_PREREQ_MISSING"
@@ -90,14 +136,100 @@ command -v cargo >/dev/null 2>&1 || {
     exit "$EXIT_PREREQ_MISSING"
 }
 
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-frameguard.XXXXXX")" || exit "$EXIT_PREREQ_MISSING"
+trap cleanup EXIT
+
+# --- which SOURCE, and under what name ---------------------------------------
+# Everything below measures `$source_root` and reports `$measured_commit`. The
+# only three admitted combinations are: a named commit in a detached worktree,
+# a clean repository whose HEAD is therefore its own name, and an unnamed tree
+# -- the last of which may be compared but never captured.
+[ -n "$repo" ] || repo="$source_root"
+repo_top=""
+if command -v git >/dev/null 2>&1; then
+    repo_top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || repo_top=""
+fi
+
+if [ -n "$at" ]; then
+    if [ -z "$repo_top" ]; then
+        printf 'frameguard: --at %s needs a git repository; %s is not one\n' \
+            "$at" "$repo" >&2
+        exit "$EXIT_PREREQ_MISSING"
+    fi
+    repo="$repo_top"
+    measured_commit="$(git -C "$repo" rev-parse --verify --quiet "$at^{commit}")" || {
+        printf 'frameguard: --at %s does not name a commit in %s\n' "$at" "$repo" >&2
+        exit "$EXIT_PREREQ_MISSING"
+    }
+    worktree="$scratch/at-${measured_commit}"
+    if ! git -C "$repo" worktree add --detach --quiet "$worktree" "$measured_commit" \
+        >"$scratch/worktree.log" 2>&1; then
+        printf 'frameguard: could not check out %s into a detached worktree\n' \
+            "$measured_commit" >&2
+        tail -n 10 "$scratch/worktree.log" >&2
+        worktree=""
+        exit "$EXIT_PREREQ_MISSING"
+    fi
+    source_root="$worktree"
+    printf 'frameguard: measuring commit %s in a detached worktree\n' "$measured_commit"
+elif [ -n "$repo_top" ]; then
+    repo="$repo_top"
+    dirty="$(git -C "$repo" status --porcelain --untracked-files=no)"
+    if [ -n "$dirty" ]; then
+        if [ -n "$capture" ]; then
+            printf 'frameguard: REFUSING to capture from a dirty tree -- %s tracked path(s) differ from HEAD.\n' \
+                "$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')" >&2
+            printf 'frameguard: an exact ratchet must name its base. Re-run with --at HEAD (or --at <commit>).\n' >&2
+            exit "$EXIT_PREREQ_MISSING"
+        fi
+        printf 'frameguard: measuring a DIRTY tree; the comparison names no commit\n'
+    else
+        measured_commit="$(git -C "$repo" rev-parse --verify --quiet 'HEAD^{commit}')" || measured_commit=""
+        [ -n "$measured_commit" ] && printf 'frameguard: measuring clean HEAD %s\n' "$measured_commit"
+    fi
+elif [ -n "$capture" ]; then
+    printf 'frameguard: REFUSING to capture from %s, which is not a git repository\n' "$repo" >&2
+    printf 'frameguard: a capture must name the commit it measured; use --repo DIR --at <commit>\n' >&2
+    exit "$EXIT_PREREQ_MISSING"
+fi
+
+# --- the instrument, and the subject -----------------------------------------
+# THE INSTRUMENT IS THE ONE YOU INVOKED. `--source`/`--at` choose which program
+# sources are compiled; the checker and the frame parser come from this
+# script's own tree unless `--tools` says otherwise. Pairing a running run.sh
+# with an older sibling checker measures nothing coherent, and it is not
+# hypothetical: the first `--at` capture of this baseline built all twelve
+# links and then died at the assembler, because the commit it measured predates
+# the checker's own `--commit` flag by ONE commit -- so measuring any past
+# frame was impossible from the moment the flag was added. A whole archived
+# tree measured by its own tools is a different and equally valid thing, and is
+# what `tools/ci/run.sh --commit <rev>` builds: there this script IS the
+# archived one, so the default already resolves to the archive.
+instrument_root="$tools"
+[ -n "$instrument_root" ] || instrument_root="$(cd "$here/../.." && pwd)"
+instrument_root="$(cd "$instrument_root" 2>/dev/null && pwd)" || {
+    printf 'frameguard: tool directory is missing: %s\n' "$tools" >&2
+    exit "$EXIT_PREREQ_MISSING"
+}
+tool="$instrument_root/tools/frameguard/frameguard.py"
+parser="$instrument_root/tools/sbf-frame-sizes.py"
+[ -f "$tool" ] && [ ! -L "$tool" ] || {
+    printf 'frameguard: checker is missing from the measuring tools: %s\n' "$tool" >&2
+    exit "$EXIT_PREREQ_MISSING"
+}
+[ -f "$parser" ] && [ ! -L "$parser" ] || {
+    printf 'frameguard: frame parser is missing from the measuring tools: %s\n' "$parser" >&2
+    exit "$EXIT_PREREQ_MISSING"
+}
+[ "$instrument_root" = "$source_root" ] \
+    || printf 'frameguard: measuring with the tools in %s\n' "$instrument_root"
+
 [ -n "$baseline" ] || baseline="$source_root/tools/frameguard/baseline.json"
 if [ -z "$capture" ] && { [ ! -f "$baseline" ] || [ -L "$baseline" ]; }; then
     printf 'frameguard: baseline is missing or not regular: %s\n' "$baseline" >&2
     exit "$EXIT_PREREQ_MISSING"
 fi
 
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-frameguard.XXXXXX")" || exit "$EXIT_PREREQ_MISSING"
-trap 'rm -rf -- "$scratch"' EXIT
 inventory="$scratch/inventory.tsv"
 reports="$scratch/reports"
 candidate="$scratch/candidate.json"
@@ -173,9 +305,12 @@ while IFS= read -r package; do
     esac
 done < "$inventory"
 
+commit_argument=()
+[ -n "$measured_commit" ] && commit_argument=(--commit "$measured_commit")
+
 code=0
 python3 "$tool" assemble --inventory "$inventory" --reports "$reports" \
-    --output "$candidate" || code=$?
+    --output "$candidate" "${commit_argument[@]+"${commit_argument[@]}"}" || code=$?
 case "$code" in
 0) ;;
 1) exit "$EXIT_GATE_FAILED" ;;
@@ -188,10 +323,10 @@ if [ -n "$capture" ]; then
     # non-atomic producer for a file that may later be admitted as baseline.
     code=0
     python3 "$tool" assemble --inventory "$inventory" --reports "$reports" \
-        --output "$capture" || code=$?
+        --output "$capture" "${commit_argument[@]+"${commit_argument[@]}"}" || code=$?
     case "$code" in
-    0) printf 'frameguard: captured the complete %s-link manifest at %s\n' \
-            "$EXPECTED_LINK_COUNT" "$capture" ;;
+    0) printf 'frameguard: captured the complete %s-link manifest of %s at %s\n' \
+            "$EXPECTED_LINK_COUNT" "$measured_commit" "$capture" ;;
     1) exit "$EXIT_GATE_FAILED" ;;
     *) exit "$EXIT_PREREQ_MISSING" ;;
     esac
@@ -200,6 +335,15 @@ fi
 
 code=0
 python3 "$tool" check --baseline "$baseline" --candidate "$candidate" || code=$?
+if [ "$code" = 1 ] && [ -n "$repo_top" ]; then
+    # Red is the start of the question, not the answer. If the baseline names
+    # the commit it was captured at, the range since it can be read back and
+    # the commits that moved program sources without carrying frame rows named,
+    # so the next reader sees WHO owes the recapture rather than only that the
+    # gate disagrees.
+    python3 "$tool" owed --repo "$repo_top" --baseline "$baseline" \
+        --until "${measured_commit:-HEAD}" >&2 || true
+fi
 case "$code" in
 0) exit "$EXIT_PASS" ;;
 1) exit "$EXIT_GATE_FAILED" ;;

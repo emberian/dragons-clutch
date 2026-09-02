@@ -1663,7 +1663,7 @@ mod tests {
         },
     };
     use dclutch_rational_representation_v2_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, RepresentationActionV2,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, RepresentationActionV2,
         RepresentationRequestHeaderV2,
     };
     use dclutch_rational_representation_v2_request_contract::generated as representation_wire;
@@ -1945,7 +1945,7 @@ mod tests {
     }
 
     fn representation_bytes() -> Vec<u8> {
-        let mut asset = [0_u8; ASSET_BYTES_V2];
+        let mut asset = [0_u8; ASSET_BYTES_V3];
         AssetV2 {
             shard_mint: id(50),
             actor_shard_account: id(51),
@@ -1990,11 +1990,8 @@ mod tests {
             &asset,
         )
         .expect("representation");
-        let mut bytes = alloc::vec![
-            0_u8;
-            dclutch_rational_representation_v2_contract::REQUEST_HEADER_BYTES_V2
-                + ASSET_BYTES_V2
-        ];
+        // The header width is a function of the action's class in v3.
+        let mut bytes = alloc::vec![0_u8; request.wire_len().expect("class width")];
         request.encode_into(&mut bytes).expect("request bytes");
         bytes
     }
@@ -2089,7 +2086,7 @@ mod tests {
         );
         put(
             representation_wire::RECEIPT_VERSION_OFFSET,
-            &representation_wire::PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+            &representation_wire::PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
         );
         put(
             representation_wire::RECEIPT_ACTION_OFFSET,
@@ -2897,7 +2894,7 @@ mod tests {
 
         let mut substituted_request = request.clone();
         *substituted_request
-            .get_mut(representation_wire::REQUEST_QUANTITY_OFFSET)
+            .get_mut(representation_wire::REQUEST_QUANTITY_OFFSET_V3)
             .expect("quantity offset inside the request") ^= 1;
         assert!(
             verify_route_receipt(

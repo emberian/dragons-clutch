@@ -3024,3 +3024,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   invalidated) → FRAMEGUARD **`(new lane)`**: capture at a named commit, a `--since` mode naming who owes rows, recapture once
   with attribution.
 - Cuts: `e045ae796`.
+
+### Lane map delta — 2026-09-02 16:30
+- STRUCTURED landing (`9785fd92` physical ABI v3, 45 files; `3510ab87` browser/SDK action-conditional read): **the packet wall
+  for full-width Structured issue/unwrap is gone** — Claims-direct K=3 at **1,005** bytes on the live ALT (was 1,397); terminal
+  Hot CU 1,003,826. Three defects the compile-only handoff could not see: a u64 written over the request magic (the emitter's
+  hand-list and its theorem disagreed by one entry → one `emittedFields`, pinned both ways), three stale instruction counts
+  (fixed lengths are the array's type now), three x==x conjuncts in `authenticate_asset`. Campaign 24/5: the terminal Hot
+  redemption refuses `0x4004 Transition` AFTER the Claims child succeeds — a post-execution receipt check behind ~20
+  `map_err(|_| Transition)` sites → surfacing treatment; a coordinate costs 74 not 72; witnesses owed a green re-pin.
+- FRAMEGUARD lane id: **`a8afaad08d0507cc5`**.
+- Cuts: `39c0a040e`.

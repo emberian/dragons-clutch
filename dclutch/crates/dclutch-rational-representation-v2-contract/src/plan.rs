@@ -14,7 +14,7 @@ use dclutch_representation_composition_v3_kernel::CompositionExposureBundleV3;
 
 use crate::{
     Error, Result,
-    request::{AssetV2, CallerRoleV2, RepresentationActionV2, RepresentationRequestV2},
+    request::{AssetV2, CallerRoleV2, RepresentationActionV2, ResolvedRequestV2},
 };
 
 /// Finalized Product/LiabilityBasis identities authenticated by the physical
@@ -67,13 +67,13 @@ pub struct TokenEffectV2 {
 /// Fully joined request, graph, and Token/Claims projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedRepresentationV2<'a> {
-    request: RepresentationRequestV2<'a>,
+    request: ResolvedRequestV2<'a>,
     projection: StructuredProjectionV2<'a>,
 }
 
 impl<'a> PreparedRepresentationV2<'a> {
-    /// Exact source request.
-    pub const fn request(self) -> RepresentationRequestV2<'a> {
+    /// Exact source request, with its adapter-derived identities.
+    pub const fn request(self) -> ResolvedRequestV2<'a> {
         self.request
     }
 
@@ -203,7 +203,7 @@ impl<'a> PreparedRepresentationV2<'a> {
 /// Join one exact request to the accepted exposure and ephemeral Token/Claims
 /// projection. No balance is copied into a protocol-owned state.
 pub fn prepare<'a>(
-    request: RepresentationRequestV2<'a>,
+    request: ResolvedRequestV2<'a>,
     descriptor: RepresentationDescriptorV2<'_>,
     projection: StructuredProjectionV2<'a>,
     exposure: CompositionExposureBundleV3<'a>,

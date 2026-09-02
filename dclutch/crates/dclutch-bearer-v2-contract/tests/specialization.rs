@@ -4,7 +4,7 @@ use dclutch_bearer_v2_contract::{
     BearerAssetIdentityV2, BearerBindingV2, BearerDescriptorV2, BearerResolutionV2, Error, prepare,
 };
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AffineBatchContextV2, AssetV2, CallerRoleV2,
+    ABSENT_REVISION, ASSET_BYTES_V3, AffineBatchContextV2, AssetV2, CallerRoleV2,
     Error as RepresentationError, RepresentationActionV2, RepresentationRequestHeaderV2,
     RepresentationRequestV2, TokenEffectStyleV2,
 };
@@ -248,8 +248,8 @@ fn identity(actor_account: [u8; 32]) -> BearerAssetIdentityV2 {
     }
 }
 
-fn asset_bytes(asset: AssetV2) -> [u8; ASSET_BYTES_V2] {
-    let mut bytes = [0_u8; ASSET_BYTES_V2];
+fn asset_bytes(asset: AssetV2) -> [u8; ASSET_BYTES_V3] {
+    let mut bytes = [0_u8; ASSET_BYTES_V3];
     asset.encode_into(&mut bytes).expect("asset row");
     bytes
 }
@@ -362,7 +362,9 @@ fn all_three_actions_use_the_shared_request_and_transferable_holder_identity() {
                 resolution,
             )
             .expect("Bearer action");
-            assert_eq!(prepared.request(), request);
+            // `prepared.request()` is the RESOLVED request in v3: the wire plus
+            // the identities the caller derived. Compare the wire half.
+            assert_eq!(prepared.request().request(), request);
             let effect = prepared
                 .token_effects()
                 .next()
@@ -522,8 +524,13 @@ fn terminal_resolution_replay_release_and_asset_substitutions_are_exact() {
         ))
     );
 
+    // Substituting the shard Mint no longer refuses HERE: v3 drops its wire
+    // copy, so `prepare` derives it from this very struct and has nothing to
+    // disagree with (see `authenticate_asset`, which OWES that check to the
+    // account frame). The actor shard Account still arrives on the wire, so it
+    // is the substitution this hostile can still make land.
     let mut substituted_identity = identity(id(41));
-    substituted_identity.shard_mint = id(45);
+    substituted_identity.actor_shard_account = id(45);
     assert_eq!(
         prepare(
             bearer,

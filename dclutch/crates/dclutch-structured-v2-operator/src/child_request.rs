@@ -39,7 +39,7 @@
 //! gives: `find_program_address` belongs to the physical adapter.
 
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, REQUEST_HEADER_BYTES_V2,
+    ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_STRUCTURED_HEADER_BYTES_V3,
     RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     TokenEffectStyleV2,
 };
@@ -75,15 +75,25 @@ use crate::{Error, Result};
 /// the two Structured actions, this is a bound on the **Product outcome
 /// width**, not on how many coordinates carry a nonzero coefficient.
 ///
-/// **Raising the RequestProfile bound would not raise this.** The packet, not
-/// the artifact, is the binding wall on the two full-width actions:
-/// `IssueStructured`/`UnwrapStructured` at `K = 3` measure 1,397 bytes as a v0
-/// message with the ALT already applied, against a 1,232-byte limit, so a
-/// cluster caps full-width issuance at `K = 2` -- BELOW this ceiling. See
-/// `the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`. (1,357
-/// until `7b80869d` made every wire measurement carry the
-/// `set_compute_unit_limit` a real transaction always pays: +40 bytes, and the
-/// `K = 2` conclusion unchanged.)
+/// **Both walls moved on 2026-09-02 and this bound did not, on purpose.** The
+/// note here said the packet was the binding wall and capped full-width
+/// issuance at `K = 2`, one coordinate BELOW this ceiling, so raising the
+/// RequestProfile bound alone would admit descriptors that could be published
+/// and denominated but never issued. Physical ABI v3 was the lift it named:
+/// commit-don't-inline plus an action-conditional header take a full-width
+/// K = 3 request from 968 bytes to 576, which moves the measured Claims-direct
+/// frame from 1,397 to 1,005 and the artifact ceiling from 3 to 6.
+///
+/// **Provisional above 3, and this literal is the measured half.** The
+/// arithmetic says K = 5 fits the Claims-direct frame (1,149 bytes, 1,161 with
+/// the house builder's unconditional `set_compute_unit_price`) and K = 6 misses
+/// by one byte; the Trading common-Hot route caps at K = 3 (1,197). None of
+/// that above K = 3 has been EXECUTED -- the campaign has only ever driven
+/// K = 3 -- and a bound admitted on arithmetic is how a descriptor gets
+/// published that nothing can issue. LIFTING PLAN: re-run
+/// `tools/gauntlet/claims-rational-representation-v2` at K = 4 and K = 5,
+/// re-pin the extents, and raise this to the lower of the measured packet
+/// ceiling and `RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3`.
 ///
 /// `STRUCTURED_HOT_MAX_TOKEN_EFFECTS_V2 = 257` is a capacity-profile
 /// measurement and has no executable meaning; do not size against it.
@@ -416,8 +426,8 @@ pub fn structured_child_request_bytes_v2(outcome_count: u32) -> Result<usize> {
     }
     usize::try_from(outcome_count)
         .ok()
-        .and_then(|width| width.checked_mul(ASSET_BYTES_V2))
-        .and_then(|assets| assets.checked_add(REQUEST_HEADER_BYTES_V2))
+        .and_then(|width| width.checked_mul(ASSET_BYTES_V3))
+        .and_then(|assets| assets.checked_add(REQUEST_STRUCTURED_HEADER_BYTES_V3))
         .ok_or(Error::ChildWidth)
 }
 
@@ -496,7 +506,7 @@ pub fn encode_structured_child_representation_v2(
             expected_actor_shards: observed.expected_actor_shards,
             expected_structured_shards,
         };
-        let mut row = [0_u8; ASSET_BYTES_V2];
+        let mut row = [0_u8; ASSET_BYTES_V3];
         asset.encode_into(&mut row).map_err(|_| Error::ChildWire)?;
         assets.extend_from_slice(&row);
         coordinate = coordinate.checked_add(1).ok_or(Error::ChildWidth)?;

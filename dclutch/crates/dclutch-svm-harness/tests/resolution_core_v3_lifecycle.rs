@@ -21,10 +21,20 @@ use dclutch_capability_contract::{
     FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
     MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
 };
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+};
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+};
+use dclutch_direct_codec::{
+    execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
+    successor::{
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
+        DirectExecutionConfigV1, DirectRootStateV1,
+    },
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
@@ -64,8 +74,9 @@ use dclutch_registry_contract::{
 };
 use dclutch_relay_contract::instruction::CommitDeadlineFailureInstructionV1;
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
+    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV2,
 };
 use dclutch_resolution_codec::{
@@ -138,6 +149,11 @@ const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x75; 32]);
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x78; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x79; 32]);
 const GENERATION: u64 = 7;
+/// The Direct row's prepaid-lazy activation deadline. Never reached: nothing on
+/// the Resolution walk reads it, which is the point.
+const DIRECT_ACTIVATION_DEADLINE_SLOT: u64 = 1_000_000;
+const DIRECT_PRICE_SCALE: u64 = 1_000;
+const DIRECT_FEE_BASIS_POINTS: u16 = 25;
 const TERMINAL_SEQUENCE: u64 = 1;
 const TERMINAL_TIME: i64 = 1_787_431_680;
 /// A wall clock strictly past the market's own primary deadline
@@ -164,10 +180,27 @@ struct Elves {
 struct RecordPair {
     raw: Pubkey,
     staging: Pubkey,
+    /// The canonical bumps of the pair, which is what an activation records
+    /// into a capability root header so later readers derive instead of
+    /// searching. Carried here so the Direct root this fixture plants states
+    /// the same four bumps a real activation would have.
+    raw_bump: u8,
+    staging_bump: u8,
 }
 
 struct Fixture {
     test: Option<ProgramTest>,
+    /// The Direct capability root: a PDA of the release-selected Trading
+    /// program, owned by it, and read by nothing on the Resolution walk.
+    direct_root: Pubkey,
+    /// The manifest row the Direct capability occupies, discovered from the
+    /// kind_id ordering rather than chosen.
+    direct_capability_entry_index: u16,
+    /// The three rows the Resolution funding subset selects: every row that is
+    /// not the Direct one.
+    resolution_entry_indices: [u16; 3],
+    /// Those three rows as the ledger's own `selected_mask`.
+    resolution_selected_mask: u16,
     provider: pyth_provider::ProviderAddresses,
     update: Keypair,
     release_set: [u8; 32],
@@ -423,18 +456,21 @@ fn mint_data() -> Vec<u8> {
 
 fn add_record(test: &mut ProgramTest, schema: [u8; 32], data: Vec<u8>) -> RecordPair {
     let digest = hash(&data).to_bytes();
-    let raw = Pubkey::find_program_address(
+    let (raw, raw_bump) = Pubkey::find_program_address(
         &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
         &REGISTRY_PROGRAM_ID,
-    )
-    .0;
-    let staging = Pubkey::find_program_address(
+    );
+    let (staging, staging_bump) = Pubkey::find_program_address(
         &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
         &REGISTRY_PROGRAM_ID,
-    )
-    .0;
+    );
     test.add_account(raw, protocol_account(REGISTRY_PROGRAM_ID, data));
-    RecordPair { raw, staging }
+    RecordPair {
+        raw,
+        staging,
+        raw_bump,
+        staging_bump,
+    }
 }
 
 fn add_active_funding(
@@ -1013,7 +1049,96 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         )
         .expect("Resolution funding entry")
     });
-    let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+    // The Direct capability, and the reason this manifest has four rows.
+    //
+    // Until 2026-09-02 this campaign resolved a market whose manifest was three
+    // Resolution rows and nothing else -- a shape no Direct market has. A market
+    // carrying a Direct capability ROOT carries the capability that owns the
+    // root in its manifest, at a row the Resolution funding subset does not
+    // select, prepaid-lazy and funded by the Trading role rather than by the
+    // walk. The identities below are the REAL ones
+    // (`dclutch-direct-codec`), not fixture bytes: `DIRECT_SUCCESSOR_KIND_ID_V3`
+    // is what a Direct capability IS and `DIRECT_ROOT_SCHEMA_ID_V1` is what its
+    // child account is, and stating them from their owning crate is what makes
+    // the manifest a Direct market's manifest rather than a fourth arbitrary
+    // row.
+    let direct_config_bytes =
+        DirectExecutionConfigV1::new(DIRECT_PRICE_SCALE, DIRECT_FEE_BASIS_POINTS, [0xd1; 32])
+            .expect("Direct execution config")
+            .encode()
+            .to_vec();
+    let direct_config = add_record(
+        &mut test,
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
+        direct_config_bytes.clone(),
+    );
+    let direct_config_id = hash(&direct_config_bytes).to_bytes();
+    // The capability release the Direct row selects. Fixture-local ON PURPOSE
+    // and said out loud: the ProgramSet record it would name is authenticated
+    // by the TRADING role at founding and by the Direct lifecycle routes, and
+    // by nothing on the Resolution walk -- Resolution decodes the manifest and
+    // never opens a capability's release, its config, or its root. Authoring a
+    // real one here would be a second authority for a fact this campaign does
+    // not test.
+    let direct_capability_release = [0xd2; 32];
+    let direct_entry =
+        CapabilityEntryV1::new(
+            id(DIRECT_SUCCESSOR_KIND_ID_V3),
+            id(direct_capability_release),
+            id(direct_config_id),
+            id([0xd3; 32]),
+            id(DIRECT_ROOT_SCHEMA_ID_V1),
+            id([0xd4; 32]),
+            ActivationPolicy::PrepaidLazy,
+            DIRECT_ACTIVATION_DEADLINE_SLOT,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(
+                FundingAmountsV1::new(
+                    // The exact rent of the root account this row owns, which is
+                    // how `selected_manifest_entry_v1` quotes it in production.
+                    CompartmentFundingV1::native_lamports(Rent::default().minimum_balance(
+                        CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1,
+                    ))
+                    .expect("Direct root rent compartment"),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                )
+                .expect("Direct typed funding"),
+                None,
+            )
+            .expect("Direct funding quote"),
+        )
+        .expect("Direct capability entry");
+    // Rows are kind_id-ASCENDING and `encode_into` refuses any other order, so
+    // the Direct row's index is DISCOVERED rather than chosen: a real Direct
+    // kind is a real digest and it lands wherever it lands among the fixture's
+    // placeholder Resolution kinds. `merge_selected_manifest_v1` does exactly
+    // this in production
+    // (`tools/local-validator/bootstrap/successor/src/selected_capability.rs`),
+    // which is the reason a fourth non-Resolution row is a shape the funding
+    // walk already has to survive.
+    let mut entries = vec![entries[0], entries[1], entries[2], direct_entry];
+    entries.sort_by(|left, right| left.kind_id().to_bytes().cmp(&right.kind_id().to_bytes()));
+    let direct_capability_entry_index = u16::try_from(
+        entries
+            .iter()
+            .position(|entry| entry.kind_id().to_bytes() == DIRECT_SUCCESSOR_KIND_ID_V3)
+            .expect("the Direct row is in the manifest"),
+    )
+    .expect("manifest row index");
+    let resolution_entry_indices: [u16; 3] = core::array::from_fn(|slot| {
+        let mut rows = (0..4_u16).filter(|row| *row != direct_capability_entry_index);
+        rows.nth(slot).expect("three Resolution rows")
+    });
+    let resolution_selected_mask = resolution_entry_indices
+        .into_iter()
+        .fold(0_u16, |mask, entry| mask | (1_u16 << entry));
+    let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 4 * CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&entries, &mut manifest_bytes).expect("capability manifest");
     let manifest_id_bytes = hash(&manifest_bytes).to_bytes();
     let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest view");
@@ -1150,6 +1275,58 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         ),
     );
 
+    // The Direct capability ROOT: a PDA of the real Trading program, owned by
+    // it, carrying the immutable activation header and the mutable `Open`
+    // Direct tail. This is the account whose existence makes the Market above a
+    // market carrying a Direct capability root rather than a plain Core Market,
+    // and it is why the Trading role in this campaign's release set had to stop
+    // being the Custody ELF: the address is derived under the release-selected
+    // Trading program, so with a substituted Trading role it is a different
+    // address entirely.
+    //
+    // Nothing on the Resolution walk reads it, and that is the invariant the
+    // campaign now checks rather than assumes -- `an_atomically_founded_market_reaches_a_terminal_certificate`
+    // proves the root is byte-identical and lamport-identical after the whole
+    // resolution, so "Resolution does not touch a capability's root" is a
+    // measurement here and not a reading of the source.
+    let direct_root_header = CapabilityRootHeaderV1::new(
+        CoreContentId::new(release_set).expect("release set identity"),
+        market.to_bytes(),
+        GENERATION,
+        CapabilityExecutionSelectionV1::new(
+            direct_capability_entry_index,
+            CoreContentId::new(manifest_id_bytes).expect("manifest identity"),
+            CoreContentId::new(DIRECT_SUCCESSOR_KIND_ID_V3).expect("Direct kind"),
+            CoreContentId::new(direct_capability_release).expect("capability release"),
+            CoreContentId::new(direct_config_id).expect("Direct config"),
+        )
+        .expect("Direct activation selection"),
+        SelectedRecordBumpsV1::new(
+            capability_manifest.raw_bump,
+            capability_manifest.staging_bump,
+            direct_config.raw_bump,
+            direct_config.staging_bump,
+        ),
+    )
+    .expect("immutable Direct root header");
+    let mut direct_root_bytes =
+        Vec::with_capacity(CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1);
+    direct_root_bytes.extend_from_slice(&direct_root_header.to_bytes());
+    direct_root_bytes.extend_from_slice(&DirectRootStateV1::new().encode());
+    let direct_root =
+        Pubkey::find_program_address(&direct_root_header.seeds().as_slices(), &TRADING_PROGRAM_ID)
+            .0;
+    test.add_account(
+        direct_root,
+        Account {
+            lamports: Rent::default().minimum_balance(direct_root_bytes.len()),
+            data: direct_root_bytes,
+            owner: TRADING_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
     let (source, source_bump) = Pubkey::find_program_address(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
@@ -1172,9 +1349,21 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     }
     let manifest_id = CapabilityContentId::new(manifest_id_bytes).expect("manifest identity");
     let funding = if preload_terminal {
-        add_active_funding(&mut test, market, manifest_id, manifest, [0, 1, 2])
+        add_active_funding(
+            &mut test,
+            market,
+            manifest_id,
+            manifest,
+            resolution_entry_indices,
+        )
     } else {
-        add_pending_funding(&mut test, market, manifest_id, manifest, [0, 1, 2])
+        add_pending_funding(
+            &mut test,
+            market,
+            manifest_id,
+            manifest,
+            resolution_entry_indices,
+        )
     };
     let activation_receipt = Pubkey::find_program_address(
         &[
@@ -1370,6 +1559,10 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
 
     Fixture {
         test: Some(test),
+        direct_root,
+        direct_capability_entry_index,
+        resolution_entry_indices,
+        resolution_selected_mask,
         provider,
         update: Keypair::new(),
         release_set,
@@ -1471,9 +1664,17 @@ async fn assert_funding_ledger_status(
     let ledger = FundingLedgerV2::decode(&ledger_account.data)
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
         .expect("authenticated FundingLedgerV2");
-    assert_eq!(ledger.ledger().selected_mask(), 0b111);
+    assert_eq!(
+        ledger.ledger().selected_mask(),
+        fixture.resolution_selected_mask
+    );
     assert_eq!(ledger.ledger().slot_count(), 3);
-    for entry_index in [0_u16, 1, 2] {
+    assert_eq!(
+        ledger.ledger().selected_mask() & (1 << fixture.direct_capability_entry_index),
+        0,
+        "the Resolution subset must not select the Direct capability's row"
+    );
+    for entry_index in fixture.resolution_entry_indices {
         assert_eq!(
             ledger.slot(entry_index).expect("selected row").status(),
             expected
@@ -2420,7 +2621,15 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         build_resolution_create_fund_v3(&create_snapshot).expect("chain-derived CreateFund");
     validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
     assert!(create.source_top_up_lamports > 0);
-    assert_eq!(create.funding_entry_indices, [0, 1, 2]);
+    // The three rows the operator derived from the ledger, named as the three
+    // rows this Market's manifest actually gives Resolution rather than as the
+    // literal `[0, 1, 2]`. Since the manifest carries the Direct capability at
+    // the row its own kind_id sorts to, a literal here was a second author of
+    // the layout and went stale the moment a fourth row existed.
+    assert_eq!(
+        create.funding_entry_indices,
+        fixture.resolution_entry_indices
+    );
     let pending_ledger_before = observed(&mut context, fixture.funding)
         .await
         .expect("pre-Market Resolution-owned Pending ledger");
@@ -4131,6 +4340,15 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         .expect("unstarted ProgramTest")
         .start_with_context()
         .await;
+    // The Direct capability root as it stands before any resolution runs.
+    // Compared byte-for-byte and lamport-for-lamport at the end of this test:
+    // Resolution must resolve a market that CARRIES a capability root without
+    // reading, moving or funding the root itself, and until 2026-09-02 that was
+    // a reading of the source rather than a measurement, because no campaign
+    // that resolved anything had a root in the bank at all.
+    let direct_root_before = observed(&mut context, fixture.direct_root)
+        .await
+        .expect("the Trading-owned Direct capability root");
     let encoded_vaa =
         pyth_provider::initialize_real_providers(&mut context, fixture.provider).await;
     let mut clock = context
@@ -4172,7 +4390,15 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     let create = build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await)
         .expect("chain-derived CreateFund against an Open Market");
     validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
-    assert_eq!(create.funding_entry_indices, [0, 1, 2]);
+    // The three rows the operator derived from the ledger, named as the three
+    // rows this Market's manifest actually gives Resolution rather than as the
+    // literal `[0, 1, 2]`. Since the manifest carries the Direct capability at
+    // the row its own kind_id sorts to, a literal here was a second author of
+    // the layout and went stale the moment a fourth row existed.
+    assert_eq!(
+        create.funding_entry_indices,
+        fixture.resolution_entry_indices
+    );
 
     // Hostile 1 — Source resolution-state substitution. The one account whose
     // address is not pinned by a manifest entry is the Source state, so its
@@ -4496,5 +4722,15 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await),
         Err(ResolutionCoreOperatorErrorV3::Market),
         "a Market carrying a terminal receipt must not create a Resolution Fund"
+    );
+
+    // The whole resolution ran over a market carrying a Direct capability root,
+    // and the root is exactly where it was. The address is a PDA of the
+    // release-selected TRADING program, which is why this assertion could not
+    // exist while the Trading role was the Custody ELF wearing a second hat.
+    assert_eq!(
+        observed(&mut context, fixture.direct_root).await,
+        Some(direct_root_before),
+        "the Resolution walk moved a capability root it must never read"
     );
 }

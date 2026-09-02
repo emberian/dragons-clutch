@@ -1425,6 +1425,8 @@ fn authenticate_accelerator_artifacts_v4(
     if logical_count != runtime_account_count {
         return Err(TradingSbfError::AcceleratorRuntimeView.into());
     }
+    let effect_span_extension = effect_span_extension_v3(effect, request.tail_count(), scalars)
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
     require_geometry(
         account_profile,
         request_profile,
@@ -1434,7 +1436,7 @@ fn authenticate_accelerator_artifacts_v4(
         family_request,
         runtime_account_count,
         &span_widths,
-        scalars,
+        effect_span_extension.as_ref(),
     )
     .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
     // Resolved here and nowhere else on this path: the observation transcript
@@ -4061,7 +4063,7 @@ fn execute_authenticated_hot_v3(
         family_request,
         runtime_accounts.len(),
         &dynamic_spans.widths,
-        &dynamic_spans.request_projection_scalars,
+        dynamic_spans.effect_span_extension.as_ref(),
     )?;
     let lifecycle_width = lifecycle_semantic_prefix_width_v3(
         account_profile,
@@ -7443,10 +7445,88 @@ fn projected_account_uses_variable_marker_v3(
     Ok(prestate_uses_variable_marker_v3(prestate))
 }
 
+/// Boxed, and the box is not decoration.
+///
+/// `execute_authenticated_hot_v3` holds this from the width derivation to the
+/// geometry check, across the account expansion, the observation walk and the
+/// rent quotes. While the discarded member was a `Vec` the whole value stayed in
+/// one slot the caller already owned; replacing it with a `Copy` pair let SROA
+/// split the value and give the two numbers spill slots of their own, which
+/// stepped that function's frame 3,840 -> 3,904 and emitted three "overwrites
+/// values in the frame" diagnostics. Measured with `-Zemit-stack-sizes` in a
+/// private target directory: by value 3,904, by reference 3,904, as two `u32`s
+/// 3,904, boxed 3,840 and zero diagnostics. The box costs one constant
+/// allocation and buys back the 64 bytes.
 struct AuthenticatedDynamicSpanWidthsV3 {
     widths: Vec<u32>,
-    request_projection_scalars: Vec<u64>,
+    /// `None` exactly when the profile declares no dynamic spans, which is the
+    /// shape whose effect account width is its base width.
+    effect_span_extension: Option<EffectSpanExtensionV3>,
     transport_span: Option<u16>,
+}
+
+/// Everything the derivation bank was still being held for once the widths had
+/// been read out of it.
+///
+/// `ProgramV4::account_count(tail, scalars)` is
+/// `base.account_count(tail) + total_extension(scalars)`, behind
+/// `require_scalar_width(tail, scalars)`. The extension term reads span
+/// SELECTORS, which are protected common scalars, so it does not depend on
+/// `tail`; and the width guard reads the bank only through its length. Those
+/// two numbers are the whole of what a later caller could still learn from the
+/// bank, so carrying them is what lets the bank die in the phase that built it
+/// instead of being charged against a no-op `dealloc` for the rest of the
+/// instruction.
+#[derive(Clone, Copy)]
+struct EffectSpanExtensionV3 {
+    /// Accounts the selected EffectV4 spans add to the base account width.
+    accounts: usize,
+    /// Length of the bank the selection was made in, which is
+    /// `EffectProgramV3::scalar_count` at the width it was derived at.
+    scalar_count: usize,
+}
+
+/// Decompose `ProgramV4::account_count` into the two terms a later caller needs,
+/// from a bank that is about to go out of scope.
+///
+/// `None` is the empty-bank shape, whose effect account width is its base
+/// width and which carries no selection to restate.
+fn effect_span_extension_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+) -> Result<Option<EffectSpanExtensionV3>, ProgramError> {
+    if scalars.is_empty() {
+        return Ok(None);
+    }
+    let total = effect
+        .successor
+        .account_count(tail_count, scalars)
+        .map_err(|_| TradingSbfError::Content)?;
+    let base = effect
+        .base()
+        .account_count(tail_count)
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(Some(EffectSpanExtensionV3 {
+        accounts: total.checked_sub(base).ok_or(TradingSbfError::Content)?,
+        scalar_count: scalars.len(),
+    }))
+}
+
+/// Copy one slice into a bank on the scratch end.
+///
+/// Not `filled` followed by `copy_from_slice`: `filled` pushes element by
+/// element, so seeding a bank that is about to be overwritten anyway would walk
+/// the whole width twice.
+fn scratch_bank_from_slice_v1<'region, T: Copy>(
+    region: &'region HeapScratchRegionV1,
+    source: &[T],
+) -> Result<ScratchVecV1<'region, T>, ProgramError> {
+    let mut bank = ScratchVecV1::with_capacity(region, source.len())?;
+    for value in source {
+        bank.push(*value)?;
+    }
+    Ok(bank)
 }
 
 fn require_dynamic_span_values_v3(
@@ -7494,136 +7574,165 @@ fn authenticate_dynamic_span_widths_v3(
     trusted_environment: TrustedEnvironmentObservationV3,
     scalar_count: usize,
     identity_count: usize,
-) -> Result<AuthenticatedDynamicSpanWidthsV3, ProgramError> {
+) -> Result<Box<AuthenticatedDynamicSpanWidthsV3>, ProgramError> {
     if !profile.uses_dynamic_fixed_spans() {
         if profile.dynamic_fixed_span_count() != 0 || effect.successor.span_count() != 0 {
             return Err(TradingSbfError::Content.into());
         }
-        return Ok(AuthenticatedDynamicSpanWidthsV3 {
+        return Ok(Box::new(AuthenticatedDynamicSpanWidthsV3 {
             widths: Vec::new(),
-            request_projection_scalars: Vec::new(),
+            effect_span_extension: None,
             transport_span: None,
-        });
+        }));
     }
     if profile.dynamic_fixed_span_count() == 0 {
         if effect.successor.span_count() != 0 {
             return Err(TradingSbfError::Content.into());
         }
-        return Ok(AuthenticatedDynamicSpanWidthsV3 {
+        return Ok(Box::new(AuthenticatedDynamicSpanWidthsV3 {
             widths: Vec::new(),
-            request_projection_scalars: Vec::new(),
+            effect_span_extension: None,
             transport_span: None,
-        });
+        }));
     }
-    let mut input_scalars = vec![0_u64; scalar_count];
-    let mut input_identities = vec![[0_u8; 32]; identity_count];
-    *input_identities
-        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
-        .ok_or(TradingSbfError::Content)? = request_digest;
-    seed_trusted_environment_v3(
-        trusted_environment,
-        &mut input_scalars,
-        &mut input_identities,
-    )?;
-    let mut scratch_scalars = input_scalars.clone();
-    let mut scratch_identities = input_identities.clone();
-    let mut projected_scalars = input_scalars.clone();
-    let mut projected_identities = input_identities.clone();
-    request.project_atomic(
-        tail_count,
-        family_request,
-        ProjectionRegistersV1 {
-            input_scalars: &input_scalars,
-            input_identities: &input_identities,
-            scratch_scalars: &mut scratch_scalars,
-            scratch_identities: &mut scratch_identities,
-            output_scalars: &mut projected_scalars,
-            output_identities: &mut projected_identities,
-        },
-    )?;
-    // `projected_scalars` is the failure-atomic output of the throwaway request
-    // projection; the other banks remain phase-local validation scratch.
     let mut widths = vec![0_u32; usize::from(profile.dynamic_fixed_span_count())];
-    let transport_page_count = match classify_bank_transport_v2(
-        u32::try_from(scalar_count).map_err(|_| TradingSbfError::Content)?,
-        u32::try_from(identity_count).map_err(|_| TradingSbfError::Content)?,
-    )
-    .map_err(|_| TradingSbfError::Content)?
-    {
-        BankTransportV2::InlineReturnData { .. } => None,
-        BankTransportV2::AuthenticatedScratchPages { page_count, .. } => Some(page_count),
-    };
-    let mut transport_span = None;
-    let mut index = 0_u16;
-    while index < profile.dynamic_fixed_span_count() {
-        let span = profile
-            .dynamic_fixed_span(index)
-            .map_err(|_| TradingSbfError::Content)?;
-        let target = ProjectionTargetV1 {
-            kind: ProjectionRegisterKindV1::Scalar,
-            space: ProjectionRegisterSpaceV1::Common,
-            index: span.count_scalar(),
+    // THE DERIVATION BANK COMES OFF THE SCRATCH END AND GOES BACK IN ONE STORE.
+    // Six banks are built here, three of them `scalar_count` wide, and every one
+    // of them is dead the moment this phase has its widths: the projection is
+    // run to learn a number, not to produce a bank anything downstream reads.
+    // On the upward end that made them the phase with the SECOND-LARGEST
+    // per-outcome slope in the whole route -- measured on the stride-6 OpenBatch
+    // ladder at HEAD, 144 of the 528 bytes each outcome cost, and 8,232 bytes
+    // flat at N = 2 -- because the bump allocator's `dealloc` is a no-op and a
+    // dead bank is still charged for the rest of the instruction. Off the
+    // scratch end they are charged only while this phase runs.
+    //
+    // This is `project_hot_effects_v3`'s split, one phase earlier: the region
+    // opens and closes inside this function, so `ScratchVecV1`'s borrow of it
+    // is what proves no bank outlives the release, and the main execution
+    // region is not open yet.
+    let (transport_span, transport_page_count, effect_span_extension) = {
+        let derivation = HeapScratchRegionV1::open()?;
+        let mut input_scalars = ScratchVecV1::filled(&derivation, &0_u64, scalar_count)?;
+        let mut input_identities = ScratchVecV1::filled(&derivation, &[0_u8; 32], identity_count)?;
+        *input_identities
+            .as_mut_slice()
+            .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
+            .ok_or(TradingSbfError::Content)? = request_digest;
+        seed_trusted_environment_v3(
+            trusted_environment,
+            input_scalars.as_mut_slice(),
+            input_identities.as_mut_slice(),
+        )?;
+        let mut scratch_scalars =
+            scratch_bank_from_slice_v1(&derivation, input_scalars.as_slice())?;
+        let mut scratch_identities =
+            scratch_bank_from_slice_v1(&derivation, input_identities.as_slice())?;
+        let mut projected_scalars =
+            scratch_bank_from_slice_v1(&derivation, input_scalars.as_slice())?;
+        let mut projected_identities =
+            scratch_bank_from_slice_v1(&derivation, input_identities.as_slice())?;
+        request.project_atomic(
+            tail_count,
+            family_request,
+            ProjectionRegistersV1 {
+                input_scalars: input_scalars.as_slice(),
+                input_identities: input_identities.as_slice(),
+                scratch_scalars: scratch_scalars.as_mut_slice(),
+                scratch_identities: scratch_identities.as_mut_slice(),
+                output_scalars: projected_scalars.as_mut_slice(),
+                output_identities: projected_identities.as_mut_slice(),
+            },
+        )?;
+        // `projected_scalars` is the failure-atomic output of the throwaway
+        // request projection; the other banks remain phase-local validation
+        // scratch.
+        let transport_page_count = match classify_bank_transport_v2(
+            u32::try_from(scalar_count).map_err(|_| TradingSbfError::Content)?,
+            u32::try_from(identity_count).map_err(|_| TradingSbfError::Content)?,
+        )
+        .map_err(|_| TradingSbfError::Content)?
+        {
+            BankTransportV2::InlineReturnData { .. } => None,
+            BankTransportV2::AuthenticatedScratchPages { page_count, .. } => Some(page_count),
         };
-        let request_owned = request.writes_register(target)?;
-        let effect_owned = (0..effect.successor.span_count()).any(|effect_index| {
-            effect
-                .successor
-                .span(effect_index)
-                .is_ok_and(|value| value.selector_common_scalar() == span.count_scalar())
-        });
-        if request_owned {
-            if !effect_owned {
+        let mut transport_span = None;
+        let mut index = 0_u16;
+        while index < profile.dynamic_fixed_span_count() {
+            let span = profile
+                .dynamic_fixed_span(index)
+                .map_err(|_| TradingSbfError::Content)?;
+            let target = ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Common,
+                index: span.count_scalar(),
+            };
+            let request_owned = request.writes_register(target)?;
+            let effect_owned = (0..effect.successor.span_count()).any(|effect_index| {
+                effect
+                    .successor
+                    .span(effect_index)
+                    .is_ok_and(|value| value.selector_common_scalar() == span.count_scalar())
+            });
+            if request_owned {
+                if !effect_owned {
+                    require_trailing_account_profile_only_span_v3(profile, span)?;
+                }
+            } else {
+                if effect_owned
+                    || disposition != StrategyDispositionV2::AdmittedAot
+                    || transport_span.is_some()
+                {
+                    return Err(TradingSbfError::Content.into());
+                }
                 require_trailing_account_profile_only_span_v3(profile, span)?;
+                let page_count = transport_page_count.ok_or(TradingSbfError::Content)?;
+                *projected_scalars
+                    .as_mut_slice()
+                    .get_mut(usize::from(span.count_scalar()))
+                    .ok_or(TradingSbfError::Content)? = u64::from(page_count);
+                transport_span = Some(index);
             }
-        } else {
-            if effect_owned
-                || disposition != StrategyDispositionV2::AdmittedAot
-                || transport_span.is_some()
-            {
+            index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        let mut effect_span = 0_u16;
+        while effect_span < effect.successor.span_count() {
+            let selector = effect
+                .successor
+                .span(effect_span)
+                .map_err(|_| TradingSbfError::Content)?
+                .selector_common_scalar();
+            if !(0..profile.dynamic_fixed_span_count()).any(|profile_index| {
+                profile
+                    .dynamic_fixed_span(profile_index)
+                    .is_ok_and(|value| value.count_scalar() == selector)
+            }) {
                 return Err(TradingSbfError::Content.into());
             }
-            require_trailing_account_profile_only_span_v3(profile, span)?;
-            let page_count = transport_page_count.ok_or(TradingSbfError::Content)?;
-            *projected_scalars
-                .get_mut(usize::from(span.count_scalar()))
-                .ok_or(TradingSbfError::Content)? = u64::from(page_count);
-            transport_span = Some(index);
+            effect_span = effect_span.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
-        index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    let mut effect_span = 0_u16;
-    while effect_span < effect.successor.span_count() {
-        let selector = effect
-            .successor
-            .span(effect_span)
-            .map_err(|_| TradingSbfError::Content)?
-            .selector_common_scalar();
-        if !(0..profile.dynamic_fixed_span_count()).any(|profile_index| {
-            profile
-                .dynamic_fixed_span(profile_index)
-                .is_ok_and(|value| value.count_scalar() == selector)
-        }) {
-            return Err(TradingSbfError::Content.into());
-        }
-        effect_span = effect_span.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    profile
-        .dynamic_span_widths_from_scalars(&projected_scalars, &mut widths)
-        .map_err(|_| TradingSbfError::Content)?;
-    effect
-        .successor
-        .account_count(tail_count, &projected_scalars)
-        .map_err(|_| TradingSbfError::Content)?;
+        profile
+            .dynamic_span_widths_from_scalars(projected_scalars.as_slice(), &mut widths)
+            .map_err(|_| TradingSbfError::Content)?;
+        // The account count is not discarded and recomputed later out of a bank
+        // held alive to carry it: it is decomposed into the two terms
+        // `ProgramV4::account_count` is made of, one of which the caller can ask
+        // the same authority for at its own tail count and the other of which
+        // does not depend on one.
+        let effect_span_extension =
+            effect_span_extension_v3(effect, tail_count, projected_scalars.as_slice())?;
+        (transport_span, transport_page_count, effect_span_extension)
+    };
     if disposition == StrategyDispositionV2::AdmittedAot
         && transport_page_count.is_some() != transport_span.is_some()
     {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(AuthenticatedDynamicSpanWidthsV3 {
+    Ok(Box::new(AuthenticatedDynamicSpanWidthsV3 {
         widths,
-        request_projection_scalars: projected_scalars,
+        effect_span_extension,
         transport_span,
-    })
+    }))
 }
 
 fn authenticated_input_scratch_pages_v3<'accounts, 'info>(
@@ -13337,7 +13446,7 @@ fn require_geometry(
     family_request: &[u8],
     runtime_accounts: usize,
     span_counts: &[u32],
-    preprojected_scalars: &[u64],
+    effect_span_extension: Option<&EffectSpanExtensionV3>,
 ) -> Result<(), ProgramError> {
     request.require_request_shape(tail_count, family_request)?;
     let request_v1 = request.v1();
@@ -13353,16 +13462,33 @@ fn require_geometry(
             .logical_account_count(tail_count)
             .map_err(|_| TradingSbfError::Content)?
     };
-    let effect_accounts = if preprojected_scalars.is_empty() {
-        effect
-            .base()
-            .account_count(tail_count)
-            .map_err(|_| TradingSbfError::Content)?
-    } else {
-        effect
-            .successor
-            .account_count(tail_count, preprojected_scalars)
-            .map_err(|_| TradingSbfError::Content)?
+    let base_effect_accounts = effect
+        .base()
+        .account_count(tail_count)
+        .map_err(|_| TradingSbfError::Content)?;
+    let effect_accounts = match effect_span_extension {
+        None => base_effect_accounts,
+        Some(extension) => {
+            // `ProgramV4::require_scalar_width`, restated against the width the
+            // span selection was made at instead of the bank it was made in.
+            // That guard reads the bank only through its length, and this is
+            // the same comparison with the same two authorities -- the effect's
+            // own `scalar_count`, at this function's tail count and at the one
+            // the derivation ran at. Dropping it would have been a lost
+            // refusal: nothing else on this path compares the two widths for a
+            // route that carves no caller authorities.
+            if effect
+                .base()
+                .scalar_count(tail_count)
+                .map_err(|_| TradingSbfError::Content)?
+                != extension.scalar_count
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            base_effect_accounts
+                .checked_add(extension.accounts)
+                .ok_or(TradingSbfError::Content)?
+        }
     };
     // The account and effect item strides are the SAME NUMBER only when the
     // profile has no dynamic spans, and requiring it unconditionally made every

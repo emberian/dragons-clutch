@@ -29,7 +29,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     },
 };
 use dclutch_bearer_v2_operator::{
-    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+    Error as BearerOperatorError, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3,
     RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
@@ -236,7 +236,7 @@ fn the_derived_descriptor_builds_both_structured_action_bundles() {
         // independent -- 258 outcomes over three shard coordinates.
         assert_eq!(bundle.representation_outcome_count, K);
         RequestProfileV1::decode(&bundle.request_profile).expect("RequestProfile V1");
-        // The measured artifact width IS the cliff arithmetic: 32 + 53 * 24.
+        // The measured artifact width IS the cliff arithmetic: 32 + 37 * 24.
         assert_eq!(
             bundle.request_profile.len(),
             REQUEST_PROFILE_HEADER_BYTES
@@ -244,7 +244,7 @@ fn the_derived_descriptor_builds_both_structured_action_bundles() {
                     + RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3 * K as usize)
                     * REQUEST_PROFILE_OPERATION_BYTES
         );
-        assert_eq!(bundle.request_profile.len(), 1_304);
+        assert_eq!(bundle.request_profile.len(), 920);
         assert!(bundle.request_profile.len() <= REQUEST_PROFILE_MAX_BYTES);
         assert!(!bundle.account_profile.is_empty());
         assert!(!bundle.effect.is_empty());
@@ -253,33 +253,52 @@ fn the_derived_descriptor_builds_both_structured_action_bundles() {
 }
 
 #[test]
-fn the_two_ceilings_are_one_number_and_neither_crate_restates_it() {
-    // `STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2` documents itself as the Rational
-    // artifact's ceiling rather than a Structured choice. That is only true if
-    // the two agree, so it is asserted rather than trusted.
-    assert_eq!(
-        STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2,
-        RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3
-    );
+fn the_structured_ceiling_is_provisionally_below_the_artifact_ceiling_it_cites() {
+    // These two WERE one number, asserted equal so that
+    // `STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2`'s claim to be the Rational
+    // artifact's ceiling rather than a Structured choice could be checked
+    // rather than trusted. Physical ABI v3 separated them: the artifact ceiling
+    // is DERIVED and moved 3 -> 6 when the request header became
+    // action-conditional and three per-coordinate keys left the wire, while the
+    // Structured child ceiling was deliberately NOT moved with it.
+    //
+    // So the relationship is now an inequality, and the gap is PROVISIONAL
+    // debt, not a bound. Lifting plan: a K = 4 and a K = 5 Claims-direct route
+    // must be driven end to end by the campaign -- fitting the RequestProfile
+    // is necessary and not sufficient, because a wider K also costs compute
+    // units and transaction bytes that only a run can measure. When they
+    // execute, this constant rises to the lower of six and what executed; until
+    // then it stays at three and this test says why.
+    assert!(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2 <= RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3);
+    assert_eq!(RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3, 6);
+    assert_eq!(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, 3);
 }
 
-/// K = 4 is refused, and the reason is 1,496 bytes against 1,312.
+/// A seventh coordinate is refused, and the reason is 1,400 bytes against 1,312.
 ///
 /// **This is the cliff evidence RECORDS-MIGRATE is owed**, and it is executable
 /// rather than an arithmetic claim in a doc comment. `REQUEST_PROFILE_MAX_BYTES_V1`
 /// is a copied literal of the legacy packet allowance; RECORDS-MIGRATE's charter
 /// is to derive every such limit from `genref` and retire the copied-1312 class.
 /// When that happens, this test is what says whether the Structured ceiling
-/// moved with it: K = 3 has EIGHT bytes of slack, and one more operation costs
-/// twenty-four, so nothing short of raising the bound admits a fourth
-/// coordinate.
+/// moved with it.
 ///
-/// The three assertions are three independent statements of the same wall:
-/// the arithmetic over the real constants, the RequestProfile encoder refusing
-/// the operation count, and the Rational bundle builder refusing a real K = 4
-/// descriptor.
+/// The wall MOVED with physical ABI v3, which is the whole point of keeping it
+/// executable. Under v2 a base of 34 operations plus six per coordinate put the
+/// cliff between K = 3 (1,304 bytes) and K = 4 (1,496). v3's action-conditional
+/// header and its three departed per-coordinate keys cut the base to 22 and the
+/// row to five, so K = 3 now costs 920 and the cliff moved to between K = 6
+/// (1,280) and K = 7 (1,400). A test that had restated 1,304 as a literal would
+/// have gone red saying only that a number changed; these assertions say which
+/// number and why.
+///
+/// The four assertions are four independent statements of the same wall: the
+/// arithmetic over the real constants, the derived ceiling agreeing with it, the
+/// bundle builder ADMITTING a real K = 6 descriptor, and the same builder
+/// refusing a real K = 7 one. The positive control is not decoration -- without
+/// it, a builder broken for every K would pass the refusal half.
 #[test]
-fn records_migrate_cliff_a_fourth_coordinate_costs_1496_bytes_against_1312() {
+fn records_migrate_cliff_a_seventh_coordinate_costs_1400_bytes_against_1312() {
     let profile_bytes = |outcomes: usize| {
         REQUEST_PROFILE_HEADER_BYTES
             + (RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3
@@ -287,57 +306,70 @@ fn records_migrate_cliff_a_fourth_coordinate_costs_1496_bytes_against_1312() {
                 * REQUEST_PROFILE_OPERATION_BYTES
     };
     assert_eq!(REQUEST_PROFILE_MAX_BYTES, 1312);
-    assert_eq!(profile_bytes(3), 1_304);
-    assert_eq!(profile_bytes(4), 1_496);
-    assert!(profile_bytes(3) <= REQUEST_PROFILE_MAX_BYTES);
-    assert!(profile_bytes(4) > REQUEST_PROFILE_MAX_BYTES);
-    // Eight bytes of slack is not a fourth operation.
-    assert_eq!(REQUEST_PROFILE_MAX_BYTES - profile_bytes(3), 8);
-    assert!(REQUEST_PROFILE_OPERATION_BYTES > REQUEST_PROFILE_MAX_BYTES - profile_bytes(3));
-
-    // The builder refuses a REAL K = 4 descriptor -- encoded by the kernel's own
-    // atomic encoder and decoded under an admission whose identity is the digest
-    // of its bytes, so the refusal is the width and nothing else.
-    let width = representation_descriptor_bytes_v3(4).expect("K4 width");
-    let mut scratch = vec![0_u8; width];
-    let mut preimage = vec![0_u8; width];
-    encode_representation_descriptor_v3_atomic(
-        RepresentationDescriptorInputV3 {
-            exposure_id: identity(0x21),
-            exposure_digest: identity(0x22),
-            root_id: identity(0x20),
-            market: identity(0x11),
-            release_set: identity(RELEASE_SET),
-            receipt_mint: identity(0x1c),
-            token_program: TOKEN_2022_PROGRAM_ID,
-            denominator: DENOMINATOR,
-            coefficients: &[2, 3, 5, 11],
-        },
-        &mut scratch,
-        &mut preimage,
-    )
-    .expect("a K=4 descriptor is a perfectly valid RECORD");
-    let id = digest(&preimage);
-    let wide = RepresentationDescriptorV2::decode(
-        &preimage,
-        DescriptorAdmissionV2 {
-            selected_descriptor_id: id,
-            finalized_descriptor_id: id,
-            recomputed_descriptor_digest: id,
-            finalized_descriptor_digest: id,
-            record_authenticated: true,
-            derived_representation_authority: identity(AUTHORITY),
-            authority_derivation_authenticated: true,
-        },
-    )
-    .expect("and it decodes");
-    assert_eq!(wide.outcome_count(), 4);
-
-    let behavior = token_behavior(wide);
-    let basis = basis(PRODUCT_N);
-    let lengths = fixed_lengths(&basis);
-    let policy = lifecycle_policy();
+    assert_eq!(profile_bytes(3), 920);
+    assert_eq!(profile_bytes(6), 1_280);
+    assert_eq!(profile_bytes(7), 1_400);
+    assert!(profile_bytes(6) <= REQUEST_PROFILE_MAX_BYTES);
+    assert!(profile_bytes(7) > REQUEST_PROFILE_MAX_BYTES);
+    // Thirty-two bytes of slack is not five more operations.
+    assert_eq!(REQUEST_PROFILE_MAX_BYTES - profile_bytes(6), 32);
     assert!(
+        RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3 * REQUEST_PROFILE_OPERATION_BYTES
+            > REQUEST_PROFILE_MAX_BYTES - profile_bytes(6)
+    );
+    // The ceiling the crate publishes is this arithmetic and not a second copy.
+    assert_eq!(
+        RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3 as usize,
+        (0..=16usize)
+            .filter(|k| profile_bytes(*k) <= REQUEST_PROFILE_MAX_BYTES)
+            .max()
+            .expect("some K fits")
+    );
+
+    // Both halves build a REAL descriptor -- encoded by the kernel's own atomic
+    // encoder and decoded under an admission whose identity is the digest of its
+    // bytes, so a refusal is the width and nothing else.
+    const WIDE_COEFFICIENTS: [u64; 7] = [2, 3, 5, 11, 13, 17, 19];
+    let bundle_at = |outcomes: usize| {
+        let width = representation_descriptor_bytes_v3(outcomes).expect("descriptor width");
+        let mut scratch = vec![0_u8; width];
+        let mut preimage = vec![0_u8; width];
+        encode_representation_descriptor_v3_atomic(
+            RepresentationDescriptorInputV3 {
+                exposure_id: identity(0x21),
+                exposure_digest: identity(0x22),
+                root_id: identity(0x20),
+                market: identity(0x11),
+                release_set: identity(RELEASE_SET),
+                receipt_mint: identity(0x1c),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                denominator: DENOMINATOR,
+                coefficients: &WIDE_COEFFICIENTS[..outcomes],
+            },
+            &mut scratch,
+            &mut preimage,
+        )
+        .expect("any K is a perfectly valid RECORD");
+        let id = digest(&preimage);
+        let wide = RepresentationDescriptorV2::decode(
+            &preimage,
+            DescriptorAdmissionV2 {
+                selected_descriptor_id: id,
+                finalized_descriptor_id: id,
+                recomputed_descriptor_digest: id,
+                finalized_descriptor_digest: id,
+                record_authenticated: true,
+                derived_representation_authority: identity(AUTHORITY),
+                authority_derivation_authenticated: true,
+            },
+        )
+        .expect("and it decodes");
+        assert_eq!(wide.outcome_count(), outcomes as u32);
+
+        let behavior = token_behavior(wide);
+        let basis = basis(PRODUCT_N);
+        let lengths = fixed_lengths(&basis);
+        let policy = lifecycle_policy();
         build_rational_open_structured_hot_bundle_v3(RationalOpenStructuredHotBundleInputV3 {
             action: RepresentationActionV2::IssueStructured,
             fixed_data_lengths: &lengths,
@@ -351,12 +383,26 @@ fn records_migrate_cliff_a_fourth_coordinate_costs_1496_bytes_against_1312() {
             capacity_profile: identity(0x13),
             root_state_bytes: 8,
         })
-        .is_err(),
-        "a fourth coordinate has no executable RequestProfile"
+        .map(|bundle| bundle.request_profile.len())
+    };
+
+    // POSITIVE CONTROL: the sixth coordinate has an executable RequestProfile,
+    // and it is exactly the width the arithmetic above predicts.
+    assert_eq!(bundle_at(6), Ok(profile_bytes(6)));
+    // And the seventh does not.
+    // And the seventh does not -- refused by the CEILING, named as such. The
+    // predecessor of this assertion was a bare `is_err()`, which would have
+    // passed on any refusal the builder reached first; the ceiling conjunct
+    // then sat inside a six-way `AccountProfileInput`, so even reading the code
+    // did not say the cliff was what refused. Both halves are fixed here.
+    assert_eq!(
+        bundle_at(7),
+        Err(BearerOperatorError::CoordinateCeiling {
+            requested: 7,
+            ceiling: RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+        })
     );
 
-    // And the derivation refuses it upstream, so a Product too wide to execute
-    // never acquires a descriptor to found in the first place.
     assert!(u32::try_from(COEFFICIENTS.len()).expect("K") <= STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2);
 }
 

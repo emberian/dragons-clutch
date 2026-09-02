@@ -38,9 +38,9 @@ use dclutch_product_runtime_v2_svm_reader::{
     },
 };
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_REPLAY_BYTES_V2,
+    ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, RATIONAL_REPLAY_BYTES_V2,
     RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2, REQUEST_HEADER_BYTES_V2,
+    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
     RationalReplayV2, RepresentationActionV2, RepresentationRequestHeaderV2,
     RepresentationRequestV2,
 };
@@ -1313,15 +1313,15 @@ fn encode_request(
 ) -> Result<Vec<u8>> {
     let row_bytes = assets
         .len()
-        .checked_mul(ASSET_BYTES_V2)
+        .checked_mul(ASSET_BYTES_V3)
         .ok_or(Error::ArithmeticOverflow)?;
     let mut rows = vec![0; row_bytes];
     for (index, asset) in assets.iter().copied().enumerate() {
         let start = index
-            .checked_mul(ASSET_BYTES_V2)
+            .checked_mul(ASSET_BYTES_V3)
             .ok_or(Error::ArithmeticOverflow)?;
         let end = start
-            .checked_add(ASSET_BYTES_V2)
+            .checked_add(ASSET_BYTES_V3)
             .ok_or(Error::ArithmeticOverflow)?;
         AssetV2 {
             shard_mint: asset.identities.shard_mint.to_bytes(),
@@ -1337,12 +1337,8 @@ fn encode_request(
         .map_err(|_| Error::InvalidRequest)?;
     }
     let request = RepresentationRequestV2::new(header, &rows).map_err(|_| Error::InvalidRequest)?;
-    let mut output = vec![
-        0;
-        REQUEST_HEADER_BYTES_V2
-            .checked_add(row_bytes)
-            .ok_or(Error::ArithmeticOverflow)?
-    ];
+    // The header width is a function of the action's class in physical ABI v3.
+    let mut output = vec![0; request.wire_len().map_err(|_| Error::InvalidRequest)?];
     request
         .encode_into(&mut output)
         .map_err(|_| Error::InvalidRequest)?;

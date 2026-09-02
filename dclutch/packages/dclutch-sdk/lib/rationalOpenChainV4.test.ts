@@ -269,7 +269,8 @@ describe('chain-derived Rational open V4', () => {
       executionStatus: 'blocked' as const, refusal: 'checked common Hot release pending',
     }) satisfies RationalOpenChainInspectionV4;
     const candidate = buildRationalOpenCandidateV4(inspection, address(234));
-    expect(candidate.outerBytes).toHaveLength(HOT_EXECUTION_ENVELOPE_BYTES_V3 + Abi.REQUEST_HEADER_BYTES_V2 + Abi.ASSET_BYTES_V2);
+    // Denominate is a SELECTED action.
+    expect(candidate.outerBytes).toHaveLength(HOT_EXECUTION_ENVELOPE_BYTES_V3 + Abi.REQUEST_SELECTED_HEADER_BYTES_V3 + Abi.ASSET_BYTES_V3);
     expect(candidate.logicalClaimsAccounts).toBe(36);
     expect(candidate.physicalClaimsAccounts).toBe(31);
     expect(candidate.loadedAddresses).toBeGreaterThan(0);

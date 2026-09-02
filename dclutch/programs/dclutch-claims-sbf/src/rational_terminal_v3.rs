@@ -133,16 +133,15 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
     authenticated: Box<AuthenticatedRationalProductV3>,
 ) -> Result<Box<RationalTerminalExecutionV3>, ProgramError> {
     let header = request.header();
-    let asset = request.asset(0).map_err(|_| ClaimsSbfError::Instruction)?;
+    // Physical ABI v3 does not send the Claims custody owner, so this
+    // derivation is its author rather than a second opinion on an inlined
+    // copy. The equality that stood below compared the derivation to itself.
     let owner_seeds =
         ProtocolPositionClaimsCapabilitySeedsV2::new(header.descriptor_id, header.selected_outcome)
             .map_err(|_| ClaimsSbfError::Identity)?;
     let owner = Pubkey::find_program_address(&owner_seeds.as_slices(), program_id)
         .0
         .to_bytes();
-    if owner != asset.claims_custody_owner {
-        return Err(ClaimsSbfError::Identity.into());
-    }
     let scenario = authenticate_terminal_certificate_scenario_v3(
         TerminalCertificateFrameV3 {
             registry: frame.registry,

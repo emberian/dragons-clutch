@@ -263,15 +263,22 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let manifest_id = CapabilityContentId::new(hash(&manifest_account.data).to_bytes())
         .expect("manifest identity");
     let manifest = CapabilityManifestV1::decode(&manifest_account.data).expect("manifest");
-    const RESOLUTION_FUNDING_MASK: u16 = 0b111;
-    let funding = funding_key(market, manifest_id, manifest, RESOLUTION_FUNDING_MASK);
+    // The Resolution subset of the BASE fixture's manifest, taken from the
+    // fixture rather than restated. It used to be the literal `0b111`, which
+    // was correct only while every row in the manifest was a Resolution row;
+    // the base manifest carries the Direct capability now, at whatever row its
+    // kind_id sorts to, and a literal here selected the Direct row and dropped
+    // a Resolution one. The failure was an operator `Funding` refusal on the
+    // same-lineage CreateFund, which is a long way from the line that caused it.
+    let resolution_funding_mask = base.resolution_selected_mask;
+    let funding = funding_key(market, manifest_id, manifest, resolution_funding_mask);
     let funding_width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
     let mut funding_data = vec![0_u8; funding_width];
     FundingLedgerV2::initialize(
         &mut funding_data,
         manifest_id,
         manifest,
-        RESOLUTION_FUNDING_MASK,
+        resolution_funding_mask,
     )
     .expect("pre-Market pending Resolution subset ledger");
     let funding_principal = FundingLedgerV2::decode(&funding_data)

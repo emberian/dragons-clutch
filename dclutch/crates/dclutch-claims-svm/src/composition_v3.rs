@@ -1009,7 +1009,7 @@ mod tests {
         LifecycleHeaderV2,
     };
     use dclutch_rational_representation_v2_request_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
         RATIONAL_BASE_ACCOUNT_COUNT_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
@@ -1732,7 +1732,7 @@ mod tests {
     }
 
     fn rational_representation_request() -> Vec<u8> {
-        let mut asset = [0_u8; ASSET_BYTES_V2];
+        let mut asset = [0_u8; ASSET_BYTES_V3];
         AssetV2 {
             shard_mint: id(50),
             actor_shard_account: id(51),
@@ -1777,11 +1777,7 @@ mod tests {
             &asset,
         )
         .expect("representation request");
-        let mut bytes = vec![
-            0_u8;
-            dclutch_rational_representation_v2_request_contract::REQUEST_HEADER_BYTES_V2
-                + ASSET_BYTES_V2
-        ];
+        let mut bytes = vec![0_u8; request.wire_len().expect("class width")];
         request
             .encode_into(&mut bytes)
             .expect("representation bytes");
@@ -1789,7 +1785,7 @@ mod tests {
     }
 
     fn structured_representation_request() -> Vec<u8> {
-        let mut assets = vec![0_u8; 2 * ASSET_BYTES_V2];
+        let mut assets = vec![0_u8; 2 * ASSET_BYTES_V3];
         for index in 0..2_usize {
             let suffix = u8::try_from(index).expect("small index");
             AssetV2 {
@@ -1804,7 +1800,7 @@ mod tests {
             }
             .encode_into(
                 assets
-                    .get_mut(index * ASSET_BYTES_V2..(index + 1) * ASSET_BYTES_V2)
+                    .get_mut(index * ASSET_BYTES_V3..(index + 1) * ASSET_BYTES_V3)
                     .expect("asset row"),
             )
             .expect("representation asset");
@@ -1841,11 +1837,7 @@ mod tests {
             &assets,
         )
         .expect("structured request");
-        let mut bytes = vec![
-            0_u8;
-            dclutch_rational_representation_v2_request_contract::REQUEST_HEADER_BYTES_V2
-                + assets.len()
-        ];
+        let mut bytes = vec![0_u8; request.wire_len().expect("class width")];
         request.encode_into(&mut bytes).expect("request bytes");
         bytes
     }
@@ -1907,9 +1899,11 @@ mod tests {
     /// kind for a representation request at `claims_composition_v3.rs:639`,
     /// and admitting it here would only have moved the wall two frames later.
     fn structured_affine_effect(request: &[u8]) -> Vec<u8> {
-        let (fixed, items) = request
-            .split_at(dclutch_rational_representation_v2_request_contract::REQUEST_HEADER_BYTES_V2);
-        let item = items.get(..ASSET_BYTES_V2).expect("item template");
+        // Structured is the only class this affine effect template builds.
+        let (fixed, items) = request.split_at(
+            dclutch_rational_representation_v2_request_contract::REQUEST_STRUCTURED_HEADER_BYTES_V3,
+        );
+        let item = items.get(..ASSET_BYTES_V3).expect("item template");
         let route = [RouteInputV3 {
             role: FixedRole::Claims,
             kind: RouteKindV3::AffineOnce,

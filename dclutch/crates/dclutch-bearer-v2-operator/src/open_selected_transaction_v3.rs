@@ -213,7 +213,7 @@ mod tests {
         HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
     };
     use dclutch_rational_representation_v2_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, REQUEST_HEADER_BYTES_V2,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_SELECTED_HEADER_BYTES_V3,
         RepresentationRequestHeaderV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
@@ -225,7 +225,7 @@ mod tests {
     }
 
     fn selected() -> ConstructedHotOpenSelectedV3 {
-        let mut row = [0_u8; ASSET_BYTES_V2];
+        let mut row = [0_u8; ASSET_BYTES_V3];
         AssetV2 {
             shard_mint: key(20).to_bytes(),
             actor_shard_account: key(21).to_bytes(),
@@ -270,7 +270,7 @@ mod tests {
             &row,
         )
         .expect("template");
-        let mut template_bytes = vec![0_u8; REQUEST_HEADER_BYTES_V2 + row.len()];
+        let mut template_bytes = vec![0_u8; REQUEST_SELECTED_HEADER_BYTES_V3 + row.len()];
         template.encode_into(&mut template_bytes).expect("encode");
         let request_len = template_bytes.len();
         let mut family_request = vec![0_u8; request_len];

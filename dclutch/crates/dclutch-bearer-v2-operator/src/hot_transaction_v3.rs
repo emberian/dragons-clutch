@@ -494,7 +494,7 @@ fn validate_fixed_frame(
 mod tests {
     use super::*;
     use dclutch_rational_representation_v2_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2,
         RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RationalTerminalHotRequestV3,
         RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
@@ -509,7 +509,7 @@ mod tests {
     }
 
     fn terminal() -> ConstructedHotTerminalV3 {
-        let mut asset = [0_u8; ASSET_BYTES_V2];
+        let mut asset = [0_u8; ASSET_BYTES_V3];
         AssetV2 {
             shard_mint: key(20).to_bytes(),
             actor_shard_account: key(21).to_bytes(),

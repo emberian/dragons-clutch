@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import * as coverage from '../scripts/explorer-coverage.mjs';
-import { decodeAgainstSpec, magicText, renderedRecords, specForMagic } from './explorer/accountRecords';
+import { decodeAgainstSpec, headerEndOf, magicText, renderedRecords, specForMagic } from './explorer/accountRecords';
 import { instructionRenderers } from './explorer/instructions';
 
 type CoverageRow = Readonly<{
@@ -129,26 +129,26 @@ describe('the render map itself', () => {
 
   it('keeps every declared field inside its record', () => {
     for (const spec of renderedRecords()) {
-      const end =
-        spec.width.kind === 'fixed'
-          ? spec.width.bytes
-          : spec.width.kind === 'header-and-rows'
-            ? spec.width.headerBytes
-            : spec.width.headerBytes;
+      const end = headerEndOf(spec.width);
       for (const declared of spec.fields) {
         expect(declared.offset, `${magicText(spec.magic)}.${declared.label} starts past its header`).toBeLessThan(end);
+      }
+      // A class tail is bounded by ITS OWN class header, not the common prefix,
+      // and it must start at or after the prefix -- a class field placed inside
+      // the prefix would be two owners for one byte range.
+      if (spec.width.kind !== 'action-classes') continue;
+      for (const actionClass of spec.width.classes) {
+        for (const declared of actionClass.fields) {
+          expect(declared.offset, `${magicText(spec.magic)}/${actionClass.name}.${declared.label} starts before the common prefix ends`).toBeGreaterThanOrEqual(spec.width.commonPrefixBytes);
+          expect(declared.offset, `${magicText(spec.magic)}/${actionClass.name}.${declared.label} starts past its class header`).toBeLessThan(actionClass.headerBytes);
+        }
       }
     }
   });
 
   it('decodes a zeroed account of the right width without throwing', () => {
     for (const spec of renderedRecords()) {
-      const width =
-        spec.width.kind === 'fixed'
-          ? spec.width.bytes
-          : spec.width.kind === 'header-and-rows'
-            ? spec.width.headerBytes
-            : spec.width.headerBytes;
+      const width = headerEndOf(spec.width);
       const bytes = new Uint8Array(width);
       const magic = magicText(spec.magic);
       for (let index = 0; index < magic.length; index += 1) bytes[index] = magic.charCodeAt(index);

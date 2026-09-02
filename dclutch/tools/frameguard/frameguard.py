@@ -9,9 +9,14 @@ committed baseline exactly: growth is red, and shrinkage is also red until the
 baseline is ratcheted down, so recovered headroom cannot silently be spent
 again.
 
-A baseline is accepted only from two independently captured manifests. Object
-hashes are intentionally absent: equality of the complete canonical function
-map, not a lucky build artifact hash, is the repeatability witness.
+A baseline is accepted only from two independently captured manifests, both of
+which must name the SAME source commit, which the accepted baseline then
+records. Object hashes are intentionally absent: equality of the complete
+canonical function map, not a lucky build artifact hash, is the repeatability
+witness -- but WHICH SOURCE was measured is not a build detail, and an exact
+ratchet whose base is "whatever the tree held that minute" cannot be reviewed
+after the fact. `owed` reads that recorded commit back and names the commits
+since it that moved program sources without carrying baseline rows.
 
 Exit 0 means the comparison ran and agreed. Exit 1 means measured frames or
 the two acceptance runs disagree. Exit 2 means an input/prerequisite was
@@ -26,6 +31,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -45,6 +51,22 @@ BASELINE_SCHEMA = "dclutch-sbf-frame-baseline-v1"
 # BOTH halves.
 EXPECTED_LINK_COUNT = 12
 SBPF_V0_FRAME_BYTES = 4096
+# A manifest names the commit whose sources it measured. It is metadata, not
+# frame content: `check` compares the function map with this field REMOVED, so
+# re-measuring the same frames at a later commit is green and only the frames
+# ratchet. `accept` refuses captures that name nothing or name different
+# commits, because a baseline whose base is unnamed cannot be diffed against
+# anything -- which is how three correct recaptures were invalidated in one
+# night, each by a program commit that landed while the four-minute double
+# build was still running.
+COMMIT_FIELD = "commit"
+FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
+# The attribution predicate for `owed`. A link's frames are a function of its
+# own crate sources above all; this names those commits exactly. It is a LOWER
+# BOUND on who moved a frame -- a `crates/` change reaches the links too -- so
+# an unattributed row is a finding, not proof of a phantom.
+PROGRAM_SOURCE = re.compile(r"^programs/[^/]+/src/")
+BASELINE_ROWS = "tools/frameguard/baseline.json"
 
 # Legacy Rust mangling ends in a crate/codegen hash. Rust v0 mangling carries
 # crate disambiguators as `Cs<base62>_`. Neither names a source-level function,
@@ -71,6 +93,12 @@ def canonical_symbol(symbol: str) -> str:
     value = LLVM_HASH.sub(".llvm.<hash>", symbol)
     value = V0_CRATE_HASH.sub("Cs<hash>_", value)
     value = LEGACY_RUST_HASH.sub("17h<hash>E", value)
+    return value
+
+
+def checked_commit(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not FULL_COMMIT.fullmatch(value):
+        raise MissingOrMalformed(f"{label} is not a full 40-character commit id")
     return value
 
 
@@ -169,7 +197,7 @@ def atomic_write(path: Path, value: dict[str, Any]) -> None:
         raise MissingOrMalformed(f"cannot atomically write {path}: {error}") from error
 
 
-def assemble(inventory: Path, reports: Path) -> dict[str, Any]:
+def assemble(inventory: Path, reports: Path, commit: str | None) -> dict[str, Any]:
     packages = read_inventory(inventory)
     if not reports.is_dir():
         raise MissingOrMalformed(f"report directory is missing: {reports}")
@@ -180,19 +208,25 @@ def assemble(inventory: Path, reports: Path) -> dict[str, Any]:
             f"{package} frame report",
         )
         links.append({"package": package, **value})
-    return {
+    manifest: dict[str, Any] = {
         "schema": MANIFEST_SCHEMA,
         "bound_bytes": SBPF_V0_FRAME_BYTES,
         "link_count": len(links),
         "links": links,
     }
+    if commit is not None:
+        manifest[COMMIT_FIELD] = checked_commit(commit, "measured commit")
+    return manifest
 
 
 def validate_manifest(value: Any, label: str, schemas: set[str]) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("schema") not in schemas:
         raise MissingOrMalformed(f"{label} has no admitted frame manifest schema")
-    if set(value) != {"schema", "bound_bytes", "link_count", "links"}:
+    fields = set(value)
+    if fields - {COMMIT_FIELD} != {"schema", "bound_bytes", "link_count", "links"}:
         raise MissingOrMalformed(f"{label} has missing or unknown fields")
+    if COMMIT_FIELD in value:
+        checked_commit(value[COMMIT_FIELD], f"{label} commit")
     if value["bound_bytes"] != SBPF_V0_FRAME_BYTES:
         raise MissingOrMalformed(f"{label} does not bind the SBPF v0 frame wall")
     links = value["links"]
@@ -254,6 +288,17 @@ def validate_manifest(value: Any, label: str, schemas: set[str]) -> dict[str, An
     return value
 
 
+def frames_only(value: dict[str, Any]) -> dict[str, Any]:
+    """The comparable content: every measured frame, and nothing about its base."""
+
+    return {key: item for key, item in value.items() if key != COMMIT_FIELD}
+
+
+def named_base(value: dict[str, Any]) -> str:
+    commit = value.get(COMMIT_FIELD)
+    return commit if isinstance(commit, str) else "an unnamed source tree"
+
+
 def differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     """Describe enough exact deltas to diagnose red without flooding a log."""
 
@@ -294,7 +339,7 @@ def differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     return messages
 
 
-def check(baseline_path: Path, candidate_path: Path) -> None:
+def check(baseline_path: Path, candidate_path: Path) -> str:
     baseline = validate_manifest(
         read_json(baseline_path, "frame baseline"), "frame baseline", {BASELINE_SCHEMA}
     )
@@ -303,19 +348,22 @@ def check(baseline_path: Path, candidate_path: Path) -> None:
         "candidate manifest",
         {MANIFEST_SCHEMA},
     )
-    projected = {**baseline, "schema": MANIFEST_SCHEMA}
-    if projected != candidate:
-        delta = differences(projected, candidate)
+    projected = frames_only({**baseline, "schema": MANIFEST_SCHEMA})
+    measured = frames_only(candidate)
+    if projected != measured:
+        delta = differences(projected, measured)
         detail = "\n".join(f"  {line}" for line in delta[:20])
         if len(delta) > 20:
             detail += f"\n  ... and {len(delta) - 20} more differences"
         raise Disagreement(
-            "per-function frame manifest differs from the admitted ratchet"
+            "per-function frame manifest differs from the ratchet admitted at "
+            f"{named_base(baseline)}"
             + (f":\n{detail}" if detail else "")
         )
+    return named_base(baseline)
 
 
-def accept(first_path: Path, second_path: Path, output: Path) -> None:
+def accept(first_path: Path, second_path: Path, output: Path) -> str:
     first = validate_manifest(
         read_json(first_path, "first capture"), "first capture", {MANIFEST_SCHEMA}
     )
@@ -323,13 +371,113 @@ def accept(first_path: Path, second_path: Path, output: Path) -> None:
         read_json(second_path, "second capture"), "second capture", {MANIFEST_SCHEMA}
     )
     if first != second:
-        delta = differences(first, second)
+        delta = differences(frames_only(first), frames_only(second))
         detail = "\n".join(f"  {line}" for line in delta[:20])
+        if first.get(COMMIT_FIELD) != second.get(COMMIT_FIELD):
+            delta.insert(
+                0,
+                f"captured at different commits: {named_base(first)}"
+                f" then {named_base(second)}",
+            )
+            detail = "\n".join(f"  {line}" for line in delta[:20])
         raise Disagreement(
             "independent captures disagree; no baseline accepted"
             + (f":\n{detail}" if detail else "")
         )
+    commit = first.get(COMMIT_FIELD)
+    if commit is None:
+        raise MissingOrMalformed(
+            "neither capture names the commit it measured; recapture with"
+            " `tools/frameguard/run.sh --at <commit> --capture <file>` so the"
+            " admitted ratchet has a reviewable base"
+        )
     atomic_write(output, {**first, "schema": BASELINE_SCHEMA})
+    return checked_commit(commit, "accepted commit")
+
+
+def git(repo: Path, *arguments: str) -> str:
+    try:
+        finished = subprocess.run(
+            ["git", "-C", str(repo), *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as error:
+        raise MissingOrMalformed(f"cannot run git in {repo}: {error}") from error
+    if finished.returncode != 0:
+        detail = finished.stderr.strip().splitlines()
+        raise MissingOrMalformed(
+            "git " + " ".join(arguments) + f" failed in {repo}"
+            + (f": {detail[0]}" if detail else "")
+        )
+    return finished.stdout
+
+
+def owed(repo: Path, since: str | None, baseline_path: Path | None, until: str) -> None:
+    """Name the commits that moved program sources without carrying frame rows.
+
+    An exact ratchet cannot be recaptured after the fact by a bystander in a
+    busy tree: the four-minute double build is longer than the interval between
+    program commits, so a correct capture is invalidated before it can be
+    reviewed and committed. The rule that fixes it -- a commit that moves a
+    frame carries its baseline rows -- is only enforceable if a reader can see
+    WHO owes them. That is this mode: the range is named by the baseline's own
+    recorded commit, so the gate answers "red, and here is the ledger" instead
+    of "red".
+    """
+
+    if since is None:
+        if baseline_path is None:
+            raise MissingOrMalformed("owed needs --since or --baseline")
+        baseline = validate_manifest(
+            read_json(baseline_path, "frame baseline"),
+            "frame baseline",
+            {BASELINE_SCHEMA},
+        )
+        since = baseline.get(COMMIT_FIELD)
+        if since is None:
+            raise MissingOrMalformed(
+                f"{baseline_path} names no captured commit, so no range can be"
+                " read from it; pass --since <commit> or recapture with --at"
+            )
+    base = git(repo, "rev-parse", "--verify", "--quiet", f"{since}^{{commit}}").strip()
+    head = git(repo, "rev-parse", "--verify", "--quiet", f"{until}^{{commit}}").strip()
+    if not base or not head:
+        raise MissingOrMalformed(f"{since}..{until} does not name two commits")
+    revisions = git(repo, "rev-list", "--reverse", f"{base}..{head}").split()
+
+    debtors: list[str] = []
+    for revision in revisions:
+        # No `-m`: a merge commit gets no accusation, because whatever program
+        # sources it brought in are attributed to the commits that made them,
+        # which `rev-list` has already put in this range.
+        names = git(
+            repo, "diff-tree", "--no-commit-id", "--name-only", "-r", revision
+        ).splitlines()
+        moved = sorted({
+            name.split("/")[1] for name in names if PROGRAM_SOURCE.match(name)
+        })
+        if not moved or BASELINE_ROWS in names:
+            continue
+        subject = git(repo, "log", "-1", "--format=%s", revision).strip()
+        debtors.append(f"{revision[:8]} {', '.join(moved)}: {subject}")
+
+    scope = f"{base[:8]}..{head[:8]} ({len(revisions)} commits)"
+    if not debtors:
+        print(
+            f"frameguard: {scope} -- no commit moved program sources without"
+            " carrying its baseline rows"
+        )
+        return
+    raise Disagreement(
+        f"{len(debtors)} commit(s) in {scope} changed program sources and left the"
+        " frame ratchet to someone else:\n"
+        + "\n".join(f"  {line}" for line in debtors)
+        + "\n  Each owes a `tools/frameguard/run.sh --at <its commit>` recapture"
+        " in its own commit, or an explicit statement that it leaves the ratchet red."
+    )
 
 
 def main() -> int:
@@ -340,6 +488,13 @@ def main() -> int:
     assemble_parser.add_argument("--inventory", type=Path, required=True)
     assemble_parser.add_argument("--reports", type=Path, required=True)
     assemble_parser.add_argument("--output", type=Path, required=True)
+    assemble_parser.add_argument("--commit", default=None)
+
+    owed_parser = subparsers.add_parser("owed")
+    owed_parser.add_argument("--repo", type=Path, required=True)
+    owed_parser.add_argument("--since", default=None)
+    owed_parser.add_argument("--until", default="HEAD")
+    owed_parser.add_argument("--baseline", type=Path, default=None)
 
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("--baseline", type=Path, required=True)
@@ -353,13 +508,24 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         if arguments.command == "assemble":
-            atomic_write(arguments.output, assemble(arguments.inventory, arguments.reports))
+            atomic_write(
+                arguments.output,
+                assemble(arguments.inventory, arguments.reports, arguments.commit),
+            )
         elif arguments.command == "check":
-            check(arguments.baseline, arguments.candidate)
-            print("frameguard: complete per-function frame manifest matches the ratchet")
+            base = check(arguments.baseline, arguments.candidate)
+            print(
+                "frameguard: complete per-function frame manifest matches the"
+                f" ratchet admitted at {base}"
+            )
+        elif arguments.command == "owed":
+            owed(arguments.repo, arguments.since, arguments.baseline, arguments.until)
         else:
-            accept(arguments.first, arguments.second, arguments.output)
-            print(f"frameguard: accepted two identical independent captures at {arguments.output}")
+            base = accept(arguments.first, arguments.second, arguments.output)
+            print(
+                "frameguard: accepted two identical independent captures of"
+                f" {base} at {arguments.output}"
+            )
         return 0
     except Disagreement as error:
         print(f"frameguard: REFUSING -- {error}", file=sys.stderr)

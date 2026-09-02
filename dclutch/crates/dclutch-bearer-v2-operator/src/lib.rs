@@ -163,6 +163,37 @@ pub enum Error {
     CapabilityProgramSet(dclutch_capability_program_contract::set_v2::ProgramSetErrorV2),
     /// Independently decoded artifact banks did not have one exact geometry.
     ArtifactGeometry,
+    /// The descriptor named more coordinates than the derived artifact ceiling
+    /// admits.
+    ///
+    /// Split out of `AccountProfileInput`, where it was one of six conjuncts and
+    /// so published "the account profile inputs were wrong" for a refusal that
+    /// is neither about accounts nor about inputs. The ceiling is
+    /// `RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3`, itself derived from
+    /// how many RequestProfile operations fit in the packet allowance, so this
+    /// refusal is the K cliff and the two numbers say where it stands.
+    CoordinateCeiling {
+        /// The descriptor's coordinate count.
+        requested: u32,
+        /// The largest coordinate count the artifact admits.
+        ceiling: u32,
+    },
+    /// A built instruction list did not have the length its file declares.
+    ///
+    /// This is split out of `ArtifactGeometry` because it is not a geometry
+    /// disagreement between two parties -- it is one file disagreeing with
+    /// itself, and the two numbers locate it exactly. Physical ABI v3 shortened
+    /// three instruction lists and left three declared counts behind; each one
+    /// surfaced as an undifferentiated geometry or length complaint naming no
+    /// field, and each had to be rediscovered by probe. The numbers ride the
+    /// refusal now. Where a list has a fixed length, prefer declaring it in the
+    /// array type instead, which makes the same drift a compile error.
+    InstructionCount {
+        /// The count the file states beside the list.
+        declared: usize,
+        /// The count the list actually reached.
+        built: usize,
+    },
     /// Checked Hot envelope or exact physical account construction refused.
     HotInstruction,
     /// The finalized descriptor bytes or their graph join refused.
