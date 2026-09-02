@@ -74,7 +74,9 @@ import {
   CUSTODY_POSTSTATE_DOMAIN_V1,
   LIABILITY_BASIS_HEADER_RESERVED_BYTES_V2,
   LIABILITY_BASIS_HEADER_RESERVED_OFFSET_V2,
-  LIABILITY_BASIS_POSITION_RESERVED_OFFSET_V2,
+  LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2,
+  LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2,
+  LIABILITY_BASIS_POSITION_RESERVED_BYTES_V2,
   SIGNED_DELTA_BASIS_OFFSET_V3,
   SIGNED_DELTA_BYTES_V3,
   SIGNED_DELTA_CALLER_ROLE_OFFSET_V3,
@@ -496,9 +498,14 @@ function validateReplay(bytes: Uint8Array, request: WalletTerminalPayoutRequestV
 }
 
 function validateClaims(input: WalletTerminalPayoutBuildInputV3): void {
-  requireZero(input.aggregateBytes, LIABILITY_BASIS_HEADER_RESERVED_OFFSET_V2, LIABILITY_BASIS_HEADER_RESERVED_BYTES_V2, 'Claims aggregate header');
+  // The first byte of the aggregate's reserved header and of the Position's
+  // reserved tail is that record's own canonical PDA bump, which the Claims
+  // founding route writes and `liability_basis_state_v2.rs` deliberately does
+  // NOT zero-check. Checking it here refused every record that carries one.
+  // The Position's reserved HEADER has no such carrier and stays whole.
+  requireZero(input.aggregateBytes, LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2 + 1, LIABILITY_BASIS_HEADER_RESERVED_BYTES_V2 - 1, 'Claims aggregate header');
   requireZero(input.positionBytes, LIABILITY_BASIS_HEADER_RESERVED_OFFSET_V2, LIABILITY_BASIS_HEADER_RESERVED_BYTES_V2, 'Claims Position header');
-  requireZero(input.positionBytes, LIABILITY_BASIS_POSITION_RESERVED_OFFSET_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 - LIABILITY_BASIS_POSITION_RESERVED_OFFSET_V2, 'Claims Position header tail');
+  requireZero(input.positionBytes, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2 + 1, LIABILITY_BASIS_POSITION_RESERVED_BYTES_V2 - 1, 'Claims Position header tail');
   const aggregate = decodeClaimsAggregateV2(input.route.aggregate, input.aggregateBytes);
   const position = decodeClaimsPositionV2(input.route.position, input.positionBytes);
   const request = input.request;

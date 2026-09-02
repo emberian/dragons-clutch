@@ -42,6 +42,26 @@ function magic(source, name) {
   return match[1];
 }
 
+/**
+ * A magic the Lean emitter prints, which it prints as bytes rather than as a
+ * byte string.
+ *
+ * The Custody record magics moved out of `lib.rs` into `generated.rs`, where
+ * they are hexadecimal `u8` literals. That is the emitter's spelling and not
+ * negotiable here, so this decodes it rather than asking the crate for a copy
+ * the crate no longer owns. Non-ASCII refuses instead of emitting a magic that
+ * would not survive `TextEncoder`.
+ */
+function emittedMagic(source, name) {
+  const match = sources[source].match(new RegExp(`(?:pub )?const ${name}: \\[u8; 8\\] = \\[([^\\]]*)\\];`));
+  if (!match) throw new Error(`missing emitted magic ${source}.${name}`);
+  const bytes = match[1].split(',').map((byte) => Number(byte.trim())).filter((byte) => !Number.isNaN(byte));
+  if (bytes.length !== 8 || bytes.some((byte) => byte < 0x20 || byte > 0x7e)) {
+    throw new Error(`emitted magic ${source}.${name} is not eight printable ASCII bytes`);
+  }
+  return String.fromCharCode(...bytes);
+}
+
 function byteString(source, name) {
   const match = sources[source].match(new RegExp(`(?:pub )?const ${name}: &\\[u8(?:; [0-9]+)?\\] =\\s*b"([^"]+)";`));
   if (!match) throw new Error(`missing Rust byte string ${source}.${name}`);
@@ -87,8 +107,8 @@ output += `export const CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 = ${scalar('c
 
 // ------------------------------------ the Custody request the route derives
 output += '\n';
-output += `export const CUSTODY_REQUEST_MAGIC_V1 = new TextEncoder().encode('${magic('custodyLib', 'CUSTODY_REQUEST_MAGIC_V1')}');\n`;
-output += `export const CUSTODY_REPLAY_MAGIC_V1 = new TextEncoder().encode('${magic('custodyLib', 'CUSTODY_REPLAY_MAGIC_V1')}');\n`;
+output += `export const CUSTODY_REQUEST_MAGIC_V1 = new TextEncoder().encode('${emittedMagic('custodyGenerated', 'CUSTODY_REQUEST_MAGIC_V1')}');\n`;
+output += `export const CUSTODY_REPLAY_MAGIC_V1 = new TextEncoder().encode('${emittedMagic('custodyGenerated', 'CUSTODY_REPLAY_MAGIC_V1')}');\n`;
 for (const name of ['CUSTODY_REQUEST_BYTES_V1', 'CUSTODY_REPLAY_BYTES_V1', 'ABI_VERSION_V1']) {
   output += `export const CUSTODY_${name === 'ABI_VERSION_V1' ? 'ABI_VERSION_V1' : name.replace('CUSTODY_', '')} = ${scalar('custodyGenerated', name)} as const;\n`;
 }
@@ -117,7 +137,7 @@ for (const name of [
 
 // ------------------------------------------------------ PDA seed material
 output += '\n';
-output += `export const CUSTODY_REPLAY_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('custodyLib', 'CUSTODY_REPLAY_PDA_DOMAIN_V1')}');\n`;
+output += `export const CUSTODY_REPLAY_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('custodyGenerated', 'CUSTODY_REPLAY_PDA_DOMAIN_V1')}');\n`;
 output += `export const CALLER_AUTHORITY_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('releaseSet', 'CALLER_AUTHORITY_PDA_DOMAIN_V1')}');\n`;
 output += `export const REGISTRY_ACTIVATION_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('registryActivation', 'ACTIVATION_PDA_DOMAIN_V1')}');\n`;
 for (const variant of ['Core', 'Claims', 'Trading', 'Resolution', 'Custody']) {
@@ -126,8 +146,12 @@ for (const variant of ['Core', 'Claims', 'Trading', 'Resolution', 'Custody']) {
 for (const variant of ['InitializeReplay', 'OpenVault', 'Transfer', 'CloseVault', 'CloseReplay']) {
   output += `export const CUSTODY_OPERATION_${variant.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()}_V1 = ${discriminant('custodyLib', 'OperationV1', variant)} as const;\n`;
 }
+// `CompartmentV1`'s discriminants ARE the emitted tags -- the enum's arms read
+// `= generated::CUSTODY_COMPARTMENT_*_TAG_V1` -- so the alphabet is read where
+// it is authored rather than off the enum that spends it.
 for (const variant of ['None', 'External', 'Settlement', 'HoardPrincipal']) {
-  output += `export const CUSTODY_COMPARTMENT_${variant.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()}_V1 = ${discriminant('custodyLib', 'CompartmentV1', variant)} as const;\n`;
+  const tag = variant.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+  output += `export const CUSTODY_COMPARTMENT_${tag}_V1 = ${scalar('custodyGenerated', `CUSTODY_COMPARTMENT_${tag}_TAG_V1`)} as const;\n`;
 }
 
 if (process.argv.includes('--check')) {

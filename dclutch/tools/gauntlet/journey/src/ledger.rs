@@ -178,7 +178,6 @@ impl ClassClaimV1 {
         Ok(Self::moves(deltas))
     }
 
-
     /// A stage whose per-class movement this ledger does not account for, and
     /// why.
     pub(crate) fn inapplicable(reason: impl Into<String>) -> Self {
@@ -302,7 +301,6 @@ pub(crate) fn class_labels() -> Vec<&'static str> {
         .chain(std::iter::once(UNCLASSIFIED))
         .collect()
 }
-
 
 /// The exact state of one account the ledger tracks.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1275,7 +1273,11 @@ mod tests {
         omit_buyer_position: bool,
     ) -> ObservationV1 {
         let balances = [
-            (vault(CompartmentV1::HoardPrincipal), "hoard", FILL_HOARD_ATOMS),
+            (
+                vault(CompartmentV1::HoardPrincipal),
+                "hoard",
+                FILL_HOARD_ATOMS,
+            ),
             (key(0x51), "buyer_token", buyer_token),
             (key(0x52), "direct_seller_token", seller_direct),
             (key(0x53), "direct_venue_fee_token", venue_fee),
@@ -1296,10 +1298,8 @@ mod tests {
         // The Mint is the whole supply whether or not this census names every
         // account holding it. That asymmetry is the point of L1.
         let mint_supply = FILL_HOARD_ATOMS + buyer_token + seller_direct + venue_fee;
-        let mut position_balances = BTreeMap::from([(
-            "seller_position".to_string(),
-            seller_claims.to_vec(),
-        )]);
+        let mut position_balances =
+            BTreeMap::from([("seller_position".to_string(), seller_claims.to_vec())]);
         let mut position_totals = seller_claims.to_vec();
         if !omit_buyer_position {
             position_balances.insert("buyer_position".into(), buyer_claims.to_vec());
@@ -1335,7 +1335,18 @@ mod tests {
     }
 
     fn before_fill(ledger: &ConservationLedgerV1) -> ObservationV1 {
-        fill_census(ledger, "before-fill", 100, 0, 0, [500, 500], [0, 0], [500, 500], false, false)
+        fill_census(
+            ledger,
+            "before-fill",
+            100,
+            0,
+            0,
+            [500, 500],
+            [0, 0],
+            [500, 500],
+            false,
+            false,
+        )
     }
 
     /// The seller sold 100 claims of outcome 0 for 100 atoms at a fee that
@@ -1396,7 +1407,12 @@ mod tests {
 
         let l1 = verdict(&verdicts, "L1");
         assert_eq!(l1.status, "violated");
-        assert!(l1.detail.contains("100 atoms are in accounts this ledger does not name"), "{}", l1.detail);
+        assert!(
+            l1.detail
+                .contains("100 atoms are in accounts this ledger does not name"),
+            "{}",
+            l1.detail
+        );
         // And it is L1 alone: the supply vector is untouched by a token account
         // going unnamed, so a reader is not sent hunting through the claims.
         assert_eq!(verdict(&verdicts, "L3").status, "holds");

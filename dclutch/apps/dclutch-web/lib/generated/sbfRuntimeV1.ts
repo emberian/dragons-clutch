@@ -1,5 +1,5 @@
 // @generated from the pinned solana-sbpf, solana-syscalls and solana-program-entrypoint
-// crates plus programs/dclutch-trading-sbf/src/entrypoint_adapter.rs; do not edit.
+// crates plus crates/dclutch-sbf-bump-heap/src/lib.rs; do not edit.
 // Regenerate with: npm run abi:sbf-runtime
 
 /** The runtime crate versions this vocabulary was read from. */

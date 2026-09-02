@@ -212,26 +212,104 @@ for (const binding of ROUTE_BOUND_AUTHORITIES) {
 }
 const outputUrl = new URL('../lib/generated/directInlineV3.ts', import.meta.url);
 
+/**
+ * The text behind a source, named either by a `SOURCE_FILES` key or -- when a
+ * forward below resolves one -- by a repository path.
+ */
+const aliasTexts = new Map();
+function sourceText(source) {
+  if (sources[source] !== undefined) return sources[source];
+  if (!aliasTexts.has(source)) aliasTexts.set(source, readCrateFile(source));
+  return aliasTexts.get(source);
+}
+
+function sourcePath(source) {
+  return SOURCE_FILES[source] ?? source;
+}
+
+function siblingOf(file, relative) {
+  const stack = [];
+  for (const part of `${file.slice(0, file.lastIndexOf('/'))}/${relative}`.split('/')) {
+    if (part === '.' || part === '') continue;
+    if (part === '..') stack.pop();
+    else stack.push(part);
+  }
+  return stack.join('/');
+}
+
+/**
+ * The file one module name inside a scraped source actually is.
+ *
+ * Read from the crate, in the three spellings this tree uses -- an attributed
+ * `#[path = "…"] mod m;`, a `use crate::other as m;` rename, and a plain
+ * `mod m;`. Reading it means the module-to-file mapping has no copy here to
+ * go stale; an unrecognised spelling returns null and the caller refuses in
+ * its own words rather than guessing.
+ */
+function moduleFile(source, moduleName) {
+  const text = sourceText(source);
+  const file = sourcePath(source);
+  const attributed = text.match(new RegExp(`#\\[path = "([^"]+)"\\][^;]*?\\bmod ${moduleName};`));
+  if (attributed) return siblingOf(file, attributed[1]);
+  const renamed = text.match(new RegExp(`use crate::([a-z_0-9]+) as ${moduleName};`));
+  if (renamed) return `${file.slice(0, file.indexOf('/src/'))}/src/${renamed[1]}.rs`;
+  if (new RegExp(`^[ \\t]*(?:pub(?:\\([^)]*\\))? )?mod ${moduleName};`, 'm').test(text)) {
+    // A plain `mod m;` in `foo.rs` is `foo/m.rs`, and in a crate or directory
+    // root it is the sibling `m.rs`. Getting this wrong reads a file that does
+    // not exist, which is how it was caught.
+    const stem = file.slice(file.lastIndexOf('/') + 1, -'.rs'.length);
+    return stem === 'lib' || stem === 'mod'
+      ? siblingOf(file, `${moduleName}.rs`)
+      : siblingOf(file, `${stem}/${moduleName}.rs`);
+  }
+  return null;
+}
+
+/**
+ * A constant whose value is `module::NAME` in a Lean-emitted sibling.
+ *
+ * Crates that gained a Lean author kept their public names and made each value
+ * a forward: `account_profile_contract::v2`'s coordinates are
+ * `generated_abi::ACCOUNT_PROFILE_V2_*`, and the effect kernel's V4 identity is
+ * `generated::EFFECT_V4_SCHEMA_RELEASE_ID_LEAN`. Following the forward reads
+ * the value at its author, while the route-binding gate above still sees this
+ * generator scraping the file the live route's use-tree resolves to -- which
+ * is the forwarding file, not the emission.
+ */
+function aliasTarget(source, name) {
+  const match = sourceText(source).match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ =\\s*([a-z_0-9]+)::([A-Z0-9_]+);`));
+  if (!match) return null;
+  const file = moduleFile(source, match[1]);
+  if (file === null) throw new Error(`${sourcePath(source)} forwards ${name} to \`${match[1]}\`, a module it does not say the file of`);
+  return Object.freeze({ source: file, name: match[2] });
+}
+
 function scalar(source, name) {
-  const match = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ = ([0-9_]+);`));
+  const alias = aliasTarget(source, name);
+  if (alias) return scalar(alias.source, alias.name);
+  const match = sourceText(source).match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ = ([0-9_]+);`));
   if (!match) throw new Error(`missing Rust scalar ${source}.${name}`);
   return Number(match[1].replaceAll('_', ''));
 }
 
 function scalarExpression(source, name, expected) {
-  const match = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ = ([^;]+);`));
+  const match = sourceText(source).match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ = ([^;]+);`));
   if (!match || match[1].trim() !== expected) throw new Error(`unexpected Rust expression ${source}.${name}`);
 }
 
 function bytes(source, name) {
-  const match = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: \\[u8; [^\\]]+\\] =\\s*(?:\\*b"([^"]+)"|\\[([\\s\\S]*?)\\]);`));
+  const alias = aliasTarget(source, name);
+  if (alias) return bytes(alias.source, alias.name);
+  const match = sourceText(source).match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: \\[u8; [^\\]]+\\] =\\s*(?:\\*b"([^"]+)"|\\[([\\s\\S]*?)\\]);`));
   if (!match) throw new Error(`missing Rust bytes ${source}.${name}`);
   if (match[1]) return [...new TextEncoder().encode(match[1])];
   return [...match[2].matchAll(/0x[0-9a-f]+|\b[0-9]+\b/g)].map((entry) => Number(entry[0]));
 }
 
 function byteString(source, name) {
-  const match = sources[source].match(new RegExp(`(?:pub )?const ${name}: &\\[u8(?:; [0-9]+)?\\] =\\s*b"([^"]+)";`));
+  const alias = aliasTarget(source, name);
+  if (alias) return byteString(alias.source, alias.name);
+  const match = sourceText(source).match(new RegExp(`(?:pub )?const ${name}: &\\[u8(?:; [0-9]+)?\\] =\\s*b"([^"]+)";`));
   if (!match) throw new Error(`missing Rust byte string ${source}.${name}`);
   return match[1];
 }

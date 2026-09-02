@@ -2,6 +2,30 @@ import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
+
+/**
+ * One Lean-emitted file, read under the names the crate that forwards to it
+ * publishes.
+ *
+ * `pub const HEADER_BYTES: usize = generated_abi::ACCOUNT_PROFILE_V2_HEADER_BYTES;`
+ * is the crate saying which emitted name each of its own names is. Substituting
+ * from those lines lets this generator keep naming coordinates the way the rest
+ * of it does while every value comes from the emitter -- and refuses loudly if
+ * the crate ever forwards two names to one, which would make the substitution
+ * ambiguous.
+ */
+function withCrateNames(emitted, crateText) {
+  let text = emitted;
+  const seen = new Set();
+  for (const forward of crateText.matchAll(/pub const ([A-Z0-9_]+): [^=]+=\s*generated_abi::([A-Z0-9_]+);/g)) {
+    if (seen.has(forward[2])) throw new Error(`the crate forwards two names to ${forward[2]}`);
+    seen.add(forward[2]);
+    text = text.replace(new RegExp(`(const )${forward[2]}(:)`), `$1${forward[1]}$2`);
+  }
+  if (seen.size === 0) throw new Error('the crate forwards no name to the emission; the substitution would be silent');
+  return text;
+}
+
 const sources = Object.freeze({
   request: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_equity_operator.rs', root), 'utf8'),
   hot: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_hot_artifact.rs', root), 'utf8'),
@@ -13,7 +37,15 @@ const sources = Object.freeze({
   delta: readFileSync(new URL('crates/dclutch-claims-svm/src/signed_delta_v3.rs', root), 'utf8'),
   deltaFrame: readFileSync(new URL('crates/dclutch-claims-svm/src/frame_spec_v1.rs', root), 'utf8'),
   strategy: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/generated_v2.rs', root), 'utf8'),
-  accountProfile: readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2.rs', root), 'utf8'),
+  // The AccountProfile V2 coordinates are emitted by
+  // `DClutchSemantics.AccountProfileV2Abi`; `v2.rs` kept its public names and
+  // made every one of them a forward into that emission. This reads the
+  // emission -- under the crate's names, taken from the crate's own forwarding
+  // lines, so the mapping has no second copy here to go stale.
+  accountProfile: withCrateNames(
+    readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2/generated_abi.rs', root), 'utf8'),
+    readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2.rs', root), 'utf8'),
+  ),
   lpProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_lp_artifacts.rs', root), 'utf8'),
   scenarioProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_profile.rs', root), 'utf8'),
   scenarioArtifacts: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_artifacts.rs', root), 'utf8'),

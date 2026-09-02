@@ -344,7 +344,7 @@ pub(crate) fn relayed_market_input(
             .map_err(|error| Error::new(format!("loader: {error:?}")))?,
         venue.programdata,
         dclutch_core_contract::ContentId::new(demo_id(row.venue_semantic_release, &[]))
-        .map_err(|error| Error::new(format!("venue semantic release: {error:?}")))?,
+            .map_err(|error| Error::new(format!("venue semantic release: {error:?}")))?,
         venue.elf_digest,
         venue.deployment_slot,
         ArtifactUpgradePolicyV1::ExactAuthority,
@@ -866,10 +866,10 @@ mod the_founding_path {
         assert_eq!(
             declared.cell_probability_bps.as_deref(),
             Some(
-                [RelayedRowFactsV1::for_observable(
-                    RelayedObservableV1::DbcMigrationProgressV1,
-                )
-                .prior_bps]
+                [
+                    RelayedRowFactsV1::for_observable(RelayedObservableV1::DbcMigrationProgressV1,)
+                        .prior_bps
+                ]
                 .as_slice()
             ),
             "and the belief it states is propositional"
@@ -928,8 +928,7 @@ mod the_founding_path {
     /// the same call the graduation market takes.
     #[test]
     fn the_mint_renunciation_market_founds_beside_the_graduation_market() {
-        let (registry, mint) =
-            row_input(RelayedObservableV1::Token2022MintAuthorityRenouncedV1);
+        let (registry, mint) = row_input(RelayedObservableV1::Token2022MintAuthorityRenouncedV1);
         assert!(mint.cuts.is_empty(), "a proposition places no cuts");
         assert_eq!(mint.coefficients, vec![1, 0]);
         let declared = mint

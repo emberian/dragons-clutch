@@ -148,17 +148,15 @@ fn close_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()> 
     println!("owner                {}", account.owner);
     println!("lamports             {}", account.lamports);
     println!("width                {} bytes", account.data.len());
-    println!(
-        "owned by program     {}",
-        yes_no(verdict.owner_is_program)
-    );
+    println!("owned by program     {}", yes_no(verdict.owner_is_program));
     println!("rent exempt          {}", yes_no(verdict.rent_exempt));
     println!("defunct-canonical    {}", yes_no(verdict.defunct.is_ok()));
     println!(
         "bump candidate       {}",
-        verdict
-            .bump_candidate
-            .map_or_else(|| "none reproduces the address".to_owned(), |b| b.to_string())
+        verdict.bump_candidate.map_or_else(
+            || "none reproduces the address".to_owned(),
+            |b| b.to_string()
+        )
     );
     println!(
         "sealed release live  {}",
@@ -278,11 +276,7 @@ fn close_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()> 
 /// The closer slot is filled with a placeholder on a dry run, because a dry run
 /// opens no key: the frame's SHAPE is what a preflight can show, and the
 /// beneficiary is substituted only once a key exists to sign with.
-fn close_instruction(
-    arguments: &ArgumentsV1,
-    registry: Pubkey,
-    bump_candidate: u8,
-) -> Instruction {
+fn close_instruction(arguments: &ArgumentsV1, registry: Pubkey, bump_candidate: u8) -> Instruction {
     let accounts = vec![
         AccountMeta::new(arguments.seal, false),
         AccountMeta::new(Pubkey::default(), true),

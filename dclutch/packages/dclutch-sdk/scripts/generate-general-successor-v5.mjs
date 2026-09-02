@@ -12,6 +12,12 @@ const sources = Object.freeze({
   collection: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/collection_v1.rs', root), 'utf8'),
   candidate: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/candidate_v1.rs', root), 'utf8'),
   selection: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_selection.rs', root), 'utf8'),
+  // The runtime wire's magics, versions and coordinates have ONE author:
+  // `DClutchSemantics.GeneralRuntimeWireV2`, printed here. `runtime_selection.rs`
+  // and `runtime_width.rs` used to spell them and now keep only aliases whose
+  // right-hand sides are this file's names, so the readers below follow the
+  // alias rather than restating a value the emission owns.
+  runtimeWire: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/generated_runtime_wire_v2.rs', root), 'utf8'),
   verifier: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_verify.rs', root), 'utf8'),
   runtime: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_width.rs', root), 'utf8'),
   state: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/state_artifacts_v3.rs', root), 'utf8'),
@@ -24,24 +30,34 @@ const outputUrl = new URL('../lib/generated/generalSuccessorV5.ts', import.meta.
 const check = process.argv.includes('--check');
 
 function scalar(source, name) {
-  const match = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ = ([A-Z0-9_]+)(?: \\+ ([0-9_]+))?;`));
+  const match = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ =\\s*(wire::)?([A-Z0-9_]+)(?: \\+ ([0-9_]+))?;`));
   if (!match) throw new Error(`missing Rust scalar ${source}.${name}`);
-  const base = /^[0-9_]+$/.test(match[1])
-    ? Number(match[1].replaceAll('_', ''))
-    : scalar(source, match[1]);
-  return base + Number((match[2] ?? '0').replaceAll('_', ''));
+  const base = match[1] !== undefined
+    ? scalar('runtimeWire', match[2])
+    : (/^[0-9_]+$/.test(match[2]) ? Number(match[2].replaceAll('_', '')) : scalar(source, match[2]));
+  return base + Number((match[3] ?? '0').replaceAll('_', ''));
+}
+
+/** One `[u8; N]` the wire emission prints as hexadecimal bytes. */
+function emittedBytes(name) {
+  const match = sources.runtimeWire.match(new RegExp(`pub const ${name}: \\[u8; [0-9]+\\] = \\[([^\\]]*)\\];`));
+  if (!match) throw new Error(`missing emitted byte array runtimeWire.${name}`);
+  return match[1].split(',').map((byte) => byte.trim()).filter(Boolean).map(Number);
 }
 
 function bytes(source, name) {
+  const alias = sources[source].match(new RegExp(`(?:pub )?const ${name}: \\[u8; [^\\]]+\\] = wire::([A-Z0-9_]+);`));
+  if (alias) return emittedBytes(alias[1]);
   const match = sources[source].match(new RegExp(`(?:pub )?const ${name}: \\[u8; [^\\]]+\\] = \\*b"([^"]+)";`));
   if (!match) throw new Error(`missing Rust byte string ${source}.${name}`);
   return [...new TextEncoder().encode(match[1])];
 }
 
 function methodOffset(source, method) {
-  const match = sources[source].match(new RegExp(`pub const fn ${method}\\(\\) -> u32 \\{\\s*([0-9_]+)\\s*\\}`));
+  const match = sources[source].match(new RegExp(`pub const fn ${method}\\(\\) -> u32 \\{\\s*(wire::)?([A-Z0-9_]+|[0-9_]+)\\s*\\}`));
   if (!match) throw new Error(`missing Rust typed offset ${source}.${method}`);
-  return Number(match[1].replaceAll('_', ''));
+  if (match[1] !== undefined) return scalar('runtimeWire', match[2]);
+  return Number(match[2].replaceAll('_', ''));
 }
 
 function associatedOffset(source, owner, name) {
@@ -75,11 +91,27 @@ function enumTag(source, owner, variant) {
   return Number(match[1].replaceAll('_', ''));
 }
 
+/**
+ * The `u16` one `const fn` over `Action` returns for one variant.
+ *
+ * Two things this now tolerates, because the crate does both and neither
+ * changes the fact being read. A projection that only FORWARDS is followed, so
+ * this reader keeps naming the concept it wants -- where an action's readonly
+ * evidence starts -- rather than whichever function currently holds the
+ * number. And arms are GROUPED with `|`, so the patterns are split instead of
+ * matched whole: a regrouping that leaves a variant's value alone must not
+ * make this reader lose it, and one that changes the value must still red.
+ */
 function actionMatchScalar(source, functionName, variant) {
-  const body = sources[source].match(new RegExp(`pub const fn ${functionName}\\(action: Action\\) -> u16 \\{([\\s\\S]*?)\\n\\}`))?.[1];
-  const match = body?.match(new RegExp(`Action::${variant}\\s*=>\\s*([0-9_]+),`));
-  if (!match) throw new Error(`missing Rust action scalar ${source}.${functionName}.${variant}`);
-  return Number(match[1].replaceAll('_', ''));
+  const body = sources[source].match(new RegExp(`(?:pub )?const fn ${functionName}\\(action: Action\\) -> u16 \\{([\\s\\S]*?)\\n\\}`))?.[1];
+  if (body === undefined) throw new Error(`missing Rust action function ${source}.${functionName}`);
+  const text = body.replaceAll(/\/\/[^\n]*/g, '');
+  const forward = text.match(/^\s*([a-z_0-9]+)\(action\)\s*$/);
+  if (forward) return actionMatchScalar(source, forward[1], variant);
+  for (const arm of text.matchAll(/([^=;{}]*?)=>\s*([0-9_]+),/g)) {
+    if (new RegExp(`Action::${variant}\\b`).test(arm[1])) return Number(arm[2].replaceAll('_', ''));
+  }
+  throw new Error(`missing Rust action scalar ${source}.${functionName}.${variant}`);
 }
 
 function array(name, values) {
@@ -103,10 +135,16 @@ const assertions = [
   ['requestV3', 'Exact 64-byte General successor request V3.'],
   ['requestV3Generated', 'REQUEST_V3_MAGIC: [u8; 8]'],
   ['requestV3Generated', 'REQUEST_V3_ABI_VERSION: u16 = 3;'],
-  ['selection', 'const MAGIC: [u8; 8] = *b"DCGSEL02";'],
-  ['selection', 'const VERSION: u16 = 2;'],
-  ['runtime', 'const SETTLEMENT_CURSOR_MAGIC: [u8; 8] = *b"DCGSET02";'],
-  ['runtime', 'pub const RUNTIME_WIDTH_VERSION_V2: u16 = 2;'],
+  // Each of these pairs is one fact stated twice on purpose: the emission's
+  // line pins the VALUE, and the crate's line pins that the crate still reads
+  // it. Either alone can go stale without the other noticing.
+  ['runtimeWire', 'pub const RUNTIME_SELECTION_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x53, 0x45, 0x4c, 0x30, 0x32];'],
+  ['selection', 'const MAGIC: [u8; 8] = wire::RUNTIME_SELECTION_MAGIC_V2;'],
+  ['runtimeWire', 'pub const RUNTIME_WIRE_VERSION_V2: u16 = 2;'],
+  ['selection', 'const VERSION: u16 = wire::RUNTIME_WIRE_VERSION_V2;'],
+  ['runtimeWire', 'pub const SETTLEMENT_CURSOR_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x53, 0x45, 0x54, 0x30, 0x32];'],
+  ['runtime', 'const SETTLEMENT_CURSOR_MAGIC: [u8; 8] = wire::SETTLEMENT_CURSOR_MAGIC_V2;'],
+  ['runtime', 'pub const RUNTIME_WIDTH_VERSION_V2: u16 = wire::RUNTIME_WIRE_VERSION_V2;'],
   ['runtime', '4 => Ok(Self::Collecting)'],
   ['runtime', '5 => Ok(Self::Materializing)'],
   ['runtime', '6 => Ok(Self::Distributing)'],
@@ -123,7 +161,8 @@ const assertions = [
   ['collection', 'const ORDER_MAGIC: [u8; 8] = *b"DCGORD01";'],
   ['candidate', 'pub const MAGIC: [u8; 8] = *b"DCGSUB01";'],
   ['verifier', 'const VERIFIER_MAGIC: [u8; 8] = *b"DCGVFY02";'],
-  ['runtime', 'const VERIFIED_CANDIDATE_MAGIC: [u8; 8] = *b"DCGVER02";'],
+  ['runtimeWire', 'pub const VERIFIED_CANDIDATE_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x56, 0x45, 0x52, 0x30, 0x32];'],
+  ['runtime', 'const VERIFIED_CANDIDATE_MAGIC: [u8; 8] = wire::VERIFIED_CANDIDATE_MAGIC_V2;'],
   ['hot', 'pub struct HotBumpHintsV1 {'],
   ['operator', 'pub const GENERAL_HOT_HEAP_FRAME_BYTES_V3: u32 = DIRECT_HOT_HEAP_FRAME_BYTES_V1;'],
 ];

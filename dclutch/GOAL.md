@@ -3395,3 +3395,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - The three "dirty" worktrees kept earlier were pre-landing snapshots (every changed file identical to or behind main) —
   removed; 251 GiB free.
 - Cuts: `e328bc44f`, `c8638b219`, `213ac7589`, `40700d238`.
+- ABI-READERS (`a6581142`): **abi verifies 27/27 web, 23/23 SDK** — eight readers now resolve the crate's own forwards to the
+  emitted sources; the Lean emitter builds the modules its emitters import (every TS emitter imports TsEmit; no invocation
+  built it); **two real drifts the red readers hid:** the browser said 117 Dealer identities (118 since 322de4b2), and its
+  Claims validator zero-checked the byte that IS the record's PDA bump — **the browser refused every record carrying one.**
+  Five dealer-codec files were unpinned-rustfmt noise (restored); three host files were the PINNED form of HEAD (landed as a
+  fmt commit); the stale 482-line hot_v3.rs working copy saved as a scratchpad patch and restored to HEAD;
+  `registered_terminal_artifacts_v4.rs` is 2,529 untracked, unwired lines of someone's in-flight sibling — left. Owed (lane
+  resumed): the capability-surface generator reads tracked files; a bump-carrying record test; runtime_width.rs's cursor
+  literals.
