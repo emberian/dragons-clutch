@@ -3323,3 +3323,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   67058c86 fixed) — restored to HEAD; nine real uncommitted edits remain (dealer-codec scenario_*, hot_v3.rs, ledger.rs,
   capability_seal_close.rs, relayed.rs) — owners unknown, left in place.
 - Cuts: `348935fc2`, `877541ed3`.
+
+### Lane map delta — 2026-09-02 13:30 EDT
+- RECOVERY-2 closed (`be012a46`): `authenticate_open_market_poststate_v1` reads through `BoundaryRpcV1` — seven permanent
+  facts vs one boundary-time fact (the Pending funding ledgers), later journals as named owners; `LaterFoundingStagesV1` is
+  the one owner of the rule; the report writer refuses a replacement that drops evidence (the erased `founding_targets` was
+  a literal Null in the first write, not a crash); detector `historical_boundary_reads` over the reconstruction path's call
+  graph, red-proven twice. Live dry-run: all 32 poststates resolve; the funding ledger's real movement is owned by the later
+  stages. Next candidate wall named: `authenticate_funding_readiness_route_v1(…, "accept")` at market.rs:11359.
+  → COHORT-13 RESUME **`a293fa83f654b0965`**: rebuild at be012a46, recover, activate (root from `facts.root`; 4GzDzNxj… must
+  become occupied), admissions, the fee-bearing fill, settlement, the census with the recorded flags. ~42 h to the deadline.

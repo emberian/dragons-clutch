@@ -1537,7 +1537,121 @@ impl Drop for CampaignEvidenceLeaseV1 {
     }
 }
 
+/// The facts a campaign report may only GAIN, never lose.
+///
+/// AGENTS.md states the rule this implements: *"Emit to a temporary file on
+/// the same filesystem, require the producer to exit zero, validate the
+/// expected header/width ... A failed generator must leave the last accepted
+/// output byte-for-byte intact."* The emitter already had the temporary file
+/// and the atomic rename; the VALIDATE step was missing, and its absence cost
+/// cohort-13 the only copy of a fact that named the Market its whole recovery
+/// is for.
+///
+/// The mechanism was not a crash mid-write. The very first write of every run
+/// -- the durable preflight, before any send -- rebuilds the report from a
+/// literal, and that literal carried `"founding_targets": Value::Null`. A run
+/// that then refused anywhere before the derivation site left an accepted
+/// report with its founding targets erased, and the run that did it refused
+/// for an unrelated reason. Measured 2026-09-02:
+/// `campaign-open.before-recovery-…Z.json`, 134,703 bytes, `founding_targets`
+/// null, against the 135,712-byte original.
+///
+/// So the producer now carries those facts forward, and this is the check that
+/// no future producer stops. It refuses, which leaves the accepted file
+/// untouched -- that IS the rule, stated as a failure mode.
+fn evidence_preserving_replacement_v1(prior: &Value, next: &Value) -> Result<()> {
+    for field in ["foundingCheckpoint", "execution"] {
+        let held = prior.get(field).is_some_and(|value| !value.is_null());
+        let kept = next.get(field).is_some_and(|value| !value.is_null());
+        if held && !kept {
+            return Err(Error::new(format!(
+                "this write would drop `{field}` from the accepted campaign report; a run that \
+                 cannot restate an accepted fact must leave the report intact, so nothing was \
+                 replaced. Point --evidence at a fresh path to write a new report."
+            )));
+        }
+    }
+    let held = prior
+        .get("founding_targets")
+        .filter(|value| !value.is_null());
+    if let Some(held) = held {
+        let kept = next
+            .get("founding_targets")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| {
+                Error::new(
+                    "this write would drop `founding_targets` from the accepted campaign report; \
+                     it names the Market a founding recovery is for, and a run that cannot \
+                     restate it must leave the report intact, so nothing was replaced.",
+                )
+            })?;
+        // Plan and Market input are already pinned identical by
+        // `load_prior_campaign_evidence`, so the derivation is deterministic
+        // and these five addresses cannot honestly move. Only the recorded
+        // input PATH may differ between runs, so it is not compared.
+        for address in [
+            "collateral_mint",
+            "realm_record",
+            "found31_market",
+            "open_market",
+            "abort_market",
+        ] {
+            if held.get(address) != kept.get(address) {
+                return Err(Error::new(format!(
+                    "this write would retarget `founding_targets.{address}` in the accepted \
+                     campaign report; nothing was replaced"
+                )));
+            }
+        }
+    }
+    let rows = |value: &Value| -> Vec<Value> {
+        value
+            .get("foundingSubmissionJournals")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let (held, kept) = (rows(prior), rows(next));
+    if kept.len() < held.len() {
+        return Err(Error::new(format!(
+            "this write would drop founding submission journals from the accepted campaign \
+             report ({} rows for {}); nothing was replaced",
+            kept.len(),
+            held.len()
+        )));
+    }
+    for (index, row) in held.iter().enumerate() {
+        let operation = row.get("operation");
+        if kept[index].get("operation") != operation {
+            return Err(Error::new(
+                "this write would reorder the accepted campaign report's founding submission \
+                 journals; nothing was replaced",
+            ));
+        }
+        if row.get("phase").and_then(Value::as_str) == Some("finalized")
+            && (kept[index].get("phase").and_then(Value::as_str) != Some("finalized")
+                || kept[index].get("expectedSignature") != row.get("expectedSignature")
+                || kept[index].get("finalizedSlot") != row.get("finalizedSlot"))
+        {
+            return Err(Error::new(format!(
+                "this write would un-finalize or re-sign accepted founding journal {}; nothing \
+                 was replaced",
+                operation.and_then(Value::as_str).unwrap_or("(unnamed)")
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
+    // Validate BEFORE the rename, against whatever this path currently holds.
+    // A file that is absent or that no longer parses states no fact this
+    // replacement could lose.
+    if let Ok(bytes) = fs::read(path)
+        && let Ok(prior) = parse_json_without_duplicate_keys_v1(&bytes)
+    {
+        evidence_preserving_replacement_v1(&prior, value)?;
+    }
     let parent = path
         .parent()
         .ok_or_else(|| Error::new("evidence output requires a parent directory"))?;
@@ -1587,6 +1701,10 @@ struct PriorCampaignEvidenceV1 {
     /// Whether the file on disk already has an `execution` block at all. The
     /// recovery-to-complete step refuses to run over one.
     carries_execution: bool,
+    /// The accepted report's own `founding_targets`, carried forward so a run
+    /// that cannot derive them does not state `null` over them. It names the
+    /// Market a founding recovery is for.
+    founding_targets: Value,
     checkpoint: Option<crate::market::MarketExecutionCheckpointV1>,
     founding_submission_journals: BTreeMap<
         crate::market::founding_submission_journal::FoundingSubmissionOperationV1,
@@ -1607,6 +1725,7 @@ fn load_prior_campaign_evidence(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PriorCampaignEvidenceV1 {
                 carries_execution: false,
+                founding_targets: Value::Null,
                 checkpoint: None,
                 founding_submission_journals: BTreeMap::new(),
                 terminal_consumable_source: None,
@@ -1695,6 +1814,10 @@ fn load_prior_campaign_evidence(
     };
     Ok(PriorCampaignEvidenceV1 {
         carries_execution: prior.get("execution").is_some(),
+        founding_targets: prior
+            .get("founding_targets")
+            .cloned()
+            .unwrap_or(Value::Null),
         checkpoint,
         founding_submission_journals,
         terminal_consumable_source,
@@ -3699,6 +3822,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let prior = match &args.evidence_path {
         None => PriorCampaignEvidenceV1 {
             carries_execution: false,
+            founding_targets: Value::Null,
             checkpoint: None,
             founding_submission_journals: BTreeMap::new(),
             terminal_consumable_source: None,
@@ -3725,6 +3849,11 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         stdout.write_all(b"\n")?;
         return Ok(());
     }
+    // A run states its own founding targets when it can derive them and the
+    // accepted report's otherwise. It never states `null` over them: that is
+    // the write that erased cohort-13's, and it happened before the
+    // derivation site was ever reached.
+    let carried_founding_targets = prior.founding_targets;
     let mut compatible_checkpoint = prior.checkpoint;
     let mut founding_submission_journals = prior.founding_submission_journals;
     let policy = if args.execute {
@@ -3857,7 +3986,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "holds": ok,
             "observed": detail,
         })).collect::<Vec<_>>()),
-        "founding_targets": Value::Null,
+        "founding_targets": carried_founding_targets.clone(),
         "foundingSubmissionJournals": founding_submission_journals.values().cloned().collect::<Vec<_>>(),
         "deploy_ladder": deploy_ladder(&plan, &args.origin),
         "transport_policy": "driver traffic: paced RPC (SMOKE-0 §6.4 -- the founding ladder and \
@@ -4329,16 +4458,19 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "this driver never airdrops: fund the payer before --execute so a shortfall refuses before the ladder"
         },
     });
-    report["founding_targets"] = founding_targets.as_ref().map_or(Value::Null, |targets| {
-        json!({
+    report["founding_targets"] = founding_targets.as_ref().map_or_else(
+        || carried_founding_targets.clone(),
+        |targets| {
+            json!({
             "market_input": args.market_path.as_ref().map(|path| path.display().to_string()),
             "collateral_mint": targets.collateral_mint.to_string(),
             "realm_record": targets.realm_record.to_string(),
             "found31_market": targets.found31_market.to_string(),
             "open_market": targets.open_market.to_string(),
             "abort_market": targets.abort_market.to_string(),
-        })
-    });
+            })
+        },
+    );
     // Full key-dependent preflight is also durable before the first send.
     if let Some(path) = &args.evidence_path {
         write_evidence_atomically(path, &report)?;
@@ -5894,6 +6026,134 @@ mod tests {
         let next = CampaignEvidenceLeaseV1::acquire(&evidence).expect("released lease reacquires");
         drop(next);
         assert!(!lock_path.exists());
+    }
+
+    /// Cohort-13's accepted report, reduced to the facts a replacement may
+    /// only gain: the founding targets that name the Market, the durable
+    /// checkpoint, and two Finalized journals.
+    fn accepted_report_v1(path: &Path) -> Value {
+        json!({
+            "schema": "dclutch-successor-campaign-report-v1",
+            "cluster": "devnet",
+            "rpc_url": "https://api.devnet.solana.com/",
+            "plan_sha256": "11".repeat(32),
+            "market_sha256": "22".repeat(32),
+            "evidence_output": path.display().to_string(),
+            "founding_targets": {
+                "market_input": "/jobs/market.json",
+                "collateral_mint": "8PMHP6cweSPjqpQmQurstNXKcBB855t6hXELePzdibY3",
+                "realm_record": "9W7GfLhKS3uNfsvGjWgTvfrF9iQFB2rqkaxNaAKmUSFU",
+                "found31_market": "HCnz8YXLnQdLgEBb8RAPjJg7R3Eh3qQx4oQiWmqGUhsc",
+                "open_market": "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15",
+                "abort_market": "HKw5UzhNYxv2i4BHuGh4cuWpEjE6Nkncc5g3dpLeZYNZ",
+            },
+            "foundingCheckpoint": checkpoint_value(),
+            "foundingSubmissionJournals": [
+                { "operation": "dcltcfq1", "phase": "finalized",
+                  "expectedSignature": recovery_signature_v1(1), "finalizedSlot": 491961396 },
+                { "operation": "dcltpcb2", "phase": "finalized",
+                  "expectedSignature": recovery_signature_v1(2), "finalizedSlot": 491962044 },
+            ],
+        })
+    }
+
+    /// The exact write that erased cohort-13's `founding_targets`, and the
+    /// rule that now refuses it.
+    ///
+    /// This is the byte-for-byte half of AGENTS.md's generator rule: a run
+    /// that cannot restate an accepted fact does not get to replace the file
+    /// with one that omits it. The refusal is the mechanism -- there is no
+    /// snapshot and no rollback, because the durable submission ledger must
+    /// still be free to persist a journal before a send.
+    #[test]
+    fn a_write_that_would_drop_accepted_evidence_refuses_and_leaves_the_file_byte_identical() {
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-campaign-preserving-write-{}.json",
+            Pubkey::new_unique()
+        ));
+        let accepted = accepted_report_v1(&path);
+        write_evidence_atomically(&path, &accepted).expect("accepted report");
+        let before = fs::read(&path).expect("accepted bytes");
+
+        // 1. The observed defect: the durable preflight's literal `null`.
+        let mut erased = accepted.clone();
+        erased["founding_targets"] = Value::Null;
+        let refusal = write_evidence_atomically(&path, &erased)
+            .err()
+            .expect("a write that nulls founding_targets must refuse");
+        assert!(
+            refusal.0.contains("would drop `founding_targets`"),
+            "{}",
+            refusal.0
+        );
+        assert_eq!(
+            fs::read(&path).expect("bytes after refusal"),
+            before,
+            "a refused write must leave the accepted report byte-for-byte intact"
+        );
+
+        // 2. The same rule over the other three facts a rebuild can lose.
+        let mut without_checkpoint = accepted.clone();
+        without_checkpoint
+            .as_object_mut()
+            .expect("report object")
+            .remove("foundingCheckpoint");
+        assert!(
+            write_evidence_atomically(&path, &without_checkpoint)
+                .err()
+                .expect("dropping the checkpoint must refuse")
+                .0
+                .contains("would drop `foundingCheckpoint`")
+        );
+        let mut shortened = accepted.clone();
+        shortened["foundingSubmissionJournals"] =
+            json!([accepted["foundingSubmissionJournals"][0].clone()]);
+        assert!(
+            write_evidence_atomically(&path, &shortened)
+                .err()
+                .expect("dropping a journal must refuse")
+                .0
+                .contains("would drop founding submission journals")
+        );
+        let mut unfinalized = accepted.clone();
+        unfinalized["foundingSubmissionJournals"][1]["phase"] = json!("submitted");
+        assert!(
+            write_evidence_atomically(&path, &unfinalized)
+                .err()
+                .expect("un-finalizing a journal must refuse")
+                .0
+                .contains("would un-finalize or re-sign")
+        );
+        let mut retargeted = accepted.clone();
+        retargeted["founding_targets"]["open_market"] =
+            json!("So11111111111111111111111111111111111111112");
+        assert!(
+            write_evidence_atomically(&path, &retargeted)
+                .err()
+                .expect("retargeting the Market must refuse")
+                .0
+                .contains("would retarget `founding_targets.open_market`")
+        );
+        assert_eq!(
+            fs::read(&path).expect("bytes after every refusal"),
+            before,
+            "no refused write may have replaced the accepted report"
+        );
+
+        // The control that keeps the rule from being a freeze: the repair
+        // this whole lane exists for -- a third journal and an execution
+        // block -- is exactly what an accepted write looks like.
+        let mut repaired = accepted.clone();
+        repaired["foundingSubmissionJournals"] = json!([
+            accepted["foundingSubmissionJournals"][0].clone(),
+            accepted["foundingSubmissionJournals"][1].clone(),
+            { "operation": "dcltgmf3", "phase": "finalized",
+              "expectedSignature": recovery_signature_v1(3), "finalizedSlot": 491963072 },
+        ]);
+        repaired["execution"] = json!({ "completed": true });
+        write_evidence_atomically(&path, &repaired).expect("an additive write is accepted");
+        assert_ne!(fs::read(&path).expect("repaired bytes"), before);
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

@@ -1361,6 +1361,168 @@ fn later_founding_stage_writing_v1(
     Ok(None)
 }
 
+/// The founding stages that finalized AFTER one boundary, and the only
+/// authority an authenticator has for excusing a live difference from what
+/// that boundary required.
+///
+/// One owner for a rule two callers need. `authenticate_recorded_founding_
+/// poststates_v1` needs it for a journal's recorded poststates, and
+/// [`BoundaryRpcV1`] needs it for a boundary-time expectation the journal
+/// never recorded at all -- cohort-13's Pending controller funding ledgers,
+/// which live in the founding's frozen coordinates and in no journal's
+/// poststate list.
+///
+/// What it can and cannot say is worth stating plainly, because it is weaker
+/// than it looks and still sufficient: naming or locking an address writable
+/// proves a later stage COULD have moved it, not that it did. That is the same
+/// strength the recorded-poststate rule has carried since `00793136`, and it
+/// is the strongest claim the record supports -- the founding's own signed
+/// messages and contract lists are the whole evidence base after the fact.
+pub(crate) struct LaterFoundingStagesV1 {
+    boundary: FoundingSubmissionOperationV1,
+    journals: Vec<FoundingSubmissionJournalV1>,
+}
+
+impl LaterFoundingStagesV1 {
+    /// Every Finalized journal strictly after `boundary`, each authenticated
+    /// against the binding before it is allowed to excuse anything.
+    pub(crate) fn authenticated(
+        binding: &FoundingSubmissionBindingV1,
+        boundary: FoundingSubmissionOperationV1,
+        journals: &[FoundingSubmissionJournalV1],
+    ) -> Result<Self> {
+        let mut later = Vec::new();
+        for successor in journals {
+            if successor.operation <= boundary
+                || successor.phase != FoundingSubmissionPhaseV1::Finalized
+            {
+                continue;
+            }
+            authenticate_founding_submission_v1(binding, successor)?;
+            later.push(successor.clone());
+        }
+        Ok(Self {
+            boundary,
+            journals: later,
+        })
+    }
+
+    fn rows(&self) -> Vec<&FoundingSubmissionJournalV1> {
+        self.journals.iter().collect()
+    }
+
+    /// The first later stage that accounts for `address`: one whose contract
+    /// lists name it, or -- because those lists are curated and not an account
+    /// list -- one whose own signed message locks it writable, resolved
+    /// through the routing tables this founding froze.
+    fn owner_of(
+        &self,
+        rpc: &mut Rpc,
+        address: Pubkey,
+        consumed: bool,
+    ) -> Result<Option<FoundingSubmissionOperationV1>> {
+        let rows = self.rows();
+        let text = address.to_string();
+        Ok(
+            match later_founding_stage_naming_v1(&text, &rows, consumed) {
+                Some(operation) => Some(operation),
+                None => later_founding_stage_writing_v1(rpc, address, &rows)?,
+            },
+        )
+    }
+}
+
+/// An RPC connection an authenticator reads through when the boundary it
+/// describes may already be in the PAST.
+///
+/// Cohort-13 paid for this distinction twice inside one commit. An
+/// authenticator named for a transaction's poststate states an invariant about
+/// ONE transaction's boundary, and every live read it makes silently
+/// re-evaluates that invariant at whatever time the process happens to run.
+/// While the caller is the transaction's own driver those two times coincide,
+/// which is why nothing caught it for as long as the reconstruction path did
+/// not exist. It does now.
+///
+/// So a read here must say which of two classes it is in, and the method name
+/// is the declaration:
+///
+/// - `permanent_*` -- a fact no later founding stage can move. A closed
+///   account stays closed, a consumed permit stays consumed, an allocated
+///   Claims record is never deallocated, a Market that reached Open does not
+///   leave Open by a funding stage.
+/// - `boundary_*` -- a BOUNDARY-TIME expectation, which a later stage may
+///   legitimately have superseded. A difference is excused only by a NAMED
+///   later owner, and refused by name otherwise.
+///
+/// `at_boundary` is the live-time constructor and behaves exactly as a bare
+/// `&mut Rpc` did: with no later stages, every boundary difference refuses in
+/// the invariant's own words.
+pub(crate) struct BoundaryRpcV1<'a> {
+    rpc: &'a mut Rpc,
+    later: Option<&'a LaterFoundingStagesV1>,
+}
+
+impl<'a> BoundaryRpcV1<'a> {
+    /// The caller IS the boundary: nothing can have come after it yet.
+    pub(crate) fn at_boundary(rpc: &'a mut Rpc) -> Self {
+        Self { rpc, later: None }
+    }
+
+    /// The boundary is in the past, and these are the stages that finalized
+    /// after it.
+    pub(crate) fn after_boundary(rpc: &'a mut Rpc, later: &'a LaterFoundingStagesV1) -> Self {
+        Self {
+            rpc,
+            later: Some(later),
+        }
+    }
+
+    /// A fact no later founding stage can move.
+    fn permanent_account(&mut self, address: Pubkey) -> Result<Option<RpcAccount>> {
+        self.rpc.account(address)
+    }
+
+    /// A fact no later founding stage can move, whose account must exist.
+    fn permanent_required_account(&mut self, address: Pubkey, label: &str) -> Result<RpcAccount> {
+        self.rpc.required_account(address, label)
+    }
+
+    /// A boundary-time expectation: `holds` is the invariant as of the
+    /// boundary, and `refusal` is the sentence that invariant refuses in.
+    ///
+    /// The invariant is kept, not weakened. What changes is the clock it is
+    /// read against: at the boundary the live bytes ARE the boundary bytes, so
+    /// a difference is the refusal; after it, a difference is the refusal only
+    /// when no later stage of this same founding owns the address.
+    fn boundary_account(
+        &mut self,
+        address: Pubkey,
+        label: &str,
+        holds: impl Fn(&RpcAccount) -> bool,
+        refusal: &str,
+    ) -> Result<()> {
+        let observed = self.rpc.account(address)?;
+        let consumed = observed.is_none();
+        if observed.as_ref().is_some_and(holds) {
+            return Ok(());
+        }
+        let Some(later) = self.later else {
+            return Err(if consumed {
+                Error::new(format!("missing {label} account {address}"))
+            } else {
+                Error::new(refusal.to_owned())
+            });
+        };
+        match later.owner_of(self.rpc, address, consumed)? {
+            Some(_) => Ok(()),
+            None => Err(Error::new(format!(
+                "{refusal}, and no founding stage after {} names or writes {label} {address}",
+                later.boundary.label()
+            ))),
+        }
+    }
+}
+
 /// What the chain now says about one poststate the journal recorded, and the
 /// journal-held reason it may honestly differ.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -1397,17 +1559,7 @@ pub(crate) fn authenticate_recorded_founding_poststates_v1(
     successors: &[FoundingSubmissionJournalV1],
 ) -> Result<Vec<RecordedPoststateDispositionV1>> {
     let recorded = founding_submission_finalized_poststates_v1(binding, journal)?;
-    let mut later = Vec::new();
-    for successor in successors {
-        if successor.operation <= journal.operation {
-            continue;
-        }
-        if successor.phase != FoundingSubmissionPhaseV1::Finalized {
-            continue;
-        }
-        authenticate_founding_submission_v1(binding, successor)?;
-        later.push(successor);
-    }
+    let later = LaterFoundingStagesV1::authenticated(binding, journal.operation, successors)?;
     let mut dispositions = Vec::with_capacity(recorded.len());
     for row in &recorded {
         let address = row
@@ -1417,11 +1569,7 @@ pub(crate) fn authenticate_recorded_founding_poststates_v1(
         let disposition = match rpc.account(address)? {
             Some(account) if &account_evidence(address, &account) == row => "unchanged".to_owned(),
             Some(_) => {
-                let owner = match later_founding_stage_naming_v1(&row.address, &later, false) {
-                    Some(operation) => Some(operation),
-                    None => later_founding_stage_writing_v1(rpc, address, &later)?,
-                }
-                .ok_or_else(|| {
+                let owner = later.owner_of(rpc, address, false)?.ok_or_else(|| {
                     Error::new(format!(
                         "founding finalized poststate {address} changed and no later {} stage names or writes it",
                         journal.operation.label()
@@ -1430,11 +1578,7 @@ pub(crate) fn authenticate_recorded_founding_poststates_v1(
                 format!("advanced-by-{}", owner.label())
             }
             None => {
-                let owner = match later_founding_stage_naming_v1(&row.address, &later, true) {
-                    Some(operation) => Some(operation),
-                    None => later_founding_stage_writing_v1(rpc, address, &later)?,
-                }
-                .ok_or_else(|| {
+                let owner = later.owner_of(rpc, address, true)?.ok_or_else(|| {
                     Error::new(format!(
                         "founding finalized poststate {address} is vacant and no later {} stage consumed it",
                         journal.operation.label()
@@ -3229,8 +3373,24 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         context.founder,
         context.claim_count,
     )?;
+    // The Open boundary is HOURS in the past on this path, and three of this
+    // founding's own stages finalized after it. So the Open verifier reads
+    // through the later-stage resolver: its permanent facts are unaffected,
+    // and its one boundary-time fact -- the Pending controller funding
+    // ledgers -- is excused only by a named later owner.
+    let later_than_open = LaterFoundingStagesV1::authenticated(
+        &submission_recorder
+            .as_deref()
+            .ok_or_else(|| Error::new("completed founding recovery omitted its journal owner"))?
+            .binding,
+        FoundingSubmissionOperationV1::Dcltgmf3,
+        &submission_recorder
+            .as_deref()
+            .ok_or_else(|| Error::new("completed founding recovery omitted its journal owner"))?
+            .ordered(),
+    )?;
     authenticate_open_market_poststate_v1(
-        rpc,
+        &mut BoundaryRpcV1::after_boundary(rpc, &later_than_open),
         &context.coordinates,
         &poststate,
         pubkey(&plan.core.program_id)?,
@@ -3246,9 +3406,10 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         let custody = pubkey(&plan.custody.program_id)?;
         let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
         let mint = context.mint;
+        let later = &later_than_open;
         let mut completion = |rpc: &mut Rpc| {
             authenticate_open_market_poststate_v1(
-                rpc,
+                &mut BoundaryRpcV1::after_boundary(rpc, later),
                 coordinates,
                 &poststate,
                 core,
@@ -11675,9 +11836,20 @@ fn execute_generic_market_founding(
                 coordinates.hoard_vault,
                 coordinates.projected_replay,
             ];
+            // A RESUME reaches this closure with the founding already
+            // Complete, and on a resume the three post-Open funding stages may
+            // themselves already be Finalized -- cohort-13 is exactly that
+            // state. A fresh founding finds none of them, so the resolver is
+            // empty here and the Open verifier refuses in its own words as
+            // before.
+            let later = LaterFoundingStagesV1::authenticated(
+                &recorder.binding,
+                FoundingSubmissionOperationV1::Dcltgmf3,
+                &recorder.ordered(),
+            )?;
             let mut completion = |rpc: &mut Rpc| {
                 authenticate_open_market_poststate_v1(
-                    rpc,
+                    &mut BoundaryRpcV1::after_boundary(rpc, &later),
                     coordinates,
                     &poststate,
                     core,
@@ -11716,8 +11888,22 @@ fn execute_generic_market_founding(
     let open_slot = honest.slot;
     transactions.push(honest);
 
+    // Same clock as the completion closure above: on a fresh founding this
+    // resolver is empty and nothing changes, on a resume it is the only reason
+    // the post-Open funding stages are not read as Open's own tampering.
+    let later_than_open = match submission_recorder.as_deref() {
+        Some(recorder) => Some(LaterFoundingStagesV1::authenticated(
+            &recorder.binding,
+            FoundingSubmissionOperationV1::Dcltgmf3,
+            &recorder.ordered(),
+        )?),
+        None => None,
+    };
     authenticate_open_market_poststate_v1(
-        rpc,
+        &mut match &later_than_open {
+            Some(later) => BoundaryRpcV1::after_boundary(rpc, later),
+            None => BoundaryRpcV1::at_boundary(rpc),
+        },
         coordinates,
         &poststate,
         core,
@@ -12087,8 +12273,11 @@ fn execute_split_market_founding(
     )?;
     let open_slot = stage2.slot;
     transactions.push(stage2);
+    // The split founding keeps no submission journal, so it has no later
+    // stages to resolve through and no reconstruction path reaches it: the
+    // caller IS the Open boundary here.
     authenticate_open_market_poststate_v1(
-        rpc,
+        &mut BoundaryRpcV1::at_boundary(rpc),
         coordinates,
         &poststate,
         core,
@@ -12111,7 +12300,7 @@ fn execute_split_market_founding(
         Ok(refused) => {
             refused.refusing(0x4004)?;
             authenticate_open_market_poststate_v1(
-                rpc,
+                &mut BoundaryRpcV1::at_boundary(rpc),
                 coordinates,
                 &poststate,
                 core,
@@ -12343,9 +12532,30 @@ fn authenticate_founding_prefunding_v1(
 }
 
 /// Reacquire and check every poststate the Open gate claims.
+///
+/// Every read here goes through [`BoundaryRpcV1`], because this function's
+/// whole subject is one transaction's boundary and the reconstruction path
+/// runs it hours after that boundary passed. The classification below is the
+/// sweep the cohort-13 recovery lane made of this function on 2026-09-02, and
+/// it is what the method names now carry:
+///
+/// - the founded Market's owner, width, phase, readiness, identity and rent
+///   beneficiary; the consumed permit; the Claims aggregate, founder Position
+///   and admission; the Hoard's principal; the closed source vault and source
+///   replay; the realized normal Custody replay; the consumed controller
+///   funding checkpoint -- all PERMANENT. No stage of this founding after Open
+///   reopens a closed account, deallocates a Claims record, moves principal, or
+///   takes the Market back out of Open; the post-Open stages are Core,
+///   Resolution and Trading FUNDING, which move rent.
+/// - the Pending controller funding ledgers -- BOUNDARY. Open must not change
+///   one while consuming its checkpoint, and that is the whole point of the
+///   check; but `core-funding-create-v1`, `resolution-funding-activate-v1` and
+///   `core-funding-accept-v1` finalize after Open precisely to move those
+///   ledgers off Pending. Read live at recovery time the sentence accused Open
+///   of what its own three successors did by design.
 #[allow(clippy::too_many_arguments)]
 fn authenticate_open_market_poststate_v1(
-    rpc: &mut Rpc,
+    rpc: &mut BoundaryRpcV1<'_>,
     coordinates: &FoundingCoordinates,
     expected: &FoundingPoststateExpectationV1,
     core: Pubkey,
@@ -12354,7 +12564,7 @@ fn authenticate_open_market_poststate_v1(
     token_program: Pubkey,
     mint: Pubkey,
 ) -> Result<()> {
-    let market = rpc.required_account(coordinates.market, "founded Market")?;
+    let market = rpc.permanent_required_account(coordinates.market, "founded Market")?;
     let state = CoreState::decode(&market.data)
         .map_err(|error| Error::new(format!("founded Market state: {error:?}")))?;
     if market.owner != core
@@ -12374,7 +12584,7 @@ fn authenticate_open_market_poststate_v1(
     // The one-shot permit is consumed by the commit-last Open stage and its
     // lamports return to the lifecycle credit. A permit that survived would be
     // a second founding.
-    let permit = rpc.account(expected.permit)?;
+    let permit = rpc.permanent_account(expected.permit)?;
     if permit.is_some_and(|account| {
         account.owner != system_program::ID || account.lamports != 0 || !account.data.is_empty()
     }) {
@@ -12403,7 +12613,7 @@ fn authenticate_open_market_poststate_v1(
             PROTOCOL_POSITION_ADMISSION_BYTES_V2,
         ),
     ] {
-        let account = rpc.required_account(key, label)?;
+        let account = rpc.permanent_required_account(key, label)?;
         if account.owner != owner
             || account.data.len() != width
             || account.data.iter().all(|byte| *byte == 0)
@@ -12414,7 +12624,7 @@ fn authenticate_open_market_poststate_v1(
         }
     }
 
-    let hoard = rpc.required_account(coordinates.hoard_vault, "founded Hoard")?;
+    let hoard = rpc.permanent_required_account(coordinates.hoard_vault, "founded Hoard")?;
     let hoard_state = TokenAccount::parse(&hoard.data)
         .map_err(|error| Error::new(format!("Hoard vault: {error:?}")))?;
     if hoard.owner != token_program
@@ -12434,7 +12644,7 @@ fn authenticate_open_market_poststate_v1(
         ("founding source vault", coordinates.source_vault),
         ("founding source replay", coordinates.source_replay),
     ] {
-        if let Some(account) = rpc.account(key)?
+        if let Some(account) = rpc.permanent_account(key)?
             && (account.owner != system_program::ID
                 || account.lamports != 0
                 || !account.data.is_empty())
@@ -12444,7 +12654,8 @@ fn authenticate_open_market_poststate_v1(
             )));
         }
     }
-    let replay = rpc.required_account(coordinates.projected_replay, "normal Custody replay")?;
+    let replay =
+        rpc.permanent_required_account(coordinates.projected_replay, "normal Custody replay")?;
     let normal = CustodyReplayV1::decode(&replay.data)
         .map_err(|error| Error::new(format!("normal Custody replay: {error:?}")))?;
     if replay.owner != custody
@@ -12459,7 +12670,7 @@ fn authenticate_open_market_poststate_v1(
         ));
     }
     if rpc
-        .account(coordinates.controller_funding_checkpoint)?
+        .permanent_account(coordinates.controller_funding_checkpoint)?
         .is_some_and(|account| account.lamports != 0 || !account.data.is_empty())
     {
         return Err(Error::new(
@@ -12467,15 +12678,16 @@ fn authenticate_open_market_poststate_v1(
         ));
     }
     for ledger in &coordinates.funding_ledgers {
-        let account = rpc.required_account(ledger.address, "Open controller funding ledger")?;
-        if account.owner != ledger.controller
-            || account.lamports != ledger.required_lamports
-            || account.data != ledger.bytes
-        {
-            return Err(Error::new(
-                "Open changed a Pending controller funding ledger while consuming its checkpoint",
-            ));
-        }
+        rpc.boundary_account(
+            ledger.address,
+            "Open controller funding ledger",
+            |account| {
+                account.owner == ledger.controller
+                    && account.lamports == ledger.required_lamports
+                    && account.data == ledger.bytes
+            },
+            "Open changed a Pending controller funding ledger while consuming its checkpoint",
+        )?;
     }
     Ok(())
 }
@@ -16375,6 +16587,423 @@ mod tests {
             super::later_founding_stage_naming_v1(PENDING_LEDGER, &[], true),
             None,
             "the LAST stage has no successor, so its own poststates must still be live"
+        );
+    }
+}
+
+/// A live, KEY-FREE re-run of the two rules a completed founding's recovery
+/// turns on, against a real campaign report and a real cluster.
+///
+/// Ignored and environment-driven, so an ordinary `cargo test` opens no
+/// socket. It exists because the reconstruction's only honest evidence is a
+/// real founding's real journals against the chain that holds them: the wall
+/// this module fixed was invisible to every offline fixture, twice.
+///
+/// It reads no keypair. Everything it needs -- the binding, the six journals,
+/// the frozen Pending expectation for each controller funding ledger -- comes
+/// out of the report the founding itself wrote, and the only chain traffic is
+/// `getAccountInfo` under a reads-only write policy.
+///
+///     DCLUTCH_LIVE_FOUNDING_REPORT=/abs/campaign-open.json \
+///     DCLUTCH_LIVE_FOUNDING_RPC=<url> \
+///     cargo test --bin dclutch-local-successor-bootstrap -- --ignored --nocapture \
+///         a_completed_foundings_later_stages
+#[cfg(test)]
+mod live_founding_boundary {
+    use super::{
+        BoundaryRpcV1, LaterFoundingStagesV1, account_evidence,
+        authenticate_recorded_founding_poststates_v1,
+        founding_submission_journal::{
+            FoundingSubmissionBindingV1, FoundingSubmissionJournalV1,
+            FoundingSubmissionOperationV1, authenticate_founding_submission_v1,
+        },
+    };
+    use crate::{
+        cluster::ClusterOriginV1,
+        model::AccountEvidence,
+        rpc::{Rpc, WritePolicyV1},
+    };
+    use solana_sdk::pubkey::Pubkey;
+
+    /// The binding a founding's own journal states, rebuilt from that journal.
+    ///
+    /// Every field is the journal's; only the recovery-policy shape is not
+    /// recorded, and it is resolved by asking which of the two geometries the
+    /// journal authenticates under rather than by consulting the Market input.
+    fn binding_from_journals_v1(
+        journals: &[FoundingSubmissionJournalV1],
+    ) -> FoundingSubmissionBindingV1 {
+        let head = journals
+            .first()
+            .expect("a founding states at least one journal");
+        let mut refusal = None;
+        for market_has_recovery_policy in [true, false] {
+            let binding = FoundingSubmissionBindingV1 {
+                cluster: head.cluster.clone(),
+                genesis_hash: head.genesis_hash.clone(),
+                evidence_path: head.evidence_path.clone(),
+                rpc_url: head.rpc_url.clone(),
+                plan_sha256: head.plan_sha256.clone(),
+                market_sha256: head.market_sha256.clone(),
+                payer: head.payer.parse::<Pubkey>().expect("journal payer"),
+                market_has_recovery_policy,
+            };
+            // The geometry pin is per-operation, and the three founding legs
+            // are shape-invariant -- so only the whole set discriminates.
+            match journals
+                .iter()
+                .try_for_each(|journal| authenticate_founding_submission_v1(&binding, journal))
+            {
+                Ok(()) => {
+                    println!("binding: market_has_recovery_policy = {market_has_recovery_policy}");
+                    return binding;
+                }
+                Err(error) => refusal = Some(error),
+            }
+        }
+        panic!(
+            "no geometry authenticates the report's own six journals: {}",
+            refusal.map(|error| error.0).unwrap_or_default()
+        )
+    }
+
+    #[test]
+    #[ignore = "reads a live cluster; set DCLUTCH_LIVE_FOUNDING_REPORT and DCLUTCH_LIVE_FOUNDING_RPC"]
+    fn a_completed_foundings_later_stages_account_for_every_open_boundary_difference() {
+        let report_path =
+            std::env::var("DCLUTCH_LIVE_FOUNDING_REPORT").expect("DCLUTCH_LIVE_FOUNDING_REPORT");
+        let url = std::env::var("DCLUTCH_LIVE_FOUNDING_RPC").expect("DCLUTCH_LIVE_FOUNDING_RPC");
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&report_path).expect("campaign report"))
+                .expect("campaign report JSON");
+        let journals: Vec<FoundingSubmissionJournalV1> =
+            serde_json::from_value(report["foundingSubmissionJournals"].clone())
+                .expect("founding submission journals");
+        assert_eq!(
+            journals.len(),
+            FoundingSubmissionOperationV1::ORDER.len(),
+            "a completed founding states all six journals"
+        );
+        let binding = binding_from_journals_v1(&journals);
+        let origin =
+            ClusterOriginV1::parse(&url, Some(&binding.genesis_hash)).expect("live cluster origin");
+        let mut rpc =
+            Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly).expect("live cluster");
+
+        // 1. The rule `00793136` established, over every recorded poststate.
+        for journal in &journals {
+            let dispositions = authenticate_recorded_founding_poststates_v1(
+                &mut rpc, &binding, journal, &journals,
+            )
+            .unwrap_or_else(|error| {
+                panic!("{} poststates: {}", journal.operation.label(), error.0)
+            });
+            println!(
+                "{} : {} recorded poststates",
+                journal.operation.label(),
+                dispositions.len()
+            );
+            for row in &dispositions {
+                println!("    {} {}", row.address, row.disposition);
+            }
+        }
+
+        // 2. The rule this commit adds, over the exact accounts the Open
+        //    acknowledgement compares: the controller funding ledgers, frozen
+        //    at their Pending expectation in the founding's own checkpoint.
+        let accounts = report["foundingCheckpoint"]["accounts"]
+            .as_object()
+            .expect("checkpoint accounts");
+        let ledgers = accounts
+            .iter()
+            .filter(|(label, _)| label.starts_with("founding_funding_ledger_v2_"))
+            .map(|(label, value)| {
+                (
+                    label.clone(),
+                    serde_json::from_value::<AccountEvidence>(value.clone())
+                        .expect("checkpoint ledger evidence"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !ledgers.is_empty(),
+            "the instrument found no controller funding ledger in the checkpoint, so a pass \
+             below would mean nothing"
+        );
+        let later = LaterFoundingStagesV1::authenticated(
+            &binding,
+            FoundingSubmissionOperationV1::Dcltgmf3,
+            &journals,
+        )
+        .expect("later founding stages");
+        const REFUSAL_V1: &str =
+            "Open changed a Pending controller funding ledger while consuming its checkpoint";
+        let mut differing = 0;
+        for (label, recorded) in &ledgers {
+            let address = recorded.address.parse::<Pubkey>().expect("ledger address");
+            let holds =
+                |account: &crate::rpc::RpcAccount| &account_evidence(address, account) == recorded;
+            // The positive control first: with NO later stages, a ledger the
+            // chain has moved must still refuse in the invariant's own words.
+            // Without this a clean pass below could equally mean the ledgers
+            // never moved and the instrument measured nothing.
+            let at_boundary = BoundaryRpcV1::at_boundary(&mut rpc).boundary_account(
+                address,
+                "Open controller funding ledger",
+                holds,
+                REFUSAL_V1,
+            );
+            match &at_boundary {
+                Ok(()) => println!("{label} {address}: unchanged since the checkpoint"),
+                Err(error) => {
+                    differing += 1;
+                    println!(
+                        "{label} {address}: MOVED since the checkpoint -- {}",
+                        error.0
+                    );
+                }
+            }
+            BoundaryRpcV1::after_boundary(&mut rpc, &later)
+                .boundary_account(address, "Open controller funding ledger", holds, REFUSAL_V1)
+                .unwrap_or_else(|error| panic!("{label} {address}: {}", error.0));
+            println!("{label} {address}: accounted for at the Open boundary");
+        }
+        assert!(
+            differing > 0,
+            "no controller funding ledger differs from its Pending checkpoint bytes, so this run \
+             never exercised the rule it is here to check"
+        );
+    }
+}
+
+/// The class of defect this module has now paid for twice, and its detector.
+///
+/// An authenticator named for a PAST transaction's poststate states an
+/// invariant about one boundary. Every live account read it makes silently
+/// re-evaluates that invariant at whatever wall time the process runs, and
+/// while the caller is the transaction's own driver those two clocks coincide
+/// -- which is why nothing caught it until a reconstruction path existed.
+/// `capture_founding_poststates_v1` was the first (`00793136`); the Open
+/// verifier's Pending funding-ledger loop was the second, one verifier over in
+/// the same commit, and it cost cohort-13 a second build-and-run cycle against
+/// a live founding under a deadline.
+///
+/// So the rule is structural rather than remembered: on the reconstruction
+/// path, an authenticator whose NAME claims a past poststate or checkpoint may
+/// not touch `Rpc`'s account readers directly. It reads through
+/// [`BoundaryRpcV1`], whose two method families force each read to say whether
+/// it is a permanent fact or a boundary-time expectation.
+///
+/// Scope is deliberate, and it is the reason the two siblings the cohort-13
+/// lane named -- `authenticate_controller_funding_checkpoint_v1` and
+/// `authenticate_controller_funding_cleanup_checkpoint_v1` -- are untouched.
+/// They compare the same funding ledgers against the same Pending bytes, and
+/// they are right to, because every one of their callers
+/// (`execute_projected_custody_bootstrap`, `plan_source_abort_recovery_v1`,
+/// `execute_source_abort_v1`, `resume_found_market_from_prepared_checkpoint`)
+/// runs while that boundary is still NOW. That is a measurement rather than a
+/// belief: this detector computes the reconstruction path's own call graph,
+/// and the day either sibling joins it, the detector names it.
+///
+/// Its one honest limitation: edges are counted between TOP-LEVEL functions,
+/// so a path that reached an authenticator only through an inherent method
+/// would not be seen. Every authenticator in this file is a free function, and
+/// the detector's first assertion is that it still reaches its own subject.
+#[cfg(test)]
+mod historical_boundary_reads {
+    use std::collections::BTreeSet;
+
+    /// The entry point of the only path that runs these authenticators long
+    /// after the boundary they describe.
+    const RECONSTRUCTION_ROOT_V1: &str = "recover_completed_market_from_checkpoint";
+
+    /// `Rpc`'s live account readers, spelled as a method call. The leading dot
+    /// is load-bearing: `BoundaryRpcV1::permanent_account` and
+    /// `boundary_account` end in the same word and must not match.
+    const LIVE_ACCOUNT_READS_V1: [&str; 4] = [
+        ".account(",
+        ".required_account(",
+        ".finalized_accounts(",
+        ".finalized_observed_accounts(",
+    ];
+
+    struct FunctionV1 {
+        name: String,
+        body: String,
+    }
+
+    /// The name a top-level `fn` line declares.
+    ///
+    /// Column zero is the discriminator, so the caller passes raw lines: a
+    /// method inside an `impl`, and everything inside a test module, is
+    /// indented and is not a top-level function -- which is exactly right,
+    /// because `BoundaryRpcV1`'s own methods are the ones that must read
+    /// `Rpc`.
+    fn top_level_fn_name_v1(line: &str) -> Option<String> {
+        let mut rest = line;
+        while let Some(shorter) = ["pub(crate) ", "pub ", "const ", "async ", "unsafe "]
+            .iter()
+            .find_map(|prefix| rest.strip_prefix(prefix))
+        {
+            rest = shorter;
+        }
+        let name = rest
+            .strip_prefix("fn ")?
+            .chars()
+            .take_while(|value| value.is_alphanumeric() || *value == '_')
+            .collect::<String>();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// Every top-level function in a rustfmt-formatted source: one starts at
+    /// column zero and ends at the next line that is exactly `}`.
+    fn top_level_functions_v1(source: &str) -> Vec<FunctionV1> {
+        let lines = source.lines().collect::<Vec<_>>();
+        let mut functions = Vec::new();
+        let mut index = 0;
+        while index < lines.len() {
+            let Some(name) = top_level_fn_name_v1(lines[index]) else {
+                index += 1;
+                continue;
+            };
+            let mut end = index + 1;
+            while end < lines.len() && lines[end] != "}" {
+                end += 1;
+            }
+            functions.push(FunctionV1 {
+                name,
+                body: lines[index..end.min(lines.len())].join("\n"),
+            });
+            index = end + 1;
+        }
+        functions
+    }
+
+    /// A textual call edge: the callee's name followed by `(`, preceded by
+    /// neither `.` (a method of the same name) nor another identifier
+    /// character.
+    fn calls_v1(body: &str, callee: &str) -> bool {
+        let needle = format!("{callee}(");
+        body.match_indices(&needle).any(|(index, _)| {
+            let before = body[..index].chars().next_back();
+            !before.is_some_and(|value| value == '.' || value == '_' || value.is_alphanumeric())
+        })
+    }
+
+    fn reachable_v1(functions: &[FunctionV1], root: &str) -> BTreeSet<String> {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![root.to_owned()];
+        while let Some(name) = stack.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let Some(function) = functions.iter().find(|value| value.name == name) else {
+                continue;
+            };
+            for candidate in functions {
+                if candidate.name != name && calls_v1(&function.body, &candidate.name) {
+                    stack.push(candidate.name.clone());
+                }
+            }
+        }
+        seen
+    }
+
+    /// A name that CLAIMS to authenticate a past transaction's poststate or
+    /// checkpoint. `reconstruct_*` is deliberately not here: it rebuilds
+    /// state, it does not assert an invariant about a boundary.
+    fn claims_a_past_boundary_v1(name: &str) -> bool {
+        name.starts_with("authenticate_")
+            && (name.ends_with("_poststate_v1") || name.ends_with("_checkpoint_v1"))
+    }
+
+    /// What the detector checked, and what it found.
+    fn historical_authenticators_v1(source: &str, root: &str) -> (Vec<String>, Vec<String>) {
+        let functions = top_level_functions_v1(source);
+        let reachable = reachable_v1(&functions, root);
+        let mut checked = Vec::new();
+        let mut offenders = Vec::new();
+        for function in &functions {
+            if !reachable.contains(&function.name) || !claims_a_past_boundary_v1(&function.name) {
+                continue;
+            }
+            checked.push(function.name.clone());
+            if LIVE_ACCOUNT_READS_V1
+                .iter()
+                .any(|read| function.body.contains(read))
+            {
+                offenders.push(function.name.clone());
+            }
+        }
+        (checked, offenders)
+    }
+
+    fn market_source_v1() -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/market.rs"),
+        )
+        .expect("market source")
+    }
+
+    #[test]
+    fn every_reconstruction_path_authenticator_reads_live_accounts_through_the_boundary_reader() {
+        let (checked, offenders) =
+            historical_authenticators_v1(&market_source_v1(), RECONSTRUCTION_ROOT_V1);
+        // An empty selection and a clean selection log identically, and that
+        // difference is the whole value of the test: a detector that lost its
+        // subject would report success forever.
+        assert!(
+            checked.contains(&"authenticate_open_market_poststate_v1".to_owned()),
+            "the detector lost its own subject: the reconstruction path must reach \
+             authenticate_open_market_poststate_v1, and it reached {checked:?}"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these authenticators name a PAST boundary and read live accounts directly: {}. \
+             A live read re-evaluates their invariant at whatever time the process runs, which \
+             is correct only while the caller IS the boundary. Read through BoundaryRpcV1 and \
+             say which reads are permanent and which are boundary-time. Checked: {checked:?}",
+            offenders.join(", ")
+        );
+    }
+
+    #[test]
+    fn the_detector_is_red_on_an_authenticator_that_reads_a_live_account_directly() {
+        // The Open verifier's funding-ledger loop as it stood before this
+        // commit, reduced to the shape that matters, with two controls: a
+        // reachable authenticator that reads through the boundary reader, and
+        // an offending authenticator the root never reaches. Written with line
+        // continuations so no line of THIS file starts a fake top-level `fn`
+        // that the real scan above would then read as market.rs's own.
+        let fixture = "fn recover_completed_market_from_checkpoint(rpc: &mut Rpc) -> Result<()> {\n\
+             \x20   authenticate_open_market_poststate_v1(rpc)?;\n\
+             \x20   authenticate_recorded_checkpoint_v1(rpc)\n\
+             }\n\
+             fn authenticate_open_market_poststate_v1(rpc: &mut Rpc) -> Result<()> {\n\
+             \x20   let account = rpc.required_account(ledger.address, \"ledger\")?;\n\
+             \x20   Ok(())\n\
+             }\n\
+             fn authenticate_recorded_checkpoint_v1(rpc: &mut BoundaryRpcV1) -> Result<()> {\n\
+             \x20   rpc.permanent_required_account(key, \"label\")?;\n\
+             \x20   rpc.boundary_account(key, \"label\", holds, \"refusal\")\n\
+             }\n\
+             fn authenticate_unreached_poststate_v1(rpc: &mut Rpc) -> Result<()> {\n\
+             \x20   rpc.account(key)\n\
+             }\n";
+        let (checked, offenders) = historical_authenticators_v1(fixture, RECONSTRUCTION_ROOT_V1);
+        assert_eq!(
+            checked,
+            vec![
+                "authenticate_open_market_poststate_v1".to_owned(),
+                "authenticate_recorded_checkpoint_v1".to_owned(),
+            ],
+            "the detector checks exactly the named authenticators the root reaches"
+        );
+        assert_eq!(
+            offenders,
+            vec!["authenticate_open_market_poststate_v1".to_owned()],
+            "the detector must name the direct live read, and neither the boundary-reader \
+             control nor the unreachable one"
         );
     }
 }
