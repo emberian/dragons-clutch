@@ -39,6 +39,12 @@ use super::{
     TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET, TYPED_SCALAR_ARTIFACT_PROFILE, TrustedBuiltinIdentityV2,
     TrustedEnvironmentV2, TrustedIdentityEnvironmentV2, VERSION,
 };
+use super::{
+    ARTIFACT_PROFILE_OFFSET, COMMON_IDENTITIES_OFFSET, COMMON_SCALARS_OFFSET,
+    FIXED_ACCOUNTS_OFFSET, FIXED_OPERATIONS_OFFSET, ITEM_ACCOUNT_STRIDE_OFFSET,
+    ITEM_IDENTITY_STRIDE_OFFSET, ITEM_OPERATIONS_OFFSET, ITEM_SCALAR_STRIDE_OFFSET, MAGIC_OFFSET,
+    VERSION_OFFSET,
+};
 use crate::{
     EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
     EFFECT_PERMISSION_WRITE_DATA,
@@ -1357,18 +1363,18 @@ where
         return Err(Error::InvalidLength);
     }
     scratch.fill(0);
-    write(scratch, 0, &MAGIC)?;
+    write(scratch, MAGIC_OFFSET, &MAGIC)?;
     for (offset, value) in [
-        (8, VERSION),
-        (10, artifact.value()),
-        (12, fixed_account_count),
-        (14, item_account_stride),
-        (16, fixed_operation_count),
-        (18, item_operation_count),
-        (20, registers.common_scalars),
-        (22, registers.item_scalar_stride),
-        (24, registers.common_identities),
-        (26, registers.item_identity_stride),
+        (VERSION_OFFSET, VERSION),
+        (ARTIFACT_PROFILE_OFFSET, artifact.value()),
+        (FIXED_ACCOUNTS_OFFSET, fixed_account_count),
+        (ITEM_ACCOUNT_STRIDE_OFFSET, item_account_stride),
+        (FIXED_OPERATIONS_OFFSET, fixed_operation_count),
+        (ITEM_OPERATIONS_OFFSET, item_operation_count),
+        (COMMON_SCALARS_OFFSET, registers.common_scalars),
+        (ITEM_SCALAR_STRIDE_OFFSET, registers.item_scalar_stride),
+        (COMMON_IDENTITIES_OFFSET, registers.common_identities),
+        (ITEM_IDENTITY_STRIDE_OFFSET, registers.item_identity_stride),
     ] {
         write(scratch, offset, &value.to_le_bytes())?;
     }

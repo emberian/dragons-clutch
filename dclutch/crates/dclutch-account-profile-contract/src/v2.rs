@@ -22,9 +22,33 @@ pub mod encode;
 /// Profile 14 fixed-data prestate predicate semantics.
 pub mod profile14;
 
+/// Lean-owned V2 fixed ABI: identity, artifact profiles, header cut points,
+/// record layouts, opcodes and tag vocabularies.
+///
+/// `DClutchSemantics.AccountProfileV2Abi` is the author. It owns layout and
+/// numbering only; which artifact profile admits which prestate tag, and what
+/// an opcode requires of its operands, stay here in the interpreter.
+#[path = "v2/generated_abi.rs"]
+#[allow(dead_code, missing_docs)]
+mod generated_abi;
+
 #[path = "v2/generated_profile14.rs"]
 #[allow(dead_code, missing_docs)]
 mod generated_profile14;
+
+use generated_abi::{
+    ACCOUNT_PROFILE_V2_ARTIFACT_PROFILE_OFFSET as ARTIFACT_PROFILE_OFFSET,
+    ACCOUNT_PROFILE_V2_COMMON_IDENTITIES_OFFSET as COMMON_IDENTITIES_OFFSET,
+    ACCOUNT_PROFILE_V2_COMMON_SCALARS_OFFSET as COMMON_SCALARS_OFFSET,
+    ACCOUNT_PROFILE_V2_FIXED_ACCOUNTS_OFFSET as FIXED_ACCOUNTS_OFFSET,
+    ACCOUNT_PROFILE_V2_FIXED_OPERATIONS_OFFSET as FIXED_OPERATIONS_OFFSET,
+    ACCOUNT_PROFILE_V2_ITEM_ACCOUNT_STRIDE_OFFSET as ITEM_ACCOUNT_STRIDE_OFFSET,
+    ACCOUNT_PROFILE_V2_ITEM_IDENTITY_STRIDE_OFFSET as ITEM_IDENTITY_STRIDE_OFFSET,
+    ACCOUNT_PROFILE_V2_ITEM_OPERATIONS_OFFSET as ITEM_OPERATIONS_OFFSET,
+    ACCOUNT_PROFILE_V2_ITEM_SCALAR_STRIDE_OFFSET as ITEM_SCALAR_STRIDE_OFFSET,
+    ACCOUNT_PROFILE_V2_MAGIC_OFFSET as MAGIC_OFFSET,
+    ACCOUNT_PROFILE_V2_VERSION_OFFSET as VERSION_OFFSET,
+};
 
 pub use generated_profile14::{
     FIXED_DATA_PREDICATE_ARTIFACT_PROFILE, FIXED_DATA_PREDICATE_BYTES,
@@ -34,125 +58,161 @@ pub use generated_profile14::{
 pub use profile14::{FixedDataPredicateKindV2, FixedDataPredicateV2};
 
 /// Canonical runtime-tail profile magic.
-pub const MAGIC: [u8; 8] = *b"DCLTAP02";
+pub const MAGIC: [u8; 8] = generated_abi::ACCOUNT_PROFILE_V2_MAGIC;
 /// Finalized-record schema label for runtime-tail account profiles.
-pub const SCHEMA_RELEASE_PREIMAGE: &[u8] = b"dclutch/schema/account-profile-v2";
+pub const SCHEMA_RELEASE_PREIMAGE: &[u8] =
+    generated_abi::ACCOUNT_PROFILE_V2_SCHEMA_RELEASE_PREIMAGE;
 /// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE`].
-pub const SCHEMA_RELEASE_ID: [u8; 32] = [
-    0x4b, 0x66, 0x56, 0x93, 0x89, 0x0c, 0x76, 0x23, 0xb5, 0x65, 0x2b, 0x82, 0xe8, 0x5b, 0x26, 0x4a,
-    0xc1, 0xa5, 0x26, 0xe7, 0x6a, 0x3d, 0x8e, 0x3c, 0x8c, 0x1d, 0xd4, 0xd4, 0x6c, 0xc8, 0xe7, 0xfc,
-];
+pub const SCHEMA_RELEASE_ID: [u8; 32] = generated_abi::ACCOUNT_PROFILE_V2_SCHEMA_RELEASE_ID;
 /// Canonical runtime-tail profile schema.
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = generated_abi::ACCOUNT_PROFILE_V2_VERSION;
 /// Canonical runtime-tail physical profile.
-pub const ARTIFACT_PROFILE: u16 = 2;
+pub const ARTIFACT_PROFILE: u16 = generated_abi::ACCOUNT_PROFILE_V2_ARTIFACT_PROFILE;
 /// Runtime-tail physical profile with affine account lengths and selected windows.
-pub const SELECTED_WINDOW_ARTIFACT_PROFILE: u16 = 3;
+pub const SELECTED_WINDOW_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_SELECTED_WINDOW_ARTIFACT_PROFILE;
 /// Selected-window profile with checked narrow integer projections into `u64` scalars.
-pub const TYPED_SCALAR_ARTIFACT_PROFILE: u16 = 4;
+pub const TYPED_SCALAR_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_TYPED_SCALAR_ARTIFACT_PROFILE;
 /// Typed-scalar profile with an optional trusted current-slot environment scalar.
-pub const TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE: u16 = 5;
+pub const TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE;
 /// Trusted-environment profile with lifecycle-bound alternative account prestates.
-pub const LIFECYCLE_PRESTATE_ARTIFACT_PROFILE: u16 = 6;
+pub const LIFECYCLE_PRESTATE_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_LIFECYCLE_PRESTATE_ARTIFACT_PROFILE;
 /// Lifecycle-prestate profile admitting explicit adapter-authenticated
 /// variable-width, readonly fixed-prefix records.
-pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE: u16 = 7;
+pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE;
 /// Variable-data successor with an optional trusted current-executing-program identity.
-pub const TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE: u16 = 8;
+pub const TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE;
 /// Trusted-program successor admitting only non-owning aliases of an earlier
 /// adapter-authenticated variable-data representative.
-pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE: u16 = 9;
+pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE;
 /// Variable-alias successor deriving one protected support width by counting
 /// nonzero `u64` rows in an authenticated immutable descriptor tail.
-pub const NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE: u16 = 10;
+pub const NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE;
 /// Successor profile with one authenticated physical representative per alias
 /// group, route-local privilege subsets, and an optional trusted System
 /// Program identity supplied by the adapter.
-pub const AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE: u16 = 11;
+pub const AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE;
 /// Successor profile deriving an exact ordered sparse `u64` support into a
 /// descriptor-specialized flat common scalar row bank.
-pub const NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE: u16 = 12;
+pub const NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE;
 /// Route-alias successor with one checked dynamic account span inserted into
 /// an otherwise fixed logical account sequence.
-pub const DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE: u16 = 13;
+pub const DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE: u16 =
+    generated_abi::ACCOUNT_PROFILE_V2_DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE;
 /// Exact V2 header width.
-pub const HEADER_BYTES: usize = 32;
+pub const HEADER_BYTES: usize = generated_abi::ACCOUNT_PROFILE_V2_HEADER_BYTES;
 /// Exact profile-8 header width including the trusted role-identity declaration.
-pub const TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES: usize = 36;
+pub const TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES;
 /// Exact account-rule width.
-pub const RULE_BYTES: usize = 16;
+pub const RULE_BYTES: usize = generated_abi::ACCOUNT_RULE_V2_BYTES;
 /// Exact projection-operation width.
-pub const OPERATION_BYTES: usize = 16;
+pub const OPERATION_BYTES: usize = generated_abi::ACCOUNT_OPERATION_V2_BYTES;
 /// Little-endian trusted-environment scalar-coordinate offset.
-pub const TRUSTED_ENVIRONMENT_SCALAR_OFFSET: usize = 28;
+pub const TRUSTED_ENVIRONMENT_SCALAR_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_SCALAR_OFFSET;
 /// Trusted-environment kind-tag offset.
-pub const TRUSTED_ENVIRONMENT_KIND_OFFSET: usize = 30;
+pub const TRUSTED_ENVIRONMENT_KIND_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_KIND_OFFSET;
 /// Trusted-environment reserved-byte offset.
-pub const TRUSTED_ENVIRONMENT_RESERVED_OFFSET: usize = 31;
+pub const TRUSTED_ENVIRONMENT_RESERVED_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_RESERVED_OFFSET;
 /// Little-endian trusted current-executing-program identity-coordinate offset.
-pub const TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET: usize = 32;
+pub const TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET;
 /// Trusted current-executing-program kind-tag offset.
-pub const TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET: usize = 34;
+pub const TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET;
 /// Trusted current-executing-program reserved-byte offset.
-pub const TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET: usize = 35;
+pub const TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET;
 /// Exact profile-11 header width including one trusted builtin identity.
-pub const AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES: usize = 40;
+pub const AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES;
 /// Little-endian trusted builtin identity-coordinate offset.
-pub const TRUSTED_BUILTIN_IDENTITY_OFFSET: usize = 36;
+pub const TRUSTED_BUILTIN_IDENTITY_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_BUILTIN_IDENTITY_OFFSET;
 /// Trusted builtin kind-tag offset.
-pub const TRUSTED_BUILTIN_KIND_OFFSET: usize = 38;
+pub const TRUSTED_BUILTIN_KIND_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_BUILTIN_KIND_OFFSET;
 /// Trusted builtin reserved-byte offset.
-pub const TRUSTED_BUILTIN_RESERVED_OFFSET: usize = 39;
+pub const TRUSTED_BUILTIN_RESERVED_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_BUILTIN_RESERVED_OFFSET;
 /// Exact profile-13 fixed header width before the canonical span table.
-pub const DYNAMIC_FIXED_SPAN_HEADER_BYTES: usize = 48;
+pub const DYNAMIC_FIXED_SPAN_HEADER_BYTES: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_DYNAMIC_FIXED_SPAN_HEADER_BYTES;
 /// Number of canonical dynamic-span table entries.
-pub const DYNAMIC_FIXED_SPAN_COUNT_OFFSET: usize = 40;
+pub const DYNAMIC_FIXED_SPAN_COUNT_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_DYNAMIC_FIXED_SPAN_COUNT_OFFSET;
 /// Reserved zero bytes after the span-table count.
-pub const DYNAMIC_FIXED_SPAN_RESERVED_OFFSET: usize = 42;
+pub const DYNAMIC_FIXED_SPAN_RESERVED_OFFSET: usize =
+    generated_abi::ACCOUNT_PROFILE_V2_DYNAMIC_FIXED_SPAN_RESERVED_OFFSET;
 /// Exact width of one dynamic-span table entry.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_BYTES: usize = 20;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_BYTES: usize = generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_BYTES;
 /// Base-logical insertion coordinate within one span entry.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_INSERTION_OFFSET: usize = 0;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_INSERTION_OFFSET: usize =
+    generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_INSERTION_OFFSET;
 /// Common scalar selecting one span count.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_COUNT_SCALAR_OFFSET: usize = 2;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_COUNT_SCALAR_OFFSET: usize =
+    generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_COUNT_SCALAR_OFFSET;
 /// First rule template owned by one span entry.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_RULE_START_OFFSET: usize = 4;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_RULE_START_OFFSET: usize =
+    generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_RULE_START_OFFSET;
 /// Number of account rules repeated per selected span item.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_RULE_STRIDE_OFFSET: usize = 6;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_RULE_STRIDE_OFFSET: usize =
+    generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_RULE_STRIDE_OFFSET;
 /// Inclusive minimum admitted span count.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_MIN_OFFSET: usize = 8;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_MIN_OFFSET: usize =
+    generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_MIN_OFFSET;
 /// Inclusive maximum admitted span count.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET: usize = 12;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET: usize =
+    generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_MAX_OFFSET;
 /// Positive congruence step for admitted counts.
-pub const DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET: usize = 16;
+pub const DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET: usize =
+    generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_STEP_OFFSET;
 
-const TRUSTED_ENVIRONMENT_NONE: u8 = 0;
-const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 = 1;
-const TRUSTED_EXECUTING_PROGRAM_NONE: u8 = 0;
-const TRUSTED_EXECUTING_PROGRAM_CURRENT: u8 = 1;
-const TRUSTED_BUILTIN_NONE: u8 = 0;
-const TRUSTED_BUILTIN_SYSTEM_PROGRAM: u8 = 1;
+const TRUSTED_ENVIRONMENT_NONE: u8 = generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_NONE;
+const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_CURRENT_SLOT;
+const TRUSTED_EXECUTING_PROGRAM_NONE: u8 =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_EXECUTING_PROGRAM_NONE;
+const TRUSTED_EXECUTING_PROGRAM_CURRENT: u8 =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_EXECUTING_PROGRAM_CURRENT;
+const TRUSTED_BUILTIN_NONE: u8 = generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_BUILTIN_NONE;
+const TRUSTED_BUILTIN_SYSTEM_PROGRAM: u8 =
+    generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_BUILTIN_SYSTEM_PROGRAM;
 
-const OP_REQUIRE_KEY: u8 = 0;
-const OP_REQUIRE_OWNER: u8 = 1;
-const OP_PROJECT_KEY: u8 = 2;
-const OP_PROJECT_OWNER: u8 = 3;
-const OP_PROJECT_LAMPORTS: u8 = 4;
-const OP_PROJECT_DATA_U64: u8 = 5;
-const OP_PROJECT_DATA_IDENTITY: u8 = 6;
-const OP_PROJECT_DATA_U32: u8 = 7;
-const OP_PROJECT_TAIL_COUNT_U32: u8 = 8;
-const OP_PROJECT_DATA_U64_AFFINE: u8 = 9;
-const OP_PROJECT_DATA_IDENTITY_AFFINE: u8 = 10;
-const OP_SELECT_DATA_WINDOW: u8 = 11;
-const OP_PROJECT_DATA_U64_SELECTED: u8 = 12;
-const OP_PROJECT_DATA_IDENTITY_SELECTED: u8 = 13;
-const OP_PROJECT_DATA_U64_SELECTED_AFFINE: u8 = 14;
-const OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE: u8 = 15;
-const OP_PROJECT_DATA_U16: u8 = 16;
-const OP_PROJECT_DATA_U8: u8 = 17;
-const OP_PROJECT_NONZERO_U64_TAIL_COUNT: u8 = 18;
-const OP_PROJECT_NONZERO_U64_TAIL_ROWS: u8 = 19;
+const OP_REQUIRE_KEY: u8 = generated_abi::OP_REQUIRE_KEY_V2;
+const OP_REQUIRE_OWNER: u8 = generated_abi::OP_REQUIRE_OWNER_V2;
+const OP_PROJECT_KEY: u8 = generated_abi::OP_PROJECT_KEY_V2;
+const OP_PROJECT_OWNER: u8 = generated_abi::OP_PROJECT_OWNER_V2;
+const OP_PROJECT_LAMPORTS: u8 = generated_abi::OP_PROJECT_LAMPORTS_V2;
+const OP_PROJECT_DATA_U64: u8 = generated_abi::OP_PROJECT_DATA_U64_V2;
+const OP_PROJECT_DATA_IDENTITY: u8 = generated_abi::OP_PROJECT_DATA_IDENTITY_V2;
+const OP_PROJECT_DATA_U32: u8 = generated_abi::OP_PROJECT_DATA_U32_V2;
+const OP_PROJECT_TAIL_COUNT_U32: u8 = generated_abi::OP_PROJECT_TAIL_COUNT_U32_V2;
+const OP_PROJECT_DATA_U64_AFFINE: u8 = generated_abi::OP_PROJECT_DATA_U64_AFFINE_V2;
+const OP_PROJECT_DATA_IDENTITY_AFFINE: u8 = generated_abi::OP_PROJECT_DATA_IDENTITY_AFFINE_V2;
+const OP_SELECT_DATA_WINDOW: u8 = generated_abi::OP_SELECT_DATA_WINDOW_V2;
+const OP_PROJECT_DATA_U64_SELECTED: u8 = generated_abi::OP_PROJECT_DATA_U64_SELECTED_V2;
+const OP_PROJECT_DATA_IDENTITY_SELECTED: u8 = generated_abi::OP_PROJECT_DATA_IDENTITY_SELECTED_V2;
+const OP_PROJECT_DATA_U64_SELECTED_AFFINE: u8 =
+    generated_abi::OP_PROJECT_DATA_U64_SELECTED_AFFINE_V2;
+const OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE: u8 =
+    generated_abi::OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE_V2;
+const OP_PROJECT_DATA_U16: u8 = generated_abi::OP_PROJECT_DATA_U16_V2;
+const OP_PROJECT_DATA_U8: u8 = generated_abi::OP_PROJECT_DATA_U8_V2;
+const OP_PROJECT_NONZERO_U64_TAIL_COUNT: u8 = generated_abi::OP_PROJECT_NONZERO_U64_TAIL_COUNT_V2;
+const OP_PROJECT_NONZERO_U64_TAIL_ROWS: u8 = generated_abi::OP_PROJECT_NONZERO_U64_TAIL_ROWS_V2;
 /// Project an ADAPTER-ESTABLISHED SHA-256 of an account's data into an identity.
 ///
 /// The interpreter does not hash, and this operation does not make it. This
@@ -166,7 +226,7 @@ const OP_PROJECT_NONZERO_U64_TAIL_ROWS: u8 = 19;
 /// nothing is renumbered: the encoding is the `identity(..)` shape
 /// `OP_PROJECT_KEY` and `OP_PROJECT_OWNER` already use, with no data offset and
 /// no stride.
-const OP_PROJECT_DATA_DIGEST: u8 = 20;
+const OP_PROJECT_DATA_DIGEST: u8 = generated_abi::OP_PROJECT_DATA_DIGEST_V2;
 
 /// Encode one fixed-account `u8` data projection into a common `u64` scalar.
 ///
@@ -816,11 +876,11 @@ impl<'a> AccountProfileV2<'a> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
-        if bytes.get(..8) != Some(MAGIC.as_slice()) {
+        if bytes.get(MAGIC_OFFSET..MAGIC_OFFSET + MAGIC.len()) != Some(MAGIC.as_slice()) {
             return Err(Error::InvalidMagic);
         }
-        let artifact_profile = read_u16(bytes, 10)?;
-        if read_u16(bytes, 8)? != VERSION
+        let artifact_profile = read_u16(bytes, ARTIFACT_PROFILE_OFFSET)?;
+        if read_u16(bytes, VERSION_OFFSET)? != VERSION
             || !matches!(
                 artifact_profile,
                 ARTIFACT_PROFILE
@@ -852,20 +912,20 @@ impl<'a> AccountProfileV2<'a> {
                 | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                 | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
                 | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
-        ) && read_u32(bytes, 28)? != 0
+        ) && read_u32(bytes, TRUSTED_ENVIRONMENT_SCALAR_OFFSET)? != 0
         {
             return Err(Error::NonCanonicalReserved);
         }
         let value = Self {
             artifact_profile,
-            fixed_accounts: read_u16(bytes, 12)?,
-            item_account_stride: read_u16(bytes, 14)?,
-            fixed_operations: read_u16(bytes, 16)?,
-            item_operations: read_u16(bytes, 18)?,
-            common_scalars: read_u16(bytes, 20)?,
-            item_scalar_stride: read_u16(bytes, 22)?,
-            common_identities: read_u16(bytes, 24)?,
-            item_identity_stride: read_u16(bytes, 26)?,
+            fixed_accounts: read_u16(bytes, FIXED_ACCOUNTS_OFFSET)?,
+            item_account_stride: read_u16(bytes, ITEM_ACCOUNT_STRIDE_OFFSET)?,
+            fixed_operations: read_u16(bytes, FIXED_OPERATIONS_OFFSET)?,
+            item_operations: read_u16(bytes, ITEM_OPERATIONS_OFFSET)?,
+            common_scalars: read_u16(bytes, COMMON_SCALARS_OFFSET)?,
+            item_scalar_stride: read_u16(bytes, ITEM_SCALAR_STRIDE_OFFSET)?,
+            common_identities: read_u16(bytes, COMMON_IDENTITIES_OFFSET)?,
+            item_identity_stride: read_u16(bytes, ITEM_IDENTITY_STRIDE_OFFSET)?,
             trusted_environment: decode_trusted_environment(bytes, artifact_profile)?,
             trusted_identity_environment: decode_trusted_identity_environment(
                 bytes,

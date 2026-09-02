@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**73 generated files from 71 emitters. 58 guarded (56 emitters), 15 unguarded (15 emitters).**
+**74 generated files from 72 emitters. 59 guarded (57 emitters), 15 unguarded (15 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -18,6 +18,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-account-profile-contract/check-generated.sh` | shell | `EmitAccountProfileAbiRust.lean` |
 | `crates/dclutch-account-profile-contract/tests/lifecycle_v5_generator_fresh.rs` | cargo-test | `EmitStateLifecyclePolicyV5AbiRust.lean` |
 | `crates/dclutch-account-profile-contract/tests/profile14_generator_fresh.rs` | cargo-test | `EmitAccountProfileV2Profile14Rust.lean` |
+| `crates/dclutch-account-profile-contract/tests/v2_abi_generator_fresh.rs` | cargo-test | `EmitAccountProfileV2AbiRust.lean` |
 | `crates/dclutch-capability-contract/check-generated.sh` | shell | `EmitCapabilityManifestV1AbiRust.lean` |
 | `crates/dclutch-capability-program-contract/check-generated.sh` | shell | `EmitCapabilityProgramAbiRust.lean` |
 | `crates/dclutch-capability-program-contract/tests/set_v1_generator_fresh.rs` | cargo-test | `EmitCapabilityProgramSetV1Rust.lean` |
@@ -74,6 +75,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `apps/dclutch-web/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbiTs.lean` |
 | `crates/dclutch-account-profile-contract/src/generated.rs` | `EmitAccountProfileAbiRust.lean` |
 | `crates/dclutch-account-profile-contract/src/lifecycle_v3/generated_v5.rs` | `EmitStateLifecyclePolicyV5AbiRust.lean` |
+| `crates/dclutch-account-profile-contract/src/v2/generated_abi.rs` | `EmitAccountProfileV2AbiRust.lean` |
 | `crates/dclutch-account-profile-contract/src/v2/generated_profile14.rs` | `EmitAccountProfileV2Profile14Rust.lean` |
 | `crates/dclutch-capability-contract/src/generated_abi.rs` | `EmitCapabilityManifestV1AbiRust.lean` |
 | `crates/dclutch-capability-program-contract/src/generated.rs` | `EmitCapabilityProgramAbiRust.lean` |

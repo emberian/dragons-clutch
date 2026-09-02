@@ -89,6 +89,7 @@ import DClutchSemantics.RequestProfileAbi
 import DClutchSemantics.RequestProfileV4Abi
 import DClutchSemantics.StateLifecyclePolicyV5Abi
 import DClutchSemantics.AccountProfileAbi
+import DClutchSemantics.AccountProfileV2Abi
 import DClutchSemantics.AccountProfileV2Profile13
 import DClutchSemantics.AccountProfileV2Profile14
 import DClutchSemantics.RepresentationCompositionV3Abi

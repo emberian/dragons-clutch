@@ -11,6 +11,10 @@ name = "emit-account-profile-abi-rust"
 root = "EmitAccountProfileAbiRust"
 
 [[lean_exe]]
+name = "emit-account-profile-v2-abi-rust"
+root = "EmitAccountProfileV2AbiRust"
+
+[[lean_exe]]
 name = "emit-account-profile-v2-profile14-rust"
 root = "EmitAccountProfileV2Profile14Rust"
 
