@@ -30,13 +30,23 @@ import sys
 
 CU = re.compile(r"Program log: dclutch-hot-cu:(\S+)")
 HEAP = re.compile(r"Program log: dclutch-hot-heap:(\S+)")
+# The fourth word is the CEILING the allocator is enforcing, and it is why this
+# pattern does not require it to be zero. A `hot_cu_checkpoint` logs zero there;
+# a `hot_heap_mark` has logged the live capacity since 2026-09-01, so on chain
+# it logs `0x10000`. The old pattern demanded a literal `0x0` in that position
+# and therefore matched NO HEAP MARK AT ALL on a real run -- the marks were
+# dropped in silence while the CU checkpoints still rendered, so the table
+# looked complete and answered a different question than the one asked. Found
+# 2026-09-02 by the lane that needed the heap column to attribute a
+# 65,536-byte wall, and which read the raw log by hand instead.
 NUMS = re.compile(
-    r"Program log: (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+), 0x0, 0x0")
+    r"Program log: (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+), 0x0")
 CONS = re.compile(r"Program consumption: (\d+) units remaining")
 
 
 def main(path):
     rows = []
+    ceilings = set()
     pending = None
     remaining = None
     with open(path) as handle:
@@ -60,6 +70,9 @@ def main(path):
                 kind, label, rem = pending
                 total = int(m.group(1), 16)
                 scratch = int(m.group(3), 16)
+                ceiling = int(m.group(4), 16)
+                if ceiling:
+                    ceilings.add(ceiling)
                 rows.append((kind, label, rem, total, scratch))
                 pending = None
 
@@ -93,8 +106,23 @@ def main(path):
             peak, peak_label = heap, label
 
     print()
-    print(f"HEAP PEAK {peak:,} at {peak_label}   "
-          f"margin against 32,768 = {32768 - peak:,}")
+    # The ceiling is READ, not assumed. It was hardcoded at 32,768 here, which
+    # is the SDK default and not what Trading runs on: `admit_heap_frame_v1`
+    # lifts the allocator to whatever the transaction granted, so the same peak
+    # is exhaustion under one ceiling and 47% of another. The heap marks carry
+    # the live capacity in their fourth word; a log with none (an off-chain
+    # build, or checkpoints only) says so rather than quoting a number nobody
+    # measured.
+    if len(ceilings) == 1:
+        ceiling = next(iter(ceilings))
+        print(f"HEAP PEAK {peak:,} at {peak_label}   "
+              f"margin against {ceiling:,} = {ceiling - peak:,}")
+    elif ceilings:
+        print(f"HEAP PEAK {peak:,} at {peak_label}   "
+              f"ceilings observed: {', '.join(f'{c:,}' for c in sorted(ceilings))}")
+    else:
+        print(f"HEAP PEAK {peak:,} at {peak_label}   "
+              "ceiling not reported by any mark in this log")
     print(f"CU spent across the profiled phases: {total_spent:,}")
 
 
