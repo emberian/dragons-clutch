@@ -3922,6 +3922,63 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
     assert_eq!(ack.disposition(), AcceleratorDispositionV2::Refused);
 }
 
+/// A substituted Product account refuses by NAME, not merely by disposition.
+///
+/// The sibling test below asserts only `Refused`, which is the coarse
+/// disposition and therefore a bare `is_err()` one level up: it passes on
+/// whatever the accelerator refuses first, and every domain conjunct returns
+/// the same canonical ack. Until the fourth conjunct had a source it could not
+/// be asserted at all -- `PRODUCT_RECORD_DIGEST` was thirty-two zero bytes on
+/// every run, so the register never matched and this refusal fired for a reason
+/// that had nothing to do with the substitution.
+///
+/// Now it has one, so the substitution is the whole cause and the log names it.
+/// Both halves are asserted: the substituted run says the line, and the
+/// UNSUBSTITUTED run does not -- without that second half this passes on an
+/// accelerator that refuses everything with the same words.
+#[tokio::test]
+async fn a_substituted_product_account_refuses_as_a_product_digest_mismatch() {
+    const PRODUCT_DIGEST_REFUSAL: &str =
+        "general: refused, product digest is not the bank's product id";
+    let width = 1_u32;
+    let fixture = terminal_fixture(width);
+    let controller = request(&fixture, Action::InitializeSettlement, 0, 0, 0);
+
+    for (substituted, must_name_it) in [(true, true), (false, false)] {
+        let mut runtime = runtime_for_initialize(&fixture);
+        if substituted {
+            runtime.insert(2, vec![0xcc; PRODUCT_RECORD.len()]);
+        }
+        let case = real_sbf_fixture(
+            width,
+            controller,
+            bank_for_request(width, controller),
+            runtime,
+        );
+        let mut context = case.test.start_with_context().await;
+        let (processed, _, _) = submit(
+            &mut context,
+            case.instruction,
+            &case.label,
+            false,
+            TopLevelPreludeV3::HeapThenLimit,
+        )
+        .await
+        .expect("ProgramTest processing");
+        let logs = processed
+            .metadata
+            .as_ref()
+            .map_or_else(Vec::new, |metadata| metadata.log_messages.clone());
+        let named = logs
+            .iter()
+            .any(|line| line.contains(PRODUCT_DIGEST_REFUSAL));
+        assert_eq!(
+            named, must_name_it,
+            "substituted={substituted} logs={logs:?}",
+        );
+    }
+}
+
 #[tokio::test]
 async fn product_or_price_scale_substitution_refuses_without_runtime_writes() {
     for width in [1_u32, 258] {

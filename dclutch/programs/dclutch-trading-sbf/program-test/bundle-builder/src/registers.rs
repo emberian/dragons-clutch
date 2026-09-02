@@ -349,6 +349,19 @@ pub(crate) fn run_engine_with_admitted_candidate(
             }
         })
         .collect::<Vec<[u8; 32]>>();
+    // The Product record's data digest. `ProjectDataDigest` projects a fact the
+    // ADAPTER establishes rather than teaching the interpreter to hash, and
+    // this engine is the host-side adapter -- so the supply has to exist here
+    // too, or the host projection refuses `DataDigestUnavailable` while the
+    // chain succeeds. That is exactly how this surfaced: the chain-side supply
+    // landed first and the bundle then failed host-side with
+    // `Projection("account-projection")`, which is the primitive working as
+    // designed. Coordinate 2 is the Product in the Hot runtime frame, spelled
+    // the way the two markers below spell 1 and 4.
+    let product_record_data_digest = input
+        .observations
+        .get(2)
+        .map(|observed| solana_program::hash::hash(&observed.data).to_bytes());
     let observations = input
         .observations
         .iter()
@@ -368,7 +381,7 @@ pub(crate) fn run_engine_with_admitted_candidate(
                     observed.executable,
                 )
             } else {
-                AccountObservationV1::new(
+                let observation = AccountObservationV1::new(
                     key,
                     &observed.owner,
                     observed.lamports,
@@ -376,7 +389,11 @@ pub(crate) fn run_engine_with_admitted_candidate(
                     observed.signer,
                     observed.writable,
                     observed.executable,
-                )
+                );
+                match (coordinate, product_record_data_digest.as_ref()) {
+                    (2, Some(digest)) => observation.with_adapter_data_digest(digest),
+                    _ => observation,
+                }
             }
         })
         .collect::<Vec<AccountObservationV1<'_>>>();

@@ -6698,3 +6698,18 @@ accounts it authenticates and exactly those are read, in exactly that order* —
 the CLI keeps the two file reads and the RPC. Its cluster policy is already a
 parameter (`ExpectedClusterV1`), which is the one impurity that turned out not to
 be one.
+
+**Packet class, strongest instance (Dealer, 2026-09-01):** the checkpoint commit
+measures **1,366** bytes as a legacy transaction — which is why every other commit
+travels v0 over a lookup table — and **the Hot rows measure 2,342–3,084.** They
+execute only because ProgramTest submits no packet, and could not reach a cluster
+as they stand. Recorded with **no route claim**: *crediting a route on a frame no
+validator would accept is worse than recording no coverage.* Pinned by witnesses.
+
+**Bindings with one author (Dealer, 2026-09-01):** a binding's label is the key it
+matches on, so a hand-written label can drift from the transaction it names while
+both look right — a second author for the route claim. Labels are now derived from
+the **program's own dispatch predicates** (the functions `process_dealer_family_v1`
+branches on), with disposition in the key. A label cannot name a route Trading
+would not take, and a witness fails if the predicate set drifts from the
+dispatcher.

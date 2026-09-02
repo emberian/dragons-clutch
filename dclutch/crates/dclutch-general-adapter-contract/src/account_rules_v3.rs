@@ -224,21 +224,21 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     // existing index moved. See the arm that emits it for why the register
     // needed a source at all.
     match action {
-        Action::SubmitCandidate => 35,
-        Action::VerifyCandidateRow => 14,
-        Action::CloseCandidate => 22,
-        Action::OpenBatch => 22,
-        Action::CloseBatch => 19,
-        Action::PlaceOrder => 33,
-        Action::CancelOrder => 31,
-        Action::ReleaseOrder => 19,
-        Action::Close => 12,
+        Action::SubmitCandidate => 36,
+        Action::VerifyCandidateRow => 15,
+        Action::CloseCandidate => 23,
+        Action::OpenBatch => 23,
+        Action::CloseBatch => 20,
+        Action::PlaceOrder => 34,
+        Action::CancelOrder => 32,
+        Action::ReleaseOrder => 20,
+        Action::Close => 13,
         Action::Consider
         | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
-        | Action::Distribute => 8,
+        | Action::Distribute => 9,
     }
 }
 
@@ -298,6 +298,17 @@ const fn general_account_profile_fixed_operation_count_v3(action: Action) -> u16
 /// `SubmitCandidate` and `CloseCandidate`, which have none. Every EARLIER
 /// ordinal keeps its position and its bytes, which is the property the root
 /// identity's own comment exists to protect.
+/// Index of the operation that sources the Product record's digest.
+///
+/// Sits immediately in front of the semantic basis, which sits in front of the
+/// two-operation derived tail. Derived for the reason that one is: a literal
+/// anywhere near a span whose start can move stops being reached without
+/// anything going red, and surfaces as `Geometry` on `Consider` -- the cheapest
+/// action, and so the first to run out of arms.
+const fn general_product_digest_operation_index_v3(action: Action) -> u16 {
+    general_semantic_basis_operation_index_v3(action).saturating_sub(1)
+}
+
 const fn general_semantic_basis_operation_index_v3(action: Action) -> u16 {
     let tail = if matches!(action, Action::SubmitCandidate | Action::CloseCandidate) {
         1
@@ -1178,6 +1189,30 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::beneficiary(),
         }),
+        // THE PRODUCT RECORD DIGEST, WHICH NO RULE COULD EXPRESS UNTIL NOW.
+        //
+        // `authenticated_general_domain`'s fourth conjunct recomputes
+        // `hash(product account)` and compares it to this register. Nothing
+        // sourced it, and nothing COULD: every one of the twenty operations the
+        // AccountProfile vocabulary carried read bytes at an offset, or a key,
+        // an owner, lamports, or a tail count, and none of them computed a
+        // digest. It was not a missing rule but a missing primitive, which is
+        // why the basis conjunct in front of it could be repaired and this one
+        // could not.
+        //
+        // `ProjectDataDigest` (`a5bb4390`, opcode 20) is that primitive, and it
+        // does NOT teach the interpreter to hash: the digest is a fact the
+        // ADAPTER establishes and this projects it exactly as `ProjectKey`
+        // projects the key. An observation whose adapter established none
+        // refuses `DataDigestUnavailable` rather than reading a zero register,
+        // which is what stops a missing supply from looking like a match
+        // against thirty-two zero bytes.
+        digest if digest == general_product_digest_operation_index_v3(action) => {
+            Ok(AccountOperationInputV2::ProjectDataDigest {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PRODUCT_COORDINATE_V3)?),
+                destination: common_identity(identity::PRODUCT_RECORD_DIGEST)?,
+            })
+        }
         // THE SEMANTIC BASIS, WHICH NOTHING SOURCED.
         //
         // Every one of the fifteen actions crosses `authenticated_general_domain`
@@ -1353,7 +1388,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 35;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 36;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -2604,7 +2639,7 @@ mod tests {
         assert_eq!(general_account_profile_fixed_count_v3(action), Ok(11));
         // 34 until the semantic-basis projection landed; every action's count
         // gained exactly one.
-        assert_eq!(general_account_profile_operation_count_v3(action), 35);
+        assert_eq!(general_account_profile_operation_count_v3(action), 36);
 
         let candidate =
             general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)
