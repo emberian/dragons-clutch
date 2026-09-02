@@ -5117,6 +5117,32 @@ fn transaction_logs(
         .collect()
 }
 
+/// Count one program's `invoke [` lines in a processed transaction.
+///
+/// It reads `log_messages` RAW. `transaction_logs` strips the `"Program log: "`
+/// prefix and keeps only the lines that had it, so no string it returns can
+/// begin with `"Program <id> invoke ["` -- a filter for that over its output is
+/// structurally always zero, whatever the transaction did. That is what the
+/// output-page invocation assertion below was doing: it read `left: 0` on a
+/// route the runtime log shows invoking the accelerator exactly once, and would
+/// have read zero for two invocations just as happily. An assertion that cannot
+/// observe its subject is a test of nothing (`AGENTS.md`), and this one had been
+/// reporting the transport's central claim.
+fn program_invocations(
+    processed: &solana_program_test::BanksTransactionResultWithMetadata,
+    program: Pubkey,
+) -> usize {
+    let needle = std::format!("Program {program} invoke [");
+    processed
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.log_messages.clone())
+        .unwrap_or_default()
+        .iter()
+        .filter(|line| line.starts_with(&needle))
+        .count()
+}
+
 fn invoked_programs(
     processed: &solana_program_test::BanksTransactionResultWithMetadata,
 ) -> Vec<Pubkey> {
@@ -8513,10 +8539,7 @@ mod lp_lifecycle {
         // and the second never had the budget to run. Under the output-page
         // pair the accelerator appears exactly once in the log, writes the
         // whole bank into the account it owns, and Trading takes the digest.
-        let accelerator_invocations = super::transaction_logs(&accepted)
-            .iter()
-            .filter(|line| line.starts_with(&std::format!("Program {ACCELERATOR} invoke [")))
-            .count();
+        let accelerator_invocations = super::program_invocations(&accepted, ACCELERATOR);
         assert_eq!(
             accelerator_invocations, 1,
             "the output-page transport is one invocation whatever the bank costs"

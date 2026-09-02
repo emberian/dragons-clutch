@@ -3092,3 +3092,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   grew `rational_representation_v2::prepare_and_execute` 2,624 → 3,456 stack bytes and measured none of it → STRUCTURED;
   deepest frame 4,032/4,096 in resolution-proof's `process_direct_funding_activation_v1` → DIRECT. Owed at HEAD: `6ca28de0`.
 - Cuts: `def7055b6`.
+
+### Lane map delta — 2026-09-02 19:45
+- DEALER successor (`1ceb6653`, `4f4cafd6`): the accelerator searched six records it could read through the seal (−35,862 CU)
+  and re-ran the Effect grammar hostile (−75,251); accelerator CPI 460,167 → 376,475; frontier.rs was a stale fixture (8 bytes
+  where 45 belong) and `accepted.rs:8516` counted invocations structurally at zero — both fixed. **The last wall is one
+  number: `authenticate_strategy_from_sealed_boxed_v3` spends 419,775 CU (30% of the budget), 370,983 of it hashing the
+  744,840-byte accelerator ELF on every hot action**, because nothing bound the release's elf_digest to the observed account.
+  Priced: the slot-pin swap takes the honest Add to **1,222,307 — EXECUTING and COMMITTING**, 177,393 headroom.
+- **RULING (under the standing goal; ember may reverse): decision 0012 governs — `ArtifactRelease` finalization records a
+  `DeploymentObservationV1` (one hash once), the hot path authenticates accelerator deployments by the slot pin.** Registry
+  change + corpus extension + successor publication stage for cohort-13; cohort-12 unaffected. → DEALER lane.
+- Lock design answered: the per-ACTION half is the seal's and free (the six coordinates are already observed under a
+  write-once verdict); per-root needs the activation-cache flag; per-strategy is a third group.
+- Cuts: `8eb24da70`.

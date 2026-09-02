@@ -692,10 +692,34 @@ fn frame(broken: Break) -> Frame {
     )
     .expect("canonical caller authority");
 
+    // The last two evidence accounts are the accelerator's own Loader V3
+    // deployment, and they carry REAL BODIES because the callback now attests
+    // it: `2b8f87a0` made `authenticate_accelerator_invocation_v4` parse the
+    // ProgramData metadata -- deployment slot and upgrade authority -- into the
+    // authenticated caller, so the immutability of the program being invoked is
+    // part of what the caller authority binds.
+    //
+    // This fixture staged eight bytes of `0x20` there. `ProgramDataMetadataV3View::parse`
+    // wants forty-five and a variant tag of three, so it refused `InvalidLength`
+    // and the probe published `Release` (0x4001) from the `acc-toplevel` block
+    // -- BEFORE the root-prestate compare. Every stage this file claims to
+    // clear from 3 onward was being asserted against a refusal that never
+    // reached it, and `Break::Activation` passed for the wrong reason, because
+    // `Release` is also what a corrupted activation cache raises. The stale
+    // side was the fixture; the program's law is unchanged and the expectations
+    // below always described it correctly.
+    //
+    // Positions are DERIVED from the evidence width, the same subtraction the
+    // program does, so a widened evidence frame moves both sides together.
+    let accelerator_elf = vec![0xda_u8; 64];
+    let program_index = ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4 - 2;
+    let programdata_index = ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4 - 1;
     let evidence = (0..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
         .map(|index| {
-            if index == 6 {
-                Slot::program(accelerator)
+            if index == program_index {
+                loader_program_slot(accelerator)
+            } else if index == programdata_index {
+                loader_programdata_slot(accelerator, &accelerator_elf)
             } else {
                 Slot::new(key(0x20, index), system_program::ID, vec![0x20; 8])
             }

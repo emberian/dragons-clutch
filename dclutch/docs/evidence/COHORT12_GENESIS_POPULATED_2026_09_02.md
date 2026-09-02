@@ -857,4 +857,175 @@ green gate whose Trading link equals the deployed bytes, a captured carry-forwar
 closure, five clean baselines, and a journal skeleton — every input the seal needs
 except an admissible identity set.
 
+## Addendum, 2026-09-02: the seal COMPLETES — and the market it was for is unreachable, for a third reason
+
+The root cause the previous addendum named is fixed and the fix works. Cohort-12
+is the first full-redeploy cohort in this project's history to produce a complete
+checked deployment set. It cost **zero SOL**: every step below is key-free and
+read-only against the cluster, and the deployer stands at **36.327394469 SOL**,
+the same figure it has held since the ladder.
+
+### What was changed
+
+`PERMANENT_DEVNET_UPGRADE_TARGETS_V1` is retired (`8e1f9850`, cherry-picked onto
+`seal/cohort-12` as `190146e8`). The seven ids are now an authenticated input read
+off the deployment-set journal that names them — exact width, canonical role order,
+the Loader-derived ProgramData coordinate of every Program, fourteen distinct
+non-native accounts — and the safety is what it always was: every row re-read
+against the cluster under the journal's own retained authority. Decision 0012
+carries the amendment. `require_rent_exempt` now reads the live Rent sysvar out of
+the same finalized context as the balances it judges; devnet quotes
+`lamports_per_byte_year 6333, exemption_threshold 1.0` at slot 491,925,181, which
+reproduces the 1,038,612 lamports the closure accounts hold to the unit against
+`Rent::default()`'s 1,141,440.
+
+**First, the question that decided whether this was a formal change: it was not.**
+Decision 0012's Lean model takes the release/target set as an INPUT and names no
+constant. `ProtocolInfrastructure.lean` has `Identity := Nat` and carries
+`SlotPin`/`Binding`/`Profile` as structures the adapter fills — its own docstring
+says the observed fields are "read out of the live ProgramData account in this very
+invocation". `ExecutionRelease.lean`'s `ReleaseSet` is a structure with
+`releaseSetValid` a predicate over the supplied value, not an enumeration. The
+Lean-decided corpus landed at `d418cc8b` carries zero Pubkeys — fill bytes and
+slots only. And the constant appeared in **no** `formal/`, **no** `programs/`, and
+**no** `crates/` file: two host-tool sources, a tool README, `GOAL.md`, and this
+document.
+
+### The seal, measured
+
+Branch `seal/cohort-12` at `190146e8` = `96a3b04e` + the amendment, and its diff
+from `e39efbb0` touches **only `tools/` and `docs/`** — no `programs/`, no
+`crates/` — so the ordinary Trading link is unchanged at
+`b0cff55ab0ef162d7e427b8cb894f1468b1804d997ab35c52710df3268a8e3ed`, the deployed
+bytes, which the green gate `82298c60da8b9fc249b9fa673f5337a95ee42606ff44237e20b927e65448bb72`
+certifies. The auditor was built from that tip; the journal keeps the gate's own
+`source_revision` `96a3b04e`, because the gate is the artifact and the auditor is not.
+
+The refusal that stood for eight cohorts — *"set journal target at index 0 is not
+exact permanent devnet registry:Hies39GB…"* — is gone. All five owned roles
+preflight `equal: true` against a fresh finalized observation:
+
+| role | live ELF = checked candidate | observed slot |
+| --- | --- | ---: |
+| custody | `2823c823…` | 491,928,063 |
+| resolution | `307bc81c…` | 491,928,088 |
+| claims | `268d527e…` | 491,928,120 |
+| trading | `b0cff55a…` | 491,928,152 |
+| core | `9ef7df55…` | 491,928,175 |
+
+Trading's line is the whole repair in one row: the gate's Trading link and the
+deployed bytes are the same digest.
+
+Journaled `already-current`, then audited:
+
+```
+completed_role_count 7      next_role null
+final_set_sha256 60f113e27232ea98391ce902ffa52fa3c82966c1726da9f59c57324550857bec
+registry carry-forward   rent carry-forward
+custody / resolution / claims / trading / core: already-current
+```
+
+And `prepare --deployment-set-journal` produced a plan whose
+`checked_upgrade_set_final_sha256` is that same `60f113e2…`. **`plan.checked_upgrade_set`
+is `Some`.** No upgrade ran, no deployment slot moved, no key was opened.
+
+### And the third wall, which is the finding
+
+`release_set_id` did **not** stay `797e83ac…`. It is `6dcda3224f0d1a251d2a91bb64ae25b10967e6133b40e0a0a008ae3057a75c90`.
+
+Every deployment slot is identical between the founded plan and the sealed one.
+What moved is three `semantic_release_id` values — custody, claims, core — and
+the cause is exact:
+
+```rust
+// upgrade.rs, checked_semantic_release_id
+"trading"    => COMPILED_DIRECT_RELEASE_ID_V1        // a fixed constant
+"resolution" => RESOLUTION_CONTROLLER_RELEASE_ID_V7  // a fixed constant
+_            => digest(source_semantic_release_preimage_v1(role, source_revision))
+```
+
+Registry and Rent are CarryForward and reproduce byte-for-byte; Trading and
+Resolution carry fixed semantic ids; **custody, claims and core hash the GIT
+REVISION.** The founded plan used `e39efbb0`; the journal must use the gate's
+revision, and the gate cannot be at `e39efbb0` because that commit's candidate
+ships the profiled Trading link. So:
+
+**A release-tooling fix necessarily changes the release-set identity of three
+roles whose program bytes did not change at all.** `e39efbb0` and `96a3b04e` have
+byte-identical custody, claims and core sources — the diff is `tools/` and
+`docs/` — and they mint different semantic release ids, therefore a different
+release set, therefore a different activation, therefore a different market. The
+semantic identity of *program bytes* is derived from a *tree revision* that
+includes files those bytes do not depend on. That is the same shape as wall C one
+level further out: an identity that names something adjacent to the thing it
+identifies.
+
+This is not repairable for cohort-12 by any commit. There is no commit whose sha
+is `e39efbb0` other than `e39efbb0`, and the candidate refuses to run as any
+commit but its own.
+
+### The fee-bearing trade: its disposition, by code and conjunct
+
+Attempted, with the sealed plan, against the live market:
+
+```
+devnet-checked-execution-release-v1
+  Error("missing Registry activation cache account 2pdhpxkYxZ6QZpG43ocrdWN5cqUZfKeJfrjNQv88qz1w")
+```
+
+`2pdhpxkY…` is `find_program_address([ACTIVATION_PDA_DOMAIN_V1, 6dcda322…],
+registry)` — the sealed plan's activation, which does not exist, because what was
+activated on chain is `9H5Jy4kjXJFiLtj8uGrCwhzYVw3nYsxRMAHA7s86p8cE` for release
+set `797e83ac…`. Had that account existed, the next conjunct is
+`direct_hot_route_manifest.rs`'s `checked-execution/release-set` — *"activation
+cache selects release set X, the plan pins Y"* — because the market pins
+`797e83ac…` at `STATE_SELECTED_RELEASE_SET_OFFSET`, re-read at slot 491,931,501
+and unchanged.
+
+The other door is the one cohort-12's own plan takes, and it is the refusal this
+file recorded before: `checked-execution/plan-unsealed`, *"devnet plan omitted its
+authenticated permanent checked deployment set"*. **Both doors are shut, and they
+are shut by the same fact from opposite sides**: the plan that matches the market
+has no checked set, and the plan that has a checked set does not match the market.
+
+**On the closed observation window, read from the conjunct rather than assumed:**
+`WINDOW_SPEC_MAGIC` (`DCLTWIN1`) occurs in exactly one crate,
+`dclutch-source-contract` — the observable and resolution side. The Trading Direct
+fill route never reads it. A Direct fill is gated by the Market phase (still
+`0x01` Open, generation 2, re-read at slot 491,931,501) and by each intent
+ticket's own `valid_from`/`valid_through` slots, not by the observation window. So
+the closed window is **not** what refuses the fill; it was never reached. That is
+a source-level determination, not a live measurement, and it is labelled as one.
+
+### Resolution is blocked by the same wall, so it is not a separate lane's win
+
+`flagship-resolution-v1 --produce-input` on devnet calls
+`authenticate_checked_upgrade_plan`, which requires `plan.checked_upgrade_set` —
+so cohort-12's founded plan refuses outright. And the sealed plan's resolution
+input takes `activation_cache: plan.activation` (`flagship_resolution.rs:3630`),
+which is the vacant `2pdhpxkY…`. **Resolving `EQnYCUMkz…` needs the same
+release-set identity the fill needs, and neither can be had.** The market can be
+neither filled nor resolved on this plan.
+
+### What is now true, and what it costs
+
+- The sealing machinery **works**, for any cohort, for the first time. Deployed
+  from a commit that carries `28ff0823` and `8e1f9850`, a genesis cohort seals in
+  place with no upgrade, no new release set relative to its own founding, and no
+  second founding — because its gate revision and its founding revision are then
+  the same commit.
+- **Cohort-12's market `EQnYCUMkz…` is terminal-in-place**: Open, generation 2,
+  two admitted Positions, 201 exactly-delegated atoms, Direct capability entry 0
+  activated — and reachable by no fill and no resolution. It joins the four
+  earlier devnet SOL/USD markets as unfillable, for a fourth distinct reason.
+- The route to a real fill is **cohort-13, deployed from a commit at or after
+  `8e1f9850`**, sealed against its own gate before founding. Its founding and its
+  seal then share one revision and nothing is stranded. That is a cohort lane, not
+  a repair.
+- Owed, and worth its own owner: **the semantic release id should be derived from
+  what it identifies.** Hashing the git revision makes every release-tooling
+  commit a protocol-identity event for three roles, which is what stranded this
+  market. Trading and Resolution already show the alternative — a fixed, code-owned
+  release id.
+
 Devnet evidence. Not mainnet evidence.
