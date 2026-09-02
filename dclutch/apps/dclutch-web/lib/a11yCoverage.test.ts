@@ -79,10 +79,27 @@ describe('accessibility coverage', () => {
     // contrast number produced by a guess is worse than no number, because it
     // gets colours rewritten to satisfy it.
     //
-    // These 223 rules are a named wall, not a pass. Closing them needs a
-    // resolved cascade, and the test below records exactly which instrument
-    // cannot supply one and why — measured, not assumed.
-    expect(report().unresolvedContrast.length).toBe(223);
+    // These rules are a named wall, not a pass. Closing them needs a resolved
+    // cascade, and the test below records exactly which instrument cannot
+    // supply one and why — measured, not assumed.
+    //
+    // 223 -> 196 on 2026-09-02, and the 27 that left were not resolved: 26 were
+    // DEAD CSS, rules for classes no component renders, and one was a real
+    // defect the refusal was hiding. The wall was carrying a legacy stylesheet
+    // as if it were unmeasured surface. Every family was verified absent from
+    // every `className` in app/ and components/ before deletion.
+    //
+    // TWO REAL FAILURES WERE FOUND INSIDE THE 196 by resolving them by hand,
+    // which is what this number is for. `.trade-v3-preview p` sat on the
+    // hairline-grid DIVIDER rather than a cell, 3.75:1 at 13px on /trade and
+    // /market; it now paints the same tint over the same cell, opaque, and
+    // resolves at 5.72:1. `.flow-rail a > small` was 4.02:1 before any state,
+    // and `.flow-rail-upcoming a { opacity: .58 }` took the seven-step trade
+    // rail to 2.16:1 for the step label and 3.18:1 for the number. THE SURVEY
+    // MODELS OPACITY NOWHERE, so that whole class of defect is invisible to it
+    // even for rules it does resolve — which is the next thing worth closing
+    // here, and is named as debt rather than fixed today.
+    expect(report().unresolvedContrast.length).toBe(196);
   });
 
   /**
