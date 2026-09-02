@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
+import { DEVNET_DEPLOYMENT_V1 } from './deployments';
 import { SolanaRpcClient } from './rpc';
 import { deriveWalletTerminalPayoutInputV1 } from './walletTerminalInputSnapshot';
 import { loadWalletTerminalInputWasmV1 } from './walletTerminalInputV1';
@@ -43,22 +44,29 @@ const ready = process.env.DCLUTCH_LIVE_DEVNET === '1' && market !== undefined &&
 const live = ready ? it : it.skip;
 
 /**
- * Cohort-12, deployed 2026-09-02. Cohort-11's five ids were here and are now
- * CLOSED -- devnet is disposable by ruling, so a default written down here has
- * a shelf life of one cohort. `DCLUTCH_RESOLVED_PROGRAMS` still overrides, and
- * remains the way to point this at a cohort younger than this file.
+ * The programs come from the shipped deployment preset, not from this file.
+ *
+ * Five ids were written down here, and the comment above them said outright
+ * that "a default written down here has a shelf life of one cohort" -- which
+ * is a note explaining why the file will break rather than a reason it has to.
+ * It broke on schedule when cohort-12 was closed. `DEVNET_DEPLOYMENT_V1` is
+ * the surface the browser itself reads and the cohort lane keeps current, so
+ * taking them from there ends the cycle instead of restarting it.
+ *
+ * `DCLUTCH_RESOLVED_PROGRAMS` still overrides, and remains the way to point
+ * this at a cohort the shipped preset does not name.
  */
-const DEVNET_COHORT_12 = Object.freeze({
-  registry: '5c4CfHXHaLoJRtVSZFURp6Qhub8P4x8Hk4yZ3KJNrK53',
-  core: 'G4Wz4fj4zqBPFWYFF9CeYeJtTK5UqSZUu2fyCr9ANjYG',
-  claims: 'GwduZB13AgqLxsoxi8wZEQndYBsQERea35dhuYKJzCvc',
-  custody: '2MHNgYoCtDzqRryjgAxzFwLVPztSN6NTUr7RmjiMrcLc',
-  resolution: '9vs7atqDTAZTMo2a9iMZXD6Nf39jQZ7sZFf2X4pGDDvs',
+const DEVNET_PRESET = Object.freeze({
+  registry: DEVNET_DEPLOYMENT_V1.programs.registry,
+  core: DEVNET_DEPLOYMENT_V1.programs.core,
+  claims: DEVNET_DEPLOYMENT_V1.programs.claims,
+  custody: DEVNET_DEPLOYMENT_V1.programs.custody,
+  resolution: DEVNET_DEPLOYMENT_V1.programs.resolution,
 });
 
 function programs(): Readonly<Record<'registry' | 'core' | 'claims' | 'custody' | 'resolution', string>> {
   const named = process.env.DCLUTCH_RESOLVED_PROGRAMS;
-  if (named === undefined) return DEVNET_COHORT_12;
+  if (named === undefined) return DEVNET_PRESET;
   // A later cohort deploys new ids; naming them beats editing this file.
   const parsed: unknown = JSON.parse(named);
   const record = parsed as Record<string, unknown>;

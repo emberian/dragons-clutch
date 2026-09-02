@@ -7,6 +7,7 @@ import {
   marketEditorialV1,
   parseMarketRegistryV1,
 } from './marketRegistry';
+import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
 
 /**
  * The registry is the one place the site is allowed to put words in a
@@ -60,18 +61,25 @@ describe('the shipped devnet market registry', () => {
    * exactly what went stale on every market above it.
    */
   it('names the market the public cut headlines, and leaves the derivable fields to the chain', () => {
-    const open = MARKET_REGISTRY_V1.markets['EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1'];
-    expect(open).toBeDefined();
-    expect(open.title).toContain('SOL/USD');
-    expect(open.coordinate).toEqual({ label: 'SOL/USD', unitPrefix: '$' });
-    expect(open.question).toBeNull();
-    expect(open.outcomes).toBeNull();
+    // THE ADDRESS COMES FROM THE CUT, not from a literal beside it. This case
+    // pinned `EQnY…` and went red the hour that cohort closed -- a pin next to
+    // the fixture it should have been reading, which is the same staleness the
+    // registry itself was built to stop. A cut with no featured market has
+    // nothing for this case to check, and says so rather than passing.
+    const featured = PUBLIC_DEVNET_CUT_V1.market;
+    expect(featured, 'the public cut names no market to headline').not.toBeNull();
+    const open = MARKET_REGISTRY_V1.markets[featured!];
+    expect(open, `the cut headlines ${featured} and the registry does not name it`).toBeDefined();
+    // A coordinate name and a story: the two things the chain has no word for.
+    expect(open.coordinate?.label).toBeTruthy();
+    expect(open.story).toBeTruthy();
     expect(open.resolution).toContain('Pyth');
     expect(open.resolution).toContain('source-failure outcome');
-    // The two things the chain does NOT say and a reader acts on: the rate,
-    // and that the boundaries were measured rather than inherited.
-    expect(open.story).toContain('50 basis points');
-    expect(open.story).toContain('measured');
+    // And deliberately NOT a question or an outcome list: those restate
+    // boundaries the market's own result-domain record carries, and restating
+    // them is exactly what went stale on every dead row in this file.
+    expect(open.question).toBeNull();
+    expect(open.outcomes).toBeNull();
   });
 
   it('keeps every entry inside the editorial charter: no numbers-in-words drift', () => {

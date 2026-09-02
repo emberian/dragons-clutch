@@ -3,6 +3,15 @@
   "cluster": "devnet",
   "provenance": "Coordinate names and stories are site-side editorial, because the chain carries no words for them. Titles, questions and outcome names are DERIVED from each market's own result-domain record wherever a row leaves them out, and every number, phase, address and settlement time beside them is read from the chain.",
   "markets": {
+    "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15": {
+      "title": "SOL/USD — the first sealed market",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
+      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
+      "story": "The first market here whose founding and its checked execution release share one identity by construction, at exactly 50 basis points a side. Whether trading is switched on is a chain fact this page reads live."
+    },
     "EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1": {
       "title": "SOL/USD — which side of $98 and $102",
       "coordinate": {
@@ -10,7 +19,7 @@
         "unitPrefix": "$"
       },
       "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "Founded at exactly 50 basis points a side — the first fee rate here a Direct fill would admit, though no checked execution release exists for it yet. Its boundaries were centred on a measured spot, not a stale default."
+      "story": "The programs that ran it have been closed, so it no longer decodes. It was this site's featured market for a day and never took a fill: no checked execution release was ever produced for it."
     },
     "6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4": {
       "title": "SOL/USD range — open for trading",

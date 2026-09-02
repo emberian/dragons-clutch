@@ -27,8 +27,9 @@
  * filesystem, and only after the result parses as a cut, so a refused stage
  * leaves the last accepted fixture byte-for-byte intact.
  */
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const fixture = fileURLToPath(new URL('../fixtures/public-cut.devnet.json', import.meta.url));
 const [fragmentPath, ...rest] = process.argv.slice(2);
@@ -38,8 +39,31 @@ if (fragmentPath === undefined || releaseSet === undefined || releaseSet === nul
   throw new Error('usage: node scripts/stage-checked-release.mjs <fragment.json> --release-set HEX64');
 }
 
-const { parseCheckedReleaseFragmentV1, parsePublicDevnetCutV1, stageCheckedReleaseV1 } =
-  await import('../lib/publicCutStaging.ts');
+// The staging rules have ONE owner -- `lib/publicCutStaging.ts`, which is what
+// the tests exercise -- and this script must not restate them. Node cannot
+// import that module directly: it is TypeScript and it resolves the `@/` alias
+// the app's bundler owns. So it is bundled here, with esbuild (already present
+// for the dev server), into a temporary module beside the app so its
+// `node_modules` resolve, imported, and deleted.
+//
+// This is the step that was missing when this script first shipped: it was
+// written, its LIBRARY was tested, and the script itself had never been run
+// once. It failed on its first real invocation with ERR_MODULE_NOT_FOUND.
+const bundle = fileURLToPath(new URL('../.stage-checked-release.bundle.mjs', import.meta.url));
+execFileSync(fileURLToPath(new URL('../node_modules/.bin/esbuild', import.meta.url)), [
+  fileURLToPath(new URL('../lib/publicCutStaging.ts', import.meta.url)),
+  '--bundle', '--format=esm', '--platform=node',
+  `--alias:@=${fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')}`,
+  '--external:@solana/web3.js', '--log-level=silent',
+  `--outfile=${bundle}`,
+], { stdio: ['ignore', 'ignore', 'inherit'] });
+let staging;
+try {
+  staging = await import(pathToFileURL(bundle).href);
+} finally {
+  rmSync(bundle, { force: true });
+}
+const { parseCheckedReleaseFragmentV1, parsePublicDevnetCutV1, stageCheckedReleaseV1 } = staging;
 
 const fragment = parseCheckedReleaseFragmentV1(JSON.parse(readFileSync(fragmentPath, 'utf8')));
 const cut = parsePublicDevnetCutV1(JSON.parse(readFileSync(fixture, 'utf8')));
@@ -53,4 +77,8 @@ parsePublicDevnetCutV1(JSON.parse(serialized));
 const temporary = `${fixture}.staging`;
 writeFileSync(temporary, serialized);
 renameSync(temporary, fixture);
-console.log(`staged checked release for execution release set ${fragment.releaseSetId}`);
+const row = staged.checkedReleases[releaseSet];
+console.log(`staged checked release for execution release set ${releaseSet}`);
+console.log(`  gate digest ${row.gateDigest}`);
+console.log(`  sealed set  ${row.sealedSet}`);
+console.log(`Both digests were copied from ${fragmentPath}; neither was read from this terminal.`);

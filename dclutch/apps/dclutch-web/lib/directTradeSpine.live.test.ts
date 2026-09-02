@@ -82,13 +82,30 @@ describe('live devnet Direct trade spine', () => {
       expect(spine.descriptorId).toMatch(/^[0-9a-f]{64}$/);
       expect(spine.outcomeCount).toBeGreaterThan(0);
       expect(spine.priceScale).toBeGreaterThan(0n);
-      // The featured market's Direct capability is founded AND switched on, so
-      // its activation root stands and the panel's gate opens. A cut that
-      // headlines a market whose trading was never activated would be pointing
-      // every reader at a stepper they cannot use.
-      expect(spine.rootExists).toBe(true);
+      // WHAT A CUT OWES A READER IS AN OPEN MARKET, not a tradable one.
+      //
+      // This asserted `rootExists` and no `activation` wall, on the reasoning
+      // that headlining an unactivated market points readers at a stepper they
+      // cannot use. That stopped being true when step 1 moved outside the gate:
+      // the chain admits participants before it admits a fill, so a reader can
+      // connect, read their standing and join a market whose Direct capability
+      // is not switched on -- and cohort-13's is not. What the cut must not do
+      // is headline a market that is not Open, because then even joining is
+      // refused, and that is what this pins.
+      expect(spine.phase).toBe('Open');
       expect(spine.walls.map((wall) => wall.name)).not.toContain('phase');
-      expect(spine.walls.map((wall) => wall.name)).not.toContain('activation');
+      // Every remaining wall is reported rather than assumed away, and each
+      // must be one this browser has a card for: an unnamed wall would reach a
+      // reader as a blank gate.
+      for (const wall of spine.walls) {
+        expect(['activation', 'release', 'prestate', 'packet']).toContain(wall.name);
+        report(`  wall ${wall.name}: ${wall.detail}`);
+      }
+      // Activation is the operator's move and has a deadline, so when it
+      // stands the gate must carry the sentence that says whose move it is.
+      const activation = spine.walls.find((wall) => wall.name === 'activation') ?? null;
+      if (activation !== null) expect(activation.detail).toContain('operator');
+      expect(spine.rootExists).toBe(activation === null);
 
       // The wall a reader used to meet at the preview button. The public cut
       // is this site's own deployment record and names the execution release
@@ -100,7 +117,14 @@ describe('live devnet Direct trade spine', () => {
       const sealed = (PUBLIC_DEVNET_CUT_V1.checkedReleases[spine.releaseSetId] ?? null) !== null;
       report(`checked release for ${spine.releaseSetId}: ${sealed ? 'on file' : 'none'}`);
       expect(spine.walls.some((wall) => wall.name === 'release')).toBe(!sealed);
-      expect(spine.tradable).toBe(sealed);
+      // Tradable is the CONJUNCTION, and this pinned it as though the checked
+      // release were the only thing in the way -- true while the release wall
+      // was the only market-level wall that could stand, and wrong the moment
+      // a sealed market turned up unactivated, which is cohort-13 exactly.
+      // Sealing says the fill would be admitted at the route boundary; it says
+      // nothing about whether the capability is switched on.
+      const marketWalls = spine.walls.filter((wall) => ['phase', 'activation', 'release'].includes(wall.name));
+      expect(spine.tradable).toBe(marketWalls.length === 0);
     }, 120_000);
   }
 });

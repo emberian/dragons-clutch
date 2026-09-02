@@ -23,34 +23,45 @@ describe('public devnet cut staging', () => {
     });
     expect(publicCutMarketHrefV1(pending)).toBe('/markets');
     expect(publicCutExplorerHrefV1(pending)).toBe('/explorer');
-    // THE SHIPPED CUT IS PENDING, and that is a live fact rather than a
-    // placeholder: cohort-12's seven programs were closed on 2026-09-02 and
-    // its market stopped resolving with them, so there is no market this
-    // deployment can read or join until cohort-13 is founded and sealed.
-    //
-    // Pending is a first-class state here, not an empty one. Every surface
-    // that reads the cut already has a pending face -- the front door says the
-    // first markets are being set up, the launch rail says no market is open
-    // yet, and both walk a reader to /markets rather than to a link that
-    // returns account-not-found. The alternative was to leave the closed
-    // cohort's address in place, which is exactly the defect the 2026-09-02 UX
-    // walk found on the front door, and exactly how it got there: a lane
-    // stopped without flipping a fixture.
-    expect(PUBLIC_DEVNET_CUT_V1.market).toBeNull();
-    // A pending cut may not name lifecycle activity at all -- the parser
-    // refuses that shape -- so these are what the schema forces, not a choice.
-    expect(PUBLIC_DEVNET_CUT_V1.activity.found).toBeNull();
+    // THE SHIPPED CUT IS CHECKED IN BOTH STATES, because it has two and moves
+    // between them every time a cohort is closed and a new one is founded.
+    // This case has now been rewritten twice for that transition alone -- once
+    // to pin a market, once to pin its absence -- which is the tell that it
+    // was pinning the wrong thing. What it asserts now is what must hold
+    // whichever state the cut is in, and each branch says what that state
+    // means, so a cohort change moves the branch rather than reddening a case.
+    const market = PUBLIC_DEVNET_CUT_V1.market;
+    if (market === null) {
+      // Pending is first-class, not empty: every surface that reads the cut
+      // has a pending face and walks a reader to /markets rather than to a
+      // link that returns account-not-found.
+      expect(publicCutMarketHrefV1()).toBe('/markets');
+      expect(publicCutExplorerHrefV1()).toBe('/explorer');
+      // Null, not the empty list: a cut naming no Market describes no
+      // deployment, so it reports that nobody consulted a record rather than
+      // that a record named none -- and the trade spine raises no wall from it.
+      expect(checkedReleaseSetIdsV1()).toBeNull();
+      expect(PUBLIC_DEVNET_CUT_V1.checkedReleases).toEqual({});
+    } else {
+      expect(publicCutMarketHrefV1()).toBe(`/markets/${market}`);
+      expect(publicCutExplorerHrefV1()).toContain(encodeURIComponent(market));
+      // A live cut has been asked the question, so it answers a list -- empty
+      // when no execution release set it knows of has been sealed.
+      expect(checkedReleaseSetIdsV1()).toEqual(Object.keys(PUBLIC_DEVNET_CUT_V1.checkedReleases));
+      for (const [releaseSetId, row] of Object.entries(PUBLIC_DEVNET_CUT_V1.checkedReleases)) {
+        // Rows are ingested from a sealing driver's fragment, never typed, and
+        // the parser is what proves that shape survived the copy.
+        expect(releaseSetId).toMatch(/^[0-9a-f]{64}$/);
+        expect(row.gateDigest).toMatch(/^[0-9a-f]{64}$/);
+        expect(row.sealedSet).toMatch(/^[0-9a-f]{64}$/);
+      }
+    }
+    // A lifecycle signature appears only when one has been read back off the
+    // chain, never because a step is expected to have happened. A pending cut
+    // may not name one at all; the parser refuses that shape.
     expect(PUBLIC_DEVNET_CUT_V1.activity.trade).toBeNull();
     expect(PUBLIC_DEVNET_CUT_V1.activity.resolve).toBeNull();
     expect(PUBLIC_DEVNET_CUT_V1.activity.redeem).toBeNull();
-    expect(publicCutMarketHrefV1()).toBe('/markets');
-    expect(publicCutExplorerHrefV1()).toBe('/explorer');
-    // And it knows no checked release sets. Null, not the empty list: a cut
-    // that names no Market describes no deployment, so it reports that nobody
-    // consulted a record rather than that a record named none -- and the trade
-    // spine raises no `release` wall from it.
-    expect(PUBLIC_DEVNET_CUT_V1.checkedReleases).toEqual({});
-    expect(checkedReleaseSetIdsV1()).toBeNull();
     expect(checkedReleaseSetIdsV1(pending)).toBeNull();
   });
 

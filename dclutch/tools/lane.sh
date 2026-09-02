@@ -207,9 +207,17 @@ you name, because it takes that path's whole current WORKING-TREE content. So
 committing Cargo.toml while another lane holds a line in it sweeps their line
 into your commit. This subcommand commits HEAD's blob plus YOUR hunk instead:
 `git apply --cached` writes only your change into the index, on top of the
-blob the index already holds from HEAD, and the working tree is never touched
--- the other lane's line stays exactly where it was, and after your commit
-`git diff -- <file>` shows only theirs.
+blob the index already holds from HEAD -- the other lane's line stays exactly
+where it was, and after your commit `git diff -- <file>` shows only theirs.
+
+AFTER the commit it brings each path's WORKING TREE forward to match, which is
+a no-op when you edited in place and the whole point when your patch was built
+somewhere else (a detached worktree, the house pattern for a shared file). It
+applies only where every context line matches, so it can add your hunk and can
+never overwrite another lane's; where a foreign hunk blocks it, the path is
+left alone and named. Without this step every path in a worktree-built patch
+reads as a REVERSAL of the commit just made, and the next `--only` on one of
+them silently reverts it.
 
 Refuses:
   - a non-empty index (`git diff --cached` shows anything). The whole
@@ -225,11 +233,17 @@ Then it reads the commit back the way `lane.sh commit` does, and prints any
 path whose working tree still carries hunks that are NOT yours -- so you can
 see, and say, exactly whose work you left behind.
 
-Incident this prevents: `0b8c377d` swept seven files another lane had staged,
+Incidents this prevents: `0b8c377d` swept seven files another lane had staged,
 and on 2026-09-02 both a rip lane and the Dealer lane serialised for half an
 hour on Cargo.toml because neither could commit it without taking the other's
 row. Path-granular protection is not enough for the one file every
 crate-lifecycle lane must edit.
+
+And the mirror image, the same day, which the reconciliation step above closes:
+`9efc24cf` committed a shared file with `--only` while another lane's call
+sites sat in its working-tree copy, carrying them to HEAD without the function
+they call -- main stopped compiling. Both tools leave a footgun on the side you
+are not looking at, so read `git diff` on your own paths right after either.
 EOF
 }
 
@@ -327,7 +341,54 @@ lane_cmd_commit_patch() {
     exit 1
   fi
 
+  # RECONCILE THE WORKING TREE, path by path, and only where it is a no-op or
+  # a strict addition.
+  #
+  # `git apply --cached` writes the index and nothing else, which is the whole
+  # mechanism -- and its cost, until 2026-09-02, was that a path whose working
+  # tree did NOT already carry the hunk was left reading as a REVERSAL of the
+  # commit that had just been made. That is not a cosmetic wart. A patch built
+  # in a detached worktree (the house pattern for a shared file) leaves every
+  # one of its paths in that state, so the next `git status` invites someone to
+  # "restore" them, and the next `lane.sh commit --only` on any of those paths
+  # takes the working-tree content and silently reverts the hunk. Measured that
+  # day: a lane committed a helper function and its call sites through this
+  # subcommand, another lane's `--only` on one of those files then landed the
+  # call sites without the helper, and main stopped compiling.
+  #
+  # So each path is now brought forward, with the same conservatism the index
+  # side already has:
+  #   - the patch applies to the working tree  -> apply it (the file the next
+  #     reader sees is the file that was committed);
+  #   - it does not apply, but its REVERSE does -> the hunk is already there;
+  #     nothing to do, which is the ordinary case where you edited in place;
+  #   - neither                                 -> someone else's hunk sits in
+  #     the way. Left ALONE and named, because clobbering it is the one thing
+  #     this subcommand exists to make impossible.
+  # `git apply` writes nothing unless every context line matches, so the first
+  # branch cannot overwrite another lane's line either.
   local w
+  local -a carried=() blocked=()
+  for w in "${want[@]}"; do
+    if git apply --check --include="$w" "$patch" >/dev/null 2>&1; then
+      if git apply --include="$w" "$patch" >/dev/null 2>&1; then
+        carried+=("$w")
+      else
+        blocked+=("$w")
+      fi
+    elif ! git apply --reverse --check --include="$w" "$patch" >/dev/null 2>&1; then
+      blocked+=("$w")
+    fi
+  done
+  if [[ ${#carried[@]} -gt 0 ]]; then
+    echo "lane commit-patch: carried the committed hunk into the working tree for:"
+    printf '  %s\n' "${carried[@]}"
+  fi
+  if [[ ${#blocked[@]} -gt 0 ]]; then
+    echo "lane commit-patch: could NOT reconcile (someone else's hunk is in the way):"
+    printf '  %s\n' "${blocked[@]}"
+  fi
+
   for w in "${want[@]}"; do
     if [[ -n "$(git diff --name-only -- "$w")" ]]; then
       echo "lane commit-patch: $w still carries hunks that are not yours (left untouched)."

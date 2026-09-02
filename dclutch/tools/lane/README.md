@@ -32,6 +32,39 @@ the protocol changed to `--only` exclusively. `--only` is race-proof *only*
 when given a real, non-empty path list; an empty one degrades it back to
 "commit whatever the index/working tree holds."
 
+### `lane.sh commit-patch <message> <patch-file>`
+
+Commits **HEAD's blob plus your hunk** for a path another lane is also editing,
+then brings that path's working tree forward to match.
+
+`commit --only` protects other PATHS and structurally cannot protect other
+HUNKS inside a path you name, because it takes that path's whole current
+working-tree content. `commit-patch` applies your patch to the index instead
+(`git apply --cached`, on top of the blob the index already holds from HEAD),
+so another lane's uncommitted line in the same file is neither committed nor
+disturbed.
+
+Refuses a non-empty index, a staged path set that differs from the patch's, a
+missing patch file, and being run outside the repository root. Reads the commit
+back the way `lane.sh commit` does.
+
+**After the commit it reconciles the working tree**, per path, three ways: the
+patch applies, so it is applied; it does not, but its reverse does, so the hunk
+is already there and nothing happens; or neither, so a foreign hunk is in the
+way and the path is left alone and named. `git apply` writes nothing unless
+every context line matches, so the first branch can add your hunk and can never
+overwrite another lane's.
+
+That step is not tidiness. Until 2026-09-02 the index was written and the
+working tree was not, so every path in a patch built in a detached worktree —
+the house pattern for a shared file — read afterwards as a REVERSAL of the
+commit just made, and the next `--only` on one of them would have silently
+reverted it. The mirror incident the same day: `9efc24cf` committed a shared
+file with `--only` while another lane's call sites sat in its working-tree
+copy, carrying them to HEAD without the function they call, and main stopped
+compiling. Both tools leave a footgun on the side you are not looking at, so
+read `git diff` on your own paths right after either.
+
 ### `lane.sh fmt [--allow-root] <file.rs> [<file.rs> ...]`
 
 Runs exactly `rustup run 1.97.1 rustfmt --edition 2024 -- <file.rs> ...`.

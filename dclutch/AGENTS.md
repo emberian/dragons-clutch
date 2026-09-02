@@ -47,8 +47,14 @@ is not a source tree to copy wholesale.
   lanes edit *one file* it cannot separate their hunks — for that case use
   `tools/lane.sh commit-patch <msg> <patch-file>`, which applies your patch to an
   index it first proves empty, refuses if the staged path set differs from the
-  patch's, commits HEAD's blob plus your hunk without `--only`, and names any path
-  whose working tree still carries someone else's. Run `cargo check` on the touched workspace before any SBF build. If
+  patch's, commits HEAD's blob plus your hunk without `--only`, then carries that
+  hunk into the working tree wherever it applies cleanly and names any path where
+  someone else's got in the way. It carries it forward because it used to not:
+  the index was written and the working tree was not, so a patch built in a
+  detached worktree left every path reading as a REVERSAL of the commit just made
+  — and a later `--only` on one of them would revert it. **Read `git diff` on your
+  own paths right after either subcommand**; each leaves a footgun on the side the
+  other closes. Run `cargo check` on the touched workspace before any SBF build. If
   `.git/index.lock` is held, check `ps` for a live `git`/`op-ssh-sign` and wait.
 - **The live tree is `/Users/ember/dev/dclutch`. There is a STALE NESTED COPY
   of it at `/Users/ember/dev/dragons-clutch/dclutch`** — the publication subtree

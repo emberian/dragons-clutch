@@ -45,7 +45,7 @@ export default function LaunchStory() {
       <div className="launch-hero-copy">
         <p className="eyebrow"><span className="launch-live-dot" />Dragon&apos;s Clutch · public devnet</p>
         <h1>Markets you can<br />check <em>yourself.</em></h1>
-        <p className="launch-deck">dClutch turns a real-world question with a definite answer into fully collateralized Solana claims. {opened ? 'You can read this market, join it, and trade on devnet — every step from the chain itself, not from us.' : 'You can read the deployed programs right now. When a market opens, this page links to it and to its transactions.'}</p>
+        <p className="launch-deck">dClutch turns a real-world question with a definite answer into fully collateralized Solana claims. {opened ? 'You can read this market and join it on devnet — every step from the chain itself, not from us. Whether it can take a trade is a chain fact, and its own page says which.' : 'You can read the deployed programs right now. When a market opens, this page links to it and to its transactions.'}</p>
         <div className="launch-actions">
           <Anchor className="launch-primary" href={marketHref}>{opened ? 'Enter the live market' : 'Explore the deployment'} <span>↗</span></Anchor>
           <Anchor className="launch-secondary" href={publicCutExplorerHrefV1(cut)}>{opened ? 'Watch this market on chain' : 'Watch the chain'}</Anchor>

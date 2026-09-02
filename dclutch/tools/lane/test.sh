@@ -168,6 +168,103 @@ else
   bad "lane_path_covered: all three cases correct"
 fi
 
+echo "=== lane.sh commit-patch ==="
+
+# A scratch repo of its own, because these cases care about the exact
+# relationship between HEAD, the index and the working tree, and the `commit`
+# cases above leave all three in a state they chose.
+CP="$WORK/cp"
+mkdir -p "$CP"
+git -C "$CP" init -q
+git -C "$CP" config user.email "lane-test@example.invalid"
+git -C "$CP" config user.name "lane test"
+git -C "$CP" config commit.gpgsign false
+printf 'alpha\nbeta\ngamma\n' >"$CP/clean.txt"
+printf 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n' >"$CP/shared.txt"
+git -C "$CP" add clean.txt shared.txt
+git -C "$CP" commit -q -m "initial"
+
+# THE PATCH IS BUILT SOMEWHERE ELSE, which is the case the reconciliation step
+# exists for: a detached worktree is the house pattern for a shared file, and a
+# patch from one leaves the working tree at HEAD for every path it names.
+CP_WT="$WORK/cp-worktree"
+git -C "$CP" worktree add -q --detach "$CP_WT" HEAD
+printf 'alpha\nBETA-mine\ngamma\n' >"$CP_WT/clean.txt"
+sed -i.bak 's/^two$/two-MINE/' "$CP_WT/shared.txt" && rm -f "$CP_WT/shared.txt.bak"
+git -C "$CP_WT" diff >"$WORK/mine.patch"
+git -C "$CP" worktree remove --force "$CP_WT"
+
+# ...and meanwhile ANOTHER LANE holds a line in one of those same files, far
+# from mine, uncommitted. It must survive untouched.
+sed -i.bak 's/^nine$/nine-THEIRS/' "$CP/shared.txt" && rm -f "$CP/shared.txt.bak"
+
+expect_success "commit-patch: commits HEAD's blob plus the patch" \
+  in_dir "$CP" "$LANE_SH" commit-patch "lane test: my hunk only" "$WORK/mine.patch"
+
+# (a) A path with no foreign hunk must read CLEAN afterwards. Before the
+# reconciliation step this was the bug: `git apply --cached` left the working
+# tree at HEAD, so the file read as a REVERSAL of the commit just made, and the
+# next `lane.sh commit --only` on it would have silently reverted the hunk.
+if [[ -z "$(git -C "$CP" diff --name-only -- clean.txt)" ]]; then
+  ok "commit-patch: a path with no foreign hunk is clean after the commit"
+else
+  bad "commit-patch: a path with no foreign hunk is clean after the commit (git diff still shows it)"
+fi
+if grep -qx 'BETA-mine' "$CP/clean.txt"; then
+  ok "commit-patch: the working tree carries the committed content, not HEAD's"
+else
+  bad "commit-patch: the working tree carries the committed content, not HEAD's"
+fi
+
+# (b) The foreign hunk in the SAME PATCH's other file survives, and is the only
+# thing left dirty there.
+if grep -qx 'nine-THEIRS' "$CP/shared.txt"; then
+  ok "commit-patch: the other lane's hunk survives in a file the patch touched"
+else
+  bad "commit-patch: the other lane's hunk survives in a file the patch touched"
+fi
+if grep -qx 'two-MINE' "$CP/shared.txt"; then
+  ok "commit-patch: and the committed hunk was carried into that file too"
+else
+  bad "commit-patch: and the committed hunk was carried into that file too"
+fi
+CP_LEFT="$(git -C "$CP" diff -- shared.txt | grep -c '^+[^+]' || true)"
+if [[ "$CP_LEFT" -eq 1 ]] && git -C "$CP" diff -- shared.txt | grep -qx '+nine-THEIRS'; then
+  ok "commit-patch: exactly the foreign hunk is left dirty, nothing else"
+else
+  bad "commit-patch: exactly the foreign hunk is left dirty, nothing else (found $CP_LEFT added lines)"
+fi
+CP_READBACK="$(git -C "$CP" show --name-only --pretty=format: HEAD | grep -vc '^$' || true)"
+if [[ "$CP_READBACK" -eq 2 ]]; then
+  ok "commit-patch: the commit names exactly the patch's two paths"
+else
+  bad "commit-patch: the commit names exactly the patch's two paths (got $CP_READBACK)"
+fi
+if git -C "$CP" show HEAD:shared.txt | grep -qx 'nine'; then
+  ok "commit-patch: the other lane's line was NOT swept into the commit"
+else
+  bad "commit-patch: the other lane's line was NOT swept into the commit"
+fi
+
+# (c) The ordinary case -- you edited in place, so the working tree already
+# carries the hunk -- must stay a silent no-op rather than failing to re-apply.
+sed -i.bak 's/^gamma$/gamma-again/' "$CP/clean.txt" && rm -f "$CP/clean.txt.bak"
+git -C "$CP" diff -- clean.txt >"$WORK/inplace.patch"
+expect_success "commit-patch: an already-applied hunk reconciles as a no-op" \
+  in_dir "$CP" "$LANE_SH" commit-patch "lane test: in-place hunk" "$WORK/inplace.patch"
+if [[ -z "$(git -C "$CP" diff --name-only -- clean.txt)" ]] && grep -qx 'gamma-again' "$CP/clean.txt"; then
+  ok "commit-patch: the in-place path is clean and still carries its hunk"
+else
+  bad "commit-patch: the in-place path is clean and still carries its hunk"
+fi
+
+expect_refusal "commit-patch: refuses a non-empty index" \
+  in_dir "$CP" env GIT_INDEX_TEST=1 bash -c 'git add -A >/dev/null 2>&1; touch staged.txt; git add staged.txt; "$0" commit-patch "msg" "$1"' "$LANE_SH" "$WORK/inplace.patch"
+git -C "$CP" reset -q
+
+expect_refusal "commit-patch: refuses a patch file that does not exist" \
+  in_dir "$CP" "$LANE_SH" commit-patch "msg" "$WORK/no-such.patch"
+
 echo "=== lane.sh fmt ==="
 
 mkdir -p "$WORK/fmtdir"
