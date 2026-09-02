@@ -3269,3 +3269,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - CLASS-DELTA closed (`aeb316d4`, `bf59126d`): `--declared-class-delta LABEL=I128`, the simulator declares from the finalized
   fill document; L8 proven reachable and satisfiable through the census binary. COHORT-13 has the flags.
 - Cuts: `31c3e304f`, `00096ac9f`.
+
+### Lane map delta — 2026-09-03 05:00
+- COHORT-13: **the founding LANDED** (sealed plan, agreeing identities) and the driver then exited 1 on a transient
+  `getBlockTime -32004` after finalization, so the report has no `execution` block and activation refuses
+  ("campaign report omitted execution", campaign.rs:368). No fill yet; the census is no longer among the reasons.
+  **Third instance of one pattern:** `recovered_finalized_founding` has a schema field, two serialization sites and a refusal
+  naming the owed repair, and its only two writers write the literal `false` — reader, schema and refusal built, producer
+  never written (cohort-12's already-current writer; the permanent target set). Also: `capture_founding_poststates_v1` re-reads
+  an account a later stage consumed, so a COMPLETED founding can never be resumed. → RECOVERY **`ad3313e1364efe1be`**: the
+  producer, journal-based poststate comparison, non-fatal post-finalization reads, and the detector (a schema bool with only
+  literal-false writers fails a test). Deadline: slot 492,460,566, ~55 h. Fallback: a second founding on the sealed plan.
+- Evidence: `docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md`. Cuts: `41dd93143`.
