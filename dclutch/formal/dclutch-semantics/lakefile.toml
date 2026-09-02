@@ -219,6 +219,10 @@ name = "emit-dealer-scenario-netting-corpus-rust"
 root = "EmitDealerScenarioNettingCorpusRust"
 
 [[lean_exe]]
+name = "emit-general-selection-decision-corpus-rust"
+root = "EmitGeneralSelectionDecisionCorpusRust"
+
+[[lean_exe]]
 name = "emit-capability-funding-activation-corpus-rust"
 root = "EmitCapabilityFundingActivationCorpusRust"
 

@@ -366,4 +366,292 @@ theorem accepted_close_routes_surplus_and_leaves_zero_residuals
   have pre := accepted_close_requires_zero_residual_claim_liability candidate state accepted
   exact ⟨rfl, pre.2, rfl, rfl⟩
 
+/-! ## Runtime selection decision corpus
+
+`crates/dclutch-general-adapter-contract` decides the best valid submitted
+candidate in a COMPOSITION of three functions, and reading any one of them
+alone gives a wrong verdict about this module:
+
+* `runtime_verify::runtime_verified_balance_v2` derives the complete-set
+  movement and the exact quote surplus from a certificate's claim banks and
+  aggregate quote fields, which is `Candidate.completeSetMove` and
+  `Candidate.quoteAfterMaterialization` here;
+* `runtime_verify::runtime_candidate_key_better_v2` interprets the immutable
+  policy over the resulting three-field key, which is `betterBy` here;
+* `runtime_selection::consider_verified_candidate_v2` is the fold, and it is
+  the only one of the three that decides anything -- replacement, and the
+  keep-on-tie that `exact_objective_tie_keeps_the_submitted_incumbent` proves.
+  It reads the incumbent's key from the PERSISTED CURSOR rather than
+  recomputing it, so those bytes are a third author of the comparison.
+
+Three facts about the runtime side this corpus declines to smooth over.
+
+Rust refuses a gate EARLIER than this module in two places. Its balance
+derivation refuses `ClaimImbalance` when any coordinate disagrees with the
+movement read off coordinate zero, where `Candidate.completeSetMove` is total
+and `Candidate.claimsBalance` is a separate conjunct; and it refuses
+`QuoteImbalance` on a credit exceeding available quote, where
+`Objective.quoteSurplus` truncates in `Nat`. Those two conjuncts are asserted
+of every vector below, so the replay runs on the domain where the two agree
+rather than on the domain where one of them is silently absorbing a defect.
+
+Rust also refuses `DuplicateCandidate`, `Substitution` and `RevisionMismatch`,
+which have no counterpart here at all: they are the optimistic-concurrency and
+comparison-domain obligations of a permissionless account frame, not facts
+about selection. Product, Batch, policy identity, price scale and outcome
+width are held fixed across each vector so none of them can fire.
+
+And candidate identity is a `Nat` here and a little-endian 32-byte content
+identity there. The emitted bytes are that embedding; one vector separates two
+identities in byte 31 alone, so a big-endian reading of the tie-break would
+disagree here rather than nowhere.
+
+What this does not bridge: candidate ADMISSION. A certificate is already
+verified when selection reads it, and these certificates are deliberately not
+`Candidate.valid` -- their quote fields are candidate-wide aggregates rather
+than per-execution rounded quotes, so `quotesCanonical` fails on all of them.
+The two admission conjuncts the runtime's balance derivation actually mirrors
+are `claimsBalance` and `quoteBalances`, and those are the two asserted. -/
+
+/-- One submitted certificate exactly as the runtime selection cursor reads
+it: a content identity, one signed per-lot claim exchange scaled by the
+candidate's filled lots, and the aggregate quote debit and credit. -/
+structure SubmittedCertificate where
+  candidateId : Nat
+  lots : Nat
+  deliverPerLot : List Nat
+  receivePerLot : List Nat
+  quoteDebit : Nat
+  quoteCredit : Nat
+  deriving Repr
+
+/-- The `Candidate` a certificate stands for. Prices, order identity and page
+geometry are held at benign values because `Candidate.objective` reads none of
+them; every quantity the corpus emits is then computed by `GeneralClearing`'s
+own definitions from this candidate rather than restated. -/
+def certificateCandidate (certificate : SubmittedCertificate) : Candidate := {
+  candidateId := certificate.candidateId
+  productId := 1
+  batchId := 1
+  outcomeCount := certificate.deliverPerLot.length
+  prices := { scale := 1, coordinates := [1] }
+  pages := [{ executions := [{
+    order := {
+      orderId := 1
+      ownerId := 1
+      nonce := 0
+      receivePerLot := certificate.receivePerLot
+      deliverPerLot := certificate.deliverPerLot
+      maxLots := certificate.lots
+      maxQuoteDebitPerLot := certificate.quoteDebit }
+    lots := certificate.lots
+    quoteDebit := certificate.quoteDebit
+    quoteCredit := certificate.quoteCredit }] }]
+}
+
+/-- Exactly what the runtime cursor persists about its incumbent: the
+Candidate's one-based coordinate in its immutable Batch, and the objective the
+policy interprets. -/
+abbrev SubmissionKey := Nat × Objective
+
+/-- One fold step of the runtime selection cursor. -/
+def considerKey (policy : SelectionPolicy)
+    (incumbent : Option SubmissionKey) (submitted : SubmissionKey) : Option SubmissionKey :=
+  match incumbent with
+  | none => some submitted
+  | some current =>
+      if betterBy policy.criteria submitted.2 current.2 then some submitted else some current
+
+/-- The complete fold over one Batch's submissions, in submission order. -/
+def selectBest (policy : SelectionPolicy) (submissions : List SubmissionKey) :
+    Option SubmissionKey :=
+  submissions.foldl (considerKey policy) none
+
+/-- Certificates paired with their one-based Batch coordinates. -/
+def certificateKeys : Nat → List SubmittedCertificate → List SubmissionKey
+  | _, [] => []
+  | coordinate, certificate :: rest =>
+      (coordinate, (certificateCandidate certificate).objective)
+        :: certificateKeys (coordinate + 1) rest
+
+theorem consider_takes_the_first_valid_submission
+    (selection : Selection) (candidate : Candidate)
+    (openSelection : selection.closed = false)
+    (candidateValid : candidate.valid = true)
+    (vacant : selection.best = none) :
+    (selection.consider candidate).best = some candidate := by
+  simp [Selection.consider, openSelection, candidateValid, vacant]
+
+theorem consider_replaces_a_strictly_better_submission
+    (selection : Selection) (incumbent candidate : Candidate)
+    (openSelection : selection.closed = false)
+    (candidateValid : candidate.valid = true)
+    (incumbentSelected : selection.best = some incumbent)
+    (better :
+      betterBy selection.policy.criteria candidate.objective incumbent.objective = true) :
+    (selection.consider candidate).best = some candidate := by
+  simp [Selection.consider, openSelection, candidateValid, incumbentSelected,
+    SelectionPolicy.better, better]
+
+theorem consider_keeps_an_incumbent_no_submission_betters
+    (selection : Selection) (incumbent candidate : Candidate)
+    (openSelection : selection.closed = false)
+    (candidateValid : candidate.valid = true)
+    (incumbentSelected : selection.best = some incumbent)
+    (notBetter :
+      betterBy selection.policy.criteria candidate.objective incumbent.objective = false) :
+    (selection.consider candidate).best = some incumbent := by
+  simp [Selection.consider, openSelection, candidateValid, incumbentSelected,
+    SelectionPolicy.better, notBetter]
+
+/-- The key-level fold IS `Selection.consider`, projected onto the objective
+the runtime cursor persists. This is what lets a corpus of keys stand in for a
+corpus of candidates: the coordinate rides along untouched, so keeping the
+incumbent on a tie is what makes the EARLIEST submission win. -/
+theorem consider_key_agrees_with_consider
+    (selection : Selection) (incumbent candidate : Candidate)
+    (coordinate incumbentCoordinate : Nat)
+    (openSelection : selection.closed = false)
+    (candidateValid : candidate.valid = true)
+    (incumbentSelected : selection.best = some incumbent) :
+    (considerKey selection.policy (some (incumbentCoordinate, incumbent.objective))
+        (coordinate, candidate.objective)).map Prod.snd =
+      (selection.consider candidate).best.map Candidate.objective := by
+  by_cases better :
+      betterBy selection.policy.criteria candidate.objective incumbent.objective = true
+  · rw [consider_replaces_a_strictly_better_submission selection incumbent candidate
+      openSelection candidateValid incumbentSelected better]
+    simp [considerKey, better]
+  · simp only [Bool.not_eq_true] at better
+    rw [consider_keeps_an_incumbent_no_submission_betters selection incumbent candidate
+      openSelection candidateValid incumbentSelected better]
+    simp [considerKey, better]
+
+/-! ### The vectors -/
+
+def certificate (candidateId lots : Nat) (deliverPerLot receivePerLot : List Nat)
+    (quoteDebit quoteCredit : Nat) : SubmittedCertificate :=
+  { candidateId, lots, deliverPerLot, receivePerLot, quoteDebit, quoteCredit }
+
+/-- The exact-tie submission. It is submitted twice, under two Batch
+coordinates, which is the only way an exact objective tie can reach the
+runtime fold at all: two byte-identical certificates would be refused as a
+`DuplicateCandidate` before any comparison happened. -/
+def tieCertificate : SubmittedCertificate := certificate 11 2 [4, 4] [4, 4] 12 3
+
+/-- One selection decision case: submissions in cursor order. -/
+structure SelectionVector where
+  name : String
+  submissions : List SubmittedCertificate
+
+/-- The production V5 policy as a complete admissible policy record. -/
+def canonicalPolicy : SelectionPolicy :=
+  { policyId := 1, criteria := canonicalCriteria }
+
+theorem canonical_policy_is_admissible : canonicalPolicy.valid = true := by
+  native_decide
+
+def selectionVectors : List SelectionVector := [
+  { name := "the_first_submission_becomes_the_incumbent",
+    submissions := [certificate 7 3 [2, 2] [2, 2] 10 4] },
+  { name := "more_filled_lots_replaces_a_smaller_quote_surplus",
+    submissions := [certificate 5 2 [1, 1] [1, 1] 9 9,
+                    certificate 9 4 [1, 1] [1, 1] 9 1] },
+  { name := "fewer_filled_lots_never_replaces_however_small_the_surplus",
+    submissions := [certificate 9 5 [1, 1] [1, 1] 9 1,
+                    certificate 2 4 [1, 1] [1, 1] 3 3] },
+  { name := "equal_lots_are_decided_by_the_smaller_quote_surplus",
+    submissions := [certificate 4 6 [3, 3] [3, 3] 20 5,
+                    certificate 8 6 [3, 3] [3, 3] 20 18] },
+  { name := "equal_lots_and_surplus_are_decided_in_the_most_significant_id_byte",
+    submissions := [certificate 452312848583266388373324160190187140051835877600158453279131187530910662656
+                      3 [1, 1] [1, 1] 7 2,
+                    certificate 6 3 [1, 1] [1, 1] 7 2] },
+  { name := "an_exact_objective_tie_keeps_the_submitted_incumbent",
+    submissions := [tieCertificate, tieCertificate] },
+  { name := "the_complete_set_mint_and_merge_reach_the_same_surplus_domain",
+    submissions := [certificate 3 1 [2, 2] [5, 5] 10 1,
+                    certificate 4 1 [6, 6] [1, 1] 10 12] },
+  { name := "a_three_outcome_batch_keeps_a_winner_a_later_submission_ties_on_lots",
+    submissions := [certificate 20 4 [1, 1, 1] [1, 1, 1] 8 0,
+                    certificate 30 9 [2, 2, 2] [2, 2, 2] 5 5,
+                    certificate 1 9 [1, 1, 1] [1, 1, 1] 6 5] }
+]
+
+/-- The decision one policy reaches on one vector: winning coordinate, filled
+lots, quote surplus, candidate identity. -/
+def decisionUnder (criteria : List SelectionCriterion) (vector : SelectionVector) :
+    Nat × Nat × Nat × Nat :=
+  match selectBest { policyId := 1, criteria := criteria }
+      (certificateKeys 1 vector.submissions) with
+  | none => (0, 0, 0, 0)
+  | some (coordinate, objective) =>
+      (coordinate, objective.filledLots, objective.quoteSurplus, objective.candidateId)
+
+def SelectionVector.decision (vector : SelectionVector) : Nat × Nat × Nat × Nat :=
+  decisionUnder canonicalCriteria vector
+
+/-- Every certificate's claim banks agree with the movement this module reads
+off coordinate zero. This is the domain on which the runtime's balance
+derivation does not refuse `ClaimImbalance`, so a green replay means the two
+agree rather than that one of them never ran. -/
+theorem corpus_certificates_have_balanced_claims :
+    selectionVectors.all (fun vector =>
+      vector.submissions.all (fun submitted =>
+        (certificateCandidate submitted).claimsBalance)) = true := by
+  native_decide
+
+/-- Every certificate's quote credit is covered after materialization: the
+domain on which the runtime refuses no `QuoteImbalance` and on which
+`Objective.quoteSurplus` does not truncate. -/
+theorem corpus_certificates_cover_their_quote_credit :
+    selectionVectors.all (fun vector =>
+      vector.submissions.all (fun submitted =>
+        (certificateCandidate submitted).quoteBalances)) = true := by
+  native_decide
+
+/-- The exact quote surplus of every submission, in order. The runtime derives
+each of these from claim banks and aggregate quote fields; these are the
+numbers it must reach. -/
+theorem corpus_submission_quote_surpluses_are_exact :
+    selectionVectors.map (fun vector =>
+      vector.submissions.map (fun submitted =>
+        (certificateCandidate submitted).objective.quoteSurplus)) =
+      [[6], [0, 8], [8, 0], [15, 2], [5, 5], [9, 9], [6, 3], [8, 0, 1]] := by
+  native_decide
+
+/-- The exact decision of every vector, in order. -/
+theorem corpus_selection_decisions_are_exact :
+    selectionVectors.map SelectionVector.decision =
+      [(1, 3, 6, 7), (2, 4, 8, 9), (1, 5, 8, 9), (2, 6, 2, 8),
+       (2, 3, 5, 6), (1, 2, 9, 11), (2, 1, 3, 4), (2, 9, 0, 30)] := by
+  native_decide
+
+/-- The corpus is not one answer repeated, and it is not agreeable to any
+policy: drop any single criterion from the canonical order and some vector's
+decision changes. A vector list that agreed with everything could not satisfy
+this. -/
+theorem every_canonical_criterion_decides_some_vector :
+    (selectionVectors.any fun vector =>
+      decisionUnder [.minimizeQuoteSurplus, .minimizeCandidateId] vector !=
+        vector.decision) = true ∧
+    (selectionVectors.any fun vector =>
+      decisionUnder [.maximizeFilledLots, .minimizeCandidateId] vector !=
+        vector.decision) = true ∧
+    (selectionVectors.any fun vector =>
+      decisionUnder [.maximizeFilledLots, .minimizeQuoteSurplus] vector !=
+        vector.decision) = true := by
+  native_decide
+
+/-- The tie vector really ties, and the earlier coordinate keeps the
+selection. The first conjunct is `exact_objective_tie_never_replaces` at the
+canonical policy on real corpus data rather than on a hypothesis. -/
+theorem corpus_exact_tie_keeps_the_earlier_coordinate :
+    canonicalBetter (certificateCandidate tieCertificate).objective
+        (certificateCandidate tieCertificate).objective = false ∧
+      (decisionUnder canonicalCriteria
+        { name := "tie", submissions := [tieCertificate, tieCertificate] }).1 = 1 := by
+  refine ⟨exact_objective_tie_never_replaces canonicalCriteria _ _ rfl, ?_⟩
+  native_decide
+
 end DClutch.General.V5Assurance

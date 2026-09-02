@@ -69,17 +69,12 @@ MAX_JSON_BYTES = 32 * 1024 * 1024
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 CAMPAIGN_ROLES = ("registry", "core", "claims", "trading", "resolution", "custody", "rent")
-ARTIFACT_ROLES = (
-    "claims",
-    "core",
-    "custody",
-    "dealer-accelerator",
-    "general-accelerator",
-    "registry",
-    "rent",
-    "resolution",
-    "series-shadow",
-    "trading",
+# Both DERIVED from the one shipped set, never restated. The set is the thing
+# that moves -- `e6b7bf1a` deleted a program from it -- and every copy of it in
+# this file was a copy that did not move with it.
+SHIPPED_LABELS = frozenset(label for label, _package, _produces in SHIPPED_LINKS)
+ARTIFACT_ROLES = tuple(
+    label for label, _package, produces_artifact in SHIPPED_LINKS if produces_artifact
 )
 GENESIS_SLOTS = {
     "registry": 11,
@@ -909,11 +904,7 @@ def emit(arguments: argparse.Namespace) -> None:
                 "frame_report": link.get("frame_report"),
             }
         )
-    if set(gate_by_label) != {
-        "claims", "core", "custody", "dealer-accelerator", "dclutch-dealer-sbf",
-        "dclutch-direct-aot-sbf", "general-accelerator", "dclutch-product-runtime-v2-sbf",
-        "registry", "rent", "resolution", "series-shadow", "trading",
-    }:
+    if set(gate_by_label) != set(SHIPPED_LABELS):
         refuse("checked Upgrade gate link labels differ from the shipped set")
 
     artifacts: list[dict[str, Any]] = []

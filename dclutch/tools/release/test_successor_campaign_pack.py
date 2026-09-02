@@ -40,6 +40,19 @@ class SuccessorCampaignPackTests(unittest.TestCase):
         # The authority is the set in artifact_provenance, read here rather than
         # restated, so a link appearing or disappearing moves both together.
         self.assertEqual(pack_tool.SHIPPED_LINK_COUNT, shipped)
+        self.assertEqual(
+            pack_tool.SHIPPED_LABELS,
+            frozenset(label for label, _p, _a in provenance.SHIPPED_LINKS),
+        )
+        self.assertEqual(
+            pack_tool.ARTIFACT_ROLES,
+            tuple(label for label, _p, produces in provenance.SHIPPED_LINKS if produces),
+        )
+        # The deleted program is gone from every one of them. This is the exact
+        # residue `e6b7bf1a` left: a label set naming a program that no longer
+        # ships, which refuses every candidate built after the deletion.
+        self.assertNotIn("dclutch-dealer-sbf", pack_tool.SHIPPED_LABELS)
+        self.assertNotIn("dclutch-dealer-sbf", pack_tool.ARTIFACT_ROLES)
 
         exact = {"link_count": shipped, "links": [{"label": f"l{i}"} for i in range(shipped)]}
         self.assertEqual(pack_tool.require_shipped_link_count(exact), exact["links"])

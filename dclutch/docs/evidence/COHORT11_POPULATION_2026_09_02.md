@@ -337,20 +337,55 @@ the cuts, the coefficients and the denominator, and does not record the fee
 rate; nothing read it back, and the founding succeeded, because every stage
 before the fill is indifferent to it.
 
-### And the fill has a size ceiling, which decides the ticket terms
+### And the fill has NO size ceiling — corrected 2026-09-02 by the Direct lane
 
-From the same stager passage, and it constrains any trade this substrate can
-demonstrate: `fee = mul_div_floor(gross, policy_fee_bps, 10_000)`, so at 50 bps
-every trade whose **gross collateral is 1..=199 atoms has fee 0**, takes the
-one-CPI branch, and is measured at 1,329,618..1,349,118 CU against the
-1,400,000 ceiling. Any larger trade floors to a nonzero fee, takes the two-CPI
-branch at 1,515,003 CU, and is **over the ceiling until the second-transaction
-fee leg ships**.
+**This section read the opposite until it was measured, and the correction
+matters because it was deciding the ticket terms.** It said a trade whose gross
+collateral exceeds 199 atoms floors to a nonzero fee, takes a two-CPI branch at
+1,515,003 CU, and is "over the ceiling until the second-transaction fee leg
+ships". The second-transaction fee leg SHIPPED on 2026-08-31
+(`docs/evidence/FEE_SECOND_TRANSACTION_PAIR_2026_08_31.md`), and the two-CPI
+branch it describes no longer exists in the ordinary Direct fill at all:
+`DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2 = 1`
+(`crates/dclutch-direct-codec/src/inline_candidate_v2.rs:36`). tx1 dispatches
+the seller-net leg and nothing else, at every size. This file's own later
+section — "The fee does not move at fill time, ever" — is the correct account,
+and the two passages contradicted each other.
+
+Re-measured 2026-09-02 at HEAD `9c5e039a` on five real role ELFs (trading
+`34430cc7241ff44702df2e5afa6b3fb70b80631c4aa04661e32f0605195e6711`, zero frame
+diagnostics on every role), `direct_hot_fee_pair` and
+`direct_hot_fee_bearing_margin_gate`:
+
+| | CU | against 1,400,000 |
+| --- | ---: | ---: |
+| tx1, fee-bearing fill at gross 200 | 1,317,129 | fits |
+| tx2, `DCLTDFS1` fee settlement | 173,662 | fits with 1.2M spare |
+| fee-bearing sweep, 32/32 seeds | 1,312,628 – 1,329,130 | worst margin **70,870** |
+| zero-fee sweep, 32/32 seeds | 1,309,761 – 1,332,261 | worst margin **67,739** |
+
+The fee-bearing arm's key-independent floor is 1,299,128 against the zero-fee
+arm's 1,299,259 — **131 CU BELOW it**, less than a tenth of one PDA bump
+attempt, which is to say the two are the same route and size does not select a
+branch.
+
+So a fee-bearing devnet trade is admissible at any gross this market can carry.
+The reason to keep the demonstration small is the one this file gives later and
+it is not compute: at gross ≤ 199 both fees floor to zero, so the fill leaves no
+`fee_owed`, no maker lockout, and no second transaction to crank.
+
+**Standing caution, not a ceiling.** Both arms have lost about 31,200 CU of
+margin since 2026-08-31 — both margin-gate ratchets are red at HEAD for that
+reason — so the headroom above is 70,870 and shrinking, not a comfortable one.
 
 The producer's own loopback defaults (`FILL_ATOMS_V1 = 100_000_000`,
 `EXECUTION_PRICE_V1 = 500_000`, `direct_trade_producer.rs:103`) give
-gross = 50,000,000 atoms and a fee of 250,000 — the blocked branch. A devnet
-demonstration must therefore be small.
+gross = 50,000,000 atoms and a fee of 250,000. That is not a blocked branch — it
+executes — but it is a trade that leaves 250,000 owed on the buyer's maker replay
+and locks that maker out of the market on both sides until a `DCLTDFS1`
+transaction settles it. A first demonstration that keeps `fee_owed` at zero needs
+no second transaction and no lockout to reason about, so the terms below stay
+small on purpose rather than by necessity.
 
 ### The prepared terms
 

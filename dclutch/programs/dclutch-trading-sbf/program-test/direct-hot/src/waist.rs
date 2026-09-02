@@ -1140,7 +1140,51 @@ pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 4] {
     ]
 }
 
+/// The canonical lookup-table address set, from its ONE author.
+///
+/// This used to be a second copy of `dclutch_operator::direct_inline_v3::
+/// canonical_lookup_addresses`, and the copies did not agree: this one filtered
+/// `meta.is_signer` PER OCCURRENCE, so an account signing in one instruction and
+/// not in another entered the table through its non-signing appearance -- and a
+/// v0 message must carry every signer as a static key. The fixtures had not
+/// reached a frame shaped that way, which is the only reason it had not bitten.
+///
+/// The signer set is collected from the metas here because a test harness has no
+/// separate declaration of it; the FILTER is the operator's.
 pub fn canonical_lookup_addresses(instructions: &[Instruction], payer: Pubkey) -> Vec<Pubkey> {
+    // `Pubkey::default()` is how a caller here says "no payer chosen yet" -- a
+    // table is staged before the harness picks who pays -- so it is not added to
+    // the signer set rather than being passed off as one.
+    let mut signers = Vec::new();
+    if payer != Pubkey::default() {
+        signers.push(payer);
+    }
+    for meta in instructions
+        .iter()
+        .flat_map(|instruction| &instruction.accounts)
+    {
+        if meta.is_signer && !signers.contains(&meta.pubkey) {
+            signers.push(meta.pubkey);
+        }
+    }
+    dclutch_operator::direct_inline_v3::canonical_lookup_addresses_excluding_signers(
+        instructions,
+        &signers,
+    )
+    .expect("canonical Direct lookup-table addresses")
+}
+
+/// The superseded per-occurrence derivation, kept only to be compared against.
+///
+/// `canonical_lookup_addresses_disagreement_is_measured_not_assumed` drives both
+/// on the real registered creation frames, so "the copies agreed on this fixture"
+/// is a measurement rather than a hope, and the day a frame makes them disagree
+/// the case says so instead of the message quietly gaining a non-static signer.
+#[cfg(test)]
+pub(crate) fn superseded_per_occurrence_lookup_addresses(
+    instructions: &[Instruction],
+    payer: Pubkey,
+) -> Vec<Pubkey> {
     let programs = instructions
         .iter()
         .map(|instruction| instruction.program_id)
@@ -1267,9 +1311,29 @@ pub async fn submit_v0_observed(
         // 28 bytes before the validated-artifact seal was introduced:
         // 1,228 + 40 - 64 = 1,204. The execution-only seal projection aliases
         // its six authenticated staging coordinates to the matching raw
-        // coordinates, removing six lookup indexes and producing 1,198.
+        // coordinates, removing six lookup indexes, producing 1,198.
+        //
+        // 1,167 since 2026-09-02, and the 31 bytes are ONE key -- the System
+        // program -- moving out of the static set and into the table: a static
+        // key costs 32 bytes, a lookup index costs 1.
+        //
+        // `Pubkey::default()` and the System program id are the same 32 zero
+        // bytes. The superseded derivation filtered `meta.pubkey != payer`, and
+        // every caller here that has not chosen a payer yet passes
+        // `Pubkey::default()` -- so it excluded the SYSTEM PROGRAM from the
+        // table, by coincidence of encoding rather than by any rule. The
+        // operator's builder refuses a default payer outright, so it has always
+        // looked the System program up; this pin was measuring a packet the
+        // protocol never emits, 31 bytes pessimistic. Both are one author now
+        // and the harness measures the operator's wire.
+        //
+        // Looking it up is legal because only a TOP-LEVEL instruction's program
+        // id must be a static key. `solana-message`'s `CompiledKeys` marks those
+        // `is_invoked` and never drains them into a table; a program reached by
+        // CPI carries no such rule, and the two cases below execute the whole
+        // Direct Hot action with it looked up.
         assert_eq!(
-            wire, 1_198,
+            wire, 1_167,
             "budgeted transparent continuation wire changed"
         );
     }

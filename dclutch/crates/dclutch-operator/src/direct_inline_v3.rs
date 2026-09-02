@@ -1403,7 +1403,19 @@ pub fn canonical_direct_inline_lookup_addresses_v3(
     )
 }
 
-fn canonical_lookup_addresses(
+/// The sole author of a canonical Direct lookup-table address set.
+///
+/// SIGNERS ARE EXCLUDED BY KEY, NOT BY OCCURRENCE. A v0 message must carry every
+/// signer as a static key, and the same account may appear as a signing meta in
+/// one instruction and a non-signing meta in another -- so a filter that tests
+/// `meta.is_signer` per occurrence admits a signer into the table through its
+/// non-signing appearance and compiles a message whose signer is not static.
+/// Testing the signer KEY SET cannot do that.
+///
+/// `pub` since 2026-09-02: the program-test waist had its own copy carrying
+/// exactly the per-occurrence filter above, which is two authors for one message
+/// and one of them wrong in a case the fixtures had not yet reached.
+pub fn canonical_lookup_addresses(
     instructions: &[Instruction],
     instruction_signers: &[Pubkey],
     payer: Pubkey,
@@ -1420,6 +1432,21 @@ fn canonical_lookup_addresses(
             signers.push(*signer);
         }
     }
+    canonical_lookup_addresses_excluding_signers(instructions, &signers)
+}
+
+/// The same filter, for a caller that states its complete signer set directly.
+///
+/// A SUBMISSION always has a fee payer, and `canonical_lookup_addresses` refuses
+/// without one. A table BUILDER does not always: a market's lookup table is
+/// published before anyone has chosen who will pay for the transactions that use
+/// it, and a harness that stages one has no payer to name either. Those callers
+/// state the signer set they know and get the same filter; they do not get to
+/// skip it, and they do not get a second copy of it.
+pub fn canonical_lookup_addresses_excluding_signers(
+    instructions: &[Instruction],
+    signers: &[Pubkey],
+) -> Result<Vec<Pubkey>, DirectInlineTransactionErrorV3> {
     let program_ids = instructions
         .iter()
         .map(|instruction| instruction.program_id)

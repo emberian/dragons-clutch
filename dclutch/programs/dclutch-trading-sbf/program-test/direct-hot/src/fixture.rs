@@ -4413,6 +4413,70 @@ mod tests {
         );
     }
 
+    /// The lookup-table address set has ONE author, and the copies are compared.
+    ///
+    /// The waist carried its own derivation until 2026-09-02. It filtered
+    /// `meta.is_signer` PER OCCURRENCE; the operator's filters the signer KEY
+    /// SET. They differ exactly when an account signs in one instruction of a
+    /// batch and not in another, because the per-occurrence filter then admits a
+    /// signer into the table -- and a v0 message must carry every signer as a
+    /// static key.
+    ///
+    /// This drives both on the real registered Sell and Buy frames, so whether
+    /// they agree TODAY is measured rather than assumed, and the day a frame
+    /// makes them disagree this case names it instead of the message quietly
+    /// gaining a non-static signer.
+    #[test]
+    fn canonical_lookup_addresses_disagreement_is_measured_not_assumed() {
+        let input = input();
+        let fixture =
+            build_direct_registered_creation_chain_fixture_v4(input).expect("registered chain");
+        let payer = input.payer;
+
+        for (side, instruction) in [
+            ("Sell", &fixture.sell_hot_instruction),
+            ("Buy", &fixture.buy_hot_instruction),
+        ] {
+            let batch = [instruction.clone()];
+            let authored = crate::waist::canonical_lookup_addresses(&batch, payer);
+            let superseded =
+                crate::waist::superseded_per_occurrence_lookup_addresses(&batch, payer);
+
+            // Sorted, deduplicated, and never empty -- the operator refuses an
+            // empty or over-256 table rather than compiling one.
+            assert!(!authored.is_empty(), "{side}: an empty table is refused");
+            assert!(authored.len() <= 256, "{side}: table over the index space");
+            let mut sorted = authored.clone();
+            sorted.sort_unstable_by_key(Pubkey::to_bytes);
+            sorted.dedup();
+            assert_eq!(authored, sorted, "{side}: table is not canonical");
+
+            // No signer may appear in the table, by KEY. This is the property the
+            // superseded copy could violate, and it is asserted directly rather
+            // than inferred from the two agreeing.
+            for meta in instruction.accounts.iter().filter(|meta| meta.is_signer) {
+                assert!(
+                    !authored.contains(&meta.pubkey),
+                    "{side}: signer {} is in the lookup table",
+                    meta.pubkey
+                );
+            }
+            assert!(
+                !authored.contains(&payer),
+                "{side}: the fee payer is in the lookup table"
+            );
+
+            // And the measurement: on THIS frame the two agree. That is a fact
+            // about these fixtures, not about the derivations.
+            assert_eq!(
+                authored, superseded,
+                "{side}: the two derivations disagree on this frame -- the \
+                 superseded copy is the one that may admit a signer, so read \
+                 the difference before trusting either",
+            );
+        }
+    }
+
     /// Execute both registered creation profiles against a real frame.
     ///
     /// The registered creation artifacts were proved to agree with themselves
@@ -4461,13 +4525,13 @@ mod tests {
                 project_atomic,
             },
         };
-        use dclutch_realm_contract::RealmLayoutV1;
         use dclutch_capability_program_contract::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
         use dclutch_direct_codec::registered_creation_artifacts_v4::{
             DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
             DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4, REGISTERED_IDENTITY_MINT_V4,
             REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
         };
+        use dclutch_realm_contract::RealmLayoutV1;
 
         let input = input();
         let rent = Rent::default();

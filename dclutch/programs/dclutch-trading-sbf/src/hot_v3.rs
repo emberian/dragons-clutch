@@ -13387,6 +13387,13 @@ fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info
     let mut next_scalars = ScratchVecV1::filled(region, &0_u64, scalar_count)?;
     let mut next_identities = ScratchVecV1::filled(region, &[0_u8; 32], identity_count)?;
     hot_heap_mark!("projection-three-pairs");
+    // The widest unlit stretch of the ladder ran from `p5-geometry-rent` to
+    // `p5r-account-projection`: 145,229 CU on 2026-09-02, the largest span in
+    // the route that is not a child CPI, and it covered TWO unrelated things --
+    // the six register banks above being allocated and zero-filled, and the
+    // account projection walk below. A span with two subjects cannot answer for
+    // either, so this splits it.
+    hot_cu_checkpoint!("p5r-projection-banks");
 
     let account_registers = ProjectionRegistersV2 {
         input_scalars: &current_scalars,
