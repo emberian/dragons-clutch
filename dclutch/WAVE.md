@@ -6296,3 +6296,120 @@ selected actions it then refuses to build.** Decided on a stated principle — *
 operator must be able to build what the chain admits* — the Hot open-selected path
 gets a non-Bearer sibling with the specialization chosen by the descriptor.
 Overturnable if the code disagrees.
+
+## 2026-09-01 - the harness was answering for the runtime, and it discarded a good repair
+
+**The accelerator's program-test forces the compute budget.** `freeze.rs:252` and
+`lifecycle.rs:1123` both called `test.set_compute_max_units(1_400_000)`, which
+does not set a limit: it installs one **fixed** `RuntimeConfig.compute_budget`
+with `heap_size` at the 32,768 default, after which the per-transaction
+`RequestHeapFrame` is **never consulted**. `7b80869d` removed exactly this from
+the Direct campaign this morning, and `waist::program_test_without_forced_budget`
+is the helper whose name is the whole finding.
+
+So the cleanups lane's `Access violation writing 10608 bytes at 0x300005f60 ...
+runtime mapped 32768` was not their extraction being wrong. **The request was
+present and the grant was not, because the harness had answered for the
+runtime.**
+
+### The A/B, on their preserved trees
+
+Same migration applied to both — forced budget removed, execution path moved
+from `HeapOnly` to `HeapThenLimit` — with only the accelerator ELF differing:
+
+| accelerator | `real_sbf_verify_candidate_…_at_runtime_widths` |
+|---|---|
+| `f2ab120f` BASE, default allocator | `memory allocation failed, out of memory` |
+| `e477df34` WORK, extraction installed | **passes** — N=258 at 379,359 then 579,699 CU, 83 accounts, 18 scratch pages |
+
+Zero access violations, zero allocation failures in WORK. **The grant is
+honoured on a non-forced budget, the lifted ceiling hands out memory the runtime
+really maps, and the extraction should land.** The planning-time refusal is not
+needed for this.
+
+> **A control that fails can be measuring the harness. This one discarded a
+> correct repair, and the discard was the careful choice on the evidence
+> available — the evidence was wrong.**
+
+### Two things that fall out of it
+
+**`HeapOnly` is not an executable shape at width 258 on any real chain.**
+VerifyCandidateRow at 258 costs 579,699 CU and a grant-with-no-limit gets the
+200,000 default. The forced budget's 1,400,000 was the only reason that row ever
+executed. The six-shape table moves to **width 1**, where the action fits the
+default and *admitted versus refused* is what is measured rather than the budget.
+The rule is width-independent; the confound was not.
+
+**A correction on my own row.** I reported that *the accelerator cannot reach
+half the heap the transaction pays for*. The `HEAP_LENGTH = 32 * 1024` fact is
+real — `solana_program::entrypoint!` installs `BumpAllocator` over a hardcoded
+32 KiB — but my measurement **could not tell that ceiling apart from the forced
+budget's mapping, because both were 32,768 and I had one instrument.** The grant
+was never honoured in that harness either. Right about the allocator; wrong that
+64 KiB sat mapped underneath it.
+
+> **Two ceilings at the same number read as one ceiling. The instrument that
+> cannot separate them will report whichever one you already believed in.**
+
+### Both counts were right, over different populations
+
+I was told to replace my *three rows* with their *one of seven*. Checked against
+their own preserved `seven2-base.log` instead, and **neither number was wrong.**
+Their seven are `consider`, `open_batch`, `close_batch`, `place_order`,
+`submit_candidate`, `verify_candidate`, `close_candidate` — six pass, one dies,
+exactly as they said. That list **omits**
+`real_sbf_runs_full_settlement_at_runtime_widths_one_and_258` and
+`hostile_n258_initializes_and_refuses_candidate_substitution`, which are the
+other two deaths.
+
+So at BASE with the migrated harness the lifecycle binary is **7 passed / 3
+failed, three allocation failures**, and exactly one of the three sits in their
+row set. I confirmed the settlement row dies in *their* tree, with *their* ELFs,
+in *their* unmigrated configuration, before concluding anything about the
+disagreement — because the cheap wrong move was to adopt their number and quietly
+lose two failing rows.
+
+> **A count is only as good as its stated population, and two correct counts
+> over different populations read exactly like one of them being wrong.**
+
+## 2026-09-01 — the accused shape was admitted: the budget was forced
+
+**`freeze.rs:252` and `lifecycle.rs:1123`, both `set_compute_max_units(1_400_000)`.**
+That is the whole of the access violation. The A/B on the cleanups lane's own
+preserved trees, same migration applied to both, only the accelerator ELF
+differing:
+
+| accelerator | `real_sbf_verify_candidate_…_at_runtime_widths` |
+|---|---|
+| BASE, default allocator | `memory allocation failed, out of memory` |
+| WORK, the extraction | **passes** — N=258 at 579,699 CU, 83 accounts, 18 scratch pages |
+
+**The grant is honoured on a non-forced budget; the lifted ceiling hands out memory
+the runtime really maps.** The cleanups lane's control was measuring the harness,
+not its code — and discarding on it was still the careful call given the evidence
+in hand. The extraction lands after all; the planning-time refusal is not needed.
+
+**`HeapOnly` is not an executable shape at width 258 on any real chain**: a grant
+with no limit gets the 200,000 CU default, and the row costs 579,699. The forced
+1,400,000 was the only reason it ever ran. The six-shape table moves to width 1,
+where the rule it tests is the same and the confound is gone.
+
+### Two correct counts over different populations
+
+"Three rows die" and "one of seven dies" **are both right.** The seven — consider,
+open_batch, close_batch, place_order, submit_candidate, verify_candidate,
+close_candidate — are six pass, one death, as reported. That list **omits**
+`real_sbf_runs_full_settlement_…` and `hostile_n258_initializes_…`, the other two.
+Verified by running the settlement row in *their* tree with *their* ELFs in *their*
+configuration: it dies there too. Neither retracts; the population needed stating.
+
+> **Figure to carry: lifecycle 7 of 10, three allocation failures, one of them
+> inside the seven.**
+
+### A correction on its own row — the eleventh instrument-catches-its-author
+
+*"The accelerator cannot reach half the heap the transaction pays for."* The
+`HEAP_LENGTH = 32 * 1024` fact is real. But the measurement **could not separate
+that allocator ceiling from the forced budget's mapping, because both were 32,768
+and there was one instrument.** The grant was never honoured in that harness
+either. **Right about the allocator; wrong that 64 KiB sat mapped underneath it.**

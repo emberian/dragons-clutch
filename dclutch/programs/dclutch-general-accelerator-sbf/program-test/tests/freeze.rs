@@ -249,7 +249,12 @@ fn page_key(index: u32) -> Pubkey {
 fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
-    test.set_compute_max_units(1_400_000);
+    // NO `set_compute_max_units` -- see `lifecycle.rs` for the mechanism. No
+    // wire `set_compute_unit_limit` either, and that is a claim rather than an
+    // omission: this file's heaviest transaction is 84,718 CU at width 258,
+    // inside the 200,000 default, so it executes as a caller that asked for
+    // nothing. Adding one would move this file's recorded packet bytes and CU
+    // for no execution it enables.
     test.add_program("dclutch_general_accelerator_sbf", ACCELERATOR, None);
     test.add_program("dclutch_general_accelerator_test_caller_sbf", CALLER, None);
     let (authority, _) = Pubkey::find_program_address(

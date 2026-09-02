@@ -1120,7 +1120,17 @@ fn real_sbf_fixture_wire_chunk(
 ) -> RealSbfFixture {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
-    test.set_compute_max_units(1_400_000);
+    // NO `set_compute_max_units`. It does not set a limit: it installs one
+    // FIXED `RuntimeConfig.compute_budget` for every transaction, with
+    // `heap_size` left at the 32,768 default, after which the per-transaction
+    // `RequestHeapFrame` is NEVER CONSULTED. This file puts an exact 65,536
+    // heap request on the wire and the accelerator authenticates that it is
+    // there -- so the program believed it had 64 KiB while the VM mapped 32,
+    // and the harness answered for the runtime. Inert while the fixture loaded
+    // only the accelerator; not inert once the frame became the real one.
+    // `7b80869d` removed the same defect from the Direct campaign, and
+    // `waist::program_test_without_forced_budget` is the helper whose name is
+    // the whole finding.
     test.add_program("dclutch_general_accelerator_sbf", ACCELERATOR, None);
     test.add_program("dclutch_general_accelerator_test_caller_sbf", CALLER, None);
     let (authority, _) = Pubkey::find_program_address(
@@ -1453,7 +1463,7 @@ async fn execute(
         fixture.instruction,
         &fixture.label,
         fixture.recorded,
-        TopLevelPreludeV3::HeapOnly,
+        TopLevelPreludeV3::HeapThenLimit,
     )
     .await
     .expect("ProgramTest processing");
@@ -3271,7 +3281,16 @@ async fn real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_run
                 secondary_state_bump: 1,
                 result_state_bump: 1,
             };
-            if width == 258 && index == 0 {
+            // The shape table runs at width ONE, and the width is the point.
+            // These six rows ask a question about `authenticate_top_level`,
+            // which is width-independent; running them at 258 confounded it
+            // with the compute budget, because `HeapOnly` -- a grant and no
+            // limit -- gets the 200,000 default, and VerifyCandidateRow at 258
+            // costs 579,699. Under the forced budget every row got 1,400,000
+            // and the shape looked executable. It is not, on any real chain.
+            // At width 1 the action fits the default, so "admitted" is
+            // observable as execution and the rule is what is being measured.
+            if width == 1 && index == 0 {
                 // Every top-level shape, on the real ELF. The two accepting
                 // rows are what the pinned-index rule made impossible; the four
                 // refusing rows are why dropping it is not a relaxation. Each
