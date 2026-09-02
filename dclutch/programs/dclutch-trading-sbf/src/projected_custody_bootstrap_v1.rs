@@ -36,6 +36,7 @@ use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_capability_contract::{
     CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+    CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1,
     CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId, ControllerFundingCheckpointAbortKindV1,
     ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointInputV1,
@@ -1899,7 +1900,9 @@ fn authenticate_prepared_request_digests_v1(
 
 #[inline(never)]
 fn custody_ladder_digest_v1(frame: &BootstrapFrameV1<'_, '_>) -> Result<[u8; 32], ProgramError> {
-    let observations = [
+    // See generic_market_founding_v1: the ladder's arity belongs to the digest
+    // domain, and this is one of four files that build the same preimage.
+    let observations: [_; CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1] = [
         account(frame.initialize, COMMON_STATE)?,
         account(frame.open_hoard, OPEN_HOARD_VAULT)?,
         account(frame.open_source, OPEN_SOURCE_VAULT)?,

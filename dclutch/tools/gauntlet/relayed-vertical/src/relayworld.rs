@@ -29,7 +29,9 @@ use dclutch_resolution_codec::{
     ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{SourceResolutionPhaseV1, SourceResolutionStateV2};
-use dclutch_versioned_message_operator::build_lookup_table_creation_v1;
+use dclutch_versioned_message_operator::{
+    build_lookup_table_creation_v1, canonical_route_lookup_addresses_v1,
+};
 
 use crate::model::TransactionEvidence;
 use crate::rpc::Rpc;
@@ -303,11 +305,18 @@ pub(crate) fn prepay_certificate(
     Ok(())
 }
 
-/// Publish a finalized routing table over one frame's non-signer coordinates.
+/// Publish a finalized routing table over one frame's routable coordinates.
 ///
-/// Mirrors the producer's `publish_routing_table` (market.rs): only non-signer
-/// coordinates and the invoked Program are routed, the table stays
-/// authority-owned, and it is usable strictly after the slot that extended it.
+/// Mirrors the producer's `publish_routing_table` (market.rs), including its
+/// address derivation, which is now `canonical_route_lookup_addresses_v1` in
+/// both places rather than a filter written twice. The table stays
+/// authority-owned and is usable strictly after the slot that extended it.
+///
+/// Both copies used to PUSH the invoked program id into the table. A program id
+/// can never be resolved through a table -- it has to be known before the
+/// message's tables load -- so the runtime kept it inline anyway, the entry
+/// bought nothing, and its rent was paid forever: 32 bytes per entry at the
+/// default rent, 222,720 lamports, for as long as the table exists.
 pub(crate) fn publish_routing_table(
     rpc: &mut Rpc,
     payer: &Keypair,
@@ -315,20 +324,8 @@ pub(crate) fn publish_routing_table(
     instructions: &[Instruction],
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(Pubkey, Vec<Pubkey>, Observation, Vec<ObservedAccount>)> {
-    let mut addresses: Vec<Pubkey> = Vec::new();
-    let push = |key: Pubkey, addresses: &mut Vec<Pubkey>| {
-        if key != payer.pubkey() && !addresses.contains(&key) {
-            addresses.push(key);
-        }
-    };
-    for instruction in instructions {
-        push(instruction.program_id, &mut addresses);
-        for meta in &instruction.accounts {
-            if !meta.is_signer {
-                push(meta.pubkey, &mut addresses);
-            }
-        }
-    }
+    let addresses = canonical_route_lookup_addresses_v1(payer.pubkey(), instructions)
+        .map_err(|error| Error::new(format!("{label} routing table addresses: {error:?}")))?;
     let recent_slot = rpc.finalized_slot()?;
     let plan =
         build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)

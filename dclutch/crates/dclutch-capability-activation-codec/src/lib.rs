@@ -106,8 +106,8 @@ use dclutch_capability_program_contract::{
         ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
     },
     activation_registers_v3::{
-        ACTIVATION_COMMON_SCALARS_V3, ACTIVATION_FIRST_FAMILY_SCALAR_V3,
-        ACTIVATION_ROOT_BUMP_SCALAR_V3,
+        ACTIVATION_COMMON_IDENTITIES_V3, ACTIVATION_COMMON_SCALARS_V3,
+        ACTIVATION_FIRST_FAMILY_SCALAR_V3, ACTIVATION_ROOT_BUMP_SCALAR_V3,
     },
     encode_v1::{
         CapabilityProgramInputV1, capability_program_v1_bytes, encode_capability_program_v1_atomic,
@@ -410,7 +410,7 @@ pub struct ActivationSeamImageV3<'a> {
 pub struct ActivationSeamImageV2<'a> {
     /// Seam-seeded scalar bank, exactly `ACTIVATION_COMMON_SCALARS_V3` wide.
     pub scalars: &'a [u64],
-    /// Unchanged common identity bank.
+    /// Seam-seeded identity bank, exactly `ACTIVATION_COMMON_IDENTITIES_V3` wide.
     pub identities: &'a [[u8; 32]],
     /// Lamports the founding parked in the ledger's Rent compartment.
     pub rent_quote: u64,
@@ -620,7 +620,7 @@ pub fn project_activation_root_tail_v2(
         .copied()
         .ok_or(ActivationBundleErrorV1::RegisterGeometry)?;
     if seam.scalars.len() != ACTIVATION_COMMON_SCALARS_V3
-        || seam.identities.len() != ACTIVATION_COMMON_IDENTITIES_V2
+        || seam.identities.len() != ACTIVATION_COMMON_IDENTITIES_V3
         || bump > u64::from(u8::MAX)
     {
         return Err(ActivationBundleErrorV1::RegisterGeometry);
@@ -1622,6 +1622,41 @@ mod tests {
                 },
             ),
             Err(ActivationBundleErrorV1::RegisterGeometry)
+        );
+
+        // The V3 seam's identity width is now named in V3 terms, not borrowed
+        // from V2 on the same line as the V3 scalar width. The two are equal
+        // today, so this hostile is what keeps the NAME load-bearing: if the
+        // V3 identity bank ever widens, one bank short must still refuse
+        // RegisterGeometry rather than project a short read as a valid tail.
+        *scalars
+            .get_mut(usize::from(ACTIVATION_ROOT_BUMP_SCALAR_V3))
+            .expect("bump scalar") = 0xfe;
+        let short = [[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V3 - 1];
+        assert_eq!(
+            project_activation_root_tail_v2(
+                &bundle,
+                ActivationSeamImageV2 {
+                    scalars: &scalars,
+                    identities: &short,
+                    rent_quote,
+                },
+            ),
+            Err(ActivationBundleErrorV1::RegisterGeometry),
+            "an identity bank narrower than ACTIVATION_COMMON_IDENTITIES_V3 is not the V3 seam"
+        );
+        let wide = [[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V3 + 1];
+        assert_eq!(
+            project_activation_root_tail_v2(
+                &bundle,
+                ActivationSeamImageV2 {
+                    scalars: &scalars,
+                    identities: &wide,
+                    rent_quote,
+                },
+            ),
+            Err(ActivationBundleErrorV1::RegisterGeometry),
+            "a wider identity bank is not the V3 seam either: the width is exact"
         );
     }
 

@@ -12,7 +12,6 @@ use dclutch_market_core_codec::{
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
 };
-use dclutch_resolution_codec::ResolutionCoreActionV1;
 use dclutch_source_contract::{
     ContentId, Error as SourceError, SourceMaterialV3, SourceResolutionStateV2, WindowKind,
     WindowSpecV1,
@@ -28,7 +27,7 @@ use solana_program::{
 
 use crate::{
     CAPABILITY_PREFIX_BYTES_V1, CAPABILITY_ROLE_PREFIX_BYTES_V2, CoreSbfError, process_instruction,
-    resolution::recovery_walk_has_a_live_route,
+    resolution::{ComposedResolutionActionV1, recovery_walk_has_a_live_route},
 };
 
 const PACKET_DATA_BYTES: usize = 1_232;
@@ -345,7 +344,7 @@ fn create_fund_refuses_a_material_whose_recovery_walk_no_route_can_walk() {
 
     // Therefore CreateFund does not mint that state.
     assert!(!recovery_walk_has_a_live_route(
-        ResolutionCoreActionV1::CreateFund
+        ComposedResolutionActionV1::CreateFund
     ));
     assert_eq!(CoreSbfError::RecoveryWalkUnavailable as u32, 0x3011);
 }
@@ -353,10 +352,13 @@ fn create_fund_refuses_a_material_whose_recovery_walk_no_route_can_walk() {
 /// A weld may not strand what it finds: it refuses creation, never an exit.
 #[test]
 fn the_recovery_weld_takes_no_route_from_a_fund_that_already_exists() {
+    // `CloseFund` was in this list until the composed action type existed. It
+    // is gone because it CANNOT be passed any more, not because the weld
+    // stopped covering it: Core refuses that action at decode, so there was
+    // never a fund of that kind for the weld to strand.
     for action in [
-        ResolutionCoreActionV1::VerifyFundReady,
-        ResolutionCoreActionV1::CloseFund,
-        ResolutionCoreActionV1::AdmitTerminal,
+        ComposedResolutionActionV1::VerifyFundReady,
+        ComposedResolutionActionV1::AdmitTerminal,
     ] {
         assert!(
             recovery_walk_has_a_live_route(action),

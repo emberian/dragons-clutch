@@ -51,6 +51,28 @@ serde_json = "1"
 solana-program = "=3.0.0"
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
+# DO NOT BUMP solana-program-test to 4.3.0-beta.2 without fixing what it panics
+# on. Every other pin in this block follows from this one -- solana-message
+# =4.4.1 caps solana-hash below 4.6.0, which is why this workspace also holds
+# solana-address-lookup-table-interface =3.1.0 and solana-account =4.3.2 while
+# the rest of the tree is on =3.2.0 / =4.6.0 -- and the whole cluster looks like
+# drift until you try it.
+#
+# Measured 2026-09-02: aligning this workspace to the set the dealer program-test
+# already resolves (solana-program-test =4.3.0-beta.2, solana-message =4.5.0,
+# solana-address-lookup-table-interface =3.2.0, solana-account =4.6.0,
+# solana-transaction =4.2.0) RESOLVES and BUILDS, and then two
+# resolution_core_v3_lifecycle tests die inside the runtime, not the campaign:
+# `solana-program-runtime-4.3.0-beta.2/src/loaded_programs.rs:455` panics with
+# "Unexpected replacement of an entry", taking banks_server and the SVM
+# transaction processor with it. The control was run -- pristine HEAD test files,
+# these pins alone changed, same two panics -- so it is the runtime and not the
+# campaign that cannot take the bump.
+#
+# The cost of staying here is one thing, named: this workspace cannot link
+# `dclutch-versioned-message-operator`, so the four converted packet campaigns
+# state the packet maximum themselves and reach the canonical lookup-address
+# derivation by mirroring it rather than by calling it.
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
 solana-rpc-client = { version = "=4.2.1", default-features = false }
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }

@@ -403,18 +403,6 @@ pub fn initialize_root_account_v3(
     Ok(())
 }
 
-/// Authenticate a V3 composite root and expose only its mutable family tail.
-pub fn split_root_account_mut_v3(
-    bytes: &mut [u8],
-    program: CapabilityProgramV3,
-) -> Result<(super::CapabilityRootHeaderV1, &mut [u8])> {
-    if bytes.len() != program.root_account_bytes()? {
-        return Err(Error::InvalidLength);
-    }
-    let (header, state) = bytes.split_at_mut(CAPABILITY_ROOT_HEADER_BYTES_V1);
-    Ok((super::CapabilityRootHeaderV1::decode(header)?, state))
-}
-
 fn content(bytes: &[u8], offset: usize) -> Result<ContentId> {
     ContentId::new(array(bytes, offset)?).map_err(|_| Error::ZeroIdentity)
 }

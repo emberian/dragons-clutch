@@ -128,6 +128,7 @@ use solana_system_interface::instruction::{create_account, transfer};
 
 use dclutch_versioned_message_operator::{
     Observation, ObservedAccount, build_lookup_table_creation_v1, build_lookup_table_freeze,
+    canonical_route_lookup_addresses_v1,
 };
 
 use crate::{
@@ -3936,7 +3937,7 @@ pub(crate) fn publish_routing_table(
     instructions: &[Instruction],
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(Observation, Vec<ObservedAccount>)> {
-    let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions);
+    let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions)?;
     let recent_slot = rpc.finalized_slot()?;
     let plan =
         build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
@@ -3974,7 +3975,7 @@ fn publish_frozen_founding_routing_table_v1(
     instructions: &[Instruction],
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(Observation, Vec<ObservedAccount>)> {
-    let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions);
+    let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions)?;
     let recent_slot = rpc.finalized_slot()?;
     let plan =
         build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
@@ -8678,29 +8679,47 @@ fn exact_instruction_frame_digest_v1(instruction: &Instruction) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn canonical_routing_addresses_v1(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
-    let mut addresses = Vec::new();
-    let push = |key: Pubkey, addresses: &mut Vec<Pubkey>| {
-        if key != payer && !addresses.contains(&key) {
-            addresses.push(key);
-        }
-    };
-    for instruction in instructions {
-        push(instruction.program_id, &mut addresses);
-        for meta in &instruction.accounts {
-            if !meta.is_signer {
-                push(meta.pubkey, &mut addresses);
-            }
-        }
-    }
-    addresses
+/// The addresses a routing table for this frame may carry.
+///
+/// This used to derive them here, and it PUSHED the invoked program id into the
+/// table. A program id can never be resolved through a table -- it has to be
+/// known before the message's tables load -- so the runtime kept it inline
+/// anyway and the entry bought nothing while its rent was paid forever. The
+/// derivation was also a second author for a rule the message compiler already
+/// owns, and a third copy of it sits in the relayed vertical, which documents
+/// itself as mirroring this function.
+///
+/// So it asks instead. `canonical_route_lookup_addresses_v1` offers the compiler
+/// every address the frame names and keeps the ones the compiler resolved
+/// through a table, which cannot drift from what the runtime will do.
+///
+/// This is message-invariant by construction and the census tests are the
+/// proof: the program id was already static in every compiled message, so
+/// dropping it from the TABLE moves no static key, no lookup index, and no
+/// packet byte. What changes is the table's own width, and the rent that width
+/// costs: 32 bytes per entry at the default rent, 222,720 lamports each, held
+/// for as long as the table exists.
+/// Bytes an empty lookup table occupies before its first address.
+///
+/// Discriminator, deactivation slot, last-extended slot and index, and the
+/// optional authority. Used only to price ONE entry as a difference of two
+/// rent-exempt minima, so the exact base cancels; it is named rather than
+/// inlined so the subtraction reads as the difference it is.
+const LOOKUP_TABLE_META_BYTES_V1: usize = 56;
+
+fn canonical_routing_addresses_v1(
+    payer: Pubkey,
+    instructions: &[Instruction],
+) -> Result<Vec<Pubkey>> {
+    canonical_route_lookup_addresses_v1(payer, instructions)
+        .map_err(|error| Error::new(format!("routing table addresses: {error:?}")))
 }
 
 fn compiled_complete_lock_census_v1(
     payer: Pubkey,
     instruction: &Instruction,
 ) -> Result<CompleteLockCensusV1> {
-    let addresses = canonical_routing_addresses_v1(payer, std::slice::from_ref(instruction));
+    let addresses = canonical_routing_addresses_v1(payer, std::slice::from_ref(instruction))?;
     let routing = build_lookup_table_creation_v1(payer, payer, 1, &addresses)
         .map_err(|error| Error::new(format!("DCLTGMF3 census table: {error:?}")))?;
     let bounded = bounded_instructions(std::slice::from_ref(instruction), Some(256_u32 * 1024))?;
@@ -15121,7 +15140,8 @@ mod tests {
 
         use solana_address_lookup_table_interface::state::LookupTableMeta;
 
-        let addresses = canonical_routing_addresses_v1(payer, instructions);
+        let addresses = canonical_routing_addresses_v1(payer, instructions)
+            .expect("the readiness frame names addresses a table may carry");
         let table = AddressLookupTable {
             meta: LookupTableMeta {
                 deactivation_slot: u64::MAX,
@@ -15461,6 +15481,90 @@ mod tests {
         assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
     }
 
+    /// A routing table carries no program id, no signer, and no payer -- and the
+    /// entries it stopped carrying were dead weight, not a saving traded for a
+    /// behaviour change.
+    ///
+    /// Until 2026-09-02 `canonical_routing_addresses_v1` PUSHED the invoked
+    /// program id into every routing table it built, and so did the relayed
+    /// vertical's copy of it. A program id can never be resolved through a table
+    /// -- it has to be known before the message's tables load -- so the runtime
+    /// kept it inline anyway and the entry bought nothing while its rent was
+    /// paid for as long as the table existed.
+    ///
+    /// The second half of this test is what makes the first half safe to
+    /// believe. It compiles each frame TWICE, once over the derived table and
+    /// once over a table with the program id added back, and requires the two
+    /// messages to serialise identically. If the entry had ever been doing
+    /// anything, that is where it would show.
+    #[test]
+    fn a_routing_table_carries_no_program_id_and_the_entry_it_dropped_did_nothing() {
+        let frames = [
+            ("DCLTPCB2", projected_bootstrap_census_fixture_v2()),
+            ("DCLTCFQ1", controller_funding_prepare_census_fixture_v1()),
+            ("DCLTPCA1", staged_abort_census_fixture_v1()),
+        ];
+        for (label, (payer, instruction)) in frames {
+            let addresses =
+                canonical_routing_addresses_v1(payer, std::slice::from_ref(&instruction))
+                    .unwrap_or_else(|error| panic!("{label} routing addresses: {error:?}"));
+            assert!(
+                !addresses.contains(&instruction.program_id),
+                "{label}: the invoked program cannot be resolved through a table"
+            );
+            assert!(
+                !addresses.contains(&payer),
+                "{label}: the fee payer is always static key zero"
+            );
+            for meta in &instruction.accounts {
+                if meta.is_signer {
+                    assert!(
+                        !addresses.contains(&meta.pubkey),
+                        "{label}: a signer is authenticated by its header position"
+                    );
+                }
+            }
+
+            let compile = |table_addresses: Vec<Pubkey>| {
+                v0::Message::try_compile(
+                    &payer,
+                    std::slice::from_ref(&instruction),
+                    &[AddressLookupTableAccount {
+                        key: Pubkey::new_from_array([0xfe; 32]),
+                        addresses: table_addresses,
+                    }],
+                    Hash::new_from_array([0x43; 32]),
+                )
+                .unwrap_or_else(|error| panic!("{label} census compile: {error}"))
+                .serialize()
+            };
+            let mut widened = addresses.clone();
+            widened.push(instruction.program_id);
+            assert_eq!(
+                compile(addresses),
+                compile(widened),
+                "{label}: the program-id entry changed the compiled message, so it was not dead \
+                 weight and dropping it is not free"
+            );
+        }
+    }
+
+    /// What one dropped table entry stops costing, derived rather than typed.
+    ///
+    /// An address is 32 bytes of lookup-table data, and a table is rent-exempt
+    /// for as long as it exists, so the entry's cost is the rent-exempt minimum
+    /// of 32 more bytes. Every routing table this file publishes carried exactly
+    /// one such entry it could never use.
+    #[test]
+    fn a_dropped_program_id_entry_stops_paying_thirty_two_bytes_of_permanent_rent() {
+        let rent = solana_program::rent::Rent::default();
+        let one_entry = rent
+            .minimum_balance(LOOKUP_TABLE_META_BYTES_V1 + 32)
+            .checked_sub(rent.minimum_balance(LOOKUP_TABLE_META_BYTES_V1))
+            .expect("one lookup-table entry costs a non-negative rent");
+        assert_eq!(one_entry, 222_720);
+    }
+
     #[test]
     fn projected_bootstrap_actual_compiler_census_pins_the_60_64_65_wall() {
         let (payer, base) = projected_bootstrap_census_fixture_v2();
@@ -15511,6 +15615,80 @@ mod tests {
             authenticate_generic_market_founding_lock_census_v3(payer, &prepared)
                 .expect("deterministic census")
         );
+    }
+
+    /// DCLTGMF3's extent both ways, on the shape the producer actually sends.
+    ///
+    /// This is the widest founding frame in the tree and it has been on a frozen
+    /// routing table since it was written -- and it is the one founding route
+    /// with no measured extent. `CompleteLockCensusV1` pins keys, signatures and
+    /// privileges but carries no byte fields, so this frame was packet-bounded
+    /// by ARGUMENT while every neighbouring census route was packet-bounded by a
+    /// number. The journal refuses a planned packet over 1,232 at three separate
+    /// points, which catches a regression on a validator at run time; it does
+    /// not tell a reader what the margin is, and a margin nobody can read is a
+    /// margin nobody defends.
+    ///
+    /// Both figures come from the same instruction through
+    /// `bounded_instructions`, so they carry the compute-unit limit, the
+    /// priority fee and the 256 KiB heap request the real submission carries.
+    /// The legacy figure is the control: it is compiled and thrown away, and
+    /// without it the routed figure says nothing about whether the route moved
+    /// or the instrument did.
+    #[test]
+    fn generic_founding_final_pins_its_packet_extent_and_its_legacy_control() {
+        let (payer, prepared) = generic_market_founding_census_fixture_v3();
+        let bounded = bounded_instructions(
+            std::slice::from_ref(&prepared.instruction),
+            Some(FOUNDING_HEAP_FRAME_BYTES),
+        )
+        .expect("bounded DCLTGMF3 submission");
+
+        let legacy = solana_sdk::message::legacy::Message::new(&bounded, Some(&payer));
+        let legacy_signatures = usize::from(legacy.header.num_required_signatures);
+        let legacy_bytes = 1 + legacy_signatures * 64 + legacy.serialize().len();
+
+        let addresses =
+            canonical_routing_addresses_v1(payer, &bounded).expect("DCLTGMF3 routing addresses");
+        let routed = v0::Message::try_compile(
+            &payer,
+            &bounded,
+            &[AddressLookupTableAccount {
+                key: Pubkey::new_from_array([0xfe; 32]),
+                addresses,
+            }],
+            Hash::new_from_array([0x43; 32]),
+        )
+        .expect("DCLTGMF3 compiles over its routing table");
+        let routed_signatures = usize::from(routed.header.num_required_signatures);
+        let static_keys = routed.account_keys.len();
+        let loaded: usize = routed
+            .address_table_lookups
+            .iter()
+            .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+            .sum();
+        let routed_bytes =
+            1 + routed_signatures * 64 + VersionedMessage::V0(routed).serialize().len();
+
+        // 2,129 as a legacy message, 897 over the maximum, so this frame was
+        // never submittable inline and the table is not an optimisation. 55 of
+        // its 58 coordinates become one-byte indexes; the three that stay are
+        // the payer, the invoked program and the ComputeBudget program, none of
+        // which a table can move. 55 x 31 saved, less the 36 the lookup entry
+        // costs, is the 1,669 between the two figures.
+        assert_eq!(legacy_bytes, 2_129);
+        assert_eq!(routed_bytes, 460);
+        assert_eq!(static_keys, 3);
+        assert_eq!(loaded, 55);
+        assert!(
+            legacy_bytes > 1_232,
+            "a route that already fit would need no table"
+        );
+        assert!(routed_bytes <= 1_232, "the table did not close the overrun");
+        // The same 58 the neighbouring census pins as `complete_keys`. Two
+        // instruments, one number: if they ever disagree, one of them is
+        // measuring a frame the producer does not send.
+        assert_eq!(static_keys + loaded, 58);
     }
 
     #[test]

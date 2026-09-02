@@ -13,6 +13,7 @@ use std::{collections::BTreeSet, env, fs, path::PathBuf};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+    CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1,
     CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1,
     ContentId as CapabilityContentId, ControllerFundingCheckpointDerivationV1,
@@ -841,6 +842,20 @@ fn token_amount(account: &Account) -> u64 {
 }
 
 fn custody_ladder_digest(observations: &[(Pubkey, Pubkey, u64, &[u8])]) -> [u8; 32] {
+    // This helper is the fourth author of a preimage the chain also builds in
+    // generic_market_founding_v1 and projected_custody_bootstrap_v1, where the
+    // arity is structural (`[_; CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1]`).
+    // Here it was a slice, so this side alone would accept a three- or
+    // five-account ladder and hash it happily -- and a hostile that builds the
+    // wrong ladder would then fail on a digest mismatch, which reads as "the
+    // program refused" rather than "my fixture was the wrong shape". Name the
+    // arity here too, so the test harness cannot disagree with the chain about
+    // what a ladder IS.
+    assert_eq!(
+        observations.len(),
+        CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1,
+        "the Custody ladder digest commits exactly this many accounts"
+    );
     let mut preimage = Vec::new();
     preimage.extend_from_slice(CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1);
     for (key, owner, lamports, data) in observations {

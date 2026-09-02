@@ -192,12 +192,18 @@ pub fn build_lifecycle_rent_create_v2(
     Ok(LifecycleRentCreatePlanV2 {
         instruction: Instruction {
             program_id: state.rent_program.key,
-            accounts: vec![
+            // The width is the Rent program's own admission rule -- it refuses
+            // `accounts.len() != CREATE_ACCOUNT_COUNT_V2` from its own private
+            // copy of this number -- so the builder states it as a TYPE rather
+            // than as the length a literal list happens to have. Adding a fifth
+            // meta is now a compile error here instead of a refusal there.
+            accounts: ([
                 AccountMeta::new(state.payer.key, true),
                 AccountMeta::new(credit, false),
                 AccountMeta::new_readonly(state.system_program.key, false),
                 AccountMeta::new_readonly(state.rent.key, false),
-            ],
+            ] as [AccountMeta; LIFECYCLE_RENT_CREATE_ACCOUNT_COUNT_V2])
+                .to_vec(),
             data,
         },
         credit,
@@ -243,11 +249,15 @@ pub fn build_lifecycle_rent_sweep_all_v2(
     Ok(LifecycleRentSweepPlanV2 {
         instruction: Instruction {
             program_id: state.rent_program.key,
-            accounts: vec![
+            // Same rule as Create above: the Sweep frame width is named, not
+            // counted. The Rent program admits SWEEP_ACCOUNT_COUNT_V2 or that
+            // plus one funded payer, and this is the unfunded shape.
+            accounts: ([
                 AccountMeta::new(state.credit.key, false),
                 AccountMeta::new(state.refund_wallet.key, false),
                 AccountMeta::new_readonly(state.rent.key, false),
-            ],
+            ] as [AccountMeta; LIFECYCLE_RENT_SWEEP_ACCOUNT_COUNT_V2])
+                .to_vec(),
             data: request.to_bytes().to_vec(),
         },
         amount,

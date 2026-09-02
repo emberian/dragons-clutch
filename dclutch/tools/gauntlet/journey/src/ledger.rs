@@ -1179,6 +1179,207 @@ mod tests {
             .unwrap_or_else(|| panic!("{law} must be evaluated"))
     }
 
+    // ---------- the Direct fill boundary ----------
+    //
+    // L1 and L3 have never been evaluated across a fill. The one Direct fill
+    // this substrate has ever taken was read back by a hand-written script, not
+    // by this ledger, so the two laws most exposed to a fill -- collateral
+    // closure and supply-vector agreement -- have only ever been exercised over
+    // foundings, admissions and vault transfers. These fake one.
+
+    /// The seller's and the venue fee's Direct token PDAs, and the buyer's own
+    /// token account. None of the three is a Custody vault, so all three
+    /// classify `unclassified`: a fill moves atoms only within the External
+    /// compartment and touches no Custody class at all.
+    fn fill_ledger() -> ConservationLedgerV1 {
+        let mut ledger = ConservationLedgerV1::new(key(0xc1), key(0xd1));
+        ledger.admit_custody_namespace(key(CUSTODY), MARKET, RELEASE, CONTEXT);
+        ledger.admit_founding(vault(CompartmentV1::HoardPrincipal), key(0xa4), 10);
+        ledger.track_token_account("buyer_token", key(0x51));
+        ledger.track_token_account("direct_seller_token", key(0x52));
+        ledger.track_token_account("direct_venue_fee_token", key(0x53));
+        ledger.track_position("seller_position", key(0x61));
+        ledger.track_position("buyer_position", key(0x62));
+        ledger
+    }
+
+    const FILL_HOARD_ATOMS: u64 = 10_000;
+
+    /// One census of a two-outcome market mid-trade.
+    ///
+    /// `aggregate` is passed rather than summed from the Positions, so L3 holds
+    /// only because the fill actually conserved the supply vector. Summing it
+    /// would make L3 an identity and it would stop being able to fail.
+    fn fill_census(
+        ledger: &ConservationLedgerV1,
+        stage: &str,
+        buyer_token: u64,
+        seller_direct: u64,
+        venue_fee: u64,
+        seller_claims: [u64; 2],
+        buyer_claims: [u64; 2],
+        aggregate: [u64; 2],
+        omit_seller_direct_token: bool,
+        omit_buyer_position: bool,
+    ) -> ObservationV1 {
+        let balances = [
+            (vault(CompartmentV1::HoardPrincipal), "hoard", FILL_HOARD_ATOMS),
+            (key(0x51), "buyer_token", buyer_token),
+            (key(0x52), "direct_seller_token", seller_direct),
+            (key(0x53), "direct_venue_fee_token", venue_fee),
+        ];
+        let mut token_atoms = BTreeMap::new();
+        let mut class_atoms: BTreeMap<String, u64> = BTreeMap::new();
+        let mut accounts = BTreeMap::new();
+        let mut tracked = 0;
+        for (address, label, atoms) in balances {
+            if omit_seller_direct_token && label == "direct_seller_token" {
+                continue;
+            }
+            token_atoms.insert(label.to_string(), atoms);
+            *class_atoms.entry(ledger.class_of(&address)).or_insert(0) += atoms;
+            accounts.insert(label.to_string(), account(address, 2_039_280));
+            tracked += atoms;
+        }
+        // The Mint is the whole supply whether or not this census names every
+        // account holding it. That asymmetry is the point of L1.
+        let mint_supply = FILL_HOARD_ATOMS + buyer_token + seller_direct + venue_fee;
+        let mut position_balances = BTreeMap::from([(
+            "seller_position".to_string(),
+            seller_claims.to_vec(),
+        )]);
+        let mut position_totals = seller_claims.to_vec();
+        if !omit_buyer_position {
+            position_balances.insert("buyer_position".into(), buyer_claims.to_vec());
+            for (total, claim) in position_totals.iter_mut().zip(buyer_claims) {
+                *total += claim;
+            }
+        }
+        accounts.insert("seller_position".into(), account(key(0x61), 1_823_904));
+        accounts.insert("buyer_position".into(), account(key(0x62), 1_823_904));
+        ObservationV1 {
+            stage: stage.into(),
+            slot: 1,
+            // A fill is External to External between two accounts this ledger
+            // tracks, and the Hoard is not a party: the Direct path never
+            // touches it. Zero is the STRONG claim here, not the absent one.
+            declared_collateral_delta: 0,
+            declared_hoard_delta: 0,
+            lamports: LamportClaimV1::inapplicable("this synthetic census states no lamport claim"),
+            payer_lamports: 1_000_000,
+            mint_supply,
+            token_atoms,
+            class_atoms,
+            declared_class_deltas: ClassClaimV1::unchanged(),
+            tracked_collateral: tracked,
+            hoard_atoms: FILL_HOARD_ATOMS,
+            outcome_count: 2,
+            aggregate_supply: aggregate.to_vec(),
+            position_balances,
+            position_totals,
+            accounts,
+            verdicts: Vec::new(),
+        }
+    }
+
+    fn before_fill(ledger: &ConservationLedgerV1) -> ObservationV1 {
+        fill_census(ledger, "before-fill", 100, 0, 0, [500, 500], [0, 0], [500, 500], false, false)
+    }
+
+    /// The seller sold 100 claims of outcome 0 for 100 atoms at a fee that
+    /// floored to zero, which is the only shape the deployed release can fill.
+    fn after_fill(
+        ledger: &ConservationLedgerV1,
+        omit_seller_direct_token: bool,
+        omit_buyer_position: bool,
+    ) -> ObservationV1 {
+        fill_census(
+            ledger,
+            "after-fill",
+            0,
+            100,
+            0,
+            [400, 500],
+            [100, 0],
+            [500, 500],
+            omit_seller_direct_token,
+            omit_buyer_position,
+        )
+    }
+
+    /// Every law holds across a fill, and each is asserted by NAME rather than
+    /// in aggregate, so a change to one is caught here instead of quietly
+    /// altering what a fill is compared against.
+    #[test]
+    fn every_law_holds_across_a_direct_fill_boundary() {
+        let mut ledger = fill_ledger();
+        ledger.restore_observations(vec![before_fill(&fill_ledger())]);
+        let verdicts = ledger.evaluate(&after_fill(&fill_ledger(), false, false));
+
+        for law in ["L1", "L2", "L3", "L4", "L5", "L6", "L8"] {
+            assert_eq!(
+                verdict(&verdicts, law).status,
+                "holds",
+                "{law}: {}",
+                verdict(&verdicts, law).detail
+            );
+        }
+        // A fill moves collateral only within the External compartment, so the
+        // strongest per-class claim there is -- every class moved zero -- is
+        // the true one, and L8 earns its green rather than sitting out.
+        assert_eq!(verdict(&verdicts, "L7").status, "inapplicable");
+    }
+
+    /// L1 RED when the seller's Direct token PDA is not named.
+    ///
+    /// This is the census binding `simulator.py` grew on 2026-09-02, stated as
+    /// a law rather than as a configuration note: the atoms are exactly where
+    /// the trade put them, and a census that does not name the destination
+    /// reports a shortfall of precisely the traded amount.
+    #[test]
+    fn an_unnamed_direct_token_destination_shows_up_as_the_traded_atoms_missing() {
+        let mut ledger = fill_ledger();
+        ledger.restore_observations(vec![before_fill(&fill_ledger())]);
+        let verdicts = ledger.evaluate(&after_fill(&fill_ledger(), true, false));
+
+        let l1 = verdict(&verdicts, "L1");
+        assert_eq!(l1.status, "violated");
+        assert!(l1.detail.contains("100 atoms are in accounts this ledger does not name"), "{}", l1.detail);
+        // And it is L1 alone: the supply vector is untouched by a token account
+        // going unnamed, so a reader is not sent hunting through the claims.
+        assert_eq!(verdict(&verdicts, "L3").status, "holds");
+    }
+
+    /// L3 RED when the buyer's Position is not tracked.
+    ///
+    /// The claims left the seller and arrived somewhere. A census that names
+    /// only the seller sees the departure and not the arrival, and says so.
+    #[test]
+    fn an_untracked_buyer_position_shows_up_as_the_supply_vector_falling_short() {
+        let mut ledger = fill_ledger();
+        ledger.restore_observations(vec![before_fill(&fill_ledger())]);
+        let verdicts = ledger.evaluate(&after_fill(&fill_ledger(), false, true));
+
+        let l3 = verdict(&verdicts, "L3");
+        assert_eq!(l3.status, "violated");
+        assert!(l3.detail.contains("400"), "{}", l3.detail);
+        // L1 is untouched: the collateral is all named, only the claims are not.
+        assert_eq!(verdict(&verdicts, "L1").status, "holds");
+    }
+
+    /// A fill that declared a Hoard movement it did not make is caught, which
+    /// is the guard against copying a founding's declaration onto a trade.
+    #[test]
+    fn a_fill_that_declares_a_hoard_delta_it_did_not_move_is_refused() {
+        let mut ledger = fill_ledger();
+        ledger.restore_observations(vec![before_fill(&fill_ledger())]);
+        let mut after = after_fill(&fill_ledger(), false, false);
+        after.declared_hoard_delta = -100;
+        let verdicts = ledger.evaluate(&after);
+        assert_eq!(verdict(&verdicts, "L2").status, "violated");
+        assert_eq!(verdict(&verdicts, "L1").status, "holds");
+    }
+
     /// The classifier is a derivation, not a label: every one of the nine
     /// compartments resolves to its own class, and an address that is not a
     /// vault under an admitted namespace is `unclassified` rather than being

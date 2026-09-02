@@ -35,19 +35,26 @@ FAKE_BOOT = r"""#!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 cmd="${1:-}"; shift || true
-outdir=""; session=""; output=""; prior=""; stage=""
+outdir=""; session=""; output=""; prior=""; stage=""; tokens=""
 while [ "$#" -gt 0 ]; do case "$1" in
   --output-dir) outdir="$2"; shift 2 ;;
   --session) session="$2"; shift 2 ;;
   --output) output="$2"; shift 2 ;;
   --prior) prior="$2"; shift 2 ;;
   --stage) stage="$2"; shift 2 ;;
+  --token) tokens="$tokens $2"; shift 2 ;;
   *) shift ;;
 esac; done
 case "$cmd" in
   local-private-validator-direct-trade-produce-v1)
     echo '{"schema":"fake-session"}' > "$outdir/direct-trade-session.json"
-    echo '{"schema":"fake-public"}' > "$outdir/direct-trade-public.json"
+    # The real public manifest carries the two Direct token PDAs
+    # `direct_token_setup_v1` creates, under `tokenSetup`. The census binding
+    # reads them from here rather than deriving a protocol PDA in Python.
+    cat > "$outdir/direct-trade-public.json" <<'MANIFEST'
+{"schema":"fake-public",
+ "tokenSetup":{"sellerToken":"SellerDirectTokenPda","feeToken":"VenueFeeTokenPda"}}
+MANIFEST
     echo '{"schema":"fake-producer","phase":"finalized"}' > "$outdir/direct-trade-producer.json"
     ;;
   local-private-validator-direct-trade-v1)
@@ -64,6 +71,9 @@ case "$cmd" in
     fi
     ;;
   ledger-census)
+    # Every --token this census was given, one per line, newest run last.
+    for entry in $tokens; do echo "$entry" >> "$here/census-tokens.log"; done
+    echo "--- $stage" >> "$here/census-tokens.log"
     if [ -f "$here/census-violation" ]; then
       echo "conservation law violated: hoard delta -3" >&2; exit 4
     fi
@@ -153,6 +163,90 @@ class SimulatorHarness(unittest.TestCase):
             [sys.executable, str(HERE / "simulator.py"), *argv],
             capture_output=True, text=True, timeout=120,
         )
+
+
+class DirectTokenCensusBindingTest(SimulatorHarness):
+    """The two accounts a fill pays, and the law that goes red without them.
+
+    `direct_token_setup_v1` creates one Direct token PDA for the seller and one
+    for the venue fee, and a fill moves collateral into them. Until 2026-09-02
+    nothing named either, so L1 -- tracked atoms == Mint supply -- would have
+    reported a shortfall of exactly the traded atoms and blamed the run for a
+    gap that is really an account nobody bound.
+    """
+
+    def census_tokens(self) -> list:
+        log = self.root / "census-tokens.log"
+        return log.read_text().splitlines() if log.is_file() else []
+
+    def test_the_census_names_both_direct_token_accounts_after_a_session(self) -> None:
+        (self.root / "steps-needed").write_text("1")
+        cfg = self.write_config(self.config())
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = self.census_tokens()
+        self.assertIn("direct_seller_token=SellerDirectTokenPda", rows)
+        self.assertIn("direct_venue_fee_token=VenueFeeTokenPda", rows)
+
+    def test_a_restarted_run_adopts_the_bindings_off_disk(self) -> None:
+        """The accounts outlive the cycle that created them.
+
+        A resumed run that stopped naming them would violate L1 over collateral
+        sitting exactly where its own predecessor put it. Asserted at
+        CONSTRUCTION, because a run that merely produces a new session would
+        rebind them anyway and prove nothing about resume.
+        """
+        session = self.work / "sessions" / "cycle-000001"
+        session.mkdir(parents=True)
+        (session / "direct-trade-public.json").write_text(json.dumps(
+            {"tokenSetup": {"sellerToken": "SellerFromDisk", "feeToken": "FeeFromDisk"}}))
+        sim = simulator.Simulator(self.config(), execute=False, sustain=False, cycles=1)
+        self.assertEqual(sim.direct_token_bindings, {
+            "direct_seller_token": "SellerFromDisk",
+            "direct_venue_fee_token": "FeeFromDisk",
+        })
+
+    def test_an_explicitly_configured_label_is_not_overridden(self) -> None:
+        """An operator who names an address is not second-guessed by a file."""
+        (self.root / "steps-needed").write_text("1")
+        body = self.config()
+        body["census"]["tokens"] = {"direct_seller_token": "OperatorSaidThis"}
+        cfg = self.write_config(body)
+        self.assertEqual(self.run_sim(
+            "run", "--config", str(cfg), "--cycles", "1", "--execute").returncode, 0)
+        rows = self.census_tokens()
+        self.assertIn("direct_seller_token=OperatorSaidThis", rows)
+        self.assertNotIn("direct_seller_token=SellerDirectTokenPda", rows)
+
+    def test_one_label_naming_two_addresses_refuses(self) -> None:
+        """Silently rebinding a label stops tracking the first account, which
+        is the exact shape of the L1 shortfall this binding exists to close."""
+        sim = simulator.Simulator(self.config(), execute=False, sustain=False, cycles=1)
+        first = self.root / "s1"
+        first.mkdir()
+        (first / "direct-trade-public.json").write_text(json.dumps(
+            {"tokenSetup": {"sellerToken": "A", "feeToken": "B"}}))
+        sim.adopt_direct_token_bindings(first)
+        self.assertEqual(sim.direct_token_bindings["direct_seller_token"], "A")
+        second = self.root / "s2"
+        second.mkdir()
+        (second / "direct-trade-public.json").write_text(json.dumps(
+            {"tokenSetup": {"sellerToken": "C", "feeToken": "B"}}))
+        with self.assertRaises(simulator.Refusal) as caught:
+            sim.adopt_direct_token_bindings(second)
+        self.assertIn("cannot track two accounts under one label", str(caught.exception))
+
+    def test_a_manifest_without_the_block_binds_nothing(self) -> None:
+        """A world with no trade names no trade accounts, rather than binding a
+        placeholder the census would then fail to read."""
+        sim = simulator.Simulator(self.config(), execute=False, sustain=False, cycles=1)
+        out = self.root / "s0"
+        out.mkdir()
+        (out / "direct-trade-public.json").write_text(json.dumps({"schema": "no-setup"}))
+        sim.adopt_direct_token_bindings(out)
+        self.assertEqual(sim.direct_token_bindings, {})
+        sim.adopt_direct_token_bindings(self.root / "does-not-exist")
+        self.assertEqual(sim.direct_token_bindings, {})
 
 
 class SimulatorLoopTest(SimulatorHarness):

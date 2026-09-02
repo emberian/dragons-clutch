@@ -65,8 +65,6 @@ pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 20;
 /// There is no matching child count: `AdmitTerminal` makes no child invocation.
 /// Core authenticates the Resolution-owned certificate itself.
 pub const RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1: usize = 22;
-/// Exact outer and child account count for Source/Funding close.
-pub const RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1: usize = 22;
 
 const SOURCE_MATERIAL: usize = 8;
 const SOURCE_MATERIAL_STAGING: usize = 9;
@@ -93,17 +91,42 @@ const ADMIT_RESULT_DOMAIN: usize = 18;
 const ADMIT_RESULT_DOMAIN_STAGING: usize = 19;
 const ADMIT_PORTFOLIO: usize = 20;
 const ADMIT_PORTFOLIO_STAGING: usize = 21;
-const CLOSE_CERTIFICATE: usize = 14;
-const CLOSE_CLOSURE: usize = 15;
-const CLOSE_BENEFICIARY: usize = 16;
-const CLOSE_CLOCK: usize = 17;
-const CLOSE_RENT: usize = 18;
-const CLOSE_SYSTEM: usize = 19;
-const CLOSE_RECOVERY_POLICY: usize = 20;
-const CLOSE_RECOVERY_POLICY_STAGING: usize = 21;
 
 const RESOLUTION_FUNDING_LEDGER_BYTES: usize =
     FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
+
+/// The three Resolution actions Core still COMPOSES.
+///
+/// `ResolutionCoreActionV1` is the WIRE enum and it keeps all four
+/// discriminants, because Resolution still owns `CloseFund` and decodes it on
+/// its own direct route (`process_direct_funding_close_v1`). Core does not:
+/// `a34ff595` moved the close out of Core, and `process` refuses that action at
+/// decode, before an account is parsed.
+///
+/// What that refusal could not do by itself is stop Core's own code from NAMING
+/// the action. Twelve arms across nine helpers went on matching `CloseFund` and
+/// returning frame widths, account indices, expected-writable pairs and
+/// revision rules for a route Core refuses — held there by Rust totality rather
+/// than by anything anyone had decided. Each was dead code that READ like
+/// specification, and the risk is not that it executes: it is that the next
+/// reader takes it for the design, or a later edit makes one of them reachable
+/// again by widening the decode guard alone.
+///
+/// So the refusal is enforced ONCE, at the decode site, by producing this type;
+/// past that point Core cannot name an action it refuses, because there is no
+/// variant for it. The wire enum is untouched, so nothing about what Resolution
+/// accepts changes, and the census keeps reading `#CloseFund` off the guard
+/// that still names it.
+///
+/// `pub(crate)` only because `recovery_walk_has_a_live_route` is, and the weld
+/// test re-executes its premise beside it. Nothing outside this crate can name
+/// it, which is the whole point.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ComposedResolutionActionV1 {
+    CreateFund,
+    VerifyFundReady,
+    AdmitTerminal,
+}
 
 /// Execute one exact Resolution child effect and commit any Core transition last.
 #[inline(never)]
@@ -133,6 +156,19 @@ pub(crate) fn process(
             .ok_or(CoreSbfError::Instruction)?,
     )
     .map_err(|_| CoreSbfError::Instruction)?;
+    // The one place the wire enum is read, and the one place the refusal lives.
+    // Everything below this line is typed in `ComposedResolutionActionV1` and
+    // therefore CANNOT name `CloseFund`.
+    //
+    // Deliberately a STATEMENT-position `match` writing a deferred binding,
+    // not `let action = match …`. The route census walks dispatch statements
+    // and does not descend into `let` initialisers
+    // (`tools/gauntlet/census/src/enumerate.rs`, the `Stmt::Local(_) => {}`
+    // arm), so the tidier expression form silently DELETES
+    // `core/resolution::process#CloseFund` — measured, 160 routes to 159 —
+    // while keeping the refusal itself intact. The row that records where this
+    // action is refused is worth the deferred binding.
+    let action;
     match resolution_request.action {
         // V7 closes directly in Resolution (`process_direct_funding_close_v1`).
         // Retaining the composed Core CPI would preserve the exact
@@ -146,7 +182,13 @@ pub(crate) fn process(
         }
         // Every action Core still composes continues into the shared
         // authentication below and is dispatched after it.
-        _ => {}
+        ResolutionCoreActionV1::CreateFund => action = ComposedResolutionActionV1::CreateFund,
+        ResolutionCoreActionV1::VerifyFundReady => {
+            action = ComposedResolutionActionV1::VerifyFundReady;
+        }
+        ResolutionCoreActionV1::AdmitTerminal => {
+            action = ComposedResolutionActionV1::AdmitTerminal;
+        }
     }
     if funding_header.selected_mask()
         != resolution_request
@@ -155,8 +197,8 @@ pub(crate) fn process(
     {
         return Err(CoreSbfError::Instruction.into());
     }
-    authenticate_action(request, envelope, resolution_request)?;
-    validate_outer_frame(program_id, accounts, resolution_request.action)?;
+    authenticate_action(request, envelope, resolution_request, action)?;
+    validate_outer_frame(program_id, accounts, action)?;
     let frame = FixedRoleAccountsV1::parse(program_id, accounts)?;
     let authenticated = authenticate_fixed_role(
         program_id,
@@ -166,17 +208,18 @@ pub(crate) fn process(
         role_request,
         Role::Resolution,
     )?;
-    authenticate_request_coordinates(&frame, *authenticated.state, envelope, resolution_request)?;
-    if resolution_request.action != ResolutionCoreActionV1::AdmitTerminal {
-        authenticate_recovery_policy(
-            &frame,
-            accounts,
-            resolution_request,
-            resolution_request.action,
-        )?;
+    authenticate_request_coordinates(
+        &frame,
+        *authenticated.state,
+        envelope,
+        resolution_request,
+        action,
+    )?;
+    if action != ComposedResolutionActionV1::AdmitTerminal {
+        authenticate_recovery_policy(&frame, accounts, resolution_request, action)?;
     }
-    match resolution_request.action {
-        ResolutionCoreActionV1::VerifyFundReady => {
+    match action {
+        ComposedResolutionActionV1::VerifyFundReady => {
             authenticate_activation_accept(
                 &frame,
                 accounts,
@@ -193,7 +236,7 @@ pub(crate) fn process(
             )?;
             Ok(())
         }
-        ResolutionCoreActionV1::AdmitTerminal => {
+        ComposedResolutionActionV1::AdmitTerminal => {
             // The provider transaction already persisted a Resolution-owned
             // ResolutionCertificateV2. Core independently authenticates that
             // durable poststate above/below and accepts it without asking
@@ -225,7 +268,7 @@ pub(crate) fn process(
             persist_state(frame.market(), candidate)?;
             Ok(())
         }
-        ResolutionCoreActionV1::CreateFund => {
+        ComposedResolutionActionV1::CreateFund => {
             invoke_fixed_role(
                 program_id,
                 &frame,
@@ -245,13 +288,10 @@ pub(crate) fn process(
                 *authenticated.state,
                 resolution_request,
                 acknowledgement,
+                action,
             )?;
             Ok(())
         }
-        // Refused at decode, above. A `match` on a wire enum has to be total,
-        // and the arm repeats that one refusal rather than inventing a second
-        // accusation for a caller who cannot arrive here.
-        ResolutionCoreActionV1::CloseFund => Err(CoreSbfError::UnsupportedAction.into()),
     }
 }
 
@@ -292,18 +332,18 @@ fn authenticate_action(
     request: Request,
     envelope: CoreEffectEnvelopeV1,
     resolution: ResolutionRoleRequestV2,
+    action: ComposedResolutionActionV1,
 ) -> Result<(), CoreSbfError> {
-    let (top_level, effect) = match resolution.action {
-        ResolutionCoreActionV1::CreateFund => {
+    let (top_level, effect) = match action {
+        ComposedResolutionActionV1::CreateFund => {
             (Action::VerifyReadiness, CoreEffectActionV1::CreateFund)
         }
-        ResolutionCoreActionV1::VerifyFundReady => {
+        ComposedResolutionActionV1::VerifyFundReady => {
             (Action::VerifyReadiness, CoreEffectActionV1::VerifyFundReady)
         }
-        ResolutionCoreActionV1::AdmitTerminal => {
+        ComposedResolutionActionV1::AdmitTerminal => {
             (Action::AdmitTerminal, CoreEffectActionV1::AdmitTerminal)
         }
-        ResolutionCoreActionV1::CloseFund => (Action::Retire, CoreEffectActionV1::CloseFund),
     };
     if request.action != top_level
         || envelope.action() != effect
@@ -312,18 +352,13 @@ fn authenticate_action(
     {
         return Err(CoreSbfError::Instruction);
     }
-    let revisions_match = match resolution.action {
-        ResolutionCoreActionV1::CreateFund | ResolutionCoreActionV1::VerifyFundReady => {
+    let revisions_match = match action {
+        ComposedResolutionActionV1::CreateFund | ComposedResolutionActionV1::VerifyFundReady => {
             envelope.expected_resource_a_revision() == 0
                 && envelope.expected_resource_b_revision() == 0
         }
-        ResolutionCoreActionV1::AdmitTerminal => {
+        ComposedResolutionActionV1::AdmitTerminal => {
             envelope.expected_resource_a_revision() == resolution.receipt_sequence
-                && envelope.expected_resource_b_revision() == 1
-        }
-        ResolutionCoreActionV1::CloseFund => {
-            envelope.expected_resource_a_revision().checked_add(1)
-                == Some(resolution.receipt_sequence)
                 && envelope.expected_resource_b_revision() == 1
         }
     };
@@ -339,6 +374,7 @@ fn authenticate_request_coordinates(
     state: CoreState,
     envelope: CoreEffectEnvelopeV1,
     request: ResolutionRoleRequestV2,
+    action: ComposedResolutionActionV1,
 ) -> Result<(), CoreSbfError> {
     if request.source_state
         != account(frame.child_accounts(14)?, SOURCE_STATE)?
@@ -354,11 +390,11 @@ fn authenticate_request_coordinates(
     {
         return Err(CoreSbfError::Reference);
     }
-    let beneficiary_matches = match request.action {
-        ResolutionCoreActionV1::CreateFund => {
+    let beneficiary_matches = match action {
+        ComposedResolutionActionV1::CreateFund => {
             request.beneficiary == state.rent_beneficiary.to_bytes()
         }
-        ResolutionCoreActionV1::VerifyFundReady => {
+        ComposedResolutionActionV1::VerifyFundReady => {
             request.beneficiary == state.rent_beneficiary.to_bytes()
                 && request.beneficiary
                     == account(
@@ -368,35 +404,22 @@ fn authenticate_request_coordinates(
                     .key
                     .to_bytes()
         }
-        ResolutionCoreActionV1::AdmitTerminal => request.beneficiary == [0; 32],
-        ResolutionCoreActionV1::CloseFund => {
-            request.beneficiary == state.rent_beneficiary.to_bytes()
-                && request.beneficiary
-                    == account(
-                        frame.child_accounts(CLOSE_BENEFICIARY + 1)?,
-                        CLOSE_BENEFICIARY,
-                    )?
-                    .key
-                    .to_bytes()
-        }
+        ComposedResolutionActionV1::AdmitTerminal => request.beneficiary == [0; 32],
     };
     if !beneficiary_matches {
         return Err(CoreSbfError::Reference);
     }
-    let valid_phase = match request.action {
-        ResolutionCoreActionV1::CreateFund => resolution_fund_prestate_admissible(state),
-        ResolutionCoreActionV1::VerifyFundReady => matches!(
+    let valid_phase = match action {
+        ComposedResolutionActionV1::CreateFund => resolution_fund_prestate_admissible(state),
+        ComposedResolutionActionV1::VerifyFundReady => matches!(
             (state.phase, state.readiness),
             (Phase::Founding, Readiness::Prepaid)
                 | (Phase::Founding, Readiness::Ready)
                 | (Phase::Open, Readiness::Consumed)
         ),
-        ResolutionCoreActionV1::AdmitTerminal => {
+        ComposedResolutionActionV1::AdmitTerminal => {
             matches!(state.phase, Phase::Open | Phase::Terminal)
                 && state.readiness == Readiness::Consumed
-        }
-        ResolutionCoreActionV1::CloseFund => {
-            state.phase == Phase::Retiring && state.readiness == Readiness::Consumed
         }
     };
     if !valid_phase {
@@ -454,7 +477,7 @@ fn authenticate_activation_accept(
         accounts,
         state,
         request,
-        ResolutionCoreActionV1::VerifyFundReady,
+        ComposedResolutionActionV1::VerifyFundReady,
         &rent,
     )?;
     let receipt_account = account(accounts, VERIFY_ACTIVATION_RECEIPT)?;
@@ -575,7 +598,7 @@ fn activation_receipt_market_digest(
 fn validate_outer_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    action: ResolutionCoreActionV1,
+    action: ComposedResolutionActionV1,
 ) -> Result<(), CoreSbfError> {
     let expected = outer_account_count(action);
     // The three fund actions end with the finalized RecoveryPolicyV2 pair. A
@@ -584,7 +607,7 @@ fn validate_outer_frame(
     // shape is admissible is decided against the authenticated material in
     // `authenticate_recovery_policy`, not here.
     let admissible_count = accounts.len() == expected
-        || (action != ResolutionCoreActionV1::AdmitTerminal
+        || (action != ComposedResolutionActionV1::AdmitTerminal
             && accounts.len() == expected.saturating_sub(2));
     if !admissible_count || accounts.iter().any(|value| value.is_signer) {
         return Err(CoreSbfError::AccountFrame);
@@ -607,10 +630,9 @@ fn validate_outer_frame(
         }
     }
     let expected_writable = match action {
-        ResolutionCoreActionV1::CreateFund => [true, false],
-        ResolutionCoreActionV1::VerifyFundReady => [false, false],
-        ResolutionCoreActionV1::AdmitTerminal => [false, false],
-        ResolutionCoreActionV1::CloseFund => [true, true],
+        ComposedResolutionActionV1::CreateFund => [true, false],
+        ComposedResolutionActionV1::VerifyFundReady => [false, false],
+        ComposedResolutionActionV1::AdmitTerminal => [false, false],
     };
     for (index, writable) in [SOURCE_STATE, FUNDING_LEDGER]
         .into_iter()
@@ -622,7 +644,7 @@ fn validate_outer_frame(
         }
     }
     match action {
-        ResolutionCoreActionV1::CreateFund => {
+        ComposedResolutionActionV1::CreateFund => {
             require_sysvar(account(accounts, CREATE_RENT)?, sysvar::rent::ID)?;
             require_program(account(accounts, CREATE_SYSTEM)?, system_program::ID)?;
             if has_policy_positions {
@@ -633,7 +655,7 @@ fn validate_outer_frame(
                 )?;
             }
         }
-        ResolutionCoreActionV1::VerifyFundReady => {
+        ComposedResolutionActionV1::VerifyFundReady => {
             let beneficiary = account(accounts, VERIFY_BENEFICIARY)?;
             let receipt = account(accounts, VERIFY_ACTIVATION_RECEIPT)?;
             if beneficiary.is_writable
@@ -653,7 +675,7 @@ fn validate_outer_frame(
                 )?;
             }
         }
-        ResolutionCoreActionV1::AdmitTerminal => {
+        ComposedResolutionActionV1::AdmitTerminal => {
             let certificate = account(accounts, ADMIT_CERTIFICATE)?;
             if certificate.is_writable || certificate.executable {
                 return Err(CoreSbfError::AccountFrame);
@@ -673,24 +695,6 @@ fn validate_outer_frame(
                 }
             }
         }
-        ResolutionCoreActionV1::CloseFund => {
-            if account(accounts, CLOSE_CERTIFICATE)?.is_writable
-                || !account(accounts, CLOSE_CLOSURE)?.is_writable
-                || !account(accounts, CLOSE_BENEFICIARY)?.is_writable
-            {
-                return Err(CoreSbfError::AccountFrame);
-            }
-            require_sysvar(account(accounts, CLOSE_CLOCK)?, sysvar::clock::ID)?;
-            require_sysvar(account(accounts, CLOSE_RENT)?, sysvar::rent::ID)?;
-            require_program(account(accounts, CLOSE_SYSTEM)?, system_program::ID)?;
-            if has_policy_positions {
-                require_readonly_pair(
-                    accounts,
-                    CLOSE_RECOVERY_POLICY,
-                    CLOSE_RECOVERY_POLICY_STAGING,
-                )?;
-            }
-        }
     }
     Ok(())
 }
@@ -700,7 +704,7 @@ fn authenticate_recovery_policy(
     frame: &FixedRoleAccountsV1<'_, '_>,
     accounts: &[AccountInfo<'_>],
     request: ResolutionRoleRequestV2,
-    action: ResolutionCoreActionV1,
+    action: ComposedResolutionActionV1,
 ) -> Result<(), CoreSbfError> {
     let (policy_index, staging_index) = recovery_policy_indices(action)?;
     let rent = read_rent(account(accounts, rent_index(action))?)?;
@@ -887,35 +891,34 @@ fn authenticate_no_recovery_entries(
 /// existence, before any position can be sold against it.
 /// `VerifyFundReady` stays admissible on purpose: welding it would take a route
 /// *away* from a state that already exists, which is the opposite of the
-/// census's charter. A weld may not strand what it finds. (`CloseFund` is
-/// listed below for totality only — Core refuses that action at decode, so the
-/// weld could not reach it either way.)
+/// census's charter. A weld may not strand what it finds. (`CloseFund` used to
+/// be listed below for totality only; it is not an action Core composes, so it
+/// is not a variant this function can be asked about any more.)
 ///
 /// This returns `true` again the moment the ladder gets a live route (Q2's
 /// build half: resurrect `funded::process_funded_transition` and give
 /// `RecoveryAdvanced`/`Exhausted` real routes). Deleting this function is then
 /// the whole of the revert.
-pub(crate) const fn recovery_walk_has_a_live_route(action: ResolutionCoreActionV1) -> bool {
+pub(crate) const fn recovery_walk_has_a_live_route(action: ComposedResolutionActionV1) -> bool {
     match action {
-        ResolutionCoreActionV1::CreateFund => false,
-        ResolutionCoreActionV1::VerifyFundReady
-        | ResolutionCoreActionV1::CloseFund
-        | ResolutionCoreActionV1::AdmitTerminal => true,
+        ComposedResolutionActionV1::CreateFund => false,
+        ComposedResolutionActionV1::VerifyFundReady | ComposedResolutionActionV1::AdmitTerminal => {
+            true
+        }
     }
 }
 
-fn recovery_policy_indices(action: ResolutionCoreActionV1) -> Result<(usize, usize), CoreSbfError> {
+fn recovery_policy_indices(
+    action: ComposedResolutionActionV1,
+) -> Result<(usize, usize), CoreSbfError> {
     match action {
-        ResolutionCoreActionV1::CreateFund => {
+        ComposedResolutionActionV1::CreateFund => {
             Ok((CREATE_RECOVERY_POLICY, CREATE_RECOVERY_POLICY_STAGING))
         }
-        ResolutionCoreActionV1::VerifyFundReady => {
+        ComposedResolutionActionV1::VerifyFundReady => {
             Ok((VERIFY_RECOVERY_POLICY, VERIFY_RECOVERY_POLICY_STAGING))
         }
-        ResolutionCoreActionV1::CloseFund => {
-            Ok((CLOSE_RECOVERY_POLICY, CLOSE_RECOVERY_POLICY_STAGING))
-        }
-        ResolutionCoreActionV1::AdmitTerminal => Err(CoreSbfError::Instruction),
+        ComposedResolutionActionV1::AdmitTerminal => Err(CoreSbfError::Instruction),
     }
 }
 
@@ -1125,12 +1128,11 @@ fn authenticate_poststate(
     state: CoreState,
     request: ResolutionRoleRequestV2,
     acknowledgement: CoreEffectAckV1,
+    action: ComposedResolutionActionV1,
 ) -> Result<(), CoreSbfError> {
-    let rent = read_rent(account(accounts, rent_index(request.action))?)?;
-    let observed_digest = match request.action {
-        // Refused at decode in `process`; totality only.
-        ResolutionCoreActionV1::CloseFund => return Err(CoreSbfError::UnsupportedAction),
-        action => {
+    let rent = read_rent(account(accounts, rent_index(action))?)?;
+    let observed_digest = {
+        {
             authenticate_live_poststate(frame, accounts, state, request, action, &rent)?;
             let source = account(accounts, SOURCE_STATE)?
                 .try_borrow_data()
@@ -1138,7 +1140,7 @@ fn authenticate_poststate(
             let funding_ledger = account(accounts, FUNDING_LEDGER)?
                 .try_borrow_data()
                 .map_err(|_| CoreSbfError::ChildAck)?;
-            let certificate = if action == ResolutionCoreActionV1::AdmitTerminal {
+            let certificate = if action == ComposedResolutionActionV1::AdmitTerminal {
                 Some(
                     account(accounts, ADMIT_CERTIFICATE)?
                         .try_borrow_data()
@@ -1156,7 +1158,7 @@ fn authenticate_poststate(
         }
     };
     if acknowledgement.post_resource_digest() != observed_digest
-        || !ack_revisions_match(acknowledgement, request)
+        || !ack_revisions_match(acknowledgement, request, action)
     {
         return Err(CoreSbfError::ChildAck);
     }
@@ -1168,7 +1170,7 @@ fn authenticate_live_poststate(
     accounts: &[AccountInfo<'_>],
     state: CoreState,
     request: ResolutionRoleRequestV2,
-    action: ResolutionCoreActionV1,
+    action: ComposedResolutionActionV1,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let source_account = account(accounts, SOURCE_STATE)?;
@@ -1189,10 +1191,11 @@ fn authenticate_live_poststate(
         || !matches!(
             (action, source.phase()),
             (
-                ResolutionCoreActionV1::CreateFund | ResolutionCoreActionV1::VerifyFundReady,
+                ComposedResolutionActionV1::CreateFund
+                    | ComposedResolutionActionV1::VerifyFundReady,
                 SourceResolutionPhaseV1::Primary
             ) | (
-                ResolutionCoreActionV1::AdmitTerminal,
+                ComposedResolutionActionV1::AdmitTerminal,
                 SourceResolutionPhaseV1::Resolved | SourceResolutionPhaseV1::FailureCommitted
             )
         )
@@ -1216,7 +1219,7 @@ fn authenticate_live_poststate(
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
     let manifest_id =
         CapabilityContentId::new(request.capability_manifest).map_err(|_| CoreSbfError::Funding)?;
-    let expected_status = if action == ResolutionCoreActionV1::CreateFund {
+    let expected_status = if action == ComposedResolutionActionV1::CreateFund {
         FundingLedgerStatusV2::Pending
     } else {
         FundingLedgerStatusV2::Active
@@ -1304,16 +1307,17 @@ fn authenticate_source_state(
 }
 
 fn resolution_poststate_digest(
-    action: ResolutionCoreActionV1,
+    action: ComposedResolutionActionV1,
     source_or_closure: &[u8],
     funding_ledger: &[u8],
     certificate: Option<&[u8]>,
 ) -> Result<dclutch_market_core_codec::Identity, CoreSbfError> {
+    // The tag is still the WIRE effect byte, unchanged: the digest is a
+    // cross-program agreement with Resolution, not a Core-internal encoding.
     let action_tag = [match action {
-        ResolutionCoreActionV1::CreateFund => CoreEffectActionV1::CreateFund as u8,
-        ResolutionCoreActionV1::VerifyFundReady => CoreEffectActionV1::VerifyFundReady as u8,
-        ResolutionCoreActionV1::AdmitTerminal => CoreEffectActionV1::AdmitTerminal as u8,
-        ResolutionCoreActionV1::CloseFund => CoreEffectActionV1::CloseFund as u8,
+        ComposedResolutionActionV1::CreateFund => CoreEffectActionV1::CreateFund as u8,
+        ComposedResolutionActionV1::VerifyFundReady => CoreEffectActionV1::VerifyFundReady as u8,
+        ComposedResolutionActionV1::AdmitTerminal => CoreEffectActionV1::AdmitTerminal as u8,
     }];
     nonzero_identity(
         hashv(&[
@@ -1327,32 +1331,29 @@ fn resolution_poststate_digest(
     )
 }
 
-fn ack_revisions_match(acknowledgement: CoreEffectAckV1, request: ResolutionRoleRequestV2) -> bool {
-    match request.action {
-        ResolutionCoreActionV1::CreateFund => {
+fn ack_revisions_match(
+    acknowledgement: CoreEffectAckV1,
+    request: ResolutionRoleRequestV2,
+    action: ComposedResolutionActionV1,
+) -> bool {
+    match action {
+        ComposedResolutionActionV1::CreateFund => {
             acknowledgement.pre_resource_a_revision() == 0
                 && acknowledgement.post_resource_a_revision() == 0
                 && acknowledgement.pre_resource_b_revision() == 0
                 && acknowledgement.post_resource_b_revision() == 0
         }
-        ResolutionCoreActionV1::VerifyFundReady => {
+        ComposedResolutionActionV1::VerifyFundReady => {
             acknowledgement.pre_resource_a_revision() == 0
                 && acknowledgement.post_resource_a_revision() == 0
                 && acknowledgement.pre_resource_b_revision() == 0
                 && acknowledgement.post_resource_b_revision() == 1
         }
-        ResolutionCoreActionV1::AdmitTerminal => {
+        ComposedResolutionActionV1::AdmitTerminal => {
             acknowledgement.pre_resource_a_revision() == request.receipt_sequence
                 && acknowledgement.post_resource_a_revision() == request.receipt_sequence
                 && acknowledgement.pre_resource_b_revision() == 1
                 && acknowledgement.post_resource_b_revision() == 1
-        }
-        ResolutionCoreActionV1::CloseFund => {
-            acknowledgement.pre_resource_a_revision().checked_add(1)
-                == Some(request.receipt_sequence)
-                && acknowledgement.post_resource_a_revision() == request.receipt_sequence
-                && acknowledgement.pre_resource_b_revision() == 1
-                && acknowledgement.post_resource_b_revision() == 2
         }
     }
 }
@@ -1365,21 +1366,19 @@ const fn complete_child_effect() -> ChildEffectObservation {
     }
 }
 
-const fn outer_account_count(action: ResolutionCoreActionV1) -> usize {
+const fn outer_account_count(action: ComposedResolutionActionV1) -> usize {
     match action {
-        ResolutionCoreActionV1::CreateFund => RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1,
-        ResolutionCoreActionV1::VerifyFundReady => RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1,
-        ResolutionCoreActionV1::AdmitTerminal => RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1,
-        ResolutionCoreActionV1::CloseFund => RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1,
+        ComposedResolutionActionV1::CreateFund => RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1,
+        ComposedResolutionActionV1::VerifyFundReady => RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1,
+        ComposedResolutionActionV1::AdmitTerminal => RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1,
     }
 }
 
-const fn rent_index(action: ResolutionCoreActionV1) -> usize {
+const fn rent_index(action: ComposedResolutionActionV1) -> usize {
     match action {
-        ResolutionCoreActionV1::CreateFund => CREATE_RENT,
-        ResolutionCoreActionV1::VerifyFundReady => VERIFY_RENT,
-        ResolutionCoreActionV1::AdmitTerminal => ADMIT_RENT,
-        ResolutionCoreActionV1::CloseFund => CLOSE_RENT,
+        ComposedResolutionActionV1::CreateFund => CREATE_RENT,
+        ComposedResolutionActionV1::VerifyFundReady => VERIFY_RENT,
+        ComposedResolutionActionV1::AdmitTerminal => ADMIT_RENT,
     }
 }
 

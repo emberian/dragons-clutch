@@ -5766,6 +5766,45 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each acceptance frame must OPEN with the prefix constant that names its
+    /// shared head, and until 2026-09-02 no frame referenced any of the three.
+    /// The roles were spelled out again inside every frame, so the prefix
+    /// constants documented a head that nothing held them to: a frame could
+    /// reorder RENT before MATERIAL_STAGE, or drop CLOCK, and the constant that
+    /// says otherwise would still have compiled, still been exported, and still
+    /// been named exactly once -- by itself. This is the check that makes the
+    /// three constants load-bearing rather than decorative.
+    #[test]
+    fn every_acceptance_frame_opens_with_the_prefix_that_names_its_head() {
+        for (frame, prefix, what) in [
+            (
+                ACCEPT_PRIMARY_INLINE_FRAME_V1.as_slice(),
+                ACCEPT_PRIMARY_INLINE_SOURCE_PREFIX_V1.as_slice(),
+                "primary inline",
+            ),
+            (
+                ACCEPT_RECOVERY_INLINE_FRAME_V1.as_slice(),
+                ACCEPT_RECOVERY_INLINE_SOURCE_PREFIX_V1.as_slice(),
+                "recovery inline",
+            ),
+            (
+                ACCEPT_SHARED_OBSERVATION_FRAME_V1.as_slice(),
+                ACCEPT_SHARED_SOURCE_PREFIX_V1.as_slice(),
+                "shared observation",
+            ),
+        ] {
+            assert!(
+                frame.len() > prefix.len(),
+                "{what}: a frame is its prefix plus an extension"
+            );
+            assert_eq!(
+                frame.get(..prefix.len()),
+                Some(prefix),
+                "{what}: the frame's head disagrees with the prefix constant that names it"
+            );
+        }
+    }
     fn id(fill: u8) -> ContentId {
         ContentId::new([fill; CONTENT_ID_BYTES]).expect("nonzero test identity")
     }

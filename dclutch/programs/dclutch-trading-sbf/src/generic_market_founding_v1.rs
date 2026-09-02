@@ -19,9 +19,9 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_capability_contract::{
-    CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
-    ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointPhaseV1,
-    ControllerFundingCheckpointV1,
+    CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1,
+    CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1, ControllerFundingCheckpointDerivationV1,
+    ControllerFundingCheckpointPhaseV1, ControllerFundingCheckpointV1,
 };
 
 use dclutch_claims_svm::founding_v5::{
@@ -538,7 +538,11 @@ fn authenticate_checkpoint_funding_order_v1(
 fn founding_custody_ladder_digest_v1(
     frame: &GenericFoundingFrameV1<'_, '_>,
 ) -> Result<[u8; 32], ProgramError> {
-    let observations = [
+    // Arity is the digest's own fact, not this array's shape: a fifth
+    // observation here would silently change every ladder digest the chain has
+    // ever committed, and three of the four authors of this preimage are in
+    // other files. `[_; N]` makes adding one a compile error at every author.
+    let observations: [_; CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1] = [
         account(frame.lock, LOCK_REPLAY)?,
         account(frame.lock, LOCK_HOARD_VAULT)?,
         account(frame.lock, LOCK_SOURCE_VAULT)?,

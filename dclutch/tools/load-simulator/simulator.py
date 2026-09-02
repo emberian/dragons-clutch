@@ -164,6 +164,14 @@ class Simulator:
             finals = sorted(census_dir.glob("cycle-*.json"))
             if finals:
                 self.prior_census = finals[-1]
+        # Resume: the Direct token accounts earlier cycles created are still on
+        # chain holding collateral, so a restarted run must keep naming them or
+        # its first census violates L1 over its own predecessor's trade.
+        self.direct_token_bindings: dict = {}
+        sessions = self.work / "sessions"
+        if sessions.is_dir():
+            for session in sorted(sessions.glob("cycle-*")):
+                self.adopt_direct_token_bindings(session)
 
     # ---------- cluster argv helpers ----------
 
@@ -311,7 +319,57 @@ class Simulator:
                 f"cycle {cycle} session production refused (exit {proc.returncode}); "
                 f"log: {self.work / 'logs' / f'produce-{cycle:06d}.log'}"
             )
+        self.adopt_direct_token_bindings(out)
         return out
+
+    # ---------- the two token accounts a fill creates ----------
+
+    # The Direct token PDAs `direct_token_setup_v1` creates for the SELLER and
+    # for the VENUE FEE. Both are destinations of collateral a fill moves, and
+    # both are accounts nothing named until now -- so without them L1 reports
+    # `tracked != Mint supply` by exactly the atoms the trade moved, and blames
+    # the run for a shortfall that is really an unnamed account.
+    #
+    # Read from the producer's own public manifest, never re-derived here. The
+    # producer computes both from `DirectTokenAccountSeedsV1` against the
+    # Trading program (`direct_trade_producer.rs`), and a second derivation in
+    # Python would be a mirror of a protocol PDA -- exactly the thing this
+    # module refuses to become.
+    DIRECT_TOKEN_BINDINGS_V1 = (
+        ("direct_seller_token", "sellerToken"),
+        ("direct_venue_fee_token", "feeToken"),
+    )
+
+    def adopt_direct_token_bindings(self, out: Path) -> None:
+        """Record the fill's two collateral destinations, once they exist.
+
+        STICKY, deliberately. The accounts persist after the cycle that created
+        them, so a later census that stopped naming them would violate L1 over
+        atoms sitting exactly where this run put them.
+        """
+        manifest = out / "direct-trade-public.json"
+        if not manifest.is_file():
+            return
+        try:
+            body = json.loads(manifest.read_text())
+        except (ValueError, OSError):
+            return
+        setup = body.get("tokenSetup")
+        if not isinstance(setup, dict):
+            return
+        for label, field in self.DIRECT_TOKEN_BINDINGS_V1:
+            address = setup.get(field)
+            if not isinstance(address, str) or not address:
+                continue
+            existing = self.direct_token_bindings.get(label)
+            if existing is not None and existing != address:
+                # Two different addresses under one label is a census that
+                # would silently stop tracking the first one.
+                raise Refusal(
+                    f"the Direct {label} moved from {existing} to {address}; a census "
+                    "cannot track two accounts under one label"
+                )
+            self.direct_token_bindings[label] = address
 
     def session_completion(self, out: Path) -> Optional[dict]:
         """The finalized completion document, if the session has one."""
@@ -389,7 +447,12 @@ class Simulator:
             "--stage", f"load-sim-cycle-{cycle:06d}",
             "--output", str(out),
         ]
-        for label, pubkey in census_cfg.get("tokens", {}).items():
+        # The configured token accounts, plus the two a fill created. A
+        # configured label wins: an operator who names an address explicitly is
+        # not overridden by a manifest.
+        tokens = dict(self.direct_token_bindings)
+        tokens.update(census_cfg.get("tokens", {}))
+        for label, pubkey in tokens.items():
             argv += ["--token", f"{label}={pubkey}"]
         for label, pubkey in census_cfg.get("positions", {}).items():
             argv += ["--position", f"{label}={pubkey}"]
