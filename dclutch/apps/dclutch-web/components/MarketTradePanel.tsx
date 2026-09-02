@@ -17,6 +17,7 @@ import SendStep from '@/components/trade/steps/SendStep';
 import { type DirectParticipantReadinessV1 } from '@/lib/directParticipant';
 import { type DirectTradeSpineV1 } from '@/lib/directTradeSpine';
 import { type MarketLiabilityV1 } from '@/lib/marketDiscovery';
+import { checkedReleaseSetIdsV1 } from '@/lib/publicCutStaging';
 import { publishedDirectRouteManifestV1 } from '@/lib/publishedRouteManifests';
 import { type SlotClockV1 } from '@/lib/slotClock';
 import {
@@ -138,6 +139,7 @@ export default function MarketTradePanel({
   } = createDirectTradeFlowMachineV1({
     endpoint, marketAddress, coreProgramId, registryProgramId, claimsProgramId,
     tradingProgramId, custodyProgramId, rentProgramId, denomination, wallets,
+    checkedReleaseSetIds: checkedReleaseSetIdsV1(),
     inspected, participant, outcome, desired, routeText,
     ticketState, execution, walletPreparation,
     setSpine, setSpineStatus, setParticipant, setParticipantStatus,

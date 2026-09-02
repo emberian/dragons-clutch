@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  marketGateV1, outcomeShareV1, sizeDecisionV1, tradeFlowStepsV1, type FlowProgressV1,
+  MARKET_GATE_WALL_ORDER_V1, marketGateV1, outcomeShareV1, sizeDecisionV1, tradeFlowStepsV1, type FlowProgressV1,
 } from './tradeFlowSteps';
 import { type DenominationV1 } from './quantity';
 
@@ -147,6 +147,33 @@ describe('the gate that stands instead of the stepper', () => {
     // The last clause IS the remedy: it tells a reader the wait is not theirs
     // to end, which is the whole reason this is a card and not a shrug.
     expect(gate.kind === 'closed' && gate.detail).toContain('Activation is the operator’s move, not yours.');
+  });
+
+  it('closes on a missing checked execution release, and says joining is unaffected', () => {
+    const detail = 'no checked execution release is on file for this Market’s execution release set aa11 — so a Direct fill refuses at the route admission boundary.';
+    const gate = marketGateV1([{ name: 'release', detail }]);
+    expect(gate.kind === 'closed' && gate.wall).toBe('release');
+    expect(gate.kind === 'closed' && gate.heading).toContain('checked execution release');
+    expect(gate.kind === 'closed' && gate.detail).toBe(detail);
+  });
+
+  /**
+   * The order is the order a reader can act on, and it is pinned because the
+   * three walls answer different questions and the gate shows exactly one.
+   * A market that is Retired AND has no checked release must lead with the
+   * phase: the release is moot on a market that cannot trade at all.
+   */
+  it('shows the wall a reader can act on first, when more than one stands', () => {
+    const walls = [
+      { name: 'release', detail: 'no checked execution release is on file' },
+      { name: 'activation', detail: 'never switched on' },
+      { name: 'phase', detail: 'this Market is Retired' },
+    ];
+    const first = marketGateV1(walls);
+    expect(first.kind === 'closed' && first.wall).toBe('phase');
+    const second = marketGateV1(walls.slice(0, 2));
+    expect(second.kind === 'closed' && second.wall).toBe('activation');
+    expect(MARKET_GATE_WALL_ORDER_V1).toEqual(['phase', 'activation', 'release']);
   });
 
   /**

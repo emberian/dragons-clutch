@@ -238,6 +238,12 @@ export type DirectTradeFlowContextV1 = Readonly<{
   tradingProgramId: string | null;
   custodyProgramId: string | null;
   rentProgramId: string | null;
+  /**
+   * Execution release sets with a checked release on file, or null for "not
+   * consulted". Handed down from the site's own deployment record rather than
+   * read here, because no account on chain carries it.
+   */
+  checkedReleaseSetIds: ReadonlyArray<string> | null;
   denomination: DenominationV1;
   wallets: WalletDirectoryHandleV1;
   inspected: Extract<DirectTradeSpineV1, { status: 'inspected' }> | null;
@@ -271,7 +277,7 @@ export type DirectTradeFlowMachineV1 = Readonly<{
 export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1): DirectTradeFlowMachineV1 {
   const {
     endpoint, marketAddress, coreProgramId, registryProgramId, claimsProgramId,
-    tradingProgramId, custodyProgramId, rentProgramId, denomination, wallets,
+    tradingProgramId, custodyProgramId, rentProgramId, checkedReleaseSetIds, denomination, wallets,
     inspected, participant, outcome, desired, routeText,
     ticketState, execution, walletPreparation,
     setSpine, setSpineStatus, setParticipant, setParticipantStatus,
@@ -305,6 +311,7 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
       tradingProgramId,
       claimsProgramId,
       owner: wallets.address,
+      checkedReleaseSetIds,
     });
     setSpine(next);
     setSpineStatus(next.status === 'inspected' ? next.reason : `Refused: ${next.reason}`);

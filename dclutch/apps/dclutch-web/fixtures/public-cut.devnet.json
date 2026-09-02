@@ -7,5 +7,6 @@
     "trade": null,
     "resolve": null,
     "redeem": null
-  }
+  },
+  "checkedReleases": {}
 }

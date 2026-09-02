@@ -3082,3 +3082,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   successor's first item; witness re-pin from green; the `Transition` split (380 sites, 14 files; five-build bisect makes
   the case).
 - Cuts: `ff5af604f`.
+
+### Lane map delta — 2026-09-02 19:15
+- FRAMEGUARD (`bb28a578`, `65d3f9ee`, `11932b74`, `9059bb58`): the ratchet names its base (`run.sh --at <commit>`, a dirty tree
+  refused, `accept` refuses two captures naming different commits); `frameguard.py owed` names the commits that touched
+  program sources and left the ratchet red; **the frameguard CI tier had been red at its own hermetic controls since the
+  13→12 link change and never built a link** (third instance of that drift); the checker was read out of the measured tree so
+  old commits were unmeasurable. Recaptured `afa556f3 → 11932b74` with every one of 39 rows attributed. **Finding:** `9785fd92`
+  grew `rational_representation_v2::prepare_and_execute` 2,624 → 3,456 stack bytes and measured none of it → STRUCTURED;
+  deepest frame 4,032/4,096 in resolution-proof's `process_direct_funding_activation_v1` → DIRECT. Owed at HEAD: `6ca28de0`.
+- Cuts: `def7055b6`.

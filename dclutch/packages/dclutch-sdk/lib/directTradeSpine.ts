@@ -49,6 +49,8 @@ export type DirectTradeSpineV1 = Readonly<{
   programSetId: string;
   configId: string;
   descriptorId: string;
+  /** The execution release set this Market selects. The `release` wall is about it. */
+  releaseSetId: string;
   priceScale: bigint;
   feeBasisPoints: number;
   feeRecipient: string;
@@ -71,6 +73,19 @@ export type DirectTradeSpineRequestV1 = Readonly<{
   claimsProgramId?: string | null;
   /** The connected wallet, if any: lets the spine check the trading prestate. */
   owner?: string | null;
+  /**
+   * Execution release sets known to have a CHECKED execution release, or null.
+   *
+   * A Direct fill is admitted at the route boundary only against a checked
+   * release, and that artifact is produced offline -- no account on chain says
+   * whether one exists, so this spine cannot read the answer and must be
+   * handed it. An array is an answer: a release set absent from it raises the
+   * `release` wall. `null` or omitted is NOT an answer -- it means nobody
+   * consulted a deployment record -- and raises nothing, because a wall
+   * asserted from an absence of evidence is the failure mode this whole file
+   * exists to avoid.
+   */
+  checkedReleaseSetIds?: ReadonlyArray<string> | null;
 }>;
 
 function canonical(value: string, field: string): string {
@@ -268,10 +283,28 @@ export async function inspectDirectTradeSpineV1(
         }
       }
     }
+    /*
+      THE WALL A READER USED TO MEET AT THE PREVIEW BUTTON.
+
+      Everything above says this market can take a fill: phase Open, capability
+      activated, packet inside the limit. The fill still refuses, at the route
+      admission boundary, unless a checked execution release exists for the
+      release set the Market selects -- and a full-redeploy cohort cannot
+      produce one, so this is the standing state of every cohort founded that
+      way rather than a transient. Nothing on chain carries the answer, so it
+      arrives from the caller's own deployment record and is asserted only when
+      one was supplied.
+    */
+    if (request.checkedReleaseSetIds != null && !request.checkedReleaseSetIds.includes(market.identity.selectedReleaseSetId)) {
+      walls.push(Object.freeze({
+        name: 'release',
+        detail: `no checked execution release is on file for this Market’s execution release set ${market.identity.selectedReleaseSetId}, so a Direct fill refuses at the route admission boundary. Joining this market and putting collateral in are unaffected; the fill is what waits. Producing that release is the operator’s move, not yours.`,
+      }));
+    }
     const packetWall = directPacketWallV1(DIRECT_PACKET_BUDGET_EVIDENCE_V1.wireBytes);
     if (packetWall !== null) walls.push(packetWall);
 
-    const tradable = market.phase === 'Open' && (rootExists ?? false);
+    const tradable = market.phase === 'Open' && (rootExists ?? false) && !walls.some((entry) => entry.name === 'release');
     return Object.freeze({
       status: 'inspected',
       observedSlot: floor,
@@ -280,6 +313,7 @@ export async function inspectDirectTradeSpineV1(
       generation: market.identity.generation,
       entryIndex: directEntry.index,
       manifestRecordAddress: manifestRecord.address,
+      releaseSetId: market.identity.selectedReleaseSetId,
       programSetId: hex(directEntry.programSet),
       configId: hex(directEntry.config),
       descriptorId: hex(selected.program),

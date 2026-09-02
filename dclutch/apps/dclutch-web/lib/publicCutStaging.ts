@@ -8,11 +8,30 @@ const ACTIVITY_STEPS = ['found', 'trade', 'resolve', 'redeem'] as const;
 
 export type PublicCutActivityStepV1 = (typeof ACTIVITY_STEPS)[number];
 
+/**
+ * One execution release set that has a checked release on file.
+ *
+ * A Direct fill is admitted at the route boundary only against a CHECKED
+ * execution release, and that artifact is produced offline by
+ * `devnet-checked-execution-release-v1` -- there is no account on chain a
+ * browser can read to learn whether one exists. So the browser's own
+ * authenticated deployment record carries it: the seal lane's output writes a
+ * row here, keyed by the execution release set the Market selects, and the
+ * absence of a row is exactly the fact a trader needs before they start.
+ *
+ * Both digests are the seal's, not this file's arithmetic: `gateDigest` is the
+ * gate the release was checked under and `sealedSet` the set it sealed, so a
+ * reader who has the artifact can compare it against what this site claims.
+ */
+export type PublicCutCheckedReleaseV1 = Readonly<{ gateDigest: string; sealedSet: string }>;
+
 export type PublicDevnetCutV1 = Readonly<{
   schema: typeof SCHEMA;
   cluster: 'devnet';
   market: string | null;
   activity: Readonly<Record<PublicCutActivityStepV1, string | null>>;
+  /** Keyed by execution release set identity, 64 lowercase hex. May be empty. */
+  checkedReleases: Readonly<Record<string, PublicCutCheckedReleaseV1>>;
 }>;
 
 function object(value: unknown, field: string): Record<string, unknown> {
@@ -33,6 +52,11 @@ function address(value: unknown, field: string): string {
   return value;
 }
 
+function digest(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new Error(`${field} must be 64 lowercase hex characters`);
+  return value;
+}
+
 function signature(value: unknown, field: string): string | null {
   if (value === null) return null;
   if (typeof value !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(value)) throw new Error(`${field} must be one canonical transaction signature or null`);
@@ -41,7 +65,7 @@ function signature(value: unknown, field: string): string | null {
 
 /** Parse the sole static input that opens the public devnet cut. */
 export function parsePublicDevnetCutV1(value: unknown): PublicDevnetCutV1 {
-  const root = object(value, 'public cut'); exactKeys(root, ['schema', 'cluster', 'market', 'activity'], 'public cut');
+  const root = object(value, 'public cut'); exactKeys(root, ['schema', 'cluster', 'market', 'activity', 'checkedReleases'], 'public cut');
   if (root.schema !== SCHEMA || root.cluster !== 'devnet') throw new Error('public cut has another schema or cluster');
   const market = root.market === null ? null : address(root.market, 'public cut Market');
   const activityRaw = object(root.activity, 'public cut activity'); exactKeys(activityRaw, ACTIVITY_STEPS, 'public cut activity');
@@ -57,7 +81,19 @@ export function parsePublicDevnetCutV1(value: unknown): PublicDevnetCutV1 {
   // Naming a market whose founding signature this cut cannot verify is honest;
   // naming a plausible neighbouring signature would not be, and a rule whose
   // only effect is to force the second is worse than no rule.
-  return Object.freeze({ schema: SCHEMA, cluster: 'devnet', market, activity });
+  const releasesRaw = object(root.checkedReleases, 'public cut checkedReleases');
+  const checkedReleases = Object.freeze(Object.fromEntries(Object.entries(releasesRaw).map(([releaseSetId, entry]) => {
+    const body = object(entry, `public cut checked release ${releaseSetId}`);
+    exactKeys(body, ['gateDigest', 'sealedSet'], `public cut checked release ${releaseSetId}`);
+    return [
+      digest(releaseSetId, 'public cut checked release key'),
+      Object.freeze({
+        gateDigest: digest(body.gateDigest, `public cut checked release ${releaseSetId} gateDigest`),
+        sealedSet: digest(body.sealedSet, `public cut checked release ${releaseSetId} sealedSet`),
+      }),
+    ];
+  })));
+  return Object.freeze({ schema: SCHEMA, cluster: 'devnet', market, activity, checkedReleases });
 }
 
 /** Update only fixtures/public-cut.devnet.json after a checked public opening. */
@@ -74,4 +110,17 @@ export function publicCutExplorerHrefV1(cut = PUBLIC_DEVNET_CUT_V1): string {
 export function publicCutTransactionHrefV1(step: PublicCutActivityStepV1, cut = PUBLIC_DEVNET_CUT_V1): string | null {
   const value = cut.activity[step];
   return value === null ? null : `/explorer?view=transaction&q=${encodeURIComponent(value)}`;
+}
+
+/**
+ * The execution release sets this cut says have a checked release, or null.
+ *
+ * NULL IS NOT AN EMPTY LIST and the difference is the whole point: an empty
+ * list is "this deployment record was consulted and names none", which is a
+ * reason to tell a trader the fill will refuse; null would be "nobody asked",
+ * which is not. A cut with no Market has not been staged at all, so it answers
+ * null rather than claiming knowledge of a deployment it does not describe.
+ */
+export function checkedReleaseSetIdsV1(cut = PUBLIC_DEVNET_CUT_V1): ReadonlyArray<string> | null {
+  return cut.market === null ? null : Object.freeze(Object.keys(cut.checkedReleases));
 }

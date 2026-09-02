@@ -50,6 +50,13 @@ use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase,
     Readiness, Request, StateBumpsV1,
 };
+use dclutch_operator::{
+    Finality, Observation,
+    wallet_terminal_payout_v3::{
+        WalletTerminalPayoutErrorV3, WalletTerminalPayoutInputV3, WalletTerminalPayoutReportV3,
+        WalletTerminalPayoutRouteV3, build_wallet_terminal_payout_v3,
+    },
+};
 use dclutch_product_payoff_v2_codec::{
     price_gate_v1::{
         PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
@@ -133,8 +140,7 @@ use spl_associated_token_account_interface::address::get_associated_token_addres
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
 use dclutch_rational_representation_v2_request_contract::{
-    Error as RationalRequestError,
-    generated::ASSET_COEFFICIENT_OFFSET_V3,
+    Error as RationalRequestError, generated::ASSET_COEFFICIENT_OFFSET_V3,
 };
 use dclutch_structured_v2_operator::Error as StructuredOperatorError;
 use dclutch_structured_v2_operator::STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2;
@@ -5983,7 +5989,9 @@ fn one_atom_skew_request(fixture: &Fixture, coordinate: usize) -> Vec<u8> {
         .expect("one-atom skew");
     put_u64(
         &mut request,
-        REQUEST_STRUCTURED_HEADER_BYTES_V3 + coordinate * ASSET_BYTES_V3 + ASSET_COEFFICIENT_OFFSET_V3,
+        REQUEST_STRUCTURED_HEADER_BYTES_V3
+            + coordinate * ASSET_BYTES_V3
+            + ASSET_COEFFICIENT_OFFSET_V3,
         skewed,
     );
     request
@@ -7230,7 +7238,11 @@ async fn the_unhashed_founding_context_is_not_the_namespace() {
 // ---------------------------------------------------------------------------
 
 /// Everything a wallet payout may be bent by, for the hostiles.
-#[derive(Clone, Copy, Default)]
+///
+/// `Eq` because the honest payout is the one that bends NOTHING, and
+/// [`wallet_payout_instruction`] asks exactly that question before deciding
+/// whether the operator may author the wire.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct WalletPayoutOverrides {
     /// Execution role on the wire.
     caller_role: Option<CallerRole>,
@@ -7264,6 +7276,17 @@ struct WalletPayoutOverrides {
     expected_market_revision: Option<u64>,
     /// The optimistic Position revision.
     expected_position_revision: Option<u64>,
+    /// This hostile corrupts CHAIN STATE the operator reads, so the operator
+    /// refuses to build the frame at all and the campaign must build it itself.
+    ///
+    /// It exists so the fallback is never silent. Every other honest payout
+    /// gets its wire from `build_wallet_terminal_payout_v3`, and an operator
+    /// refusal anywhere else is a hard failure rather than a quiet return to
+    /// the hand-built frame. The one site that sets it
+    /// (`a_cross_market_position_is_not_payable_here`) also asserts WHICH
+    /// refusal the operator gives, so "the builder catches this offline" is a
+    /// measurement and not a claim.
+    prestate_the_operator_refuses: bool,
 }
 
 /// The exact 640-byte request for one wallet payout out of this fixture.
@@ -7319,21 +7342,17 @@ fn wallet_payout_request(
     .expect("canonical wallet payout request")
 }
 
-/// Rebuild, host-side, the packet and payout the chain will derive.
+/// The Product-to-Claims projection one wallet payout is evaluated under.
 ///
-/// The Custody caller PDA depends on the Custody request digest, which depends
-/// on the candidate digest, which depends on the packet digest and the payout.
-/// So a builder cannot address this frame without evaluating the Product -- and
-/// this function is the campaign's proof that the arithmetic is reproducible
-/// from public state alone. It is also what a browser builder has to do.
-fn wallet_payout_plan(
+/// One author, because the campaign's own planner and the operator input built
+/// beside it both need it and a second construction of a projection is a second
+/// opinion about what the Market sold.
+fn wallet_payout_admission(
     fixture: &Fixture,
-    request_bytes: &[u8],
-    prestate: &WalletPayoutPrestate,
-) -> Option<(u64, [u8; 32])> {
-    let request = TerminalSettlementRequestV3::decode(request_bytes).expect("canonical request");
+    request: TerminalSettlementRequestV3,
+) -> ProductClaimsTerminalAdmissionV3 {
     let input = request.input();
-    let admission = ProductClaimsTerminalAdmissionV3::new(
+    ProductClaimsTerminalAdmissionV3::new(
         input.exposure_id,
         input.exposure_digest,
         [0x61; 32],
@@ -7348,7 +7367,118 @@ fn wallet_payout_plan(
         OUTCOME_COUNT,
         fixture.basis_profile.payout_scale(),
     )
-    .expect("terminal admission projection");
+    .expect("terminal admission projection")
+}
+
+/// The same wallet payout, built by the OPERATOR a wallet actually calls.
+///
+/// `crates/dclutch-operator/src/wallet_terminal_payout_v3.rs` is what the CLI,
+/// the browser and any redemption builder run. Until 2026-09-02 no real-ELF
+/// campaign called it: this file hand-built the same thirty-six-account frame
+/// and the two were never compared, which is a second author for a wire with
+/// one owner. [`wallet_payout_instruction`] now asks this one to build every
+/// honest payout and checks the hand-built frame against it coordinate by
+/// coordinate, so a divergence is a failure at every honest call site rather
+/// than a discovery at a refused redemption.
+///
+/// The observation is labelled `Finalized` because the operator refuses
+/// anything else, and saying so is the honest form: ProgramTest HAS no
+/// finalized commitment (`tools/gauntlet/TIERS.md`), so this label asserts that
+/// the fixture's accounts are a single consistent prestate, not that a cluster
+/// finalized them.
+fn wallet_payout_operator_report(
+    fixture: &Fixture,
+    overrides: WalletPayoutOverrides,
+    prestate: &WalletPayoutPrestate,
+) -> Result<WalletTerminalPayoutReportV3, WalletTerminalPayoutErrorV3> {
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let request = wallet_payout_request(fixture, overrides);
+    let admission = wallet_payout_admission(fixture, request);
+    let input = request.input();
+    build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+        observation: Observation {
+            slot: 1,
+            unix_timestamp: 0,
+            finality: Finality::Finalized,
+        },
+        route: WalletTerminalPayoutRouteV3 {
+            aggregate: fixture.aggregate,
+            linked_basis_raw: fixture.linked_basis_record,
+            linked_basis_staging: fixture.linked_basis_staging,
+            product_raw: fixture.product_record,
+            product_staging: fixture.product_staging,
+            result_domain_raw: fixture.result_domain_record,
+            result_domain_staging: fixture.result_domain_staging,
+            portfolio_raw: fixture.portfolio_record,
+            portfolio_staging: fixture.portfolio_staging,
+            market: fixture.market,
+            activation_cache: fixture.activation_cache,
+            registry_program: REGISTRY_PROGRAM_ID,
+            claims_program: CLAIMS_PROGRAM_ID,
+            claims_programdata: fixture.claims_programdata,
+            core_program: CORE_PROGRAM_ID,
+            core_programdata: fixture.core_programdata,
+            resolution_program: RESOLUTION_PROGRAM_ID,
+            resolution_programdata: fixture.resolution_programdata,
+            position: fixture.actor_position,
+            exposure_raw: fixture.graph_raw,
+            exposure_staging: fixture.graph_staging,
+            custody_program: CUSTODY_PROGRAM_ID,
+            terminal_certificate: terminal.certificate,
+            realm_raw: terminal.realm_raw,
+            realm_staging: terminal.realm_staging,
+            custody_replay: terminal.custody_replay,
+            collateral_mint: terminal.collateral_mint,
+            hoard: terminal.hoard,
+            recipient: terminal.recipient,
+            custody_authority: terminal.custody_authority,
+            token_program: TOKEN_PROGRAM_ID,
+        },
+        parent_context: fixture.parent_context,
+        terminal_record_digest: input.terminal_record_digest,
+        recipient_owner: input.recipient_owner,
+        transfer_index: input.transfer_index,
+        admission,
+        product_basis_bytes: &fixture.linked_basis_bytes,
+        composition_exposure_bytes: &fixture.graph_bytes,
+        composition_exposure_admission: RecordAdmissionV3 {
+            selected_id: input.exposure_id,
+            finalized_id: input.exposure_id,
+            recomputed_digest: fixture.graph_digest,
+            finalized_digest: input.exposure_digest,
+            record_authenticated: true,
+        },
+        product_record_digest: input.product_record_digest,
+        aggregate_bytes: &prestate.aggregate,
+        position_bytes: &prestate.position,
+        custody_replay_bytes: &prestate.custody_replay,
+        hoard_token_bytes: &prestate.hoard_token,
+        recipient_token_bytes: &prestate.recipient_token,
+        terminal: fixture.terminal_scenario,
+        owner: input.owner,
+        claim_index: input.claim_index,
+        quantity: input.quantity,
+        expected_generation: input.generation,
+        expected_market_revision: input.expected_market_revision,
+        expected_position_revision: input.expected_position_revision,
+    })
+}
+
+/// Rebuild, host-side, the packet and payout the chain will derive.
+///
+/// The Custody caller PDA depends on the Custody request digest, which depends
+/// on the candidate digest, which depends on the packet digest and the payout.
+/// So a builder cannot address this frame without evaluating the Product -- and
+/// this function is the campaign's proof that the arithmetic is reproducible
+/// from public state alone. It is also what a browser builder has to do.
+fn wallet_payout_plan(
+    fixture: &Fixture,
+    request_bytes: &[u8],
+    prestate: &WalletPayoutPrestate,
+) -> Option<(u64, [u8; 32])> {
+    let request = TerminalSettlementRequestV3::decode(request_bytes).expect("canonical request");
+    let input = request.input();
+    let admission = wallet_payout_admission(fixture, request);
     let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral delta");
     let mut payouts = vec![0_u64; K];
     let mut translation_scratch = vec![0_u64; K];
@@ -7403,6 +7533,14 @@ struct WalletPayoutPrestate {
     aggregate: Vec<u8>,
     position: Vec<u8>,
     hoard: u64,
+    /// Exact Claims-role Custody replay bytes. The campaign's own builder takes
+    /// the cursor as an override constant; the operator DECODES it and derives
+    /// `expected_custody_revision` from what the chain actually holds, which is
+    /// one of the three places the two authors could disagree.
+    custody_replay: Vec<u8>,
+    /// Exact Hoard and recipient token-account bytes, for the same reason.
+    hoard_token: Vec<u8>,
+    recipient_token: Vec<u8>,
 }
 
 async fn wallet_payout_prestate(
@@ -7416,6 +7554,9 @@ async fn wallet_payout_prestate(
         aggregate: observed(context, fixture.aggregate).await.data,
         position: observed(context, position).await.data,
         hoard: token_amount(&hoard),
+        custody_replay: observed(context, terminal.custody_replay).await.data,
+        hoard_token: hoard.data.clone(),
+        recipient_token: observed(context, terminal.recipient).await.data,
     }
 }
 
@@ -7586,14 +7727,61 @@ fn wallet_payout_instruction(
         AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
     ];
     assert_eq!(accounts.len(), TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3);
-    (
-        Instruction {
-            program_id: CLAIMS_PROGRAM_ID,
-            accounts,
-            data: request_bytes.clone(),
-        },
-        request_bytes,
-    )
+    let hand_built = Instruction {
+        program_id: CLAIMS_PROGRAM_ID,
+        accounts,
+        data: request_bytes.clone(),
+    };
+    if overrides.prestate_the_operator_refuses {
+        // The operator READS the accounts this hostile corrupted and refuses
+        // offline; the campaign still has to put the frame on the wire to prove
+        // what the CHAIN does with it. The setting site asserts the refusal.
+        assert!(
+            wallet_payout_operator_report(fixture, overrides, prestate).is_err(),
+            "this override says the operator refuses this prestate, and it did not"
+        );
+        return (hand_built, request_bytes);
+    }
+    if overrides != WalletPayoutOverrides::default() {
+        // A hostile is a frame the operator would refuse to build -- a
+        // substituted certificate, an unsigned authority, a foreign caller
+        // program. Building those is what this function is for, and the
+        // operator is not a second opinion about them.
+        return (hand_built, request_bytes);
+    }
+    // The honest payout has ONE author, and this is where the campaign stops
+    // being a second one. Compared coordinate by coordinate before the
+    // operator's instruction is returned, so a divergence names the position it
+    // is at instead of surfacing as a refusal thirty-six accounts deep.
+    let operator = wallet_payout_operator_report(fixture, overrides, prestate)
+        .expect("the operator builds every honest wallet payout in this campaign")
+        .instruction;
+    assert_eq!(
+        operator.program_id, hand_built.program_id,
+        "the two authors of the wallet payout disagree about the program"
+    );
+    assert_eq!(
+        operator.data, hand_built.data,
+        "the two authors of the wallet payout disagree about the request bytes"
+    );
+    assert_eq!(
+        operator.accounts.len(),
+        hand_built.accounts.len(),
+        "the two authors of the wallet payout disagree about the frame width"
+    );
+    for (coordinate, (built, hand)) in operator
+        .accounts
+        .iter()
+        .zip(hand_built.accounts.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            (built.pubkey, built.is_signer, built.is_writable),
+            (hand.pubkey, hand.is_signer, hand.is_writable),
+            "the two authors of the wallet payout disagree at coordinate {coordinate}"
+        );
+    }
+    (operator, request_bytes)
 }
 
 /// Submit one wallet payout over a live address-lookup table.
@@ -8938,12 +9126,38 @@ async fn a_cross_market_position_is_not_payable_here() {
     assert_ne!(forged.data, honest.data);
     context.set_account(&fixture.actor_position, &AccountSharedData::from(forged));
 
+    // The BUILDER catches this before a transaction exists. `wallet_terminal_payout_v3`
+    // decodes the Position it was handed and joins its Market against the
+    // aggregate's, so a wallet running the real builder against this corrupted
+    // account gets `Route` offline and never pays a fee. The campaign still
+    // submits the hand-built frame below, because what the CHAIN does with a
+    // frame no honest builder would emit is the property under test -- and
+    // those are two different facts, which is why both are stated.
+    let refusal_prestate =
+        wallet_payout_prestate(&mut context, &fixture, fixture.actor_position).await;
+    assert_eq!(
+        wallet_payout_operator_report(
+            &fixture,
+            WalletPayoutOverrides {
+                prestate_the_operator_refuses: true,
+                ..WalletPayoutOverrides::default()
+            },
+            &refusal_prestate,
+        )
+        .err(),
+        Some(WalletTerminalPayoutErrorV3::Route),
+        "the wallet builder must refuse a cross-market Position offline",
+    );
+
     let result = submit_wallet_payout(
         &mut context,
         &fixture,
         table,
         &addresses,
-        WalletPayoutOverrides::default(),
+        WalletPayoutOverrides {
+            prestate_the_operator_refuses: true,
+            ..WalletPayoutOverrides::default()
+        },
         "claims rational-representation-v2: a wallet payout against a cross-market Position",
     )
     .await;

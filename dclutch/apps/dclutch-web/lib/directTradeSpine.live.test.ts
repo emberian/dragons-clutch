@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEVNET_DEPLOYMENT_V1 } from './deployments';
 import { inspectDirectTradeSpineV1 } from './directTradeSpine';
-import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
+import { checkedReleaseSetIdsV1, PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
 import { SolanaRpcClient } from './rpc';
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
@@ -46,6 +46,7 @@ describe('live devnet Direct trade spine', () => {
         registryProgramId: DEVNET_DEPLOYMENT_V1.programs.registry,
         tradingProgramId: DEVNET_DEPLOYMENT_V1.programs.trading,
         claimsProgramId: DEVNET_DEPLOYMENT_V1.programs.claims,
+        checkedReleaseSetIds: checkedReleaseSetIdsV1(),
       });
 
       if (spine.status === 'refused') {
@@ -77,6 +78,18 @@ describe('live devnet Direct trade spine', () => {
       expect(spine.rootExists).toBe(true);
       expect(spine.walls.map((wall) => wall.name)).not.toContain('phase');
       expect(spine.walls.map((wall) => wall.name)).not.toContain('activation');
+
+      // The wall a reader used to meet at the preview button. The public cut
+      // is this site's own deployment record and names the execution release
+      // sets with a checked release; cohort-12 is a full redeploy and can
+      // produce none, so the featured market's set is absent from it and the
+      // fill is what waits. The assertion is conditional on the cut's own
+      // answer rather than on a pinned expectation, so a cohort that DOES seal
+      // one turns the wall off here without editing this case.
+      const sealed = (PUBLIC_DEVNET_CUT_V1.checkedReleases[spine.releaseSetId] ?? null) !== null;
+      report(`checked release for ${spine.releaseSetId}: ${sealed ? 'on file' : 'none'}`);
+      expect(spine.walls.some((wall) => wall.name === 'release')).toBe(!sealed);
+      expect(spine.tradable).toBe(sealed);
     }, 120_000);
   }
 });

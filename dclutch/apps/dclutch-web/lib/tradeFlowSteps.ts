@@ -161,13 +161,24 @@ export function tradeFlowStepsV1(progress: FlowProgressV1): ReadonlyArray<FlowSt
 }
 
 /**
- * The two market-level walls, resolved BEFORE a stepper is meaningful.
+ * The three market-level walls, resolved BEFORE a stepper is meaningful.
  *
- * `phase` and `activation` are facts about the Market, not about the reader or
- * their trade, and no step can move them. Rendering six greyed steps under
- * "this market can never trade" is the flat console in a new costume, so the
- * stepper does not render at all: one card says what is true, and the last
- * clause of `activation` is the remedy and is kept.
+ * `phase`, `activation` and `release` are facts about the Market, not about
+ * the reader or their trade, and no step can move them. Rendering six greyed
+ * steps under "this market can never trade" is the flat console in a new
+ * costume, so the stepper does not render at all: one card says what is true,
+ * and each wall's last clause is the remedy and is kept.
+ *
+ * The ORDER is the order a reader can act on. `phase` first because a market
+ * that is not Open makes the other two moot; `activation` next because it is
+ * the one with a deadline; `release` last because it is the furthest from the
+ * market itself -- a fact about which execution release has been checked, not
+ * about this Market at all.
+ *
+ * `release` joined them on 2026-09-02, and it is why this gate is worth
+ * having: it was reaching a reader at step 5's preview button, after they had
+ * picked an outcome, taken a ticket and chosen a size, and it is the one wall
+ * of the three that a full-redeploy cohort can never clear.
  */
 export type MarketGateV1 =
   | Readonly<{ kind: 'open' }>
@@ -176,12 +187,16 @@ export type MarketGateV1 =
 const MARKET_GATE_HEADINGS_V1: Readonly<Record<string, string>> = Object.freeze({
   phase: 'This market is not open for trading.',
   activation: 'This market’s Direct trading was founded, but never switched on.',
+  release: 'Trading here waits on a checked execution release.',
 });
+
+/** The market-level wall names, in the order a reader can act on them. */
+export const MARKET_GATE_WALL_ORDER_V1: ReadonlyArray<string> = Object.freeze(['phase', 'activation', 'release']);
 
 export function marketGateV1(
   walls: ReadonlyArray<Readonly<{ name: string; detail: string }>>,
 ): MarketGateV1 {
-  for (const name of ['phase', 'activation']) {
+  for (const name of MARKET_GATE_WALL_ORDER_V1) {
     const wall = walls.find((candidate) => candidate.name === name);
     if (wall !== undefined) {
       return Object.freeze({

@@ -62,7 +62,9 @@ use dclutch_capability_program_contract::{
         SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1, SealedStaticOwnershipV1};
+use dclutch_capability_seal_contract::{
+    SealedArtifactV1, SealedDescriptorClosureV1, SealedRoleV1, SealedStaticOwnershipV1,
+};
 use dclutch_claims_svm::frame_spec_v1::{
     ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
 };
@@ -1053,6 +1055,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     hot_cu_checkpoint!("acc-caller-authority");
     let (trading_receipt, claims_program, custody_program) =
         authenticate_accelerator_activation_v4(frame, envelope)?;
+    let trading_semantic_release = trading_receipt.semantic_release_id().to_bytes();
     let market = authenticate_market_boxed_v3(&frame, envelope)
         .map_err(|_| TradingSbfError::AcceleratorRelease)?;
     let root_data = frame
@@ -1106,9 +1109,15 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         family_context.selection().capability_release_raw_bump(),
         family_context.selection().capability_release_staging_bump(),
     )?;
+    // Both arguments are the SAME PROVEN VALUE, so the second is passed as the
+    // first rather than recomputed: the borrow above refuses unless
+    // `hash(program_set_data)` is exactly this selected capability release, so
+    // hashing the record again could only ever agree with itself. The canonical
+    // path made this repair at `authenticate_and_execute_hot_v3`; the
+    // accelerator kept the recompute.
     let program_set = CapabilityProgramSetV2::decode_selected(
         family_context.selection().capability_release().to_bytes(),
-        hash(&program_set_data).to_bytes(),
+        family_context.selection().capability_release().to_bytes(),
         &program_set_data,
     )
     .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
@@ -1123,14 +1132,51 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     {
         return Err(TradingSbfError::AcceleratorArtifact.into());
     }
-    let descriptor_data = borrow_finalized_record(
+    // Decision 0005's seal, on the accelerator path for the same reason the
+    // canonical path has it: SIX RECORDS WERE BEING SEARCHED FOR RATHER THAN
+    // READ. `borrow_finalized_record` spends two `find_program_address` calls
+    // per record, and `borrow_finalized_record_at`'s own note prices one
+    // attempt at 1,500 CU with 5 to 19 attempts drawn per key. Measured against
+    // the shipped ELFs 2026-09-02: the descriptor plus the five artifacts cost
+    // this callback **135,785 CU in `acc-artifacts` and 26,782 in
+    // `acc-records`** for addresses a Trading-owned write-once verdict had
+    // already derived and persisted.
+    //
+    // The note this replaces argued the seal "adds no authority this path is
+    // missing", and that is true in the direction it was written -- the seal is
+    // not a substitute for binding a record to its digest, and it is not being
+    // used as one. Every conjunct survives: `borrow_sealed_record` still
+    // requires Registry ownership, read-only privileges, rent exemption and
+    // `hash(bytes) == digest` before a byte is read, and it adds the row's
+    // `exact_data_length`, which the search form never checked. What the seal
+    // removes is only the SEARCH -- and a wrong coordinate still refuses,
+    // because the row's raw account must equal the account the frame supplied.
+    let seal_data = frame
+        .capability_seal
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    let seal = authenticate_capability_seal_v3(
+        frame.trading_program.key,
         frame,
+        &rent,
+        selected_descriptor.schema().to_bytes(),
+        selected_descriptor.program().to_bytes(),
+        selected_action,
+        trading_semantic_release,
+        &seal_data,
+    )
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    let descriptor_data = borrow_sealed_record(
+        frame,
+        seal,
+        SealedRoleV1::Descriptor,
         frame.descriptor_raw,
         frame.descriptor_staging,
         &rent,
         selected_descriptor.schema().to_bytes(),
         selected_descriptor.program().to_bytes(),
-    )?;
+    )
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
     drop(descriptor_data);
     authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
@@ -1201,6 +1247,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     hot_cu_checkpoint!("acc-input-bank");
     let geometry = authenticate_accelerator_artifacts_v4(
         frame,
+        seal,
         &rent,
         &descriptor,
         &strategy,
@@ -1304,6 +1351,7 @@ struct AcceleratorGeometryV4 {
 #[inline(never)]
 fn authenticate_accelerator_artifacts_v4(
     frame: HotFrameV3<'_, '_>,
+    seal: SealedDescriptorClosureV1<'_>,
     rent: &Rent,
     descriptor: &CapabilityProgramV4,
     strategy: &AuthenticatedExecutionStrategyV2,
@@ -1313,14 +1361,17 @@ fn authenticate_accelerator_artifacts_v4(
     scalars: &[u64],
     product_outcome_count: u32,
 ) -> Result<AcceleratorGeometryV4, ProgramError> {
-    let account_profile_data = borrow_finalized_record(
+    let account_profile_data = borrow_sealed_record(
         frame,
+        seal,
+        SealedRoleV1::AccountProfile,
         frame.account_profile_raw,
         frame.account_profile_staging,
         rent,
         descriptor.account_profile().schema().to_bytes(),
         descriptor.account_profile().program().to_bytes(),
-    )?;
+    )
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
@@ -1331,23 +1382,29 @@ fn authenticate_accelerator_artifacts_v4(
         product_outcome_count,
         request.tail_count(),
     )?;
-    let request_profile_data = borrow_finalized_record(
+    let request_profile_data = borrow_sealed_record(
         frame,
+        seal,
+        SealedRoleV1::RequestProfile,
         frame.request_profile_raw,
         frame.request_profile_staging,
         rent,
         descriptor.request_profile().schema().to_bytes(),
         descriptor.request_profile().program().to_bytes(),
-    )?;
+    )
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
-    let transition_data = borrow_finalized_record(
+    let transition_data = borrow_sealed_record(
         frame,
+        seal,
+        SealedRoleV1::TransitionProgram,
         frame.transition_raw,
         frame.transition_staging,
         rent,
         descriptor.transition().schema().to_bytes(),
         descriptor.transition().program().to_bytes(),
-    )?;
+    )
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3
         || strategy.strategy().transition_schema() != descriptor.transition().schema()
         || strategy.strategy().transition_program() != descriptor.transition().program()
@@ -1356,23 +1413,50 @@ fn authenticate_accelerator_artifacts_v4(
     }
     let transition = TransitionProgramV3::decode(&transition_data)
         .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    let effect_data = borrow_finalized_record(
+    let effect_data = borrow_sealed_record(
         frame,
+        seal,
+        SealedRoleV1::EffectProgram,
         frame.effect_raw,
         frame.effect_staging,
         rent,
         descriptor.effect().schema().to_bytes(),
         descriptor.effect().program().to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    // Decoded THROUGH THE SEAL, like the canonical path, and for a number:
+    // `decode_selected_effect_v4` re-runs the whole hostile Effect grammar and
+    // cost this callback **75,251 CU** measured 2026-09-02, against ~1,000 for
+    // `decode_sealed_effect_v4` at `authenticate_and_execute_hot_v3` over the
+    // same record. The seal minted its row from the bytes
+    // `borrow_finalized_record` had just authenticated, and the borrow above
+    // re-proves `hash(effect_data)` is still that digest, so the grammar is a
+    // fact about bytes this invocation has already pinned. Re-deriving it was
+    // the last thing on this path doing from scratch what a write-once verdict
+    // already committed to.
+    let effect_token = sealed_token(
+        seal,
+        SealedRoleV1::EffectProgram,
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
+        &effect_data,
     )?;
-    let effect = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
-    let lifecycle_data = borrow_finalized_record(
+    let effect = decode_sealed_effect_v4(
+        descriptor.effect().schema().to_bytes(),
+        &effect_data,
+        effect_token,
+    )?;
+    let lifecycle_data = borrow_sealed_record(
         frame,
+        seal,
+        SealedRoleV1::LifecyclePolicy,
         frame.lifecycle_raw,
         frame.lifecycle_staging,
         rent,
         descriptor.lifecycle().schema().to_bytes(),
         descriptor.lifecycle().program().to_bytes(),
-    )?;
+    )
+    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     // R2 -- `derivation_policy == lifecycle().program()` -- is GONE, and what it
     // restated was already authenticated more strongly two statements up.
     //
@@ -1397,9 +1481,12 @@ fn authenticate_accelerator_artifacts_v4(
     if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    // Same identity twice, for the same reason as the program set above: the
+    // sealed borrow refuses unless `hash(lifecycle_data)` is exactly the
+    // lifecycle record's content digest, which IS `lifecycle().program()`.
     StateLifecyclePolicyV5::decode_selected(
         descriptor.lifecycle().program().to_bytes(),
-        hash(&lifecycle_data).to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
         &lifecycle_data,
     )
     .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
