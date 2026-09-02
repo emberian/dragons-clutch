@@ -55,6 +55,22 @@ pub const ACCELERATOR_ACK_SCHEMA_ID_V2: [u8; 32] = [
     0x82, 0x84, 0x9e, 0x0f, 0x4f, 0xfc, 0xbd, 0x22, 0xe4, 0x12, 0xba, 0xbb, 0x70, 0x02, 0xd7, 0x0d,
     0x8f, 0x63, 0xae, 0x24, 0x42, 0x45, 0xd0, 0xbe, 0x88, 0x42, 0x73, 0xf9, 0x4b, 0xf7, 0xee, 0x4f,
 ];
+/// Schema label for [`AcceleratorOutputPageRequestV3`].
+pub const ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_PREIMAGE_V3: &[u8] =
+    b"dclutch/schema/accelerator-output-page-request-v3";
+/// SHA-256 of [`ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_PREIMAGE_V3`].
+pub const ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_ID_V3: [u8; 32] = [
+    0x43, 0x55, 0x1f, 0xce, 0xc7, 0xd1, 0x2e, 0x8a, 0x54, 0xa9, 0x56, 0xae, 0xa2, 0xaa, 0x45, 0x29,
+    0xdd, 0xb8, 0xb3, 0xb7, 0x7b, 0xb6, 0xa9, 0xa3, 0x0b, 0xe9, 0x69, 0xd3, 0x8b, 0x6c, 0xcf, 0xac,
+];
+/// Schema label for [`AcceleratorOutputPageAckV3`].
+pub const ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_PREIMAGE_V3: &[u8] =
+    b"dclutch/schema/accelerator-output-page-ack-v3";
+/// SHA-256 of [`ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_PREIMAGE_V3`].
+pub const ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_ID_V3: [u8; 32] = [
+    0x23, 0xa4, 0x8e, 0x95, 0xfc, 0xad, 0xab, 0x09, 0x5d, 0xf6, 0x2d, 0x47, 0xfb, 0x35, 0x71, 0x22,
+    0xbe, 0x10, 0xa9, 0xa5, 0x3a, 0x5c, 0xf9, 0xa9, 0x0b, 0xae, 0x49, 0xe2, 0xfa, 0x4e, 0x3c, 0x1e,
+];
 /// Schema label for Trading-owned [`AuthenticatedScratchPageV2`] accounts.
 pub const SCRATCH_PAGE_SCHEMA_PREIMAGE_V2: &[u8] =
     b"dclutch/schema/execution-strategy-scratch-page-v2";
@@ -69,7 +85,6 @@ const TRANSPORT_SCRATCH: u8 = 1;
 const ACK_REFUSED: u8 = 0;
 const ACK_ACCEPTED: u8 = 1;
 const SCRATCH_INPUT: u8 = 0;
-const SCRATCH_CANDIDATE: u8 = 1;
 
 /// Stable refusal from V2 strategy, authorization, or transport validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,6 +159,17 @@ pub enum AcceleratorTransportProfileV2 {
     ChunkedBankV2,
     /// Complete read-only runtime/candidate/effect comparison used by Shadow AOT.
     ShadowTranscriptV3,
+    /// Whole candidate bank written to one accelerator-owned page, acknowledged
+    /// by a header alone.
+    ///
+    /// The chunked profile is bounded by return data, not by work: a bank wider
+    /// than [`ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2`] costs one whole invocation
+    /// per 880 bytes, and the accelerator re-authenticates and re-evaluates
+    /// from zero in each. This profile removes the bound instead of the work.
+    /// The candidate travels in an account the accelerator owns; the
+    /// acknowledgement carries the `total_bank_digest` it already carried, and
+    /// that digest is what binds the page.
+    OutputPageV3,
 }
 
 impl StrategyDispositionV2 {
@@ -393,12 +419,17 @@ fn transport_profile(
     let ack_v2 = schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2)?;
     let request_v3 = schema_id(SHADOW_REQUEST_SCHEMA_ID_V3)?;
     let ack_v3 = schema_id(SHADOW_ACK_SCHEMA_ID_V3)?;
+    let request_page = schema_id(ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_ID_V3)?;
+    let ack_page = schema_id(ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_ID_V3)?;
     match (request_schema, ack_schema) {
         (request, ack) if request == request_v2 && ack == ack_v2 => {
             Ok(AcceleratorTransportProfileV2::ChunkedBankV2)
         }
         (request, ack) if request == request_v3 && ack == ack_v3 => {
             Ok(AcceleratorTransportProfileV2::ShadowTranscriptV3)
+        }
+        (request, ack) if request == request_page && ack == ack_page => {
+            Ok(AcceleratorTransportProfileV2::OutputPageV3)
         }
         _ => Err(Error::UnsupportedSchema),
     }
@@ -1488,27 +1519,471 @@ impl<'a> AcceleratorAckV2<'a> {
     }
 }
 
+/// Borrowed exact accelerator request for one whole candidate bank.
+///
+/// The chunked [`AcceleratorRequestV2`] with its chunk geometry removed --
+/// `chunk_index`, `chunk_count` and `chunk_offset` are the entire difference,
+/// and `output_page_request_drops_exactly_the_chunk_geometry` states that in
+/// Lean. Everything an accelerator authenticates against is unchanged, and the
+/// input transport stays orthogonal: an inline input bank and a scratch-paged
+/// one both select this output profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceleratorOutputPageRequestV3<'a> {
+    transport: RequestTransportV2,
+    strategy_program: ContentId,
+    certificate_program: ContentId,
+    capability_program: ContentId,
+    invocation_context: ContentId,
+    input_bank_digest: ContentId,
+    tail_count: u32,
+    scalar_count: u32,
+    identity_count: u32,
+    total_bank_bytes: u64,
+    inline_bank: &'a [u8],
+}
+
+impl<'a> AcceleratorOutputPageRequestV3<'a> {
+    /// Construct one exact inline or scratch-backed whole-bank request.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        transport: RequestTransportV2,
+        strategy_program: ContentId,
+        certificate_program: ContentId,
+        capability_program: ContentId,
+        invocation_context: ContentId,
+        input_bank_digest: ContentId,
+        tail_count: u32,
+        scalar_count: u32,
+        identity_count: u32,
+        inline_bank: &'a [u8],
+    ) -> Result<Self> {
+        let total_bank_bytes = register_bank_bytes_v2(scalar_count, identity_count)?;
+        // A bank of no bytes has no page to write and no digest to bind. The
+        // chunked profile refuses it through `chunk_geometry`, which has no
+        // chunk zero to name; this profile has no geometry, so it says so here.
+        if total_bank_bytes == 0 {
+            return Err(Error::InvalidLength);
+        }
+        match transport {
+            RequestTransportV2::Inline => {
+                if u64::try_from(inline_bank.len()).map_err(|_| Error::InvalidLength)?
+                    != total_bank_bytes
+                {
+                    return Err(Error::InvalidLength);
+                }
+            }
+            RequestTransportV2::ScratchPages => {
+                if !inline_bank.is_empty() {
+                    return Err(Error::NonCanonicalReservedBytes);
+                }
+            }
+        }
+        Ok(Self {
+            transport,
+            strategy_program,
+            certificate_program,
+            capability_program,
+            invocation_context,
+            input_bank_digest,
+            tail_count,
+            scalar_count,
+            identity_count,
+            total_bank_bytes,
+            inline_bank,
+        })
+    }
+
+    /// Hostile-decode one exact whole-bank request and optional inline bank.
+    pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        require_prefix_header(
+            bytes,
+            ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
+            &ACCELERATOR_OUTPUT_PAGE_REQUEST_MAGIC_V3,
+        )?;
+        require_zero(bytes, OUTPUT_PAGE_REQUEST_HEADER_RESERVED_OFFSET_V3, 3)?;
+        require_zero(bytes, OUTPUT_PAGE_REQUEST_TAIL_RESERVED_OFFSET_V3, 12)?;
+        let transport =
+            RequestTransportV2::decode(byte(bytes, OUTPUT_PAGE_REQUEST_TRANSPORT_OFFSET_V3)?)?;
+        let value = Self::new(
+            transport,
+            content(bytes, OUTPUT_PAGE_REQUEST_STRATEGY_PROGRAM_OFFSET_V3)?,
+            content(bytes, OUTPUT_PAGE_REQUEST_CERTIFICATE_PROGRAM_OFFSET_V3)?,
+            content(bytes, OUTPUT_PAGE_REQUEST_CAPABILITY_PROGRAM_OFFSET_V3)?,
+            content(bytes, OUTPUT_PAGE_REQUEST_INVOCATION_CONTEXT_OFFSET_V3)?,
+            content(bytes, OUTPUT_PAGE_REQUEST_INPUT_BANK_DIGEST_OFFSET_V3)?,
+            read_u32(bytes, OUTPUT_PAGE_REQUEST_TAIL_COUNT_OFFSET_V3)?,
+            read_u32(bytes, OUTPUT_PAGE_REQUEST_SCALAR_COUNT_OFFSET_V3)?,
+            read_u32(bytes, OUTPUT_PAGE_REQUEST_IDENTITY_COUNT_OFFSET_V3)?,
+            match transport {
+                RequestTransportV2::Inline => bytes
+                    .get(ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3..)
+                    .ok_or(Error::InvalidLength)?,
+                RequestTransportV2::ScratchPages => &[],
+            },
+        )?;
+        if read_u64(bytes, OUTPUT_PAGE_REQUEST_TOTAL_BANK_BYTES_OFFSET_V3)?
+            != value.total_bank_bytes
+            || (transport == RequestTransportV2::ScratchPages
+                && bytes.len() != ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3)
+        {
+            return Err(Error::BindingMismatch);
+        }
+        Ok(value)
+    }
+
+    /// Encode exact request header and optional inline input bank.
+    pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
+        let expected = ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3
+            .checked_add(self.inline_bank.len())
+            .ok_or(Error::ArithmeticOverflow)?;
+        if output.len() != expected {
+            return Err(Error::InvalidLength);
+        }
+        let canonical = Self::new(
+            self.transport,
+            self.strategy_program,
+            self.certificate_program,
+            self.capability_program,
+            self.invocation_context,
+            self.input_bank_digest,
+            self.tail_count,
+            self.scalar_count,
+            self.identity_count,
+            self.inline_bank,
+        )?;
+        if canonical != self {
+            return Err(Error::BindingMismatch);
+        }
+        output.fill(0);
+        write_header(output, &ACCELERATOR_OUTPUT_PAGE_REQUEST_MAGIC_V3);
+        put_byte(
+            output,
+            OUTPUT_PAGE_REQUEST_TRANSPORT_OFFSET_V3,
+            self.transport.tag(),
+        );
+        for (offset, value) in [
+            (
+                OUTPUT_PAGE_REQUEST_STRATEGY_PROGRAM_OFFSET_V3,
+                self.strategy_program,
+            ),
+            (
+                OUTPUT_PAGE_REQUEST_CERTIFICATE_PROGRAM_OFFSET_V3,
+                self.certificate_program,
+            ),
+            (
+                OUTPUT_PAGE_REQUEST_CAPABILITY_PROGRAM_OFFSET_V3,
+                self.capability_program,
+            ),
+            (
+                OUTPUT_PAGE_REQUEST_INVOCATION_CONTEXT_OFFSET_V3,
+                self.invocation_context,
+            ),
+            (
+                OUTPUT_PAGE_REQUEST_INPUT_BANK_DIGEST_OFFSET_V3,
+                self.input_bank_digest,
+            ),
+        ] {
+            put(output, offset, value.as_bytes());
+        }
+        put_u32(
+            output,
+            OUTPUT_PAGE_REQUEST_TAIL_COUNT_OFFSET_V3,
+            self.tail_count,
+        );
+        put_u32(
+            output,
+            OUTPUT_PAGE_REQUEST_SCALAR_COUNT_OFFSET_V3,
+            self.scalar_count,
+        );
+        put_u32(
+            output,
+            OUTPUT_PAGE_REQUEST_IDENTITY_COUNT_OFFSET_V3,
+            self.identity_count,
+        );
+        put_u64(
+            output,
+            OUTPUT_PAGE_REQUEST_TOTAL_BANK_BYTES_OFFSET_V3,
+            self.total_bank_bytes,
+        );
+        put(
+            output,
+            ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
+            self.inline_bank,
+        );
+        Ok(())
+    }
+
+    /// Input transport chosen by the caller after authenticated bank sizing.
+    pub const fn transport(self) -> RequestTransportV2 {
+        self.transport
+    }
+    /// Exact finalized Strategy content identity.
+    pub const fn strategy_program(self) -> ContentId {
+        self.strategy_program
+    }
+    /// Exact finalized Certificate content identity.
+    pub const fn certificate_program(self) -> ContentId {
+        self.certificate_program
+    }
+    /// Exact CapabilityProgram descriptor content identity.
+    pub const fn capability_program(self) -> ContentId {
+        self.capability_program
+    }
+    /// Exact invocation-context digest.
+    pub const fn invocation_context(self) -> ContentId {
+        self.invocation_context
+    }
+    /// Exact input-bank digest.
+    pub const fn input_bank_digest(self) -> ContentId {
+        self.input_bank_digest
+    }
+    /// Product-authoritative semantic tail count.
+    pub const fn tail_count(self) -> u32 {
+        self.tail_count
+    }
+    /// Runtime scalar count.
+    pub const fn scalar_count(self) -> u32 {
+        self.scalar_count
+    }
+    /// Runtime identity count.
+    pub const fn identity_count(self) -> u32 {
+        self.identity_count
+    }
+    /// Exact whole-bank byte width the page must carry.
+    pub const fn total_bank_bytes(self) -> u64 {
+        self.total_bank_bytes
+    }
+    /// Borrow exact inline input bank, empty for scratch transport.
+    pub const fn inline_bank(self) -> &'a [u8] {
+        self.inline_bank
+    }
+}
+
+/// Exact whole-bank acknowledgement: a header, and no candidate bytes at all.
+///
+/// This type carries no lifetime because it borrows nothing. That is the
+/// transport, stated in the type: the candidate is in the page, and what comes
+/// back through return data is the digest of it. `total_bank_digest` is the
+/// same field the chunked acknowledgement already carried and the same field
+/// its caller already checked against the producer-tagged return data
+/// (`AcceleratorAckV2::total_bank_digest`), so the page needs no ownership
+/// proof of its own -- a page the accelerator could not write holds bytes whose
+/// hash is not the digest of the bank it just computed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceleratorOutputPageAckV3 {
+    disposition: AcceleratorDispositionV2,
+    request_digest: ContentId,
+    invocation_context: ContentId,
+    total_bank_digest: Option<ContentId>,
+    total_bank_bytes: u64,
+}
+
+impl AcceleratorOutputPageAckV3 {
+    /// Construct one acceptance binding the exact bank written to the page.
+    pub const fn accepted(
+        request: AcceleratorOutputPageRequestV3<'_>,
+        request_digest: ContentId,
+        total_bank_digest: ContentId,
+    ) -> Self {
+        Self {
+            disposition: AcceleratorDispositionV2::Accepted,
+            request_digest,
+            invocation_context: request.invocation_context,
+            total_bank_digest: Some(total_bank_digest),
+            total_bank_bytes: request.total_bank_bytes,
+        }
+    }
+
+    /// Construct one canonical semantic refusal, which writes no page.
+    pub const fn refused(
+        request: AcceleratorOutputPageRequestV3<'_>,
+        request_digest: ContentId,
+    ) -> Self {
+        Self {
+            disposition: AcceleratorDispositionV2::Refused,
+            request_digest,
+            invocation_context: request.invocation_context,
+            total_bank_digest: None,
+            total_bank_bytes: 0,
+        }
+    }
+
+    /// Hostile-decode one exact whole-bank acknowledgement.
+    ///
+    /// The width is EXACT, not a floor. A chunked acknowledgement is a header
+    /// plus a payload and can legitimately be longer than its header; this one
+    /// cannot, so a trailing byte is a refusal rather than a payload nobody
+    /// reads.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        require_header(
+            bytes,
+            ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3,
+            &ACCELERATOR_OUTPUT_PAGE_ACK_MAGIC_V3,
+        )?;
+        require_zero(bytes, OUTPUT_PAGE_ACK_HEADER_RESERVED_OFFSET_V3, 3)?;
+        require_zero(bytes, OUTPUT_PAGE_ACK_TAIL_RESERVED_OFFSET_V3, 24)?;
+        let disposition = match byte(bytes, OUTPUT_PAGE_ACK_DISPOSITION_OFFSET_V3)? {
+            ACK_REFUSED => AcceleratorDispositionV2::Refused,
+            ACK_ACCEPTED => AcceleratorDispositionV2::Accepted,
+            _ => return Err(Error::UnknownTag),
+        };
+        let digest_bytes = read_array(bytes, OUTPUT_PAGE_ACK_TOTAL_BANK_DIGEST_OFFSET_V3)?;
+        let total_bank_digest = match disposition {
+            AcceleratorDispositionV2::Accepted => {
+                Some(ContentId::new(digest_bytes).map_err(|_| Error::ZeroIdentity)?)
+            }
+            AcceleratorDispositionV2::Refused => {
+                if digest_bytes != [0; 32] {
+                    return Err(Error::NonCanonicalReservedBytes);
+                }
+                None
+            }
+        };
+        let value = Self {
+            disposition,
+            request_digest: content(bytes, OUTPUT_PAGE_ACK_REQUEST_DIGEST_OFFSET_V3)?,
+            invocation_context: content(bytes, OUTPUT_PAGE_ACK_INVOCATION_CONTEXT_OFFSET_V3)?,
+            total_bank_digest,
+            total_bank_bytes: read_u64(bytes, OUTPUT_PAGE_ACK_TOTAL_BANK_BYTES_OFFSET_V3)?,
+        };
+        value.validate_canonical()?;
+        Ok(value)
+    }
+
+    /// Encode one exact acknowledgement into caller-owned return-data bytes.
+    pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
+        self.validate_canonical()?;
+        if output.len() != ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3 {
+            return Err(Error::InvalidLength);
+        }
+        output.fill(0);
+        write_header(output, &ACCELERATOR_OUTPUT_PAGE_ACK_MAGIC_V3);
+        put_byte(
+            output,
+            OUTPUT_PAGE_ACK_DISPOSITION_OFFSET_V3,
+            match self.disposition {
+                AcceleratorDispositionV2::Refused => ACK_REFUSED,
+                AcceleratorDispositionV2::Accepted => ACK_ACCEPTED,
+            },
+        );
+        put(
+            output,
+            OUTPUT_PAGE_ACK_REQUEST_DIGEST_OFFSET_V3,
+            self.request_digest.as_bytes(),
+        );
+        put(
+            output,
+            OUTPUT_PAGE_ACK_INVOCATION_CONTEXT_OFFSET_V3,
+            self.invocation_context.as_bytes(),
+        );
+        if let Some(digest) = self.total_bank_digest {
+            put(
+                output,
+                OUTPUT_PAGE_ACK_TOTAL_BANK_DIGEST_OFFSET_V3,
+                digest.as_bytes(),
+            );
+        }
+        put_u64(
+            output,
+            OUTPUT_PAGE_ACK_TOTAL_BANK_BYTES_OFFSET_V3,
+            self.total_bank_bytes,
+        );
+        Ok(())
+    }
+
+    /// Require the exact request digest, context, and whole-bank width.
+    pub fn validate_request(
+        self,
+        request: AcceleratorOutputPageRequestV3<'_>,
+        request_digest: ContentId,
+    ) -> Result<()> {
+        if self.request_digest != request_digest
+            || self.invocation_context != request.invocation_context
+            || (self.disposition == AcceleratorDispositionV2::Accepted
+                && self.total_bank_bytes != request.total_bank_bytes)
+        {
+            Err(Error::BindingMismatch)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_canonical(self) -> Result<()> {
+        match self.disposition {
+            AcceleratorDispositionV2::Refused => {
+                if self.total_bank_digest.is_some() || self.total_bank_bytes != 0 {
+                    Err(Error::NonCanonicalReservedBytes)
+                } else {
+                    Ok(())
+                }
+            }
+            AcceleratorDispositionV2::Accepted => {
+                if self.total_bank_digest.is_none() || self.total_bank_bytes == 0 {
+                    Err(Error::BindingMismatch)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Accepted or refused disposition.
+    pub const fn disposition(self) -> AcceleratorDispositionV2 {
+        self.disposition
+    }
+    /// SHA-256 of the exact accelerator request bytes.
+    pub const fn request_digest(self) -> ContentId {
+        self.request_digest
+    }
+    /// Exact invocation-context digest.
+    pub const fn invocation_context(self) -> ContentId {
+        self.invocation_context
+    }
+    /// Digest of the exact page bytes, absent on refusal.
+    pub const fn total_bank_digest(self) -> Option<ContentId> {
+        self.total_bank_digest
+    }
+    /// Exact page byte width the digest is taken over, zero for refusal.
+    pub const fn total_bank_bytes(self) -> u64 {
+        self.total_bank_bytes
+    }
+}
+
 /// Trading-owned authenticated scratch-page kind.
+///
+/// ONE KIND, AND THE SECOND ONE IS GONE. `Candidate` sat here from the day the
+/// V2 transport was written, documented as "Candidate AOT output assembled by
+/// Trading", and in the whole tree nothing ever constructed it: every
+/// `AuthenticatedScratchPageV2` in the programs, the bundle builder, the
+/// General program-tests and the successor bootstrap passes `Input`, and
+/// [`AuthenticatedScratchPageV2::validate_request_input`] refuses anything
+/// else. It was a tag a hostile decoder accepted and no validator could ever
+/// approve.
+///
+/// It was also the reserved seat for an accelerator output page, and the
+/// output-page transport declines it: that page is the candidate bank and
+/// nothing else, bound by the `totalBankDigest` its producer-checked
+/// acknowledgement carries. A 192-byte page header would restate the counts,
+/// the invocation context and the digest that the acknowledgement already
+/// states, under a `SCRATCH_TRADING_PROGRAM_OFFSET_V2` field naming the wrong
+/// owner. So the vocabulary is retired rather than reused, and the kind byte
+/// now has exactly one accepted value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScratchPageKindV2 {
     /// Canonical projected interpreter/AOT input bank.
     Input,
-    /// Candidate AOT output assembled by Trading.
-    Candidate,
 }
 
 impl ScratchPageKindV2 {
     const fn tag(self) -> u8 {
         match self {
             Self::Input => SCRATCH_INPUT,
-            Self::Candidate => SCRATCH_CANDIDATE,
         }
     }
 
     fn decode(value: u8) -> Result<Self> {
         match value {
             SCRATCH_INPUT => Ok(Self::Input),
-            SCRATCH_CANDIDATE => Ok(Self::Candidate),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -2858,6 +3333,451 @@ mod tests {
         );
         assert_eq!(page_output, page_before);
     }
+    fn page_request<'a>(bank: &'a [u8]) -> AcceleratorOutputPageRequestV3<'a> {
+        AcceleratorOutputPageRequestV3::new(
+            RequestTransportV2::Inline,
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            70_000,
+            26,
+            37,
+            bank,
+        )
+        .expect("output page request")
+    }
+
+    fn encoded_page_request(bank: &[u8]) -> std::vec::Vec<u8> {
+        let request = page_request(bank);
+        let mut bytes = vec![0_u8; ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3 + bank.len()];
+        request.encode_into(&mut bytes).expect("encode request");
+        bytes
+    }
+
+    fn encoded_page_ack(accepted: bool) -> std::vec::Vec<u8> {
+        let bank = vec![3_u8; 1_392];
+        let request = page_request(&bank);
+        let ack = if accepted {
+            AcceleratorOutputPageAckV3::accepted(request, id(6), id(7))
+        } else {
+            AcceleratorOutputPageAckV3::refused(request, id(6))
+        };
+        let mut bytes = vec![0_u8; ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3];
+        ack.encode_into(&mut bytes).expect("encode ack");
+        bytes
+    }
+
+    /// The equity Add bank is 1,392 bytes: two chunks on the chunked profile,
+    /// one page and one acknowledgement here, and the acknowledgement is the
+    /// same width whatever the bank is.
+    #[test]
+    fn output_page_roundtrip_is_count_derived_and_carries_no_chunk_geometry() {
+        let bank = vec![3_u8; 26 * 8 + 37 * 32];
+        assert_eq!(bank.len(), 1_392);
+        let encoded = encoded_page_request(&bank);
+        assert_eq!(
+            encoded.len(),
+            ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3 + bank.len()
+        );
+        let decoded = AcceleratorOutputPageRequestV3::decode(&encoded).expect("decode request");
+        assert_eq!(decoded, page_request(&bank));
+        assert_eq!(decoded.total_bank_bytes(), 1_392);
+        assert_eq!(decoded.inline_bank(), bank.as_slice());
+        // The same bank on the chunked profile: two invocations, and the
+        // difference between the two headers is exactly the chunk geometry.
+        assert_eq!(
+            classify_bank_transport_v2(26, 37),
+            Ok(BankTransportV2::AuthenticatedScratchPages {
+                bank_bytes: 1_392,
+                page_count: 2,
+            })
+        );
+        assert_eq!(
+            ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3 + 4 + 4 + 8,
+            ACCELERATOR_REQUEST_HEADER_BYTES_V2
+        );
+
+        for (accepted, disposition, digest, width) in [
+            (true, AcceleratorDispositionV2::Accepted, Some(id(7)), 1_392),
+            (false, AcceleratorDispositionV2::Refused, None, 0),
+        ] {
+            let bytes = encoded_page_ack(accepted);
+            assert_eq!(bytes.len(), ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3);
+            assert_eq!(bytes.len(), ACCELERATOR_ACK_HEADER_BYTES_V2);
+            let ack = AcceleratorOutputPageAckV3::decode(&bytes).expect("decode ack");
+            assert_eq!(ack.disposition(), disposition);
+            assert_eq!(ack.total_bank_digest(), digest);
+            assert_eq!(ack.total_bank_bytes(), width);
+            assert_eq!(ack.request_digest(), id(6));
+            assert_eq!(ack.invocation_context(), id(4));
+            ack.validate_request(page_request(&bank), id(6))
+                .expect("bound to its request");
+        }
+    }
+
+    /// The pair is the transport identity, so neither half is interchangeable
+    /// and neither half alone selects anything.
+    #[test]
+    fn output_page_schema_pair_selects_the_profile_and_mixtures_refuse() {
+        let page_request_schema =
+            schema_id(ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_ID_V3).expect("request schema");
+        let page_ack_schema =
+            schema_id(ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_ID_V3).expect("ack schema");
+        let chunked_request = schema_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2).expect("chunked request");
+        let chunked_ack = schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2).expect("chunked ack");
+        let shadow_request = schema_id(SHADOW_REQUEST_SCHEMA_ID_V3).expect("shadow request");
+        assert_eq!(
+            transport_profile(page_request_schema, page_ack_schema),
+            Ok(AcceleratorTransportProfileV2::OutputPageV3)
+        );
+        for (request, ack) in [
+            (page_request_schema, chunked_ack),
+            (chunked_request, page_ack_schema),
+            (page_request_schema, shadow_request),
+            (page_ack_schema, page_request_schema),
+        ] {
+            assert_eq!(
+                transport_profile(request, ack),
+                Err(Error::UnsupportedSchema)
+            );
+        }
+    }
+
+    /// Neither record decodes as the other's, in either direction.
+    ///
+    /// The refused chunked acknowledgement is exactly 144 bytes, the same width
+    /// as every output-page acknowledgement, so length alone separates nothing
+    /// here and the magic is doing the whole job.
+    #[test]
+    fn output_page_and_chunked_records_are_not_interchangeable() {
+        let bank = vec![3_u8; 1_392];
+        let chunked = AcceleratorRequestV2::new(
+            RequestTransportV2::Inline,
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            70_000,
+            26,
+            37,
+            0,
+            &bank,
+        )
+        .expect("chunked request");
+        let mut chunked_request_bytes =
+            vec![0_u8; ACCELERATOR_REQUEST_HEADER_BYTES_V2 + bank.len()];
+        chunked
+            .encode_into(&mut chunked_request_bytes)
+            .expect("encode chunked request");
+        let mut chunked_ack_bytes = vec![0_u8; ACCELERATOR_ACK_HEADER_BYTES_V2];
+        AcceleratorAckV2::refused(chunked, id(6))
+            .encode_into(&mut chunked_ack_bytes)
+            .expect("encode chunked ack");
+        assert_eq!(
+            chunked_ack_bytes.len(),
+            ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3
+        );
+
+        let page_request_bytes = encoded_page_request(&bank);
+        let page_ack_bytes = encoded_page_ack(true);
+
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&chunked_request_bytes),
+            Err(Error::InvalidMagic)
+        );
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&chunked_ack_bytes),
+            Err(Error::InvalidMagic)
+        );
+        assert_eq!(
+            AcceleratorRequestV2::decode(&page_request_bytes),
+            Err(Error::InvalidMagic)
+        );
+        assert_eq!(
+            AcceleratorAckV2::decode(&page_ack_bytes),
+            Err(Error::InvalidMagic)
+        );
+        // And an output-page acknowledgement read as an output-page REQUEST,
+        // which is the pairing a mixed Strategy record would produce.
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&page_ack_bytes),
+            Err(Error::InvalidLength)
+        );
+    }
+
+    #[test]
+    fn hostile_output_page_request_bytes_refuse_by_exact_cause() {
+        let bank = vec![3_u8; 1_392];
+        let canonical = encoded_page_request(&bank);
+
+        let mut truncated = canonical.clone();
+        truncated.truncate(ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3 - 1);
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&truncated),
+            Err(Error::InvalidLength)
+        );
+
+        let mut short_bank = canonical.clone();
+        short_bank.truncate(canonical.len() - 1);
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&short_bank),
+            Err(Error::InvalidLength)
+        );
+
+        let mut restated_width = canonical.clone();
+        put_u64(
+            &mut restated_width,
+            OUTPUT_PAGE_REQUEST_TOTAL_BANK_BYTES_OFFSET_V3,
+            1_391,
+        );
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&restated_width),
+            Err(Error::BindingMismatch)
+        );
+
+        let mut unknown_transport = canonical.clone();
+        put_byte(
+            &mut unknown_transport,
+            OUTPUT_PAGE_REQUEST_TRANSPORT_OFFSET_V3,
+            2,
+        );
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&unknown_transport),
+            Err(Error::UnknownTag)
+        );
+
+        for offset in [
+            OUTPUT_PAGE_REQUEST_HEADER_RESERVED_OFFSET_V3,
+            OUTPUT_PAGE_REQUEST_TAIL_RESERVED_OFFSET_V3,
+        ] {
+            let mut dirty = canonical.clone();
+            put_byte(&mut dirty, offset, 1);
+            assert_eq!(
+                AcceleratorOutputPageRequestV3::decode(&dirty),
+                Err(Error::NonCanonicalReservedBytes)
+            );
+        }
+
+        let mut zero_identity = canonical.clone();
+        put(
+            &mut zero_identity,
+            OUTPUT_PAGE_REQUEST_STRATEGY_PROGRAM_OFFSET_V3,
+            &[0_u8; 32],
+        );
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&zero_identity),
+            Err(Error::ZeroIdentity)
+        );
+
+        // Scratch input transport carries no inline bank, and a bank appended
+        // to one is a binding mismatch rather than bytes nobody reads.
+        let scratch = AcceleratorOutputPageRequestV3::new(
+            RequestTransportV2::ScratchPages,
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            70_000,
+            26,
+            37,
+            &[],
+        )
+        .expect("scratch request");
+        let mut scratch_bytes = vec![0_u8; ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3];
+        scratch
+            .encode_into(&mut scratch_bytes)
+            .expect("encode scratch request");
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&scratch_bytes),
+            Ok(scratch)
+        );
+        scratch_bytes.push(0);
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::decode(&scratch_bytes),
+            Err(Error::BindingMismatch)
+        );
+
+        // A bank of no bytes has no page and no digest.
+        assert_eq!(
+            AcceleratorOutputPageRequestV3::new(
+                RequestTransportV2::Inline,
+                id(1),
+                id(2),
+                id(3),
+                id(4),
+                id(5),
+                0,
+                0,
+                0,
+                &[],
+            ),
+            Err(Error::InvalidLength)
+        );
+    }
+
+    #[test]
+    fn hostile_output_page_ack_bytes_refuse_by_exact_cause() {
+        let accepted = encoded_page_ack(true);
+        let refused = encoded_page_ack(false);
+
+        // The acknowledgement is a header, exactly: one trailing byte is not a
+        // payload this transport has any word for.
+        let mut with_payload = accepted.clone();
+        with_payload.push(0);
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&with_payload),
+            Err(Error::InvalidLength)
+        );
+        let mut truncated = accepted.clone();
+        truncated.truncate(accepted.len() - 1);
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&truncated),
+            Err(Error::InvalidLength)
+        );
+
+        let mut unknown = accepted.clone();
+        put_byte(&mut unknown, OUTPUT_PAGE_ACK_DISPOSITION_OFFSET_V3, 2);
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&unknown),
+            Err(Error::UnknownTag)
+        );
+
+        let mut zero_digest = accepted.clone();
+        put(
+            &mut zero_digest,
+            OUTPUT_PAGE_ACK_TOTAL_BANK_DIGEST_OFFSET_V3,
+            &[0_u8; 32],
+        );
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&zero_digest),
+            Err(Error::ZeroIdentity)
+        );
+
+        let mut zero_width = accepted.clone();
+        put_u64(
+            &mut zero_width,
+            OUTPUT_PAGE_ACK_TOTAL_BANK_BYTES_OFFSET_V3,
+            0,
+        );
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&zero_width),
+            Err(Error::BindingMismatch)
+        );
+
+        // A refusal that smuggles a digest, and a refusal that smuggles a
+        // width: both are the page claiming to hold something it does not.
+        let mut refused_with_digest = refused.clone();
+        put(
+            &mut refused_with_digest,
+            OUTPUT_PAGE_ACK_TOTAL_BANK_DIGEST_OFFSET_V3,
+            id(9).as_bytes(),
+        );
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&refused_with_digest),
+            Err(Error::NonCanonicalReservedBytes)
+        );
+        let mut refused_with_width = refused.clone();
+        put_u64(
+            &mut refused_with_width,
+            OUTPUT_PAGE_ACK_TOTAL_BANK_BYTES_OFFSET_V3,
+            1_392,
+        );
+        assert_eq!(
+            AcceleratorOutputPageAckV3::decode(&refused_with_width),
+            Err(Error::NonCanonicalReservedBytes)
+        );
+
+        for offset in [
+            OUTPUT_PAGE_ACK_HEADER_RESERVED_OFFSET_V3,
+            OUTPUT_PAGE_ACK_TAIL_RESERVED_OFFSET_V3,
+        ] {
+            let mut dirty = accepted.clone();
+            put_byte(&mut dirty, offset, 1);
+            assert_eq!(
+                AcceleratorOutputPageAckV3::decode(&dirty),
+                Err(Error::NonCanonicalReservedBytes)
+            );
+        }
+
+        // Bound to its own request and to no other.
+        let bank = vec![3_u8; 1_392];
+        let ack = AcceleratorOutputPageAckV3::decode(&accepted).expect("decode");
+        assert_eq!(
+            ack.validate_request(page_request(&bank), id(8)),
+            Err(Error::BindingMismatch)
+        );
+        let other_context = AcceleratorOutputPageRequestV3::new(
+            RequestTransportV2::Inline,
+            id(1),
+            id(2),
+            id(3),
+            id(40),
+            id(5),
+            70_000,
+            26,
+            37,
+            &bank,
+        )
+        .expect("request under another context");
+        assert_eq!(
+            ack.validate_request(other_context, id(6)),
+            Err(Error::BindingMismatch)
+        );
+        let narrow_bank = vec![3_u8; 1_384];
+        let narrower = AcceleratorOutputPageRequestV3::new(
+            RequestTransportV2::Inline,
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            70_000,
+            25,
+            37,
+            &narrow_bank,
+        )
+        .expect("request over a narrower bank");
+        assert_eq!(
+            ack.validate_request(narrower, id(6)),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    /// `ScratchPageKindV2::Candidate` was a tag no producer wrote and no
+    /// validator could approve; the kind byte now has one accepted value.
+    #[test]
+    fn scratch_page_kind_has_exactly_one_accepted_tag() {
+        let bank = vec![7_u8; 40];
+        let page = AuthenticatedScratchPageV2::new(
+            ScratchPageKindV2::Input,
+            id(20),
+            id(1),
+            id(4),
+            id(5),
+            70_000,
+            1,
+            1,
+            0,
+            &bank,
+        )
+        .expect("page");
+        let mut bytes = vec![0_u8; SCRATCH_PAGE_HEADER_BYTES_V2 + bank.len()];
+        page.encode_into(&mut bytes).expect("encode page");
+        assert_eq!(bytes.get(SCRATCH_KIND_OFFSET_V2), Some(&0));
+        assert_eq!(AuthenticatedScratchPageV2::decode(&bytes), Ok(page));
+        for tag in 1..=u8::MAX {
+            let mut hostile = bytes.clone();
+            put_byte(&mut hostile, SCRATCH_KIND_OFFSET_V2, tag);
+            assert_eq!(
+                AuthenticatedScratchPageV2::decode(&hostile),
+                Err(Error::UnknownTag)
+            );
+        }
+    }
 }
 
 /// Byte coordinate of the eight-byte magic in every `ExecutionStrategyV2`
@@ -2883,7 +3803,9 @@ const _: () = assert!(
         && ADMISSION_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
         && REQUEST_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
         && ACK_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
-        && SCRATCH_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2,
+        && SCRATCH_MAGIC_OFFSET_V2 == HEADER_MAGIC_OFFSET_V2
+        && OUTPUT_PAGE_REQUEST_MAGIC_OFFSET_V3 == HEADER_MAGIC_OFFSET_V2
+        && OUTPUT_PAGE_ACK_MAGIC_OFFSET_V3 == HEADER_MAGIC_OFFSET_V2,
     "an ExecutionStrategyV2 record moved its magic away from the shared header \
      coordinate the generic header helpers read"
 );
@@ -2893,7 +3815,9 @@ const _: () = assert!(
         && ADMISSION_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
         && REQUEST_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
         && ACK_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
-        && SCRATCH_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2,
+        && SCRATCH_SCHEMA_VERSION_OFFSET_V2 == HEADER_SCHEMA_VERSION_OFFSET_V2
+        && OUTPUT_PAGE_REQUEST_SCHEMA_VERSION_OFFSET_V3 == HEADER_SCHEMA_VERSION_OFFSET_V2
+        && OUTPUT_PAGE_ACK_SCHEMA_VERSION_OFFSET_V3 == HEADER_SCHEMA_VERSION_OFFSET_V2,
     "an ExecutionStrategyV2 record moved its schema version away from the \
      shared header coordinate the generic header helpers read"
 );
@@ -2903,7 +3827,9 @@ const _: () = assert!(
         && ADMISSION_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
         && REQUEST_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
         && ACK_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
-        && SCRATCH_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2,
+        && SCRATCH_ARTIFACT_PROFILE_OFFSET_V2 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
+        && OUTPUT_PAGE_REQUEST_ARTIFACT_PROFILE_OFFSET_V3 == HEADER_ARTIFACT_PROFILE_OFFSET_V2
+        && OUTPUT_PAGE_ACK_ARTIFACT_PROFILE_OFFSET_V3 == HEADER_ARTIFACT_PROFILE_OFFSET_V2,
     "an ExecutionStrategyV2 record moved its artifact profile away from the \
      shared header coordinate the generic header helpers read"
 );

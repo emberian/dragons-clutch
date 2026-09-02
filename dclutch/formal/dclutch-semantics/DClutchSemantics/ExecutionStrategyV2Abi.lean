@@ -26,6 +26,16 @@ def requestMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x41, 0x49, 0x52, 0x32
 def ackMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x41, 0x41, 0x4b, 0x32]
 def scratchMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x53, 0x50, 0x47, 0x32]
 
+/-- Request magic of the whole-bank output-page transport, `DCLTAOR3`.
+
+    The request/ack magic pair IS the transport identity: a Strategy record
+    naming this pair selects an accelerator that writes its complete candidate
+    bank into one account it owns and acknowledges with a header alone. Mixing
+    it with either V2 magic decodes as nothing. -/
+def outputPageRequestMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x41, 0x4f, 0x52, 0x33]
+/-- Acknowledgement magic of the whole-bank output-page transport, `DCLTAOK3`. -/
+def outputPageAckMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x41, 0x4f, 0x4b, 0x33]
+
 def schemaVersion : Nat := 2
 def artifactProfile : Nat := 2
 
@@ -335,6 +345,113 @@ def rustName : ScratchField → String
 
 end ScratchField
 
+/-! ## The whole-bank output-page transport
+
+Chunking is a consequence of one bound: return data is 1,024 bytes, so a bank
+wider than `chunkPayloadBytes` needs `ceil (bank / 880)` invocations of an
+accelerator that re-authenticates and re-evaluates from zero every time. The
+output-page transport removes the bound rather than the work: the accelerator
+writes the complete bank into one account it owns and returns a header whose
+`totalBankDigest` binds those bytes, so the request carries no chunk index,
+count or offset and the acknowledgement carries no payload.
+
+Everything else is unchanged. The header shape (magic, `schemaVersion`,
+`artifactProfile`) is the V2 one, so both records are read by the same prefix
+check; the fields that authenticate a request and an answer are the same
+fields; and the acknowledgement is exactly `ackHeaderBytes` wide, so a caller's
+return-data floor does not move.
+-/
+
+inductive OutputPageRequestField where
+  | magic | schemaVersion | artifactProfile | transport | headerReserved
+  | strategyProgram | certificateProgram | capabilityProgram
+  | invocationContext | inputBankDigest
+  | tailCount | scalarCount | identityCount
+  | totalBankBytes | tailReserved
+  deriving DecidableEq, Repr
+
+def outputPageRequestSchema : List (FieldSpec OutputPageRequestField) := [
+  ⟨.magic, .bytes 8⟩,
+  ⟨.schemaVersion, .u16⟩,
+  ⟨.artifactProfile, .u16⟩,
+  ⟨.transport, .u8⟩,
+  ⟨.headerReserved, .reserved 3⟩,
+  ⟨.strategyProgram, .bytes 32⟩,
+  ⟨.certificateProgram, .bytes 32⟩,
+  ⟨.capabilityProgram, .bytes 32⟩,
+  ⟨.invocationContext, .bytes 32⟩,
+  ⟨.inputBankDigest, .bytes 32⟩,
+  ⟨.tailCount, .u32⟩,
+  ⟨.scalarCount, .u32⟩,
+  ⟨.identityCount, .u32⟩,
+  ⟨.totalBankBytes, .u64⟩,
+  ⟨.tailReserved, .reserved 12⟩
+]
+
+def outputPageRequestLayout : List (PlacedField OutputPageRequestField) :=
+  specialize outputPageRequestSchema
+def outputPageRequestHeaderBytes : Nat := schemaWidth outputPageRequestSchema
+
+namespace OutputPageRequestField
+
+def rustName : OutputPageRequestField → String
+  | .magic => "OUTPUT_PAGE_REQUEST_MAGIC_OFFSET_V3"
+  | .schemaVersion => "OUTPUT_PAGE_REQUEST_SCHEMA_VERSION_OFFSET_V3"
+  | .artifactProfile => "OUTPUT_PAGE_REQUEST_ARTIFACT_PROFILE_OFFSET_V3"
+  | .transport => "OUTPUT_PAGE_REQUEST_TRANSPORT_OFFSET_V3"
+  | .headerReserved => "OUTPUT_PAGE_REQUEST_HEADER_RESERVED_OFFSET_V3"
+  | .strategyProgram => "OUTPUT_PAGE_REQUEST_STRATEGY_PROGRAM_OFFSET_V3"
+  | .certificateProgram => "OUTPUT_PAGE_REQUEST_CERTIFICATE_PROGRAM_OFFSET_V3"
+  | .capabilityProgram => "OUTPUT_PAGE_REQUEST_CAPABILITY_PROGRAM_OFFSET_V3"
+  | .invocationContext => "OUTPUT_PAGE_REQUEST_INVOCATION_CONTEXT_OFFSET_V3"
+  | .inputBankDigest => "OUTPUT_PAGE_REQUEST_INPUT_BANK_DIGEST_OFFSET_V3"
+  | .tailCount => "OUTPUT_PAGE_REQUEST_TAIL_COUNT_OFFSET_V3"
+  | .scalarCount => "OUTPUT_PAGE_REQUEST_SCALAR_COUNT_OFFSET_V3"
+  | .identityCount => "OUTPUT_PAGE_REQUEST_IDENTITY_COUNT_OFFSET_V3"
+  | .totalBankBytes => "OUTPUT_PAGE_REQUEST_TOTAL_BANK_BYTES_OFFSET_V3"
+  | .tailReserved => "OUTPUT_PAGE_REQUEST_TAIL_RESERVED_OFFSET_V3"
+
+end OutputPageRequestField
+
+inductive OutputPageAckField where
+  | magic | schemaVersion | artifactProfile | disposition | headerReserved
+  | requestDigest | invocationContext | totalBankDigest
+  | totalBankBytes | tailReserved
+  deriving DecidableEq, Repr
+
+def outputPageAckSchema : List (FieldSpec OutputPageAckField) := [
+  ⟨.magic, .bytes 8⟩,
+  ⟨.schemaVersion, .u16⟩,
+  ⟨.artifactProfile, .u16⟩,
+  ⟨.disposition, .u8⟩,
+  ⟨.headerReserved, .reserved 3⟩,
+  ⟨.requestDigest, .bytes 32⟩,
+  ⟨.invocationContext, .bytes 32⟩,
+  ⟨.totalBankDigest, .bytes 32⟩,
+  ⟨.totalBankBytes, .u64⟩,
+  ⟨.tailReserved, .reserved 24⟩
+]
+
+def outputPageAckLayout : List (PlacedField OutputPageAckField) :=
+  specialize outputPageAckSchema
+def outputPageAckBytes : Nat := schemaWidth outputPageAckSchema
+
+namespace OutputPageAckField
+
+def rustName : OutputPageAckField → String
+  | .magic => "OUTPUT_PAGE_ACK_MAGIC_OFFSET_V3"
+  | .schemaVersion => "OUTPUT_PAGE_ACK_SCHEMA_VERSION_OFFSET_V3"
+  | .artifactProfile => "OUTPUT_PAGE_ACK_ARTIFACT_PROFILE_OFFSET_V3"
+  | .disposition => "OUTPUT_PAGE_ACK_DISPOSITION_OFFSET_V3"
+  | .headerReserved => "OUTPUT_PAGE_ACK_HEADER_RESERVED_OFFSET_V3"
+  | .requestDigest => "OUTPUT_PAGE_ACK_REQUEST_DIGEST_OFFSET_V3"
+  | .invocationContext => "OUTPUT_PAGE_ACK_INVOCATION_CONTEXT_OFFSET_V3"
+  | .totalBankDigest => "OUTPUT_PAGE_ACK_TOTAL_BANK_DIGEST_OFFSET_V3"
+  | .totalBankBytes => "OUTPUT_PAGE_ACK_TOTAL_BANK_BYTES_OFFSET_V3"
+  | .tailReserved => "OUTPUT_PAGE_ACK_TAIL_RESERVED_OFFSET_V3"
+
+end OutputPageAckField
+
 theorem strategy_width_is_exact : strategyBytes = 272 := by native_decide
 theorem certificate_width_is_exact : certificateBytes = 336 := by native_decide
 theorem admission_width_is_exact : admissionBytes = 48 := by native_decide
@@ -342,6 +459,35 @@ theorem request_width_is_exact : requestHeaderBytes = 224 := by native_decide
 theorem ack_width_is_exact : ackHeaderBytes = 144 := by native_decide
 theorem scratch_width_is_exact : scratchHeaderBytes = 192 := by native_decide
 theorem chunk_payload_is_exact : chunkPayloadBytes = 880 := by native_decide
+theorem output_page_request_width_is_exact :
+    outputPageRequestHeaderBytes = 208 := by native_decide
+theorem output_page_ack_width_is_exact : outputPageAckBytes = 144 := by native_decide
+
+/-- The output-page request is the chunked request with its chunk geometry gone.
+
+    Not "smaller": smaller by exactly `chunkIndex : u32`, `chunkCount : u32` and
+    `chunkOffset : u64`, which is the whole content of the difference. Every
+    other field, and the twelve reserved tail bytes, are carried across. -/
+theorem output_page_request_drops_exactly_the_chunk_geometry :
+    outputPageRequestHeaderBytes
+        + FieldKind.byteWidth .u32 + FieldKind.byteWidth .u32
+        + FieldKind.byteWidth .u64
+      = requestHeaderBytes := by native_decide
+
+/-- The output-page acknowledgement is a header and nothing else, at exactly the
+    chunked header's width -- so a caller that already refuses return data
+    narrower than `ackHeaderBytes` needs no new floor, and the bytes the chunk
+    geometry and payload length vacated are reserved rather than reclaimed. -/
+theorem output_page_ack_is_the_chunked_header_width :
+    outputPageAckBytes = ackHeaderBytes := by native_decide
+theorem output_page_ack_fits_return_data :
+    outputPageAckBytes ≤ returnDataBytes := by native_decide
+
+/-- No two transport magics collide, so a record of one transport cannot be
+    decoded as a record of another. -/
+theorem transport_magics_are_pairwise_distinct :
+    [requestMagic, ackMagic, outputPageRequestMagic, outputPageAckMagic].Pairwise (· ≠ ·) := by
+  native_decide
 
 theorem strategy_fields_disjoint : strategyLayout.Pairwise Before :=
   specializeFrom_pairwise 0 strategySchema
@@ -355,5 +501,10 @@ theorem ack_fields_disjoint : ackLayout.Pairwise Before :=
   specializeFrom_pairwise 0 ackSchema
 theorem scratch_fields_disjoint : scratchLayout.Pairwise Before :=
   specializeFrom_pairwise 0 scratchSchema
+theorem output_page_request_fields_disjoint :
+    outputPageRequestLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 outputPageRequestSchema
+theorem output_page_ack_fields_disjoint : outputPageAckLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 outputPageAckSchema
 
 end DClutch.ExecutionStrategyV2Abi

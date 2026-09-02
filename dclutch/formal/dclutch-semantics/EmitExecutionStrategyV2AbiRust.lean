@@ -32,15 +32,21 @@ def main : IO Unit := do
   IO.println s!"pub const SCRATCH_PAGE_HEADER_BYTES_V2: usize = {scratchHeaderBytes};"
   IO.println s!"pub const SVM_RETURN_DATA_BYTES_V2: usize = {returnDataBytes};"
   IO.println s!"pub const ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2: usize = {chunkPayloadBytes};"
+  IO.println s!"pub const ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3: usize = {outputPageRequestHeaderBytes};"
+  IO.println s!"pub const ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3: usize = {outputPageAckBytes};"
   emitMagic "EXECUTION_STRATEGY_PROGRAM_MAGIC_V2" strategyMagic
   emitMagic "EXECUTION_STRATEGY_CERTIFICATE_MAGIC_V2" certificateMagic
   emitMagic "EXECUTION_STRATEGY_ADMISSION_MAGIC_V2" admissionMagic
   emitMagic "ACCELERATOR_REQUEST_MAGIC_V2" requestMagic
   emitMagic "ACCELERATOR_ACK_MAGIC_V2" ackMagic
   emitMagic "SCRATCH_PAGE_MAGIC_V2" scratchMagic
+  emitMagic "ACCELERATOR_OUTPUT_PAGE_REQUEST_MAGIC_V3" outputPageRequestMagic
+  emitMagic "ACCELERATOR_OUTPUT_PAGE_ACK_MAGIC_V3" outputPageAckMagic
   emitOffsets strategyLayout StrategyField.rustName
   emitOffsets certificateLayout CertificateField.rustName
   emitOffsets admissionLayout AdmissionField.rustName
   emitOffsets requestLayout RequestField.rustName
   emitOffsets ackLayout AckField.rustName
   emitOffsets scratchLayout ScratchField.rustName
+  emitOffsets outputPageRequestLayout OutputPageRequestField.rustName
+  emitOffsets outputPageAckLayout OutputPageAckField.rustName

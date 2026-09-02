@@ -335,8 +335,22 @@ function exactLoaderPair(
   return Object.freeze({ deploymentSlot: observedSlot, upgradeAuthority: observedAuthority });
 }
 
+/**
+ * The four reads this acquisition performs, named as a contract.
+ *
+ * Taking the whole `SolanaRpcClient` class made the parameter NOMINAL through
+ * its `#request` private slot, so the browser's deliberately diverged twin
+ * client could not be passed however complete it was -- which is one of the two
+ * things that kept `apps/dclutch-web` on a weaker fork of this file instead of
+ * importing it.
+ */
+export type OperatorSurfaceReaderV1 = Pick<
+  SolanaRpcClient,
+  'probe' | 'finalizedSlot' | 'multipleAccounts' | 'multipleAccountDataSlices'
+>;
+
 export async function acquireOperatorSurfaceV1(
-  client: SolanaRpcClient,
+  client: OperatorSurfaceReaderV1,
   coordinates: OperatorCoordinatesV1,
   deploymentPreset: OperatorDeploymentPresetV1 | null = null,
 ): Promise<OperatorSurfaceSnapshotV1> {

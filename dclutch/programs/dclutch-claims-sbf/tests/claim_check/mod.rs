@@ -13,9 +13,16 @@ use super::*;
 use solana_program_test::ProgramTestBanksClientExt;
 
 use dclutch_claims_svm::claim_check_request_v1::OpenClaimCheckEscrowRequestV1;
-use dclutch_claims_svm::claim_check_v1::{
-    CLAIM_CHECK_ESCROW_BYTES_V1, ClaimCheckEscrowSeedsV1, ClaimCheckEscrowV1,
-    ClaimCheckVaultSeedsV1,
+use dclutch_claims_svm::claim_check_v1::{CLAIM_CHECK_ESCROW_BYTES_V1, ClaimCheckEscrowV1};
+
+// The claim-check CLIENT: the redemption and escrow-close frames this campaign
+// drives, the coordinates it derives, and the closeability ruling it predicts
+// are all the operator's, so a defect in the shipped builder fails HERE rather
+// than reaching a holder.
+use dclutch_operator::claim_check_v1::{
+    ClaimCheckCoordinatesV1, ClaimCheckRedemptionReportV1, build_claim_check_escrow_close_v1,
+    build_claim_check_redemption_v1, escrow_is_closeable_v1, project_claim_check_coordinates_v1,
+    read_claim_check_statement_v1,
 };
 
 /// Build the 12-account open-escrow frame the route declares.
@@ -82,14 +89,55 @@ struct OpenOverrides {
     collateral_mint: Option<Pubkey>,
 }
 
+/// Every address a claim-check lives at, derived ONCE, by the shipped client.
+///
+/// `dclutch_operator::claim_check_v1` is the tree's only client-side statement
+/// of these addresses, and this campaign used to restate all three by hand from
+/// the same seed types. That is two authors for one derivation with nothing
+/// checking they agree: a builder that drifted would still find this campaign
+/// green, because the campaign would have drifted with it. The operator derives
+/// them now, so what executes against the real Claims ELF is the client's own
+/// answer and a divergence has somewhere to fail.
+fn coordinates_for(aggregate: Pubkey, owner: [u8; 32]) -> ClaimCheckCoordinatesV1 {
+    project_claim_check_coordinates_v1(
+        &CLAIMS_PROGRAM_ID,
+        &aggregate,
+        &Pubkey::new_from_array(owner),
+    )
+    .expect("the operator projects a claim-check's coordinates")
+}
+
+/// A stand-in holder for the two coordinates that do not have one.
+///
+/// `ClaimCheckEscrowSeedsV1` and `ClaimCheckVaultSeedsV1` take the aggregate
+/// ALONE, so the escrow and the vault are the same pair whoever holds a claim
+/// against them. The operator projects all four coordinates together, and its
+/// record seed requires an owner that is non-zero and distinct from the
+/// aggregate -- so the escrow/vault lookups hand it this, which reaches neither
+/// address. `the_escrow_and_vault_do_not_depend_on_the_holder` is the standing
+/// proof of that sentence rather than its restatement.
+const COORDINATE_PROBE_OWNER: [u8; 32] = [1; 32];
+
 fn escrow_address(aggregate: Pubkey) -> Pubkey {
-    let seeds = ClaimCheckEscrowSeedsV1::new(aggregate.to_bytes()).expect("escrow seeds");
-    Pubkey::find_program_address(&seeds.as_slices(), &CLAIMS_PROGRAM_ID).0
+    coordinates_for(aggregate, COORDINATE_PROBE_OWNER).escrow
 }
 
 fn vault_address(aggregate: Pubkey) -> Pubkey {
-    let seeds = ClaimCheckVaultSeedsV1::new(aggregate.to_bytes()).expect("vault seeds");
-    Pubkey::find_program_address(&seeds.as_slices(), &CLAIMS_PROGRAM_ID).0
+    coordinates_for(aggregate, COORDINATE_PROBE_OWNER).vault
+}
+
+/// The probe owner is immaterial, and this is why it may be one.
+#[test]
+fn the_escrow_and_vault_do_not_depend_on_the_holder() {
+    let aggregate = Pubkey::new_unique();
+    let probe = coordinates_for(aggregate, COORDINATE_PROBE_OWNER);
+    let holder = coordinates_for(aggregate, Pubkey::new_unique().to_bytes());
+    assert_eq!(probe.escrow, holder.escrow);
+    assert_eq!(probe.vault, holder.vault);
+    assert_ne!(
+        probe.record, holder.record,
+        "and the record, which does depend on the holder, must not collide"
+    );
 }
 
 /// Submit one open-escrow instruction paid by the context's payer.
@@ -473,8 +521,7 @@ async fn the_open_admits_the_opener_and_no_other_signer() {
 
 use dclutch_claims_svm::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
 use dclutch_claims_svm::claim_check_v1::{
-    COMPACTION_CRANK_REWARD_LAMPORTS_V1, COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckSeedsV1,
-    ClaimCheckV1,
+    COMPACTION_CRANK_REWARD_LAMPORTS_V1, COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckV1,
 };
 use dclutch_claims_svm::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
@@ -491,8 +538,7 @@ use dclutch_claims_svm::terminal_settlement_v3::{
 const POSITION_BYTES: usize = 128 + 8 * K;
 
 fn claim_check_address(aggregate: Pubkey, owner: [u8; 32]) -> Pubkey {
-    let seeds = ClaimCheckSeedsV1::new(aggregate.to_bytes(), owner).expect("claim-check seeds");
-    Pubkey::find_program_address(&seeds.as_slices(), &CLAIMS_PROGRAM_ID).0
+    coordinates_for(aggregate, owner).record
 }
 
 fn admission_address(aggregate: Pubkey, owner: [u8; 32]) -> Pubkey {
@@ -1127,62 +1173,80 @@ async fn an_ordinary_redemption_survives_the_compaction_deadlines_warp() {
 
 // ---------------------------------------------------------------- redemption
 
-use dclutch_claims_svm::claim_check_request_v1::RedeemClaimCheckRequestV1;
-use dclutch_claims_svm::claim_check_v1::{
-    CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, ClaimCheckRedemptionRoleV1,
-};
-
-/// Build the seven-account redemption frame from its own declared spec.
+/// READ the holder's claim-check with the shipped client, then BUILD its payout
+/// with the shipped client.
 ///
-/// The privileges are read off `ClaimCheckRedemptionRoleV1`, not restated here,
-/// so the test cannot pass a frame the route's own spec would reject.
-fn redeem_instruction(
+/// This campaign used to restate the seven-account frame itself. The frame it
+/// wrote and the frame `dclutch_operator::claim_check_v1` ships were structurally
+/// the same code -- both zipping addresses against `ClaimCheckRedemptionRoleV1`
+/// -- which is the whole problem: TWO AUTHORS for one frame, and nothing
+/// anywhere comparing them. A defect in the operator's builder could not have
+/// failed this campaign, so the campaign's green said nothing at all about the
+/// thing an actual holder would run.
+///
+/// Both halves of the client are on the path now. `read_claim_check_statement_v1`
+/// checks the record's address against the coordinates the bytes claim, so the
+/// campaign also cannot be handed somebody else's record and shown it as this
+/// holder's; and the report it returns carries the operator's PREDICTIONS --
+/// token credit, lamport credit, which account should be gone -- which the
+/// honest cases assert against what the chain actually did.
+async fn redemption_report(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    holder: Pubkey,
+    holder_tokens: Pubkey,
+) -> ClaimCheckRedemptionReportV1 {
+    let coordinates = coordinates_for(fixture.aggregate, holder.to_bytes());
+    let record = observed(context, coordinates.record).await;
+    let statement = read_claim_check_statement_v1(
+        &CLAIMS_PROGRAM_ID,
+        &coordinates.record,
+        &record.data,
+        record.lamports,
+    )
+    .expect("the operator reads the holder's own claim-check");
+    build_claim_check_redemption_v1(
+        &CLAIMS_PROGRAM_ID,
+        &TOKEN_PROGRAM_ID,
+        &holder_tokens,
+        statement,
+    )
+    .expect("the operator builds the redemption")
+}
+
+/// The operator's redemption frame, with at most one account substituted.
+///
+/// A hostile is stronger for being a substitution ON the shipped frame rather
+/// than beside it: the substituted account is then the ONLY thing separating
+/// the transaction from one the client itself would have handed a wallet, so a
+/// refusal cannot be explained by some other way the hand-written frame differed.
+async fn redeem_instruction(
+    context: &mut ProgramTestContext,
     fixture: &Fixture,
     holder: Pubkey,
     holder_tokens: Pubkey,
     overrides: RedeemOverrides,
 ) -> Instruction {
-    let terminal = fixture.terminal_accounts.expect("terminal fixture");
-    let aggregate = fixture.aggregate;
-    let request = RedeemClaimCheckRequestV1 {
-        aggregate: aggregate.to_bytes(),
-        owner: overrides.owner.unwrap_or(holder.to_bytes()),
+    let mut instruction = redemption_report(context, fixture, holder, holder_tokens)
+        .await
+        .instruction;
+    if let Some(substitute) = overrides.holder {
+        instruction.accounts[CLAIM_CHECK_REDEMPTION_HOLDER_ACCOUNT] = AccountMeta {
+            pubkey: substitute,
+            ..instruction.accounts[CLAIM_CHECK_REDEMPTION_HOLDER_ACCOUNT].clone()
+        };
     }
-    .new()
-    .expect("redeem request");
-    let addresses = [
-        overrides.holder.unwrap_or(holder),
-        claim_check_address(aggregate, holder.to_bytes()),
-        escrow_address(aggregate),
-        vault_address(aggregate),
-        holder_tokens,
-        terminal.collateral_mint,
-        TOKEN_PROGRAM_ID,
-    ];
-    let accounts = ClaimCheckRedemptionRoleV1::frame()
-        .iter()
-        .zip(addresses)
-        .map(|(role, address)| {
-            let (signer, writable) = role.privileges();
-            if writable {
-                AccountMeta::new(address, signer)
-            } else {
-                AccountMeta::new_readonly(address, signer)
-            }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(accounts.len(), CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1);
-    Instruction {
-        program_id: CLAIMS_PROGRAM_ID,
-        accounts,
-        data: request.to_bytes().expect("redeem bytes").to_vec(),
-    }
+    instruction
 }
+
+/// The holder's own slot in the redemption frame. Slot 0 is the signer the
+/// route authenticates against the record's owner; substituting it is what
+/// makes a stranger's attempt a stranger's attempt.
+const CLAIM_CHECK_REDEMPTION_HOLDER_ACCOUNT: usize = 0;
 
 #[derive(Clone, Copy, Default)]
 struct RedeemOverrides {
     holder: Option<Pubkey>,
-    owner: Option<[u8; 32]>,
 }
 
 /// Run a market all the way to a compacted claim-check, then hand back the
@@ -1235,12 +1299,11 @@ async fn a_sleeping_holder_is_paid_from_a_claim_check_long_after_the_crank() {
     let tokens_before = token_amount(&observed(&mut context, holder_tokens).await);
     let lamports_before = observed(&mut context, holder).await.lamports;
 
-    let instruction =
-        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default());
+    let report = redemption_report(&mut context, &fixture, holder, holder_tokens).await;
     let result = submit_holder_signed(
         &mut context,
         &fixture,
-        instruction,
+        report.instruction.clone(),
         "claims claim-check: the sleeping holder redeems",
     )
     .await;
@@ -1249,10 +1312,22 @@ async fn a_sleeping_holder_is_paid_from_a_claim_check_long_after_the_crank() {
     }
     assert!(result.accepted, "the holder must be paid");
 
-    // Paid exactly what the claim-check promised.
+    // Paid exactly what the claim-check promised -- AND exactly what the
+    // operator predicted before the transaction was sent. `report` was built
+    // from the record's own bytes by the shipped client, so these two are the
+    // numbers a wallet would have shown the holder in advance, held to what the
+    // chain then did. The first assertion is not the second restated: `owed`
+    // came from a direct `ClaimCheckV1::decode` here, while the operator
+    // reached its figure through `read_claim_check_statement_v1`, which also
+    // checks the record's address against the coordinates its bytes claim.
+    assert_eq!(
+        report.expected_token_credit, owed,
+        "the operator read the same entitlement out of the record"
+    );
     assert_eq!(
         token_amount(&observed(&mut context, holder_tokens).await),
-        tokens_before + owed
+        tokens_before + report.expected_token_credit,
+        "the holder was credited exactly what the operator predicted"
     );
     // The vault gave up exactly that, and the escrow's count went to zero.
     assert_eq!(
@@ -1278,7 +1353,14 @@ async fn a_sleeping_holder_is_paid_from_a_claim_check_long_after_the_crank() {
         .is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
         "a redeemed claim-check keeps nothing"
     );
-    assert!(observed(&mut context, holder).await.lamports > lamports_before);
+    let holder_after = observed(&mut context, holder).await.lamports;
+    assert!(holder_after > lamports_before);
+    assert!(
+        holder_after <= lamports_before + report.expected_lamport_credit,
+        "and gained no more lamports than the record's rent, which is all the \
+         operator promised -- the holder paid this transaction's fee out of the \
+         difference"
+    );
 }
 
 /// NOBODY BUT THE HOLDER CAN REDEEM, AND THE RECORD SURVIVES THE ATTEMPT.
@@ -1297,14 +1379,17 @@ async fn a_stranger_cannot_redeem_another_holders_claim_check() {
     )
     .await;
     let instruction = redeem_instruction(
+        &mut context,
         &fixture,
         holder,
         holder_tokens,
+        // The record still names the holder; only the signer is swapped. The
+        // request bytes are the operator's, unaltered.
         RedeemOverrides {
             holder: Some(stranger),
-            owner: Some(holder.to_bytes()),
         },
-    );
+    )
+    .await;
     // Signed by the stranger alone: a real, well-formed attempt.
     let result = submit_opener_signed(
         &mut context,
@@ -1341,8 +1426,14 @@ async fn a_claim_check_cannot_be_redeemed_twice() {
     let mut context = test.start_with_context().await;
     let holder_tokens = compact_for_a_sleeping_holder(&mut context, &fixture).await;
     let holder = fixture.actor.pubkey();
-    let instruction =
-        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default());
+    let instruction = redeem_instruction(
+        &mut context,
+        &fixture,
+        holder,
+        holder_tokens,
+        RedeemOverrides::default(),
+    )
+    .await;
 
     let first = submit_holder_signed(
         &mut context,
@@ -1428,35 +1519,36 @@ async fn submit_holder_signed(
 
 // -------------------------------------------------------------- escrow close
 
-use dclutch_claims_svm::claim_check_request_v1::CloseClaimCheckEscrowRequestV1;
-
+/// The escrow close, built by the shipped client.
+///
+/// `build_claim_check_escrow_close_v1` had NO CALLER ANYWHERE IN THE TREE --
+/// not a campaign, not a test, not a tool -- while this campaign closed escrows
+/// against the real ELF with a six-account frame it wrote out by hand. So the
+/// one function a real cranker would call was the one function nothing ran, and
+/// the close that was demonstrably admitted was a frame the client does not
+/// ship. It ships this one, and this is now the frame the ELF admits.
+///
+/// The fourth account is the residue destination, structurally never written
+/// today: the terminal executor's exact-equality check means no transfer fee
+/// can survive it, so the vault is empty by the time its last claim-check is
+/// redeemed.
 fn close_escrow_instruction(
     fixture: &Fixture,
     caller: Pubkey,
     caller_tokens: Pubkey,
 ) -> Instruction {
     let terminal = fixture.terminal_accounts.expect("terminal fixture");
-    let request = CloseClaimCheckEscrowRequestV1 {
-        aggregate: fixture.aggregate.to_bytes(),
-    }
-    .new()
-    .expect("close request");
-    Instruction {
-        program_id: CLAIMS_PROGRAM_ID,
-        accounts: Vec::from([
-            AccountMeta::new(caller, true),
-            AccountMeta::new(escrow_address(fixture.aggregate), false),
-            AccountMeta::new(vault_address(fixture.aggregate), false),
-            // The residue destination. Structurally never written today: the
-            // terminal executor's exact-equality check means no transfer fee
-            // can survive it, so the vault is empty by the time its last
-            // claim-check is redeemed.
-            AccountMeta::new(caller_tokens, false),
-            AccountMeta::new_readonly(terminal.collateral_mint, false),
-            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
-        ]),
-        data: request.to_bytes().expect("close bytes").to_vec(),
-    }
+    build_claim_check_escrow_close_v1(
+        &CLAIMS_PROGRAM_ID,
+        &TOKEN_PROGRAM_ID,
+        &caller,
+        &caller_tokens,
+        // Escrow and vault are the only coordinates this frame names and both
+        // are aggregate-derived, so the owner does not reach it.
+        coordinates_for(fixture.aggregate, COORDINATE_PROBE_OWNER),
+        &terminal.collateral_mint,
+    )
+    .expect("the operator builds the escrow close")
 }
 
 /// THE RESIDUE SHRINKS TO ZERO, AND THE LAST REDEMPTION IS WHAT ALLOWS IT.
@@ -1476,7 +1568,15 @@ async fn the_escrow_closes_once_its_last_claim_check_is_redeemed() {
     let vault = vault_address(fixture.aggregate);
 
     // While a claim-check is live, the escrow holds somebody's collateral and
-    // closing it would be taking their money.
+    // closing it would be taking their money. The operator says so too, from
+    // the escrow's own bytes, BEFORE anything is submitted -- and the chain is
+    // then asked whether it agrees. A client that told a cranker to go ahead
+    // here would be sending them into `0x5625` at their own expense.
+    assert!(
+        !escrow_is_closeable_v1(&observed(&mut context, escrow).await.data)
+            .expect("the operator reads the escrow"),
+        "the operator must refuse an escrow that still owes somebody"
+    );
     let premature = submit_opener_signed(
         &mut context,
         close_escrow_instruction(&fixture, caller, holder_tokens),
@@ -1490,15 +1590,30 @@ async fn the_escrow_closes_once_its_last_claim_check_is_redeemed() {
     );
 
     // The holder comes back.
+    let last = redemption_report(&mut context, &fixture, holder, holder_tokens).await;
     let redeemed = submit_holder_signed(
         &mut context,
         &fixture,
-        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default()),
+        last.instruction.clone(),
         "claims claim-check: the last redemption",
     )
     .await;
     assert!(redeemed.accepted, "the holder must be paid");
+    assert!(
+        maybe_observed(&mut context, last.expected_vacant[0])
+            .await
+            .is_none_or(|account| account.lamports == 0),
+        "the operator said the record would be gone after this redemption"
+    );
 
+    // And once the last claim-check is redeemed, the same reading flips. The
+    // two rulings are the operator's and the chain's, and this pair of
+    // assertions is the whole reason a cranker can trust the first one.
+    assert!(
+        escrow_is_closeable_v1(&observed(&mut context, escrow).await.data)
+            .expect("the operator reads the settled escrow"),
+        "the operator must admit a settled escrow"
+    );
     let escrow_lamports = observed(&mut context, escrow).await.lamports;
     let vault_lamports = observed(&mut context, vault).await.lamports;
     let caller_before = observed(&mut context, caller).await.lamports;
@@ -1638,10 +1753,11 @@ async fn a_market_retires_a_sleeping_holders_position_and_the_holder_is_still_pa
     );
 
     // --- the holder returns, to a market whose machinery is gone -------------
+    let late = redemption_report(&mut context, &fixture, holder, holder_tokens).await;
     let redeemed = submit_holder_signed(
         &mut context,
         &fixture,
-        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default()),
+        late.instruction.clone(),
         "claims claim-check: the sleeper finally returns",
     )
     .await;

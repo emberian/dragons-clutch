@@ -29,6 +29,16 @@ pub struct DelegatedCustodyInfrastructureV2 {
     pub registry_program: Pubkey,
     /// Loader-owned programdata for the selected caller program.
     pub caller_programdata: Pubkey,
+    /// Finalized Realm record.
+    ///
+    /// NOT derivable here, and not `custody.realm`. `custody.realm` is the
+    /// Realm's CONTENT DIGEST -- Custody hashes this account's data and
+    /// compares the result against it (`authenticate_realm`,
+    /// `programs/dclutch-custody-sbf/src/lib.rs`). The account's own key must
+    /// be the Registry raw-record PDA over that digest, and its bump lives in
+    /// the Core Market's `bumps.realm_raw_record`, which this builder is not
+    /// given. So it is supplied, exactly as its staging twin below always was.
+    pub realm_raw: Pubkey,
     /// Canonical vacant staging cursor proving the Realm record final.
     pub realm_staging: Pubkey,
 }
@@ -50,26 +60,26 @@ pub fn delegated_custody_transfer_cpi_v2(
     let custody = request.custody;
     let caller_program = Pubkey::new_from_array(custody.caller_program);
     let market = Pubkey::new_from_array(custody.market);
-    let realm = Pubkey::new_from_array(custody.realm);
     let source = Pubkey::new_from_array(custody.source);
     let destination = Pubkey::new_from_array(custody.destination);
     let mint = Pubkey::new_from_array(custody.mint);
     let token_program = Pubkey::new_from_array(custody.token_program);
-    if [
-        infrastructure.custody_program,
-        infrastructure.registry_program,
-        infrastructure.caller_programdata,
-        infrastructure.realm_staging,
-        caller_program,
-        market,
-        realm,
-        source,
-        destination,
-        mint,
-        token_program,
-    ]
-    .iter()
-    .any(|key| key.to_bytes().iter().all(|byte| *byte == 0))
+    if custody.realm == [0; 32]
+        || [
+            infrastructure.custody_program,
+            infrastructure.registry_program,
+            infrastructure.caller_programdata,
+            infrastructure.realm_raw,
+            infrastructure.realm_staging,
+            caller_program,
+            market,
+            source,
+            destination,
+            mint,
+            token_program,
+        ]
+        .iter()
+        .any(|key| key.to_bytes().iter().all(|byte| *byte == 0))
         || source == destination
         || caller_program == infrastructure.registry_program
         || infrastructure.custody_program == caller_program
@@ -116,7 +126,7 @@ pub fn delegated_custody_transfer_cpi_v2(
             AccountMeta::new_readonly(infrastructure.registry_program, false),
             AccountMeta::new_readonly(caller_program, false),
             AccountMeta::new_readonly(infrastructure.caller_programdata, false),
-            AccountMeta::new_readonly(realm, false),
+            AccountMeta::new_readonly(infrastructure.realm_raw, false),
             AccountMeta::new_readonly(infrastructure.realm_staging, false),
             AccountMeta::new(replay, false),
             AccountMeta::new_readonly(mint, false),
@@ -186,6 +196,7 @@ mod tests {
             custody_program: key(30),
             registry_program: key(31),
             caller_programdata: key(32),
+            realm_raw: key(34),
             realm_staging: key(33),
         };
         let custody = base();
@@ -212,13 +223,55 @@ mod tests {
             .expect("delegated instruction");
         assert_eq!(instruction.accounts.len(), 14);
         assert_eq!(instruction.data.len(), DELEGATED_CUSTODY_REQUEST_BYTES_V2);
-        assert_eq!(
+
+        // EVERY slot's identity, in order. This assertion is the repair for a
+        // real defect: slot 6 used to carry `custody.realm`, which is the
+        // Realm's CONTENT DIGEST, where Custody requires the Realm RECORD --
+        // it hashes that account's data and compares the hash against the
+        // digest, so passing the digest itself as the key refuses
+        // `CustodySbfError::Realm` (0x6004) at
+        // `programs/dclutch-custody-sbf/src/lib.rs`'s realm-key check. The
+        // builder could not produce a frame the program admits, and this test
+        // did not notice because it only ever checked the frame's WIDTH, its
+        // flags, and slot 12. A shape is not a frame.
+        // Slots 0, 2 and 8 are PDAs this builder derives; restating their
+        // derivations here would make the test a second author of exactly the
+        // thing it audits, so they are left to the frame's own construction.
+        // Every OTHER slot is a value the caller handed in, and a value handed
+        // in can be checked against where it landed -- which is the entire
+        // defect class this missed.
+        let expected = [
+            (1, Pubkey::new_from_array(custody.market)),
+            (3, infrastructure.registry_program),
+            (4, Pubkey::new_from_array(custody.caller_program)),
+            (5, infrastructure.caller_programdata),
+            (6, infrastructure.realm_raw),
+            (7, infrastructure.realm_staging),
+            (9, Pubkey::new_from_array(custody.mint)),
+            (10, Pubkey::new_from_array(custody.source)),
+            (11, Pubkey::new_from_array(custody.destination)),
+            (12, authority),
+            (13, Pubkey::new_from_array(custody.token_program)),
+        ];
+        for (slot, want) in expected.iter() {
+            assert_eq!(
+                instruction
+                    .accounts
+                    .get(*slot)
+                    .expect("account slot exists")
+                    .pubkey,
+                *want,
+                "account slot {slot}"
+            );
+        }
+        assert_ne!(
             instruction
                 .accounts
-                .get(12)
+                .get(6)
                 .expect("account slot exists")
                 .pubkey,
-            authority
+            Pubkey::new_from_array(custody.realm),
+            "slot 6 is the Realm RECORD, never the digest Custody checks it against"
         );
         assert!(
             instruction

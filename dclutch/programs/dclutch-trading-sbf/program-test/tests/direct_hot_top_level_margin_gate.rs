@@ -627,6 +627,57 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// the measurement is what is wrong; if they differ, codegen moved and the
 /// 4,836 is a recoverable accident rather than a conjunct the route needed.
 /// Still NOT PINNED until that says which.
+///
+/// ### The experiment was run, and it says THE MEASUREMENT
+///
+/// Trading built at both revisions with `-Zemit-stack-sizes --emit=obj,link`.
+/// Both links reproduce the digests the CU runs were taken on -- `bfd447d5...`
+/// and `4e5dd776...` -- so the objects measured are the objects executed, and
+/// both carry the same 3 frame diagnostics.
+///
+/// ```text
+///   FUNC symbols            948  vs  948     differing sizes: 0
+///   stack frames            941  vs  941     differing frames: 0
+///   total code bytes  1,848,096  vs  1,848,096            +0
+/// ```
+///
+/// **Not one function changed size and not one changed frame.** Codegen did not
+/// move, so the executed instruction stream is the same and 4,836 CU of real
+/// cost is impossible. The `.text` bytes DO differ, and that is consistent:
+/// eight comment lines shift every later line number in `hot_v3.rs`, which moves
+/// the panic-location strings in `.rodata`, which moves the addresses those
+/// instructions carry as immediates. Same instructions, different immediates,
+/// identical cost.
+///
+/// ### So the instrument is this file's own floor, and here is the defect
+///
+/// The floor is `min over 32 seeds of (CU - 1500 * modelled attempts)`. Differenced
+/// SEED BY SEED across the two builds, the residual does not move by a constant:
+///
+/// ```text
+///   fee-bearing   +1,835 .. +9,335    values 1500k + ~335
+///   zero-fee      -8,661 .. +10,837   BOTH SIGNS
+/// ```
+///
+/// Every unmodelled search is reseeded by `release_set_id`, so a relink
+/// RESAMPLES the whole distribution. The floor is then an ORDER STATISTIC over a
+/// resampled lottery -- the minimum of 32 fresh draws -- and the minimum of a
+/// resampled distribution moves even when nothing it measures does. That is the
+/// residual dependence, and it is not any one search's constant depth: it is the
+/// `min` itself.
+///
+/// This partially un-retracts the section above. Its 17 CU control is sound and
+/// still worth reading, but 17 CU is ONE SAMPLE of that order statistic, not a
+/// proof of key-independence; this pair drew 4,836 from the same process.
+///
+/// **What would make the assertion true.** Either leave no unmodelled search in
+/// the residual -- the Claims caller authority is the known one, and the fixture
+/// already derives it at `direct-hot/src/fixture.rs` and discards the bump, so
+/// exposing it is a contained change -- or stop calling a minimum a constant and
+/// carry its sampling spread, comparing floors only within one link.
+///
+/// STILL NOT PINNED. A number is not a code cost until the statistic that reads
+/// it has no lottery left in it.
 const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_268_059;
 
 /// The protocol maximum a transaction may consume.

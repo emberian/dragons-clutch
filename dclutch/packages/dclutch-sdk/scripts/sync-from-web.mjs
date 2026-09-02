@@ -40,6 +40,12 @@ const WEB_ONLY = new Set([
 
 /** App compatibility shims that already re-export their SDK semantic owner. */
 const SDK_OWNED_REEXPORTS = new Set([
+  // The checked live-devnet operator surface. The web copy was a fork that
+  // authenticated the deployment more weakly than this one -- no upgrade
+  // authority binding, no release join, no route-admission boundary -- and is
+  // now a re-export. Absorbing it would overwrite the owner with its own shim.
+  'lib/operatorSurface.ts',
+
   // The capability catalogue and every rule that turns evidence into a status
   // are SDK semantics; the browser supplies only its own routes, through
   // `apps/dclutch-web/lib/capabilitySurface.ts`. Absorbing the web file would
@@ -63,10 +69,6 @@ const DIVERGED = new Set([
   'lib/rpc.ts',
   'lib/rpc.test.ts',
   'lib/localSuccessor.ts',
-  // The SDK authenticates the complete activation-cache contents and returns
-  // its route-admission boundary; the UI copy intentionally remains lighter.
-  'lib/operatorSurface.ts',
-  'lib/operatorSurface.test.ts',
   'scripts/abi-coverage.mjs',
   'scripts/abi-coverage.baseline.json',
 ]);

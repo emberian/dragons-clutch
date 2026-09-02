@@ -59,6 +59,17 @@ dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-
 dclutch-chain-bundle-builder = { path = "../dclutch-trading-sbf/program-test/bundle-builder" }
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
+# The claim-check CLIENT. `claim_check_v1`'s builders are the tree's only
+# client-side statement of the redemption and escrow-close frames, and this
+# campaign used to restate both by hand -- two authors for one frame, with
+# nothing checking they agreed. The campaign now calls the builders, so what
+# executes against the real ELFs is the operator's own frame.
+#
+# `default-features = false` drops `dealer-series` and with it the only reason
+# the crate links `dclutch-trading-sbf`: the claim-check planners need no
+# program. DEV only; none of this reaches the cdylib and the ELF digest is the
+# control.
+dclutch-operator = { path = "../../crates/dclutch-operator", default-features = false }
 # Structured V2's founding-time lowering, so the campaign's execution descriptor
 # is DERIVED (decision 0011 §3c/§3d) rather than a sixth hand-written preimage.
 # DEV only: none of these reach the cdylib, and the ELF digest is the control.

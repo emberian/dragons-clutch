@@ -1654,6 +1654,7 @@ dependencies = [
  "dclutch-fractional-claim-kernel",
  "dclutch-fractional-claims-kernel",
  "dclutch-market-core-codec",
+ "dclutch-operator",
  "dclutch-product-contract",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",

@@ -9,11 +9,11 @@
       "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The heaviest transaction here is the compaction crank at 530,670."
     },
     {
-      "id": "exactly-one-claim-check-transaction-is-unmeasured",
+      "id": "every-claim-check-transaction-is-measured",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.wire_bytes == null) | .label] | join(\" + \")",
-      "expect": "claims rational-representation-v2: a stranger begins retiring",
-      "provenance": "A null `wire_bytes` is the emitter's word for 'did not measure', which is honest but is not a claim that the frame fits. Exactly one transaction in this campaign is unmeasured, and it is a FIXTURE step rather than a claim-check route -- the stranger-driven BeginRetiring, which travels as a v0 message and which this package has no serializer for. Naming it rather than counting it means a claim-check route becoming unmeasured turns this red."
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A null `wire_bytes` is the emitter's word for 'did not measure', which is honest but is not a claim that the frame fits. This witness used to NAME the single unmeasured transaction -- the stranger-driven BeginRetiring, which travels as a v0 message the package then had no serializer for -- so that a claim-check route going unmeasured would turn it red. That transaction is measured now (414 bytes), so the exemption it described no longer exists and naming it made the witness fail on an improvement. The campaign measures every frame it submits, and this says exactly that, which is the stronger claim. Measured 2026-09-02 at HEAD 5fa46416: 96 transactions, zero unmeasured -- confirmed against an UNMODIFIED HEAD tree as the control, so the change is the campaign's rather than any one lane's."
     },
     {
       "id": "every-measured-claim-check-frame-fits-a-legacy-packet",

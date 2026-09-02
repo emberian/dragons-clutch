@@ -111,6 +111,25 @@ pub const ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3: usize =
 pub const ADMITTED_RUNTIME_ACCOUNTS_START_V3: usize =
     ADMITTED_STRATEGY_EVIDENCE_START_V3 + ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
 
+/// Accelerator-owned candidate output page, under `OutputPageV3` only.
+///
+/// APPENDED, so nothing moves. Every coordinate above -- the caller authority,
+/// the whole common Hot fixed frame, the eight evidence accounts -- reads the
+/// same number it read before this existed, and
+/// [`ADMITTED_RUNTIME_ACCOUNTS_START_V3`] still names where the CHUNKED
+/// transport's runtime slice begins. The page takes that slot and the
+/// output-page transport's runtime slice begins one later, which is what
+/// [`ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3`] is for.
+///
+/// Two constants rather than one profile-switched constant, because the switch
+/// belongs to the party that already knows the transport. A single constant
+/// that changed value would have moved the chunked frame for everyone, and
+/// "inert until a Strategy record names the profile" would have been false.
+pub const ADMITTED_OUTPUT_PAGE_ACCOUNT_V3: usize = ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1;
+/// First AccountProfile-ordered runtime account under the output-page transport.
+pub const ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3: usize =
+    ADMITTED_OUTPUT_PAGE_ACCOUNT_V3 + 1;
+
 // The evidence suffix is the one span this file states rather than derives, so
 // it is pinned to the accounts that occupy it: the last named coordinate must be
 // the last slot before the runtime slice. A ninth evidence account added to the
@@ -120,6 +139,18 @@ const _: () = {
     assert!(
         ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1 == ADMITTED_RUNTIME_ACCOUNTS_START_V3,
         "the admitted evidence suffix count and its named coordinates disagree"
+    );
+    // The page is APPENDED: it occupies the slot the chunked runtime slice
+    // starts at, and displaces only the output-page transport's own slice. A
+    // ninth evidence account would break this at the same time it breaks the
+    // assertion above, rather than silently pushing the page into the runtime.
+    assert!(
+        ADMITTED_OUTPUT_PAGE_ACCOUNT_V3 == ADMITTED_RUNTIME_ACCOUNTS_START_V3,
+        "the appended output page does not sit immediately after the evidence suffix"
+    );
+    assert!(
+        ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3 == ADMITTED_RUNTIME_ACCOUNTS_START_V3 + 1,
+        "the output-page runtime slice is not displaced by exactly the page"
     );
 };
 
@@ -411,6 +442,19 @@ mod tests {
         assert_eq!(
             ADMITTED_RUNTIME_ACCOUNTS_START_V3,
             ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1
+        );
+
+        // The appended output page moves no coordinate the chunked transport
+        // reads: it takes the first slot after the evidence suffix, which is
+        // where the chunked runtime slice starts, and pushes only the
+        // output-page transport's own runtime slice.
+        assert_eq!(
+            ADMITTED_OUTPUT_PAGE_ACCOUNT_V3,
+            ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1
+        );
+        assert_eq!(
+            ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3,
+            ADMITTED_OUTPUT_PAGE_ACCOUNT_V3 + 1
         );
     }
 }

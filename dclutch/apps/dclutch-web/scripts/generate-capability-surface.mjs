@@ -326,6 +326,41 @@ function verifierFor(generatedModule) {
 const web = (file) => relative(webRoot, file).split('\\').join('/');
 const inWeb = (file) => file.startsWith(webRoot);
 
+/**
+ * The generated ABI a reachable module IS, following re-export shims into the
+ * package.
+ *
+ * `apps/dclutch-web/lib/*.ts` is increasingly a two-line
+ * `export * from '@dclutch/sdk/*'`, and this census resolves those specifiers
+ * correctly -- but then credited a generated module only when the file it
+ * landed on was under the WEB root. So the moment a surface's semantic owner
+ * moved into the package, every generated ABI beneath it fell off the survey
+ * and the route it serves looked like it depended on nothing.
+ *
+ * Measured on 2026-09-02, converging `lib/operatorSurface.ts` onto its SDK
+ * owner: `/operate` and `/workbench` lost the infrastructure, refusal-band and
+ * refusal-registry ABIs in one commit, and `lib/infrastructure.ts` lost both
+ * routes. Nothing was less true about the browser; the instrument had stopped
+ * being able to see. Ten shims already carried this blind spot.
+ *
+ * The two trees hold BYTE-IDENTICAL generated modules at the same relative
+ * path -- `lib/twinIdentity.test.ts` is the gate, and it names every deliberate
+ * exception -- and the web's `abi:*:verify` script is what checks the web copy.
+ * So an SDK generated module is credited under its web-relative name, and only
+ * when that web file actually exists; a package-only generated module is not
+ * something a web verifier can speak for and is left uncredited.
+ */
+function generatedModuleName(file) {
+  if (inWeb(file)) {
+    const name = web(file);
+    return name.startsWith('lib/generated/') ? name : null;
+  }
+  if (!file.startsWith(sdkRoot)) return null;
+  const name = relative(sdkRoot, file).split('\\').join('/');
+  if (!name.startsWith('lib/generated/')) return null;
+  return exists(join(webRoot, name)) ? name : null;
+}
+
 const routeEntries = routes();
 /** Route -> its own closure, so a module can be asked which routes reach it. */
 const routeClosures = routeEntries.map((entry) => ({ ...entry, files: closureOf(entry.file) }));
@@ -367,7 +402,8 @@ function surfaceRow(file) {
     transaction = transaction || local.transaction;
     submits = submits || local.submits;
     readsExternalFile = readsExternalFile || local.readsExternalFile;
-    if (inWeb(member) && web(member).startsWith('lib/generated/')) generated.add(web(member));
+    const generatedName = generatedModuleName(member);
+    if (generatedName !== null) generated.add(generatedName);
   }
   return {
     module: web(file),

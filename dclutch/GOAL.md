@@ -2876,3 +2876,26 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   (`9533e300`; the scraper had already failed since `a00fc7c9`). 84/84 guarded; twin identity 157 (honest).
   Scope correction: coreFound is 39/95 (four Rust layouts have no Lean owner — successor's unit 1); directInlineV3's
   generator carries an eleven-way route-binding gate and must not be replaced as-is.
+
+### Lane map delta — 2026-09-02 10:00
+- **COHORT-12 LIVE** (`b4ddd2c8`, `docs/evidence/COHORT12_GENESIS_POPULATED_2026_09_02.md`): cohort-11 closed (+41.89 SOL),
+  seven programs redeployed from `e39efbb0` (42.03 SOL, byte-identical on read-back three ways), ladder 33 tx / 0 errors,
+  **SOL/USD OPEN at `EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1`** at 50 bps with cuts 9800/10200 (spot $100.04 read
+  from three venues; the runbook's $150 assumption corrected), two admissions landed, census L1/L3/L4 hold. **Frozen tables
+  proven on chain with cohort-11 as control** (four of its five still authority-held). Deployer 36.56 SOL.
+  **The trade did not execute — a conflict between two of our rules:** checked execution needs a sealed upgrade set
+  (`prepare --deployment-set-journal`, five receipt-backed Upgrades) and a full redeploy upgrades nothing; cohorts 7–8
+  (upgrade lineage) sealed, 10/11/12 (full redeploy) None — **why no Direct fill has ever run on devnet.** Resolution: rule (a)
+  forbids a PARTIAL deploy, not an upgrade of the whole set → upgrade all seven in place on cohort-12's ids from HEAD, seal,
+  trade. Also: simulator preflight wrote a durable journal `--execute` resumed (0x4003 Content on the first attempt).
+  Structural fix owed to the release tool: a genesis deployment's receipts should seal too. Retirement is owned-loopback only.
+- WEB (`aeb01cd2`, `492d6bef`, `8baf2c9f`, `49f64be6`, `0b576d67`, `0f1d75b2`): payout fix convicted on chain against cohort-12;
+  **the browser had shipped a closed cohort** (stubs executable, ProgramData absent; the live test asked the stub) → repointed
+  to cohort-12 with ProgramData read; **no client could decode any Registry cache** (bump offset 12 vs five TS mirrors demanding
+  zeros) → fixed both trees; 14 type errors → 0 (browser could not submit a trade); a11y 223 → 196. Next: converge
+  operatorSurface onto the SDK owner (upgrade-authority binding, route-specific release admission); opacity in the survey.
+- DIRECT `42840630`: a real relink moves the margin statistic by **17 CU** — the gate IS key-independent; db4d5ff4's inference
+  retracted in place; the 4,836 is probable codegen on an inlining-sensitive route → symbol diff, then fix the boundaries.
+- K=5 (worktree): Lean vocabulary + contract green (`1480a5e6`); K=6 corrected to **K=5** by the +12 price instruction; the
+  back half is a positional RequestProfile register contract → continuing in the worktree.
+- Cuts: `cb7594d9d`, `926d6e99c`, `9fca23065`.
