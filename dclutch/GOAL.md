@@ -3379,3 +3379,7 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   relay with devnet-sponsored-push-v1, flagship-resolution-v1's phases, the winning position paid through
   `build_wallet_terminal_payout_v3`, the browser's gated redemption test) and WEB **`ac4d471f005f017db`** (the fill on the
   market page derived from the chain's records; cohort-13's simulator artifact ingested; a derived leaderboard).
+- MAGICS closed (`2661f675`: a zero-diff frame capture; `frameguard owed` exit 0 — nobody owes). Disk: the previous session's
+  scratchpad held 235 GB of closed lanes' targets and worktrees — removed (53 → 246 GiB free); kept `c13-recov` (reserved for
+  the resolution lane) and three worktrees carrying UNCOMMITTED work from closed lanes: `seal-wt`, `wire2`, `wt-structured`
+  under `…/3db4cac9…/scratchpad/` — to be read, not swept.
