@@ -385,24 +385,64 @@ What the command is waiting on, by commit:
 
 ### What must then be observed
 
-Against the terms above, with the founder selling 100 atoms of outcome 0:
+Read out of the codec and the finalization projection, not guessed. A fill
+writes **ten** accounts, named by `DirectInlinePoststateRoleV3`
+(`crates/dclutch-direct-codec/src/direct_finalization_v3.rs:231-251`).
+
+With the founder selling 100 atoms of outcome 0 at gross 100, fee 0:
 
 | observation | before | after |
 | --- | --- | --- |
-| seller Position claim vector | `[500000000, 500000000, 500000000, 500000000]` | `[499999900, …]` |
-| buyer Position claim vector | `[0, 0, 0, 0]` | `[100, 0, 0, 0]` |
-| aggregate supply vector (L3) | `[500000000 × 4]` | **unchanged** — a trade moves claims between Positions, it does not mint them |
-| buyer delegated allowance | `100` | `0` — spent to zero by the one trade it authorized |
-| venue fee token account | `0` | `0` at this size — the fee floors to zero, which is why this size is fillable |
+| seller Position claims | `[500000000, 500000000, 500000000, 500000000]` | `[499999900, …]` — `checked_sub(fill)` at `:1481` |
+| buyer Position claims | `[0, 0, 0, 0]` | `[100, 0, 0, 0]` — `checked_add(fill)` at `:1479` |
+| Claims aggregate | supply `[500000000 × 4]` | **revision +1, supply UNCHANGED** — the projection passes `None` for the balance selector (`:577-583`) |
+| buyer token account | 100 atoms, allowance 100 | `amount −= 100`, `delegated_amount −= 100` → both 0, delegate cleared **because the fee is zero** (`:1326-1342`) |
+| seller Direct token PDA | 0 | `+= seller_net_collateral_credit` = `gross − seller_fee` = 100 (`:625-633`) |
+| **venue fee token PDA** | 0 | **0 — the fill never moves it, at any size** |
+| Hoard | 500000000 | **500000000, delta exactly 0** |
+| seller + buyer maker replay roots | vacant | created, `next_nonce` +1 each, ~2,004,480 lamports rent each |
+| Custody replay cursor | — | `next_revision` +1 |
 
-Both Position vectors above are read off chain today, not asserted. The
-conservation laws must then say: **L1 unchanged** (no atoms enter or leave the
-tracked set, they move between named token accounts), **L3 still holds** with the
-buyer Position now nonzero, **L4 still holds** (the Hoard is untouched by a claim
-transfer between Positions), and **L2/L5 report the collateral that moved
-between the buyer's and seller's Direct token accounts against a declared delta
-rather than against zero**. Any of those failing is the finding, not the
-formatting.
+Two things this lane had wrong in an earlier draft, corrected from the source:
+
+- **The fee does not move at fill time, ever.** It is accrued as `fee_owed` on
+  the *buyer's* maker replay root (`successor.rs:1390-1395`) and settled by a
+  separate permissionless `DCLTDFS1` transaction. The venue fee token account is
+  one of the ten writable accounts and must **exist** — it is committed
+  byte-exact — but its balance is unchanged by the fill. It is created only by
+  `direct_token_setup_v1`, the same instruction the 30-bps config blocks.
+- **The fee is charged per side**: `seller_fee = buyer_fee =
+  floor(gross × bps / 10_000)`, the seller is paid `gross − seller_fee`, the
+  buyer is debited `gross + buyer_fee`, and `fee_owed = seller_fee + buyer_fee`.
+  A maker carrying `fee_owed != 0` **consumes no further nonce in that market
+  on either side until it is settled** (`SuccessorError::FeeOwedOutstanding`,
+  `successor.rs:1191-1200`). At gross ≤ 199 both fees floor to zero, so the
+  demonstration trade leaves no debt and no lockout — a third reason to keep it
+  small.
+
+The conservation declaration a fill must carry is
+`--declared-collateral-delta 0 --declared-hoard-delta 0`. **Zero is the strong
+claim here, not the absent one**: the fill is `External → External` between two
+accounts that must both be tracked, so the tracked total does not move, and the
+Hoard is not a party at all — the Direct path never touches it. L1, L2, L3, L4,
+L5 and L6 must all read `holds`; L7 and L8 are unconditionally inapplicable
+under `ledger-census`.
+
+**Two census bindings must be added before the fill or two laws will correctly
+report a shortfall**, and neither is added by anything today:
+
+- the **seller Direct token PDA** and the **venue fee token PDA** must join
+  `census.tokens`, or L1 reports `tracked != Mint supply` by the transferred
+  atoms — the destination is a new account nothing names;
+- the **buyer Position** must be in `census.positions`, or L3 falls short by
+  `fill` at the traded outcome. This lane already added it.
+
+That L1/L3 statement is a derivation from the binding code, flagged as such:
+`ledger-census` has never been run across a Direct fill boundary. The one fill
+that has ever landed (`FIRST_LOCAL_DIRECT_FILL_2026_08_31.md`) was read back by
+a hand-written `conservation.py`, not by the census. So the first fill this
+substrate takes is also the first test of these two laws against a fill, and
+either of them refusing is the finding rather than the formatting.
 
 ## The genesis release candidate: it finally ran, and it refuses
 
@@ -461,6 +501,11 @@ All three name the one symbol
 overwrite is undefined behaviour at execution, not a warning, so the candidate
 is right to withhold the artifact — and this is the hottest route the protocol
 has.
+
+**Still 3 at `5de38ef2`**, re-measured with a targeted `dclutch-trading-sbf`
+build rather than a whole candidate run. The one `hot_v3.rs` commit that has
+landed since is a profiling checkpoint, not the repair, so the release remains
+ungated on this and the trade command below remains blocked at step 2.
 
 **The control is closed as a refusal, not as a pass.** That is worth more than
 another queueing: for two days it could not say anything, and now it names two

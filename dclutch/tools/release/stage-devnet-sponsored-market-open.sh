@@ -78,9 +78,13 @@ already known.
 --direct-fee-basis-points has no default and must be stated.  The rate is
 sealed into the Market at founding and cannot be changed afterwards.
 
-PASS 50.  Not 0.  This paragraph used to say the opposite -- "pass 0 for a
-market that must trade" -- and that sentence founded three markets that can
-never take a fill.  A ZERO-FEE MARKET CANNOT BE SET UP AT ALL:
+PASS 50.  Not 0.  THIS IS NOW A GATE, NOT ADVICE: any other rate refuses unless
+you add --i-mean-unfillable to say that an unfillable market is what you meant.
+The gate exists because this paragraph did not.  It used to say the opposite --
+"pass 0 for a market that must trade" -- and that sentence founded three markets
+that can never take a fill; cohort-11's SOL/USD market was then founded at 30 on
+2026-09-01, the day AFTER this paragraph was corrected, by an operator reading
+this very page.  A ZERO-FEE MARKET CANNOT BE SET UP AT ALL:
 direct_token_setup_v1 is the sole creator of the seller's and the venue's
 Direct token accounts, so it precedes every Hot fill, and it refuses unless
 the Market's finalized Direct config reads exactly

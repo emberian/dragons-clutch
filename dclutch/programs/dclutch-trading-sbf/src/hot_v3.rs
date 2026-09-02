@@ -6847,6 +6847,15 @@ fn execute_admitted_candidate_v3(
         view.runtime_accounts,
         view.input_scratch_pages,
     )?;
+    // The candidate phase is the widest unlit stretch on an admitted route: on
+    // 2026-09-02 a hostile equity Add entered it with 715,210 units, made ZERO
+    // CPIs, and died at the budget -- so every unit went somewhere between the
+    // `request-lifecycle-preplan` checkpoint and the accelerator's first
+    // invoke, with nothing to say which consumer. This splits that stretch in
+    // two: everything up to here is the runtime transcript over every account,
+    // and everything after is context assembly, frame validation, bank encode
+    // and chunk classification.
+    hot_cu_checkpoint!("candidate-transcript");
     let product_runtime = view.product_runtime_v3.runtime;
     let admitted_context = AdmittedInvocationContextV3 {
         release_set: ContentId::new(view.envelope.release_set())
