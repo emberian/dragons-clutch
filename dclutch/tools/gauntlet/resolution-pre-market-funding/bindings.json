@@ -1,0 +1,59 @@
+{
+  "campaign": "resolution-pre-market-funding-programtest",
+  "note": "Real-ELF ProgramTest for the pre-Market Resolution funding pair: initialize a future Market's Resolution-owned funding ledger before that Market exists, and abort it when the prepared checkpoint expires. Campaign: crates/dclutch-svm-harness/tests/pre_market_resolution_funding.rs, three cases, driven through a real SBF Trading-shaped caller against the compiled Core, Registry, Rent and Resolution ELFs. EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE. The three refusal codes in particular were MEASURED and not assumed: all three of this campaign's hostiles asserted only is_err() before 2026-09-01, and the fold is what showed that two of them refuse in DIFFERENT PROGRAMS -- one in Resolution at depth two, one in Core at depth three. Each was then proved red individually by weakening its expected discriminant, and the campaign's own assertions now name what the census names. FAST LANE: nothing deploys through Loader-v3 and ProgramTest has no finalized commitment.",
+  "bindings": [
+    {
+      "label": "pre-market funding: initialize the Resolution-owned Pending ledger",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/pre_market_funding_v1::process_pre_market_funding_v2"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "DCLRPMF2, and the route's first census evidence of any kind. A Trading-shaped caller CPIs into Resolution, which PROJECTS the Market that does not exist yet through Core's ProjectFound36 and initializes that future Market's Resolution-owned funding ledger at its derived address, all three rows Pending. Caller [1], Resolution [2], Core [3], three System allocations at [3]. 488,773 CU -- the most expensive transaction in any of this row's three campaigns -- and 1,797 wire bytes, which is the second witness below."
+    },
+    {
+      "label": "pre-market funding: refuses a funding source aliased into ProjectFound36",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/pre_market_funding_v1::process_pre_market_funding_v2"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::AccountFrame",
+      "note": "HOSTILE. The funding source is aliased into the projection frame, so the account that pays and an account the projection authenticates are the same. Resolution refuses it at depth two as Custom(0x8000) before Core is ever reached -- 64,470 CU against the 90,024 the next hostile spends -- and the ledger stays vacant. Until 2026-09-01 this assertion was a bare is_err(), which per AGENTS.md is a test of nothing; the code here was measured, not assumed, and the test now names it."
+    },
+    {
+      "label": "pre-market funding: refuses an internal ProjectFound36 alias",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/pre_market_funding_v1::process_pre_market_funding_v2"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::AccountFrame",
+      "note": "HOSTILE, and the pair to the row above: the alias is INTERNAL to the projection frame, so Resolution has nothing to object to and the refusal comes from Core at depth three as Custom(0x3001), re-reported by Resolution and the caller on the way out. Two hostiles, one accusation each, two different programs, two different codes -- which is exactly why a shared bare is_err() over both was worthless. The census credits this to Core because the chain says Core raised it."
+    },
+    {
+      "label": "pre-market funding abort: surplus ledger dust refuses",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::Funding",
+      "note": "HOSTILE. An abort presented against a ledger carrying unaccounted surplus lamports refuses as Custom(0x800e) and rolls back to the byte-identical dusted ledger. The third of this campaign's three bare is_err() assertions, now named."
+    },
+    {
+      "label": "pre-market funding abort: the expired checkpoint refunds and closes the ledger",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "DCLRPMA1, and the route's first census evidence. The prepared checkpoint expired, so the pre-Market funding is unwound: the ledger closes, every native principal lamport returns to the funding source and the rent to the Market's persisted RentCredit beneficiary, and the caller receives the canonical abort receipt naming the ledger and the exact total refunded. Caller [1] then Resolution [2], 137,269 CU. This is the route that makes a founding that never happens cost nobody anything."
+    }
+  ]
+}

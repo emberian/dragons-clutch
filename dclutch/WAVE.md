@@ -6590,3 +6590,22 @@ cannot notice the thing it exists to notice.* Five literals in `admitted_v3.rs`
 measured 23 where they asserted 1 after the table they pinned was derived; the pin
 is now the displacement conjunct itself. Same family as the restated constant, one
 level up.
+
+## 2026-09-01 — the packet limit is not a Structured problem
+
+Witnessing C-09's fourteen routes for the first time measured what no family had:
+**thirteen recorded transactions exceed the 1,232-byte legacy packet.** Worst is the
+pre-market initializer at **1,797 (+565)** — not marginal; it cannot go on a legacy
+message. Core terminal admit 1,456, Settle 1,321, CreateFund 1,275, Capture 1,255,
+CloseFund 1,237. `CommitFailure` fits by **ten bytes**, with no room for a priority
+fee — recorded as a witness so a later account goes red rather than silent.
+
+The Structured K=2/K=3 arithmetic (55% of a packet is inline pubkeys; the lift is
+*commit-don't-inline*) is the same finding. **This is a protocol-wide thread under
+the attractor, not a family's wall.**
+
+Also bought: two `is_err()` hostiles that refuse in *different programs* at
+different CPI depths, indistinguishable under the assertion they shared; and two
+more dead dispatch arms beside `#AdmitTerminal` — one with no stated reason, one
+whose stated reason no longer holds. **Register: 19 executed, 43 blocked, 99
+unclaimed — and 8 of 314 refusal codes have ever been observed firing on chain.**

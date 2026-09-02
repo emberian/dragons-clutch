@@ -53,6 +53,7 @@ mod sponsored_campaign {
         SponsoredPushActionV1, SponsoredPushCandidateV1, SponsoredPushHeadV1,
         SponsoredPushInstructionV1, SponsoredPushReceiptV1,
     };
+    use dclutch_program_test_evidence::TransactionEvidence;
     use dclutch_resolution_proof_sbf::ResolutionError;
     use dclutch_source_contract::{
         CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
@@ -1298,11 +1299,54 @@ mod sponsored_campaign {
             .expect("account exists")
     }
 
+    /// The extent of a signed legacy transaction on the wire.
+    ///
+    /// It MEASURES and does not judge, and deliberately carries no copy of
+    /// Solana's 1,232-byte `PACKET_DATA_BYTES` to compare against.
+    /// `solana-program-test` submits no packet and cannot enforce that maximum
+    /// itself, so the comparison belongs somewhere a campaign cannot quietly
+    /// satisfy: this tier's own witness reads the recorded extents back.
+    fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+        1 + signatures * 64 + message.len()
+    }
+
+    /// Submit one labelled action and record the runtime's own account of it.
+    ///
+    /// The evidence is emitted BEFORE the caller gets to assert anything, so a
+    /// case that fails its own assertion still leaves behind what the chain
+    /// did. Each label in this campaign names exactly one transaction, which is
+    /// what lets a binding carry one outcome and one refusal code; a label
+    /// spanning an executed and a refused transaction is the defect
+    /// `census observe` exists to catch.
     async fn submit_with_cu(
         context: &mut ProgramTestContext,
         instruction: Instruction,
         signers: &[&Keypair],
         label: &str,
+    ) -> Result<u64, BanksClientError> {
+        submit_labelled(context, instruction, signers, label, true).await
+    }
+
+    /// Submit fixture plumbing the census is deliberately not told about.
+    ///
+    /// A campaign that labelled every transaction it happens to send would be
+    /// claiming coverage no binding was written for. These two warm the
+    /// provider bootstrap programs and drive no protocol route.
+    async fn submit_fixture(
+        context: &mut ProgramTestContext,
+        instruction: Instruction,
+        signers: &[&Keypair],
+        label: &str,
+    ) -> Result<u64, BanksClientError> {
+        submit_labelled(context, instruction, signers, label, false).await
+    }
+
+    async fn submit_labelled(
+        context: &mut ProgramTestContext,
+        instruction: Instruction,
+        signers: &[&Keypair],
+        label: &str,
+        recorded: bool,
     ) -> Result<u64, BanksClientError> {
         let blockhash = context
             .banks_client
@@ -1317,6 +1361,20 @@ mod sponsored_campaign {
             &all,
             blockhash,
         );
+        let signature = transaction
+            .signatures
+            .first()
+            .expect("signed transaction")
+            .to_string();
+        let extent = wire_extent(
+            transaction.signatures.len(),
+            &transaction.message.serialize(),
+        );
+        let slot = context
+            .banks_client
+            .get_sysvar::<Clock>()
+            .await
+            .map_or(0, |clock| clock.slot);
         let processed = context
             .banks_client
             .process_transaction_with_metadata(transaction)
@@ -1326,6 +1384,28 @@ mod sponsored_campaign {
             .as_ref()
             .map_or(0, |metadata| metadata.compute_units_consumed);
         eprintln!("sponsored-push CU {label}: {units}");
+        if recorded {
+            let failure = processed
+                .result
+                .clone()
+                .err()
+                .map(|error| format!("{error:?}"));
+            let logs = processed
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.log_messages.clone())
+                .unwrap_or_default();
+            dclutch_program_test_evidence::record(&TransactionEvidence {
+                label,
+                signature: &signature,
+                slot,
+                error: failure.as_deref(),
+                logs: &logs,
+                compute_units_consumed: Some(units),
+                wire_bytes: Some(extent),
+            })
+            .expect("campaign evidence must be writable when the gauntlet asked for it");
+        }
         processed
             .result
             .map(|()| units)
@@ -1362,7 +1442,7 @@ mod sponsored_campaign {
             ("fixture/warm-receiver", RECEIVER_PROGRAM),
             ("fixture/warm-push", PUSH_PROGRAM),
         ] {
-            let _ = submit_with_cu(
+            let _ = submit_fixture(
                 &mut context,
                 Instruction {
                     program_id,

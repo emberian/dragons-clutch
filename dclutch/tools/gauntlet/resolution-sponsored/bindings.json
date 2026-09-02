@@ -1,0 +1,191 @@
+{
+  "campaign": "resolution-sponsored-programtest",
+  "note": "Real-ELF ProgramTest for the sponsored-push family in the Resolution role program: capture, settle, close-candidate, close-head and commit-failure, driven against the compiled Core and Resolution ELFs with a synthetic Pyth receiver/push bootstrap. Campaign: crates/dclutch-svm-harness/tests/sponsored_push_lifecycle.rs. EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE, NEVER FROM WHAT THE CAMPAIGN OUGHT TO TOUCH: the outcomes, the invoked programs, the compute units and the refusal codes are the ones a 16-transaction fold reported, and each label was checked to carry exactly one outcome AND one refusal code before it was written down. Five distinct refusal codes appear across the five actions and the campaign's nine hostiles do not share one; a binding that read a code off the first hostile of an action and wrote it for the rest would be exactly the false green this tier exists to remove. This is a FAST LANE: nothing here deploys through Loader v3, ProgramTest has no finalized commitment, the price bodies and the receiver program are synthetic, and the honest sentence about the strongest row is 'the bank accepted a sponsored capture', never 'the market observed a price'. The two fixture warm-up transactions are deliberately unrecorded -- they drive no protocol route.",
+  "bindings": [
+    {
+      "label": "Capture/owner-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_capture#Capture"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::ProviderRelease",
+      "note": "HOSTILE, and the first transaction the route ever ran: the sponsored price account is presented System-owned rather than owned by the pinned Pyth receiver. Observed once as Custom(0x8009), Resolution alone in the frame, 99,560 CU, and the head PDA is still vacant afterwards -- the refusal lands before any sponsored state is allocated."
+    },
+    {
+      "label": "Capture/first",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_capture#Capture"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The route's first executing observation of any kind. A worker captures the first sponsored price update into an immutable candidate and opens the head at its derived address; Resolution plus System, 124,991 CU. The candidate seals the update bytes and the capture Clock, which is what lets settlement refuse to re-read the mutable upstream account later."
+    },
+    {
+      "label": "Capture/head-advance",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_capture#Capture"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The same route advancing an existing head rather than opening one: a second, fresher candidate becomes best and the new head carries the prior head's digest. Observed once, accepted, Resolution plus System, 120,827 CU."
+    },
+    {
+      "label": "Capture/late-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_capture#Capture"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::ProviderFreshness",
+      "note": "HOSTILE. A candidate offered one second past the disclosed deadline on the independent failure market. Observed once as Custom(0x8012) -- a different code from the owner refusal above, from the same route -- 105,265 CU, and that market's head stays vacant, which is the precondition the funded failure below depends on."
+    },
+    {
+      "label": "Settle/deadline-boundary-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_settle#Settle"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::ProviderFreshness",
+      "note": "HOSTILE, the closed half of the deadline boundary: settlement attempted AT the deadline rather than after it. Observed once as Custom(0x8012), 100,431 CU, with the Source state and the success certificate byte-identical afterwards and the receipt PDA still vacant."
+    },
+    {
+      "label": "Settle/non-head-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_settle#Settle"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::SponsoredPush",
+      "note": "HOSTILE. The resolver names the older first candidate instead of the head. Observed once as Custom(0x8015), 108,146 CU; the Source state is unchanged. A resolver cannot choose which submitted answer wins."
+    },
+    {
+      "label": "Settle/best-sealed",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_settle#Settle"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The route's first executing observation. Past the deadline the head candidate settles from its SEALED capture Clock -- the upstream account has since advanced past max_age and is never re-read -- minting a ResolutionSuccess certificate and a durable receipt naming the candidate, its publish time, its posted slot and the consuming slot. Resolution plus System, 145,911 CU."
+    },
+    {
+      "label": "Settle/replay-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_settle#Settle"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::Transition",
+      "note": "HOSTILE. The same settlement submitted again against a now-terminal Source. Observed once as Custom(0x800c), 52,196 CU -- a third distinct code from this one route."
+    },
+    {
+      "label": "CloseCandidate/primary-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_close_candidate#CloseCandidate"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::Transition",
+      "note": "HOSTILE, and the reason cleanup is not a separate permission: a candidate cannot be erased while the Source is still Primary, because a submitted answer is evidence until the question is closed. Observed once as Custom(0x800c), 4,102 CU, and the candidate account is byte-identical afterwards."
+    },
+    {
+      "label": "CloseCandidate/first",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_close_candidate#CloseCandidate"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The route's first executing observation: once the Source is terminal the losing candidate closes and its rent returns to the recorded refund recipient. Resolution alone, 8,189 CU."
+    },
+    {
+      "label": "CloseCandidate/second",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_close_candidate#CloseCandidate"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The same route closing the candidate that WON. Observed once, accepted, 6,689 CU. Settlement copied what it needed into the receipt, so the selected candidate is not load-bearing after it."
+    },
+    {
+      "label": "CloseHead/terminal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_close_head#CloseHead"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The route's first observation. With both candidates gone the head closes too, 6,333 CU, and the market's sponsored footprint is zero accounts."
+    },
+    {
+      "label": "CommitFailure/nonvacant-head-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_commit_failure#CommitFailure"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::SponsoredPush",
+      "note": "HOSTILE. Failure cannot be committed while a candidate stands: a submitted answer is the reason this market is not failing. Observed once as Custom(0x8015), 85,003 CU, Source unchanged."
+    },
+    {
+      "label": "CommitFailure/V5-ledger-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_commit_failure#CommitFailure"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::Funding",
+      "note": "HOSTILE, and the sharpest one: a byte-canonical LEGACY V5 subset ledger whose every address, row status, balance and Source coordinate is otherwise valid. Under Resolution V6 it refuses as Custom(0x800e), 208,840 CU, with the Source state AND the funding ledger both byte-identical afterwards."
+    },
+    {
+      "label": "CommitFailure/deadline-boundary-refusal",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_commit_failure#CommitFailure"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::Transition",
+      "note": "HOSTILE, the open half of the failure boundary: failure committed AT the deadline. Observed once as Custom(0x800c), 295,789 CU, with Source and funding ledger unchanged -- an atomic refusal on the most expensive path in the family."
+    },
+    {
+      "label": "CommitFailure/head-vacant",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1",
+        "resolution/process_commit_failure#CommitFailure"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The route's first executing observation, and the family's answer to a silent sponsor: one second past the deadline, with the head never having received a candidate, the market commits a ResolutionFailure certificate at the Product's own pre-disclosed failure region -- route all zeroes, no provider evidence behind it -- and pays the worker who walked it exactly the recorded bounty. Resolution plus System, 310,957 CU, the campaign's ceiling."
+    }
+  ]
+}

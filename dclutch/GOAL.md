@@ -2526,3 +2526,8 @@ map to the scratchpad at session start rather than session end.
 ### Lane map delta — 21:20
 - GENERAL: `crates/dclutch-sbf-bump-heap` landed (`fe254e9f`); accelerator **25/0 with the real frame**, first time; the Trading-side frameguard re-capture for the renamed symbol is **owed**. Fourth conjunct unblocked by `ProjectDataDigest` (`a5bb4390`, Direct). 
 - DIRECT: wall C crossed, campaign completes behind the wall-A probe; on the registered crosscheck.
+
+### Lane map delta — 21:30
+- `a0a5010a5119d7214` C-09 WITNESS — **closed.** 12 of 14 witnessed on real ELFs; 2 blocked with reason and owner (recovery policy → ember's open ruling; `#AdmitTerminal` → a dead arm, deletion at `core-sbf/src/resolution.rs:263-272`, plus `#VerifyFundReady` and `#CloseFund` beside it — **Core owner, unassigned**).
+- **New thread under the attractor: the legacy packet.** Thirteen routes over 1,232 bytes; the fix class is *commit-don't-inline*, same as Structured's K lift. Protocol-wide; nobody owns it yet.
+- **Coverage figure to carry: 8 of 314 refusal codes have been observed firing on chain.**

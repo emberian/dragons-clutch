@@ -1,0 +1,54 @@
+{
+  "campaign": "resolution-core-v3-programtest",
+  "witnesses": [
+    {
+      "id": "core-v3-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours; the campaign sets ProgramTest's ceiling to exactly that value and never raises it. The observed maximum is 286,481 on CreateFund, which matters here because the direct V7 close exists precisely BECAUSE the composed Core-CPI close exceeded this ceiling."
+    },
+    {
+      "id": "core-v3-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This campaign measured nothing before 2026-09-01."
+    },
+    {
+      "id": "core-v3-create-close-and-admit-do-not-fit-a-legacy-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes > 1232) | .label] | sort | join(\" + \")",
+      "expect": "core-v3: CloseFund closes all three rows of the subset ledger + core-v3: Core admits the terminal state without a child invocation + core-v3: CreateFund creates the canonical Source funding",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree until 4e1c4db put it on a v0 ALT. First measurement of this family: CreateFund is 1,275 bytes, CloseFund 1,237 and the terminal admit 1,456, so BOTH ENDS of the Resolution funding lifecycle AND the terminal admission need v0 messages over an Address Lookup Table. Activation (1,189), its replay (1,172) and the provider abandon (1,052) fit."
+    },
+    {
+      "id": "core-v3-create-fund-reaches-resolution-through-core",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"CreateFund\")) | .logs[] | select(test(\"invoke \\\\[\")) | capture(\"invoke \\\\[(?<depth>[0-9]+)\\\\]\").depth] | join(\",\")",
+      "expect": "1,1,2,3,3",
+      "provenance": "The Core-effect composition is a claim about DEPTH, and the runtime's own `Program <id> invoke [n]` lines are where it is checkable without trusting the harness. A prepay at depth 1, Core at depth 1, Resolution at depth 2 and two System allocations at depth 3 is the shape `core/resolution::process` describes: Core authenticates, invokes the fixed role child, and commits its own transition last. Recorded as depths only so the row survives a run whose gauntlet-local program addresses move."
+    },
+    {
+      "id": "core-v3-activation-and-close-are-not-composed",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"activation|CloseFund\")) | .logs[] | select(test(\"invoke \\\\[\")) | capture(\"invoke \\\\[(?<depth>[0-9]+)\\\\]\").depth] | unique | sort | join(\",\")",
+      "expect": "1,2",
+      "provenance": "The counterpart to the witness above, and the design fact V7 turns on: activation and close are submitted DIRECTLY to Resolution and never reach depth 3, because retaining the composed Core CPI preserved a duplicate-authentication path that exceeded the compute ceiling (programs/dclutch-core-sbf/src/resolution.rs refuses CloseFund at the top of `process` for exactly this reason). A depth 3 appearing here would mean the composed path had come back."
+    },
+    {
+      "id": "core-v3-abandon-refuses-with-its-own-code",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | .logs[] | select(test(\"failed: custom program error\")) | capture(\"0x(?<c>[0-9a-f]+)\").c] | unique | sort | join(\",\")",
+      "expect": "8017",
+      "provenance": "The one hostile this tier records raises exactly one code: 0x8017, ResolutionError::SubmissionStillConsumable, in Resolution's registered band 8 (crates/dclutch-refusal-registry). Named rather than asserted as is_err(): an early abandon and a live-Source abandon are different facts and the program distinguishes them, so a bare is_err() here would pass on either."
+    },
+    {
+      "id": "core-v3-terminal-admit-invokes-no-child",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"admits\")) | .logs[] | select(test(\"invoke \\\\[\")) | capture(\"invoke \\\\[(?<depth>[0-9]+)\\\\]\").depth] | join(\",\")",
+      "expect": "1",
+      "provenance": "A claim about ABSENCE, checked against the runtime's own invoke lines rather than against the harness's belief. programs/dclutch-core-sbf/src/resolution.rs says of AdmitTerminal that Core 'accepts it without asking Resolution to repeat the same release, product, Source, ledger, and certificate work in a child invocation'. A single depth-1 entry and no second line is that sentence, measured. It is also why `resolution/process_admit#AdmitTerminal` remains blocked with no observation while this campaign drives Core's admission to completion: the two are different routes, and only one of them runs."
+    }
+  ]
+}

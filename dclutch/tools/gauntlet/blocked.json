@@ -27,16 +27,6 @@
       "owner": "cycle-2 tranche A, Claims"
     },
     {
-      "route": "resolution/core_effect::process_core_effect",
-      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
-    },
-    {
-      "route": "resolution/process_create#CreateFund",
-      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
-    },
-    {
       "route": "resolution/process_verify#VerifyFundReady",
       "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
@@ -53,11 +43,6 @@
     },
     {
       "route": "resolution/provider_instruction_v3::process_provider_resolution_v3",
-      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
-    },
-    {
-      "route": "resolution/provider_transport_v3::process_provider_transport_v3",
       "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
@@ -152,19 +137,9 @@
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
-      "route": "core/resolution::process#CreateFund",
-      "reason": "Resolution Fund lifecycle; needs the Source/provider tier and an open Market.",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
-    },
-    {
       "route": "core/resolution::process#CloseFund",
-      "reason": "Resolution Fund lifecycle; needs the Source/provider tier and an open Market.",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
-    },
-    {
-      "route": "core/resolution::process#Retire",
-      "reason": "Resolution readiness/terminal admission; needs the Source/provider tier and an open Market.",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+      "reason": "DEAD ARM: unreachable code, not missing coverage. The previous reason (\"Resolution Fund lifecycle; needs the Source/provider tier and an open Market\") is now provably wrong and was replaced rather than left standing: the Source/provider evidence it asked for now exists (tools/gauntlet/resolution-core-v3) and this arm still cannot run. `resolution::process` refuses CloseFund at its TOP -- programs/dclutch-core-sbf/src/resolution.rs:136, `V7 closes directly in Resolution` because retaining the composed Core CPI preserved the exact duplicate-authentication route that exceeded the transaction compute ceiling -- so control never reaches the trailing `match resolution_request.action` at line 263 and this arm (line 267) can never be selected. The live successor is `resolution/core_effect::process_direct_funding_close_v1`, which is EXECUTED (resolution-core-v3-programtest, 261,641 CU): the close did not go missing, it moved. Same deletion as `core/resolution::process#AdmitTerminal` and `#VerifyFundReady`; AGENTS.md forbids preserving a superseded authority path beside its successor.",
+      "owner": "Core owner -- the fix is a deletion in programs/dclutch-core-sbf/src/resolution.rs:263-272, which C-09's charter forbids it from making. Found and convicted by C-09 (WITNESS) 2026-09-01."
     },
     {
       "route": "core/persist_state#VerifyFundReady",
@@ -240,6 +215,21 @@
       "route": "core/infrastructure_v2::process_initialize_v2",
       "reason": "The V1 -> V2 infrastructure succession ceremony. Undrivable at HEAD, and the reason has now moved TWICE in one day -- re-read it before citing it. It was 'no chain carries a live V1'; RELEASE-DEVNET falsified that on 2026-09-01 (cohort-9's core carries a live 144-byte V1 at FYzxwAjEqRwzYA727p3K3bCyEioesJoCQzx6oKVeVmNe, so conjunct 2 is satisfied) and it became conjunct 4: infrastructure_v2.rs refuses a succession in which nothing moved, and a cohort deployed hours ago has moved nothing. c60b25e8 then changed what the route MEANS. Since 2951b226 every Core route authenticates the V2 profile only, so a genesis cohort could never found -- measured on cohort-9, which reached activation and refused its founding sixty transactions deep. The repair was NOT a V1 fallback in the readers (PROFILE_UPGRADE_RULING_2026_08_31 section 6 refuses try-V2-then-V1 by name, and while that refusal's benefit analysis went stale the parallel-authority failure it named did not): process_initialize now commits a GENESIS V2 alongside the V1, using two distinct domain-separated sentinels as predecessor ids, so there is still exactly one authentication path. Conjunct 6 became ONE SUCCESSION PER DOMAIN rather than one V2 per domain, reading those sentinels -- a born-at-V2 profile has not spent its succession, a profile naming real V1 artifact releases has. So this route is no longer the thing that makes a cohort foundable; it is now only what a cohort needs to MOVE its Registry. It stays undrivable until a cohort carries a born-at-V2 profile and makes a real Loader-v3 upgrade to a strictly later deployment slot -- which needs the cohort-10 redeploy that carries c60b25e8, since this is a program change and reaches chain no other way. Cohort-9 cannot host it: its Core predates the genesis arm and its V2 PDA G5M2jgBQXypkUgoMc2jswH8WZx61ykDcSeQm3Bfw5tTF was read back as an untouched vacancy. Manufacturing the forward slot by re-uploading identical Registry bytes is a ceremony performed on the check and was refused. Consent still needs the PREDECESSOR release's bound upgrade authority to sign, so a cohort revoking authority on both infrastructure roles is permanently unfoundable -- 6155219a refuses that at plan time by name. Evidence: docs/evidence/COHORT9_DEVNET_DEPLOY_2026_09_01.md. NOTHING may report the ceremony as executed until it actually runs.",
       "owner": "RELEASE-DEVNET (carries the evidence and the cohort-10 redeploy that lands c60b25e8)"
+    },
+    {
+      "route": "core/resolution::authenticate_recovery_policy#(recovery_id,policy)",
+      "reason": "STRUCTURALLY UNDRIVABLE, and the emptiness is convicted rather than asserted. This is the `Some((recovery_id, policy))` arm -- the recovery-BEARING half of `authenticate_recovery_policy` -- and its satisfying set is empty for three independent reasons, any one of which suffices. (1) `recovery_walk_has_a_live_route` (programs/dclutch-core-sbf/src/resolution.rs:883) returns FALSE for `CreateFund`, so a Market whose SourceMaterialV3 names a recovery policy refuses fund creation with `CoreSbfError::RecoveryWalkUnavailable` (0x3011, lib.rs:160) at resolution.rs:726, before the arm's body runs. (2) The two actions the predicate DOES admit, `VerifyFundReady` and `CloseFund`, each require a fund that `CreateFund` refused to create, so neither can ever present recovery-bearing material. (3) `CloseFund` is separately refused at the top of `resolution::process` (line 136), so it cannot reach the call at all. The weld is doubled off-chain: `build_resolution_create_fund_v3` returns `ResolutionCoreOperatorErrorV3::RecoveryWalkUnavailable` for exactly this shape (crates/dclutch-resolution-core-v3-operator/src/lib.rs:1131), so the instruction cannot even be built. The stated cause is a real protocol fact and not a gap in the harness: `SourceResolutionStateV2` HAS NO TRANSITION THAT ADVANCES A RECOVERY ATTEMPT -- `funded.rs` plans the whole failure walk as Primary -> Exhausted -> FailureCommitted -- so a fund created over recovery-bearing material would have no terminal at all. A fixture that faked the precondition would witness nothing. THE POSITIVE CONTROL that this is a branch problem and not an unreached guard: the sibling arm `core/authenticate_no_recovery_entries#None` is EXECUTED (resolution-core-v3-programtest, one CreateFund at 286,481 CU) -- the guard is reached and evaluated on every fund creation; it is the other branch that has no inhabitant.",
+      "owner": "ember -- open ruling, \"recovery as a capability child\" (GOAL.md). NOT C-09's to build: the honest cost is between one transition function and ~5,000 lines (architect-scholar A2), and the design question of whether recovery is universal ontology or a purchased capability is unanswered. C-09 drives this arm the day a transition that advances a recovery attempt exists."
+    },
+    {
+      "route": "core/resolution::process#AdmitTerminal",
+      "reason": "DEAD ARM: unreachable code, not missing coverage. `resolution::process` handles AdmitTerminal in a block beginning at programs/dclutch-core-sbf/src/resolution.rs:195 that returns on EVERY path -- `return Err(CoreSbfError::Transition)` on a receipt-id mismatch, `return Ok(())` on an idempotent re-admission, and `return Ok(())` after `admit_terminal` + `persist_state`. Control therefore cannot reach the trailing `match resolution_request.action` at line 263, and this arm (line 266) can never be selected. MEASURED, not only read: the transaction bound as `core-v3: Core admits the terminal state without a child invocation` (tools/gauntlet/resolution-core-v3) submits exactly this action against the real ELFs and it EXECUTES at 87,806 CU with Core alone in the frame, leaving the Market Terminal with its certificate receipt persisted. Had line 266 been live the same transaction would have refused `CoreSbfError::Instruction`. The only input that could select the arm provably takes the earlier return instead. Two dead arms sit beside it in the same match -- `core/resolution::process#VerifyFundReady` (line 265) and `#CloseFund` (line 267) -- and all three should go in one commit.",
+      "owner": "Core owner -- the fix is a deletion in programs/dclutch-core-sbf/src/resolution.rs:263-272, which C-09's charter forbids it from making. Found and convicted by C-09 (WITNESS) 2026-09-01."
+    },
+    {
+      "route": "core/resolution::process#VerifyFundReady",
+      "reason": "DEAD ARM, the same defect as `core/resolution::process#AdmitTerminal` one line below it. `resolution::process` handles VerifyFundReady in a block that ends `return Ok(())` at programs/dclutch-core-sbf/src/resolution.rs:193, so control cannot reach the trailing match at line 263 and this arm (line 265) can never be selected. ADOPTED into blocked.json by C-09 (WITNESS) 2026-09-01 while convicting its neighbour: it is not in C-09's row and was carrying NO STATED REASON AT ALL, which reads as unstarted work rather than as unreachable code. Same fix, same commit. Do not confuse it with the DISTINCT and live route `resolution/process_verify#VerifyFundReady`, which is Resolution's own child handler and is separately blocked in this file on evidence wiring: the two share a name and nothing else.",
+      "owner": "Core owner -- the fix is a deletion in programs/dclutch-core-sbf/src/resolution.rs:263-272, which C-09's charter forbids it from making. Found and convicted by C-09 (WITNESS) 2026-09-01."
     }
   ]
 }

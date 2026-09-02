@@ -1,0 +1,84 @@
+{
+  "campaign": "resolution-core-v3-programtest",
+  "note": "Real-ELF ProgramTest for the Resolution funding lifecycle and the permissionless provider-abandon reclaim, against the compiled Core, Custody, Registry and Resolution ELFs. Campaign: crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs, five cases, green since well before this tier existed and INVISIBLE to the census the whole time -- exactly the gap tools/gauntlet/blocked.json described as `runs green under ProgramTest ... but that campaign emits no census evidence`. This tier is that evidence. EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE: the outcomes, the invoke sequences, the compute units and the one refusal code are what a six-transaction fold reported, and each label was checked to carry exactly one outcome and one refusal code before it was written. The campaign submits well over fifty transactions and only these six are recorded -- a campaign that labelled every transaction it happens to send would be claiming coverage no binding was written for. FAST LANE: nothing here deploys through Loader-v3, ProgramTest has no finalized commitment, and the provider programs are the provenance-pinned local-validator projection of captured receiver/router artifacts. The honest sentence is `the bank executed the funding lifecycle against the real ELFs`, never `the protocol resolved a market on chain`.",
+  "bindings": [
+    {
+      "label": "core-v3: CreateFund creates the canonical Source funding",
+      "routes": [
+        "core/process_instruction",
+        "core/resolution::process#Retire",
+        "core/resolution::process#CreateFund",
+        "core/authenticate_no_recovery_entries#None",
+        "resolution/process_instruction",
+        "resolution/core_effect::process_core_effect",
+        "resolution/process_create#CreateFund"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "One transaction, two programs, seven routes, and the chain's own invoke sequence is what licenses the claim: System [1], Core [1], Resolution [2], System [3] x2. Core's dispatch arm at lib.rs:688 accepts VerifyReadiness/AdmitTerminal/AdmitTerminal-or-Retire at the exact instruction width and hands CreateFund to resolution::process; Resolution's entrypoint takes the Core-effect envelope and reaches process_create. `core/authenticate_no_recovery_entries#None` is the arm this market's material selects: SourceMaterialV3::explicitly_unbounded carries NO recovery policy, so the frame ends before the two policy positions and the short frame IS the statement that none exists. That arm is not a simplification -- it is the only one a live founding can take, because the Some arm is welded shut for CreateFund (see blocked.json). 286,481 CU."
+    },
+    {
+      "label": "core-v3: activate the exact three-row Resolution funding ledger",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/core_effect::process_direct_funding_activation_v1"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "DCLRFAQ1, the V7 direct activation, and the route's first census evidence of any kind. Submitted straight to Resolution rather than composed through Core: System [1] then Resolution [1]. It moves all three funding rows Pending -> Active, credits the RentCredit beneficiary the exact amount the operator predicted from chain state, and writes the immutable activation receipt. 269,297 CU."
+    },
+    {
+      "label": "core-v3: the completed activation replays without mutation",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/core_effect::process_direct_funding_activation_v1"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The same route's idempotence, and the reason it is bound separately: a replay of a completed activation ACCEPTS rather than refusing, and must leave every mutable lifecycle account and the immutable receipt byte-identical. The operator predicts zero top-up and zero beneficiary credit before it is submitted and the chain agrees. 121,256 CU -- less than half the first activation, which is the cost of the work it does not repeat."
+    },
+    {
+      "label": "core-v3: CloseFund closes all three rows of the subset ledger",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/core_effect::process_direct_funding_close_v1"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "DCLRFCQ1, the V7 permissionless terminal close, and the route's first census evidence. Also submitted straight to Resolution: Resolution [1] then System [2] twice. It discharges all three rows, closes the Source state and the funding ledger, and mints the exhaustive Source closure receipt the campaign then checks compartment by compartment. This route exists because retaining the composed Core CPI preserved a duplicate-authentication path that exceeded the transaction compute ceiling; at 261,641 CU the direct route has room."
+    },
+    {
+      "label": "core-v3: abandon refuses before the submitter's own deadline",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/provider_transport_v3::process_provider_transport_v3",
+        "resolution/process_abandon#magic"
+      ],
+      "program": "resolution",
+      "outcome": "refused",
+      "refusal": "resolution/ResolutionError::SubmissionStillConsumable",
+      "note": "HOSTILE, and the route's first transaction of any kind. DCLTPAB3 aimed one second before the submitter's OWN recorded reclaim_after_unix_seconds. Observed as Custom(0x8017), Resolution alone in the frame, 13,208 CU, and the abandoned lifecycle account, its posted price update and the beneficiary are all byte-identical afterwards. The bound is checked separately from the Source phase on purpose, so that `not yet` and `still live` are one refusal only when they are one fact."
+    },
+    {
+      "label": "core-v3: a stranger reclaims the abandoned submission",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/provider_transport_v3::process_provider_transport_v3",
+        "resolution/process_abandon#magic"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The route's first executing observation. The losing provider submission can never be consumed -- CloseFund already discharged the Source, so its address presents as the vacant System account the runtime materializes -- and past the submitter's own deadline any stranger may reclaim it. Resolution [1] then the Pyth receiver [2] then System [2]: 59,206 CU, and every lamport the losing submission held returns to the same persisted RentCredit recipient, not to the caller."
+    },
+    {
+      "label": "core-v3: Core admits the terminal state without a child invocation",
+      "routes": [
+        "core/process_instruction",
+        "core/resolution::process#Retire"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "Bound for what its INVOKE SEQUENCE proves, and deliberately claiming only two routes. Core at depth one and nothing else: 87,806 CU, no CPI at all. Two things follow. (1) `resolution/process_admit#AdmitTerminal` is NOT driven by this campaign and its blocked.json entry stays honest -- Core independently authenticates the Resolution-owned certificate rather than asking Resolution to repeat the release, product, Source, ledger and certificate work in a child invocation. (2) It is the positive control for the dead-arm finding filed against `core/resolution::process#AdmitTerminal` (resolution.rs:266): AdmitTerminal is the only action that names that arm, this transaction is that action, and it EXECUTED -- so it took the early-return block at resolution.rs:195-223 and never reached the trailing match, which would have refused CoreSbfError::Instruction. The arm is not merely undriven; the only input that could select it provably does not."
+    }
+  ]
+}

@@ -82,8 +82,11 @@ use dclutch_source_contract::{
     SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2,
     SourceSpecV1,
 };
+use dclutch_program_test_evidence::TransactionEvidence;
+use dclutch_resolution_proof_sbf::ResolutionError;
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
+    clock::Clock,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -93,7 +96,7 @@ use solana_program_test::{ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::transfer;
-use solana_transaction::Transaction;
+use solana_transaction::{InstructionError, Transaction, TransactionError};
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x31; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x32; 32]);
@@ -876,6 +879,85 @@ fn project_found_accounts(fixture: &Fixture) -> Vec<AccountMeta> {
     accounts
 }
 
+/// The extent of a signed legacy transaction on the wire.
+///
+/// It MEASURES and does not judge, and deliberately carries no copy of Solana's
+/// 1,232-byte `PACKET_DATA_BYTES`. `solana-program-test` submits no packet and
+/// cannot enforce that maximum itself, so the comparison belongs in
+/// `tools/gauntlet/resolution-pre-market-funding/witnesses.json`.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    1 + signatures * 64 + message.len()
+}
+
+/// Submit one labelled step, record what the chain did, and return the result
+/// together with the program-return data the caller inspects.
+///
+/// The evidence is emitted BEFORE the caller asserts anything, so a step that
+/// fails its own assertion still leaves behind what the chain did. Only the
+/// steps `tools/gauntlet/resolution-pre-market-funding/bindings.json` names come
+/// through here, and each label names exactly one transaction -- which is what
+/// lets a binding carry one outcome and one refusal code.
+async fn process_recorded(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    label: &str,
+) -> (Result<(), TransactionError>, Option<(Pubkey, Vec<u8>)>) {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let extent = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    let outcome = processed.result.clone();
+    let failure = outcome.clone().err().map(|error| format!("{error:?}"));
+    let metadata = processed.metadata;
+    let logs = metadata
+        .as_ref()
+        .map(|value| value.log_messages.clone())
+        .unwrap_or_default();
+    let units = metadata
+        .as_ref()
+        .map_or(0, |value| value.compute_units_consumed);
+    let returned = metadata
+        .and_then(|value| value.return_data)
+        .map(|value| (value.program_id, value.data));
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(extent),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    (outcome, returned)
+}
+
 async fn submit(
     context: &mut ProgramTestContext,
     instructions: &[Instruction],
@@ -1002,25 +1084,22 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         accounts: source_aliased_accounts,
         data: initializer.instruction.data.clone(),
     };
-    let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
-        .await
-        .expect("funding-source hostile blockhash");
-    let source_aliased_transaction = Transaction::new_signed_with_payer(
+    let (source_aliased, _) = process_recorded(
+        &mut context,
         &[source_aliased_instruction],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
-        blockhash,
-    );
-    let source_aliased = context
-        .banks_client
-        .process_transaction_with_metadata(source_aliased_transaction)
-        .await
-        .expect("funding-source hostile Banks RPC");
+        "pre-market funding: refuses a funding source aliased into ProjectFound36",
+    )
+    .await;
     assert!(
-        source_aliased.result.is_err(),
-        "Resolution refuses a funding source aliased into ProjectFound36"
+        matches!(
+            source_aliased,
+            Err(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::AccountFrame as u32
+        ),
+        "a funding source aliased into ProjectFound36 must refuse as Resolution \
+         AccountFrame, got {source_aliased:?}"
     );
     assert_eq!(
         observed(&mut context, fixture.ledger).await,
@@ -1036,25 +1115,32 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         accounts: aliased_accounts,
         data: initializer.instruction.data.clone(),
     };
-    let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
-        .await
-        .expect("hostile blockhash");
-    let aliased_transaction = Transaction::new_signed_with_payer(
+    let (aliased, _) = process_recorded(
+        &mut context,
         &[aliased_instruction],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
-        blockhash,
-    );
-    let aliased = context
-        .banks_client
-        .process_transaction_with_metadata(aliased_transaction)
-        .await
-        .expect("hostile Banks RPC");
+        "pre-market funding: refuses an internal ProjectFound36 alias",
+    )
+    .await;
+    // Core, not Resolution, catches this one: the alias is internal to the
+    // ProjectFound36 frame Core authenticates, and the observed refusal is
+    // `core/CoreSbfError::AccountFrame` raised at depth three and re-reported
+    // by Resolution and the caller on the way out. This workspace takes no
+    // dependency on the Core program crate, so the exact code is asserted where
+    // it can be derived rather than typed --
+    // `tools/gauntlet/resolution-pre-market-funding/bindings.json`, which the
+    // census checks against the inventory AND against which program raised it.
+    // What is derivable here is the half that discriminates: the refusing band
+    // is not Resolution's, so this hostile is not being caught one frame early.
     assert!(
-        aliased.result.is_err(),
-        "Core refuses an internal ProjectFound36 alias"
+        matches!(
+            aliased,
+            Err(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code >> 12 != (ResolutionError::AccountFrame as u32) >> 12
+        ),
+        "an internal ProjectFound36 alias must refuse outside Resolution's band, \
+         got {aliased:?}"
     );
     assert_eq!(
         observed(&mut context, fixture.ledger).await,
@@ -1069,32 +1155,18 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         accounts: caller_accounts,
         data: initializer.instruction.data.clone(),
     };
-    let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
-        .await
-        .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
+    let (outcome, returned) = process_recorded(
+        &mut context,
         &[caller_instruction],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
-        blockhash,
-    );
-    let processed = context
-        .banks_client
-        .process_transaction_with_metadata(transaction)
-        .await
-        .expect("Banks RPC");
-    assert!(processed.result.is_ok(), "initializer transaction commits");
-    let returned = processed
-        .metadata
-        .expect("initializer metadata")
-        .return_data
-        .expect("initializer receipt");
-    assert_eq!(returned.program_id, TRADING_CALLER_PROGRAM_ID);
-    assert_eq!(returned.data.len(), PRE_MARKET_FUNDING_RECEIPT_BYTES_V2);
+        "pre-market funding: initialize the Resolution-owned Pending ledger",
+    )
+    .await;
+    assert!(outcome.is_ok(), "initializer transaction commits");
+    let returned = returned.expect("initializer receipt");
+    assert_eq!(returned.0, TRADING_CALLER_PROGRAM_ID);
+    assert_eq!(returned.1.len(), PRE_MARKET_FUNDING_RECEIPT_BYTES_V2);
     let receipt =
-        authenticate_pre_market_funding_receipt_v2(&returned.data, initializer.expected_receipt)
+        authenticate_pre_market_funding_receipt_v2(&returned.1, initializer.expected_receipt)
             .expect("exact initializer receipt");
     assert_eq!(receipt, initializer.expected_receipt);
 
@@ -1422,26 +1494,26 @@ async fn expired_prepared_checkpoint_refunds_and_closes_resolution_ledger() {
     let mut dusted_accounts = abort_accounts.clone();
     dusted_accounts[0].pubkey =
         Pubkey::find_program_address(&dusted_seeds.as_slices(), &TRADING_CALLER_PROGRAM_ID).0;
-    let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
-        .await
-        .expect("blockhash");
-    let dusted_transaction = Transaction::new_signed_with_payer(
+    let (dusted_result, _) = process_recorded(
+        &mut context,
         &[Instruction {
             program_id: TRADING_CALLER_PROGRAM_ID,
             accounts: dusted_accounts,
             data: dusted_bytes.to_vec(),
         }],
-        Some(&payer),
-        &[&context.payer],
-        blockhash,
+        "pre-market funding abort: surplus ledger dust refuses",
+    )
+    .await;
+    assert!(
+        matches!(
+            dusted_result,
+            Err(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Funding as u32
+        ),
+        "surplus ledger dust must refuse as Resolution Funding, got {dusted_result:?}"
     );
-    let dusted_result = context
-        .banks_client
-        .process_transaction(dusted_transaction)
-        .await;
-    assert!(dusted_result.is_err(), "surplus ledger dust refuses");
     let after_refusal = observed(&mut context, fixture.ledger)
         .await
         .expect("refused ledger remains");
@@ -1453,39 +1525,22 @@ async fn expired_prepared_checkpoint_refunds_and_closes_resolution_ledger() {
     let source_before = observed(&mut context, payer)
         .await
         .expect("post-refusal funding source");
-    let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
-        .await
-        .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
+    let (outcome, returned) = process_recorded(
+        &mut context,
         &[Instruction {
             program_id: TRADING_CALLER_PROGRAM_ID,
             accounts: abort_accounts,
             data: abort_bytes.to_vec(),
         }],
-        Some(&payer),
-        &[&context.payer],
-        blockhash,
-    );
-    let processed = context
-        .banks_client
-        .process_transaction_with_metadata(transaction)
-        .await
-        .expect("Banks RPC");
-    assert!(processed.result.is_ok(), "expiry close succeeds");
-    let returned = processed
-        .metadata
-        .expect("abort metadata")
-        .return_data
-        .expect("abort receipt");
-    assert_eq!(returned.program_id, TRADING_CALLER_PROGRAM_ID);
-    assert_eq!(
-        returned.data.len(),
-        PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1
-    );
+        "pre-market funding abort: the expired checkpoint refunds and closes the ledger",
+    )
+    .await;
+    assert!(outcome.is_ok(), "expiry close succeeds");
+    let returned = returned.expect("abort receipt");
+    assert_eq!(returned.0, TRADING_CALLER_PROGRAM_ID);
+    assert_eq!(returned.1.len(), PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1);
     let receipt =
-        PreMarketFundingAbortReceiptV1::decode(&returned.data).expect("canonical abort receipt");
+        PreMarketFundingAbortReceiptV1::decode(&returned.1).expect("canonical abort receipt");
     assert_eq!(receipt.ledger, fixture.ledger.to_bytes());
     assert_eq!(receipt.total_refund_lamports, ledger_before.lamports);
     assert!(observed(&mut context, fixture.ledger).await.is_none());

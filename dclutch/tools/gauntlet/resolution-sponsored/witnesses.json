@@ -1,0 +1,54 @@
+{
+  "campaign": "resolution-sponsored-programtest",
+  "witnesses": [
+    {
+      "id": "sponsored-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it. The observed maximum is 310,957 on CommitFailure/head-vacant."
+    },
+    {
+      "id": "sponsored-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. Before 2026-09-01 this campaign measured NOTHING, which is why the next witness is a first observation rather than a regression guard."
+    },
+    {
+      "id": "sponsored-capture-and-settle-do-not-fit-a-legacy-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes > 1232) | .label | split(\"/\")[0]] | unique | join(\" + \")",
+      "expect": "Capture + Settle",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree until 4e1c4db put it on a v0 ALT. This family had never been measured. Every Capture is 1,255 bytes and every Settle is 1,321; neither can be submitted by a real sponsor on a legacy message, and both need v0 messages over an Address Lookup Table. Eight of the sixteen transactions are over."
+    },
+    {
+      "id": "sponsored-eight-transactions-are-over-the-packet-limit",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes > 1232)] | length | tostring",
+      "expect": "8",
+      "provenance": "The count that goes with the witness above, kept separate so a campaign that grows a ninth over-limit transaction fails loudly rather than passing on a prefix match of the family names."
+    },
+    {
+      "id": "sponsored-commit-failure-fits-by-ten-bytes",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes <= 1232) | .wire_bytes] | max | tostring",
+      "expect": "1222",
+      "provenance": "Against the same 1,232-byte PACKET_DATA_BYTES: the largest transaction in this campaign that DOES fit is a CommitFailure at 1,222 bytes -- ten bytes of headroom, and no room at all for a priority fee instruction. Recorded as a measured margin so that a later account added to the failure frame is a red witness rather than a silent crossing."
+    },
+    {
+      "id": "sponsored-all-five-actions-execute",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error == null) | .label | split(\"/\")[0]] | unique | sort | join(\" + \")",
+      "expect": "Capture + CloseCandidate + CloseHead + CommitFailure + Settle",
+      "provenance": "SponsoredPushActionV1 has exactly five variants (crates/dclutch-resolution-codec/src/sponsored_push_v1.rs), and process_sponsored_push_v1 dispatches one arm per variant. This asserts that every one of the five is observed EXECUTING, not merely refusing -- a family whose actions are only ever seen red is a family with no evidence that it works."
+    },
+    {
+      "id": "sponsored-hostiles-raise-five-distinct-codes",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | .logs[] | select(test(\"failed: custom program error\")) | capture(\"0x(?<c>[0-9a-f]+)\").c] | unique | sort | join(\",\")",
+      "expect": "8009,800c,800e,8012,8015",
+      "provenance": "The nine hostiles do not share one code. Read off the fold rather than off the enum: 0x8009 ProviderRelease, 0x800c Transition, 0x800e Funding, 0x8012 ProviderFreshness, 0x8015 SponsoredPush -- all in Resolution's registered band 8 (crates/dclutch-refusal-registry). This witness exists because the census lane's own draft failed exactly here: six hostiles sharing one label had the first one's code written for all of them, and five raised something else."
+    }
+  ]
+}

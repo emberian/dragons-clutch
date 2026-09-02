@@ -42,6 +42,7 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_provider_transport_v3_operator::{
     ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
     ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3, ProviderSubmitIntentV3,
@@ -1453,6 +1454,90 @@ async fn submit(
     context.banks_client.process_transaction(transaction).await
 }
 
+/// The extent of a signed legacy transaction on the wire.
+///
+/// It MEASURES and does not judge, and deliberately carries no copy of Solana's
+/// 1,232-byte `PACKET_DATA_BYTES`. `solana-program-test` submits no packet and
+/// cannot enforce that maximum itself, so the comparison belongs in
+/// `tools/gauntlet/resolution-core-v3/witnesses.json`, where the campaign
+/// cannot quietly satisfy it.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    1 + signatures * 64 + message.len()
+}
+
+/// Submit one labelled step and record the runtime's own account of it.
+///
+/// The evidence is emitted BEFORE the caller asserts anything, so a step that
+/// fails its own assertion still leaves behind what the chain did. Only the
+/// steps `tools/gauntlet/resolution-core-v3/bindings.json` names come through
+/// here: this campaign submits well over fifty transactions and a campaign that
+/// labelled every one of them would be claiming coverage no binding was written
+/// for. Each label names exactly one transaction, which is what lets a binding
+/// carry one outcome and one refusal code.
+async fn submit_recorded(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    label: &str,
+) -> Result<(), BanksClientError> {
+    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let mut all: Vec<&dyn Signer> = Vec::with_capacity(signers.len() + 1);
+    all.push(&context.payer);
+    all.extend(signers.iter().copied().map(|signer| signer as &dyn Signer));
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&context.payer.pubkey()),
+        &all,
+        blockhash,
+    );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let extent = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await?;
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .as_ref()
+        .map(|metadata| {
+            (
+                metadata.log_messages.clone(),
+                metadata.compute_units_consumed,
+            )
+        })
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(extent),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    processed
+        .result
+        .map_err(BanksClientError::TransactionError)
+}
+
 async fn provider_submit_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -1996,9 +2081,14 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         create.source_top_up_lamports,
     ));
     create_instructions.push(create.instruction);
-    submit(&mut context, &create_instructions)
-        .await
-        .expect("prepay and create canonical Source funding");
+    submit_recorded(
+        &mut context,
+        &create_instructions,
+        &[],
+        "core-v3: CreateFund creates the canonical Source funding",
+    )
+    .await
+    .expect("prepay and create canonical Source funding");
 
     let source = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.source)
@@ -2035,9 +2125,14 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         ));
     }
     activation_instructions.push(activation.instruction);
-    submit(&mut context, &activation_instructions)
-        .await
-        .expect("activate exact three-row Resolution funding ledger");
+    submit_recorded(
+        &mut context,
+        &activation_instructions,
+        &[],
+        "core-v3: activate the exact three-row Resolution funding ledger",
+    )
+    .await
+    .expect("activate exact three-row Resolution funding ledger");
     assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
     assert_eq!(
         observed(&mut context, fixture.rent_credit)
@@ -2059,9 +2154,14 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     assert_eq!(activation_replay.receipt_top_up_lamports, 0);
     assert_eq!(activation_replay.expected_beneficiary_credit_lamports, 0);
     assert_eq!(activation_replay.request_digest, activation.request_digest);
-    submit(&mut context, &[activation_replay.instruction])
-        .await
-        .expect("completed activation replays without mutation");
+    submit_recorded(
+        &mut context,
+        &[activation_replay.instruction],
+        &[],
+        "core-v3: the completed activation replays without mutation",
+    )
+    .await
+    .expect("completed activation replays without mutation");
     assert_eq!(
         retirement_snapshot(&mut context, &fixture).await,
         after_activation,
@@ -2798,9 +2898,14 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     let close =
         build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
             .expect("chain-derived same-lineage CloseFund");
-    submit(&mut context, &[close.instruction.clone()])
-        .await
-        .expect("close all three rows in the provider-resolution subset ledger");
+    submit_recorded(
+        &mut context,
+        &[close.instruction.clone()],
+        &[],
+        "core-v3: CloseFund closes all three rows of the subset ledger",
+    )
+    .await
+    .expect("close all three rows in the provider-resolution subset ledger");
 
     assert!(observed(&mut context, fixture.source).await.is_none());
     assert!(observed(&mut context, fixture.funding).await.is_none());
@@ -2925,9 +3030,14 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         observed(&mut context, second_update.pubkey()).await,
         observed(&mut context, fixture.rent_credit).await,
     );
-    let early = pyth_provider::submit(&mut context, &[abandoned.instruction.clone()], &[&resolver])
-        .await
-        .expect_err("abandonment before the submitter's own deadline must refuse");
+    let early = submit_recorded(
+        &mut context,
+        &[abandoned.instruction.clone()],
+        &[&resolver],
+        "core-v3: abandon refuses before the submitter's own deadline",
+    )
+    .await
+    .expect_err("abandonment before the submitter's own deadline must refuse");
     assert!(
         matches!(
             early,
@@ -2959,9 +3069,14 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         .await
         .expect("RentCredit")
         .lamports;
-    pyth_provider::submit(&mut context, &[abandoned.instruction], &[&resolver])
-        .await
-        .expect("a stranger reclaims the losing submission's provider rent");
+    submit_recorded(
+        &mut context,
+        &[abandoned.instruction],
+        &[&resolver],
+        "core-v3: a stranger reclaims the abandoned submission",
+    )
+    .await
+    .expect("a stranger reclaims the losing submission's provider rent");
     assert!(
         observed(&mut context, second_submit.lifecycle)
             .await
@@ -3910,9 +4025,14 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         .expect("Resolution persists the atomically founded Market's terminal certificate");
     let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
         .expect("chain-derived atomically founded terminal Accept");
-    submit(&mut context, &[admit.instruction])
-        .await
-        .expect("Core accepts the terminal state of an atomically founded Market");
+    submit_recorded(
+        &mut context,
+        &[admit.instruction],
+        &[],
+        "core-v3: Core admits the terminal state without a child invocation",
+    )
+    .await
+    .expect("Core accepts the terminal state of an atomically founded Market");
 
     let terminal = CoreState::decode(
         &observed(&mut context, fixture.market)
