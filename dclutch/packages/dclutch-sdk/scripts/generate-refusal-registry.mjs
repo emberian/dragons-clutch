@@ -18,6 +18,13 @@
  *
  * So the chain of custody is: enum doc comment -> census -> refusals.md ->
  * this module, with a verify gate at every arrow.
+ *
+ * RUN genref FIRST. Because the band table comes from the registry crate and
+ * the codes come from `refusals.md`, a band removed from the crate while
+ * `refusals.md` still lists its codes makes this script throw "code 0x… sits
+ * in no registered band" rather than emit a stale row -- so after any band
+ * removal, `tools/genref/generate.sh` has to run before `abi:refusal-registry`,
+ * not after (found deleting band 0x7 on 2026-09-02).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

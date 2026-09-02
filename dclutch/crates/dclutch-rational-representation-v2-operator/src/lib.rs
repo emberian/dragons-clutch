@@ -1602,9 +1602,27 @@ fn authenticate_positive_custody_replay(
     {
         return Err(Error::InvalidTerminal("custody-replay-frame"));
     }
-    if replay.open_vault_count == 0 {
-        return Err(Error::InvalidTerminal("custody-replay-no-open-vault"));
-    }
+    // NO VAULT-COUNT REQUIREMENT. This asked for `open_vault_count != 0` on the
+    // CLAIMS-role replay, and the chain does not: a positive terminal
+    // redemption COMMITS against a replay counting zero open vaults, measured
+    // on real ELFs in
+    // `real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic` --
+    // Hoard down one atom, recipient up one, replay revision advanced, against
+    // the replay `create_claims_custody_replay` had just minted with
+    // `open_vault_count == 0`. That test now asserts the zero explicitly, so
+    // the deletion has its positive control in the same tree.
+    //
+    // It was a mirror, and the direction it was wrong in is the expensive one:
+    // it refused what the protocol admits, so the operator could not construct
+    // ANY positive redemption for ANY caller. The direct tests never met it
+    // because they hand-build their requests and never call this operator; the
+    // losing-coordinate tests never met it because a zero payout does not reach
+    // here. Nothing had ever asked the operator for a payout until the Hot
+    // terminal route did.
+    //
+    // The vault the payout draws on is opened under a DIFFERENT caller role at
+    // founding. Counting it on the Claims-role replay was asking the wrong
+    // replay, which is why no route in the tree could ever have satisfied it.
     if replay.next_revision == u64::MAX {
         return Err(Error::InvalidTerminal("custody-replay-exhausted"));
     }

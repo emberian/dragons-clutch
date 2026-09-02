@@ -755,6 +755,16 @@ fn create_profile(
     Ok(())
 }
 
+/// Lean-decided decision cases for the decision-0012 slot pin.
+///
+/// `DClutchSemantics.ProtocolInfrastructure` owns the rule; the Rust below
+/// stays a hand-written mirror. This corpus is what makes the two answerable
+/// to each other, and the guard in `tests/` is what stops it rotting.
+#[cfg(test)]
+#[path = "generated_slot_pin_corpus.rs"]
+#[allow(dead_code, missing_docs)]
+mod generated_slot_pin_corpus;
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -880,6 +890,109 @@ mod tests {
             bpf_loader_upgradeable::ID,
             false,
         )
+    }
+
+    /// Replay every Lean-decided slot-pin case through the real adapter.
+    ///
+    /// `ProtocolInfrastructure.lean` proves the rule; `require_pinned_deployment`
+    /// mirrors it by hand, and until now nothing checked one against the other.
+    /// Each vector is built into a genuine Loader V3 observation -- a Program
+    /// account carrying its ProgramData link, and a ProgramData account carrying
+    /// the observed slot and authority -- and the outcome Lean decided is
+    /// asserted against the code the adapter actually returns.
+    ///
+    /// The two non-canonical pairings are replayed at the release CONSTRUCTOR
+    /// rather than at the pin: `ArtifactReleaseV1::new` validates the pairing,
+    /// so Rust refuses those records a gate earlier than Lean's
+    /// `canonicalReleaseShape` does. Same verdict, earlier gate, and the corpus
+    /// says which.
+    #[test]
+    fn lean_slot_pin_corpus_replays_through_the_adapter() {
+        use generated_slot_pin_corpus::{
+            SLOT_PIN_OUTCOME_ADMIT, SLOT_PIN_OUTCOME_REFUSE_INFRASTRUCTURE,
+            SLOT_PIN_OUTCOME_REFUSE_SUPERSEDED, SLOT_PIN_VECTORS_V1,
+        };
+
+        let elf = [0xa5_u8; 96];
+        let mut admitted = 0_usize;
+        let mut superseded = 0_usize;
+        let mut infrastructure = 0_usize;
+        let mut noncanonical = 0_usize;
+
+        for vector in SLOT_PIN_VECTORS_V1 {
+            let policy = if vector.bound_policy_immutable {
+                ArtifactUpgradePolicyV1::Immutable
+            } else {
+                ArtifactUpgradePolicyV1::ExactAuthority
+            };
+            let bound_authority = vector.bound_authority.map(|fill| [fill; 32]);
+            let observed_authority = vector.observed_authority.map(|fill| [fill; 32]);
+
+            let program_key = Pubkey::new_from_array([11; 32]);
+            let programdata_key =
+                Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID)
+                    .0;
+            let built = ArtifactReleaseV1::new(
+                dclutch_release_set_contract::ProgramIdentityV1::new(program_key.to_bytes())
+                    .expect("program"),
+                dclutch_release_set_contract::ProgramIdentityV1::new(
+                    bpf_loader_upgradeable::ID.to_bytes(),
+                )
+                .expect("loader"),
+                programdata_key.to_bytes(),
+                ContentId::new([3; 32]).expect("semantic"),
+                hash(&elf).to_bytes(),
+                vector.bound_slot,
+                policy,
+                bound_authority,
+            );
+
+            if !vector.canonical_release_shape {
+                assert!(
+                    built.is_err(),
+                    "{}: a non-canonical pairing must not become a release",
+                    vector.name
+                );
+                assert_ne!(
+                    vector.outcome, SLOT_PIN_OUTCOME_ADMIT,
+                    "{}: Lean must refuse what Rust cannot construct",
+                    vector.name
+                );
+                noncanonical += 1;
+                continue;
+            }
+
+            let release = built.expect("canonical release");
+            let program = account(
+                program_key,
+                loader_program_bytes(programdata_key),
+                bpf_loader_upgradeable::ID,
+                true,
+            );
+            let programdata =
+                programdata_account(release, vector.observed_slot, observed_authority, &elf);
+            let observed = require_pinned_deployment(&program, &programdata, release);
+
+            let expected = if vector.outcome == SLOT_PIN_OUTCOME_ADMIT {
+                admitted += 1;
+                Ok(())
+            } else if vector.outcome == SLOT_PIN_OUTCOME_REFUSE_SUPERSEDED {
+                superseded += 1;
+                Err(CoreSbfError::ReleaseSuperseded)
+            } else {
+                assert_eq!(vector.outcome, SLOT_PIN_OUTCOME_REFUSE_INFRASTRUCTURE);
+                infrastructure += 1;
+                Err(CoreSbfError::Infrastructure)
+            };
+            assert_eq!(observed, expected, "{}", vector.name);
+        }
+
+        // The corpus is not one answer repeated: Lean's own coverage theorem
+        // says all three outcomes occur, and this is that claim arriving.
+        assert_eq!(
+            (admitted, superseded, infrastructure, noncanonical),
+            (2, 2, 4, 2)
+        );
     }
 
     /// The pinned fast path is strictly stronger than hashing, never weaker.

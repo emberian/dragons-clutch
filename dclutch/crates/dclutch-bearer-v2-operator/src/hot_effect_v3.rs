@@ -69,7 +69,43 @@ use crate::{Error, Result};
 /// root, config, Product record, portfolio record, and linked Product basis.
 pub const RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3: u16 = 5;
 /// Exact Rational terminal Claims child account frame.
+///
+/// **IT DISAGREES WITH THE REQUEST CONTRACT BY ONE ACCOUNT, AND THE CONTRACT IS
+/// RIGHT.** `REPRESENTATION_FRAME_SPEC_V2::account_count` yields
+/// `RATIONAL_BASE_ACCOUNT_COUNT_V2 + RATIONAL_ASSET_ACCOUNT_COUNT_V2 +
+/// RATIONAL_TERMINAL_ACCOUNT_COUNT_V2` = **50** for a terminal request -- every
+/// selected action carries `asset_count == 1` -- every executing direct terminal
+/// frame in the tree asserts that 50, and
+/// `construct_chain_hot_redeem_terminal_v3` builds a 50-account child. Measured
+/// 2026-09-02 by walking the Hot terminal frame for the first time: the child is
+/// 50 wide and this profile is 49, so the coordinate walk runs off the end of
+/// the profile before any chain sees either.
+///
+/// This number is also the route's declared `fixed_account_count`, and the
+/// Claims composition checks that against `physical_account_count()` computed
+/// from the request, so a 49 could only ever be refused
+/// `ClaimsCompositionErrorV3::Route`. Nothing had met it because the Hot
+/// terminal route had never been built.
+///
+/// **It is left at 49 deliberately, because the fix is not a widening.** The
+/// terminal suffix's last coordinate is already the Token program (aliased to
+/// 27 in `hot_account_profile_v3::rule`) and the writable set places the Custody
+/// replay, Hoard and recipient one index BELOW where a 50-wide suffix puts them,
+/// so the missing account sits in the MIDDLE of the suffix -- realm staging by
+/// position. Inserting it shifts every per-index table in that function
+/// (writable, signer, executable, alias, opaque, zero-length), which is a
+/// re-derivation against the true fourteen-entry suffix rather than an
+/// increment. Deriving this constant from the frame spec compiles and moves the
+/// walls to `PrivilegeMismatch`; it is the right destination and it is a unit of
+/// its own.
+///
+/// What DID change: this is now the single author. Four other sites typed the
+/// same width -- the profile's logical count, the Hot instruction builder's
+/// `expected_child_accounts`, this module's own effect route, and the
+/// transaction module's fixture -- and a width typed in five places is what let
+/// it drift from the contract that owns it without anything going red.
 pub const RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3: u16 = 49;
+
 /// Exact logical AccountProfile/EffectProgram account width.
 pub const RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3: u16 =
     RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3 + RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3;
@@ -277,7 +313,10 @@ mod tests {
         );
         let program = successor.base();
         assert_eq!(program.route_count(), 1);
-        assert_eq!(program.account_count(258).expect("accounts"), 54);
+        assert_eq!(
+            program.account_count(258).expect("accounts"),
+            usize::from(RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3),
+        );
         let route = program.route(0).expect("route");
         assert_eq!(route.role(), FixedRole::Claims);
         assert_eq!(route.kind(), RouteKindV3::Once);

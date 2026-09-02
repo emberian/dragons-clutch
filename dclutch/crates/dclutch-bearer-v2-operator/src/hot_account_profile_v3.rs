@@ -211,7 +211,10 @@ mod tests {
             })
             .expect("profile");
         let profile = AccountProfileV2::decode(&bytes).expect("decode profile");
-        assert_eq!(profile.fixed_account_count(), 54);
+        assert_eq!(
+            profile.fixed_account_count(),
+            crate::RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
+        );
         assert_eq!(profile.item_account_stride(), 0);
 
         let mut data = (0..LOGICAL_ACCOUNT_COUNT)

@@ -5,7 +5,9 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
+use dclutch_versioned_message_operator::{
+    Finality, Observation, ObservedAccount, PACKET_DATA_BYTES,
+};
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde::{
     Deserialize, Serialize,
@@ -1029,13 +1031,7 @@ impl Rpc {
         );
         let packet = bincode::serialize(&transaction)
             .map_err(|error| Error::new(format!("{label}: serialize transaction: {error}")))?;
-        if packet.len() > 1_232 {
-            return Err(Error::new(format!(
-                "{label}: legacy transaction is {} bytes, above the 1,232-byte packet ceiling; \
-                 this frame needs v0 routing",
-                packet.len()
-            )));
-        }
+        Self::require_legacy_packet_ceiling_v1(label, &packet)?;
         let signature = transaction
             .signatures
             .first()
@@ -1163,7 +1159,7 @@ impl Rpc {
             std::slice::from_ref(table),
         )
         .map_err(|error| Error::new(format!("{label}: v0 message: {error:?}")))?;
-        if routed.wire_bytes > 1_232 {
+        if routed.wire_bytes > PACKET_DATA_BYTES {
             return Err(Error::new(format!(
                 "{label}: routed transaction is {} bytes, above the 1,232-byte packet ceiling",
                 routed.wire_bytes
@@ -1747,6 +1743,33 @@ impl Rpc {
         .map_err(|error| Error::new(format!("transaction signature: {error}")))
     }
 
+    /// Refuse a legacy packet the cluster cannot carry, and name the fix.
+    ///
+    /// The v0 send needs no equivalent: `compile_v0_message` enforces this same
+    /// ceiling before it will hand back a message at all and returns
+    /// `Error::PacketTooLarge`, and `send_signed_v0` checks the compiled extent
+    /// again. The ORDINARY LEGACY send was the one path that could build an
+    /// oversized packet and hand it to the cluster, where it surfaces as an
+    /// unexplained transport failure: the wire is simply too long, and nothing
+    /// on either side says which frame did it or by how much. Its durable
+    /// sibling `prepare_signed_legacy_packet` has refused this since it was
+    /// written; this is the same refusal, in the same words, on the path that
+    /// actually carries most of the traffic.
+    ///
+    /// The bytes handed in are the bytes submitted, not a model of them.
+    fn require_legacy_packet_ceiling_v1(label: &str, packet: &[u8]) -> Result<()> {
+        // The rendered ceiling below is prose; this is what keeps it honest.
+        const _: () = assert!(PACKET_DATA_BYTES == 1_232);
+        if packet.len() > PACKET_DATA_BYTES {
+            return Err(Error::new(format!(
+                "{label}: legacy transaction is {} bytes, above the 1,232-byte packet ceiling; \
+                 this frame needs v0 routing",
+                packet.len()
+            )));
+        }
+        Ok(())
+    }
+
     fn send_inner(
         &mut self,
         label: &str,
@@ -1797,7 +1820,11 @@ impl Rpc {
                 &signers,
                 blockhash,
             );
-            let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;
+            let packet = bincode::serialize(&transaction)
+                .map_err(|error| Error::new(format!("{label}: serialize transaction: {error}")))?;
+            Self::require_legacy_packet_ceiling_v1(label, &packet)?;
+            let encoded = BASE64.encode(&packet);
+            let signature = self.submit_encoded(label, &encoded, expect_failure)?;
             match self.confirm(label, signature, &encoded, expect_failure, last_valid)? {
                 ConfirmOutcomeV1::Confirmed(evidence) => return Ok(evidence),
                 ConfirmOutcomeV1::Dropped => {
@@ -2283,6 +2310,58 @@ fn u64_field(value: &Value, name: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ordinary legacy send refuses one byte over and admits the last byte
+    /// under, on real transactions through the real serializer.
+    ///
+    /// Nothing here models the wire: the packet is grown one instruction byte at
+    /// a time until `bincode` says it is exactly the ceiling, and then one more.
+    /// Before this, an oversized legacy send reached the cluster and came back
+    /// as an unexplained transport failure -- the only path in this client that
+    /// could do that, since every v0 send is refused by
+    /// `compile_v0_message` before a message exists.
+    #[test]
+    fn the_legacy_ceiling_refuses_one_byte_over_and_admits_the_last_byte_under() {
+        let payer = Keypair::new();
+        let program_id = Pubkey::new_from_array([0x11; 32]);
+        let build = |data_len: usize| {
+            let instruction = Instruction {
+                program_id,
+                accounts: Vec::new(),
+                data: vec![0x5a; data_len],
+            };
+            let transaction = Transaction::new_signed_with_payer(
+                std::slice::from_ref(&instruction),
+                Some(&payer.pubkey()),
+                &[&payer],
+                Hash::new_from_array([0x22; 32]),
+            );
+            bincode::serialize(&transaction).expect("packet bytes")
+        };
+
+        let mut data_len = 1_000;
+        while build(data_len).len() < PACKET_DATA_BYTES {
+            data_len = data_len.checked_add(1).expect("bounded search");
+        }
+        let exact = build(data_len);
+        assert_eq!(exact.len(), PACKET_DATA_BYTES);
+        Rpc::require_legacy_packet_ceiling_v1("at the ceiling", &exact)
+            .expect("the last byte under the ceiling is submittable");
+
+        let over = build(data_len.checked_add(1).expect("one byte over"));
+        assert_eq!(over.len(), PACKET_DATA_BYTES + 1);
+        let refusal = Rpc::require_legacy_packet_ceiling_v1("one byte over", &over)
+            .expect_err("one byte over the ceiling must refuse");
+        let rendered = format!("{refusal}");
+        assert!(
+            rendered.contains("one byte over: legacy transaction is 1233 bytes"),
+            "the refusal must name the frame and its exact extent: {rendered}"
+        );
+        assert!(
+            rendered.contains("needs v0 routing"),
+            "the refusal must name the fix, not just the fact: {rendered}"
+        );
+    }
     use std::{
         io::Read as _,
         net::TcpListener,

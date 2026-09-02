@@ -291,6 +291,131 @@ theorem stale_upgradeable_observation_is_not_supersession
     | releaseSupersededByUpgrade => exact absurd refusal superseded
     | deploymentSlotMismatch => rfl
 
+/-! ## Decision-case corpus
+
+The rule above is mirrored by hand in `core-sbf/src/infrastructure.rs` and in
+`dclutch-registry-contract`, and nothing checked one against the other. These
+vectors are that check: every decision case the theorems name, emitted, and
+replayed byte-exact through the adapter. They are the bridge, not a second
+implementation -- the Rust rule stays hand-written and this says what it must
+answer.
+
+`PinOutcome` is coarser than `PinRefusal` on purpose, because the adapter is:
+Core names only the superseded case distinctly and folds every other refusal
+into one operator-facing code. -/
+
+/-- What an operator reads back from the adapter. -/
+inductive PinOutcome where
+  /-- The pin holds and the deployment is admitted. -/
+  | admit
+  /-- The named authority moved the substrate forward; re-release. -/
+  | refuseSuperseded
+  /-- Every other disagreement, folded as the adapter folds it. -/
+  | refuseInfrastructure
+  deriving DecidableEq, Repr
+
+def PinOutcome.tag : PinOutcome → Nat
+  | .admit => 0
+  | .refuseSuperseded => 1
+  | .refuseInfrastructure => 2
+
+def PinOutcome.rustName : PinOutcome → String
+  | .admit => "Admit"
+  | .refuseSuperseded => "RefuseSuperseded"
+  | .refuseInfrastructure => "RefuseInfrastructure"
+
+/-- The outcome in the adapter's own conjunct order.
+
+A non-canonical record never reaches the slot comparison -- Rust refuses it at
+the release constructor and again at `require_slot_pinned_release_v1` -- so the
+superseded name is guarded by the canonical shape. The slot is compared BEFORE
+the authority, which is why a release that was both upgraded and re-keyed reads
+as superseded rather than as an authority substitution. -/
+def SlotPin.outcome (pin : SlotPin) : PinOutcome :=
+  match pin.admits with
+  | true => PinOutcome.admit
+  | false =>
+      if pin.canonicalReleaseShape
+          && pin.observedDeploymentSlot != pin.boundDeploymentSlot
+          && pin.slotRefusal == PinRefusal.releaseSupersededByUpgrade then
+        PinOutcome.refuseSuperseded
+      else
+        PinOutcome.refuseInfrastructure
+
+/-- One named decision case. -/
+structure PinVector where
+  name : String
+  pin : SlotPin
+
+private def authority : Identity := 161
+private def substitute : Identity := 178
+private def boundSlot : Slot := 7
+
+/-- Every decision case the theorems above name, once each. -/
+def pinVectors : List PinVector := [
+  { name := "revoked_immutable_release_admits",
+    pin := ⟨.immutable, none, boundSlot, none, boundSlot⟩ },
+  { name := "upgradeable_slot_pinned_release_admits",
+    pin := ⟨.exactAuthority, some authority, boundSlot, some authority, boundSlot⟩ },
+  { name := "superseded_upgradeable_release_refuses",
+    pin := ⟨.exactAuthority, some authority, boundSlot, some authority, boundSlot + 1⟩ },
+  { name := "stale_upgradeable_observation_is_not_supersession",
+    pin := ⟨.exactAuthority, some authority, boundSlot, some authority, boundSlot - 1⟩ },
+  { name := "moved_slot_refuses_on_immutable_release",
+    pin := ⟨.immutable, none, boundSlot, none, boundSlot + 1⟩ },
+  { name := "substituted_upgrade_authority_refuses",
+    pin := ⟨.exactAuthority, some authority, boundSlot, some substitute, boundSlot⟩ },
+  { name := "retained_authority_over_immutable_release_refuses",
+    pin := ⟨.immutable, none, boundSlot, some authority, boundSlot⟩ },
+  { name := "supersession_is_named_before_authority_substitution",
+    pin := ⟨.exactAuthority, some authority, boundSlot, some substitute, boundSlot + 2⟩ },
+  { name := "noncanonical_immutable_release_naming_an_authority_refuses",
+    pin := ⟨.immutable, some authority, boundSlot, none, boundSlot⟩ },
+  { name := "noncanonical_exact_authority_release_naming_none_refuses",
+    pin := ⟨.exactAuthority, none, boundSlot, none, boundSlot⟩ }
+]
+
+/-! ### Corpus theorems -/
+
+/-- The operator-facing outcome agrees with the admission rule exactly.  This
+is what lets a three-valued corpus stand in for the two-valued rule. -/
+theorem outcome_is_admit_iff_pin_admits (pin : SlotPin) :
+    pin.outcome = PinOutcome.admit <-> pin.admits = true := by
+  unfold SlotPin.outcome
+  cases hadmits : pin.admits with
+  | true => simp
+  | false => simp; split <;> simp
+
+/-- The corpus decides every outcome, so a vector list that answers one way
+throughout cannot satisfy it. -/
+theorem pin_vectors_cover_every_outcome :
+    pinVectors.any (fun vector => vector.pin.outcome == PinOutcome.admit) &&
+      pinVectors.any (fun vector =>
+        vector.pin.outcome == PinOutcome.refuseSuperseded) &&
+      pinVectors.any (fun vector =>
+        vector.pin.outcome == PinOutcome.refuseInfrastructure) := by
+  native_decide
+
+/-- Both canonical pairings are exercised on the admitting side, so "admit"
+is not one shape's accident. -/
+theorem pin_vectors_admit_both_canonical_pairings :
+    pinVectors.any (fun vector =>
+        vector.pin.outcome == PinOutcome.admit &&
+          vector.pin.boundUpgradePolicy == UpgradePolicy.immutable) &&
+      pinVectors.any (fun vector =>
+        vector.pin.outcome == PinOutcome.admit &&
+          vector.pin.boundUpgradePolicy == UpgradePolicy.exactAuthority) := by
+  native_decide
+
+/-- The exact expected outcome of every vector, pinned in order. -/
+theorem pin_vector_outcomes_are_exact :
+    pinVectors.map (fun vector => vector.pin.outcome.tag) =
+      [0, 0, 1, 2, 2, 2, 2, 1, 2, 2] := by
+  native_decide
+
+theorem pin_vector_count_is_exact : pinVectors.length = 10 := by
+  native_decide
+
 /-! ## One-time initialization -/
 
 /-- Normalized current Core Loader observation used only for profile init. -/

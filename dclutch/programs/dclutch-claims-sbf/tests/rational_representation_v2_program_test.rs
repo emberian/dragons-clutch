@@ -893,6 +893,21 @@ mod common_hot_open {
             u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection bytes");
         terminal_lengths[4] = basis_width;
         terminal_lengths[29] = basis_width;
+        // The same eleven the selected profile needed, for the same reason and
+        // from the same owners: this profile had never been projected either.
+        // Three of them are INJECTED Hot-evidence coordinates outside the Claims
+        // child frame, which is why a check that walks the child cannot see them.
+        terminal_lengths[0] = selected_lengths[0];
+        terminal_lengths[2] = selected_lengths[2];
+        terminal_lengths[3] = selected_lengths[3];
+        terminal_lengths[10] = selected_lengths[10];
+        terminal_lengths[12] = selected_lengths[12];
+        terminal_lengths[14] = selected_lengths[14];
+        terminal_lengths[17] = selected_lengths[17];
+        terminal_lengths[18] = selected_lengths[18];
+        terminal_lengths[22] = selected_lengths[22];
+        terminal_lengths[33] = selected_lengths[33];
+        terminal_lengths[37] = selected_lengths[37];
         let selected = |action| {
             build_rational_open_selected_bundle_v6(RationalOpenSelectedBundleInputV6 {
                 action,
@@ -1039,6 +1054,7 @@ mod common_hot_open {
         fixture: &Fixture,
         action: RepresentationActionV2,
     ) -> HotPlanV3 {
+        let terminal = action == RepresentationActionV2::RedeemTerminal;
         let activation = account(context, fixture.activation_cache).await;
         let descriptor_raw = account(context, fixture.descriptor_raw).await;
         let descriptor_staging = vacant_or_account(context, fixture.descriptor_staging).await;
@@ -1056,10 +1072,20 @@ mod common_hot_open {
         let aggregate = account(context, fixture.aggregate).await;
         let replay = account(context, fixture.representation_replay).await;
         let receipt_mint = account(context, fixture.receipt_mint).await;
-        let actor_receipt = account(context, fixture.actor_receipt).await;
-        let actor_position = account(context, fixture.actor_position).await;
+        // A terminal redemption references NEITHER of these -- see the
+        // observation below -- and a terminal fixture need not have created
+        // them, so they are observed rather than required on that path only.
+        let actor_receipt = if terminal {
+            vacant_or_account(context, fixture.actor_receipt).await
+        } else {
+            account(context, fixture.actor_receipt).await
+        };
+        let actor_position = if terminal {
+            vacant_or_account(context, fixture.actor_position).await
+        } else {
+            account(context, fixture.actor_position).await
+        };
 
-        let terminal = action == RepresentationActionV2::RedeemTerminal;
         let terminal_fixture = fixture.terminal_accounts;
         let terminal_observed = match terminal_fixture {
             Some(accounts) if terminal => Some((
@@ -1390,7 +1416,9 @@ mod common_hot_open {
         } else {
             0
         };
-        let profile = AccountProfileV2::decode(set.account_profile).expect("AccountProfile");
+        let profile =
+            dclutch_account_profile_contract::v2::AccountProfileV2::decode(set.account_profile)
+                .expect("AccountProfile");
         let staging_cursors = [
             fixture.descriptor_staging,
             fixture.graph_staging,
@@ -1413,9 +1441,14 @@ mod common_hot_open {
             // A staging cursor is the one child coordinate allowed to hold
             // nothing, because a finalized record's cursor is absent by
             // definition (`add_finalized_record`). Every other coordinate must
-            // exist, and `account` still refuses by name when it does not: the
-            // vacancy is granted to the six addresses that earned it, not to
-            // the loop.
+            // exist, and `account` still refuses by name when it does not.
+            //
+            // NOT "bind whatever is there": that was tried on 2026-09-02 and it
+            // silently changed the ISSUE frame. Several coordinates the fixture
+            // supplies are absent at bind time and the builder derives its own
+            // address for an unbound one, so skipping them substituted six
+            // accounts in a frame that had been committing. The vacancy is
+            // granted to the addresses that earned it, never to the loop.
             let account = if staging_cursors.contains(&meta.pubkey) {
                 vacant_or_account(context, meta.pubkey).await
             } else {
@@ -5480,36 +5513,34 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
     );
 }
 
-/// THE TERMINAL REDEMPTION ON THE HOT ROUTE, AND THE WALL IT STOPS AT.
+/// THE TERMINAL REDEMPTION ON THE HOT ROUTE, AND THE WALL IT REACHES.
 ///
-/// Every terminal test in this island drives the direct-caller path -- a
-/// test-only wrapper in the caller slot -- and builds its request BY HAND, so a
-/// stranger's redemption of a structured position has never crossed Trading and
-/// has never been constructed by the operator either. This drives the Hot route
-/// as far as it goes and pins where it stops, because a wall recorded is a wall
-/// the next lane reads instead of rediscovering.
+/// Every other terminal test in this island drives the direct-caller path AND
+/// hand-builds its request, so until this one a redemption had never crossed
+/// Trading and had never been constructed by the operator at all. The operator
+/// now BUILDS it -- a 50-account Claims child, planned through the same public
+/// planner the browser would use -- and the wall is one account of artifact
+/// geometry.
 ///
-/// **The wall is not the Hot route.** It is
-/// `authenticate_positive_custody_replay`
-/// (`rational-representation-v2-operator/src/lib.rs`): a POSITIVE payout
-/// requires `replay.open_vault_count != 0` on the Claims-role Custody replay,
-/// and nothing in this tree opens a vault on one. This island's own fixture
-/// asserts the opposite -- `assert_eq!(created.open_vault_count, 0)` on the
-/// replay the real creation route mints -- so the operator cannot construct a
-/// positive terminal redemption for ANY caller, Hot or direct. The direct tests
-/// do not meet it because they hand-build the request and never call the
-/// operator; the losing-coordinate tests do not meet it because a zero payout
-/// skips the check entirely.
+/// `RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3` says the terminal Claims frame is
+/// 49. The request contract's own `REPRESENTATION_FRAME_SPEC_V2` says 50, every
+/// executing direct terminal frame asserts 50, and the Claims composition checks
+/// the route's declared span against `physical_account_count()` computed from
+/// the request -- so a 49-wide release could only ever have been refused
+/// `Route`. Nothing had met it because nothing had built this route.
 ///
-/// Whether the requirement is right is a design question and is NOT settled
-/// here: the Hoard vault is opened under a different caller role at founding,
-/// so requiring the CLAIMS-role replay to count it may be asking the wrong
-/// replay. Recorded, not answered.
+/// The coordinate walk runs off the end of the 54-wide profile at the child's
+/// 50th account, which is what this pins. See the constant's own doc for why the
+/// fix is a re-derivation of five per-index tables rather than an increment:
+/// the missing account sits in the MIDDLE of the terminal suffix, not at its
+/// end.
 ///
-/// This test pins the exact refusal. The day a vault-opening route lands, it
-/// goes red, and whoever lands it finishes the redemption.
+/// One wall earlier this test refused `InvalidTerminal("custody-replay-no-open-vault")`,
+/// a host-side requirement the chain does not hold; that mirror is deleted and
+/// `real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic` carries
+/// the proof.
 #[tokio::test]
-async fn current_common_hot_redeem_stops_at_the_claims_role_vault_count() {
+async fn current_common_hot_terminal_frame_is_one_account_narrower_than_the_request() {
     let trading = trading_artifact();
     let (test, fixture) = fixture_with_basis_and_trading(
         TerminalV1::Provider,
@@ -5522,22 +5553,43 @@ async fn current_common_hot_redeem_stops_at_the_claims_role_vault_count() {
     // NOTHING PLANTS THE REPLAY. Every terminal test in this island starts by
     // executing the real Claims replay-creation route against the real ELFs,
     // because a Claims-role `CustodyReplayV1` is a prestate no other route can
-    // produce and planting one was green against an account that could not
-    // exist. The Hot route is no different, and its absence was the first wall
-    // this test hit: `InvalidTerminal("custody-replay-decode")`.
+    // produce. The Hot route is no different, and its absence was this test's
+    // first wall: `InvalidTerminal("custody-replay-decode")`.
     let created = create_claims_custody_replay(&mut context, &fixture).await;
     assert!(created.accepted, "the real replay-creation route commits");
 
-    let plan = common_hot_open::plan_redeem_refusal(&mut context, &fixture).await;
+    // THE OPERATOR BUILDS IT. This is the line that was `NotBearer`, then
+    // `InvalidAction`, then `InvalidTerminal("custody-replay-no-open-vault")`.
+    let plan = common_hot_open::plan_redeem(&mut context, &fixture).await;
+
+    let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(
+        &fixture
+            .hot_release
+            .as_ref()
+            .expect("Hot release")
+            .redeem
+            .account_profile,
+    )
+    .expect("terminal AccountProfile");
     assert_eq!(
-        plan,
-        dclutch_bearer_v2_operator::Error::ChainOperator(
-            dclutch_rational_representation_v2_operator::Error::InvalidTerminal(
-                "custody-replay-no-open-vault"
-            )
+        (
+            plan.claims_child.instruction.accounts.len(),
+            profile
+                .logical_account_count_with_dynamic_spans(0, &[])
+                .expect("terminal logical width"),
         ),
-        "the Hot terminal planner stops at the Claims-role vault count",
+        (50, 54),
+        "the terminal Claims child is 50 accounts and its release profile is 5 + 49",
     );
+}
+
+async fn account_of(context: &mut ProgramTestContext, key: Pubkey) -> Account {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("account query")
+        .unwrap_or_else(|| panic!("no account at {key}"))
 }
 
 /// One representation coordinate's cost on the wire.
@@ -6148,6 +6200,25 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         live_alt,
     );
     let before = snapshot(&mut context, &fixture).await;
+    // THE CONJUNCT THE CHAIN DOES NOT HOLD, asserted where the chain settles it.
+    //
+    // The positive redemption below COMMITS -- Hoard down one atom, recipient up
+    // one, replay revision advanced -- against a Claims-role Custody replay this
+    // test created through the real route moments ago, and that replay counts
+    // ZERO open vaults. `create_claims_custody_replay` mints it that way and
+    // `the_claims_role_replay_is_created_exactly_once` asserts it.
+    //
+    // So Custody executes a positive terminal payout at `open_vault_count == 0`,
+    // and the host-side operator's matching requirement was a mirror of a
+    // conjunct no on-chain route holds. It is deleted in this change; this line
+    // is what refutes it, and it runs on real ELFs.
+    assert_eq!(
+        CustodyReplayV1::decode(&before.custody_replay.as_ref().expect("Custody replay").data)
+            .expect("pre-redemption Custody replay")
+            .open_vault_count,
+        0,
+        "the chain pays a positive terminal redemption with no open vault on the Claims-role replay",
+    );
 
     for (label, hostile) in [
         ("same-width descriptor", descriptor_substitution),

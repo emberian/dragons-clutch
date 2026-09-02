@@ -119,7 +119,12 @@ pub fn build_rational_terminal_hot_instruction_v3(
         &terminal.family_request,
         terminal.family_digest,
         &terminal.claims_child,
-        49,
+        // A FOURTH AUTHOR for one width, and the last one still typed. The
+        // terminal Claims frame is `RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3`,
+        // which now derives from the request contract's frame spec; this said
+        // `49` while the operator built 50 and while the Claims composition
+        // would have refused anything but 50.
+        usize::from(crate::RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3),
         &bundle.account_profile,
         header.outcome_count,
     )?;
@@ -523,7 +528,10 @@ mod tests {
             .specialize_child_into(family_digest, &mut exact_child)
             .expect("exact child");
         let claims_program = key(70);
-        let mut metas = (0_u8..49)
+        // A FIFTH AUTHOR for the same width, in this module's own fixture. The
+        // terminal Claims frame is one constant and this is now that constant.
+        let mut metas = (0_u8..u8::try_from(crate::RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3)
+            .expect("terminal Claims frame"))
             .map(|index| AccountMeta::new_readonly(key(100_u8.wrapping_add(index)), false))
             .collect::<Vec<_>>();
         metas.get_mut(0).expect("caller meta").is_signer = true;

@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**74 generated files from 72 emitters. 59 guarded (57 emitters), 15 unguarded (15 emitters).**
+**75 generated files from 73 emitters. 60 guarded (58 emitters), 15 unguarded (15 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -63,6 +63,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-transition-vm/check-v2-generated.sh` | shell | `EmitTransitionVMV2Rust.lean` |
 | `packages/dclutch-sdk: lean-emit EmitCapabilityManifestV1AbiTs.lean` | lean-emit | `EmitCapabilityManifestV1AbiTs.lean` |
 | `packages/dclutch-sdk: lean-emit EmitRealmPositionAbiTs.lean` | lean-emit | `EmitRealmPositionAbiTs.lean` |
+| `programs/dclutch-core-sbf/tests/slot_pin_corpus_generator_fresh.rs` | cargo-test | `EmitProtocolInfrastructurePinCorpusRust.lean` |
 | `programs/dclutch-custody-sbf/check-generated.sh` | shell | `EmitCustodyAbiRust.lean` |
 | `tools/direct-translation-validator/check-generated.sh` | shell | `EmitDirectProgramRust.lean` |
 | `tools/direct-translation-validator/check.sh` | shell | `EmitDirectTranslationCorpus.lean`, `EmitRegisteredCreationTranslationCorpus.lean` |
@@ -129,6 +130,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-transition-vm/src/v2/generated.rs` | `EmitTransitionVMV2Rust.lean` |
 | `packages/dclutch-sdk/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1AbiTs.lean` |
 | `packages/dclutch-sdk/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbiTs.lean` |
+| `programs/dclutch-core-sbf/src/generated_slot_pin_corpus.rs` | `EmitProtocolInfrastructurePinCorpusRust.lean` |
 | `tools/direct-translation-validator/src/generated_direct_program.rs` | `EmitDirectProgramRust.lean` |
 
 ## Unguarded generated files
