@@ -2,6 +2,24 @@
 /* eslint-disable */
 
 /**
+ * The finalized linked-basis RECORD digest this owner was admitted against.
+ *
+ * THE BUG THIS CLOSES. The browser derived the linked-basis record address
+ * from the Claims aggregate's `basis_id`. That is the SEMANTIC LiabilityBasisV2
+ * identity: it authenticates a basis body and cannot address one, because the
+ * semantic preimage ignores bytes the record digest covers. Measured on devnet
+ * cohort-11, the raw-record PDA it derives is VACANT while the record the
+ * campaign published sits at the PDA of a digest the aggregate does not carry
+ * -- so the frame named an account nothing lives at, and the planner failed
+ * decoding empty bytes instead of saying which coordinate was wrong.
+ *
+ * `ProtocolPositionAdmissionEvidenceV2` is the only place on chain that names
+ * the record digest, and it is decoded HERE rather than sliced in TypeScript,
+ * because an offset written down in a client is the same defect one level up.
+ */
+export function linked_basis_record_digest_v1(admission_base64: string): string;
+
+/**
  * Plan one wallet-authorized Position admission. Browser entry point.
  */
 export function plan_user_position_admission_v1_wasm(snapshot_json: string): string;
@@ -20,6 +38,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly linked_basis_record_digest_v1: (a: number, b: number) => [number, number, number, number];
     readonly plan_user_position_admission_v1_wasm: (a: number, b: number) => [number, number, number, number];
     readonly user_position_admission_account_count_v1: () => number;
     readonly user_position_admission_magic_v1: () => [number, number];

@@ -108,8 +108,11 @@ export async function prepareUserPositionAdmissionV1(
   request: UserPositionAdmissionRequestV1,
   loadPlanner: typeof loadUserPositionAdmissionWasmV1 = loadUserPositionAdmissionWasmV1,
 ): Promise<PreparedAdmissionV1> {
-  const acquired = await acquireUserPositionAdmissionSnapshotV1(client, request);
+  // The planner is loaded FIRST now: the acquisition needs it to decode the
+  // admission record, which is the only account on chain that names the
+  // linked-basis record digest.
   const planner = await loadPlanner();
+  const acquired = await acquireUserPositionAdmissionSnapshotV1(client, request, planner);
   let planJson: string;
   try {
     planJson = planner.plan_user_position_admission_v1_wasm(acquired.snapshotJson);

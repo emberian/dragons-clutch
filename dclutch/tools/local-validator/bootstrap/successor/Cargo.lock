@@ -1348,6 +1348,7 @@ dependencies = [
  "getrandom 0.4.3",
  "sha2 0.10.9",
  "solana-program",
+ "spl-associated-token-account-interface",
 ]
 
 [[package]]

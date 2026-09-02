@@ -84,10 +84,25 @@ function productRecord(): Uint8Array {
 }
 
 function aggregate(): Uint8Array {
-  const bytes = new Uint8Array(280);
-  bytes.set(new Uint8Array(32).fill(6), 152); // linked basis digest
-  return bytes;
+  // WAS: this wrote a value at offset 152 and called it "linked basis digest".
+  // Offset 152 is `basis_id`, the SEMANTIC LiabilityBasisV2 identity, and the
+  // fixture made the module's belief true by construction — so the test could
+  // never notice that the address it derived is vacant on a real market. The
+  // aggregate is still read and still checked for presence; it just no longer
+  // pretends to name a record.
+  return new Uint8Array(280);
 }
+
+/**
+ * The compiled planner's decoder, faked to the one call this module makes.
+ *
+ * The real one decodes `ProtocolPositionAdmissionV2`; a fake that returns a
+ * fixed digest is enough to test the WIRING, and the live test is what proves
+ * the digest is the right one.
+ */
+const derivation = Object.freeze({
+  linked_basis_record_digest_v1: () => 'de'.repeat(32),
+});
 
 /** Serves any address; records what was asked, and at which floor. */
 function client(asked: string[][], floors: (string | undefined)[]): SolanaRpcClient {
@@ -113,8 +128,10 @@ function client(asked: string[][], floors: (string | undefined)[]): SolanaRpcCli
         accounts: addresses.map((address) => {
           const served = serve(address);
           if (asked.length === 2) {
-            // The second read is the Product record and the Claims aggregate.
-            served.account.data = addresses.indexOf(address) === 0 ? productRecord() : aggregate();
+            // The second read is the Product record, the Claims aggregate, and
+            // this owner's admission record.
+            const at = addresses.indexOf(address);
+            served.account.data = at === 0 ? productRecord() : at === 1 ? aggregate() : new Uint8Array(512);
           }
           return served;
         }),
@@ -134,11 +151,67 @@ const request = Object.freeze({
   activationCache: '11111111111111111111111111111117',
 });
 
+describe('the linked-basis record is addressed by the digest that addresses it', () => {
+  /**
+   * A wallet with no admission record is TOLD, not guessed at.
+   *
+   * The record digest is named on chain in exactly one account, and a wallet
+   * only has that account once it has been admitted. Before this, the module
+   * derived an address from the aggregate's semantic `basis_id` — an address
+   * nothing lives at on a real market — and the planner failed decoding empty
+   * bytes. Refusing by name, with the remedy, is the honest shape.
+   */
+  it('refuses a first admission that was not told the linked-basis digest', async () => {
+    const vacantAdmission = {
+      finalizedSlot: async () => '900',
+      probe: async () => ({ genesisHash: MARKET, solanaCore: '2.0.0', endpoint: 'http://x', featureSetHash: '' }),
+      blockTime: async () => '1790000000',
+      multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
+        slot: '900',
+        accounts: addresses.map((address, index) => ({
+          address,
+          // The third account of the second read is the admission record, and
+          // this wallet has none.
+          account: addresses.length === 3 && index === 2 ? null : {
+            owner: '11111111111111111111111111111111', executable: false, lamports: '1000000', space: 0,
+            data: address === MARKET ? coreState() : addresses.length === 3 && index === 0 ? productRecord() : aggregate(),
+          },
+        })),
+      }),
+    } as unknown as SolanaRpcClient;
+    await expect(acquireUserPositionAdmissionSnapshotV1(vacantAdmission, request, derivation))
+      .rejects.toThrow(/has no admission record .* yet, and the linked-basis record digest is named on chain only inside an admission record/);
+  });
+
+  it('accepts a first admission that was told, and refuses a malformed digest', async () => {
+    const vacantAdmission = {
+      finalizedSlot: async () => '900',
+      probe: async () => ({ genesisHash: MARKET, solanaCore: '2.0.0', endpoint: 'http://x', featureSetHash: '' }),
+      blockTime: async () => '1790000000',
+      multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
+        slot: '900',
+        accounts: addresses.map((address, index) => ({
+          address,
+          account: addresses.length === 3 && index === 2 ? null : {
+            owner: '11111111111111111111111111111111', executable: false, lamports: '1000000', space: 0,
+            data: address === MARKET ? coreState() : addresses.length === 3 && index === 0 ? productRecord() : aggregate(),
+          },
+        })),
+      }),
+    } as unknown as SolanaRpcClient;
+    const told = Object.freeze({ ...request, linkedBasisRecordDigest: 'ab'.repeat(32) });
+    await expect(acquireUserPositionAdmissionSnapshotV1(vacantAdmission, told, derivation)).resolves.toBeDefined();
+    const nonsense = Object.freeze({ ...request, linkedBasisRecordDigest: 'NOT-HEX' });
+    await expect(acquireUserPositionAdmissionSnapshotV1(vacantAdmission, nonsense, derivation))
+      .rejects.toThrow(/linked-basis record digest is named on chain only inside an admission record/);
+  });
+});
+
 describe('the admission snapshot is derived and finalized', () => {
   it('carries exactly the twenty-five accounts the planner authenticates', async () => {
     const asked: string[][] = [];
     const floors: (string | undefined)[] = [];
-    const acquired = await acquireUserPositionAdmissionSnapshotV1(client(asked, floors), request);
+    const acquired = await acquireUserPositionAdmissionSnapshotV1(client(asked, floors), request, derivation);
     const snapshot = JSON.parse(acquired.snapshotJson) as Record<string, unknown>;
     expect(snapshot.format).toBe(USER_POSITION_ADMISSION_SNAPSHOT_FORMAT_V1);
     // Field-for-field with the Rust snapshot. A missing one is an input the
@@ -155,7 +228,7 @@ describe('the admission snapshot is derived and finalized', () => {
     // authenticates a chain that never existed at any single moment.
     const asked: string[][] = [];
     const floors: (string | undefined)[] = [];
-    await acquireUserPositionAdmissionSnapshotV1(client(asked, floors), request);
+    await acquireUserPositionAdmissionSnapshotV1(client(asked, floors), request, derivation);
     expect(floors.length).toBeGreaterThan(1);
     for (const floor of floors) expect(floor).toBe('900');
   });
@@ -163,7 +236,7 @@ describe('the admission snapshot is derived and finalized', () => {
   it('derives every address rather than accepting one', async () => {
     const asked: string[][] = [];
     const floors: (string | undefined)[] = [];
-    const acquired = await acquireUserPositionAdmissionSnapshotV1(client(asked, floors), request);
+    const acquired = await acquireUserPositionAdmissionSnapshotV1(client(asked, floors), request, derivation);
     // The request carries a Market, an owner, and this deployment's programs.
     // Everything else in the frame is computed.
     expect(Object.keys(request).length).toBe(8);
@@ -178,7 +251,7 @@ describe('the admission snapshot is derived and finalized', () => {
   });
 
   it('carries the genesis hash as the planner reads it, not as base58', async () => {
-    const acquired = await acquireUserPositionAdmissionSnapshotV1(client([], []), request);
+    const acquired = await acquireUserPositionAdmissionSnapshotV1(client([], []), request, derivation);
     const snapshot = JSON.parse(acquired.snapshotJson) as Readonly<{ genesisHash: string }>;
     const bytes = Uint8Array.from(atob(snapshot.genesisHash), (one) => one.charCodeAt(0));
     expect(bytes.length).toBe(32);
@@ -198,7 +271,7 @@ describe('the admission snapshot is derived and finalized', () => {
         })),
       }),
     } as unknown as SolanaRpcClient;
-    await expect(acquireUserPositionAdmissionSnapshotV1(broken, request))
+    await expect(acquireUserPositionAdmissionSnapshotV1(broken, request, derivation))
       .rejects.toThrow(/Core Market state has the wrong exact ABI/);
   });
 
@@ -212,7 +285,7 @@ describe('the admission snapshot is derived and finalized', () => {
         accounts: addresses.map((address) => ({ address, account: null })),
       }),
     } as unknown as SolanaRpcClient;
-    await expect(acquireUserPositionAdmissionSnapshotV1(empty, request))
+    await expect(acquireUserPositionAdmissionSnapshotV1(empty, request, derivation))
       .rejects.toThrow(/Core Market .* is absent at finalized commitment/);
   });
 });

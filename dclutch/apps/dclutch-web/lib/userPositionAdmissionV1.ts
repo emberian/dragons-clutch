@@ -56,6 +56,8 @@ export type UserPositionAdmissionPlanV1 = Readonly<{
 
 /** The three functions the compiled planner exposes. */
 export type UserPositionAdmissionWasmV1 = Readonly<{
+  /** The linked-basis record digest an owner's admission record names. */
+  linked_basis_record_digest_v1(admissionBase64: string): string;
   plan_user_position_admission_v1_wasm(snapshotJson: string): string;
   user_position_admission_account_count_v1(): number;
   user_position_admission_magic_v1(): string;
@@ -143,6 +145,7 @@ export async function loadUserPositionAdmissionWasmV1(
   }
   return Object.freeze({
     plan_user_position_admission_v1_wasm: wasmModule.plan_user_position_admission_v1_wasm,
+    linked_basis_record_digest_v1: wasmModule.linked_basis_record_digest_v1,
     user_position_admission_account_count_v1: wasmModule.user_position_admission_account_count_v1,
     user_position_admission_magic_v1: wasmModule.user_position_admission_magic_v1,
   });

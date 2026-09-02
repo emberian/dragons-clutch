@@ -19,6 +19,48 @@ SPEC.loader.exec_module(pack_tool)
 
 
 class SuccessorCampaignPackTests(unittest.TestCase):
+    def test_the_gate_link_count_is_the_shipped_set_and_not_a_restated_number(self) -> None:
+        """The count `e6b7bf1a` moved, and nothing here was watching.
+
+        This module carried the literal 13 in three places. The shipped set went
+        to twelve when `dclutch-dealer-sbf` was deleted; the two Rust readers
+        were swept in `aa7f8892` and the shell gate in `0f0ec379`, and these were
+        the ones left. Nothing went red -- a full release candidate built every
+        link, emitted its checked Upgrade gate, and refused at the last stage.
+        """
+        import importlib.util as _util
+
+        provenance_path = MODULE_PATH.with_name("artifact_provenance.py")
+        spec = _util.spec_from_file_location("artifact_provenance_probe", provenance_path)
+        assert spec is not None and spec.loader is not None
+        provenance = _util.module_from_spec(spec)
+        spec.loader.exec_module(provenance)
+        shipped = len(provenance.SHIPPED_LINKS)
+
+        # The authority is the set in artifact_provenance, read here rather than
+        # restated, so a link appearing or disappearing moves both together.
+        self.assertEqual(pack_tool.SHIPPED_LINK_COUNT, shipped)
+
+        exact = {"link_count": shipped, "links": [{"label": f"l{i}"} for i in range(shipped)]}
+        self.assertEqual(pack_tool.require_shipped_link_count(exact), exact["links"])
+
+        for wrong in (shipped - 1, shipped + 1):
+            with self.assertRaises(pack_tool.Refusal):
+                pack_tool.require_shipped_link_count(
+                    {"link_count": wrong, "links": [{"label": f"l{i}"} for i in range(wrong)]}
+                )
+        # A gate whose declared count disagrees with its own list refuses too.
+        with self.assertRaises(pack_tool.Refusal):
+            pack_tool.require_shipped_link_count(
+                {"link_count": shipped, "links": [{"label": "l0"}]}
+            )
+        # A string of exactly the right LENGTH still is not a link list, and
+        # only the type check can say so -- the count check is satisfied by it.
+        not_a_list = "x" * shipped
+        self.assertEqual(len(not_a_list), shipped)
+        with self.assertRaises(pack_tool.Refusal):
+            pack_tool.require_shipped_link_count({"link_count": shipped, "links": not_a_list})
+
     def test_zero_public_key_has_canonical_base58(self) -> None:
         self.assertEqual(pack_tool.base58_32("00" * 32), "1" * 32)
 

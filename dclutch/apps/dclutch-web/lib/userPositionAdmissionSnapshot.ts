@@ -5,7 +5,6 @@ import { acquireFinalizedAccountsInChunksV1 } from './coreFound';
 import { decodeBase58 } from './explorer/base58';
 import {
   GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-  LIABILITY_BASIS_MARKET_BASIS_OFFSET,
   LIABILITY_BASIS_MARKET_SEED_V2,
   LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
   PORTFOLIO_SCHEMA_ID_V2,
@@ -27,6 +26,7 @@ import {
   UPGRADEABLE_LOADER_ID,
 } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import { type UserPositionAdmissionWasmV1 } from './userPositionAdmissionV1';
 
 /**
  * The twenty-five-account snapshot the compiled admission planner authenticates.
@@ -79,6 +79,19 @@ export type AdmissionSnapshotFieldV1 = (typeof ADMISSION_SNAPSHOT_ACCOUNT_FIELDS
 export type UserPositionAdmissionRequestV1 = Readonly<{
   market: string;
   owner: string;
+  /**
+   * The finalized linked-basis RECORD digest, for a wallet with no admission
+   * record yet.
+   *
+   * The chain names this digest in exactly one place —
+   * `ProtocolPositionAdmissionEvidenceV2` — which a wallet only has once it HAS
+   * been admitted. So a first admission must be told, and this is where. An
+   * already-admitted wallet leaves it out and the digest is read from its own
+   * record. The aggregate's `basis_id` is NOT this: it is the semantic
+   * LiabilityBasisV2 identity, which authenticates a basis body and cannot
+   * address one.
+   */
+  linkedBasisRecordDigest?: string;
   coreProgramId: string;
   claimsProgramId: string;
   tradingProgramId: string;
@@ -133,10 +146,30 @@ function accountMap(observation: Awaited<ReturnType<SolanaRpcClient['multipleAcc
   return new Map(observation.accounts.map((entry) => [entry.address, entry.account]));
 }
 
+/**
+ * A first admission has to be told which linked-basis record backs this market.
+ *
+ * Not a gap in this file: a gap in the CHAIN. The record digest is named in
+ * exactly one account, `ProtocolPositionAdmissionEvidenceV2`, which a wallet
+ * only has once it has been admitted — and the aggregate carries the SEMANTIC
+ * identity, which authenticates a basis body and cannot address one. Refusing
+ * by name beats deriving an address nothing lives at.
+ */
+function requireFirstAdmissionDigestV1(request: UserPositionAdmissionRequestV1): string {
+  const digest = request.linkedBasisRecordDigest;
+  if (digest === undefined || !/^[0-9a-f]{64}$/.test(digest)) {
+    throw new Error(
+      `this wallet has no admission record for ${request.market} yet, and the linked-basis record digest is named on chain only inside an admission record. Supply it as linkedBasisRecordDigest — the Claims aggregate's basis_id is the semantic identity and does not address the record.`,
+    );
+  }
+  return digest;
+}
+
 /** Assemble one finalized admission snapshot, deriving every coordinate. */
 export async function acquireUserPositionAdmissionSnapshotV1(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'probe' | 'blockTime' | 'multipleAccounts'>,
   request: UserPositionAdmissionRequestV1,
+  derivation: Pick<UserPositionAdmissionWasmV1, 'linked_basis_record_digest_v1'>,
 ): Promise<AcquiredAdmissionSnapshotV1> {
   const market = key(request.market, 'Market').toBase58();
   const owner = key(request.owner, 'owner wallet').toBase58();
@@ -169,22 +202,11 @@ export async function acquireUserPositionAdmissionSnapshotV1(
   // 2 — the coordinates the Market's own state determines.
   const claimsAggregate = pda([LIABILITY_BASIS_MARKET_SEED_V2, key(market, 'Market').toBytes()], request.claimsProgramId, 'Claims program');
   const product = deriveFinalizedRecordAddressesV1(request.registryProgramId, PRODUCT_RECORD_SCHEMA_ID_V2, productRecordDigest);
-
-  // 3 — read the two records that name the rest, at the same floor.
-  const graphObservation = await acquireFinalizedAccountsInChunksV1(client, [product.record, claimsAggregate], floor);
-  const graph = accountMap(graphObservation);
-  const productBytes = required(graph, product.record, 'Product record').data;
-  const aggregateBytes = required(graph, claimsAggregate, 'Claims aggregate').data;
-  const resultDomain = deriveFinalizedRecordAddressesV1(
-    request.registryProgramId, RESULT_DOMAIN_SCHEMA_ID_V2, slice(productBytes, PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2, 32));
-  const portfolio = deriveFinalizedRecordAddressesV1(
-    request.registryProgramId, PORTFOLIO_SCHEMA_ID_V2, slice(productBytes, PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2, 32));
-  const linkedBasis = deriveFinalizedRecordAddressesV1(
-    request.registryProgramId, GRADED_BASIS_RECORD_SCHEMA_ID_V3, slice(aggregateBytes, LIABILITY_BASIS_MARKET_BASIS_OFFSET, 32));
-
   const generationBytes = new Uint8Array(8);
   new DataView(generationBytes.buffer).setBigUint64(0, generation, true);
-
+  // Every one of these is a PDA of coordinates round one already produced, so
+  // they are known before the next read rather than after it — which is what
+  // lets the admission record join that read.
   const derived: UserPositionAdmissionDerivedV1 = Object.freeze({
     claimsAggregate,
     position: pda([PROTOCOL_POSITION_STATE_SEED_V2, key(claimsAggregate, 'Claims aggregate').toBytes(), key(owner, 'owner').toBytes()], request.claimsProgramId, 'Claims program'),
@@ -192,6 +214,35 @@ export async function acquireUserPositionAdmissionSnapshotV1(
     rentCredit: pda([LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, key(market, 'Market').toBytes(), generationBytes], request.rentProgramId, 'Rent program'),
     generation: generation.toString(),
   });
+
+  // 3 — read the two records that name the rest, at the same floor.
+  const graphObservation = await acquireFinalizedAccountsInChunksV1(client, [product.record, claimsAggregate, derived.admission], floor);
+  const graph = accountMap(graphObservation);
+  const productBytes = required(graph, product.record, 'Product record').data;
+  required(graph, claimsAggregate, 'Claims aggregate');
+  const resultDomain = deriveFinalizedRecordAddressesV1(
+    request.registryProgramId, RESULT_DOMAIN_SCHEMA_ID_V2, slice(productBytes, PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2, 32));
+  const portfolio = deriveFinalizedRecordAddressesV1(
+    request.registryProgramId, PORTFOLIO_SCHEMA_ID_V2, slice(productBytes, PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2, 32));
+  // THE LINKED-BASIS RECORD, from the digest that actually addresses it.
+  //
+  // This used to read `basis_id` out of the aggregate. That is the SEMANTIC
+  // LiabilityBasisV2 identity: it authenticates a basis body and cannot address
+  // one, because the semantic preimage ignores bytes the record digest covers.
+  // Measured on devnet cohort-11, the PDA it derived was VACANT while the
+  // published record sat at the PDA of a digest the aggregate does not carry —
+  // so this frame named an account nothing lives at, and the planner failed
+  // decoding empty bytes rather than saying which coordinate was wrong.
+  //
+  // The digest is read from THIS OWNER'S admission record, decoded by the
+  // compiled planner rather than sliced here, and a wallet that has none yet
+  // must be told — with a refusal that says why rather than a vacant address.
+  const admissionAccount = graph.get(derived.admission) ?? null;
+  const linkedBasisDigest = admissionAccount === null
+    ? fromHex(requireFirstAdmissionDigestV1(request), 'linked-basis record digest')
+    : fromHex(derivation.linked_basis_record_digest_v1(base64(admissionAccount.data)), 'linked-basis record digest');
+  const linkedBasis = deriveFinalizedRecordAddressesV1(
+    request.registryProgramId, GRADED_BASIS_RECORD_SCHEMA_ID_V3, linkedBasisDigest);
 
   // 4 — the whole frame, in the planner's own field order.
   const coordinates: Readonly<Record<AdmissionSnapshotFieldV1, string>> = Object.freeze({

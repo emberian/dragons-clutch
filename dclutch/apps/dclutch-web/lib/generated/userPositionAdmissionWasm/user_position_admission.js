@@ -1,6 +1,45 @@
 /* @ts-self-types="./user_position_admission.d.ts" */
 
 /**
+ * The finalized linked-basis RECORD digest this owner was admitted against.
+ *
+ * THE BUG THIS CLOSES. The browser derived the linked-basis record address
+ * from the Claims aggregate's `basis_id`. That is the SEMANTIC LiabilityBasisV2
+ * identity: it authenticates a basis body and cannot address one, because the
+ * semantic preimage ignores bytes the record digest covers. Measured on devnet
+ * cohort-11, the raw-record PDA it derives is VACANT while the record the
+ * campaign published sits at the PDA of a digest the aggregate does not carry
+ * -- so the frame named an account nothing lives at, and the planner failed
+ * decoding empty bytes instead of saying which coordinate was wrong.
+ *
+ * `ProtocolPositionAdmissionEvidenceV2` is the only place on chain that names
+ * the record digest, and it is decoded HERE rather than sliced in TypeScript,
+ * because an offset written down in a client is the same defect one level up.
+ * @param {string} admission_base64
+ * @returns {string}
+ */
+export function linked_basis_record_digest_v1(admission_base64) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(admission_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.linked_basis_record_digest_v1(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Plan one wallet-authorized Position admission. Browser entry point.
  * @param {string} snapshot_json
  * @returns {string}

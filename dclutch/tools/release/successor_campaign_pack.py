@@ -28,6 +28,34 @@ import sys
 import tarfile
 import tempfile
 import tomllib
+
+# THE SHIPPED SET IS DEFINED ONCE, in artifact_provenance, and this module used
+# to restate its SIZE as the literal 13 in three places. `e6b7bf1a` deleted
+# `dclutch-dealer-sbf` and took the set from thirteen links to twelve; the two
+# Rust readers were swept in `aa7f8892` and the shell gate in `0f0ec379`, and
+# these were the ones left. A count that is restated is a count that goes stale
+# silently, so it is derived.
+from artifact_provenance import SHIPPED_LINKS
+
+SHIPPED_LINK_COUNT = len(SHIPPED_LINKS)
+
+
+def require_shipped_link_count(gate):
+    """The gate binds exactly the shipped set, counted from the set itself.
+
+    Extracted so the count has a test. It did not have one: the literal 13 this
+    module carried survived `e6b7bf1a` taking the set to twelve, and the first
+    thing to notice was a full release candidate that built every link, emitted
+    its checked Upgrade gate, and refused at the last stage.
+    """
+    links = gate.get("links")
+    if (
+        not isinstance(links, list)
+        or gate.get("link_count") != SHIPPED_LINK_COUNT
+        or len(links) != SHIPPED_LINK_COUNT
+    ):
+        refuse(f"checked Upgrade gate is not the exact {SHIPPED_LINK_COUNT}-link set")
+    return links
 from typing import Any, Mapping, NoReturn, Sequence
 
 
@@ -833,7 +861,7 @@ def emit(arguments: argparse.Namespace) -> None:
         "not_a_deployment": "true",
         "cargo_lock_immutability": "passed",
         "sbf_build_freshness": "passed",
-        "sbf_build_freshness_links": "13",
+        "sbf_build_freshness_links": str(SHIPPED_LINK_COUNT),
         "sbf_build_diagnostics_total": "0",
         "sbf_build_diagnostics_accepted": "false",
     }
@@ -853,9 +881,7 @@ def emit(arguments: argparse.Namespace) -> None:
     gate = verify_checked_gate(root, gate_path, gate_sha)
     if gate.get("source_revision") != revision or gate.get("source_tree_sha256") != tree_sha:
         refuse("checked Upgrade gate differs from candidate source")
-    links = gate.get("links")
-    if not isinstance(links, list) or gate.get("link_count") != 13 or len(links) != 13:
-        refuse("checked Upgrade gate is not the exact 13-link set")
+    links = require_shipped_link_count(gate)
 
     host_channel, compute_ceiling, packet_ceiling = authority_values(root)
     resolution_semantic = resolution_semantic_id(root)
@@ -1166,7 +1192,7 @@ def verify_pack(pack_path: Path) -> tuple[Path, dict[str, Any]]:
     for key, expected in (
         ("cargo_lock_immutability", "passed"),
         ("sbf_build_freshness", "passed"),
-        ("sbf_build_freshness_links", "13"),
+        ("sbf_build_freshness_links", str(SHIPPED_LINK_COUNT)),
         ("sbf_build_diagnostics_total", "0"),
         ("sbf_build_diagnostics_accepted", "false"),
     ):
