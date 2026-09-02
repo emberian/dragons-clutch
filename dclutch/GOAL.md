@@ -2899,3 +2899,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - K=5 (worktree): Lean vocabulary + contract green (`1480a5e6`); K=6 corrected to **K=5** by the +12 price instruction; the
   back half is a positional RequestProfile register contract → continuing in the worktree.
 - Cuts: `cb7594d9d`, `926d6e99c`, `9fca23065`.
+
+### Lane map delta — 2026-09-02 10:45
+- WEB (`3fa1a432`, `61f725a8`, `dfab77e1`): the browser's 377-line fork of the deployment surface is a re-export of the SDK
+  owner (proven both ways against cohort-12 by flipping one bit of a real ProgramData header); `generate-capability-surface.mjs`
+  had gone blind wherever a shim is — **71 modules recovered attribution**; the a11y survey composes opacity and found a second
+  live failure; 196 → 194. Two wasm verifies wait on dirty deps (channel lane's execution-strategy-contract).
+- UX READING **`a61b86f8e79649a76`** (Fable): walk the live site on cohort-12 as a stranger, an operator, and a reader; ranked
+  ten with sizes; top three first → WEB's next unit.
+- SLICES `7f60ccad`: the delegated-custody campaign drives the shipped builder and the defect it hid is chain evidence.
+  COHORT-12 `2613e7d6`: the preflight no longer writes the journal execute resumes. EMISSION `c65d5cca`: two more browser
+  ABIs emitted; the terminal action byte loses two authors.
+- Cuts: `6bf9793ed`, `59d49c1ad`.

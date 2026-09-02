@@ -113,7 +113,7 @@ use super::{
     },
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
-        authenticate_parent_releases, execute_parent_authenticated,
+        execute_parent_authenticated,
     },
     terminal_certificate_v3::{
         TerminalCertificateFrameV3, authenticate_terminal_certificate_scenario_v3,
@@ -444,7 +444,6 @@ fn execute(
 ) -> Result<TerminalSettlementReceiptV3, ProgramError> {
     let input = (*request).input();
     let signed_accounts = Vec::from(&accounts[..SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + 1]);
-    authenticate_parent_releases(program_id, &signed_accounts, &prepared.packet)?;
     let signed_receipt = execute_parent_authenticated(
         program_id,
         &signed_accounts,

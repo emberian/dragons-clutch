@@ -653,22 +653,22 @@
       "campaign": "claims-rational-representation-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: a wallet-held Position is paid",
-      "measured": 354370,
+      "measured": 375251,
       "tolerance": 15000,
-      "budget": 369370,
+      "budget": 390251,
       "enforced": true,
-      "provenance": "The redemption's step two: a plain wallet-held LBV2 Position paid out of a resolved Market's Hoard through claims/terminal_settlement_v3 under the widened execution role Claims (decision 0008 s8). The heaviest of the three wallet-payout shapes, because it is the only one that both evaluates the Product basis AND crosses the Custody boundary. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [354370, 354370], band 0, so the tolerance is the 15,000 floor. 25.3% of the 1,400,000 ceiling -- this route has room, and the reason to watch it is that it is now the FIRST route a wallet reaches on its own."
+      "provenance": "The redemption's step two: a plain wallet-held LBV2 Position paid out of a resolved Market's Hoard through claims/terminal_settlement_v3 under the widened execution role Claims (decision 0008 s8). The heaviest of the three wallet-payout shapes, because it is the only one that both evaluates the Product basis AND crosses the Custody boundary. RE-PINNED 2026-09-02 at 375251, and the number moves for a reason that is entirely OUTSIDE this row's own program. Measured on real ELFs at the 2026-08-27 pin commit 082f942f and at 3fa1a432: Claims' own frame was 240,028 then and is 240,754 now -- 726 CU apart -- while the Custody CPI it makes went 121,843 to 134,347. So +12,504 of this row's +20,881 is a Custody-side growth this lane did not locate, and it belongs to programs/dclutch-custody-sbf; the rest is the Resolution certificate conjunct a83b8a36 added (one activation-cache role authentication, 25,417 CU after the repetition below, plus the certificate join), which the 2026-08-27 draw did not pay for at all. What got Claims' frame back to its 08-27 cost was removing two repetitions, not removing work: dclutch-registry-activation-auth-v1 decoded the 1,288-byte activation cache TWICE per single-role authentication (48,659 CU to 25,417, and this route authenticates three roles), and every parent-authenticated Claims route decoded its plan, parsed its 36-account frame and took its privileges twice (29,878 CU for the second parse alone). Together they returned 100,414 CU on this shape. 26.8% of the 1,400,000 ceiling, so 1,024,749 CU of headroom remain. One caution for whoever re-pins next: the 2026-08-27 draw does not reproduce from 082f942f today -- the zero-payout row reproduces 223,244 to the unit, but this shape rebuilds at 361,871 there, so its band was never 0 across REBUILDS, only across re-runs of one set of ELFs."
     },
     {
       "id": "claims-wallet-position-payout-owner-paid",
       "campaign": "claims-rational-representation-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: the Position owner pays its own fee",
-      "measured": 354369,
+      "measured": 375250,
       "tolerance": 15000,
-      "budget": 369369,
+      "budget": 390250,
       "enforced": true,
-      "provenance": "The same payout in the browser's shape: one wallet as both fee payer and authority, so coordinate 0 arrives writable (decision 0008 s8.4). Draws [354369, 354369], band 0, tolerance at the floor. Pinned separately from the row above and ONE unit below it, which is the entire measured cost of the single-signer message -- a divergence here would mean the relaxed privilege had started doing work, and it does not."
+      "provenance": "The same payout in the browser's shape: one wallet as both fee payer and authority, so coordinate 0 arrives writable (decision 0008 s8.4). RE-PINNED 2026-09-02 at 375250 alongside the row above and for its reasons; read that row for the located cause. Still pinned separately and still ONE unit below it, which is the entire measured cost of the single-signer message -- a divergence here would mean the relaxed privilege had started doing work, and after a 100,414 CU recovery and a Custody-side growth it still does not."
     },
     {
       "id": "claims-wallet-position-zero-payout",
@@ -679,7 +679,7 @@
       "tolerance": 15000,
       "budget": 238244,
       "enforced": true,
-      "provenance": "terminal_settlement_v3's zero-payout branch, reached from a wallet holding a claim at a LOSING coordinate. Draws [223244, 223244], band 0, tolerance at the floor. 131,126 CU cheaper than the paying shape, and that gap IS the Custody leg: authenticate_zero_custody_accounts re-derives the whole Custody frame from the persisted namespace without spending it, so the difference is one CPI and its token reads rather than a shortcut."
+      "provenance": "terminal_settlement_v3's zero-payout branch, reached from a wallet holding a claim at a LOSING coordinate. Draws [223244, 223244], band 0, tolerance at the floor. 131,126 CU cheaper than the paying shape, and that gap IS the Custody leg: authenticate_zero_custody_accounts re-derives the whole Custody frame from the persisted namespace without spending it, so the difference is one CPI and its token reads rather than a shortcut. NOT re-pinned, and that is the point: this row reached 316,946 on 2026-08-31 and is back to 216,698 on 2026-09-02 -- 6,546 BELOW its 2026-08-27 draw -- because the two repetitions named in claims-wallet-position-payout were removed rather than paid for. It is left at the 08-27 number so the recovery is visible as slack instead of being ratcheted away, and the gap to the paying shape is now 158,553 for the Custody-side reason that row records."
     }
   ]
 }

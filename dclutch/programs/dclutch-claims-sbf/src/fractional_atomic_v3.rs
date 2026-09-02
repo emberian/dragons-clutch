@@ -64,8 +64,7 @@ use crate::{
     affine_batch_v2::CorePhaseGateV3,
     rational_representation_v2::authenticate_finalized_rational_record,
     signed_delta_v3::{
-        AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, authenticate_parent_releases,
-        execute_parent_authenticated,
+        AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, execute_parent_authenticated,
     },
     terminal_settlement_v3::execute_enclosing_authenticated as execute_terminal_enclosing,
 };
@@ -463,7 +462,6 @@ fn execute_prepared_open(
     let signed_accounts = accounts
         .get(..FRACTIONAL_ATOMIC_SIGNED_DELTA_ACCOUNT_COUNT_V3)
         .ok_or(ClaimsSbfError::Accounts)?;
-    authenticate_parent_releases(program_id, signed_accounts, &prepared.packet)?;
     let request_digest = digest(instruction_data);
     let signed_receipt = execute_signed_delta_boxed(
         program_id,

@@ -350,6 +350,20 @@ pub(super) fn process(
 
 /// Execute one generated SignedDeltaV3 plan from an enclosing Claims route
 /// authenticated under the same caller authority and ProductRuntimeV3 graph.
+///
+/// The release/deployment chain is authenticated HERE, on the frame this
+/// function has already parsed. It used to be a separate pre-pass
+/// (`authenticate_parent_releases`) that every enclosing route called
+/// immediately before this one, and that pre-pass re-decoded the plan,
+/// re-parsed the whole account frame and re-took the privileges before it got
+/// to the releases -- so a terminal settlement paid `SignedDeltaPlanV3::decode`,
+/// `SignedDeltaAccountsV3::parse` and `authenticate_privileges` twice for one
+/// execution. Measured 2026-09-02 on real Claims ELFs: the second parse alone
+/// was 29,878 CU of a 36-account frame. The order the pre-pass established is
+/// preserved exactly -- privileges, then releases, then the parent authority --
+/// and `execute_authenticated`'s `parent_authenticated` arm still skips its own
+/// release authentication, so the chain is authenticated once and never zero
+/// times.
 pub(crate) fn execute_parent_authenticated(
     program_id: &Pubkey,
     account_infos: &[AccountInfo<'_>],
@@ -361,6 +375,7 @@ pub(crate) fn execute_parent_authenticated(
         .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
     let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
     authenticate_privileges(program_id, &accounts, plan.caller_role())?;
+    authenticate_releases(&accounts, plan)?;
     authenticate_parent_authority(&accounts, plan, parent)?;
     execute_authenticated(
         program_id,
@@ -370,24 +385,6 @@ pub(crate) fn execute_parent_authenticated(
         true,
         phase_gate,
     )
-}
-
-/// Authenticate the current release/deployment chain for an enclosing Claims
-/// route before it invokes [`execute_parent_authenticated`].
-///
-/// The enclosing route still owns the parent request digest and caller PDA;
-/// this helper only prevents that parent-authenticated execution mode from
-/// bypassing the canonical Registry observations.
-pub(crate) fn authenticate_parent_releases(
-    program_id: &Pubkey,
-    account_infos: &[AccountInfo<'_>],
-    instruction_data: &[u8],
-) -> Result<(), ProgramError> {
-    let plan = SignedDeltaPlanV3::decode(instruction_data)
-        .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
-    let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
-    authenticate_privileges(program_id, &accounts, plan.caller_role())?;
-    authenticate_releases(&accounts, plan)
 }
 
 fn execute_authenticated(

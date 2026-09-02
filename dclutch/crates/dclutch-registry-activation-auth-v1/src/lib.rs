@@ -164,6 +164,25 @@ pub fn authenticate_activated_role_v1(
 /// This is the first role in a multi-role adapter frame. It performs the sole
 /// canonical search and returns an opaque witness that can be reused only by
 /// [`authenticate_activated_role_with_bump_v1`].
+///
+/// # One decode, which is what "Reading several roles from ONE decode" is for
+///
+/// This is written as the same identity-then-role pair a multi-role frame
+/// uses, rather than as `authenticate_activation_cache_bump_v1` followed by
+/// `authenticate_role_in_account`. Those two each borrow and decode the cache,
+/// so the single-role entry point ran `ActivatedExecutionReleaseSetViewV1::decode`
+/// -- the complete five-role projection and every aliasing pair, twenty-five
+/// `decode_role` calls -- TWICE for one role, and every check the second decode
+/// made the first had already made. Measured 2026-09-02 on real Claims ELFs:
+/// **48,659 CU per call before, 25,417 after**, and Claims' terminal settlement
+/// pays it three times.
+///
+/// Nothing is weakened. [`authenticate_activation_cache_identity_v1`] takes
+/// [`require_cache_account`] again over the decoded view, and
+/// [`authenticate_activated_role_in_frame_v1`] takes the read-only frame before
+/// the role: owner and exact width still precede the first byte read, the
+/// release-set equality still precedes the address, and the frame still
+/// precedes the deployment observation.
 #[inline(never)]
 pub fn authenticate_activated_role_and_bump_v1(
     registry: &AccountInfo<'_>,
@@ -176,9 +195,16 @@ pub fn authenticate_activated_role_and_bump_v1(
     AuthenticatedRoleReceiptV1,
     AuthenticatedActivationCacheBumpV1,
 )> {
-    let bump = authenticate_activation_cache_bump_v1(registry, cache, release_set_id)?;
+    require_cache_account(registry.key, cache)?;
+    let bytes = cache
+        .try_borrow_data()
+        .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
+        .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    let bump =
+        authenticate_activation_cache_identity_v1(registry, cache, release_set_id, activated)?;
     let receipt =
-        authenticate_role_in_account(registry, cache, release_set_id, role, program, programdata)?;
+        authenticate_activated_role_in_frame_v1(cache, activated, role, program, programdata)?;
     Ok((receipt, bump))
 }
 
