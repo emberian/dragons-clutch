@@ -3644,3 +3644,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   programs tier cannot be green; two dead bindings in the Claims preflight. → DEALER **`(spawned)`**: the gate, the dead
   bindings, the Remove's compute wall PRICED (route weight / two-transaction Remove / hoisted child) for a ruling, the alias row.
 - Cuts: `f2fc96870`.
+- COHORT-14 PREP closed (`d218b963d` the third adapter release **430369ce…** — preimage differs from release 1 in exactly bytes
+  10 and 11; `d478c6a5c` a founding SELECTS the newest release, a reader ADMITS any production one — pinning one id would
+  have refused every cohort-14 admission with a true sentence about the wrong conjunct; `f8257be53` **a 170-byte ATA
+  destination pays on real ELFs, 369,366 CU, the only change 32 bytes in the Realm record**, cohort-13's release still
+  refuses 0x6006; `86acf9918` the accelerator's ArtifactRelease as a tenth record in `prepare`, plus eight direct_market
+  tests red since 2da012cd fixed (a fixture refusing before its Drop existed); `af928eea3` capture and settle are NOT one
+  event — settle is legal only strictly after end+max_age, two hours later; the scheduler's dry-run on cohort-13's window
+  says capture 13:23:39 EDT, settle 15:53:09; `4cc6aa2d0` tools/cohort14/ runbook, seal step 04 before founding 05,
+  cost 42.26 SOL priced from cohort-13's measured lamports/byte; `f431bf5d1` relayed-vertical fixed — it is not dead and
+  the journey tier now builds it). The unexplained −1.9178 SOL is the accelerator deploy (66e300f3), to the lamport.
+  → COHORT-14 **`(spawned)`**: close 13, deploy, ladder + tenth record, seal, Direct + General markets, activate, fill,
+  census, **OpenBatch on a real chain**, the in-window relay, an honest resolution, payout to a real ATA.
+- Cuts: `db3ae5ddd`.
