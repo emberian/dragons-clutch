@@ -217,12 +217,34 @@ function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
   return output;
 }
 
+/**
+ * What one authenticated `ProductBasisV3` record states.
+ *
+ * `payoutScale` is the fact this validator used to compute and throw away, and
+ * it is the ONE authenticated source of atoms-per-complete-set anywhere a
+ * client can reach: Core pins it at founding
+ * (`programs/dclutch-core-sbf/src/generic_founding_v1.rs:1091,1099,1300`) and
+ * the conservation contract names it outright
+ * (`crates/dclutch-claims-conservation-contract/src/lib.rs:60-61`). Returning
+ * only the width left every downstream surface to assume 1 — which is true of
+ * every categorical basis and of every fixture in this tree, and false of the
+ * first graded market, where an under-collateralized `n(basis_scale - 1)` is
+ * identically zero at scale 1 and therefore invisible.
+ */
+export type ProductBasisFactsV3 = Readonly<{
+  basisWidth: number;
+  /** Atoms of collateral one complete set is worth. */
+  payoutScale: bigint;
+  /** 1 for a categorical basis, 2 for a graded one. */
+  kind: number;
+}>;
+
 export async function validateProductBasisV3(
   bytes: Uint8Array,
   productId: Uint8Array,
   resultDomainDigest: Uint8Array,
   domain: Uint8Array,
-): Promise<number> {
+): Promise<ProductBasisFactsV3> {
   if (bytes.length < BASIS_HEADER_BYTES_V3 || !same(slice(bytes, 0, 8), BASIS_MAGIC_V3)
       || u16(bytes, 8) !== BASIS_SCHEMA_V3 || u16(bytes, 10) !== BASIS_HEADER_BYTES_V3
       || readU32(bytes, 12) !== bytes.length) throw new Error('Product basis has the wrong exact V3 header or width');
@@ -250,7 +272,7 @@ export async function validateProductBasisV3(
         || knotCount !== 0 || termCount !== 0 || bytes.length !== BASIS_HEADER_BYTES_V3) {
       throw new Error('categorical Product basis is not canonical Q=1');
     }
-    return basisWidth;
+    return Object.freeze({ basisWidth, payoutScale, kind });
   }
   if (kind !== 2 || rounding !== TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3 || basisWidth < 2
       || knotDenominator === 0n || termCount === 0) throw new Error('graded Product basis kind or counts are not canonical');
@@ -331,7 +353,7 @@ export async function validateProductBasisV3(
     }
     if (bound > payoutScale) throw new Error('graded Product basis exceeds its checked cell envelope');
   }
-  return basisWidth;
+  return Object.freeze({ basisWidth, payoutScale, kind });
 }
 
 function key(value: string, field: string): PublicKey {
@@ -981,8 +1003,8 @@ export async function inspectDirectHotRouteV3(
   const linkedBasisRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_LINKED_BASIS_RAW_ACCOUNT_V3].address, fixed[HOT_LINKED_BASIS_STAGING_ACCOUNT_V3].address,
     GRADED_BASIS_RECORD_SCHEMA_ID_V3, await sha256(required(observation.accounts, fixed[HOT_LINKED_BASIS_RAW_ACCOUNT_V3].address, 'Product basis').data), 'Product basis');
-  const basisWidth = await validateProductBasisV3(linkedBasisRaw.data, productGraph.productId, resultDomainDigest, resultDomainRaw.data);
-  if (linkedBasisRaw.data[16] === 1 && basisWidth !== productGraph.outcomeCount) {
+  const productBasis = await validateProductBasisV3(linkedBasisRaw.data, productGraph.productId, resultDomainDigest, resultDomainRaw.data);
+  if (productBasis.kind === 1 && productBasis.basisWidth !== productGraph.outcomeCount) {
     throw new Error('categorical Product basis width differs from Product-owned outcome count');
   }
 
@@ -1028,7 +1050,7 @@ export async function inspectDirectHotRouteV3(
     ...runtimeMetas,
   ];
   const outcomeCount = tailCountFromProfile(profileRaw.data, logicalRuntimeAccounts);
-  if (outcomeCount !== basisWidth) throw new Error('AccountProfile runtime width differs from Product-owned basis width');
+  if (outcomeCount !== productBasis.basisWidth) throw new Error('AccountProfile runtime width differs from Product-owned basis width');
   validateRuntimeAccountProfileV2(
     profileRaw.data,
     outcomeCount,

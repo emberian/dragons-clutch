@@ -356,8 +356,8 @@ export async function inspectDealerEquityRouteV3(
   const linkedBasisRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HotAbi.HOT_LINKED_BASIS_RAW_ACCOUNT_V3]?.address ?? '', fixed[HotAbi.HOT_LINKED_BASIS_STAGING_ACCOUNT_V3]?.address ?? '',
     HotAbi.GRADED_BASIS_RECORD_SCHEMA_ID_V3, await sha256(linkedBasisAccount.data), 'Product basis');
-  const basisWidth = await validateProductBasisV3(linkedBasisRaw.data, graph.productId, resultDomainDigest, domainRaw.data);
-  if (basisWidth !== request.width || graph.outcomeCount !== request.width) throw new Error('Dealer request width differs from Product-owned outcome/basis width');
+  const productBasis = await validateProductBasisV3(linkedBasisRaw.data, graph.productId, resultDomainDigest, domainRaw.data);
+  if (productBasis.basisWidth !== request.width || graph.outcomeCount !== request.width) throw new Error('Dealer request width differs from Product-owned outcome/basis width');
 
   const profileRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HotAbi.HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3]?.address ?? '', fixed[HotAbi.HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3]?.address ?? '',

@@ -989,11 +989,21 @@ across two evidence families**, measured rather than remembered:
 |---|---|---|
 | `resolution_core_v3_lifecycle` | **5/5** | Pyth terminal, one transaction |
 | `sponsored_push_lifecycle` | **1/1** | Pyth sponsored push — 592-byte release vs 440, **no router, no VAA** |
-| `relayed_mainnet_state` | **19/19** | relayed observation record — a *different family*, own real ed25519 quorum, and the one the gauntlet runs |
+| `relayed_mainnet_state` | **24/24** | relayed observation record — a *different family*, own real ed25519 quorum, and the one the gauntlet runs. **TWO observables**, both driven create → append ×4 → seal → consume → resolve on the same real ELFs: row 0 DBC graduation (19, unchanged) and row 1 SPL Token-2022 mint-authority renunciation (5), which share every line of transport, quorum, funding, walk and settlement and differ only in the adapter's `observable_selector` and the grammar it selects |
 
 The fourth, `SharedObservationChild`, has no implementation anywhere: it shares
 Pyth's extension id and nothing switches on it. **An unimplemented cardinality
 variant, not a family.**
+
+**And the relayed family now has two observables, which settles what a
+non-price resolution source costs.** Row 1 — "has this token's supply become
+permanently fixed?" — is a four-byte `COption` tag read out of an attested
+account snapshot; its terminality is enforced by the OBSERVED program
+(`spl-token-2022 4.0.0 processor.rs:722` refuses `SetAuthority(MintTokens)`
+with `FixedSupply` once the authority is `None`), so an observation of it
+proves something about every later slot. It cost a Lean grammar, one `read_X`,
+one enum arm, and **twenty lines of TOML** in `tools/relayer/` — which is twelve
+thousand lines and contains no venue logic at all. Not a family: a row.
 
 **And the architectural ruling already exists**, at
 `crates/dclutch-source-contract/src/lib.rs:268-283`, about the relayed

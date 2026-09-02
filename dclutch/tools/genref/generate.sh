@@ -12,6 +12,19 @@
 
 set -euo pipefail
 
+# Refuse a dirty tree. This generator reads the WORKING TREE, and in a shared
+# checkout with live lanes that means emitting reference docs describing code
+# that is not in HEAD -- and, measured 2026-09-01, silently deleting another
+# lane's landed refusal rows. Regenerate from a detached worktree at HEAD
+# (`git worktree add --detach <dir> HEAD`), or pass --allow-dirty when you have
+# read the diff and mean it.
+if [ "${GENREF_ALLOW_DIRTY:-0}" != "1" ] && ! printf '%s\n' "$@" | grep -qx -- '--allow-dirty'; then
+  if [ -n "$(git -C "$(dirname "$0")/../.." status --porcelain 2>/dev/null)" ]; then
+    echo "genref: refusing to regenerate from a dirty tree; use a detached worktree at HEAD, or --allow-dirty" >&2
+    exit 3
+  fi
+fi
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 CENSUS_DIR="$REPO/tools/gauntlet/census"

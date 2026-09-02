@@ -198,6 +198,98 @@ const DEPLOYMENT_SLOT: u64 = 423_941_138;
 const UPGRADE_AUTHORITY: [u8; 32] = [0x4a; 32];
 const ELF_DIGEST: [u8; 32] = [0xee; 32];
 
+/// The mainnet SPL Token-2022 program, `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`.
+///
+/// Decoded from the address rather than pasted as bytes, so the constant this
+/// fixture pins is checkable by reading it. Token-2022 is Loader V3, which is
+/// what makes row 1 reachable at all: classic SPL Token is BPFLoader2, has no
+/// `ProgramData`, and cannot be pinned cross-cluster by this family.
+fn token_2022_program() -> [u8; 32] {
+    use core::str::FromStr as _;
+    Pubkey::from_str("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
+        .expect("the Token-2022 address")
+        .to_bytes()
+}
+
+/// Its Loader V3 `ProgramData`, DERIVED the way the loader derives it rather
+/// than pasted: a pasted address is a second thing to get wrong.
+fn token_2022_programdata() -> [u8; 32] {
+    Pubkey::find_program_address(
+        &[token_2022_program().as_ref()],
+        &bpf_loader_upgradeable::ID,
+    )
+    .0
+    .to_bytes()
+}
+
+/// The observed `Mint`, whose authority this market asks about.
+const OBSERVED_MINT: [u8; 32] = [0x6d; 32];
+/// `Mint::LEN`. `Account` is 165 and `Multisig` is 355, so no other account
+/// this program owns can present at this length.
+const MINT_BYTES: usize = 82;
+/// The four-byte `COption` tag of `mint_authority`, at offset zero.
+const MINT_AUTHORITY_TAG_OFFSET: usize = 0;
+/// `is_initialized: bool`, admitting only 0 or 1.
+const MINT_IS_INITIALIZED_OFFSET: usize = 45;
+/// The four-byte `COption` tag of `freeze_authority`.
+const MINT_FREEZE_AUTHORITY_TAG_OFFSET: usize = 46;
+/// `COption::None`, and therefore the renounced state.
+const COPTION_NONE: u32 = 0;
+/// `COption::Some`, and therefore an authority still held.
+const COPTION_SOME: u32 = 1;
+/// The atom a renounced mint carries into the Product's cuts.
+const MINT_AUTHORITY_RENOUNCED: u8 = 1;
+
+/// One row of the decoding-rules table, as a whole observable WORLD.
+///
+/// Everything the fixture builds that the ROW gets to decide lives here, so a
+/// row-1 vertical is `fixture_for_row(mint_row(), ..)` rather than a forked
+/// copy of the eighteen hundred lines below it. The two rows share every line
+/// of transport, quorum, funding, walk and settlement, which is the claim the
+/// family makes and this is where it is executed rather than asserted.
+#[derive(Clone, Copy)]
+struct RowFixtureV1 {
+    /// The adapter's `observable_selector` for this row.
+    selector: u32,
+    /// The observed venue program, and its Loader V3 `ProgramData`.
+    program: [u8; 32],
+    programdata: [u8; 32],
+    /// The account whose bytes carry this row's own state.
+    state_key: [u8; 32],
+    /// Its full on-chain length, which for both rows equals the pinned inline
+    /// width because both carry their state account whole.
+    state_len: u32,
+    /// The atom this row's terminal state carries.
+    terminal_atom: i128,
+    /// Distinguishes the two rows' Product and venue-release identities, so a
+    /// Product carving one observable can never be resolved by the other.
+    identity_seed: u8,
+}
+
+fn dbc_row() -> RowFixtureV1 {
+    RowFixtureV1 {
+        selector: 0,
+        program: DBC_PROGRAM,
+        programdata: DBC_PROGRAMDATA,
+        state_key: DBC_POOL,
+        state_len: VIRTUAL_POOL_BYTES as u32,
+        terminal_atom: MIGRATION_PROGRESS_CREATED_POOL as i128,
+        identity_seed: 0x60,
+    }
+}
+
+fn mint_row() -> RowFixtureV1 {
+    RowFixtureV1 {
+        selector: 1,
+        program: token_2022_program(),
+        programdata: token_2022_programdata(),
+        state_key: OBSERVED_MINT,
+        state_len: MINT_BYTES as u32,
+        terminal_atom: MINT_AUTHORITY_RENOUNCED as i128,
+        identity_seed: 0x90,
+    }
+}
+
 struct Elves {
     core: Vec<u8>,
     resolution: Vec<u8>,
@@ -510,22 +602,22 @@ fn manifest_identity(manifest: CapabilityManifestV1<'_>) -> CapabilityContentId 
 /// The founding-time pinned ordered account set, exactly as the daemon derives
 /// it: the relayer chooses none of these, it echoes the identity and the adapter
 /// compares.
-fn account_set() -> ([AccountSetEntryV1; 4], [u8; 32]) {
+fn account_set(row: RowFixtureV1) -> ([AccountSetEntryV1; 4], [u8; 32]) {
     let entries = [
         AccountSetEntryV1 {
-            key: DBC_PROGRAM,
+            key: row.program,
             expected_owner: LOADER_V3_PROGRAM_ID,
             inline_len: 36,
         },
         AccountSetEntryV1 {
-            key: DBC_PROGRAMDATA,
+            key: row.programdata,
             expected_owner: LOADER_V3_PROGRAM_ID,
             inline_len: 45,
         },
         AccountSetEntryV1 {
-            key: DBC_POOL,
-            expected_owner: DBC_PROGRAM,
-            inline_len: 424,
+            key: row.state_key,
+            expected_owner: row.program,
+            inline_len: u16::try_from(row.state_len).expect("state width"),
         },
         AccountSetEntryV1 {
             key: MAINNET_CLOCK,
@@ -546,10 +638,10 @@ fn account_set() -> ([AccountSetEntryV1; 4], [u8; 32]) {
     (entries, account_set_id)
 }
 
-fn dbc_program_body() -> Vec<u8> {
+fn dbc_program_body(row: RowFixtureV1) -> Vec<u8> {
     let mut data = vec![0u8; 36];
     data[..4].copy_from_slice(&2u32.to_le_bytes());
-    data[4..36].copy_from_slice(&DBC_PROGRAMDATA);
+    data[4..36].copy_from_slice(&row.programdata);
     data
 }
 
@@ -574,6 +666,36 @@ fn virtual_pool_body() -> Vec<u8> {
     data
 }
 
+/// A `Mint` whose authority is `COption::None` and which IS initialized.
+///
+/// The two facts are separate on purpose. An uninitialized mint is all zeroes,
+/// and all zeroes reads as `COption::None` in both tags -- so `is_initialized`
+/// is the only thing standing between a freshly allocated 82-byte account and
+/// a proof that this token's supply is permanently fixed. Layout real
+/// (`spl-token-interface` `impl Pack for Mint`), values invented.
+fn renounced_mint_body() -> Vec<u8> {
+    mint_body(COPTION_NONE, 1, COPTION_SOME)
+}
+
+fn mint_body(authority_tag: u32, is_initialized: u8, freeze_tag: u32) -> Vec<u8> {
+    let mut data = vec![0u8; MINT_BYTES];
+    data[MINT_AUTHORITY_TAG_OFFSET..MINT_AUTHORITY_TAG_OFFSET + 4]
+        .copy_from_slice(&authority_tag.to_le_bytes());
+    data[MINT_IS_INITIALIZED_OFFSET] = is_initialized;
+    data[MINT_FREEZE_AUTHORITY_TAG_OFFSET..MINT_FREEZE_AUTHORITY_TAG_OFFSET + 4]
+        .copy_from_slice(&freeze_tag.to_le_bytes());
+    data
+}
+
+/// The bytes this row's state position carries in the honest, terminal case.
+fn state_body(row: RowFixtureV1) -> Vec<u8> {
+    if row.selector == 0 {
+        virtual_pool_body()
+    } else {
+        renounced_mint_body()
+    }
+}
+
 fn mainnet_clock_body() -> Vec<u8> {
     let mut data = vec![0u8; 40];
     data[..8].copy_from_slice(&OBSERVED_SLOT.to_le_bytes());
@@ -590,13 +712,13 @@ struct Position {
     tail_digest: [u8; 32],
 }
 
-fn positions() -> Vec<Position> {
+fn positions(row: RowFixtureV1) -> Vec<Position> {
     vec![
         Position {
-            body: dbc_program_body(),
+            body: dbc_program_body(row),
             data_len: 36,
             owner: LOADER_V3_PROGRAM_ID,
-            key: DBC_PROGRAM,
+            key: row.program,
             executable: true,
             tail_digest: SHA256_EMPTY_DIGEST,
         },
@@ -604,17 +726,17 @@ fn positions() -> Vec<Position> {
             body: dbc_programdata_prefix(),
             data_len: 2_326_622,
             owner: LOADER_V3_PROGRAM_ID,
-            key: DBC_PROGRAMDATA,
+            key: row.programdata,
             executable: false,
             // For a ProgramData account inlined at exactly 45 bytes the tail
             // digest IS the deployed ELF digest, by construction.
             tail_digest: ELF_DIGEST,
         },
         Position {
-            body: virtual_pool_body(),
-            data_len: VIRTUAL_POOL_BYTES as u32,
-            owner: DBC_PROGRAM,
-            key: DBC_POOL,
+            body: state_body(row),
+            data_len: row.state_len,
+            owner: row.program,
+            key: row.state_key,
             executable: false,
             tail_digest: SHA256_EMPTY_DIGEST,
         },
@@ -659,13 +781,18 @@ struct ProductGraph {
     result_unit_id: [u8; 32],
 }
 
-fn product_graph(test: &mut ProgramTest) -> ProductGraph {
-    let product_id = ProductContentId::new([0x60; 32]).expect("Product identity");
-    let coordinate_domain_id = [0x61; 32];
-    let result_unit_id = [0x62; 32];
-    let liability_basis_id = ProductContentId::new([0x63; 32]).expect("liability basis");
+fn product_graph(test: &mut ProgramTest, row: RowFixtureV1) -> ProductGraph {
+    // Seeded by the row. Two rows must be two Products with two coordinate
+    // domains and two result units; sharing them would be the one way a
+    // Product carving one observable could be resolved by the other.
+    let seed = row.identity_seed;
+    let product_id = ProductContentId::new([seed; 32]).expect("Product identity");
+    let coordinate_domain_id = [seed.wrapping_add(1); 32];
+    let result_unit_id = [seed.wrapping_add(2); 32];
+    let liability_basis_id =
+        ProductContentId::new([seed.wrapping_add(3); 32]).expect("liability basis");
     let representation_release_id =
-        ProductContentId::new([0x64; 32]).expect("representation release");
+        ProductContentId::new([seed.wrapping_add(4); 32]).expect("representation release");
 
     let cuts: [i128; 0] = [];
     let mut domain_bytes = vec![0; result_domain_record_bytes(cuts.len()).expect("domain width")];
@@ -677,7 +804,8 @@ fn product_graph(test: &mut ProgramTest) -> ProductGraph {
             result_unit_id: ProductContentId::new(result_unit_id).expect("result unit"),
             liability_basis_id,
             representation_release_id,
-            mapping_release_id: ProductContentId::new([0x65; 32]).expect("mapping release"),
+            mapping_release_id: ProductContentId::new([seed.wrapping_add(5); 32])
+                .expect("mapping release"),
             cut_denominator: 1,
             cuts: &cuts,
         },
@@ -693,7 +821,8 @@ fn product_graph(test: &mut ProgramTest) -> ProductGraph {
         PortfolioInputV2 {
             product_id,
             result_domain_id: ProductContentId::new(domain_digest).expect("domain digest"),
-            claim_basis_id: ProductContentId::new([0x66; 32]).expect("claim basis"),
+            claim_basis_id: ProductContentId::new([seed.wrapping_add(6); 32])
+                .expect("claim basis"),
             liability_basis_id,
             representation_release_id,
             denominator: 1,
@@ -729,12 +858,16 @@ fn product_graph(test: &mut ProgramTest) -> ProductGraph {
 ///
 /// A market on a third-party venue is a market that can terminate in "the venue
 /// changed", and this is the record that makes that true rather than a wish.
-fn venue_release(deployment_slot: u64, elf_digest: [u8; 32]) -> ArtifactReleaseV1 {
+fn venue_release(
+    row: RowFixtureV1,
+    deployment_slot: u64,
+    elf_digest: [u8; 32],
+) -> ArtifactReleaseV1 {
     ArtifactReleaseV1::new(
-        ProgramIdentityV1::new(DBC_PROGRAM).expect("venue program"),
+        ProgramIdentityV1::new(row.program).expect("venue program"),
         ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID).expect("loader"),
-        DBC_PROGRAMDATA,
-        ContentId::new([0x67; 32]).expect("venue semantic release"),
+        row.programdata,
+        ContentId::new([row.identity_seed.wrapping_add(7); 32]).expect("venue semantic release"),
         elf_digest,
         deployment_slot,
         ArtifactUpgradePolicyV1::ExactAuthority,
@@ -887,6 +1020,8 @@ fn source_graph(
 
 struct Fixture {
     test: Option<ProgramTest>,
+    /// Which row of the decoding-rules table this world is a market on.
+    row: RowFixtureV1,
     relayer: Keypair,
     worker: Keypair,
     market: Pubkey,
@@ -912,8 +1047,15 @@ struct Fixture {
     failure_entry_index: u16,
 }
 
+/// Row 0's world, which is what every test written before row 1 existed means
+/// by "the fixture".
 fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
-    fixture_with_venue(seal_threshold, extra_keys, DEPLOYMENT_SLOT, ELF_DIGEST)
+    fixture_with_venue(dbc_row(), seal_threshold, extra_keys, DEPLOYMENT_SLOT, ELF_DIGEST)
+}
+
+/// Any row's world, with that row's pinned deployment.
+fn fixture_for_row(row: RowFixtureV1, seal_threshold: u8) -> Fixture {
+    fixture_with_venue(row, seal_threshold, &[], DEPLOYMENT_SLOT, ELF_DIGEST)
 }
 
 /// Build the whole world, with the venue's pinned deployment as a parameter.
@@ -922,6 +1064,7 @@ fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
 /// form of "the venue was upgraded mid-market", which is why it is a knob here
 /// rather than a constant.
 fn fixture_with_venue(
+    row: RowFixtureV1,
     seal_threshold: u8,
     extra_keys: &[[u8; 32]],
     pinned_deployment_slot: u64,
@@ -930,7 +1073,7 @@ fn fixture_with_venue(
     let elves = artifacts();
     let relayer = Keypair::new();
     let worker = Keypair::new();
-    let (_, account_set_id) = account_set();
+    let (_, account_set_id) = account_set(row);
 
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -968,7 +1111,7 @@ fn fixture_with_venue(
 
     let config_value = RelayedAdapterConfigV1::new(
         account_set_id,
-        0,
+        row.selector,
         0,
         u64::from(WINDOW_MAX_AGE_SECONDS),
         CLUSTER_SKEW_SECONDS,
@@ -980,11 +1123,11 @@ fn fixture_with_venue(
         config_value.to_bytes().expect("config bytes").to_vec(),
     );
 
-    let product = product_graph(&mut test);
+    let product = product_graph(&mut test, row);
     let (venue, venue_digest) = add_record(
         &mut test,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
-        venue_release(pinned_deployment_slot, pinned_elf_digest)
+        venue_release(row, pinned_deployment_slot, pinned_elf_digest)
             .to_bytes()
             .to_vec(),
     );
@@ -1225,7 +1368,8 @@ fn fixture_with_venue(
         config,
         rent_beneficiary,
         account_set_id,
-        positions: positions(),
+        row,
+        positions: positions(row),
         product,
         venue,
         source_state,
@@ -1378,7 +1522,7 @@ impl Fixture {
     /// preimage, so a caller cannot produce a different identity by writing the
     /// same field twice.
     fn entry_bytes(&self, substitution: ConsumeSubstitution) -> Vec<u8> {
-        let (mut entries, _) = account_set();
+        let (mut entries, _) = account_set(self.row);
         if let Some(width) = substitution.venue_inline_len {
             entries[2].inline_len = width;
         }
@@ -2304,7 +2448,7 @@ async fn a_quorum_below_the_release_threshold_never_seals() {
 /// transport and this test is where that shows up.
 #[test]
 fn two_disjoint_relayer_key_sets_share_one_decoding_rules_identity() {
-    let (_, account_set_id) = account_set();
+    let (_, account_set_id) = account_set(dbc_row());
     let config = RelayedAdapterConfigV1::new(
         account_set_id,
         0,
@@ -2527,6 +2671,243 @@ async fn a_sealed_graduation_resolves_the_market_through_the_products_own_domain
     );
 }
 
+/// ROW 1, THE SAME VERTICAL. Create, four attestations, seal, consume,
+/// resolve -- on the same real ELFs, through the same transport, quorum,
+/// funding and settlement, with nothing changed but which row of the
+/// decoding-rules table the adapter config selects.
+///
+/// This is what makes the family's central claim executable rather than
+/// asserted: a second observable is a config selector and a grammar, and every
+/// line between the relayer's signature and the Product's cuts is shared.
+#[tokio::test]
+async fn a_sealed_renunciation_resolves_the_market_through_the_products_own_domain() {
+    let mut fixture = fixture_for_row(mint_row(), 1);
+    let mut context = start(&mut fixture).await;
+    seal_record(&mut context, &fixture).await;
+
+    submit_recorded(
+        &mut context,
+        &[fixture.consume_instruction(ConsumeSubstitution::default())],
+        &[&fixture.worker],
+        "relayed consumption: a sealed mint-authority renunciation resolves the market",
+    )
+    .await
+    .expect("consume the sealed renunciation record");
+
+    let data = record_bytes(&mut context, fixture.record).await;
+    let view = RelayedObservationRecordViewV1::decode(&data).expect("record decodes");
+    assert_eq!(view.phase(), Ok(RelayedRecordPhaseV1::Consumed));
+
+    let source_data = record_bytes(&mut context, fixture.source_state).await;
+    let source = SourceResolutionStateV2::decode(&source_data).expect("Source state decodes");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::Resolved);
+    let projection = source.terminal_projection().expect("terminal projection");
+    assert_eq!(projection.terminal_sequence(), TERMINAL_SEQUENCE);
+
+    let certificate_data = record_bytes(&mut context, fixture.certificate).await;
+    let certificate =
+        ResolutionCertificateV2::decode(&certificate_data).expect("certificate decodes");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV2::ResolutionSuccess
+    );
+    assert_eq!(certificate.market, fixture.market.to_bytes());
+    assert_eq!(certificate.generation, GENERATION);
+    // The atom is THIS row's discriminant and not the other row's. A graduation
+    // carries 3; a renunciation carries 1. Nothing between the wire and the
+    // Product's cuts had to learn the difference -- the grammar did.
+    assert_eq!(
+        certificate.result_numerator,
+        i128::from(MINT_AUTHORITY_RENOUNCED)
+    );
+    assert_ne!(
+        certificate.result_numerator,
+        i128::from(MIGRATION_PROGRESS_CREATED_POOL)
+    );
+    assert_eq!(certificate.result_denominator, 1);
+    assert_eq!(
+        certificate.selector, 0,
+        "the renounced cell is the Product's only ordinary one"
+    );
+    assert!(certificate.selector < GRADUATION_REGION_COUNT);
+    assert_eq!(certificate.observed_at, CREATED_UNIX as u64);
+    assert_eq!(
+        certificate.provider_evidence,
+        projection.resolution_evidence_id().to_bytes()
+    );
+    assert_ne!(certificate.provider_evidence, [0; 32]);
+
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.consume_instruction(ConsumeSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_RELAYED_RECORD,
+    );
+}
+
+/// THE ZEROED MINT, ON CHAIN. A freshly allocated 82-byte account is all
+/// zeroes, and all zeroes reads as `COption::None` in BOTH tags -- so as far as
+/// the authority field is concerned it says "this token's supply is
+/// permanently fixed". `is_initialized` is the only byte standing between that
+/// account and a false proof.
+///
+/// Lean proves it (`a_zeroed_account_does_not_prove_a_renunciation`). This
+/// executes it: a real quorum signs the real zeroed bytes, the record seals
+/// honestly, and the on-chain adapter refuses. The positive control is in the
+/// same run and is the whole point -- the SAME bytes with that one byte set to
+/// one do resolve, so the refusal is about `is_initialized` and not about the
+/// checker refusing everything.
+#[tokio::test]
+async fn a_zeroed_mint_cannot_prove_a_renunciation_on_chain() {
+    let mut fixture = fixture_for_row(mint_row(), 1);
+    let zeroed = vec![0_u8; MINT_BYTES];
+    assert_eq!(
+        u32::from_le_bytes(
+            zeroed[MINT_AUTHORITY_TAG_OFFSET..MINT_AUTHORITY_TAG_OFFSET + 4]
+                .try_into()
+                .expect("tag")
+        ),
+        COPTION_NONE,
+        "the account this test signs really does claim a renounced authority"
+    );
+    fixture.positions[2].body = zeroed;
+    let mut context = start(&mut fixture).await;
+    seal_record(&mut context, &fixture).await;
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.consume_instruction(ConsumeSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_PROVIDER_OBSERVATION,
+    );
+    // Nothing moved: the market is still live and the record still sealed.
+    let source_data = record_bytes(&mut context, fixture.source_state).await;
+    let source = SourceResolutionStateV2::decode(&source_data).expect("Source decodes");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
+
+    // POSITIVE CONTROL, a fresh world over the same bytes plus one byte.
+    let mut control = fixture_for_row(mint_row(), 1);
+    let mut initialized = vec![0_u8; MINT_BYTES];
+    initialized[MINT_IS_INITIALIZED_OFFSET] = 1;
+    control.positions[2].body = initialized;
+    let mut context = start(&mut control).await;
+    seal_record(&mut context, &control).await;
+    submit(
+        &mut context,
+        &[control.consume_instruction(ConsumeSubstitution::default())],
+        &[&control.worker],
+    )
+    .await
+    .expect("one byte is the whole difference between no proof and a proof");
+    let certificate_data = record_bytes(&mut context, control.certificate).await;
+    let certificate =
+        ResolutionCertificateV2::decode(&certificate_data).expect("certificate decodes");
+    assert_eq!(
+        certificate.result_numerator,
+        i128::from(MINT_AUTHORITY_RENOUNCED)
+    );
+}
+
+/// Row 1's load-bearing refusal, the mirror of a pre-terminal pool. A mint
+/// whose authority is still held is NO ANSWER, not a negative one, and the
+/// honest response is to leave the market open.
+#[tokio::test]
+async fn a_held_mint_authority_says_the_window_is_unsatisfied_and_leaves_the_market_live() {
+    for freeze_tag in [COPTION_NONE, COPTION_SOME] {
+        let mut fixture = fixture_for_row(mint_row(), 1);
+        fixture.positions[2].body = mint_body(COPTION_SOME, 1, freeze_tag);
+        let mut context = start(&mut fixture).await;
+        seal_record(&mut context, &fixture).await;
+        refused_with(
+            submit(
+                &mut context,
+                &[fixture.consume_instruction(ConsumeSubstitution::default())],
+                &[&fixture.worker],
+            )
+            .await,
+            REFUSAL_RELAYED_WINDOW,
+        );
+        let data = record_bytes(&mut context, fixture.record).await;
+        let view = RelayedObservationRecordViewV1::decode(&data).expect("record decodes");
+        assert_eq!(view.phase(), Ok(RelayedRecordPhaseV1::Sealed));
+        let source_data = record_bytes(&mut context, fixture.source_state).await;
+        let source = SourceResolutionStateV2::decode(&source_data).expect("Source decodes");
+        assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
+    }
+}
+
+/// SPL Token carries no discriminator, so what stops a foreign 82-byte body is
+/// the two `COption` tags. Every case here is a real quorum standing behind a
+/// real signed statement, which is the only interesting kind of hostile input.
+#[tokio::test]
+async fn a_signed_but_foreign_or_incoherent_mint_body_refuses_on_its_own_field() {
+    let cases: [(&str, Vec<u8>); 3] = [
+        (
+            "an authority tag that is not one of the two words this program writes",
+            mint_body(2, 1, COPTION_SOME),
+        ),
+        (
+            "a freeze-authority tag that is not a tag, so the body is not a Mint",
+            mint_body(COPTION_NONE, 1, 0xdead_beef),
+        ),
+        (
+            "an is_initialized byte `Pack::unpack_from_slice` itself refuses",
+            mint_body(COPTION_NONE, 2, COPTION_SOME),
+        ),
+    ];
+    for (name, body) in cases {
+        let mut fixture = fixture_for_row(mint_row(), 1);
+        fixture.positions[2].body = body;
+        let mut context = start(&mut fixture).await;
+        seal_record(&mut context, &fixture).await;
+        let result = submit(
+            &mut context,
+            &[fixture.consume_instruction(ConsumeSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await;
+        assert!(result.is_err(), "{name} was accepted");
+        refused_with(result, REFUSAL_PROVIDER_OBSERVATION);
+    }
+}
+
+/// The two rows are two markets on two account sets, and neither identity is
+/// reachable from the other. A shared `account_set_id` or a shared Product
+/// would be the one way one row's observation could settle the other's market.
+#[test]
+fn the_two_rows_pin_different_account_sets_and_different_products() {
+    let (dbc_entries, dbc_set) = account_set(dbc_row());
+    let (mint_entries, mint_set) = account_set(mint_row());
+    assert_ne!(dbc_set, mint_set);
+    assert_ne!(dbc_entries[2].key, mint_entries[2].key);
+    assert_eq!(dbc_entries[2].inline_len, 424);
+    assert_eq!(
+        mint_entries[2].inline_len, 82,
+        "the base Mint is carried whole; an extended mint refuses on its length"
+    );
+    // Both sets name the same foreign clock at the same position, which is the
+    // one account the family always reads for itself.
+    assert_eq!(dbc_entries[3], mint_entries[3]);
+    assert_ne!(dbc_row().terminal_atom, mint_row().terminal_atom);
+    assert_ne!(dbc_row().selector, mint_row().selector);
+    // Token-2022's ProgramData is DERIVED, so this fixture cannot be pinning a
+    // programdata that the loader would not agree with.
+    assert_eq!(
+        Pubkey::find_program_address(
+            &[token_2022_program().as_ref()],
+            &bpf_loader_upgradeable::ID
+        )
+        .0
+        .to_bytes(),
+        mint_row().programdata
+    );
+}
+
 #[tokio::test]
 async fn an_unsealed_record_cannot_be_consumed() {
     let mut fixture = fixture(1, &[]);
@@ -2620,7 +3001,7 @@ async fn a_venue_upgraded_mid_market_refuses_every_later_observation() {
     // founding; the attested `ProgramData` reports another. Nothing about the
     // relayer, the quorum or the pool changed, and the market still cannot
     // resolve -- which is precisely the cost the Product has to disclose.
-    let mut fixture = fixture_with_venue(1, &[], DEPLOYMENT_SLOT + 1, [0xef; 32]);
+    let mut fixture = fixture_with_venue(dbc_row(), 1, &[], DEPLOYMENT_SLOT + 1, [0xef; 32]);
     let mut context = start(&mut fixture).await;
     seal_record(&mut context, &fixture).await;
     refused_with(

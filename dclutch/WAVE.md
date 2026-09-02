@@ -5866,3 +5866,50 @@ The lane's first commit used `git add <path> && git commit`, which commits the
 across seven files), now in history under a relay-titled message. Nothing lost;
 history misattributed. This is the second lane to do it in one evening, and the
 `commit -o` rule in `AGENTS.md` postdates both.
+
+## 2026-09-01 — the whole pre-CPI region is innocent, and the transport is decided twice
+
+The admitted-AOT pre-CPI boundary now carries three codes instead of `Content`
+(`f3a91aa4`): `AdmittedFrame` 0x4017 (8 sites), `AdmittedTransport` 0x4018 (40),
+`AdmittedContext` 0x4019 (1). **The equity Add still refuses `0x4003` at 577,603 CU
+with no CPI** — so none of the 49 repointed sites fired. **The entire
+`admitted_composition_v3` pre-CPI region is innocent**, and the search collapses
+from 2,126 `Content` sites to ~30 in `hot_v3.rs` (`execute_admitted_candidate_v3`,
+`:6258-6386`, nearly all `ContentId::new(...)` and `ok_or` on strategy ids).
+`ContentId::new` refuses a **zero** identity, so the shape to look for is a digest
+that does not exist where one was expected — the register-116 family.
+
+Three eliminations by construction: the frame's shape/deployment block refuses
+`Release`, not `Content`; the caller-authority width has one author; the equity
+effect declares its scalar and identity counts from the same functions the
+operator validates against.
+
+### The positive control never ran the path the Add needs
+
+LP bank = 20×8 + 21×32 = **832 bytes ≤ 880 → inline, one chunk, no scratch pages.**
+Equity Add bank = 26×8 + 37×32 = **1,392 → two scratch pages.** The LP Open at
+1,042,690 CU proves admitted-AOT works *inline*; it never executes the transport
+the Add requires.
+
+**And the transport is decided twice.** `classify_bank_transport_v2` derives it
+from the bank's *size*; `transport = if input_scratch_pages.is_empty()` derives
+it from what the caller *supplied*. Equity's Profile13 declares no dynamic spans,
+so `authenticated_input_scratch_pages_v3` returns `Ok(&[])` (`hot_v3.rs:6750`) and
+Trading picks `Inline` for a bank classification says needs two pages. **The two
+are never compared, `AcceleratorRequestV2::new` accepts the inline form, and the
+disagreement is silent** — the Add ships its whole 1,392-byte bank inline in each
+of two chunk requests. A guard with two authors, whether or not it is today's wall.
+
+### Do not run genref from a shared dirty tree
+
+The lane ran `tools/genref/generate.sh` to pick up its three new codes. It
+regenerates from the **working tree**, and in a shared dirty tree it silently
+**deleted another lane's landed `0xC006`–`0xC011` rows** from
+`docs/reference/refusals.md`, plus six other files. Caught because
+`docs/reference/` had been verified clean immediately before; restored with
+`git restore --source=HEAD` on seven named paths. The convergence protocol is
+*regenerate from a clean worktree at HEAD*, and the tool now refuses a dirty tree.
+
+The `cargo check` gate in every driver script **blocked nine attempts over ten
+minutes** while another lane's file was mid-probe; the run that got through was
+the one that produced a result.

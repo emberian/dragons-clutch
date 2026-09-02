@@ -76,7 +76,7 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
       <PositionBars
         balances={position.balances}
         claim={position.claim.kind === 'mergeable'
-          ? { kind: 'mergeable', completeSetsAtoms: position.claim.completeSetsAtoms }
+          ? { kind: 'mergeable', completeSetsAtoms: position.claim.completeSetsAtoms, mergeableCollateralAtoms: position.claim.mergeableCollateralAtoms }
           : position.claim.kind === 'redeemable'
             ? { kind: 'redeemable', winningClaim: position.claim.winningClaim, redeemableAtoms: position.claim.redeemableAtoms }
             : { kind: 'unavailable' }}

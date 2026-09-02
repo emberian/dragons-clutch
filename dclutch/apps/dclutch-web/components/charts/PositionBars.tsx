@@ -22,7 +22,16 @@ import { FIGURE_AXIS_PX, useFigureScale } from './useFigureScale';
  */
 
 export type PositionBarsClaimV1 =
-  | Readonly<{ kind: 'mergeable'; completeSetsAtoms: string }>
+  | Readonly<{
+    kind: 'mergeable';
+    completeSetsAtoms: string;
+    /**
+     * Collateral all these sets return, or `null` when the caller has not
+     * authenticated the Market's basis scale. Passed in rather than assumed:
+     * this figure has no chain access and cannot read `ProductBasisV3`.
+     */
+    mergeableCollateralAtoms?: string | null;
+  }>
   | Readonly<{ kind: 'redeemable'; winningClaim: number; redeemableAtoms: string }>
   | Readonly<{ kind: 'unavailable' }>;
 
@@ -142,7 +151,12 @@ export default function PositionBars({ balances, claim, caption, emptyReason }: 
       <span className="viz-key" style={{ background: 'var(--viz-law)' }} />
       <strong>merge floor · {claim.completeSetsAtoms} complete sets</strong> — {claim.completeSetsAtoms === '0'
         ? 'one claim balance is zero, so no complete set exists to merge'
-        : 'the smallest owned balance; each set merges back into exactly one collateral atom'}
+        : (claim.mergeableCollateralAtoms ?? null) === null
+          // The set count is scale-free; what a set is WORTH is `basis_scale`
+          // atoms, and no record carrying it has been read here. Saying "one
+          // collateral atom" would be the scale-1 assumption drawn as a fact.
+          ? 'the smallest owned balance; what each set is worth in collateral is this Market’s basis scale, which this figure has not read'
+          : `the smallest owned balance; these sets merge back into ${claim.mergeableCollateralAtoms} collateral atoms`}
     </p>}
     {claim.kind === 'redeemable' && <p className="viz-readout">
       <span className="viz-key" style={{ background: 'var(--viz-accent)' }} />

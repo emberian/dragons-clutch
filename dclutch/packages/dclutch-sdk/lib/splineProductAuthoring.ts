@@ -172,6 +172,44 @@ function address(value: unknown, field: string): string {
  * admission theorem into TypeScript. It verifies the compiler's declared file
  * identities, canonical Registry PDAs, fixed schemas, and report invariants,
  * then exposes only the five record coordinates Found needs.
+ *
+ * ## The degeneracy check here is STRICTLY WEAKER than the compiler's
+ *
+ * The founding belief became a family: `FoundingBeliefV1` in
+ * `crates/dclutch-product-compiler/src/partition_quality.rs:195` is `SpotBand`
+ * (a spot-centred band with a volatility) or `StatedProposition` (a declared
+ * probability), and each selects its own model — a belief and its model are one
+ * choice, so no caller passes a model in. With the family came a second
+ * measurement, `PartitionQualityReportV1::unresolved_share_bps` (`:270`): the
+ * ex-ante mass that lands on NO ordinary cell, measured beside the cells rather
+ * than inferred from them. And `is_degenerate` (`:284`) is now a disjunction:
+ *
+ * ```text
+ * self.dominant_share_bps >= ceiling_bps || self.unresolved_share_bps >= ceiling_bps
+ * ```
+ *
+ * The check below tests only the first arm, because the report this client
+ * reads carries only the first number. **That is a weaker condition than the
+ * compiler's and this file states it rather than leaving a reader to assume the
+ * two agree.**
+ *
+ * Two things keep the weakness from being reachable in silence, and both are
+ * refusals rather than promises:
+ *
+ *   - `report.partition_quality.model` is matched by NAME against
+ *     `triangular-plausible-band-v1`. A propositional report announces a
+ *     different model and is refused outright, so it is never measured under
+ *     this one's name by the weaker rule.
+ *   - `exactKeys` is exact in both directions. The day the producer emits
+ *     `unresolved_share_bps`, this refuses the whole report as having unknown
+ *     fields — loudly, before any partial reading — rather than dropping the
+ *     new arm on the floor.
+ *
+ * So the repair when that day comes is to read the reported number and apply
+ * the compiler's own disjunction to it, exactly as `dominant_share_bps` is read
+ * and applied here. It is NOT to compute either model in TypeScript: a second
+ * implementation of the triangular displacement is the identical defect this
+ * seam exists to avoid, and the compiled report already carries the answer.
  */
 export async function inspectSplineProductAuthoringArtifactsV1(
   reportValue: unknown,
@@ -291,6 +329,12 @@ export async function inspectSplineProductAuthoringArtifactsV1(
   // The compiler refuses `dominant >= ceiling` before it writes a report, so a
   // report that says otherwise is describing a market that should not exist.
   // Reported rather than recomputed, and refused rather than rendered.
+  //
+  // ONE ARM OF TWO. `PartitionQualityReportV1::is_degenerate`
+  // (`crates/dclutch-product-compiler/src/partition_quality.rs:284`) also
+  // refuses `unresolved_share_bps >= ceiling_bps`, and this report carries no
+  // such field. See this function's own doc for why that weakness is not
+  // reachable in silence, and for what to do instead of porting a model here.
   const degenerate = dominantShareBps >= maxCellShareBps;
   if (degenerate) {
     throw new Error(`report.partition_quality states a degenerate partition (cell ${dominantCell} takes ${dominantShareBps} of ${maxCellShareBps} permitted basis points) that its own compiler must have refused`);

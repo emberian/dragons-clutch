@@ -46,9 +46,35 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
 export const PORTFOLIO_MAX_MARKETS = MARKET_DISCOVERY_MAX_ADDRESSES;
 const RPC_ACCOUNT_BATCH = 32;
 
+/**
+ * Atoms of collateral one complete set is worth, when it is known.
+ *
+ * The scale is `ProductBasisV3::payout_scale`, which Core authenticates at
+ * founding: `programs/dclutch-core-sbf/src/generic_founding_v1.rs:1091` refuses
+ * a zero, `:1099` copies it into `GenericProductFacts.basis_scale`, and `:1300`
+ * refuses a founding request that states a different one. The conservation
+ * contract says it outright — *"the conversion to atoms is `basis_scale`"*
+ * (`crates/dclutch-claims-conservation-contract/src/lib.rs:60-61`).
+ *
+ * `null` is the state of a surface that has not read that record, and it is
+ * deliberately NOT a default of 1. Every fixture in this tree happens to carry
+ * 1, which is exactly why a default would look right everywhere and be wrong on
+ * the first graded market: at scale 1 an under-collateralized quantity of
+ * `n(basis_scale - 1)` is identically zero and invisible.
+ */
+export type BasisScaleV1 = bigint | null;
+
 /** What the reader can still do with these exact balances, and why. */
 export type PortfolioClaimV1 =
-  | Readonly<{ kind: 'mergeable'; completeSetsAtoms: string; note: string }>
+  | Readonly<{
+    kind: 'mergeable';
+    completeSetsAtoms: string;
+    /** Collateral one set returns, or `null` when the basis was not read. */
+    collateralPerSetAtoms: string | null;
+    /** Collateral all these sets return, or `null` for the same reason. */
+    mergeableCollateralAtoms: string | null;
+    note: string;
+  }>
   | Readonly<{ kind: 'redeemable'; winningClaim: number; redeemableAtoms: string; perClaimAtoms: ReadonlyArray<string>; note: string }>
   | Readonly<{ kind: 'unavailable'; note: string }>;
 
@@ -130,7 +156,11 @@ function minimum(values: ReadonlyArray<string>): string {
  * What these exact balances still admit, decided by the Market's own phase and
  * settlement rather than by what would be convenient to display.
  */
-export function portfolioClaimV1(market: MarketDiscoveryCardV1, balances: ReadonlyArray<string>): PortfolioClaimV1 {
+export function portfolioClaimV1(
+  market: MarketDiscoveryCardV1,
+  balances: ReadonlyArray<string>,
+  basisScale: BasisScaleV1 = null,
+): PortfolioClaimV1 {
   if (market.status !== 'decoded') {
     return Object.freeze({ kind: 'unavailable', note: 'The Market did not decode at this finalized floor, so nothing may be claimed about what these balances admit.' });
   }
@@ -155,10 +185,23 @@ export function portfolioClaimV1(market: MarketDiscoveryCardV1, balances: Readon
     // this count names something that cannot be performed -- and says so,
     // rather than reading as an offer that is merely unexercised.
     const closed = marketActivationOutlookV1(market).status === 'never';
+    const sets = minimum(balances);
+    // The SET COUNT is scale-free — a complete set is one atom of every claim,
+    // so it is the smallest balance whatever a set is worth. The COLLATERAL a
+    // set returns is not: it is `basis_scale` atoms, and this surface reads no
+    // record that carries it. Stating "exactly one collateral atom" was the
+    // scale-1 assumption published as a fact.
+    const perSet = basisScale === null ? null : basisScale.toString();
+    const total = basisScale === null ? null : (BigInt(sets) * basisScale).toString();
+    const collateral = perSet === null
+      ? 'Merging burns one complete set and withdraws the collateral that set is worth — `basis_scale` atoms, the authenticated `ProductBasisV3::payout_scale` Core pins at founding. This surface has not read that record, so it states the set count and not a collateral quantity.'
+      : `Merging burns one complete set and withdraws ${perSet} collateral atoms, which is this Market's authenticated basis scale, so these sets are worth ${total ?? '0'} atoms.`;
     return Object.freeze({
       kind: 'mergeable',
-      completeSetsAtoms: minimum(balances),
-      note: `A complete set is one atom of every claim. Merging burns one complete set and withdraws exactly one collateral atom, so the count that can be merged is the smallest owned claim balance. This is arithmetic on these balances, not an offer.${closed ? ' On this Market it is arithmetic only: its trading can never be switched on, and there is no other route that moves collateral out before it reaches its answer.' : ''}`,
+      completeSetsAtoms: sets,
+      collateralPerSetAtoms: perSet,
+      mergeableCollateralAtoms: total,
+      note: `A complete set is one atom of every claim, so the count that can be merged is the smallest owned claim balance. ${collateral} This is arithmetic on these balances, not an offer.${closed ? ' On this Market it is arithmetic only: its trading can never be switched on, and there is no other route that moves collateral out before it reaches its answer.' : ''}`,
     });
   }
   return Object.freeze({

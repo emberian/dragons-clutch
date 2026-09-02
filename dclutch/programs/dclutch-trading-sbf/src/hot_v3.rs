@@ -14947,11 +14947,73 @@ mod tests {
             Box::leak(Box::new(Pubkey::new_unique())),
             true,
         );
+        // `owner_program` is a PRIVILEGE fact and never an identity one, and
+        // this is the arm that says so out loud. It is `frame.registry` at every
+        // call site -- an already authenticated fixed coordinate, not something
+        // a caller chooses -- and the credit's real owner binding is the
+        // `create_program_address` at the end of the function, under
+        // `account.owner`. `686bf2e5` did pin the two together and it was
+        // measured unsatisfiable on every honest transaction, because lifecycle
+        // credits are owned by the RENT program and `frame.registry` is the
+        // Registry; see the note on `authenticate_lifecycle_credit_v3`.
+        //
+        // So an unrelated executable readonly account IS admitted here, and this
+        // case asserts that rather than pretending otherwise. What must not be
+        // admitted is a substituted CREDIT owner, which is the attack this
+        // parameter used to be mistaken for a defence against, and which the
+        // next assertion drives.
+        assert!(
+            authenticate_lifecycle_credit_v3(
+                &accounts,
+                &unrelated_executable_owner,
+                0,
+                floor,
+                &rent,
+                market.to_bytes(),
+                release.to_bytes(),
+                generation,
+                credit_key.to_bytes(),
+            )
+            .is_ok(),
+            "the owner-program argument carries privileges, not identity",
+        );
+
+        // THE SUBSTITUTION THAT MATTERS, and nothing tested it. The credit is a
+        // frame coordinate, so its owner is whatever the caller staged; the
+        // lamport census found `LifecycleRentCreditV2` to be the one root all
+        // four families compare against, and an attacker's program owning a
+        // well-formed credit body is the whole attack. The derivation refuses it
+        // because `create_program_address` under a foreign owner cannot
+        // reproduce this credit's address from this credit's own seeds.
+        let foreign_owned_credit = AccountInfo::new(
+            Box::leak(Box::new(credit_key)),
+            false,
+            true,
+            Box::leak(Box::new(floor)),
+            Box::leak(state.to_bytes().to_vec().into_boxed_slice()),
+            Box::leak(Box::new(unrelated_owner_key)),
+            false,
+        );
+        assert_eq!(
+            authenticate_lifecycle_credit_v3(
+                &[&foreign_owned_credit],
+                &owner,
+                0,
+                floor,
+                &rent,
+                market.to_bytes(),
+                release.to_bytes(),
+                generation,
+                credit_key.to_bytes(),
+            ),
+            Err(TradingSbfError::Content.into()),
+            "a credit under a substituted owner must never authenticate",
+        );
+
         for (name, hostile_owner) in [
             ("non-executable", &non_executable_owner),
             ("writable", &writable_owner),
             ("signer", &signer_owner),
-            ("unrelated", &unrelated_executable_owner),
         ] {
             assert_eq!(
                 authenticate_lifecycle_credit_v3(

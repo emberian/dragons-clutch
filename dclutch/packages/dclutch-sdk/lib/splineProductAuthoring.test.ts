@@ -193,4 +193,44 @@ describe('partition quality', () => {
       value.files,
     )).rejects.toThrow(/states a degenerate partition \(cell 2 takes 10000 of 9000 permitted basis points\)/);
   });
+
+  /**
+   * The weaker arm, pinned as weaker.
+   *
+   * `PartitionQualityReportV1::is_degenerate`
+   * (`crates/dclutch-product-compiler/src/partition_quality.rs:284`) is a
+   * disjunction — `dominant_share_bps >= ceiling || unresolved_share_bps >=
+   * ceiling` — and this client tests only the first arm, because the report it
+   * reads carries only the first number. The producer
+   * (`tools/local-validator/bootstrap/successor/src/spline_product.rs:219-231`)
+   * computes the second and does not emit it.
+   *
+   * These two assertions are what stops that being a silent hole. A report
+   * that grows the field is refused whole rather than read past, and a
+   * propositional model is refused by name rather than measured under a spot
+   * model's rule. Both are the current, correct behaviour, and both are the
+   * signal to the author who lands the emission: carry the arm, do not port
+   * the model.
+   */
+  it('refuses a report that grew unresolved_share_bps rather than reading past it', async () => {
+    const value = await fixture();
+    await expect(inspectSplineProductAuthoringArtifactsV1(
+      withQuality(value.report, { unresolved_share_bps: 0 }),
+      value.files,
+    )).rejects.toThrow(/report\.partition_quality has missing or unknown fields/);
+  });
+
+  it('refuses the propositional model by name rather than scoring it under the spot rule', async () => {
+    const value = await fixture();
+    // `PartitionQualityModelV1::StatedCategoricalPrior` is the other member of
+    // the belief family. Under it a market that is 95% likely to fail to
+    // resolve is exactly as degenerate as one whose middle cell takes
+    // everything, and only `unresolved_share_bps` says so — which this report
+    // does not carry. Refusing the model is what keeps that from being scored
+    // as a healthy partition.
+    await expect(inspectSplineProductAuthoringArtifactsV1(
+      withQuality(value.report, { model: 'stated-categorical-prior-v1' }),
+      value.files,
+    )).rejects.toThrow(/names a displacement model this client cannot describe/);
+  });
 });

@@ -11,9 +11,23 @@ describe('PositionBars', () => {
       caption="Owned claim atoms per claim."
     />);
     expect(html).toContain('merge floor · 7 complete sets');
-    expect(html).toContain('the smallest owned balance; each set merges back into exactly one collateral atom');
+    // The set count is scale-free and is stated. What a set is WORTH is not,
+    // and this figure reads no record that carries it, so it says so rather
+    // than drawing the scale-1 assumption as a fact.
+    expect(html).toContain('what each set is worth in collateral is this Market\u2019s basis scale, which this figure has not read');
+    expect(html).not.toContain('one collateral atom');
     expect(html).toContain('claim 2 · 30 atoms');
     expect(html).toContain('var(--viz-law)');
+  });
+
+  it('states the collateral exactly when the caller has authenticated the basis scale', () => {
+    const html = renderToStaticMarkup(<PositionBars
+      balances={['12', '7', '30']}
+      claim={{ kind: 'mergeable', completeSetsAtoms: '7', mergeableCollateralAtoms: '7000000' }}
+      caption="Owned claim atoms per claim."
+    />);
+    expect(html).toContain('these sets merge back into 7000000 collateral atoms');
+    expect(html).not.toContain('has not read');
   });
 
   it('says plainly when a zero balance means no complete set exists', () => {

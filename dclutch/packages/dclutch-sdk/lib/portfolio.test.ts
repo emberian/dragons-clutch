@@ -253,4 +253,44 @@ describe('portfolio by Claims Position derivation', () => {
     // On a Market that can still trade, the extra clause is absent entirely.
     expect(portfolioClaimV1(market, entry.position.balances).note).not.toMatch(/arithmetic only/);
   });
+
+  /**
+   * The scale-1 assumption, and the two states it collapsed into one.
+   *
+   * "Merging burns one complete set and withdraws exactly one collateral atom"
+   * is true of every categorical basis and of every fixture in this tree, and
+   * false of the first graded market. The SET COUNT is scale-free and is stated
+   * either way; the COLLATERAL is `basis_scale` atoms and is stated only when a
+   * caller has authenticated `ProductBasisV3::payout_scale`.
+   */
+  it('states a collateral quantity only when the basis scale was authenticated', async () => {
+    const portfolio = await inspectPortfolioV1(client(await chain()), request);
+    const [entry] = portfolio.entries;
+    if (entry.position.status !== 'held') throw new Error('expected a held Position');
+    const market = entry.market;
+    if (market.status !== 'decoded') throw new Error('expected a decoded Market');
+
+    const unknown = portfolioClaimV1(market, entry.position.balances);
+    if (unknown.kind !== 'mergeable') throw new Error('an Open Market admits the complete-set merge');
+    expect(unknown.completeSetsAtoms).toBe('500000000');
+    expect(unknown.collateralPerSetAtoms).toBeNull();
+    expect(unknown.mergeableCollateralAtoms).toBeNull();
+    expect(unknown.note).toMatch(/has not read that record/);
+    expect(unknown.note).not.toMatch(/exactly one collateral atom/);
+
+    const known = portfolioClaimV1(market, entry.position.balances, 1_000_000n);
+    if (known.kind !== 'mergeable') throw new Error('the scale changes nothing about which act is admitted');
+    // Scale-free: the same sets, whatever a set is worth.
+    expect(known.completeSetsAtoms).toBe(unknown.completeSetsAtoms);
+    expect(known.collateralPerSetAtoms).toBe('1000000');
+    expect(known.mergeableCollateralAtoms).toBe('500000000000000');
+    expect(known.note).toMatch(/1000000 collateral atoms/);
+    expect(known.note).not.toMatch(/has not read that record/);
+
+    // The default is not 1. A default of 1 is what made the defect invisible:
+    // at scale 1 the two branches print the same sentence.
+    const unit = portfolioClaimV1(market, entry.position.balances, 1n);
+    if (unit.kind !== 'mergeable') throw new Error('the scale changes nothing about which act is admitted');
+    expect(unit.collateralPerSetAtoms).toBe('1');
+  });
 });

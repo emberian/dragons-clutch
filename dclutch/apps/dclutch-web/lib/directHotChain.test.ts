@@ -420,7 +420,12 @@ describe('Direct V3 chain-selected artifacts', () => {
 
   it('hostile-decodes the Hot38 Product-basis continuation and semantic join', async () => {
     const fixture = await categoricalBasisFixture();
-    await expect(validateProductBasisV3(fixture.basis, identity(1), identity(2), fixture.domain)).resolves.toBe(3);
+    // The scale comes back now rather than being computed and dropped. A
+    // categorical basis is canonical Q=1 BY REFUSAL -- the validator throws on
+    // any other value -- so this pins the one case where 1 is a fact and not an
+    // assumption, and every consumer that wants the number has to ask for it.
+    await expect(validateProductBasisV3(fixture.basis, identity(1), identity(2), fixture.domain))
+      .resolves.toEqual({ basisWidth: 3, payoutScale: 1n, kind: 1 });
 
     const substituted = fixture.basis.slice();
     substituted.set(identity(9), 32);
