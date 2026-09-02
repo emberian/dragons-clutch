@@ -1790,6 +1790,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
  "dclutch-market-core-codec",
+ "dclutch-operator",
  "dclutch-program-test-evidence",
  "dclutch-realm-contract",
  "dclutch-record-contract",

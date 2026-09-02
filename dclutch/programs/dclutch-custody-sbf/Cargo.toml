@@ -37,6 +37,17 @@ solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [dev-dependencies]
 dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
+# The delegated-custody CLIENT. `delegated_custody_transfer_cpi_v2` is the
+# tree's only client-side statement of `custody/delegated::process`, and this
+# campaign used to restate its 14-account frame here -- which is how the builder
+# shipped a Realm DIGEST where the chain requires the Realm RECORD without any
+# campaign noticing. The campaign drives the builder now, so the frame the real
+# Custody ELF admits is the one an operator would actually send.
+#
+# `default-features = false` drops `dealer-series` and with it the only reason
+# the crate links `dclutch-trading-sbf`. DEV only; none of it reaches the
+# cdylib, and the ELF digest is the control.
+dclutch-operator = { path = "../../crates/dclutch-operator", default-features = false }
 solana-account = "=4.6.0"
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.5.0"

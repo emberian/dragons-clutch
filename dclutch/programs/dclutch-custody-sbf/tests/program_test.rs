@@ -17,6 +17,10 @@ use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     StateBumpsV1,
 };
+use dclutch_operator::delegated_custody::{
+    DelegatedCustodyInfrastructureV2, DelegatedCustodyOperatorErrorV2,
+    delegated_custody_transfer_cpi_v2,
+};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
@@ -868,25 +872,55 @@ fn wrapper_instruction(
     }
 }
 
+/// The delegated CPI frame, AUTHORED BY THE SHIPPED CLIENT.
+///
+/// This campaign used to write the fourteen accounts out here, beside the ones
+/// `dclutch_operator::delegated_custody` ships -- the tree's only client-side
+/// statement of this route. Two authors for one frame is how the builder came
+/// to put the Realm's CONTENT DIGEST in slot 6, where Custody requires the
+/// Realm RECORD, and ship that way while this campaign's own hand-written
+/// frame stayed correct and green. The route read `executed` the whole time.
+///
+/// The test caller program forwards whatever metas it is handed
+/// (`test-programs/caller`), re-emitting them to Custody unchanged except that
+/// it promotes slot 0 to signer and signs it with its own derived seeds. So the
+/// frame below is, exactly, the frame the real Custody ELF admits -- and the
+/// builder is now the thing this campaign tests rather than a second opinion
+/// nothing consulted.
+fn delegated_cpi(
+    fixture: &Fixture,
+    request: DelegatedCustodyRequestV2,
+) -> Result<Instruction, DelegatedCustodyOperatorErrorV2> {
+    delegated_custody_transfer_cpi_v2(
+        request,
+        DelegatedCustodyInfrastructureV2 {
+            custody_program: CUSTODY_PROGRAM_ID,
+            registry_program: REGISTRY_PROGRAM_ID,
+            caller_programdata: fixture.caller_programdata,
+            realm_raw: fixture.realm_key,
+            realm_staging: fixture.realm_staging,
+        },
+    )
+}
+
 fn delegated_wrapper_instruction(
     fixture: &Fixture,
     request: DelegatedCustodyRequestV2,
     fail_after: bool,
 ) -> Instruction {
-    let request_bytes = request.encode().expect("delegated request bytes");
-    let custody = request.custody;
+    let cpi = delegated_cpi(fixture, request).expect("the operator builds the delegated CPI");
     let mut accounts = vec![AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false)];
-    accounts.extend(common_metas_for_bytes(fixture, custody, &request_bytes));
-    accounts.extend([
-        AccountMeta::new_readonly(fixture.mint, false),
-        AccountMeta::new(Pubkey::new_from_array(custody.source), false),
-        AccountMeta::new(Pubkey::new_from_array(custody.destination), false),
-        AccountMeta::new_readonly(fixture.custody_authority, false),
-        AccountMeta::new_readonly(fixture.profile.token_program(), false),
-    ]);
-    let mut data = Vec::with_capacity(request_bytes.len() + 1);
+    // Slot 0 is presented UNSIGNED at the outer level and the caller program
+    // requires that: it is a PDA of the caller, so no keypair could sign for it
+    // here, and the caller promotes it when it `invoke_signed`s. Every other
+    // privilege is the operator's, forwarded untouched.
+    accounts.extend(cpi.accounts.iter().map(|meta| AccountMeta {
+        is_signer: false,
+        ..meta.clone()
+    }));
+    let mut data = Vec::with_capacity(cpi.data.len() + 1);
     data.push(u8::from(fail_after));
-    data.extend_from_slice(&request_bytes);
+    data.extend_from_slice(&cpi.data);
     Instruction {
         program_id: CALLER_PROGRAM_ID,
         accounts,

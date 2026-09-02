@@ -355,6 +355,26 @@ def actionTag : RegisteredPhysical.TerminalAction → UInt8
   | .cancel => 0
   | .expire => 1
 
+/-- The action byte read back.  `decode` used to match `0` and `1` directly,
+which made the terminal tag a fact with two authors inside this module and a
+third in the Rust emitter: the encoder wrote `actionTag`, the decoder compared
+against its own literals, and `examples_round_trip` was the only thing holding
+the two together -- a theorem about a round trip, standing in for a statement
+about the alphabet.  Inverting `actionTag` instead means a tag can only be
+changed in one place. -/
+def actionOfTag (tag : UInt8) : Option RegisteredPhysical.TerminalAction :=
+  if tag = actionTag .cancel then some .cancel
+  else if tag = actionTag .expire then some .expire
+  else none
+
+theorem actionOfTag_inverts_actionTag
+    (action : RegisteredPhysical.TerminalAction) :
+    actionOfTag (actionTag action) = some action := by
+  cases action <;> native_decide
+
+theorem action_tags_are_distinct : actionTag .cancel ≠ actionTag .expire := by
+  native_decide
+
 structure InstructionV1 where
   action : RegisteredPhysical.TerminalAction
   controllerBump : UInt8
@@ -373,10 +393,7 @@ def decode (input : List UInt8) : Option InstructionV1 := do
   if input.take (Field.offset .version) != magic then none else
   if Codec.decodeLE ((input.drop (Field.offset .version)).take 2) != version then none else
   let actionByte <- input[(Field.offset .action)]?
-  let action <- match actionByte.toNat with
-    | 0 => some RegisteredPhysical.TerminalAction.cancel
-    | 1 => some RegisteredPhysical.TerminalAction.expire
-    | _ => none
+  let action <- actionOfTag actionByte
   if (input.drop (Field.offset .reserved)).take (Field.width .reserved) != [0, 0, 0]
     then none else
   some {

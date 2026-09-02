@@ -258,6 +258,49 @@ class SimulatorLoopTest(SimulatorHarness):
         status = json.loads((self.work / "status.json").read_text())
         self.assertEqual(status["trades"]["landed"], 0)
 
+    def test_a_preflight_never_writes_the_journal_the_execute_run_resumes(self) -> None:
+        """A preflight admission journal must not sit where --execute resumes it.
+
+        The driver adopts an existing report at its --output and resumes instead
+        of replanning, and its prefund branch runs only under --execute. So a
+        preflight-built plan carries the PDA rent as System top-ups inside the
+        admission transaction; those debit the Position owner, the compiler then
+        marks the owner writable, and the admission frame requires it readonly.
+        Resuming one signs a message that can never land -- measured on
+        cohort-12 as `TradingSbfError::Content` 0x4003 at 12,233 CU, no CPI.
+        """
+        admission = {
+            "name": "p1", "plan": "/dev/null", "campaign_evidence": "/dev/null",
+            "position_owner": "OWNER", "position_owner_keypair": "/dev/null",
+            "fee_payer": "PAYER", "fee_payer_keypair": "/dev/null",
+            "minimum_finalized_slot": 1,
+            "output": str(self.work / "admissions" / "p1.json"),
+            "collateral": None,
+        }
+        cfg = self.write_config(self.config(admissions=[admission]))
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The configured path -- the one an --execute run would resume -- is untouched.
+        self.assertFalse(
+            (self.work / "admissions" / "p1.json").exists(),
+            "a preflight wrote the journal the execute run resumes",
+        )
+        self.assertTrue((self.work / "preflight-admissions" / "p1.json").exists())
+
+        # And --execute journals where it always did, having planned fresh. In
+        # its own work dir, because a preflight also leaves a CYCLE journal
+        # whose plan differs from an executing one -- which refuses loudly and
+        # by name, so it is a nuisance rather than this defect.
+        work2 = self.root / "work2"
+        admission2 = dict(admission, output=str(work2 / "admissions" / "p1.json"))
+        cfg2 = self.root / "config2.json"
+        cfg2.write_text(json.dumps(
+            self.config(admissions=[admission2], work_dir=str(work2))))
+        proc = self.run_sim("run", "--config", str(cfg2), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((work2 / "admissions" / "p1.json").exists())
+        self.assertFalse((work2 / "preflight-admissions").exists())
+
     def test_execute_runs_cycles_lands_trades_and_reconciles(self) -> None:
         (self.root / "steps-needed").write_text("3")
         cfg = self.write_config(self.config())

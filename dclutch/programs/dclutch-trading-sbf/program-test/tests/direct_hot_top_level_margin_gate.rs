@@ -678,6 +678,28 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 ///
 /// STILL NOT PINNED. A number is not a code cost until the statistic that reads
 /// it has no lottery left in it.
+///
+/// ### Three relink pairs, and the lottery bites on one of them
+///
+/// The order-statistic reading predicts that a relink usually moves this number
+/// by nothing and occasionally moves it by thousands. Measured, on three pairs
+/// that differ in the Trading ELF alone:
+///
+/// ```text
+///   real code change, direct_fee_settlement_v1 only      +17 CU
+///   comment-only, 40 lines prepended to that same file     0 CU  (zero-fee +1)
+///   comment-only, cbdecdb3 -> 5de38ef2                 +4,836 CU
+/// ```
+///
+/// The middle pair is the control this section needed and it was built on
+/// purpose: forty comment lines prepended to one module, which moves the ELF
+/// digest and nothing else, both builds at zero frame diagnostics. It moved the
+/// fee-bearing floor by ZERO. So a relink is not reliably expensive and is not
+/// reliably free -- it is a draw, and the third pair drew badly.
+///
+/// That is why the fix is to the STATISTIC and not to the route. There is no
+/// code in `5de38ef2` to make robust: 948 symbols and 941 frames say so. What
+/// needs repair is a residual that still contains a search nobody subtracts.
 const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_268_059;
 
 /// The protocol maximum a transaction may consume.

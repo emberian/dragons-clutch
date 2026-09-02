@@ -189,7 +189,30 @@ class Simulator:
     def ensure_admissions(self) -> None:
         for adm in self.config.get("admissions", []):
             name = adm["name"]
+            # A PREFLIGHT MUST NOT WRITE THE JOURNAL THE EXECUTE RUN RESUMES.
+            #
+            # The admission driver adopts an existing report at its --output and
+            # takes `resume_admission_and_collateral` instead of replanning. Its
+            # PREFUND branch runs only under --execute, so a plan built by a
+            # preflight legitimately carries the Position and admission rent as
+            # System top-ups INSIDE the admission transaction -- and those debit
+            # the Position owner, which the v0 compiler then marks writable,
+            # which `UserPositionAdmissionFrameV1` forbids because the owner
+            # must sign READONLY. Resuming that plan under --execute therefore
+            # signs and sends a message that can never land, at any size, on any
+            # chain: measured on cohort-12, 2026-09-02, refusing
+            # `TradingSbfError::Content` 0x4003 after 12,233 CU with no CPI --
+            # cohort-11's Wall 3 signature reached by a different route.
+            #
+            # So a preflight journals under its own directory. Nothing there is
+            # ever resumed, and an --execute run always plans fresh, prefunds in
+            # its own finalized transfer, and emits the single-instruction
+            # message the frame authenticates. A real --execute crash still
+            # resumes, which is what the resume path is for: that journal holds
+            # a signed packet and re-signing it would risk a replay.
             output = Path(adm["output"])
+            if not self.execute:
+                output = self.work / "preflight-admissions" / output.name
             # The driver writes a journal LOCK beside its output before it
             # writes the output, so the directory has to exist first or the
             # admission dies on the lock rather than on anything about the

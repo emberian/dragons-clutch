@@ -271,6 +271,10 @@ name = "emit-rational-terminal-hot-v3-rust"
 root = "EmitRationalTerminalHotV3Rust"
 
 [[lean_exe]]
+name = "emit-rational-terminal-hot-v3-ts"
+root = "EmitRationalTerminalHotV3Ts"
+
+[[lean_exe]]
 name = "emit-realm-position-abi-rust"
 root = "EmitRealmPositionAbiRust"
 
@@ -285,6 +289,10 @@ root = "EmitRegisteredControllerAbiRust"
 [[lean_exe]]
 name = "emit-registered-creation-translation-corpus"
 root = "EmitRegisteredCreationTranslationCorpus"
+
+[[lean_exe]]
+name = "emit-registered-direct-ts"
+root = "EmitRegisteredDirectTs"
 
 [[lean_exe]]
 name = "emit-relayed-mainnet-state-v1-abi-rust"

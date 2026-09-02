@@ -62,6 +62,16 @@ def bytes (name : String) (value : List UInt8) : String :=
   let hex := value.map fun byte => s!"0x{Codec.byteHex byte}"
   s!"export const {name} = Uint8Array.from([{String.intercalate ", " hex}]);"
 
+/-- Raw bytes wrapped sixteen to a line.  `bytes` puts a whole array on one
+line, which is right for an eight-byte magic and wrong for a two-hundred-byte
+fixture: a single-line diff of a record encoding says only that it changed.
+The wrapped form makes the row that moved the row the reader sees. -/
+def bytesBlock (name : String) (value : List UInt8) : List String :=
+  let hex := value.map fun byte => s!"0x{Codec.byteHex byte}"
+  let rows := (List.range ((value.length + 15) / 16)).map fun row =>
+    "  " ++ String.intercalate ", " ((hex.drop (row * 16)).take 16) ++ ","
+  (s!"export const {name} = Uint8Array.from([" :: rows) ++ ["]);"]
+
 /-- A PDA seed domain.  The bytes are the UTF-8 encoding of the domain string;
 emitting the string keeps the generated module readable while `TextEncoder`
 reproduces exactly the bytes the program seeds with. -/

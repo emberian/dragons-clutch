@@ -43,8 +43,8 @@ def main : IO Unit := do
   emitRustBytes "pub(crate)" "REGISTERED_TERMINAL_MAGIC_BYTES" Terminal.magic
   for field in Terminal.Field.all do
     IO.println s!"pub(crate) const {Terminal.Field.rustName field}: usize = {Terminal.Field.offset field};"
-  IO.println "pub(crate) const REGISTERED_TERMINAL_CANCEL: u8 = 0;"
-  IO.println "pub(crate) const REGISTERED_TERMINAL_EXPIRE: u8 = 1;"
+  IO.println s!"pub(crate) const REGISTERED_TERMINAL_CANCEL: u8 = {Terminal.actionTag .cancel};"
+  IO.println s!"pub(crate) const REGISTERED_TERMINAL_EXPIRE: u8 = {Terminal.actionTag .expire};"
   emitRustBytes "pub(crate)" "REGISTERED_CLAIM_CANCEL_TEMPLATE"
     (DClutch.Direct.RegisteredPhysical.encodeTerminalInstruction .cancel 0)
   emitRustBytes "pub(crate)" "REGISTERED_CLAIM_EXPIRE_TEMPLATE"
