@@ -784,6 +784,95 @@ mod tests {
         );
     }
 
+    /// The genesis manifest describes BOTH profiles one instruction commits.
+    ///
+    /// Schema 3 pinned only the 144-byte V1 -- correct while
+    /// `InitializeProtocolInfrastructureV1` wrote only that, and half a chain
+    /// act since `c60b25e8`. The V2 half is DERIVED from the V1's two
+    /// bindings, so the assertions worth making are that it cannot be
+    /// substituted and that the two halves cannot disagree.
+    #[test]
+    fn a_genesis_manifest_carries_both_profiles_and_neither_can_be_substituted() {
+        let fixture = Fixture::immutable();
+        let core_program =
+            Pubkey::new_from_array(fixture.execution.artifacts()[0].program().to_bytes());
+        let v1 = ProtocolInfrastructureProfileV1::new(
+            binding(artifact_release_from_checked(&fixture.registry).expect("Registry artifact")),
+            binding(artifact_release_from_checked(&fixture.rent).expect("Rent artifact")),
+        )
+        .expect("genesis V1 profile");
+        let genesis = build_checked_genesis_infrastructure_v1(
+            fixture.execution,
+            v1,
+            &fixture.execution_releases[0],
+            &fixture.registry,
+            &fixture.rent,
+        )
+        .expect("genesis manifest");
+        let bytes = genesis.encode();
+        assert_eq!(bytes.len(), CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1);
+        assert_ne!(
+            CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1,
+            CHECKED_GENESIS_INFRASTRUCTURE_BYTES_RETIRED_V3,
+            "the widened genesis manifest must not be mistakable for the retired one"
+        );
+        assert_ne!(
+            CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1,
+            CHECKED_INFRASTRUCTURE_BYTES_V1
+        );
+        assert_eq!(
+            u16::from_le_bytes([bytes[SCHEMA_OFFSET], bytes[SCHEMA_OFFSET + 1]]),
+            CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V4
+        );
+        assert_eq!(CheckedGenesisInfrastructureV1::decode(&bytes), Ok(genesis));
+
+        // The V2 is the one every on-chain reader authenticates, and it is a
+        // genesis: both sentinels, same two bindings, its own PDA domain.
+        assert!(genesis.genesis_profile_v2().born_at_v2());
+        assert_eq!(genesis.genesis_profile_v2().registry(), v1.registry());
+        assert_eq!(genesis.genesis_profile_v2().rent(), v1.rent());
+        assert_eq!(
+            genesis.genesis_profile_v2_pda(),
+            Pubkey::find_program_address(
+                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+                &core_program,
+            )
+            .0
+            .to_bytes()
+        );
+        assert_eq!(
+            genesis.profile_pda(),
+            Pubkey::find_program_address(
+                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+                &core_program,
+            )
+            .0
+            .to_bytes()
+        );
+        assert_ne!(genesis.genesis_profile_v2_pda(), genesis.profile_pda());
+
+        // A SUCCEEDED V2 in the genesis slot is well-formed bytes at the right
+        // width and must still refuse: it is not born at V2, so it does not
+        // describe a cohort that succeeds nothing.
+        let mut forged = bytes;
+        forged[GENESIS_PROFILE_V2_OFFSET
+            ..GENESIS_PROFILE_V2_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2]
+            .copy_from_slice(&succeed(v1, fixture.predecessor_registry_artifact).to_bytes());
+        assert_eq!(
+            CheckedGenesisInfrastructureV1::decode(&forged),
+            Err(Error::InvalidInfrastructureManifest)
+        );
+
+        // And a V2 PDA moved to any other address refuses too.
+        let mut moved = bytes;
+        moved[GENESIS_PROFILE_V2_PDA_OFFSET..GENESIS_PROFILE_V2_PDA_OFFSET + 32]
+            .copy_from_slice(&genesis.profile_pda());
+        assert_eq!(
+            CheckedGenesisInfrastructureV1::decode(&moved),
+            Err(Error::InvalidInfrastructureManifest)
+        );
+    }
+
     #[test]
     fn immutable_infrastructure_has_one_exact_checked_manifest() {
         let fixture = Fixture::immutable();
@@ -1056,19 +1145,40 @@ mod tests {
 // will never write.
 
 /// Schema discriminant for the genesis (no-predecessor) layout.
-pub const CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V3: u16 = 3;
+///
+/// Schema 3 embedded only the 144-byte V1. Since `c60b25e8`
+/// `InitializeProtocolInfrastructureV1` commits BOTH profiles in one
+/// instruction -- the sealed V1 historical record and the genesis V2 every
+/// consumer actually reads -- so a manifest pinning only the V1 describes half
+/// the chain act it claims to check. Schema 4 embeds both bodies and both
+/// PDAs. Schema 3 is retired rather than kept beside this: it can no longer
+/// describe any cohort this tree deploys.
+pub const CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V4: u16 = 4;
+
+/// Retired genesis width, kept only so a stale manifest refuses by name.
+pub const CHECKED_GENESIS_INFRASTRUCTURE_BYTES_RETIRED_V3: usize =
+    CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1
+        + CHECKED_MULTIPROGRAM_BYTES_V1
+        + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        + 32
+        + 2 * CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1;
 
 /// Exact checked genesis-infrastructure evidence width.
 pub const CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1: usize = CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1
     + CHECKED_MULTIPROGRAM_BYTES_V1
     + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
     + 32
+    + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+    + 32
     + 2 * CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1;
 
 const GENESIS_PROFILE_OFFSET: usize = EXECUTION_OFFSET + CHECKED_MULTIPROGRAM_BYTES_V1;
 const GENESIS_PROFILE_PDA_OFFSET: usize =
     GENESIS_PROFILE_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1;
-const GENESIS_REGISTRY_OFFSET: usize = GENESIS_PROFILE_PDA_OFFSET + 32;
+const GENESIS_PROFILE_V2_OFFSET: usize = GENESIS_PROFILE_PDA_OFFSET + 32;
+const GENESIS_PROFILE_V2_PDA_OFFSET: usize =
+    GENESIS_PROFILE_V2_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2;
+const GENESIS_REGISTRY_OFFSET: usize = GENESIS_PROFILE_V2_PDA_OFFSET + 32;
 const GENESIS_RENT_OFFSET: usize = GENESIS_REGISTRY_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1;
 
 /// Checked evidence for one founded Core/Registry/Rent chain that succeeds
@@ -1078,6 +1188,13 @@ pub struct CheckedGenesisInfrastructureV1 {
     execution: CheckedExecutionReleaseSetV1,
     profile: ProtocolInfrastructureProfileV1,
     profile_pda: [u8; 32],
+    /// The genesis V2 the same instruction commits at the V2 domain.
+    ///
+    /// It is a pure function of the V1's two bindings, so it is DERIVED here
+    /// and never supplied: a manifest cannot pin a V2 that disagrees with the
+    /// V1 beside it.
+    genesis_profile_v2: ProtocolInfrastructureProfileV2,
+    genesis_profile_v2_pda: [u8; 32],
     registry_artifact: ArtifactReleaseV1,
     registry_checked_release_id: ContentId,
     rent_artifact: ArtifactReleaseV1,
@@ -1093,7 +1210,7 @@ impl CheckedGenesisInfrastructureV1 {
         if bytes.get(..8) != Some(CHECKED_INFRASTRUCTURE_MAGIC_V1.as_slice()) {
             return Err(Error::InvalidMagic);
         }
-        if read_u16(bytes, SCHEMA_OFFSET)? != CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V3 {
+        if read_u16(bytes, SCHEMA_OFFSET)? != CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V4 {
             return Err(Error::UnsupportedSchema);
         }
         if read_u16(bytes, COMPONENT_COUNT_OFFSET)? != CHECKED_INFRASTRUCTURE_COMPONENTS_V1 {
@@ -1114,6 +1231,13 @@ impl CheckedGenesisInfrastructureV1 {
         )?)
         .map_err(|_| Error::InvalidInfrastructureManifest)?;
         let profile_pda = read_array(bytes, GENESIS_PROFILE_PDA_OFFSET)?;
+        let genesis_profile_v2 = ProtocolInfrastructureProfileV2::decode(subslice(
+            bytes,
+            GENESIS_PROFILE_V2_OFFSET,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+        )?)
+        .map_err(|_| Error::InvalidInfrastructureManifest)?;
+        let genesis_profile_v2_pda = read_array(bytes, GENESIS_PROFILE_V2_PDA_OFFSET)?;
         let registry_artifact = ArtifactReleaseV1::decode(subslice(
             bytes,
             GENESIS_REGISTRY_OFFSET,
@@ -1140,6 +1264,8 @@ impl CheckedGenesisInfrastructureV1 {
             execution,
             profile,
             profile_pda,
+            genesis_profile_v2,
+            genesis_profile_v2_pda,
             registry_artifact,
             registry_checked_release_id,
             rent_artifact,
@@ -1159,7 +1285,7 @@ impl CheckedGenesisInfrastructureV1 {
         copy(
             &mut output,
             SCHEMA_OFFSET,
-            &CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V3.to_le_bytes(),
+            &CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V4.to_le_bytes(),
         );
         copy(
             &mut output,
@@ -1173,6 +1299,16 @@ impl CheckedGenesisInfrastructureV1 {
             &self.profile.to_bytes(),
         );
         copy(&mut output, GENESIS_PROFILE_PDA_OFFSET, &self.profile_pda);
+        copy(
+            &mut output,
+            GENESIS_PROFILE_V2_OFFSET,
+            &self.genesis_profile_v2.to_bytes(),
+        );
+        copy(
+            &mut output,
+            GENESIS_PROFILE_V2_PDA_OFFSET,
+            &self.genesis_profile_v2_pda,
+        );
         copy(
             &mut output,
             GENESIS_REGISTRY_OFFSET,
@@ -1209,6 +1345,16 @@ impl CheckedGenesisInfrastructureV1 {
     /// The V1-domain profile PDA this manifest pins.
     pub fn profile_pda(self) -> [u8; 32] {
         self.profile_pda
+    }
+
+    /// The genesis V2 the same initialization commits, which every consumer reads.
+    pub fn genesis_profile_v2(self) -> ProtocolInfrastructureProfileV2 {
+        self.genesis_profile_v2
+    }
+
+    /// The V2-domain profile PDA this manifest pins.
+    pub fn genesis_profile_v2_pda(self) -> [u8; 32] {
+        self.genesis_profile_v2_pda
     }
 
     /// Which substrate the components describe, derived rather than supplied.
@@ -1268,6 +1414,21 @@ impl CheckedGenesisInfrastructureV1 {
         // candidate summary namespaces these under `infrastructure.`, so a
         // different spelling here would silently omit a required summary field.
         push_line(&mut output, "profile_pda", &encode_hex(&self.profile_pda));
+        // The genesis V2 the same instruction commits. Stated beside the V1
+        // rather than instead of it, because initialization writes both and a
+        // reader who saw only the V1 would believe the cohort stands on a
+        // profile nothing reads.
+        push_line(
+            &mut output,
+            "genesis_profile_v2_sha256",
+            &encode_hex(&sha256(&self.genesis_profile_v2.to_bytes())),
+        );
+        push_line(
+            &mut output,
+            "genesis_profile_v2_pda",
+            &encode_hex(&self.genesis_profile_v2_pda),
+        );
+        push_line(&mut output, "genesis_profile_v2_born_at_v2", "true");
         // The same component keys, in the same order, as the succession
         // manifest. Every scraper that reads `infrastructure.*` out of a
         // candidate summary reads BOTH, so a genesis that spelled these
@@ -1342,6 +1503,25 @@ impl CheckedGenesisInfrastructureV1 {
         if self.profile_pda != expected_profile.to_bytes() {
             return Err(Error::InvalidInfrastructureManifest);
         }
+        // The genesis V2 is DERIVED from the same two bindings, so a manifest
+        // whose two profiles disagree -- or whose V2 carries anything but the
+        // two sentinels -- cannot decode. There is nothing here a caller
+        // supplies and therefore nothing to get wrong.
+        let expected_v2 =
+            ProtocolInfrastructureProfileV2::genesis(self.profile.registry(), self.profile.rent())
+                .map_err(|_| Error::InvalidInfrastructureManifest)?;
+        let expected_v2_pda = Pubkey::find_program_address(
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+            &Pubkey::new_from_array(core_program),
+        )
+        .0;
+        if self.genesis_profile_v2 != expected_v2
+            || !self.genesis_profile_v2.born_at_v2()
+            || self.genesis_profile_v2_pda != expected_v2_pda.to_bytes()
+            || self.genesis_profile_v2_pda == self.profile_pda
+        {
+            return Err(Error::InvalidInfrastructureManifest);
+        }
         Ok(())
     }
 }
@@ -1371,10 +1551,21 @@ pub fn build_checked_genesis_infrastructure_v1(
     )
     .0
     .to_bytes();
+    let genesis_profile_v2 =
+        ProtocolInfrastructureProfileV2::genesis(profile.registry(), profile.rent())
+            .map_err(|_| Error::InvalidInfrastructureManifest)?;
+    let genesis_profile_v2_pda = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+        &core_program,
+    )
+    .0
+    .to_bytes();
     let result = CheckedGenesisInfrastructureV1 {
         execution,
         profile,
         profile_pda,
+        genesis_profile_v2,
+        genesis_profile_v2_pda,
         registry_artifact,
         registry_checked_release_id: registry_checked.checked_release_id()?,
         rent_artifact,

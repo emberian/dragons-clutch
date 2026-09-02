@@ -34,7 +34,7 @@ use dclutch_release_tool::{
 };
 use solana_program::pubkey::Pubkey;
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --predecessor-profile PATH --out PATH\n  dclutch-release-tool derive-genesis-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure [--genesis] --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --predecessor-profile PATH --out PATH\n  dclutch-release-tool derive-genesis-infrastructure-profile --registry PATH --rent PATH --out PATH --v2-out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure [--genesis] --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
 
 fn main() -> ExitCode {
     match run() {
@@ -213,6 +213,7 @@ fn verify_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), St
     // exact width distinguish a genesis from a succession, and each decoder
     // refuses the other by name rather than misreading it. So this reads the
     // bytes instead of asking the caller to restate what they already say.
+    refuse_retired_genesis_manifest(manifest.len())?;
     if manifest.len() == dclutch_release_tool::CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1 {
         let result = verify_checked_genesis_infrastructure_v1(
             &manifest,
@@ -234,6 +235,7 @@ fn inspect_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), S
     let manifest = read_bytes(required(flags, "--manifest")?)?;
     let text_output = flags.remove("--text-out");
     require_no_flags(flags)?;
+    refuse_retired_genesis_manifest(manifest.len())?;
     if manifest.len() == dclutch_release_tool::CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1 {
         let result =
             CheckedGenesisInfrastructureV1::decode(&manifest).map_err(format_release_error)?;
@@ -241,6 +243,22 @@ fn inspect_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), S
     }
     let result = CheckedInfrastructureV1::decode(&manifest).map_err(format_release_error)?;
     emit_infrastructure_text(result, text_output)
+}
+
+/// Refuse a schema-3 genesis manifest by name rather than by misreading it.
+///
+/// Schema 3 pinned only the 144-byte V1. Since `c60b25e8` initialization
+/// commits both profiles in one instruction, so those bytes describe half a
+/// chain act; without this the retired width falls through to the succession
+/// decoder and dies on `InvalidLength`, which names nothing.
+fn refuse_retired_genesis_manifest(len: usize) -> Result<(), String> {
+    if len == dclutch_release_tool::CHECKED_GENESIS_INFRASTRUCTURE_BYTES_RETIRED_V3 {
+        return Err(
+            "this is a retired schema-3 genesis infrastructure manifest: it pins only the              144-byte V1 profile, and initialization now commits the genesis V2 in the same              instruction. Rebuild the candidate to emit a schema-4 manifest carrying both              profiles."
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn emit_infrastructure_text(
@@ -480,13 +498,22 @@ fn derive_genesis_infrastructure_profile(
         );
     }
     let output = required(flags, "--out")?;
+    // Both bodies, because `InitializeProtocolInfrastructureV1` commits both
+    // in one instruction. Required rather than optional: a pack that carried
+    // only the V1 would describe half the chain act, and every consumer reads
+    // the V2.
+    let v2_output = required(flags, "--v2-out")?;
     let registry = load_checked_release(required(flags, "--registry")?)?;
     let rent = load_checked_release(required(flags, "--rent")?)?;
     require_no_flags(flags)?;
     let profile = derive_protocol_infrastructure_profile_v1(&registry, &rent)
         .map_err(format_release_error)?;
+    let genesis = ProtocolInfrastructureProfileV2::genesis(profile.registry(), profile.rent())
+        .map_err(|error| format!("genesis infrastructure V2 profile refused: {error:?}"))?;
     fs::write(&output, profile.to_bytes())
-        .map_err(|error| format!("failed writing {}: {error}", output.display()))
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))?;
+    fs::write(&v2_output, genesis.to_bytes())
+        .map_err(|error| format!("failed writing {}: {error}", v2_output.display()))
 }
 
 /// Probe one dumped account against the ZeroBump seal-close arm, offline.

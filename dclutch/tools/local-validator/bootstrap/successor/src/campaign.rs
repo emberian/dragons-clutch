@@ -1944,18 +1944,64 @@ pub(crate) fn publication_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<S
     })
 }
 
-/// Does Core's infrastructure profile exist, with this plan's exact body?
+/// Do BOTH of Core's infrastructure profiles exist, with this plan's exact bodies?
+///
+/// One instruction commits both since `c60b25e8`, so this stage is Complete
+/// only when both are on chain. A cohort holding the V1 alone is not a cohort
+/// that half-succeeded: it is the pre-`c60b25e8` shape, and nothing on chain
+/// would found against it, so reporting Complete on the V1 alone would report
+/// an unfoundable cohort as ready.
 pub(crate) fn initialize_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<StageStateV1> {
-    let address = pubkey(&plan.infrastructure_profile.address)?;
+    let v1 = observed_profile_state_v1(
+        rpc,
+        "infrastructure profile",
+        &plan.infrastructure_profile.address,
+        &plan.infrastructure_profile.body_hex,
+    )?;
+    let v2 = observed_profile_state_v1(
+        rpc,
+        "genesis V2 infrastructure profile",
+        &plan.genesis_infrastructure_profile.address,
+        &plan.genesis_infrastructure_profile.body_hex,
+    )?;
+    Ok(match (v1, v2) {
+        (ObservedProfileV1::Matches, ObservedProfileV1::Matches) => StageStateV1::Complete,
+        (ObservedProfileV1::Absent, ObservedProfileV1::Absent) => StageStateV1::Absent,
+        (ObservedProfileV1::Conflict(detail), _) | (_, ObservedProfileV1::Conflict(detail)) => {
+            StageStateV1::Conflict(detail)
+        }
+        (ObservedProfileV1::Matches, ObservedProfileV1::Absent) => StageStateV1::Partial(
+            "the V1 infrastructure profile is committed but the genesis V2 is not; this cohort              cannot be founded until initialization writes both"
+                .into(),
+        ),
+        (ObservedProfileV1::Absent, ObservedProfileV1::Matches) => StageStateV1::Partial(
+            "the genesis V2 infrastructure profile is committed but the sealed V1 is not".into(),
+        ),
+    })
+}
+
+enum ObservedProfileV1 {
+    Absent,
+    Matches,
+    Conflict(String),
+}
+
+fn observed_profile_state_v1(
+    rpc: &mut Rpc,
+    label: &str,
+    address: &str,
+    body_hex: &str,
+) -> Result<ObservedProfileV1> {
+    let address = pubkey(address)?;
     let Some(account) = rpc.account(address)? else {
-        return Ok(StageStateV1::Absent);
+        return Ok(ObservedProfileV1::Absent);
     };
-    let expected = runtime::decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let expected = runtime::decode_hex(body_hex)?;
     Ok(if account.data == expected {
-        StageStateV1::Complete
+        ObservedProfileV1::Matches
     } else {
-        StageStateV1::Conflict(format!(
-            "an infrastructure profile exists at {address} whose {} bytes are not this plan's {}",
+        ObservedProfileV1::Conflict(format!(
+            "a {label} exists at {address} whose {} bytes are not this plan's {}",
             account.data.len(),
             expected.len()
         ))
@@ -2740,6 +2786,21 @@ pub(crate) fn wallet_arithmetic(
         &profile_body,
         profile_minimum,
     )?;
+    // The genesis V2 the same instruction commits. Its rent is 224 bytes'
+    // worth and the payer owes it in the same transaction, so an estimate that
+    // omitted it would under-state the requirement -- which is the estimate
+    // that strands a run.
+    let genesis_profile_address = pubkey(&plan.genesis_infrastructure_profile.address)?;
+    let genesis_profile_body = runtime::decode_hex(&plan.genesis_infrastructure_profile.body_hex)?;
+    let genesis_profile_minimum = rpc.minimum_balance(genesis_profile_body.len())?;
+    let genesis_profile_account = rpc.account(genesis_profile_address)?;
+    let genesis_profile_rent = remaining_profile_rent(
+        genesis_profile_account.as_ref(),
+        pubkey(&plan.core.program_id)?,
+        &genesis_profile_body,
+        genesis_profile_minimum,
+    )?;
+    let profile_rent = profile_rent.saturating_add(genesis_profile_rent);
     let activation_rent = runtime::remaining_activation_rent(rpc, plan)?;
     let fees = ESTIMATED_TRANSACTIONS.saturating_mul(LAMPORTS_PER_SIGNATURE);
     let required = record_rent
@@ -6047,6 +6108,14 @@ mod tests {
                 checked_local_mutable_set: None,
                 infrastructure_succession: None,
                 infrastructure_profile: crate::model::InfrastructureProfilePin {
+                    address: String::new(),
+                    schema_id: String::new(),
+                    body_sha256: String::new(),
+                    body_hex: String::new(),
+                    registry_artifact_release_id: String::new(),
+                    rent_artifact_release_id: String::new(),
+                },
+                genesis_infrastructure_profile: crate::model::InfrastructureProfilePin {
                     address: String::new(),
                     schema_id: String::new(),
                     body_sha256: String::new(),

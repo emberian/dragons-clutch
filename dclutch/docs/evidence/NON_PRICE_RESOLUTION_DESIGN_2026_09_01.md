@@ -461,3 +461,81 @@ diff. The commit-based figures (1,077 / 8,782 / 12,455) are real; the
 - **To skip R1**: acceptable only if observable #2 has the identical four-position
   shape (program, programdata, state, clock). If it does, R1 can wait for #3. If it
   does not, skipping R1 forks the orchestration and the family stops being one.
+
+---
+
+## §9. What the build lane executed — 2026-09-01, added below the scholar's own text
+
+Nothing above is edited. This section records what happened to §5's three units
+and to the one task §7 left open, so a reader of this file does not have to
+cross-reference the log.
+
+**The open task, run.** §7 says: *"I did not run a founding and watch it
+refuse."* It was run first, before anything was built, by driving the relayed
+graduation market's own `MarketRunInput` through `compile_market_bodies` — the
+first act of `publish_market_records`, before any RPC, so the exact site the
+founding campaign reaches. Verbatim:
+
+> `founding_band is required to compile this market's partition: state anchor,
+> volatility_bps, window_slots, plausible_half_widths and max_cell_share_bps.
+> There is no default -- volatility is an authoring input, and a partition
+> cannot be measured for degeneracy without the belief it is meant to describe`
+
+**§4.4 was right in mechanism as well as in shape.** No path supplies a band.
+
+**R1** (`0b8c377d`): the DBC positions moved onto `RelayedObservableV1` as
+`RelayedSetLayoutV1`. Behaviour-preserving, proven by the shipped
+relay-consuming ELF rebuilding byte-identical
+(`f64190e2e257c273387852560323a9d688c3e323a8ca49939fa474ac6e49b4f8`) with both
+crates genuinely recompiling, and by the nineteen `relayed_mainnet_state` tests
+— **counted in §7, and now run**: 19 passed on real ELFs.
+
+**R2** (`cbf983fe` compiler, `26179076` founding path): the belief became a
+family, `FoundingBeliefV1`. §5's framing held and made the unit small. Two
+corrections to the shape §5 proposed, both in the direction of fewer authors:
+
+- The belief and the model are **one type**, not two. §5.1 and §5.2 proposed a
+  second `PartitionQualityModelV1` variant *and* a band sibling; carrying the
+  parameters on both makes a mismatched pair representable and then owes
+  somebody a check that they agree. `PartitionQualityModelV1` is now the *name*
+  a report carries and the parameters live on the belief.
+- `MarketQuestionV1::Proposition` carries **only a payout**, not §5.3's
+  `probability_bps`. The probability is the belief; stating it in the question
+  as well would be two authors on one number.
+
+The zero-cut hole closes as §5 predicted, and one thing §5 did not name closes
+with it: `unresolved_share_bps`. A proposition's unproved mass lands on the
+Product's own disclosed failure outcome, which is not an ordinary cell, so a
+market believed at 500 bps is refused as degenerate *from the failure side* —
+something no measure over ordinary cells alone could ever have seen.
+
+**R3** (`1fe58874`, `871017cf`): observable #2 is SPL Token-2022 mint-authority
+renunciation. §2's estimates measured against the landed diff:
+
+| §2's estimate | landed |
+|---|---|
+| decoding rules — Lean ~230 | +344 (including per-row layout generalization and eleven new theorems) |
+| emitted Rust ~30–40 | **+35** |
+| the reader ~115 + one enum arm | +313 in `decode.rs`, of which ~180 is the acceptance corpus and the two-row distinguishability tests |
+| relayer TOML ~10 lines | **23 non-comment lines, no code** |
+| interpretation orchestration | **0** — R1 had already paid it; the spine took one arm |
+
+**§8's R1 clause, answered honestly.** *"To skip R1: acceptable only if
+observable #2 has the identical four-position shape."* It does. R1 was
+therefore not strictly required for #2 — what it bought here is that the
+positions are **per-row data** rather than module constants, and that the state
+position's pinned inline width comes off the row (424 against 82) instead of
+being typed twice. A row with a different *cardinality* would exercise it
+fully, and none exists yet: the natural shape of "a fact a program wrote into
+an account" is one state account plus the three the family always needs. The
+first proposition that would want a fifth is a **conjunction over two accounts
+of the same venue**, and no market has asked for one.
+
+**The route is witnessed, not only proven.** `relayed_mainnet_state` is 19 → 24
+on real ELFs: row 1 is driven create → append ×4 → seal → consume → resolve
+through the same transport, quorum, funding, deadline walk and settlement, with
+nothing changed but the adapter's `observable_selector` and the grammar it
+selects. Including the sharp one on chain rather than only in Lean: a zeroed
+82-byte account reads as `COption::None` in both tags, a real quorum signs those
+real bytes, and the adapter refuses — with the positive control in the same run,
+because the same bytes with `is_initialized` set to one do resolve.

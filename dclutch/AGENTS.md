@@ -39,9 +39,15 @@ is not a source tree to copy wholesale.
   private-key material outside the devnet keypair this work requires.
 - Local commits are ordinary work. Add named files explicitly while parallel
   work is live.
-- **Shared-index discipline, earned 2026-09-01.** Commit with `git commit -o <exact
-  paths>`, never `git add` + `git commit` — a lane using the shared index swept
-  another lane's staged rename into its own commit. **Run `cargo check` on the
+- **Shared-index discipline, earned 2026-09-01, three times.** Commit with
+  `git commit -o <exact paths>`, never `git add` + `git commit` — a lane using
+  the shared index swept another lane's staged rename into its own commit, and a
+  second swept seven of another lane's staged files. **And `-o` is the floor, not
+  the ceiling:** when two lanes edit *one file*, the staged hunk carries both, and
+  a third lane committed another's unstaged ceiling change that way. **Read
+  `git diff --cached` before every commit.** If it shows a hunk you did not write,
+  `git apply --cached -R` that hunk out (or stage only yours with `git add -p`),
+  then commit. **Run `cargo check` on the
   affected workspace before any SBF build**: two dealer `accepted` runs died on
   another lane's half-applied refactor mid-build, and the check gate is what got
   the third through. If `.git/index.lock` is held, check `ps` for a live

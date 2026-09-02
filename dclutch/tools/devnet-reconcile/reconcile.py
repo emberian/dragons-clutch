@@ -35,7 +35,7 @@ OWNED_LOOPBACK_RECEIPT_SCHEMA = "dclutch-owned-loopback-reconcile-session-receip
 OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA = (
     "dclutch-owned-loopback-pyth-provider-closure-v1"
 )
-OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA = "dclutch-local-successor-infrastructure-plan-v2"
+OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA = "dclutch-local-successor-infrastructure-plan-v3"
 OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA = "dclutch-successor-local-validator-profile-v1"
 OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA = (
     "dclutch-owned-loopback-private-lifecycle-session-v1"

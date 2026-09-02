@@ -328,7 +328,7 @@ struct ProviderClosureArgumentsV1 {
     output: PathBuf,
 }
 
-const PROVIDER_PLAN_SCHEMA_V1: &str = "dclutch-local-successor-infrastructure-plan-v2";
+const PROVIDER_PLAN_SCHEMA_V1: &str = crate::model::SUCCESSOR_PLAN_SCHEMA_V3;
 const PROVIDER_PROFILE_SCHEMA_V1: &str = "dclutch-successor-local-validator-profile-v1";
 const MAX_PROVIDER_SOURCE_BYTES_V1: u64 = 32 * 1024 * 1024;
 const PROVIDER_RECEIPT_MODE_V1: u32 = 0o600;

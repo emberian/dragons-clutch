@@ -5913,3 +5913,47 @@ regenerates from the **working tree**, and in a shared dirty tree it silently
 The `cargo check` gate in every driver script **blocked nine attempts over ten
 minutes** while another lane's file was mid-probe; the run that got through was
 the one that produced a result.
+
+## 2026-09-01 — row 1 witnessed, not only proven; and `-o` is necessary, not sufficient
+
+`relayed_mainnet_state` **19 → 24**, all green, on real ELFs (`871017cf`). **The
+fixture is parameterized, not forked**: `RowFixtureV1` holds only what the *row*
+decides — selector, venue program and ProgramData, state account and width,
+terminal atom, identity seed — and every pre-existing test kept its exact call
+site. **The two rows share every line of transport, quorum, funding, deadline walk
+and settlement.** That was the family's claim; it is now executed rather than
+asserted. Token-2022's ProgramData is **derived** with `find_program_address`, with
+a test asserting the derivation, not pasted.
+
+**The hostile that mattered, on chain**:
+`a_zeroed_mint_cannot_prove_a_renunciation_on_chain` — a real quorum signs the real
+all-zero 82 bytes (which read as `COption::None` in both tags, i.e. "supply
+permanently fixed"), the record seals honestly, and the adapter refuses
+`REFUSAL_PROVIDER_OBSERVATION` with the market still live. **The positive control
+is in the same test: the same bytes with `is_initialized = 1` do resolve, carrying
+atom 1.** Lean proved it; this witnesses it.
+
+**The third row declined on the stated criterion.** No real proposition wants a
+different set cardinality — a proposal's state, a mint's supply, an NFT's owner are
+each one account plus the three the family always needs. The first that would is a
+conjunction over two accounts of one venue, and no market has asked. Adding it now
+would be adding a row to exercise the machinery. The open case is named in §9 so a
+later lane does not rediscover the question.
+
+The scholar's estimates set beside the landed diff, in §9 below its text and
+editing none of it: emitted Rust ~30–40 → **35**; relayer ~10 lines → **23
+non-comment lines, no code**; orchestration → **0** (R1 had paid it).
+
+### `-o` does not help when two lanes edit one file
+
+`cbf983fe` committed another lane's **unstaged** edit to `partition_quality.rs` —
+the 9000-ceiling change — which sat in the same file between the moment the suite
+ran green and the moment `git add` ran on it. **Same fault class as the index
+sweep, one file deeper**, and `commit -o` cannot prevent it: two lanes in one file
+means the staged hunk carries both.
+
+> **Only reading the staged diff before committing does.** `git diff --cached`
+> before every commit is the rule; `-o` is the floor, not the ceiling.
+
+The red that caused (a hostile asserting the old discriminant) was found and fixed
+in the same lane's next commit, walking both sides of the new bound.

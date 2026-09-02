@@ -915,10 +915,15 @@ echo "checked: five-role execution release set"
 # commits at `dclutch:infrastructure:v1` on a cohort whose profile PDA is still
 # vacant. Neither command can produce the other's bytes.
 if [ "$GENESIS_COHORT" = "true" ]; then
+    # BOTH bodies. `InitializeProtocolInfrastructureV1` commits the sealed V1
+    # and the genesis V2 in one instruction since `c60b25e8`, and the V2 is the
+    # one every consumer reads, so a pack carrying only `profile.bin` would
+    # describe half the act it claims to check.
     run_tool derive-genesis-infrastructure-profile \
         --registry "$EVIDENCE/registry/checked.bin" \
         --rent "$EVIDENCE/rent/checked.bin" \
-        --out "$INFRA_DIR/profile.bin"
+        --out "$INFRA_DIR/profile.bin" \
+        --v2-out "$INFRA_DIR/profile.v2.bin"
 else
     run_tool derive-infrastructure-profile \
         --registry "$EVIDENCE/registry/checked.bin" \
@@ -1037,7 +1042,10 @@ fi
     # putting the word "none" where a consumer expects 64 hex digits.
     if [ "$GENESIS_COHORT" = "true" ]; then
         printf 'infrastructure_lineage=genesis\n'
-        printf 'infrastructure_profile_version=1\n'
+        # Both, because initialization commits both: the sealed V1 historical
+        # record and the genesis V2 every consumer reads.
+        printf 'infrastructure_profile_version=1+2\n'
+        printf 'genesis_infrastructure_profile_v2_sha256=%s\n' "$(sha256 "$INFRA_DIR/profile.v2.bin")"
         printf 'predecessor_infrastructure_profile=none\n'
     else
         printf 'infrastructure_lineage=succession\n'

@@ -4316,10 +4316,26 @@ struct FoundInfrastructureCoordinatesV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FoundInfrastructureSelectionV1 {
-    Predecessor,
+    /// A cohort BORN at V2: initialization committed the genesis V2 and no
+    /// succession has run or is planned.
+    Genesis,
     PlannedSuccessor,
 }
 
+/// Which V2 profile does this founding authenticate against?
+///
+/// There used to be a third answer, `Predecessor`, taken whenever a plan had no
+/// succession and no V2 stood on chain: it fed the 144-byte V1 at the V1 PDA
+/// into the projection. After `2951b226` moved every Core reader to
+/// "V2 only, and never a fallback" that arm could not produce a foundable
+/// projection at all -- it was not dead code, it was the arm a genesis cohort
+/// always took, and it always failed sixty transactions deep with a coarse
+/// `AccountAuthority`. Measured on cohort-9 at the cost of two stranded
+/// collateral mints. It is deleted rather than left beside this one, per
+/// AGENTS.md: a superseded authority path does not survive its successor.
+///
+/// So a plan with no succession now REQUIRES its genesis V2 on chain. Absence
+/// is not a fallback; it is the initialize stage not having run.
 fn checked_found_infrastructure_selection_v1(
     plan: &SuccessorPlan,
     successor_profile_observed: bool,
@@ -4328,12 +4344,55 @@ fn checked_found_infrastructure_selection_v1(
         plan.infrastructure_succession.is_some(),
         successor_profile_observed,
     ) {
-        (false, false) => Ok(FoundInfrastructureSelectionV1::Predecessor),
-        (false, true) => Err(Error::new(
-            "Found refuses an observed V2 infrastructure profile without its authenticated succession plan",
+        (false, true) => Ok(FoundInfrastructureSelectionV1::Genesis),
+        (false, false) => Err(Error::new(
+            "Found requires the genesis V2 infrastructure profile at the V2 domain: this plan              carries no succession, so the cohort is born at V2, and Core authenticates the V2              profile and nothing else. The V2 PDA is vacant -- run the initialize stage.",
         )),
         (true, _) => Ok(FoundInfrastructureSelectionV1::PlannedSuccessor),
     }
+}
+
+/// Authenticate an observed born-at-V2 profile against the plan's own pin.
+///
+/// Nothing is taken on the account's word: the bytes must be exactly the pin
+/// `prepare` derived, the pin must decode as a V2 that `born_at_v2()`, and the
+/// address must be the V2 PDA under this plan's Core. A succeeded profile
+/// carries real predecessor ids and fails `born_at_v2()` here, so this arm can
+/// never quietly found against a cohort whose ceremony has run without its
+/// succession plan.
+fn checked_genesis_found_plan_v1(
+    plan: &SuccessorPlan,
+    profile_address: Pubkey,
+    profile_account: &RpcAccount,
+) -> Result<SuccessorPlan> {
+    let core = pubkey(&plan.core.program_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let rent = pubkey(&plan.rent_credit.program_id)?;
+    let expected_address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+    let pinned = decode_hex(&plan.genesis_infrastructure_profile.body_hex)?;
+    let observed = ProtocolInfrastructureProfileV2::decode(&profile_account.data)
+        .map_err(|error| Error::new(format!("genesis Found infrastructure: {error:?}")))?;
+    if profile_address != expected_address
+        || plan.genesis_infrastructure_profile.address != expected_address.to_string()
+        || profile_account.owner != core
+        || profile_account.executable
+        || profile_account.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+        || profile_account.data != pinned
+        || !observed.born_at_v2()
+        || observed.registry().program().to_bytes() != registry.to_bytes()
+        || observed.rent().program().to_bytes() != rent.to_bytes()
+    {
+        return Err(Error::new(
+            "the observed genesis V2 infrastructure profile is not this plan's exact born-at-V2 pin",
+        ));
+    }
+    // The founding path reads `plan.infrastructure_profile`, so the selected
+    // plan points it at the V2 the chain actually authenticates. The V1 stays
+    // exactly where initialization sealed it; nothing reads it again.
+    let mut selected = plan.clone();
+    selected.infrastructure_profile = plan.genesis_infrastructure_profile.clone();
+    Ok(selected)
 }
 
 fn checked_successor_found_coordinates_v1(
@@ -4473,9 +4532,12 @@ fn authenticated_found_infrastructure_plan_v1(
         Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
     let profile_account = rpc.account(profile)?;
     if checked_found_infrastructure_selection_v1(plan, profile_account.is_some())?
-        == FoundInfrastructureSelectionV1::Predecessor
+        == FoundInfrastructureSelectionV1::Genesis
     {
-        return Ok(plan.clone());
+        let profile_account = profile_account.ok_or_else(|| {
+            Error::new("genesis Found selection lost its observed V2 infrastructure profile")
+        })?;
+        return checked_genesis_found_plan_v1(plan, profile, &profile_account);
     }
     match crate::campaign::succession_state(rpc, plan)? {
         crate::campaign::StageStateV1::Complete => {}
@@ -13345,25 +13407,185 @@ mod tests {
         }
     }
 
+    /// A cohort born at V2: no succession pin, a genesis V2 at the V2 PDA.
+    struct GenesisFoundFixtureV1 {
+        plan: SuccessorPlan,
+        profile_address: Pubkey,
+        profile_account: RpcAccount,
+    }
+
+    fn genesis_found_fixture_v1() -> GenesisFoundFixtureV1 {
+        use dclutch_release_set_contract::{
+            ArtifactReleaseIdV1, ExecutionRoleBindingV1,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, ProgramIdentityV1,
+        };
+
+        let mut plan = split_founding_fixture_v1().plan;
+        let registry = pubkey(&plan.registry.program_id).expect("Registry program");
+        let rent = pubkey(&plan.rent_credit.program_id).expect("Rent program");
+        let core = pubkey(&plan.core.program_id).expect("Core program");
+        let registry_artifact =
+            ArtifactReleaseIdV1::new([0xd1; 32]).expect("Registry artifact release");
+        let rent_artifact = ArtifactReleaseIdV1::new([0xd2; 32]).expect("Rent artifact release");
+        let registry_binding = ExecutionRoleBindingV1::new(
+            ProgramIdentityV1::new(registry.to_bytes()).expect("Registry identity"),
+            registry_artifact,
+        );
+        let rent_binding = ExecutionRoleBindingV1::new(
+            ProgramIdentityV1::new(rent.to_bytes()).expect("Rent identity"),
+            rent_artifact,
+        );
+        let v1 = ProtocolInfrastructureProfileV1::new(registry_binding, rent_binding)
+            .expect("sealed V1 profile");
+        let genesis = ProtocolInfrastructureProfileV2::genesis(registry_binding, rent_binding)
+            .expect("genesis V2 profile");
+        let v1_bytes = v1.to_bytes();
+        let genesis_bytes = genesis.to_bytes();
+        let v1_address =
+            Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core).0;
+        let profile_address =
+            Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+
+        plan.infrastructure_succession = None;
+        plan.infrastructure_profile.address = v1_address.to_string();
+        plan.infrastructure_profile.schema_id = hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1);
+        plan.infrastructure_profile.body_sha256 = hex(&Sha256::digest(v1_bytes));
+        plan.infrastructure_profile.body_hex = hex(&v1_bytes);
+        plan.infrastructure_profile.registry_artifact_release_id =
+            hex(registry_artifact.as_bytes());
+        plan.infrastructure_profile.rent_artifact_release_id = hex(rent_artifact.as_bytes());
+        plan.genesis_infrastructure_profile.address = profile_address.to_string();
+        plan.genesis_infrastructure_profile.schema_id =
+            hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2);
+        plan.genesis_infrastructure_profile.body_sha256 = hex(&Sha256::digest(genesis_bytes));
+        plan.genesis_infrastructure_profile.body_hex = hex(&genesis_bytes);
+        plan.genesis_infrastructure_profile
+            .registry_artifact_release_id = hex(registry_artifact.as_bytes());
+        plan.genesis_infrastructure_profile.rent_artifact_release_id =
+            hex(rent_artifact.as_bytes());
+
+        GenesisFoundFixtureV1 {
+            plan,
+            profile_address,
+            profile_account: RpcAccount {
+                lamports: 1,
+                owner: core,
+                executable: false,
+                rent_epoch: 0,
+                data: genesis_bytes.to_vec(),
+            },
+        }
+    }
+
+    /// The genesis arm founds, the vacancy refuses, and no arm falls back to V1.
+    ///
+    /// `Predecessor` -- the arm that fed the 144-byte V1 into the projection
+    /// whenever a plan had no succession -- is gone, and this is the test of
+    /// that: a plan with no succession and no V2 on chain is now a REFUSAL
+    /// naming the vacancy, where it used to be a foundable-looking projection
+    /// that failed sixty transactions deep on chain.
     #[test]
-    fn found_infrastructure_selection_is_atomic_and_predecessor_is_exact() {
-        let predecessor = split_founding_fixture_v1().plan;
+    fn found_infrastructure_selection_is_genesis_or_planned_successor_and_never_v1() {
+        let genesis = genesis_found_fixture_v1();
         assert_eq!(
-            checked_found_infrastructure_selection_v1(&predecessor, false)
-                .expect("genuinely absent succession"),
-            FoundInfrastructureSelectionV1::Predecessor
+            checked_found_infrastructure_selection_v1(&genesis.plan, true)
+                .expect("a born-at-V2 cohort founds against its genesis V2"),
+            FoundInfrastructureSelectionV1::Genesis
         );
+        let vacant = checked_found_infrastructure_selection_v1(&genesis.plan, false)
+            .expect_err("a vacant V2 PDA is not a fallback to the V1");
         assert!(
-            checked_found_infrastructure_selection_v1(&predecessor, true).is_err(),
-            "an observed V2 profile cannot fall back to the predecessor"
-        );
-        let before = serde_json::to_value(&predecessor).expect("predecessor JSON");
-        let byte_identical = predecessor.clone();
-        assert_eq!(
-            serde_json::to_value(byte_identical).expect("selected predecessor JSON"),
-            before
+            vacant.to_string().contains("run the initialize stage"),
+            "{vacant}"
         );
 
+        // The selected plan points the founding path at the V2 the chain
+        // authenticates, and touches nothing else.
+        let records_before =
+            serde_json::to_value(&genesis.plan.records).expect("plan records JSON");
+        let selected = checked_genesis_found_plan_v1(
+            &genesis.plan,
+            genesis.profile_address,
+            &genesis.profile_account,
+        )
+        .expect("genesis Found selection");
+        assert_eq!(
+            selected.infrastructure_profile.address,
+            genesis.profile_address.to_string()
+        );
+        assert_eq!(
+            selected.infrastructure_profile.schema_id,
+            hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2)
+        );
+        assert_eq!(
+            selected.infrastructure_profile.body_hex,
+            genesis.plan.genesis_infrastructure_profile.body_hex
+        );
+        assert_eq!(
+            serde_json::to_value(&selected.records).expect("selected records JSON"),
+            records_before,
+            "a genesis founding moves no Registry artifact record"
+        );
+
+        // Hostile: a SUCCEEDED V2 at the same address under the same plan.
+        // Half a forgery is still a forgery on chain; here the whole account
+        // is well-formed and Core-owned and still must not found, because this
+        // plan carries no succession to authenticate it against.
+        let succeeded = ProtocolInfrastructureProfileV2::new(
+            ProtocolInfrastructureProfileV1::decode(
+                &decode_hex(&genesis.plan.infrastructure_profile.body_hex).expect("V1 body"),
+            )
+            .expect("V1 profile")
+            .registry(),
+            ProtocolInfrastructureProfileV1::decode(
+                &decode_hex(&genesis.plan.infrastructure_profile.body_hex).expect("V1 body"),
+            )
+            .expect("V1 profile")
+            .rent(),
+            dclutch_release_set_contract::ArtifactReleaseIdV1::new([0xe1; 32])
+                .expect("real predecessor Registry"),
+            dclutch_release_set_contract::ArtifactReleaseIdV1::new([0xe2; 32])
+                .expect("real predecessor Rent"),
+        )
+        .expect("succeeded profile");
+        let mut succeeded_account = genesis.profile_account.clone();
+        succeeded_account.data = succeeded.to_bytes().to_vec();
+        assert!(!succeeded.born_at_v2());
+        assert!(
+            checked_genesis_found_plan_v1(
+                &genesis.plan,
+                genesis.profile_address,
+                &succeeded_account
+            )
+            .is_err(),
+            "a succeeded V2 is not a born-at-V2 cohort and must not found without its ceremony"
+        );
+
+        // Hostile: a well-formed genesis V2 for DIFFERENT bindings.
+        let mut foreign_plan = genesis.plan.clone();
+        foreign_plan.genesis_infrastructure_profile.body_hex = hex(&[0x00_u8; 4]);
+        assert!(
+            checked_genesis_found_plan_v1(
+                &foreign_plan,
+                genesis.profile_address,
+                &genesis.profile_account
+            )
+            .is_err(),
+            "the observed V2 must be byte-identical to the plan's own pin"
+        );
+
+        // Positive control: the succession arm is untouched.
+        let planned = found_infrastructure_fixture_v1();
+        assert_eq!(
+            checked_found_infrastructure_selection_v1(&planned.plan, true)
+                .expect("a planned succession still selects its successor"),
+            FoundInfrastructureSelectionV1::PlannedSuccessor
+        );
+    }
+
+    #[test]
+    fn found_successor_selection_is_atomic_and_rewrites_only_registry() {
         let fixture = found_infrastructure_fixture_v1();
         let rent_before = serde_json::to_value(
             fixture
@@ -14251,6 +14473,14 @@ mod tests {
             checked_local_mutable_set: None,
             infrastructure_succession: None,
             infrastructure_profile: InfrastructureProfilePin {
+                address: Pubkey::new_unique().to_string(),
+                schema_id: String::new(),
+                body_sha256: String::new(),
+                body_hex: String::new(),
+                registry_artifact_release_id: String::new(),
+                rent_artifact_release_id: String::new(),
+            },
+            genesis_infrastructure_profile: InfrastructureProfilePin {
                 address: Pubkey::new_unique().to_string(),
                 schema_id: String::new(),
                 body_sha256: String::new(),

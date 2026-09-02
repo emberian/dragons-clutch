@@ -121,7 +121,7 @@ const TABLE_PROVISION_JOURNAL_FORMAT: &str = "dclutch-flagship-resolution-alt-jo
 const LOCAL_TABLE_PROVISION_JOURNAL_FORMAT: &str =
     "dclutch-owned-loopback-flagship-resolution-alt-journal-v3";
 const CAMPAIGN_FORMAT: &str = "dclutch-successor-campaign-report-v1";
-const PLAN_FORMAT: &str = "dclutch-local-successor-infrastructure-plan-v2";
+const PLAN_FORMAT: &str = crate::model::SUCCESSOR_PLAN_SCHEMA_V3;
 /// Provisional operator delay after the terminal window. It is not a protocol
 /// liveness bound; a measured finalized reclaim campaign can lift or narrow it.
 const FLAGSHIP_RECLAIM_DELAY_SECONDS_V1: i64 = 3_600;
@@ -3638,7 +3638,13 @@ fn producer_selected_input(
             funding_ledger: funding_ledger.to_string(),
             certificate: certificate.to_string(),
             activation_cache: plan.activation.clone(),
-            infrastructure: plan.infrastructure_profile.address.clone(),
+            // The V2 PDA, because that is the profile Core authenticates:
+            // since `2951b226` every route reads `dclutch:infrastructure:v2`
+            // and nothing else. The address is domain-derived under Core, so
+            // it is the same account whether this cohort was born at V2 or
+            // succeeded into it; only the bytes differ. The sealed V1 is
+            // lineage evidence and is never an account in a live instruction.
+            infrastructure: plan.genesis_infrastructure_profile.address.clone(),
             registry_program: registry_program.to_string(),
             registry_programdata: plan.registry.programdata_id.clone(),
             registry_artifact: registry_artifact.to_owned(),

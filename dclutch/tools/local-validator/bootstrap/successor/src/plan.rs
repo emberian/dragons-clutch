@@ -18,8 +18,9 @@ use dclutch_registry_svm::ProgramDataV3View;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, ProgramIdentityV1,
-    ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2, ProgramIdentityV1,
+    ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
 use dclutch_resolution_codec::{
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
@@ -1166,6 +1167,29 @@ fn prepare_inner(
         &args.core_program,
     )
     .0;
+    // The genesis V2, committed by the SAME initialize instruction at the V2
+    // domain. Derived from the same two bindings rather than supplied, so the
+    // plan cannot pin a V2 that disagrees with its V1; the two sentinels come
+    // from the constructor and are the whole difference.
+    let genesis_infrastructure =
+        ProtocolInfrastructureProfileV2::genesis(registry.binding(), rent.binding())
+            .map_err(debug_error("genesis protocol infrastructure profile"))?;
+    if !genesis_infrastructure.born_at_v2() {
+        return Err(Error::new(
+            "the derived genesis infrastructure profile does not carry both genesis sentinels",
+        ));
+    }
+    let genesis_infrastructure_bytes = genesis_infrastructure.to_bytes();
+    let genesis_infrastructure_address = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+        &args.core_program,
+    )
+    .0;
+    if genesis_infrastructure_address == infrastructure_address {
+        return Err(Error::new(
+            "the V1 and V2 infrastructure profile domains derived the same address",
+        ));
+    }
     if let Some(set) = &args.checked_upgrade_set {
         validate_carried_infrastructure_projection(
             set,
@@ -1342,7 +1366,7 @@ fn prepare_inner(
         .transpose()?;
     writer.sync()?;
     let plan = SuccessorPlan {
-        schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
+        schema: crate::model::SUCCESSOR_PLAN_SCHEMA_V3.into(),
         genesis_boundary: if checked_local_mutable_gate.is_some() {
             vec![
                 "Genesis installs seven exact checked-release Loader-v3 Program/ProgramData pairs under one disposable retained authority at canonical local slots 1 through 7, the two exact immutable slot-zero Pyth provider Loader pairs, and one exact Registry successor Buffer under that retained authority. Nothing else.".into(),
@@ -1361,7 +1385,7 @@ fn prepare_inner(
         bootstrap_order: if checked_local_mutable_gate.is_some() {
             vec![
                 "Re-authenticate the exact checked-release gate and all seven mutable Loader pairs before any key read.".into(),
-                "Publish the predecessor ArtifactRelease records and singleton V1 infrastructure profile through Registry transactions.".into(),
+                "Publish the predecessor ArtifactRelease records and BOTH infrastructure profiles -- the sealed V1 and the genesis V2 -- through Registry and Core transactions.".into(),
                 "Consume the planted Buffer in one real Loader Upgrade, publish the observed successor Registry ArtifactRelease, and create the V2 profile before any activation.".into(),
                 "Activate the five-role exact-authority ExecutionReleaseSet without revoking the disposable local Upgrade authority.".into(),
                 "Execute DCLTGMF3 founding, participant admission, Direct, resolution, payout, and retirement through their accepted exterior callers.".into(),
@@ -1369,7 +1393,7 @@ fn prepare_inner(
         } else {
             vec![
                 "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
-                "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
+                "Use that in-memory Core upgrade-authority signer to initialize BOTH infrastructure profiles in one instruction -- the sealed 144-byte V1 and the 224-byte genesis V2 every consumer reads -- from exact Registry and Rent artifact records.".into(),
                 "Revoke Core upgrade authority to None through Loader-v3 and verify the exact tag-None fixed-offset poststate, including Loader-retained inactive authority bytes, before release recognition.".into(),
                 "Activate the five-role immutable ExecutionReleaseSet through Registry, then create RentCredit and execute canonical Found31.".into(),
                 "Create and fund Source through Core effects before consuming the captured signed Pyth PriceUpdate through Resolution.".into(),
@@ -1410,6 +1434,14 @@ fn prepare_inner(
             schema_id: hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1),
             body_sha256: hex(&sha256_bytes(&infrastructure_bytes)),
             body_hex: hex(&infrastructure_bytes),
+            registry_artifact_release_id: hex(registry.id.as_bytes()),
+            rent_artifact_release_id: hex(rent.id.as_bytes()),
+        },
+        genesis_infrastructure_profile: InfrastructureProfilePin {
+            address: genesis_infrastructure_address.to_string(),
+            schema_id: hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2),
+            body_sha256: hex(&sha256_bytes(&genesis_infrastructure_bytes)),
+            body_hex: hex(&genesis_infrastructure_bytes),
             registry_artifact_release_id: hex(registry.id.as_bytes()),
             rent_artifact_release_id: hex(rent.id.as_bytes()),
         },
@@ -1962,10 +1994,7 @@ mod tests {
 
         let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, deployments);
         let plan = plan.expect("zero-padded observed payload prepares");
-        assert_eq!(
-            plan.schema,
-            "dclutch-local-successor-infrastructure-plan-v2"
-        );
+        assert_eq!(plan.schema, crate::model::SUCCESSOR_PLAN_SCHEMA_V3);
         assert_eq!(
             plan.registry.checked_candidate_elf_sha256,
             hex(&sha256_bytes(&raw))
@@ -2664,6 +2693,109 @@ mod tests {
             plan.infrastructure_profile.rent_artifact_release_id,
             plan.rent_credit.artifact_release_id
         );
+        fs::remove_dir_all(&root).expect("remove scoped test root");
+    }
+
+    /// A prepared plan pins BOTH profiles, because one instruction writes both.
+    ///
+    /// This is the plan-side half of `c60b25e8`. The V2 is derived from the
+    /// V1's own two bindings rather than supplied, so the assertions here are
+    /// about a body nobody typed: that it is at the V2 domain, that it is a
+    /// different account from the V1, that it carries both genesis sentinels,
+    /// and that it binds the same Registry and Rent artifact releases the V1
+    /// does. A cohort whose plan omitted this could reach activation and then
+    /// refuse its founding sixty transactions deep -- which is what cohort-9
+    /// did.
+    #[test]
+    fn a_prepared_plan_pins_the_genesis_v2_beside_its_sealed_v1() {
+        let (plan, root) = prepared_plan(RecordPublicationV1::Transaction);
+        let core = pubkey(&plan.core.program_id).expect("Core program");
+        let expected_address =
+            Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+        assert_eq!(
+            plan.genesis_infrastructure_profile.address,
+            expected_address.to_string()
+        );
+        assert_ne!(
+            plan.genesis_infrastructure_profile.address,
+            plan.infrastructure_profile.address
+        );
+        assert_eq!(
+            plan.genesis_infrastructure_profile.schema_id,
+            hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2)
+        );
+
+        let body = crate::runtime::decode_hex(&plan.genesis_infrastructure_profile.body_hex)
+            .expect("genesis V2 body hex");
+        assert_eq!(body.len(), 224);
+        assert_eq!(
+            plan.genesis_infrastructure_profile.body_sha256,
+            hex(&sha256_bytes(&body))
+        );
+        let genesis = ProtocolInfrastructureProfileV2::decode(&body).expect("genesis V2 decode");
+        assert!(genesis.born_at_v2());
+
+        let v1 = ProtocolInfrastructureProfileV1::decode(
+            &crate::runtime::decode_hex(&plan.infrastructure_profile.body_hex)
+                .expect("V1 body hex"),
+        )
+        .expect("V1 decode");
+        assert_eq!(genesis.registry(), v1.registry());
+        assert_eq!(genesis.rent(), v1.rent());
+        assert_eq!(
+            plan.genesis_infrastructure_profile
+                .registry_artifact_release_id,
+            plan.registry.artifact_release_id
+        );
+        assert_eq!(
+            plan.genesis_infrastructure_profile.rent_artifact_release_id,
+            plan.rent_credit.artifact_release_id
+        );
+
+        // The projection authenticator rebuilds the V2 from the V1's bindings,
+        // so a substituted pin refuses here rather than at the fifteenth
+        // account of a live transaction. Positive control first: the plan as
+        // prepared must pass, or this test would also pass on a checker that
+        // refused everything.
+        crate::runtime::authenticate_infrastructure_profile_projection(&plan)
+            .expect("a prepared plan authenticates both profiles");
+        // A well-formed genesis V2 -- both sentinels intact -- for a DIFFERENT
+        // Registry binding. `born_at_v2()` is true of it, so only the
+        // derived-from-the-V1 equality can catch it, which is the conjunct
+        // worth proving.
+        let foreign_registry = ExecutionRoleBindingV1::new(
+            v1.registry().program(),
+            ArtifactReleaseIdV1::new([0x7c; 32]).expect("foreign Registry artifact"),
+        );
+        let foreign = ProtocolInfrastructureProfileV2::genesis(foreign_registry, v1.rent())
+            .expect("foreign genesis V2");
+        assert!(foreign.born_at_v2());
+        let foreign_body = foreign.to_bytes();
+        let mut forged = plan.clone();
+        forged.genesis_infrastructure_profile.body_hex = hex(&foreign_body);
+        forged.genesis_infrastructure_profile.body_sha256 = hex(&sha256_bytes(&foreign_body));
+        assert!(
+            crate::runtime::authenticate_infrastructure_profile_projection(&forged).is_err(),
+            "a genesis V2 binding a different Registry artifact must refuse"
+        );
+        // And the sentinel conjunct itself: one flipped byte in the trailing
+        // predecessor id is no longer a genesis profile.
+        let mut half = plan.clone();
+        let mut half_body = body.clone();
+        half_body[body.len() - 1] ^= 0x01;
+        half.genesis_infrastructure_profile.body_hex = hex(&half_body);
+        half.genesis_infrastructure_profile.body_sha256 = hex(&sha256_bytes(&half_body));
+        assert!(
+            crate::runtime::authenticate_infrastructure_profile_projection(&half).is_err(),
+            "half a sentinel pair is not a genesis profile"
+        );
+        let mut moved = plan.clone();
+        moved.genesis_infrastructure_profile.address = plan.infrastructure_profile.address.clone();
+        assert!(
+            crate::runtime::authenticate_infrastructure_profile_projection(&moved).is_err(),
+            "the genesis V2 pin must live at the V2 domain, never at the V1's address"
+        );
+
         fs::remove_dir_all(&root).expect("remove scoped test root");
     }
 

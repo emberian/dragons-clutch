@@ -178,7 +178,10 @@ impl FoundingBandInputV1 {
             ("anchor", self.anchor.is_some()),
             ("volatility_bps", self.volatility_bps.is_some()),
             ("window_slots", self.window_slots.is_some()),
-            ("plausible_half_widths", self.plausible_half_widths.is_some()),
+            (
+                "plausible_half_widths",
+                self.plausible_half_widths.is_some(),
+            ),
         ];
         let any_spot = spot_fields.iter().any(|(_, present)| *present);
         let proposition = self.cell_probability_bps.is_some();
@@ -188,10 +191,7 @@ impl FoundingBandInputV1 {
             )));
         }
         if proposition {
-            let cell_probability_bps = self
-                .cell_probability_bps
-                .clone()
-                .unwrap_or_default();
+            let cell_probability_bps = self.cell_probability_bps.clone().unwrap_or_default();
             if cell_probability_bps.is_empty() {
                 return Err(Error::new(format!(
                     "{label} founding_band/cell_probability_bps: expected one                      probability per ordinary cell, and a partition has at least one"
@@ -454,6 +454,33 @@ pub(crate) struct RecordPair {
     /// genesis and the supervisor has to publish them through Registry
     /// `Begin -> Append -> Finalize` like any other record.
     pub(crate) body_hex: String,
+}
+
+/// Current successor infrastructure-plan schema.
+///
+/// v3 carries `genesis_infrastructure_profile` beside `infrastructure_profile`,
+/// because since `c60b25e8` one initialize instruction commits both bodies and
+/// widens its frame 14 -> 15 accounts. A v2 plan describes a chain act no
+/// program in this tree performs any more, so it is refused by name rather
+/// than defaulted forward.
+pub(crate) const SUCCESSOR_PLAN_SCHEMA_V3: &str = "dclutch-local-successor-infrastructure-plan-v3";
+/// The retired schema, named only so a stale plan refuses legibly.
+pub(crate) const SUCCESSOR_PLAN_SCHEMA_RETIRED_V2: &str =
+    "dclutch-local-successor-infrastructure-plan-v2";
+
+/// Refuse a plan header that is not the current schema, naming what it is.
+pub(crate) fn authenticate_successor_plan_schema_v3(schema: &str) -> Result<()> {
+    if schema == SUCCESSOR_PLAN_SCHEMA_V3 {
+        return Ok(());
+    }
+    if schema == SUCCESSOR_PLAN_SCHEMA_RETIRED_V2 {
+        return Err(Error::new(format!(
+            "this is a retired {SUCCESSOR_PLAN_SCHEMA_RETIRED_V2} plan: it pins only the V1              infrastructure profile, and Core initialization now commits the genesis V2 in the              same instruction over a fifteen-account frame. Re-run `prepare` to emit a              {SUCCESSOR_PLAN_SCHEMA_V3} plan."
+        )));
+    }
+    Err(Error::new(format!(
+        "successor infrastructure plan schema {schema:?} is not {SUCCESSOR_PLAN_SCHEMA_V3}"
+    )))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -792,6 +819,19 @@ pub(crate) struct SuccessorPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) infrastructure_succession: Option<InfrastructureSuccessionPinV1>,
     pub(crate) infrastructure_profile: InfrastructureProfilePin,
+    /// The genesis V2 the SAME initialize instruction commits, at the V2 PDA.
+    ///
+    /// Since `2951b226` every Core route authenticates the V2 succession
+    /// profile and nothing else, and since `c60b25e8`
+    /// `InitializeProtocolInfrastructureV1` commits both bodies in one
+    /// instruction so a cohort can never stand half initialized with a V1
+    /// nothing reads. This pin is what the driver passes as the fifteenth
+    /// account and what `Found` selects against on a born-at-V2 cohort.
+    ///
+    /// Not optional and never absent: every cohort this tool plans is born at
+    /// V2. A plan that omits it is a pre-`c60b25e8` plan and is refused by the
+    /// schema check rather than defaulted into silence.
+    pub(crate) genesis_infrastructure_profile: InfrastructureProfilePin,
     pub(crate) records: BTreeMap<String, RecordPair>,
     /// `"genesis"` or `"transaction"`. Devnet has no genesis, so the
     /// transaction mode is the one a real deployment can actually reach; the

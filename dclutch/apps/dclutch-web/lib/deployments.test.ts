@@ -127,11 +127,18 @@ describe('operator document import', () => {
 
   it('fills the roles from an infrastructure plan and says it has no endpoint', () => {
     const imported = importDeploymentDocumentV1(JSON.stringify({
-      schema: 'dclutch-local-successor-infrastructure-plan-v2',
+      schema: 'dclutch-local-successor-infrastructure-plan-v3',
       ...roles,
     }));
     expect(imported.endpoint).toBeNull();
     expect(imported.programs.trading).toBe(LOCAL_DEPLOYMENT_V1.programs.trading);
+  });
+
+  it('names a retired v2 plan rather than calling it a foreign document', () => {
+    expect(() => importDeploymentDocumentV1(JSON.stringify({
+      schema: 'dclutch-local-successor-infrastructure-plan-v2',
+      ...roles,
+    }))).toThrow('retired');
   });
 
   it('refuses non-JSON, foreign schemas, and missing roles by name', () => {

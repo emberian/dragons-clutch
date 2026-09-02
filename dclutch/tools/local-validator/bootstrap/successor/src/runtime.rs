@@ -36,7 +36,9 @@ use dclutch_registry_svm::{
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleV1,
     InitializeProtocolInfrastructureV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2, ProtocolInfrastructureProfileV1,
+    ProtocolInfrastructureProfileV2,
 };
 use sha2::Digest as _;
 use solana_loader_v3_interface::instruction::set_upgrade_authority;
@@ -366,6 +368,16 @@ pub(crate) fn found_through_open(
             "infrastructure profile unexpectedly existed at genesis",
         ));
     }
+    // The same statement for the V2 domain. One instruction writes both, and
+    // the program refuses a non-vacant genesis PDA, so an occupied V2 here
+    // would strand the whole initialize stage on a fact the supervisor could
+    // have read for free.
+    let genesis_profile = pubkey(&plan.genesis_infrastructure_profile.address)?;
+    if rpc.account(genesis_profile)?.is_some() {
+        return Err(Error::new(
+            "genesis V2 infrastructure profile unexpectedly existed at genesis",
+        ));
+    }
     transactions.push(
         rpc.send_expected_failure(
             "wrong authority cannot initialize infrastructure",
@@ -495,6 +507,7 @@ pub(crate) fn found_through_open(
     for (label, address) in [
         ("core_programdata", pubkey(&plan.core.programdata_id)?),
         ("infrastructure_profile", profile),
+        ("genesis_infrastructure_profile", genesis_profile),
         ("release_activation", activation),
         ("core_authority_wallet", authority.pubkey()),
     ] {
@@ -696,6 +709,11 @@ pub(crate) fn initialize_instruction(
         accounts: vec![
             AccountMeta::new(payer, true),
             AccountMeta::new(pubkey(&plan.infrastructure_profile.address)?, false),
+            // The genesis V2, committed by this same instruction at the V2
+            // domain. `InitializeInfrastructureAccounts::parse` reads it third
+            // -- writable, non-signer, and distinct from the V1 -- and refuses
+            // the frame otherwise.
+            AccountMeta::new(pubkey(&plan.genesis_infrastructure_profile.address)?, false),
             AccountMeta::new_readonly(pubkey(&plan.core.programdata_id)?, false),
             AccountMeta::new_readonly(authority, true),
             AccountMeta::new_readonly(registry.0, false),
@@ -1300,10 +1318,11 @@ fn verify_published_record(
 }
 
 pub(crate) fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+    let core = pubkey(&plan.core.program_id)?;
     let address = pubkey(&plan.infrastructure_profile.address)?;
     let account = rpc.required_account(address, "infrastructure profile")?;
     let expected = decode_hex(&plan.infrastructure_profile.body_hex)?;
-    if account.owner != pubkey(&plan.core.program_id)?
+    if account.owner != core
         || account.executable
         || account.data != expected
         || hex(&sha2::Sha256::digest(&account.data)) != plan.infrastructure_profile.body_sha256
@@ -1311,6 +1330,27 @@ pub(crate) fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> 
     {
         return Err(Error::new(
             "Core infrastructure profile poststate did not match exact plan bytes",
+        ));
+    }
+    // Both, in the same verification, because one instruction wrote both. A
+    // cohort standing with a V1 nothing reads and no V2 to found against is
+    // exactly the state `c60b25e8` exists to make unreachable, and a
+    // verification that looked only at the V1 would report it as complete.
+    let genesis_address = pubkey(&plan.genesis_infrastructure_profile.address)?;
+    let genesis_account =
+        rpc.required_account(genesis_address, "genesis infrastructure profile")?;
+    let genesis_expected = decode_hex(&plan.genesis_infrastructure_profile.body_hex)?;
+    let genesis_decoded = ProtocolInfrastructureProfileV2::decode(&genesis_account.data)
+        .map_err(|error| Error::new(format!("genesis infrastructure profile: {error:?}")))?;
+    if genesis_account.owner != core
+        || genesis_account.executable
+        || genesis_account.data != genesis_expected
+        || hex(&sha2::Sha256::digest(&genesis_account.data))
+            != plan.genesis_infrastructure_profile.body_sha256
+        || !genesis_decoded.born_at_v2()
+    {
+        return Err(Error::new(
+            "Core genesis V2 infrastructure profile poststate did not match exact plan bytes",
         ));
     }
     Ok(())
@@ -1458,6 +1498,56 @@ pub(crate) fn authenticate_infrastructure_profile_projection(plan: &SuccessorPla
     }
     if plan.infrastructure_profile.body_sha256 != hex(&sha2::Sha256::digest(&body)) {
         return Err(Error::new("infrastructure profile body hash mismatch"));
+    }
+    authenticate_genesis_infrastructure_profile_projection(plan, profile)?;
+    Ok(())
+}
+
+/// Rebuild the genesis V2 from the SAME two bindings the V1 carries.
+///
+/// Nothing here is taken from the plan except the pin being checked: the body
+/// is a pure function of the V1's Registry and Rent bindings, so a plan whose
+/// two profiles disagree -- or whose V2 came from anywhere but
+/// `ProtocolInfrastructureProfileV2::genesis` -- refuses here rather than at the
+/// fifteenth account of a live transaction.
+fn authenticate_genesis_infrastructure_profile_projection(
+    plan: &SuccessorPlan,
+    v1: ProtocolInfrastructureProfileV1,
+) -> Result<()> {
+    let core = pubkey(&plan.core.program_id)?;
+    let address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
+    if plan.genesis_infrastructure_profile.address != address.to_string()
+        || hex32(&plan.genesis_infrastructure_profile.schema_id)?
+            != PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2
+        || plan.genesis_infrastructure_profile.address == plan.infrastructure_profile.address
+    {
+        return Err(Error::new(
+            "genesis infrastructure profile address or schema is not canonical",
+        ));
+    }
+    let expected = ProtocolInfrastructureProfileV2::genesis(v1.registry(), v1.rent())
+        .map_err(|error| Error::new(format!("genesis infrastructure profile: {error:?}")))?;
+    let body = decode_hex(&plan.genesis_infrastructure_profile.body_hex)?;
+    let observed = ProtocolInfrastructureProfileV2::decode(&body)
+        .map_err(|error| Error::new(format!("genesis infrastructure profile: {error:?}")))?;
+    if observed != expected
+        || !observed.born_at_v2()
+        || plan
+            .genesis_infrastructure_profile
+            .registry_artifact_release_id
+            != plan.infrastructure_profile.registry_artifact_release_id
+        || plan.genesis_infrastructure_profile.rent_artifact_release_id
+            != plan.infrastructure_profile.rent_artifact_release_id
+    {
+        return Err(Error::new(
+            "genesis infrastructure profile substituted a Registry or Rent binding",
+        ));
+    }
+    if plan.genesis_infrastructure_profile.body_sha256 != hex(&sha2::Sha256::digest(&body)) {
+        return Err(Error::new(
+            "genesis infrastructure profile body hash mismatch",
+        ));
     }
     Ok(())
 }
@@ -1728,8 +1818,8 @@ fn ensure_rpc_port_free(port: u16) -> Result<()> {
 }
 
 fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
-    if plan.schema != "dclutch-local-successor-infrastructure-plan-v2"
-        || plan.genesis_boundary.len() != 2
+    crate::model::authenticate_successor_plan_schema_v3(&plan.schema)?;
+    if plan.genesis_boundary.len() != 2
         || plan.bootstrap_order.len() != 5
         || plan.execution_blocker.is_empty()
     {

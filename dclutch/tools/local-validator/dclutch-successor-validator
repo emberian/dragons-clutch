@@ -384,7 +384,7 @@ validate_plan() {
     --arg rent_credit_id "$rent_credit_id" \
     --arg rent_credit_elf "$rent_credit_elf" \
     --arg rent_credit_hash "$rent_credit_hash" \
-    '.schema == "dclutch-local-successor-infrastructure-plan-v2" and
+    '.schema == "dclutch-local-successor-infrastructure-plan-v3" and
      .account_dir == $account_dir and
      .registry.program_id == $registry_id and
      .registry.elf_path == $registry_elf and

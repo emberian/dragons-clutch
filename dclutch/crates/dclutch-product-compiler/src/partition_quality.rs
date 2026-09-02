@@ -812,14 +812,30 @@ mod tests {
             ),
             Err(CompileError::UnsupportedFoundingBand)
         );
+        // A ceiling of zero refuses every partition, so it is a malformed
+        // parameter rather than an attempt to widen the gate.
         assert_eq!(
             require_interesting_partition_v1(&[100_000_000], &two_wide(band), 0),
             Err(CompileError::UnsupportedFoundingBand)
         );
-        assert_eq!(
-            require_interesting_partition_v1(&[100_000_000], &two_wide(band), 10_001),
-            Err(CompileError::UnsupportedFoundingBand)
-        );
+        // A ceiling ABOVE the release's own maximum is a different thing to
+        // have got wrong: it is the caller asking for a gate weaker than the
+        // release admits, and it refuses on its own discriminant so a test
+        // asserting "some error" cannot pass on a malformed band while meaning
+        // this. Both sides of the boundary, so the bound is exact.
+        for above in [MAX_CELL_EX_ANTE_SHARE_BPS_V1 + 1, 9_999, 10_000, 10_001] {
+            assert_eq!(
+                require_interesting_partition_v1(&[100_000_000], &two_wide(band), above),
+                Err(CompileError::CellShareCeilingAboveMaximum),
+                "{above} is above the release's maximum"
+            );
+        }
+        require_interesting_partition_v1(
+            &[100_000_000],
+            &two_wide(band),
+            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        )
+        .expect("POSITIVE CONTROL: the maximum itself is a ceiling a caller may state");
         assert_eq!(
             centred_cuts_v1(&band, 1, BandProfileV1::Uniform),
             Err(CompileError::PartitionTooSmall)

@@ -250,7 +250,7 @@ fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
     registry: Pubkey,
     evidence_authenticator: &E,
 ) -> Result<()> {
-    if plan.schema != "dclutch-local-successor-infrastructure-plan-v2"
+    if plan.schema != crate::model::SUCCESSOR_PLAN_SCHEMA_V3
         || plan.record_publication != "transaction"
         || crate::plan::pubkey(&plan.registry.program_id)? != registry
     {
@@ -413,7 +413,7 @@ fn authenticate_devnet_genesis_plan_v1<E: DirectPlanEvidenceV1>(
 }
 
 fn authenticate_local_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result<u64> {
-    if plan.schema != "dclutch-local-successor-infrastructure-plan-v2"
+    if plan.schema != crate::model::SUCCESSOR_PLAN_SCHEMA_V3
         || plan.record_publication != "transaction"
         || crate::plan::pubkey(&plan.registry.program_id)? != registry
     {

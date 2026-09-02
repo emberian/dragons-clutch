@@ -167,7 +167,7 @@ function canonicalAddress(value: unknown, field: string): string {
 /**
  * Read an operator document into the Custom form: the successor bootstrap's
  * run spec (`dclutch-local-successor-run-spec-v2`, which names its RPC URL)
- * or its infrastructure plan (`dclutch-local-successor-infrastructure-plan-v2`,
+ * or its infrastructure plan (`dclutch-local-successor-infrastructure-plan-v3`,
  * program identities only). This fills the draft; admission is still
  * `parseCustomDeploymentV1`, so an imported document cannot smuggle anything
  * the hand-typed form could not.
@@ -185,8 +185,15 @@ export function importDeploymentDocumentV1(text: string): Readonly<{
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('the pasted document is not one JSON object');
   const record = raw as Record<string, unknown>;
   const schema = record.schema;
-  if (schema !== 'dclutch-local-successor-run-spec-v2' && schema !== 'dclutch-local-successor-infrastructure-plan-v2') {
-    throw new Error('the pasted document is neither a successor run spec (dclutch-local-successor-run-spec-v2) nor an infrastructure plan (dclutch-local-successor-infrastructure-plan-v2)');
+  // The plan schema moved to v3 when initialization began committing both
+  // infrastructure profiles in one instruction. A v2 plan is named rather than
+  // lumped in with a foreign document: what an operator holds is a stale plan,
+  // not the wrong kind of file, and the remedy is to re-run `prepare`.
+  if (schema === 'dclutch-local-successor-infrastructure-plan-v2') {
+    throw new Error('this is a retired dclutch-local-successor-infrastructure-plan-v2 document; re-run `prepare` to emit a dclutch-local-successor-infrastructure-plan-v3 plan');
+  }
+  if (schema !== 'dclutch-local-successor-run-spec-v2' && schema !== 'dclutch-local-successor-infrastructure-plan-v3') {
+    throw new Error('the pasted document is neither a successor run spec (dclutch-local-successor-run-spec-v2) nor an infrastructure plan (dclutch-local-successor-infrastructure-plan-v3)');
   }
   const roleKey: Readonly<Record<ProtocolRoleV1, string>> = Object.freeze({
     registry: 'registry', core: 'core', claims: 'claims', trading: 'trading',
