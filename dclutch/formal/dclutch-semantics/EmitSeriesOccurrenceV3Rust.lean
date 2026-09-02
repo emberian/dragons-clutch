@@ -37,6 +37,8 @@ def main : IO Unit := do
   emitBytes "SERIES_TEMPLATE_MAGIC_V3" templateMagic
   emitBytes "SERIES_OCCURRENCE_MAGIC_V3" occurrenceMagic
   emitBytes "SERIES_TICKET_MAGIC_V3" ticketMagic
+  emitBytes "SERIES_STATE_MAGIC_V3" seriesStateMagic
+  emitBytes "SERIES_TICKET_STATE_MAGIC_V3" ticketStateMagic
   emitBytes "SERIES_TEMPLATE_SCHEMA_RELEASE_PREIMAGE_V3" templateSchemaReleasePreimage
   emitBytes "SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3" templateSchemaReleaseId
   emitBytes "SERIES_OCCURRENCE_SCHEMA_RELEASE_PREIMAGE_V3" occurrenceSchemaReleasePreimage

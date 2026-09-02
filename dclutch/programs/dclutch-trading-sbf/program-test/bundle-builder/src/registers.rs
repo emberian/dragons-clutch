@@ -59,6 +59,7 @@ use dclutch_request_profile_contract::{
         NativeEd25519InstructionViewV1, NativeSignatureRegistersV1,
         REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2, seed_authenticated_signers_atomic,
     },
+    v3::{REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID, RequestProfileV3},
 };
 use dclutch_transition_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
@@ -505,12 +506,7 @@ pub(crate) fn run_engine_with_admitted_candidate(
     }
 
     // Phase 5: request projection.
-    let base_profile = match request_profile {
-        RequestProfileKind::Unsigned(profile) => profile,
-        RequestProfileKind::Signed(profile) => profile.request_profile(),
-    };
-    project_request_atomic(
-        base_profile,
+    request_profile.project_atomic(
         tail_count,
         input.family_request,
         ProjectionRegistersV1 {
@@ -521,8 +517,8 @@ pub(crate) fn run_engine_with_admitted_candidate(
             output_scalars: &mut next_scalars,
             output_identities: &mut next_identities,
         },
-    )
-    .map_err(|_| BuilderError::Projection("request-projection"))?;
+        "request-projection",
+    )?;
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
 
@@ -755,26 +751,61 @@ fn projected_account_uses_variable_marker(
 enum RequestProfileKind<'a> {
     Unsigned(RequestProfileV1<'a>),
     Signed(RequestProfileV2<'a>),
+    Borrowed(RequestProfileV3<'a>),
 }
 
 impl<'a> RequestProfileKind<'a> {
-    /// The V1 projector, which both kinds ultimately delegate projection to.
+    /// The V1 projector every kind ultimately delegates projection to.
+    ///
+    /// For `Borrowed` this is the *prefix* projector only: it validates and
+    /// projects the exact declared prefix and never sees the witness suffix,
+    /// so it must not be driven over a complete request. Use
+    /// [`Self::project_atomic`], which is the kind-aware form.
     fn base(self) -> RequestProfileV1<'a> {
         match self {
             Self::Unsigned(profile) => profile,
             Self::Signed(profile) => profile.request_profile(),
+            Self::Borrowed(profile) => profile.request_profile(),
         }
     }
 
     /// Whether any request projection writes `target`.
+    ///
+    /// `hot_v3::RequestProfileKindV3::writes_register` answers this from the
+    /// embedded V1 for every kind that wraps one, V3 included: the witness
+    /// suffix is opaque and projects nothing.
     fn writes_register(self, target: ProjectionTargetV1) -> Result<bool, BuilderError> {
+        self.base()
+            .writes_register(target)
+            .map_err(|_| BuilderError::Spans("writes-register"))
+    }
+
+    /// Project the family request, phase for phase with
+    /// `hot_v3::RequestProfileKindV3::project_atomic`.
+    ///
+    /// The kinds differ in exactly one place and it is this one. V1 and V2
+    /// declare the complete request and project all of it. V3 declares only a
+    /// prefix; `project_prefix_atomic` splits the complete request at the
+    /// embedded V1's declared width, checks the opaque suffix against the
+    /// borrowed-witness policy (nonzero bounds, exact child-request magic),
+    /// and projects the prefix alone. Driving `base()` over the complete
+    /// request instead would refuse on width, which is the whole reason the
+    /// engine named V3 a boundary rather than falling through to V1.
+    fn project_atomic(
+        self,
+        tail_count: u32,
+        family_request: &'a [u8],
+        registers: ProjectionRegistersV1<'_>,
+        site: &'static str,
+    ) -> Result<(), BuilderError> {
         match self {
-            Self::Unsigned(profile) => profile
-                .writes_register(target)
-                .map_err(|_| BuilderError::Spans("writes-register")),
-            Self::Signed(profile) => profile
-                .writes_register(target)
-                .map_err(|_| BuilderError::Spans("writes-register")),
+            Self::Unsigned(_) | Self::Signed(_) => {
+                project_request_atomic(self.base(), tail_count, family_request, registers)
+                    .map_err(|_| BuilderError::Projection(site))
+            }
+            Self::Borrowed(profile) => profile
+                .project_prefix_atomic(tail_count, family_request, registers)
+                .map_err(|_| BuilderError::Projection(site)),
         }
     }
 }
@@ -798,9 +829,13 @@ fn decode_request_profile_bytes(
         RequestProfileV2::decode_selected(authenticated, authenticated, bytes)
             .map(RequestProfileKind::Signed)
             .map_err(|_| BuilderError::Projection("request-profile-v2"))
+    } else if schema == REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID {
+        RequestProfileV3::decode_selected(authenticated, authenticated, bytes)
+            .map(RequestProfileKind::Borrowed)
+            .map_err(|_| BuilderError::Projection("request-profile-v3"))
     } else {
-        // V3 (borrowed-witness) and V4 (repeated-rows) request profiles are a
-        // named boundary of this engine; no reproduced family needs them yet.
+        // V4 (repeated-rows) request profiles remain a named boundary of this
+        // engine; no reproduced family needs them yet.
         Err(BuilderError::Projection("request-profile-schema"))
     }
 }
@@ -915,8 +950,7 @@ pub fn derive_dynamic_span_geometry(
     let mut projected_identities = input_identities.clone();
     let request_profile =
         decode_request_profile_bytes(input.request_profile_bytes, input.request_profile_schema)?;
-    project_request_atomic(
-        request_profile.base(),
+    request_profile.project_atomic(
         tail_count,
         input.family_request,
         ProjectionRegistersV1 {
@@ -927,8 +961,8 @@ pub fn derive_dynamic_span_geometry(
             output_scalars: &mut projected_scalars,
             output_identities: &mut projected_identities,
         },
-    )
-    .map_err(|_| BuilderError::Spans("request-projection"))?;
+        "span-request-projection",
+    )?;
 
     let transport_page_count = match classify_bank_transport_v2(
         u32::try_from(scalar_count).map_err(|_| BuilderError::Arithmetic)?,
@@ -961,11 +995,28 @@ pub fn derive_dynamic_span_geometry(
                 require_trailing_profile_only_span(profile, span)?;
             }
         } else {
-            if effect_owned
-                || disposition != StrategyDispositionV2::AdmittedAot
-                || transport_span.is_some()
-            {
-                return Err(BuilderError::Spans("unowned-span"));
+            // Three separate accusations, and which one it is decides where a
+            // reader looks next: an EffectV4 span whose selector no request
+            // operation writes is an artifact defect, a non-AdmittedAot
+            // disposition is a strategy defect, and a second selector nothing
+            // writes is a profile defect. `hot_v3` publishes one `Content` for
+            // all three; the builder is a diagnostic and can afford to say.
+            std::eprintln!(
+                "dynamic fixed span {index} is written by no request operation: \
+                 count_scalar={} insertion_coordinate={} effect_owned={effect_owned} \
+                 disposition={disposition:?} transport_span_already_taken={}",
+                span.count_scalar(),
+                span.insertion_coordinate(),
+                transport_span.is_some(),
+            );
+            if effect_owned {
+                return Err(BuilderError::Spans("effect-span-unwritten-selector"));
+            }
+            if disposition != StrategyDispositionV2::AdmittedAot {
+                return Err(BuilderError::Spans("unowned-span-disposition"));
+            }
+            if transport_span.is_some() {
+                return Err(BuilderError::Spans("second-transport-span"));
             }
             require_trailing_profile_only_span(profile, span)?;
             let page_count = transport_page_count.ok_or(BuilderError::Spans("inline-bank"))?;
@@ -1637,6 +1688,16 @@ mod tests {
         hot_candidate_v3::{general_hot_scalar_count_v3, scalar},
     };
     use dclutch_general_codec::Action;
+    use dclutch_request_profile_contract::{
+        encode::{
+            RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1, ScalarRegisterV1,
+            encode_request_profile_v1_atomic,
+        },
+        v3::{
+            BorrowedWitnessPolicyV3, BorrowedWitnessRoleV3, REQUEST_PROFILE_V3_HEADER_BYTES,
+            encode_request_profile_v3_atomic,
+        },
+    };
 
     fn exact_effect_v4() -> Vec<u8> {
         let routes = [RouteInputV3 {
@@ -1808,5 +1869,171 @@ mod tests {
             lifecycle_semantic_prefix_width(profile, 4, &[], expanded + 1),
             Err(BuilderError::Lifecycle("expanded-account-width"))
         );
+    }
+    /// The exact prefix projector selector 9's borrowed-witness profile wraps.
+    ///
+    /// Sixteen prefix bytes: an eight-byte magic the profile requires, then one
+    /// projected `u64` into common scalar zero.
+    #[cfg(test)]
+    fn borrowed_embedded_v1() -> Vec<u8> {
+        let instructions = [
+            RequestInstructionV1::require_u64(
+                RequestCoordinateV1::fixed(0),
+                u64::from_le_bytes(*b"PREFIX03"),
+            ),
+            RequestInstructionV1::project_u64(
+                RequestCoordinateV1::fixed(8),
+                ScalarRegisterV1::common(0),
+            ),
+        ];
+        let width = dclutch_request_profile_contract::HEADER_BYTES
+            + 2 * dclutch_request_profile_contract::OPERATION_BYTES;
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_request_profile_v1_atomic(
+            RequestGeometryV1::new(16, 0, 1, 0, 1, 0),
+            &instructions,
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("embedded V1 prefix projector");
+        output
+    }
+
+    #[cfg(test)]
+    fn borrowed_policy() -> BorrowedWitnessPolicyV3 {
+        BorrowedWitnessPolicyV3 {
+            minimum_bytes: 8,
+            maximum_bytes: 16,
+            consumer_role: BorrowedWitnessRoleV3::Claims,
+            child_request_magic: *b"CHILD003",
+            child_receipt_magic: *b"RECPT003",
+            child_receipt_bytes: 376,
+        }
+    }
+
+    #[cfg(test)]
+    fn borrowed_wrapper() -> Vec<u8> {
+        let embedded = borrowed_embedded_v1();
+        let width = REQUEST_PROFILE_V3_HEADER_BYTES + embedded.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_request_profile_v3_atomic(&embedded, borrowed_policy(), &mut scratch, &mut output)
+            .expect("V3 borrowed-witness wrapper");
+        output
+    }
+
+    /// Project one complete request through whichever kind the schema selects.
+    #[cfg(test)]
+    fn project_once(
+        bytes: &[u8],
+        schema: [u8; 32],
+        request: &[u8],
+    ) -> Result<Vec<u64>, BuilderError> {
+        let profile = decode_request_profile_bytes(bytes, schema)?;
+        let input_scalars = vec![0_u64; 1];
+        let input_identities = vec![[0_u8; 32]; 1];
+        let mut scratch_scalars = input_scalars.clone();
+        let mut scratch_identities = input_identities.clone();
+        let mut output_scalars = input_scalars.clone();
+        let mut output_identities = input_identities.clone();
+        profile.project_atomic(
+            0,
+            request,
+            ProjectionRegistersV1 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+            "test-projection",
+        )?;
+        Ok(output_scalars)
+    }
+
+    /// The borrowed-witness kind projects the PREFIX and leaves the suffix opaque.
+    ///
+    /// The distinction is the whole reason V3 was a named boundary of this
+    /// engine rather than a fall-through to V1: the embedded V1 declares a
+    /// sixteen-byte request, the complete request is twenty-four bytes, and a
+    /// V1 projector driven over all of it refuses on width. This asserts the
+    /// engine takes the split, and that the same wrapper bytes under the V1
+    /// schema label are refused rather than quietly reinterpreted.
+    #[test]
+    fn a_borrowed_witness_profile_projects_its_prefix_and_borrows_the_rest() {
+        let wrapper = borrowed_wrapper();
+        let mut request = Vec::new();
+        request.extend_from_slice(b"PREFIX03");
+        request.extend_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+        request.extend_from_slice(b"CHILD003");
+        assert_eq!(request.len(), 24);
+
+        assert_eq!(
+            project_once(
+                &wrapper,
+                dclutch_request_profile_contract::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
+                &request,
+            ),
+            Ok(vec![0x0102_0304_0506_0708])
+        );
+
+        // The embedded V1 is what answers register ownership, exactly as
+        // `hot_v3::RequestProfileKindV3::writes_register` answers it.
+        let profile = decode_request_profile_bytes(
+            &wrapper,
+            dclutch_request_profile_contract::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
+        )
+        .expect("borrowed-witness kind");
+        assert!(matches!(profile, RequestProfileKind::Borrowed(_)));
+        assert_eq!(
+            profile.writes_register(ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Common,
+                index: 0,
+            }),
+            Ok(true)
+        );
+
+        // Same bytes, wrong schema label: a V3 wrapper is not a V1 profile and
+        // must be refused, never reinterpreted from its first sixteen bytes.
+        assert_eq!(
+            project_once(&wrapper, REQUEST_PROFILE_SCHEMA_ID_V1, &request),
+            Err(BuilderError::Projection("request-profile-v1"))
+        );
+    }
+
+    /// Every conjunct of the witness policy refuses, and none of them is width.
+    #[test]
+    fn a_borrowed_witness_outside_its_declared_policy_refuses() {
+        let wrapper = borrowed_wrapper();
+        let schema = dclutch_request_profile_contract::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID;
+        let prefix = {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(b"PREFIX03");
+            bytes.extend_from_slice(&1_u64.to_le_bytes());
+            bytes
+        };
+        for (case, witness) in [
+            ("absent witness", Vec::new()),
+            ("below the declared minimum", b"CHILD0".to_vec()),
+            ("above the declared maximum", b"CHILD003XXXXXXXXX".to_vec()),
+            ("another child's magic", b"OTHER003".to_vec()),
+        ] {
+            let mut request = prefix.clone();
+            request.extend_from_slice(&witness);
+            assert_eq!(
+                project_once(&wrapper, schema, &request),
+                Err(BuilderError::Projection("test-projection")),
+                "a witness {case} must refuse"
+            );
+        }
+        // And the honest one still commits, so the refusals above are the
+        // policy talking and not a broken fixture.
+        let mut request = prefix;
+        request.extend_from_slice(b"CHILD003");
+        assert!(project_once(&wrapper, schema, &request).is_ok());
     }
 }

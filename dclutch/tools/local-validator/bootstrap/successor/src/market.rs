@@ -3336,6 +3336,48 @@ fn targets_found31(plan: &SuccessorPlan, input: &MarketRunInput, mint: Pubkey) -
     Ok(derive_founding_targets(plan, input, mint)?.found31_market)
 }
 
+/// The label DCLTCFQ1's honest transaction carries.
+///
+/// One author for two readers: the live send site and the reconstruction that
+/// reads the same transaction back off chain hours later. They used to be one
+/// literal and one absence, which is how the reconstruction came to project no
+/// DCLTCFQ1 row at all.
+const DCLTCFQ1_SUBMISSION_LABEL_V1: &str =
+    "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)";
+
+/// The founding stages the completed-founding reconstruction must project from
+/// HISTORY, because nothing on that path re-sends them.
+///
+/// `campaign.rs`'s `authenticate_recovery_to_complete_v1` corroborates all six
+/// journal signatures against the report's own `execution.transactions`, and it
+/// is right to: an `execution` block that names journals no transaction row
+/// backs is assertion rather than evidence. But the reconstruction deliberately
+/// republishes nothing -- `reconstruct_founding_checkpoint_v1` refuses its own
+/// republication by count -- so the two stages BEFORE Open had no owner that
+/// would put them in the projection. DCLTGMF3 has one in
+/// `finalize_existing_founding_submission_v1` and the three funding stages have
+/// one in `execute_funding_readiness_suffix_v1`; these two had none, and a
+/// recovered report was refused for a gap in its producer rather than a defect
+/// in its founding.
+///
+/// They are READ BACK and reauthenticated, never transcribed:
+/// `authenticate_historical_founding_transaction_v1` reparses the journal's
+/// signature, refetches the finalized packet, and compares slot, packet digest,
+/// fee and compute units against what the journal recorded. It deliberately
+/// does not re-assert those stages' old poststates as live state -- three later
+/// stages moved them by design, and saying so at the right boundary is
+/// `RecoveredFoundingJournalV1::poststates`' job, not this projection's.
+const RECONSTRUCTION_PROJECTED_HISTORY_V1: [(FoundingSubmissionOperationV1, &str); 2] = [
+    (
+        FoundingSubmissionOperationV1::Dcltcfq1,
+        DCLTCFQ1_SUBMISSION_LABEL_V1,
+    ),
+    (
+        FoundingSubmissionOperationV1::Dcltpcb2,
+        PrestateLaneV1::Founding.prestate_label(),
+    ),
+];
+
 /// Rebuild full caller-consumable evidence after the atomic DCLTGMF3 packet
 /// finalized but the process died before the campaign report update.
 pub(crate) fn recover_completed_market_from_checkpoint(
@@ -3400,6 +3442,14 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         context.mint,
     )?;
     if let Some(recorder) = submission_recorder.as_deref_mut() {
+        // Canonical order, and before DCLTGMF3: the projection a reader sees is
+        // the founding's own sequence, not the order recovery happened to
+        // rebuild it in.
+        for (operation, label) in RECONSTRUCTION_PROJECTED_HISTORY_V1 {
+            let evidence =
+                authenticate_historical_founding_transaction_v1(rpc, label, operation, recorder)?;
+            push_transaction_once_v1(transactions, evidence);
+        }
         let coordinates = &context.coordinates;
         let core = pubkey(&plan.core.program_id)?;
         let claims = pubkey(&plan.claims.program_id)?;
@@ -7353,7 +7403,7 @@ fn execute_projected_custody_bootstrap(
                 };
                 send_durable_founding_v1(
                     rpc,
-                    "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
+                    DCLTCFQ1_SUBMISSION_LABEL_V1,
                     FoundingSubmissionOperationV1::Dcltcfq1,
                     std::slice::from_ref(&controller_funding_prepare),
                     &[payer, &projection_witness],
@@ -13654,6 +13704,80 @@ fn pyth_market_input_base(
 
 #[cfg(test)]
 mod tests {
+
+    /// Every founding journal has an owner that will put it in the projection.
+    ///
+    /// The consumer's rule is all-or-nothing:
+    /// `authenticate_recovery_to_complete_v1` corroborates each of the six
+    /// journal signatures against `execution.transactions` and refuses the whole
+    /// report when one is missing. Cohort-13 was refused by that rule with a
+    /// sound founding underneath it -- "recovery-to-complete named a DCLTCFQ1
+    /// signature its own transaction projection does not carry" -- because the
+    /// stages before Open had no projecting owner at all, and a producer gap
+    /// reads exactly like a defect in the founding.
+    ///
+    /// So the partition is asserted rather than remembered. Three owners cover
+    /// `ORDER` between them and their union must be the whole of it:
+    /// this array for everything before Open,
+    /// `finalize_existing_founding_submission_v1` for Open itself, and
+    /// `execute_funding_readiness_suffix_v1` for the post-Open suffix. Add a
+    /// seventh stage anywhere and exactly one arm of this goes red, naming the
+    /// half whose owner is missing -- which is the failure this test exists to
+    /// stop being discovered on a deadline against a live market.
+    #[test]
+    fn every_founding_journal_before_open_has_a_projecting_owner() {
+        use super::{
+            RECONSTRUCTION_PROJECTED_HISTORY_V1,
+            founding_submission_journal::FoundingSubmissionOperationV1 as Operation,
+        };
+
+        let projected = RECONSTRUCTION_PROJECTED_HISTORY_V1
+            .iter()
+            .map(|(operation, _)| *operation)
+            .collect::<Vec<_>>();
+        let before_open = Operation::ORDER
+            .iter()
+            .copied()
+            .take_while(|operation| *operation != Operation::Dcltgmf3)
+            .collect::<Vec<_>>();
+        assert!(
+            !before_open.is_empty(),
+            "the canonical order must have stages before Open, or this test proves nothing"
+        );
+        assert_eq!(
+            projected, before_open,
+            "the reconstruction projects {projected:?} from history but the founding order runs {before_open:?} before DCLTGMF3; every one of them is corroborated by the consumer"
+        );
+
+        // The other half of the partition, so the union is checked and not just
+        // this array: Open, then the suffix, then nothing left over.
+        let after_open = Operation::ORDER
+            .iter()
+            .copied()
+            .skip_while(|operation| *operation != Operation::Dcltgmf3)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after_open,
+            vec![
+                Operation::Dcltgmf3,
+                Operation::CoreFundingCreateV1,
+                Operation::ResolutionFundingActivateV1,
+                Operation::CoreFundingAcceptV1,
+            ],
+            "DCLTGMF3 is finalized by finalize_existing_founding_submission_v1 and the three funding stages by execute_funding_readiness_suffix_v1; a change here needs a projecting owner before the consumer will accept a recovered report"
+        );
+        assert_eq!(projected.len() + after_open.len(), Operation::ORDER.len());
+
+        // A label is what a reader sees beside a signature, so it may not be
+        // blank and the two may not be the same string.
+        for (operation, label) in RECONSTRUCTION_PROJECTED_HISTORY_V1 {
+            assert!(
+                label.contains(operation.label()),
+                "{label:?} does not name {}",
+                operation.label()
+            );
+        }
+    }
 
     /// The historical fixture partition is DEGENERATE, and now something says so.
     ///

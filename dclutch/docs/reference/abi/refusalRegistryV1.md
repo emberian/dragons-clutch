@@ -10,60 +10,15 @@
 Source module: `apps/dclutch-web/lib/generated/refusalRegistryV1.ts`, whose own header reads:
 
 ```
-@generated from crates/dclutch-refusal-registry/src/lib.rs and docs/reference/refusals.md; do not edit.
+@generated from lib/generated/refusalBandsV1.ts and docs/reference/refusals.md; do not edit.
 Regenerate with: npm run abi:refusal-registry
 ```
-
-## Numeric constants (widths, offsets, counts, tags)
-
-| name | value |
-| --- | ---: |
-| `REFUSAL_BAND_SHIFT` | 12 |
-| `REFUSAL_BAND_SPAN` | 4,096 |
 
 ## Unrendered exports (verbatim)
 
 The renderer did not recognize these statement shapes, so they are
 shown verbatim rather than dropped.
 
-```ts
-export interface RefusalBandV1 {
-  readonly label: string;
-  readonly package: string;
-  readonly base: number;
-  readonly tier: 'program' | 'test-caller';
-}
-```
-```ts
-export const REFUSAL_BANDS_V1: ReadonlyArray<RefusalBandV1> = [
-  { label: "registry", package: "dclutch-registry-sbf", base: 0x1000, tier: "program" },
-  { label: "rent", package: "dclutch-rent-sbf", base: 0x2000, tier: "program" },
-  { label: "core", package: "dclutch-core-sbf", base: 0x3000, tier: "program" },
-  { label: "trading", package: "dclutch-trading-sbf", base: 0x4000, tier: "program" },
-  { label: "claims", package: "dclutch-claims-sbf", base: 0x5000, tier: "program" },
-  { label: "custody", package: "dclutch-custody-sbf", base: 0x6000, tier: "program" },
-  { label: "resolution", package: "dclutch-resolution-proof-sbf", base: 0x8000, tier: "program" },
-  { label: "product-runtime-v2", package: "dclutch-product-runtime-v2-sbf", base: 0x9000, tier: "program" },
-  { label: "direct-aot", package: "dclutch-direct-aot-sbf", base: 0xA000, tier: "program" },
-  { label: "series-shadow", package: "dclutch-series-shadow-sbf", base: 0xB000, tier: "program" },
-  { label: "general-accelerator", package: "dclutch-general-accelerator-sbf", base: 0xC000, tier: "program" },
-  { label: "dealer-accelerator", package: "dclutch-dealer-accelerator-sbf", base: 0xD000, tier: "program" },
-  { label: "test/claims-affine-batch-caller", package: "dclutch-claims-affine-batch-test-caller-sbf", base: 0x100000, tier: "test-caller" },
-  { label: "test/claims-fractional-signed-delta-caller", package: "dclutch-fractional-signed-delta-test-caller-sbf", base: 0x101000, tier: "test-caller" },
-  { label: "test/claims-liability-basis-caller", package: "dclutch-claims-liability-basis-test-caller-sbf", base: 0x102000, tier: "test-caller" },
-  { label: "test/claims-rational-lifecycle-caller", package: "dclutch-rational-lifecycle-test-caller-sbf", base: 0x103000, tier: "test-caller" },
-  { label: "test/claims-rational-v2-caller", package: "dclutch-rational-v2-test-caller-sbf", base: 0x104000, tier: "test-caller" },
-  { label: "test/claims-sparse-chain-caller", package: "dclutch-claims-sparse-chain-test-caller-sbf", base: 0x105000, tier: "test-caller" },
-  { label: "test/claims-terminal-settlement-caller", package: "dclutch-terminal-settlement-test-caller-sbf", base: 0x106000, tier: "test-caller" },
-  { label: "test/custody-caller", package: "dclutch-custody-test-caller-sbf", base: 0x107000, tier: "test-caller" },
-  { label: "test/dealer-accelerator-caller", package: "dclutch-dealer-accelerator-test-caller-sbf", base: 0x108000, tier: "test-caller" },
-  { label: "test/general-accelerator-caller", package: "dclutch-general-accelerator-test-caller-sbf", base: 0x109000, tier: "test-caller" },
-  { label: "test/resolution-receipt-caller", package: "dclutch-resolution-receipt-test-caller-sbf", base: 0x10A000, tier: "test-caller" },
-  { label: "test/claims-fractional-atomic-caller", package: "dclutch-fractional-atomic-test-caller-sbf", base: 0x10B000, tier: "test-caller" },
-  { label: "test/claims-claim-check-escrow-signer", package: "dclutch-claim-check-escrow-signer-test-sbf", base: 0x10C000, tier: "test-caller" },
-  { label: "test/claims-fractional-compaction-caller", package: "dclutch-fractional-compaction-test-caller-sbf", base: 0x10D000, tier: "test-caller" },
-];
-```
 ```ts
 export interface RefusalCodeV1 {
   readonly code: number;
@@ -93,6 +48,9 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x1010, name: "RegistryError::ReleaseLineageSelfSuccession", meaning: "A declaration named one release set as its own successor.", band: "registry" },
   { code: 0x1011, name: "RegistryError::ReleaseLineageAuthorityMissing", meaning: "A moved role's consenting upgrade authority did not sign, or cannot.", band: "registry" },
   { code: 0x1012, name: "RegistryError::ReleaseLineageNotForward", meaning: "A moved role's successor deployment slot was not strictly later.", band: "registry" },
+  { code: 0x1013, name: "RegistryError::ArtifactReleaseDeploymentFrame", meaning: "An `ArtifactRelease` was finalized without its deployment in the frame.", band: "registry" },
+  { code: 0x1014, name: "RegistryError::ArtifactReleaseNotDeployed", meaning: "An `ArtifactRelease` did not describe the deployment at its own address.", band: "registry" },
+  { code: 0x1015, name: "RegistryError::ArtifactReleaseElfMismatch", meaning: "A deployment is at that address and it is not the release's bytes.", band: "registry" },
   { code: 0x2000, name: "RentSbfError::Instruction", meaning: "Instruction bytes did not decode under the canonical contract.", band: "rent" },
   { code: 0x2001, name: "RentSbfError::AccountFrame", meaning: "Account count, order, privileges, aliases, or wallet facts refused.", band: "rent" },
   { code: 0x2002, name: "RentSbfError::RuntimeAccount", meaning: "System Program or Rent sysvar identity/value refused.", band: "rent" },
@@ -160,6 +118,16 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x4017, name: "TradingSbfError::AdmittedFrame", meaning: "The authenticated admitted-AOT frame or one of its Registry records.", band: "trading" },
   { code: 0x4018, name: "TradingSbfError::AdmittedTransport", meaning: "The admitted-AOT register-bank transport: encoding, chunking, caller authority width, or the authenticated input scratch pages.", band: "trading" },
   { code: 0x4019, name: "TradingSbfError::AdmittedContext", meaning: "The admitted-AOT invocation context: an identity that is not a valid `ContentId`, or a strategy that names no certificate, admission, or artifact release.", band: "trading" },
+  { code: 0x401A, name: "TradingSbfError::AcceleratorFrame", meaning: "The ACCELERATOR callback's account frame or request transport.", band: "trading" },
+  { code: 0x401B, name: "TradingSbfError::AcceleratorRelease", meaning: "The ACCELERATOR callback's rejoin of the release waist.", band: "trading" },
+  { code: 0x401C, name: "TradingSbfError::AcceleratorArtifact", meaning: "The ACCELERATOR callback's Registry records, descriptor or strategy.", band: "trading" },
+  { code: 0x401D, name: "TradingSbfError::AcceleratorRuntimeView", meaning: "The ACCELERATOR callback's AccountProfile-derived runtime view.", band: "trading" },
+  { code: 0x401E, name: "TradingSbfError::ScratchExhausted", meaning: "The scratch end of the program heap could not serve a bank.", band: "trading" },
+  { code: 0x401F, name: "TradingSbfError::AccountData", meaning: "An account or sysvar this route must READ could not be borrowed or parsed.", band: "trading" },
+  { code: 0x4020, name: "TradingSbfError::ChildReceipt", meaning: "The child's returned receipt did not decode, or does not answer this request.", band: "trading" },
+  { code: 0x4021, name: "TradingSbfError::Width", meaning: "A value did not fit the wire width or platform integer it was projected into.", band: "trading" },
+  { code: 0x4022, name: "TradingSbfError::DeploymentSlotMismatch", meaning: "A slot-pinned release's deployment slot is not the one it bound.", band: "trading" },
+  { code: 0x4023, name: "TradingSbfError::ChildRefused", meaning: "An invoked child program refused, and its own code is in the log above.", band: "trading" },
   { code: 0x4100, name: "SeriesAccountErrorV3::State", meaning: "Owner, width, key, phase, or canonical bytes refused.", band: "trading" },
   { code: 0x4101, name: "SeriesAccountErrorV3::Frame", meaning: "Signer, writable, executable, System, or alias contract refused.", band: "trading" },
   { code: 0x4102, name: "SeriesAccountErrorV3::Funding", meaning: "Exact native funding or checked arithmetic refused.", band: "trading" },
@@ -180,6 +148,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x500C, name: "ClaimsSbfError::BasisEvaluatorAbsent", meaning: "The Market's basis names the degree-2-to-3 spline family, for which this deployment carries no evaluator.", band: "claims" },
   { code: 0x500D, name: "ClaimsSbfError::PrincipalCapacity", meaning: "Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated.", band: "claims" },
   { code: 0x500E, name: "ClaimsSbfError::ExposureNotIdentity", meaning: "The supplied Product-to-Claims exposure is not the identity embedding.", band: "claims" },
+  { code: 0x500F, name: "ClaimsSbfError::ReceiptAlias", meaning: "An account presented at a representation coordinate is the receipt's own Mint or Account: a receipt backed by itself.", band: "claims" },
   { code: 0x5100, name: "LiabilityBasisSbfErrorV2::ClaimsState", meaning: "Claims aggregate or Position bytes/PDA/revision refused.", band: "claims" },
   { code: 0x5140, name: "ProtocolPositionSbfErrorV2::Instruction", meaning: "Instruction bytes did not decode as the canonical lifecycle ABI.", band: "claims" },
   { code: 0x5141, name: "ProtocolPositionSbfErrorV2::Accounts", meaning: "Account count, privilege, executable, or alias facts refused.", band: "claims" },
@@ -338,6 +307,10 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x8015, name: "ResolutionError::SponsoredPush", meaning: "Sponsored-push candidate, head, release, or deadline authentication failed.", band: "resolution" },
   { code: 0x8016, name: "ResolutionError::RecordStillConsumable", meaning: "`RetireRecord` was aimed at evidence a still-live market could consume.", band: "resolution" },
   { code: 0x8017, name: "ResolutionError::SubmissionStillConsumable", meaning: "`AbandonSubmission` was aimed at a submission a Source could still consume.", band: "resolution" },
+  { code: 0x8018, name: "ResolutionError::ActivationCache", meaning: "The account offered as this Market's activation is not the canonical Registry-owned cache for the release set the frame names.", band: "resolution" },
+  { code: 0x8019, name: "ResolutionError::ActivatedRole", meaning: "The activation is canonical, and the program brought for a role OTHER than Resolution is not the one that activation selected for it.", band: "resolution" },
+  { code: 0x801A, name: "ResolutionError::CallerAuthority", meaning: "The calling role's authority PDA is not the one the frame's own seeds derive.", band: "resolution" },
+  { code: 0x801B, name: "ResolutionError::InfrastructureProfile", meaning: "The Core-owned protocol infrastructure profile, or the Registry release it names, did not authenticate.", band: "resolution" },
   { code: 0x9000, name: "AdmissionSbfErrorV2::AccountFrame", meaning: "Account count, aliasing, privilege, or owner was invalid.", band: "product-runtime-v2" },
   { code: 0x9001, name: "AdmissionSbfErrorV2::Instruction", meaning: "Instruction bytes or request identity were invalid.", band: "product-runtime-v2" },
   { code: 0x9002, name: "AdmissionSbfErrorV2::Rent", meaning: "Rent sysvar identity or bytes were invalid.", band: "product-runtime-v2" },
@@ -376,8 +349,19 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0xC011, name: "GeneralAcceleratorSbfErrorV3::ScratchBankDigest", meaning: "The reassembled bank's bytes differed from the digest declared.", band: "general-accelerator" },
   { code: 0xC012, name: "GeneralAcceleratorSbfErrorV3::ScratchBankLength", meaning: "The pages did not sum to the bank length the request declared.", band: "general-accelerator" },
   { code: 0xC013, name: "GeneralAcceleratorSbfErrorV3::HeapCeilingNotLifted", meaning: "The declared heap frame could not be installed as this program's ceiling.", band: "general-accelerator" },
+  { code: 0xC014, name: "GeneralAcceleratorSbfErrorV3::OutputPageUnwritable", meaning: "The output page this program was handed is not one it can write.", band: "general-accelerator" },
+  { code: 0xC015, name: "GeneralAcceleratorSbfErrorV3::OutputPageTooNarrow", meaning: "The output page repeats another account in this CPI frame.", band: "general-accelerator" },
+  { code: 0xC016, name: "GeneralAcceleratorSbfErrorV3::OutputPageAliasesFrame", meaning: "The candidate bank is wider than the page provisioned for it.", band: "general-accelerator" },
   { code: 0xD000, name: "DealerAcceleratorSbfErrorV4::InvalidRequest", meaning: "AcceleratorRequestV2 transport or candidate-bank width differed.", band: "dealer-accelerator" },
   { code: 0xD001, name: "DealerAcceleratorSbfErrorV4::InvalidInvocation", meaning: "Common Trading could not authenticate the release/artifact/runtime view.", band: "dealer-accelerator" },
   { code: 0xD002, name: "DealerAcceleratorSbfErrorV4::InvalidAcknowledgement", meaning: "A canonical acknowledgement could not be constructed.", band: "dealer-accelerator" },
+  { code: 0xD003, name: "DealerAcceleratorSbfErrorV4::InvalidFrame", meaning: "The account frame or request transport this callback was handed.", band: "dealer-accelerator" },
+  { code: 0xD004, name: "DealerAcceleratorSbfErrorV4::InvalidRelease", meaning: "The release waist this callback rejoined: Market or Rent.", band: "dealer-accelerator" },
+  { code: 0xD005, name: "DealerAcceleratorSbfErrorV4::InvalidArtifact", meaning: "The Registry records, selected descriptor or AdmittedAot strategy.", band: "dealer-accelerator" },
+  { code: 0xD006, name: "DealerAcceleratorSbfErrorV4::InvalidRuntimeView", meaning: "The AccountProfile-derived runtime view a candidate is computed against: tail width, span widths, logical account count, geometry, transcript.", band: "dealer-accelerator" },
+  { code: 0xD007, name: "DealerAcceleratorSbfErrorV4::HeapCeilingNotLifted", meaning: "The transaction's granted heap frame could not be admitted.", band: "dealer-accelerator" },
+  { code: 0xD008, name: "DealerAcceleratorSbfErrorV4::OutputPageUnwritable", meaning: "The output page this program was handed is not one it can write.", band: "dealer-accelerator" },
+  { code: 0xD009, name: "DealerAcceleratorSbfErrorV4::OutputPageAliasesFrame", meaning: "The output page repeats another account in this CPI frame.", band: "dealer-accelerator" },
+  { code: 0xD00A, name: "DealerAcceleratorSbfErrorV4::OutputPageTooNarrow", meaning: "The candidate bank is wider than the page provisioned for it.", band: "dealer-accelerator" },
 ];
 ```

@@ -68,12 +68,31 @@ if (inventory.schema !== 'dclutch-gauntlet-route-inventory-v1') {
 }
 
 /**
- * The band table, read from the registry crate rather than the inventory: the
- * inventory carries bands only as a uniqueness check input, and the registry is
- * where the allocation and its prose live.
+ * The band table's file, read rather than the inventory: the inventory carries
+ * bands only as a uniqueness check input, and the registry is where the
+ * allocation and its prose live.
+ *
+ * It moved out of the crate's `lib.rs` and into `generated_bands.rs` on
+ * 2026-09-02 (`1d8b999a`, "decision 0007's band allocation gets an author"),
+ * which made `DClutchSemantics.RefusalBandsV1` its authority. This reader was
+ * not swept with it, so `abi:route-census` threw `BANDS table not found` from
+ * that commit until it was noticed: a browser surface with no authority behind
+ * it, which is the exact failure `AGENTS.md` names when a Rust fact moves and
+ * its non-Rust consumers are left pointing at the old address.
+ */
+const bandAllocationPath = join(
+  repoRoot,
+  'crates',
+  'dclutch-refusal-registry',
+  'src',
+  'generated_bands.rs',
+);
+
+/**
+ * The band table, read from the registry crate rather than the inventory.
  */
 function readBands() {
-  const source = readFileSync(join(repoRoot, 'crates', 'dclutch-refusal-registry', 'src', 'lib.rs'), 'utf8');
+  const source = readFileSync(bandAllocationPath, 'utf8');
   const table = source.match(/pub const BANDS: &\[RefusalBand\] = &\[([\s\S]*?)\n\];/);
   if (!table) throw new Error('refusal registry: BANDS table not found');
   const entries = [...table[1].matchAll(/RefusalBand \{([\s\S]*?)\}/g)].map((entry) => entry[1]);
@@ -102,7 +121,7 @@ function readBands() {
 }
 
 const bands = readBands();
-const bandShift = Number(readFileSync(join(repoRoot, 'crates', 'dclutch-refusal-registry', 'src', 'lib.rs'), 'utf8')
+const bandShift = Number(readFileSync(bandAllocationPath, 'utf8')
   .match(/pub const BAND_SHIFT: u32 = (\d+);/)?.[1]);
 if (!Number.isSafeInteger(bandShift)) throw new Error('refusal registry: BAND_SHIFT not resolved');
 
@@ -204,7 +223,7 @@ out += '// Regenerate with: npm run abi:route-census\n';
 out += '//\n';
 out += '// Sources:\n';
 out += '//   tools/gauntlet/census                        (the route/refusal enumeration)\n';
-out += '//   crates/dclutch-refusal-registry/src/lib.rs   (the band allocation)\n';
+out += '//   crates/dclutch-refusal-registry/src/generated_bands.rs   (the band allocation)\n';
 out += '//\n';
 out += `// ${programs.length} programs, ${magics.length} magic-selected routes, ${refusals.length} refusal codes.\n\n`;
 

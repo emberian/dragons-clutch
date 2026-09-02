@@ -1312,6 +1312,9 @@ fn assemble_plan(
 mod tests {
     use dclutch_capability_program_contract::SelectedRecordBumpsV1;
     use dclutch_core_contract::ContentId;
+    use dclutch_direct_codec::successor::{
+        DirectMakerReplayLayoutV1 as MakerLayout, DirectRootStateLayoutV1 as RootLayout,
+    };
     use dclutch_direct_codec::{
         ordinary_account_artifacts_v3::DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3,
         ordinary_artifacts_v3::DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3,
@@ -1332,19 +1335,6 @@ mod tests {
         unix_timestamp: 1_788_000_000,
         finality: Finality::Finalized,
     };
-
-    /// Maker replay wire magic, from the codec's own documented layout.
-    const MAKER_MAGIC: [u8; 8] = *b"DCLTDMR1";
-    const MAKER_BUMP_OFFSET: usize = 10;
-    const MAKER_MARKET_OFFSET: usize = 16;
-    const MAKER_GENERATION_OFFSET: usize = 48;
-    const MAKER_IDENTITY_OFFSET: usize = 56;
-    const MAKER_NEXT_NONCE_OFFSET: usize = 88;
-    const MAKER_LIVE_COUNT_OFFSET: usize = 96;
-    const MAKER_RENT_OWNER_OFFSET: usize = 112;
-    const MAKER_RENT_PRINCIPAL_OFFSET: usize = 144;
-    const MAKER_FEE_OWED_OFFSET: usize = 152;
-    const ROOT_COUNT_OFFSET: usize = 16;
 
     fn key(value: u8) -> Pubkey {
         Pubkey::new_from_array([value; 32])
@@ -1397,7 +1387,7 @@ mod tests {
             .expect("retiring")
             .encode()
             .to_vec();
-        bytes[ROOT_COUNT_OFFSET..ROOT_COUNT_OFFSET + 8]
+        bytes[RootLayout::OPEN_MAKER_ROOT_COUNT..RootLayout::OPEN_MAKER_ROOT_COUNT + 8]
             .copy_from_slice(&open_maker_root_count.to_le_bytes());
         DirectRootStateV1::decode(&bytes).expect("root tail")
     }
@@ -1420,24 +1410,25 @@ mod tests {
     ) -> Vec<u8> {
         let version = DirectRootStateV1::new().encode();
         let mut wire = vec![0_u8; DIRECT_MAKER_REPLAY_BYTES_V1];
-        wire[..8].copy_from_slice(&MAKER_MAGIC);
+        wire[MakerLayout::MAGIC..MakerLayout::MAGIC + 8]
+            .copy_from_slice(&MakerLayout::MAGIC_WORD.to_le_bytes());
         wire[8..10].copy_from_slice(&version[8..10]);
-        wire[MAKER_BUMP_OFFSET] = bump;
-        wire[MAKER_MARKET_OFFSET..MAKER_MARKET_OFFSET + 32].copy_from_slice(&market.to_bytes());
-        wire[MAKER_GENERATION_OFFSET..MAKER_GENERATION_OFFSET + 8]
+        wire[MakerLayout::BUMP] = bump;
+        wire[MakerLayout::MARKET..MakerLayout::MARKET + 32].copy_from_slice(&market.to_bytes());
+        wire[MakerLayout::GENERATION..MakerLayout::GENERATION + 8]
             .copy_from_slice(&generation.to_le_bytes());
-        wire[MAKER_IDENTITY_OFFSET..MAKER_IDENTITY_OFFSET + 32].copy_from_slice(&maker.to_bytes());
+        wire[MakerLayout::MAKER..MakerLayout::MAKER + 32].copy_from_slice(&maker.to_bytes());
         // One nonce has been consumed, so a nonzero `live_count` is a state
         // `validate` admits rather than one it rejects as `live > next`.
-        wire[MAKER_NEXT_NONCE_OFFSET..MAKER_NEXT_NONCE_OFFSET + 8]
+        wire[MakerLayout::NEXT_NONCE..MakerLayout::NEXT_NONCE + 8]
             .copy_from_slice(&1_u64.to_le_bytes());
-        wire[MAKER_LIVE_COUNT_OFFSET..MAKER_LIVE_COUNT_OFFSET + 8]
+        wire[MakerLayout::LIVE_COUNT..MakerLayout::LIVE_COUNT + 8]
             .copy_from_slice(&live_count.to_le_bytes());
-        wire[MAKER_RENT_OWNER_OFFSET..MAKER_RENT_OWNER_OFFSET + 32]
+        wire[MakerLayout::RENT_OWNER..MakerLayout::RENT_OWNER + 32]
             .copy_from_slice(&rent_owner.to_bytes());
-        wire[MAKER_RENT_PRINCIPAL_OFFSET..MAKER_RENT_PRINCIPAL_OFFSET + 8]
+        wire[MakerLayout::RENT_PRINCIPAL..MakerLayout::RENT_PRINCIPAL + 8]
             .copy_from_slice(&rent_principal.to_le_bytes());
-        wire[MAKER_FEE_OWED_OFFSET..MAKER_FEE_OWED_OFFSET + 8]
+        wire[MakerLayout::FEE_OWED..MakerLayout::FEE_OWED + 8]
             .copy_from_slice(&fee_owed.to_le_bytes());
         wire
     }

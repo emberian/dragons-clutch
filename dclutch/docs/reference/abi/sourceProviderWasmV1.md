@@ -31,17 +31,19 @@ Source module: `apps/dclutch-web/lib/generated/sourceProviderWasmV1.ts`, whose o
 | `SOURCE_PROVIDER_SUBMIT_RECORD_FORMAT_V1` | `dclutch-source-provider-submit-record-v1` |
 | `SOURCE_PROVIDER_SUBMIT_PYTH_INPUT_FORMAT_V1` | `dclutch-source-provider-submit-pyth-input-v1` |
 | `SOURCE_PROVIDER_SUBMIT_PYTH_FORMAT_V1` | `dclutch-source-provider-submit-pyth-v1` |
+| `SOURCE_PROVIDER_PRICE_INPUT_FORMAT_V1` | `dclutch-source-provider-price-input-v1` |
+| `SOURCE_PROVIDER_PRICE_FORMAT_V1` | `dclutch-source-provider-price-v1` |
 | `SOURCE_PROVIDER_SUBMIT_FRESH_INPUT_FORMAT_V1` | `dclutch-source-provider-submit-fresh-input-v1` |
 | `SOURCE_PROVIDER_SUBMIT_FRESH_FORMAT_V1` | `dclutch-source-provider-submit-fresh-v1` |
 | `SOURCE_PROVIDER_SUBMIT_INPUT_FORMAT_V1` | `dclutch-source-provider-submit-input-v1` |
 | `SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1` | `dclutch-source-provider-submit-plan-v1` |
 | `SOURCE_PROVIDER_SUBMIT_POSTSTATE_INPUT_FORMAT_V1` | `dclutch-source-provider-submit-poststate-input-v1` |
 | `SOURCE_PROVIDER_SUBMIT_POSTSTATE_FORMAT_V1` | `dclutch-source-provider-submit-poststate-v1` |
-| `SOURCE_PROVIDER_WASM_SHA256_V1` | `5417dda9dd14f831e8490e8f6d07c6d7348e2de417445c1c6a524b9c282e82ad` |
+| `SOURCE_PROVIDER_WASM_SHA256_V1` | `1eb64241cc20c2eff2a1d5b77de4806f6b43f03ef9c24230ea6d9bc9a2999c49` |
 
 ## Numeric constants (widths, offsets, counts, tags)
 
 | name | value |
 | --- | ---: |
 | `SOURCE_PROVIDER_SUBMIT_LIFECYCLE_BYTES_V1` | 528 |
-| `SOURCE_PROVIDER_WASM_BYTES_V1` | 604,558 |
+| `SOURCE_PROVIDER_WASM_BYTES_V1` | 617,576 |

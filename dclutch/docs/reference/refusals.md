@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **305** codes, with meanings taken
+The tables below carry all **334** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**67 of 305** codes have been observed refusing a real
+**74 of 334** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,44 +54,18 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-305 codes belonging to the programs the route census enumerates.
+334 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
 
-The 21 campaigns contributing:
-`claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `custody-family-programtest`, `dealer-checkpoint-programtest`, `direct-aot-programtest`, `general-accelerator-programtest`, `journey`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `retirement-checkpoint-programtest`, `retirement-replay-handoff-programtest`, `structured-v2-programtest`, `tier1`, `tier4-series-occurrence-programtest`.
+The 22 campaigns contributing:
+`claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `custody-family-programtest`, `dealer-checkpoint-programtest`, `direct-aot-programtest`, `direct-fee-pair-programtest`, `general-accelerator-programtest`, `journey`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `retirement-checkpoint-programtest`, `retirement-replay-handoff-programtest`, `structured-v2-programtest`, `tier1`, `tier4-series-occurrence-programtest`.
 
 ## Band allocation
 
 | base | band | allocation |
 | --- | --- | --- |
-| `0x1000` | 0x1 | Band 1 — `dclutch-registry-sbf` |
-| `0x2000` | 0x2 | Band 2 — `dclutch-rent-sbf` |
-| `0x3000` | 0x3 | Band 3 — `dclutch-core-sbf` |
-| `0x4000` | 0x4 | Band 4 — `dclutch-trading-sbf` |
-| `0x5000` | 0x5 | Band 5 — `dclutch-claims-sbf` |
-| `0x6000` | 0x6 | Band 6 — `dclutch-custody-sbf` |
-| `0x8000` | 0x8 | Band 8 — `dclutch-resolution-proof-sbf` |
-| `0x9000` | 0x9 | Band 9 — `dclutch-product-runtime-v2-sbf` |
-| `0xA000` | 0xA | Band 10 — `dclutch-direct-aot-sbf` |
-| `0xB000` | 0xB | Band 11 — `dclutch-series-shadow-sbf` |
-| `0xC000` | 0xC | Band 12 — `dclutch-general-accelerator-sbf` |
-| `0xD000` | 0xD | Band 13 — `dclutch-dealer-accelerator-sbf` |
-| `0x100000` | 0x100 | Band 0x100 — `dclutch-claims-sbf` test caller `affine-batch-caller` |
-| `0x101000` | 0x101 | Band 0x101 — `dclutch-claims-sbf` test caller `fractional-signed-delta-caller` |
-| `0x102000` | 0x102 | Band 0x102 — `dclutch-claims-sbf` test caller `liability-basis-caller` |
-| `0x103000` | 0x103 | Band 0x103 — `dclutch-claims-sbf` test caller `rational-lifecycle-caller` |
-| `0x104000` | 0x104 | Band 0x104 — `dclutch-claims-sbf` test caller `rational-v2-caller` |
-| `0x105000` | 0x105 | Band 0x105 — `dclutch-claims-sbf` test caller `sparse-chain-caller` |
-| `0x106000` | 0x106 | Band 0x106 — `dclutch-claims-sbf` test caller `terminal-settlement-caller` |
-| `0x107000` | 0x107 | Band 0x107 — `dclutch-custody-sbf` test caller `caller` |
-| `0x108000` | 0x108 | Band 0x108 — `dclutch-dealer-accelerator-sbf` test caller `dealer-caller` |
-| `0x109000` | 0x109 | Band 0x109 — `dclutch-general-accelerator-sbf` test caller `general-caller` |
-| `0x10A000` | 0x10A | Band 0x10A — `dclutch-svm-harness` test caller `resolution-receipt-caller` |
-| `0x10B000` | 0x10B | Band 0x10B — `dclutch-claims-sbf` test caller `fractional-atomic-caller` |
-| `0x10C000` | 0x10C | Band 0x10C — `dclutch-claims-sbf` test signer `claim-check-escrow-signer` |
-| `0x10D000` | 0x10D | Band 0x10D — `dclutch-claims-sbf` test caller `fractional-compaction-caller` |
 
 ## claims
 
@@ -100,7 +74,7 @@ The 21 campaigns contributing:
 | `0x5000` | `ClaimsSbfError::Instruction` | Instruction bytes were hostile or selected no supported family. | -- | `programs/dclutch-claims-sbf/src/lib.rs:170` |
 | `0x5001` | `ClaimsSbfError::Accounts` | Account count, privileges, owners, or executable flags were wrong. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:172` |
 | `0x5002` | `ClaimsSbfError::Identity` | Market or Position semantic identities did not join the packet. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:174` |
-| `0x5003` | `ClaimsSbfError::Release` | Registry receipt or current deployment authentication failed. | -- | `programs/dclutch-claims-sbf/src/lib.rs:176` |
+| `0x5003` | `ClaimsSbfError::Release` | Registry receipt or current deployment authentication failed. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:176` |
 | `0x5004` | `ClaimsSbfError::Authority` | Caller PDA authority did not authenticate the packet. | -- | `programs/dclutch-claims-sbf/src/lib.rs:178` |
 | `0x5005` | `ClaimsSbfError::Economic` | Claims economic transition refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:180` |
 | `0x5006` | `ClaimsSbfError::CustodyRequired` | This action requires the canonical Custody child composition. | -- | `programs/dclutch-claims-sbf/src/lib.rs:182` |
@@ -112,6 +86,7 @@ The 21 campaigns contributing:
 | `0x500C` | `ClaimsSbfError::BasisEvaluatorAbsent` | The Market's basis names the degree-2-to-3 spline family, for which this deployment carries no evaluator. | -- | `programs/dclutch-claims-sbf/src/lib.rs:221` |
 | `0x500D` | `ClaimsSbfError::PrincipalCapacity` | Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/lib.rs:231` |
 | `0x500E` | `ClaimsSbfError::ExposureNotIdentity` | The supplied Product-to-Claims exposure is not the identity embedding. | -- | `programs/dclutch-claims-sbf/src/lib.rs:254` |
+| `0x500F` | `ClaimsSbfError::ReceiptAlias` | An account presented at a representation coordinate is the receipt's own Mint or Account: a receipt backed by itself. | -- | `programs/dclutch-claims-sbf/src/lib.rs:275` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | -- | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:83` |
 | `0x5140` | `ProtocolPositionSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical lifecycle ABI. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:112` |
 | `0x5141` | `ProtocolPositionSbfErrorV2::Accounts` | Account count, privilege, executable, or alias facts refused. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:114` |
@@ -229,10 +204,10 @@ The 21 campaigns contributing:
 | `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:427` |
 | `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:434` |
 | `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:436` |
-| `0x5680` | `RationalReplayCloseSbfErrorV1::Accounts` | The fixed two-account frame, ownership, writability or length refused. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:284` |
-| `0x5681` | `RationalReplayCloseSbfErrorV1::Authority` | The actor named by the cursor did not sign, or a second signer appeared. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:286` |
-| `0x5682` | `RationalReplayCloseSbfErrorV1::Identity` | The cursor address did not derive from the coordinates the request named. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:288` |
-| `0x5683` | `RationalReplayCloseSbfErrorV1::Replay` | The cursor did not decode, or named another descriptor or actor. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:290` |
+| `0x5680` | `RationalReplayCloseSbfErrorV1::Accounts` | The fixed two-account frame, ownership, writability or length refused. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:285` |
+| `0x5681` | `RationalReplayCloseSbfErrorV1::Authority` | The actor named by the cursor did not sign, or a second signer appeared. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:287` |
+| `0x5682` | `RationalReplayCloseSbfErrorV1::Identity` | The cursor address did not derive from the coordinates the request named. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:289` |
+| `0x5683` | `RationalReplayCloseSbfErrorV1::Replay` | The cursor did not decode, or named another descriptor or actor. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:291` |
 
 ## core
 
@@ -272,27 +247,35 @@ The 21 campaigns contributing:
 
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
-| `0x6000` | `CustodySbfError::Instruction` | Instruction bytes did not decode as the one generated request. | custody-family-programtest | `programs/dclutch-custody-sbf/src/lib.rs:93` |
-| `0x6001` | `CustodySbfError::AccountFrame` | Account count, order, privileges, or aliases were not exact. | -- | `programs/dclutch-custody-sbf/src/lib.rs:95` |
-| `0x6002` | `CustodySbfError::Release` | Registry CPI, producer, receipt, release, role, or caller refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:97` |
-| `0x6003` | `CustodySbfError::CallerAuthority` | Caller authority was not the release-pinned role PDA signer. | -- | `programs/dclutch-custody-sbf/src/lib.rs:99` |
-| `0x6004` | `CustodySbfError::Realm` | Realm content, PDA, owner, Mint, token program, or adapter release refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:101` |
-| `0x6005` | `CustodySbfError::Replay` | Replay PDA, owner, bytes, or revision refused. | custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:103` |
-| `0x6006` | `CustodySbfError::TokenState` | Vault PDA, token state, or authority policy refused. | custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:105` |
-| `0x6007` | `CustodySbfError::Create` | Rent, payer, System program, or account creation refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:107` |
-| `0x6008` | `CustodySbfError::TokenCpi` | Exact token or close-account CPI refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:109` |
-| `0x6009` | `CustodySbfError::Postcondition` | Exact CPI postcondition or checked balance arithmetic refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:111` |
-| `0x600A` | `CustodySbfError::Commit` | Replay state could not be committed after all effects succeeded. | -- | `programs/dclutch-custody-sbf/src/lib.rs:113` |
-| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | dealer-checkpoint-programtest; tier1 | `programs/dclutch-custody-sbf/src/lib.rs:122` |
-| `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-custody-sbf/src/lib.rs:130` |
+| `0x6000` | `CustodySbfError::Instruction` | Instruction bytes did not decode as the one generated request. | custody-family-programtest | `programs/dclutch-custody-sbf/src/lib.rs:94` |
+| `0x6001` | `CustodySbfError::AccountFrame` | Account count, order, privileges, or aliases were not exact. | -- | `programs/dclutch-custody-sbf/src/lib.rs:96` |
+| `0x6002` | `CustodySbfError::Release` | Registry CPI, producer, receipt, release, role, or caller refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:98` |
+| `0x6003` | `CustodySbfError::CallerAuthority` | Caller authority was not the release-pinned role PDA signer. | -- | `programs/dclutch-custody-sbf/src/lib.rs:100` |
+| `0x6004` | `CustodySbfError::Realm` | Realm content, PDA, owner, Mint, token program, or adapter release refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:102` |
+| `0x6005` | `CustodySbfError::Replay` | Replay PDA, owner, bytes, or revision refused. | custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:104` |
+| `0x6006` | `CustodySbfError::TokenState` | Vault PDA, token state, or authority policy refused. | custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:106` |
+| `0x6007` | `CustodySbfError::Create` | Rent, payer, System program, or account creation refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:108` |
+| `0x6008` | `CustodySbfError::TokenCpi` | Exact token or close-account CPI refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:110` |
+| `0x6009` | `CustodySbfError::Postcondition` | Exact CPI postcondition or checked balance arithmetic refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:112` |
+| `0x600A` | `CustodySbfError::Commit` | Replay state could not be committed after all effects succeeded. | -- | `programs/dclutch-custody-sbf/src/lib.rs:114` |
+| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | dealer-checkpoint-programtest; tier1 | `programs/dclutch-custody-sbf/src/lib.rs:123` |
+| `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-custody-sbf/src/lib.rs:131` |
 
 ## dealer-accelerator
 
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
-| `0xD000` | `DealerAcceleratorSbfErrorV4::InvalidRequest` | AcceleratorRequestV2 transport or candidate-bank width differed. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:45` |
-| `0xD001` | `DealerAcceleratorSbfErrorV4::InvalidInvocation` | Common Trading could not authenticate the release/artifact/runtime view. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:47` |
-| `0xD002` | `DealerAcceleratorSbfErrorV4::InvalidAcknowledgement` | A canonical acknowledgement could not be constructed. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:49` |
+| `0xD000` | `DealerAcceleratorSbfErrorV4::InvalidRequest` | AcceleratorRequestV2 transport or candidate-bank width differed. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:56` |
+| `0xD001` | `DealerAcceleratorSbfErrorV4::InvalidInvocation` | Common Trading could not authenticate the release/artifact/runtime view. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:58` |
+| `0xD002` | `DealerAcceleratorSbfErrorV4::InvalidAcknowledgement` | A canonical acknowledgement could not be constructed. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:60` |
+| `0xD003` | `DealerAcceleratorSbfErrorV4::InvalidFrame` | The account frame or request transport this callback was handed. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:70` |
+| `0xD004` | `DealerAcceleratorSbfErrorV4::InvalidRelease` | The release waist this callback rejoined: Market or Rent. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:72` |
+| `0xD005` | `DealerAcceleratorSbfErrorV4::InvalidArtifact` | The Registry records, selected descriptor or AdmittedAot strategy. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:74` |
+| `0xD006` | `DealerAcceleratorSbfErrorV4::InvalidRuntimeView` | The AccountProfile-derived runtime view a candidate is computed against: tail width, span widths, logical account count, geometry, transcript. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:77` |
+| `0xD007` | `DealerAcceleratorSbfErrorV4::HeapCeilingNotLifted` | The transaction's granted heap frame could not be admitted. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:86` |
+| `0xD008` | `DealerAcceleratorSbfErrorV4::OutputPageUnwritable` | The output page this program was handed is not one it can write. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:95` |
+| `0xD009` | `DealerAcceleratorSbfErrorV4::OutputPageAliasesFrame` | The output page repeats another account in this CPI frame. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:103` |
+| `0xD00A` | `DealerAcceleratorSbfErrorV4::OutputPageTooNarrow` | The candidate bank is wider than the page provisioned for it. | -- | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs:108` |
 
 ## direct-aot
 
@@ -307,26 +290,29 @@ The 21 campaigns contributing:
 
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
-| `0xC000` | `GeneralAcceleratorSbfErrorV3::InvalidRequest` | Accelerator request transport or register geometry differed. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:93` |
-| `0xC001` | `GeneralAcceleratorSbfErrorV3::InvalidFrame` | The fixed admitted frame or readonly runtime frame differed. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:95` |
-| `0xC002` | `GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction` | The current top-level instruction could not be read from the sysvar. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:104` |
-| `0xC003` | `GeneralAcceleratorSbfErrorV3::InvalidScratchBank` | The request's declared scratch-bank geometry could not be used. | general-accelerator-programtest | `programs/dclutch-general-accelerator-sbf/src/lib.rs:114` |
-| `0xC004` | `GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement` | The exact acknowledgement could not be encoded. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:116` |
-| `0xC005` | `GeneralAcceleratorSbfErrorV3::ForeignInstructionBeforeTrading` | An instruction ahead of this one did not belong to ComputeBudget. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:118` |
-| `0xC006` | `GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested` | No exact `RequestHeapFrame` preceded the current instruction. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:134` |
-| `0xC007` | `GeneralAcceleratorSbfErrorV3::TopLevelProgramNotTrading` | The current top-level instruction was not the admitted Trading program's. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:136` |
-| `0xC008` | `GeneralAcceleratorSbfErrorV3::InvalidHotEnvelope` | The top-level data was not a canonical Hot execution envelope. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:138` |
-| `0xC009` | `GeneralAcceleratorSbfErrorV3::InvalidFamilyRequest` | The carried family request was not the exact width, or did not decode. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:140` |
-| `0xC00A` | `GeneralAcceleratorSbfErrorV3::InstructionsSysvarAccount` | The supplied account was not the readonly instructions sysvar. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:142` |
-| `0xC00B` | `GeneralAcceleratorSbfErrorV3::CurrentInstructionIndexUnreadable` | The runtime could not report which top-level instruction is executing. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:144` |
-| `0xC00C` | `GeneralAcceleratorSbfErrorV3::PrecedingInstructionUnreadable` | An instruction ahead of the current one could not be read. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:146` |
-| `0xC00D` | `GeneralAcceleratorSbfErrorV3::ScratchPagePrivileges` | A scratch page was not a Trading-owned readonly unsigned data account. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:148` |
-| `0xC00E` | `GeneralAcceleratorSbfErrorV3::ScratchPageDecode` | A scratch page's bytes were not a canonical authenticated page. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:150` |
-| `0xC00F` | `GeneralAcceleratorSbfErrorV3::ScratchPageRequestBinding` | A scratch page did not belong to this caller and this request. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:152` |
-| `0xC010` | `GeneralAcceleratorSbfErrorV3::ScratchPageOrder` | A scratch page arrived out of its streamed chunk index or offset. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:154` |
-| `0xC011` | `GeneralAcceleratorSbfErrorV3::ScratchBankDigest` | The reassembled bank's bytes differed from the digest declared. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:156` |
-| `0xC012` | `GeneralAcceleratorSbfErrorV3::ScratchBankLength` | The pages did not sum to the bank length the request declared. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:163` |
-| `0xC013` | `GeneralAcceleratorSbfErrorV3::HeapCeilingNotLifted` | The declared heap frame could not be installed as this program's ceiling. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:174` |
+| `0xC000` | `GeneralAcceleratorSbfErrorV3::InvalidRequest` | Accelerator request transport or register geometry differed. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:95` |
+| `0xC001` | `GeneralAcceleratorSbfErrorV3::InvalidFrame` | The fixed admitted frame or readonly runtime frame differed. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:97` |
+| `0xC002` | `GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction` | The current top-level instruction could not be read from the sysvar. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:106` |
+| `0xC003` | `GeneralAcceleratorSbfErrorV3::InvalidScratchBank` | The request's declared scratch-bank geometry could not be used. | general-accelerator-programtest | `programs/dclutch-general-accelerator-sbf/src/lib.rs:116` |
+| `0xC004` | `GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement` | The exact acknowledgement could not be encoded. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:118` |
+| `0xC005` | `GeneralAcceleratorSbfErrorV3::ForeignInstructionBeforeTrading` | An instruction ahead of this one did not belong to ComputeBudget. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:120` |
+| `0xC006` | `GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested` | No exact `RequestHeapFrame` preceded the current instruction. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:136` |
+| `0xC007` | `GeneralAcceleratorSbfErrorV3::TopLevelProgramNotTrading` | The current top-level instruction was not the admitted Trading program's. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:138` |
+| `0xC008` | `GeneralAcceleratorSbfErrorV3::InvalidHotEnvelope` | The top-level data was not a canonical Hot execution envelope. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:140` |
+| `0xC009` | `GeneralAcceleratorSbfErrorV3::InvalidFamilyRequest` | The carried family request was not the exact width, or did not decode. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:142` |
+| `0xC00A` | `GeneralAcceleratorSbfErrorV3::InstructionsSysvarAccount` | The supplied account was not the readonly instructions sysvar. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:144` |
+| `0xC00B` | `GeneralAcceleratorSbfErrorV3::CurrentInstructionIndexUnreadable` | The runtime could not report which top-level instruction is executing. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:146` |
+| `0xC00C` | `GeneralAcceleratorSbfErrorV3::PrecedingInstructionUnreadable` | An instruction ahead of the current one could not be read. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:148` |
+| `0xC00D` | `GeneralAcceleratorSbfErrorV3::ScratchPagePrivileges` | A scratch page was not a Trading-owned readonly unsigned data account. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:150` |
+| `0xC00E` | `GeneralAcceleratorSbfErrorV3::ScratchPageDecode` | A scratch page's bytes were not a canonical authenticated page. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:152` |
+| `0xC00F` | `GeneralAcceleratorSbfErrorV3::ScratchPageRequestBinding` | A scratch page did not belong to this caller and this request. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:154` |
+| `0xC010` | `GeneralAcceleratorSbfErrorV3::ScratchPageOrder` | A scratch page arrived out of its streamed chunk index or offset. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:156` |
+| `0xC011` | `GeneralAcceleratorSbfErrorV3::ScratchBankDigest` | The reassembled bank's bytes differed from the digest declared. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:158` |
+| `0xC012` | `GeneralAcceleratorSbfErrorV3::ScratchBankLength` | The pages did not sum to the bank length the request declared. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:165` |
+| `0xC013` | `GeneralAcceleratorSbfErrorV3::HeapCeilingNotLifted` | The declared heap frame could not be installed as this program's ceiling. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:176` |
+| `0xC014` | `GeneralAcceleratorSbfErrorV3::OutputPageUnwritable` | The output page this program was handed is not one it can write. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:183` |
+| `0xC015` | `GeneralAcceleratorSbfErrorV3::OutputPageTooNarrow` | The output page repeats another account in this CPI frame. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:191` |
+| `0xC016` | `GeneralAcceleratorSbfErrorV3::OutputPageAliasesFrame` | The candidate bank is wider than the page provisioned for it. | -- | `programs/dclutch-general-accelerator-sbf/src/lib.rs:193` |
 
 ## product-runtime-v2
 
@@ -346,25 +332,28 @@ The 21 campaigns contributing:
 
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
-| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | -- | `programs/dclutch-registry-sbf/src/lib.rs:73` |
-| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | -- | `programs/dclutch-registry-sbf/src/lib.rs:75` |
-| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:77` |
-| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | tier1; tier4-series-occurrence-programtest | `programs/dclutch-registry-sbf/src/lib.rs:79` |
-| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:81` |
-| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:83` |
-| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | -- | `programs/dclutch-registry-sbf/src/lib.rs:85` |
-| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | -- | `programs/dclutch-registry-sbf/src/lib.rs:87` |
-| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:89` |
-| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:91` |
-| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | -- | `programs/dclutch-registry-sbf/src/lib.rs:93` |
-| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:95` |
-| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:97` |
-| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-registry-sbf/src/lib.rs:105` |
-| `0x100E` | `RegistryError::ReleaseLineageAlreadyDeclared` | This release set already declared a successor, and lineage never forks. | -- | `programs/dclutch-registry-sbf/src/lib.rs:111` |
-| `0x100F` | `RegistryError::ReleaseLineageRoleIdentityMoved` | A declared hop changed some role's program id. | -- | `programs/dclutch-registry-sbf/src/lib.rs:117` |
-| `0x1010` | `RegistryError::ReleaseLineageSelfSuccession` | A declaration named one release set as its own successor. | -- | `programs/dclutch-registry-sbf/src/lib.rs:119` |
-| `0x1011` | `RegistryError::ReleaseLineageAuthorityMissing` | A moved role's consenting upgrade authority did not sign, or cannot. | -- | `programs/dclutch-registry-sbf/src/lib.rs:127` |
-| `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | -- | `programs/dclutch-registry-sbf/src/lib.rs:133` |
+| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | -- | `programs/dclutch-registry-sbf/src/lib.rs:82` |
+| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | -- | `programs/dclutch-registry-sbf/src/lib.rs:84` |
+| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:86` |
+| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | tier1; tier4-series-occurrence-programtest | `programs/dclutch-registry-sbf/src/lib.rs:88` |
+| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:90` |
+| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:92` |
+| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | -- | `programs/dclutch-registry-sbf/src/lib.rs:94` |
+| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | -- | `programs/dclutch-registry-sbf/src/lib.rs:96` |
+| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:98` |
+| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:100` |
+| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | -- | `programs/dclutch-registry-sbf/src/lib.rs:102` |
+| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | -- | `programs/dclutch-registry-sbf/src/lib.rs:104` |
+| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:106` |
+| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-registry-sbf/src/lib.rs:114` |
+| `0x100E` | `RegistryError::ReleaseLineageAlreadyDeclared` | This release set already declared a successor, and lineage never forks. | -- | `programs/dclutch-registry-sbf/src/lib.rs:120` |
+| `0x100F` | `RegistryError::ReleaseLineageRoleIdentityMoved` | A declared hop changed some role's program id. | -- | `programs/dclutch-registry-sbf/src/lib.rs:126` |
+| `0x1010` | `RegistryError::ReleaseLineageSelfSuccession` | A declaration named one release set as its own successor. | -- | `programs/dclutch-registry-sbf/src/lib.rs:128` |
+| `0x1011` | `RegistryError::ReleaseLineageAuthorityMissing` | A moved role's consenting upgrade authority did not sign, or cannot. | -- | `programs/dclutch-registry-sbf/src/lib.rs:136` |
+| `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | -- | `programs/dclutch-registry-sbf/src/lib.rs:142` |
+| `0x1013` | `RegistryError::ArtifactReleaseDeploymentFrame` | An `ArtifactRelease` was finalized without its deployment in the frame. | -- | `programs/dclutch-registry-sbf/src/lib.rs:156` |
+| `0x1014` | `RegistryError::ArtifactReleaseNotDeployed` | An `ArtifactRelease` did not describe the deployment at its own address. | -- | `programs/dclutch-registry-sbf/src/lib.rs:170` |
+| `0x1015` | `RegistryError::ArtifactReleaseElfMismatch` | A deployment is at that address and it is not the release's bytes. | -- | `programs/dclutch-registry-sbf/src/lib.rs:186` |
 
 ## rent
 
@@ -411,6 +400,10 @@ The 21 campaigns contributing:
 | `0x8015` | `ResolutionError::SponsoredPush` | Sponsored-push candidate, head, release, or deadline authentication failed. | resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:121` |
 | `0x8016` | `ResolutionError::RecordStillConsumable` | `RetireRecord` was aimed at evidence a still-live market could consume. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:136` |
 | `0x8017` | `ResolutionError::SubmissionStillConsumable` | `AbandonSubmission` was aimed at a submission a Source could still consume. | resolution-core-v3-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:151` |
+| `0x8018` | `ResolutionError::ActivationCache` | The account offered as this Market's activation is not the canonical Registry-owned cache for the release set the frame names. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:163` |
+| `0x8019` | `ResolutionError::ActivatedRole` | The activation is canonical, and the program brought for a role OTHER than Resolution is not the one that activation selected for it. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:176` |
+| `0x801A` | `ResolutionError::CallerAuthority` | The calling role's authority PDA is not the one the frame's own seeds derive. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:184` |
+| `0x801B` | `ResolutionError::InfrastructureProfile` | The Core-owned protocol infrastructure profile, or the Registry release it names, did not authenticate. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:193` |
 
 ## series-shadow
 
@@ -427,9 +420,9 @@ The 21 campaigns contributing:
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
 | `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | -- | `programs/dclutch-trading-sbf/src/lib.rs:144` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | dealer-checkpoint-programtest | `programs/dclutch-trading-sbf/src/lib.rs:146` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | -- | `programs/dclutch-trading-sbf/src/lib.rs:148` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | dealer-checkpoint-programtest; tier1 | `programs/dclutch-trading-sbf/src/lib.rs:150` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | claims-rational-representation-v2-programtest; dealer-checkpoint-programtest | `programs/dclutch-trading-sbf/src/lib.rs:146` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | direct-fee-pair-programtest | `programs/dclutch-trading-sbf/src/lib.rs:148` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | dealer-checkpoint-programtest; direct-fee-pair-programtest; tier1 | `programs/dclutch-trading-sbf/src/lib.rs:150` |
 | `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | dealer-checkpoint-programtest | `programs/dclutch-trading-sbf/src/lib.rs:152` |
 | `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | dealer-checkpoint-programtest | `programs/dclutch-trading-sbf/src/lib.rs:154` |
 | `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | -- | `programs/dclutch-trading-sbf/src/lib.rs:156` |
@@ -438,9 +431,9 @@ The 21 campaigns contributing:
 | `0x4009` | `TradingSbfError::CloseSealAccount` | The account offered to `CloseSeal` is not a live canonical seal. | -- | `programs/dclutch-trading-sbf/src/lib.rs:187` |
 | `0x400A` | `TradingSbfError::CloseSealLiveRelease` | `CloseSeal` was aimed at a seal the live Trading release still addresses. | -- | `programs/dclutch-trading-sbf/src/lib.rs:203` |
 | `0x400B` | `TradingSbfError::CloseSealFrame` | The `CloseSeal` frame was not the exact permissionless closing shape. | -- | `programs/dclutch-trading-sbf/src/lib.rs:212` |
-| `0x400C` | `TradingSbfError::FeeNotOwed` | The maker replay this fee settlement names records no obligation. | -- | `programs/dclutch-trading-sbf/src/lib.rs:221` |
-| `0x400D` | `TradingSbfError::FeeDestination` | The fee destination is not a token account of the configured recipient. | -- | `programs/dclutch-trading-sbf/src/lib.rs:229` |
-| `0x400E` | `TradingSbfError::FeeSource` | The fee source is not a token account of the debtor. | -- | `programs/dclutch-trading-sbf/src/lib.rs:238` |
+| `0x400C` | `TradingSbfError::FeeNotOwed` | The maker replay this fee settlement names records no obligation. | direct-fee-pair-programtest | `programs/dclutch-trading-sbf/src/lib.rs:221` |
+| `0x400D` | `TradingSbfError::FeeDestination` | The fee destination is not a token account of the configured recipient. | direct-fee-pair-programtest | `programs/dclutch-trading-sbf/src/lib.rs:229` |
+| `0x400E` | `TradingSbfError::FeeSource` | The fee source is not a token account of the debtor. | direct-fee-pair-programtest | `programs/dclutch-trading-sbf/src/lib.rs:238` |
 | `0x400F` | `TradingSbfError::CloseMakerFrame` | The `CloseMakerReplay` frame was not the exact permissionless shape. | -- | `programs/dclutch-trading-sbf/src/lib.rs:247` |
 | `0x4010` | `TradingSbfError::CloseMakerReplayAccount` | The account offered as the maker replay is not the canonical one. | -- | `programs/dclutch-trading-sbf/src/lib.rs:256` |
 | `0x4011` | `TradingSbfError::CloseMakerFeeOutstanding` | The maker replay still owes its recorded Direct fee. | -- | `programs/dclutch-trading-sbf/src/lib.rs:264` |
@@ -452,6 +445,16 @@ The 21 campaigns contributing:
 | `0x4017` | `TradingSbfError::AdmittedFrame` | The authenticated admitted-AOT frame or one of its Registry records. | -- | `programs/dclutch-trading-sbf/src/lib.rs:322` |
 | `0x4018` | `TradingSbfError::AdmittedTransport` | The admitted-AOT register-bank transport: encoding, chunking, caller authority width, or the authenticated input scratch pages. | -- | `programs/dclutch-trading-sbf/src/lib.rs:327` |
 | `0x4019` | `TradingSbfError::AdmittedContext` | The admitted-AOT invocation context: an identity that is not a valid `ContentId`, or a strategy that names no certificate, admission, or artifact release. | -- | `programs/dclutch-trading-sbf/src/lib.rs:333` |
+| `0x401A` | `TradingSbfError::AcceleratorFrame` | The ACCELERATOR callback's account frame or request transport. | -- | `programs/dclutch-trading-sbf/src/lib.rs:349` |
+| `0x401B` | `TradingSbfError::AcceleratorRelease` | The ACCELERATOR callback's rejoin of the release waist. | -- | `programs/dclutch-trading-sbf/src/lib.rs:355` |
+| `0x401C` | `TradingSbfError::AcceleratorArtifact` | The ACCELERATOR callback's Registry records, descriptor or strategy. | -- | `programs/dclutch-trading-sbf/src/lib.rs:361` |
+| `0x401D` | `TradingSbfError::AcceleratorRuntimeView` | The ACCELERATOR callback's AccountProfile-derived runtime view. | -- | `programs/dclutch-trading-sbf/src/lib.rs:369` |
+| `0x401E` | `TradingSbfError::ScratchExhausted` | The scratch end of the program heap could not serve a bank. | -- | `programs/dclutch-trading-sbf/src/lib.rs:385` |
+| `0x401F` | `TradingSbfError::AccountData` | An account or sysvar this route must READ could not be borrowed or parsed. | -- | `programs/dclutch-trading-sbf/src/lib.rs:394` |
+| `0x4020` | `TradingSbfError::ChildReceipt` | The child's returned receipt did not decode, or does not answer this request. | -- | `programs/dclutch-trading-sbf/src/lib.rs:405` |
+| `0x4021` | `TradingSbfError::Width` | A value did not fit the wire width or platform integer it was projected into. | -- | `programs/dclutch-trading-sbf/src/lib.rs:415` |
+| `0x4022` | `TradingSbfError::DeploymentSlotMismatch` | A slot-pinned release's deployment slot is not the one it bound. | -- | `programs/dclutch-trading-sbf/src/lib.rs:436` |
+| `0x4023` | `TradingSbfError::ChildRefused` | An invoked child program refused, and its own code is in the log above. | -- | `programs/dclutch-trading-sbf/src/lib.rs:456` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:47` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:49` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:51` |

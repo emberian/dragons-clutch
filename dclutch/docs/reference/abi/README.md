@@ -30,11 +30,12 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [productPayoffV2WasmV1](productPayoffV2WasmV1.md) | from the authoritative Rust Product V2 payoff evaluator and WASM artifact; do not edit. | npm run abi:product-payoff-v2-wasm |
 | [productRuntimeV2Admission](productRuntimeV2Admission.md) | from the live Rust Product Runtime V2 admission ABI; do not edit. | npm run abi:product-runtime-v2-admission |
 | [productV2Payoff](productV2Payoff.md) | from the canonical Rust Product V2 payoff ABI; do not edit. | npm run abi:product-v2-payoff |
-| [protocolInfrastructure](protocolInfrastructure.md) | from the Lean-emitted ProtocolInfrastructureProfile Rust ABI; do not edit. | npm run abi:infrastructure |
-| [rationalTerminalHotV3](rationalTerminalHotV3.md) | from the Lean-owned Rational terminal Hot V3 and Claims-child ABIs; do not edit. | npm run abi:rational-terminal-v3 |
+| [protocolInfrastructure](protocolInfrastructure.md) | by formal/dclutch-semantics/EmitProtocolInfrastructureTs.lean; do not edit. | npm run abi:infrastructure |
+| [rationalTerminalHotV3](rationalTerminalHotV3.md) | by formal/dclutch-semantics/EmitRationalTerminalHotV3Ts.lean; do not edit. | npm run abi:rational-terminal-v3 |
 | [realmPositionV1](realmPositionV1.md) | by formal/dclutch-semantics/EmitRealmPositionAbiTs.lean; do not edit. | npm run abi:realm-position |
-| [refusalRegistryV1](refusalRegistryV1.md) | from crates/dclutch-refusal-registry/src/lib.rs and docs/reference/refusals.md; do not edit. | npm run abi:refusal-registry |
-| [registeredDirect](registeredDirect.md) | from dclutch-direct-codec Lean-emitted Rust ABI; do not edit. | npm run abi:registered |
+| [refusalBandsV1](refusalBandsV1.md) | by formal/dclutch-semantics/EmitRefusalBandsV1Ts.lean; do not edit. | npm run abi:refusal-bands |
+| [refusalRegistryV1](refusalRegistryV1.md) | from lib/generated/refusalBandsV1.ts and docs/reference/refusals.md; do not edit. | npm run abi:refusal-registry |
+| [registeredDirect](registeredDirect.md) | by formal/dclutch-semantics/EmitRegisteredDirectTs.lean; do not edit. | npm run abi:registered |
 | [routeCensus](routeCensus.md) | by scripts/generate-route-census.mjs from `dclutch-route-census inventory`; do not edit. | npm run abi:route-census |
 | [sbfRuntimeV1](sbfRuntimeV1.md) | from the pinned solana-sbpf, solana-syscalls and solana-program-entrypoint | npm run abi:sbf-runtime |
 | [sourceProviderWasmV1](sourceProviderWasmV1.md) | from the authoritative Rust Source-provider owner and WASM artifact; do not edit. |  |

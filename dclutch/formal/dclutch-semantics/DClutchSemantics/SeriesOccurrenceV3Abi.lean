@@ -25,6 +25,33 @@ def occurrenceMagic : List UInt8 :=
 def ticketMagic : List UInt8 :=
   [0x44, 0x43, 0x4c, 0x54, 0x53, 0x4b, 0x56, 0x33] -- DCLTSKV3
 
+/-!
+## The mutable replay states' magics
+
+These two head the Trading-owned mutable states, which are a different KIND
+from the three immutable records above: they are never content-addressed, never
+Registry-published, and their widths and hostile decoding stay with the Rust
+adapter.  Only the eight-byte discriminants live here, and they live here for
+one reason -- so that ONE authority chooses every Series V3 magic.
+
+`ticketStateMagic` was `DCLTSTV3` until 2026-09-02, which is `templateMagic`.
+The two are not one family separated by a profile tag: `SeriesShadowInputV3`
+carries the 400-byte Template body and the 64-byte ticket state into the SAME
+evaluator, so one reader holds both and nothing but exact width told them
+apart.  That is the shape `DCLTDRS1` was re-lettered for; see
+`tools/gauntlet/census/src/magics.rs`.  It cost nothing to fix because neither
+record existed on any durable cluster -- but the template magic is digested
+into `template_content_id`, which is a PDA seed for the Series capability root,
+the finalized record's raw/staging pair, and (recursively, through the Ticket
+body) the ticket-state account itself, while the ticket-state magic is digested
+into nothing that outlives its transaction.  So the vacant, un-addressed side
+moved.
+-/
+def seriesStateMagic : List UInt8 :=
+  [0x44, 0x43, 0x4c, 0x54, 0x53, 0x53, 0x56, 0x33] -- DCLTSSV3
+def ticketStateMagic : List UInt8 :=
+  [0x44, 0x43, 0x4c, 0x54, 0x54, 0x53, 0x56, 0x33] -- DCLTTSV3
+
 def templateBytes : Nat := 400
 def occurrenceBytes : Nat := 288
 def ticketBytes : Nat := 256

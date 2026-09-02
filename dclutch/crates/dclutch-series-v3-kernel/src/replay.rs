@@ -7,6 +7,40 @@
 
 use dclutch_core_contract::ContentId;
 
+use crate::generated::{
+    SERIES_OCCURRENCE_MAGIC_V3, SERIES_STATE_MAGIC_V3, SERIES_TEMPLATE_MAGIC_V3,
+    SERIES_TICKET_MAGIC_V3, SERIES_TICKET_STATE_MAGIC_V3,
+};
+
+/// Every Series V3 magic is distinct, and a compiler says so.
+///
+/// This is the assertion the tree did not have on 2026-09-02, when the ticket
+/// state's magic was `DCLTSTV3` -- byte-for-byte [`SERIES_TEMPLATE_MAGIC_V3`].
+/// The two are different record KINDS, not one family with a profile tag, and
+/// [`crate::shadow::SeriesShadowInputV3`] hands the 400-byte Template body and
+/// the 64-byte ticket state to a single evaluator, so one reader held both and
+/// nothing but exact width told them apart. Exact width is not a partition; a
+/// dispatcher that ever grew a both-width arm would have routed one into the
+/// other with nothing going red. `DCLTDRS1` was re-lettered for exactly this
+/// shape (`tools/gauntlet/census/src/magics.rs`), and the `DCLTRIX1` exemption
+/// records the standard the tree settled on afterwards: same-reader sharing is
+/// safe only when the split is MECHANICAL rather than prose.
+///
+/// The census gate catches a duplicate across the whole tree; this catches it
+/// in the family, at compile time, before anyone runs a tool.
+const _: () = {
+    const fn word(magic: [u8; 8]) -> u64 {
+        u64::from_le_bytes(magic)
+    }
+    assert!(word(SERIES_STATE_MAGIC_V3) != word(SERIES_TICKET_STATE_MAGIC_V3));
+    assert!(word(SERIES_STATE_MAGIC_V3) != word(SERIES_TEMPLATE_MAGIC_V3));
+    assert!(word(SERIES_STATE_MAGIC_V3) != word(SERIES_OCCURRENCE_MAGIC_V3));
+    assert!(word(SERIES_STATE_MAGIC_V3) != word(SERIES_TICKET_MAGIC_V3));
+    assert!(word(SERIES_TICKET_STATE_MAGIC_V3) != word(SERIES_TEMPLATE_MAGIC_V3));
+    assert!(word(SERIES_TICKET_STATE_MAGIC_V3) != word(SERIES_OCCURRENCE_MAGIC_V3));
+    assert!(word(SERIES_TICKET_STATE_MAGIC_V3) != word(SERIES_TICKET_MAGIC_V3));
+};
+
 /// Exact width of the mutable Series tail inside the composite Trading root.
 pub const SERIES_STATE_BYTES_V3: usize = 64;
 /// Exact width of one Trading-owned mutable occurrence-ticket state.
@@ -14,8 +48,6 @@ pub const SERIES_TICKET_STATE_BYTES_V3: usize = 64;
 /// PDA domain for a mutable ticket state under the selected Trading program.
 pub const SERIES_TICKET_STATE_PDA_DOMAIN_V3: &[u8] = b"dclutch:series-ticket:v3";
 
-const SERIES_STATE_MAGIC_V3: [u8; 8] = *b"DCLTSSV3";
-const TICKET_STATE_MAGIC_V3: [u8; 8] = *b"DCLTSTV3";
 const SCHEMA_V3: u16 = 3;
 const PROFILE_V3: u16 = 1;
 
@@ -300,7 +332,7 @@ impl TicketStateV3 {
     /// Hostile-decode one exact canonical replay state.
     pub fn decode(bytes: &[u8]) -> Result<Self, SeriesStateError> {
         if bytes.len() != SERIES_TICKET_STATE_BYTES_V3
-            || bytes.get(..8) != Some(TICKET_STATE_MAGIC_V3.as_slice())
+            || bytes.get(..8) != Some(SERIES_TICKET_STATE_MAGIC_V3.as_slice())
             || read_u16(bytes, 8)? != SCHEMA_V3
             || read_u16(bytes, 10)? != PROFILE_V3
             || !all_zero(bytes, 13, 3)?
@@ -320,7 +352,7 @@ impl TicketStateV3 {
     /// Return exact canonical bytes.
     pub fn encode(self) -> [u8; SERIES_TICKET_STATE_BYTES_V3] {
         let mut output = [0_u8; SERIES_TICKET_STATE_BYTES_V3];
-        output[..8].copy_from_slice(&TICKET_STATE_MAGIC_V3);
+        output[..8].copy_from_slice(&SERIES_TICKET_STATE_MAGIC_V3);
         output[8..10].copy_from_slice(&SCHEMA_V3.to_le_bytes());
         output[10..12].copy_from_slice(&PROFILE_V3.to_le_bytes());
         output[12] = self.phase as u8;

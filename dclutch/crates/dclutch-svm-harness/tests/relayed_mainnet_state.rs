@@ -57,12 +57,24 @@ use dclutch_registry_contract::{
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
+// The DBC venue's decoding rules have ONE author: the relay contract's
+// Lean-emitted venue table (`generated_venue_rules.rs`). This test used to
+// restate the pool discriminator, the admitted inline width and four field
+// offsets as local literals -- the discriminator then collided with
+// `DBC_VIRTUAL_POOL_DISCRIMINATOR_V1` in the magic census, and the rest were the
+// same mirror one field over. The facts they carried are kept where they belong:
+// the discriminator is `sha256("account:VirtualPool")[..8]`, agreeing with the
+// deployed IDL and a live mainnet pool account, and the 424-byte inline width is
+// that discriminator plus `PoolState::INIT_SPACE` for a program with no
+// `realloc`, so the admitted length set is the singleton `{424}`.
 use dclutch_relay_contract::{
-    RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1,
-    RELAYED_FAMILY_RELEASE_ID_V1, RELAYED_RECORD_PDA_DOMAIN_V1,
-    RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
-    RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1, SHA256_EMPTY_DIGEST, SOLANA_DEVNET_GENESIS_HASH_V1,
-    SOLANA_MAINNET_GENESIS_HASH_V1,
+    DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1, DBC_IS_MIGRATED_OFFSET_V1,
+    DBC_MIGRATION_PROGRESS_OFFSET_V1, DBC_VENUE_INLINE_BYTES_V1, DBC_VIRTUAL_POOL_DISCRIMINATOR_V1,
+    MIGRATION_PROGRESS_CREATED_POOL_V1, RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
+    RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1, RELAYED_FAMILY_RELEASE_ID_V1,
+    RELAYED_RECORD_PDA_DOMAIN_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1,
+    RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1, RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1,
+    SHA256_EMPTY_DIGEST, SOLANA_DEVNET_GENESIS_HASH_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
     identity::{LOADER_V3_PROGRAM_ID, reconstruct_deployment_observation_v1},
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,
@@ -152,16 +164,6 @@ const MAINNET_CLOCK: [u8; 32] = [
     0x8b, 0x5e, 0xb8, 0xa3, 0x9b, 0x4b, 0x6d, 0x5c, 0x73, 0x55, 0x5b, 0x21, 0x00, 0x00, 0x00, 0x00,
 ];
 const DBC_POOL: [u8; 32] = [0x5a; 32];
-/// `sha256("account:VirtualPool")[..8]`, agreeing with the deployed IDL and a
-/// live mainnet pool account.
-const VIRTUAL_POOL_DISCRIMINATOR: [u8; 8] = [0xd5, 0xe0, 0x05, 0xd1, 0x62, 0x45, 0x77, 0x5c];
-/// 8-byte discriminator + `PoolState::INIT_SPACE`. The program has no `realloc`,
-/// so the admitted length set is the singleton `{424}`.
-const VIRTUAL_POOL_BYTES: usize = 424;
-const MIGRATION_PROGRESS_OFFSET: usize = 308;
-const IS_MIGRATED_OFFSET: usize = 305;
-const FINISH_CURVE_TIMESTAMP_OFFSET: usize = 344;
-const MIGRATION_PROGRESS_CREATED_POOL: u8 = 3;
 
 /// The devnet `Clock` this campaign pins, so both time bounds are exact rather
 /// than whatever wall clock the bank was started with.
@@ -272,8 +274,8 @@ fn dbc_row() -> RowFixtureV1 {
         program: DBC_PROGRAM,
         programdata: DBC_PROGRAMDATA,
         state_key: DBC_POOL,
-        state_len: VIRTUAL_POOL_BYTES as u32,
-        terminal_atom: MIGRATION_PROGRESS_CREATED_POOL as i128,
+        state_len: DBC_VENUE_INLINE_BYTES_V1 as u32,
+        terminal_atom: MIGRATION_PROGRESS_CREATED_POOL_V1 as i128,
         identity_seed: 0x60,
     }
 }
@@ -657,11 +659,11 @@ fn dbc_programdata_prefix() -> Vec<u8> {
 /// A graduated pool: `migration_progress = CreatedPool`, `is_migrated = 1`, and
 /// a nonzero `finish_curve_timestamp`. Layout real, values invented.
 fn virtual_pool_body() -> Vec<u8> {
-    let mut data = vec![0u8; VIRTUAL_POOL_BYTES];
-    data[..8].copy_from_slice(&VIRTUAL_POOL_DISCRIMINATOR);
-    data[MIGRATION_PROGRESS_OFFSET] = MIGRATION_PROGRESS_CREATED_POOL;
-    data[IS_MIGRATED_OFFSET] = 1;
-    data[FINISH_CURVE_TIMESTAMP_OFFSET..FINISH_CURVE_TIMESTAMP_OFFSET + 8]
+    let mut data = vec![0u8; DBC_VENUE_INLINE_BYTES_V1];
+    data[..8].copy_from_slice(&DBC_VIRTUAL_POOL_DISCRIMINATOR_V1);
+    data[DBC_MIGRATION_PROGRESS_OFFSET_V1] = MIGRATION_PROGRESS_CREATED_POOL_V1;
+    data[DBC_IS_MIGRATED_OFFSET_V1] = 1;
+    data[DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1..DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1 + 8]
         .copy_from_slice(&1_756_000_500u64.to_le_bytes());
     data
 }
@@ -767,7 +769,7 @@ fn observation(position: &Position) -> AccountObservationV1<'_> {
 /// The Product Runtime V2 graph a consumption maps its result through.
 ///
 /// One ordinary region and one explicit failure region.  The single cut at
-/// `MIGRATION_PROGRESS_CREATED_POOL` is not decoration: the decoding rules hand
+/// `MIGRATION_PROGRESS_CREATED_POOL_V1` is not decoration: the decoding rules hand
 /// the consumer the `MigrationProgress` discriminant itself, so the Product --
 /// not the venue table -- is what decides which outcome that discriminant
 /// selects, and a Product carving the same observable differently needs no
@@ -2282,14 +2284,14 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
     );
 
     let pool = view.observation(2).expect("pool body");
-    assert_eq!(pool.data_len(), VIRTUAL_POOL_BYTES as u32);
+    assert_eq!(pool.data_len(), DBC_VENUE_INLINE_BYTES_V1 as u32);
     assert_eq!(
-        pool.inline().get(MIGRATION_PROGRESS_OFFSET),
-        Some(&MIGRATION_PROGRESS_CREATED_POOL)
+        pool.inline().get(DBC_MIGRATION_PROGRESS_OFFSET_V1),
+        Some(&MIGRATION_PROGRESS_CREATED_POOL_V1)
     );
     assert_eq!(
         pool.inline().get(..8),
-        Some(VIRTUAL_POOL_DISCRIMINATOR.as_slice())
+        Some(DBC_VIRTUAL_POOL_DISCRIMINATOR_V1.as_slice())
     );
 
     // Liveness census Y3 / queue Q9, on the real adapter. This record is
@@ -2943,7 +2945,7 @@ async fn a_sealed_graduation_resolves_the_market_through_the_products_own_domain
     // adapter change.
     assert_eq!(
         certificate.result_numerator,
-        i128::from(MIGRATION_PROGRESS_CREATED_POOL)
+        i128::from(MIGRATION_PROGRESS_CREATED_POOL_V1)
     );
     assert_eq!(certificate.result_denominator, 1);
     assert_eq!(
@@ -3028,7 +3030,7 @@ async fn a_sealed_renunciation_resolves_the_market_through_the_products_own_doma
     );
     assert_ne!(
         certificate.result_numerator,
-        i128::from(MIGRATION_PROGRESS_CREATED_POOL)
+        i128::from(MIGRATION_PROGRESS_CREATED_POOL_V1)
     );
     assert_eq!(certificate.result_denominator, 1);
     assert_eq!(
@@ -3274,8 +3276,8 @@ async fn a_pre_terminal_pool_says_the_window_is_unsatisfied_and_leaves_the_marke
     for progress in [0_u8, 1, 2] {
         let mut fixture = fixture(1, &[]);
         let mut pool = virtual_pool_body();
-        pool[MIGRATION_PROGRESS_OFFSET] = progress;
-        pool[IS_MIGRATED_OFFSET] = 0;
+        pool[DBC_MIGRATION_PROGRESS_OFFSET_V1] = progress;
+        pool[DBC_IS_MIGRATED_OFFSET_V1] = 0;
         fixture.positions[2].body = pool;
 
         let mut context = start(&mut fixture).await;
@@ -3485,13 +3487,14 @@ async fn a_signed_but_incoherent_or_foreign_pool_body_refuses_on_its_own_field()
         (
             "a pool claiming migration with `is_migrated` still zero",
             Box::new(|pool: &mut Vec<u8>| {
-                pool[IS_MIGRATED_OFFSET] = 0;
+                pool[DBC_IS_MIGRATED_OFFSET_V1] = 0;
             }),
         ),
         (
             "a pool claiming migration with no finish timestamp",
             Box::new(|pool: &mut Vec<u8>| {
-                pool[FINISH_CURVE_TIMESTAMP_OFFSET..FINISH_CURVE_TIMESTAMP_OFFSET + 8]
+                pool[DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1
+                    ..DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1 + 8]
                     .copy_from_slice(&0_u64.to_le_bytes());
             }),
         ),
