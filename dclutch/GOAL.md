@@ -3106,3 +3106,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Lock design answered: the per-ACTION half is the seal's and free (the six coordinates are already observed under a
   write-once verdict); per-root needs the activation-cache flag; per-strategy is a third group.
 - Cuts: `8eb24da70`.
+
+### Lane map delta — 2026-09-02 20:15
+- SEAL (`8e1f9850`, `615c243f`): decision 0012's Lean model verified to name no constant (not a formal change);
+  `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` retired for `DevnetUpgradeTargetsV1::authenticate`; rent reads the sysvar; **cohort-12
+  SEALED at zero SOL** (five roles `equal: true`, seven already-current, `checked_upgrade_set` Some). **But the sealed set's
+  `release_set_id` moved** because custody, claims and core derive their semantic release id from the GIT REVISION while
+  Trading and Resolution use code-owned constants — the founded plan (e39efbb0) and the gate (96a3b04e, byte-identical
+  sources) name different releases; the market is stranded in place (unfillable: missing activation cache for the new id;
+  unresolvable: `--produce-input` needs the sealed plan). The window is NOT what refuses (source-level: the Direct fill never
+  reads DCLTWIN1). Fix in flight: derive the id from what it identifies; then cohort-13 from a commit at or after the fix and
+  the Dealer lane's Registry change, sealing in place with nothing stranded.
+- Cuts: `e3835694a`.
