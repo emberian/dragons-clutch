@@ -768,6 +768,29 @@ mod tests {
     /// become fixed coordinates ahead of every span, and each route span
     /// carries only its source/destination pair. That is a frame move, and it
     /// is not this declaration's to make.
+    ///
+    /// WHAT THAT SHAPE IS AND IS NOT WORTH, derived from the counts pinned in
+    /// `exact_widths_shift_claims_and_obligation_without_placeholders` above,
+    /// because the price was about to be paid for the wrong reason. The twelve
+    /// are Custody Transfer offsets 0..=9, 12 and 13 -- the endpoints are 10
+    /// and 11 -- and only SEVEN of them are new fixed coordinates: offsets
+    /// 1..=5 are the Claims frame's own 11..=15 and are already here. So the
+    /// base grows by seven physical coordinates and every active route span
+    /// loses seven more, which for ONE active late route is exactly zero:
+    /// the campaign's `[0, 0, 0, 0, 2, 0, 14, 2, 6]` is 43 physical before and
+    /// 43 after, and its authentications are 33 either way, so page 1's CU does
+    /// not move either. The shape pays where two or more routes are live, and
+    /// it pays enormously: all six go 106 physical to 51, and routes 0..=3
+    /// become able to declare at all, which is the whole P1 direction. It is
+    /// capability work and multi-route work, not a lock reduction for the trade
+    /// this campaign runs, and a lane that reads it as the latter will measure
+    /// nothing and conclude the shape is broken.
+    ///
+    /// It also has a cost the sketch does not name: the twelve are
+    /// UNCONDITIONAL, so a selector-9 trade with no Custody route at all
+    /// carries seven coordinates it does not use. A span cannot be a
+    /// representative -- `AliasKindV2::Fixed` names base coordinates only --
+    /// so there is no conditional form of it.
     #[test]
     fn route_spans_declare_the_alias_they_can_reach() {
         let bytes = profile();

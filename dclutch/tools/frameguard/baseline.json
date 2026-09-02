@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "a25a2aa77afd75dc0c29218e7ab6252339bdfe94",
+  "commit": "f4547a4560f2c25cd3171574245130c445bac996",
   "link_count": 12,
   "links": [
     {
@@ -6100,7 +6100,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 953,
+      "frame_count": 952,
       "functions": [
         {
           "frames_bytes": [
@@ -6953,12 +6953,6 @@
             832
           ],
           "symbol": "_ZN19dclutch_trading_sbf22direct_replay_setup_v141authenticate_market_and_derive_request_v117h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            192
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v314record_address17h<hash>E"
         },
         {
           "frames_bytes": [

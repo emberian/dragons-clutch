@@ -261,3 +261,44 @@ refuse in either direction.
 A partial implementation is saved at
 `unit2-sealed-alias-partial.patch` in the lane scratchpad; it is deliberately
 unlanded, because a half-landed frame shape breaks the family it half-lands in.
+
+## Both blockers are retired, and the price of the row is three producers
+
+*Appended by the Dealer lane, 2026-09-02, at `aa72e3a09`.*
+
+The two blockers above are gone, and the shape now has ONE declaration instead
+of three. `SEALED_EXECUTION_FIXED_ALIASES_V3` (what the shape is -- the six
+`(raw, staging)` pairs, formerly spelled privately in the executor AND again in
+`dclutch-operator`'s Direct projector) and `SEALED_EXECUTION_ALIAS_FAMILIES_V3`
+(who submits it, formerly one inline `kind == … && action == …`) live beside
+each other in `dclutch-capability-program-contract::hot_v3`, and the executor,
+the operator and every builder read both from there.
+`parse_accelerator_readonly` calls `validate_hot_fixed_alias_shape_v3` instead
+of its own older loop, and `require_record_pair` takes the shape -- for the
+DESCRIPTOR only, because the other four records it checks are per-STRATEGY and
+the seal never witnessed their cursors.
+
+**The Dealer row is still not there, and its price is not on-chain work.** With
+the row added and the campaign's bundle builder writing the raw key into the
+six staging slots, measured on real ELFs at `1f41f40a`: LP-hot **54 -> 48**,
+the equity Add **70 -> 64**, the post-trade partial Remove **71 -> 65**,
+campaign unchanged at 30/1. What the row costs is three producers, and every
+one of them is outside the programs:
+
+- `apps/dclutch-web/lib/dealerEquityChain.ts:145` THROWS on a staging
+  coordinate that is not the derived cursor, so the first aliased Dealer frame
+  breaks the browser. `packages/dclutch-sdk/lib/dealerEquityV3.ts` is the twin.
+- `dclutch-operator`'s Dealer route has no projector for the shape and no guard
+  that refuses the wrong one before a transaction is signed. The executor
+  compares with `!=`, so a producer that builds the distinct frame is refused
+  `TradingSbfError::Content` on chain -- one of 2,124 sites -- rather than
+  told.
+- `registry_hot_continuation`'s `SealedExecutionAliasHostile` covers the Direct
+  kind only.
+
+And a fourth thing the next lane must not mistake for its own regression:
+`dclutch-operator`'s `final_commit_topology_reports_dense_selector_nine_lock_wall`
+and `unsplit_topology_derives_spans_and_proves_devnet_refusal` are RED at
+`3e7f06cc`, before any of this. They are `efca6966`'s cross-frame alias
+partition re-measured -- 107 against a pinned 117, 117 against a pinned 122 --
+whose profile pins were re-pinned from runs and whose operator pins were not.

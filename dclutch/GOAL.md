@@ -3478,3 +3478,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   calls; six unnamed machines (two read `Phase::Open` and mean something else); Registry's 11 routes have no persisted
   guard at all (a distinct fact). Correction: 90061c16's "seven Phase imports" is ten.
 - Cuts: `4994ceb55`.
+
+### Lane map delta — 2026-09-02 18:00 EDT
+- DEALER closed (`1f41f40a`, `be488cdb`, `aa72e3a0`, `72fa345d`): the handed-down replay diagnosis was REFUTED by a probe
+  (revisions agreed; a published reservation carries its records, not its poststate) — the delivery takes Custody's own
+  reserve route and **the selector-9 delivery ACTIVATES and COMMITS at 227,742 CU**; the twelve-fixed-coordinates profile
+  shape is priced as a wash for the campaign's frame (seven new, seven saved) and a win only for multi-route frames;
+  **the convergence half of the alias lock shape is landed** (one declaration; counts byte-identical as control; frames
+  953 → 952); the Dealer alias row measured LP-hot 54 → 48 / Add 70 → 64 / Remove 71 → 65 but needs three producers.
+  Next: the partial Remove exhausts the 65,536 heap grant (completes at 131,072); `Content` behind it; two operator pins
+  red since efca6966. **Incident:** a shared scratchpad worktree (`dw`, named in two of my prompts in sequence) was checked
+  out from under a lane — ninety minutes lost; lanes now get private subdirectories by instruction.
+  → DEALER **`(spawned, private scratch)`**: heap by measurement first, the Content localizer, the alias row's producers,
+  the operator pins, Custody's 15-conjunct Replay split.
+- RESOLUTION-2 landed `31d09aed2` — **cohort-13 REDEEMS**: the account terminal payout gets a public arm (report pending).
+- Cuts: `167d522ff`, `28cea584f`, `36dbf847e`, `9206c4533`.
