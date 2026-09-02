@@ -3244,3 +3244,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `market.found` reading READY on an open market is a context defect (`requiresMarket: false`) (told); the six-ELF
   resolution-core-v3 runner (→ DIRECT); 22 acts and 11 programs still ungated.
 - Cuts: `02423de5c`, `578300a4e`, `378439d7c`.
+
+### Lane map delta — 2026-09-03 03:45
+- DEALER (`85017c63` DeploymentSlotMismatch 0x4022 with the flipped-bytes-and-moved-slot hostile at the boundary that owns
+  the law; `b2147e83` frame rows): the second LP Open refuses because **the market-scoped rent credit fixes one refund
+  beneficiary while the LP owner pays the position's rent** — `identity_eq(18, 5)` admits exactly one LP owner per market
+  generation, passing only because the campaign made payer and beneficiary one key. **RULING (under the standing goal; ember
+  may reverse): the refund follows the debit** — the beneficiary derives from the funding source (the credit's when the credit
+  funds, the payer's when a payer is debited), one rule for every lifecycle-rent family; Lean first if the rule is emitted.
+  → DEALER. The lock unit's frame move waits behind it.
+- Cuts: `a2b98a32f`.

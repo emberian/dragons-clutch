@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "ac6893e327e6257a433713edfbed16ee066e7d05",
+  "commit": "a62f9cfac90cb77b5b6fd5d7919f49a68ae8e379",
   "link_count": 12,
   "links": [
     {
@@ -6100,7 +6100,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 950,
+      "frame_count": 951,
       "functions": [
         {
           "frames_bytes": [
@@ -6259,6 +6259,12 @@
             64
           ],
           "symbol": "_ZN19dclutch_trading_sbf16child_receipt_v329deliver_receipt_dependency_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf16child_refused_v117h<hash>E"
         },
         {
           "frames_bytes": [

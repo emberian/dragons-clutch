@@ -6,6 +6,7 @@ import {
   CAPABILITY_ACTIONS_V1,
   capabilityActPhaseGatesV1,
   capabilityActsWithNoPhaseGateV1,
+  capabilityRequiresMarketV1,
   evaluateCapabilityV1,
   type CapabilityMarketSnapshotV1,
 } from './capabilityModel';
@@ -107,12 +108,12 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
 
   it('an act with no published gate says so by name instead of implying admission', () => {
     // `market.found` declares a real route, and that route has no prestate:
-    // the Market it founds does not exist yet. The verdict must not present
-    // that as a checked admission.
+    // the Market it founds does not exist yet. Read with no Market held, so
+    // the subject rule below is not what is under test here.
     const found = standing('market.found');
     expect(found.action.routes).toEqual(['core/found::process#Found']);
     expect(capabilityActPhaseGatesV1(found.action)).toHaveLength(0);
-    const verdict = evaluateCapabilityV1(found, observed('Open', 'Consumed'));
+    const verdict = evaluateCapabilityV1(found, { market: null });
     expect(verdict.status).toBe('ready-to-preflight');
     expect(verdict.phaseGate.verdict).toBe('no-phase-gate');
   });
@@ -127,5 +128,72 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
       'source.admit-terminal',
     ]);
     expect(ungated).toHaveLength(CAPABILITY_ACTIONS_V1.length - gated.length);
+  });
+});
+
+/**
+ * The other half of the UX walk's row O1, which the phase gates could not fix.
+ *
+ * A phase gate answers "may this Market be asked to do this now?". It has
+ * nothing to say about an act whose Market does not exist yet, and
+ * `core/found::process#Found` correctly publishes no prestate. What made that
+ * card wrong was that `requiresMarket: boolean` could not tell "no Market" from
+ * "creates a Market", so an act about a Market that does not exist rendered
+ * READY TO PREFLIGHT beside an open one it can never touch.
+ */
+describe('an act that founds a Market is not about the Market on screen', () => {
+  it('refuses ready by name against cohort-12, and says which Market it is holding', () => {
+    const found = standing('market.found');
+    expect(found.action.subject).toBe('new-market');
+    const verdict = evaluateCapabilityV1(found, observed('Open', 'Consumed'));
+    expect(verdict.status).toBe('not-this-market');
+    expect(verdict.reason).toContain('founds a NEW Market');
+    expect(verdict.reason).toContain(COHORT_12);
+    expect(verdict.reason).toContain('Open');
+    expect(verdict.reason).toContain('clear the Market coordinate');
+  });
+
+  it('is ready with no Market held, because founding one genuinely is', () => {
+    // The positive control. Without it "not ready" would prove nothing: an act
+    // that never reads ready is not a verdict, it is a wall.
+    for (const id of ['market.found', 'market.inspect']) {
+      expect(evaluateCapabilityV1(standing(id), { market: null })).toMatchObject({
+        status: 'ready-to-preflight',
+      });
+    }
+  });
+
+  it('refuses whatever phase the held Market is in, not only an open one', () => {
+    // The subject is wrong at every phase. A rule keyed on `Open` would pass a
+    // Founding Market through and report ready for founding a second one.
+    for (const phase of ['Founding', 'Open', 'Terminal', 'Retiring', 'Retired'] as const) {
+      expect(evaluateCapabilityV1(standing('market.found'), observed(phase, 'Consumed')).status)
+        .toBe('not-this-market');
+    }
+    expect(evaluateCapabilityV1(standing('market.found'), observed(null, null)).status)
+      .toBe('not-this-market');
+  });
+
+  it('does not fire for an act that simply has no Market', () => {
+    // Keyed on the subject, not on holding a Market at all: `release.activate`
+    // is about a release set and stays ready with cohort-12 on screen.
+    const release = standing('release.activate');
+    expect(release.action.subject).toBe('no-market');
+    expect(evaluateCapabilityV1(release, observed('Open', 'Consumed')).status)
+      .toBe('ready-to-preflight');
+  });
+
+  it('pins which acts declare which subject, so a new act cannot pick one quietly', () => {
+    const bySubject = (subject: string) =>
+      CAPABILITY_ACTIONS_V1.filter((act) => act.subject === subject).map((act) => act.id);
+    expect(bySubject('new-market')).toEqual(['market.inspect', 'market.found']);
+    expect(bySubject('no-market')).toEqual(['release.activate', 'product.compile', 'direct.route']);
+    expect(bySubject('observed-market')).toHaveLength(
+      CAPABILITY_ACTIONS_V1.length - 2 - 3,
+    );
+    // `requiresMarket` is derived and has exactly one true case.
+    for (const act of CAPABILITY_ACTIONS_V1) {
+      expect(capabilityRequiresMarketV1(act)).toBe(act.subject === 'observed-market');
+    }
   });
 });

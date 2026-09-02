@@ -1,5 +1,6 @@
 import {
   CAPABILITY_ACTIONS_V1,
+  capabilityRequiresMarketV1,
   capabilityStandingV1,
   type CapabilityActionV1,
   type CapabilityClientSurfaceV1,
@@ -78,7 +79,8 @@ const NEEDS_EXTERNAL_FILE_V1: ActPrerequisiteV1 = Object.freeze({
  * steps in and stops. That is a declaration nothing had run against reality,
  * and it is the failure this whole model exists to refuse.
  *
- * Neither fact is written down. `requiresMarket` is the catalogue's, and the
+ * Neither fact is written down. The Market prerequisite is derived from the
+ * catalogue's declared subject (`capabilityRequiresMarketV1`), and the
  * file is read off the import graph by the surface generator, which marks any
  * module whose closure renders a file input. So a workspace that stops
  * needing a file stops saying it needs one on the next regeneration, and one
@@ -92,7 +94,7 @@ export function browserActPrerequisitesV1(standing: CapabilityStandingV1): Reado
   const owner = standing.action.anchors.owner;
   const surface = owner === null ? null : CLIENT_MODULE_SURFACES_V1.find((entry) => entry.module === owner) ?? null;
   const held: ActPrerequisiteV1[] = [];
-  if (standing.action.requiresMarket) held.push(NEEDS_MARKET_V1);
+  if (capabilityRequiresMarketV1(standing.action)) held.push(NEEDS_MARKET_V1);
   if (surface?.readsExternalFile === true) held.push(NEEDS_EXTERNAL_FILE_V1);
   return Object.freeze(held);
 }

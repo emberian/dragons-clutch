@@ -59,7 +59,6 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 
 use crate::TradingSbfError;
-use crate::child_refused_v1;
 
 /// Sole top-level generic Market founding instruction.
 pub const GENERIC_MARKET_FOUNDING_MAGIC_V3: [u8; 8] = *b"DCLTGMF3";
@@ -1225,7 +1224,21 @@ pub(crate) fn invoke_child<'info>(
     };
     let mut infos = accounts.to_vec();
     infos.push(child_program.clone());
-    invoke_signed(&instruction, &infos, &[signer_seeds]).map_err(child_refused_v1)?;
+    // THE ONE CPI SITE STILL COARSE, and it is held back on purpose rather
+    // than overlooked. `ChildRefused` is the right code here -- a wrong-permit
+    // stage-2 Open is refused by CORE's permit authenticator and reaches this
+    // caller through this line, which is what the successor bootstrap's own
+    // prose already says at `market.rs:11726`. But that campaign asserts
+    // `refusing(0x4004)` at `market.rs:11714` and `:11774`, and it cannot be
+    // re-pinned from an observation right now: the tier-1 localhost market
+    // producer is parked at the retired `demo-market` boundary
+    // (`tools/gauntlet/run.sh:94`), so DCLTGMO1 is reachable only through the
+    // devnet or graduation planner. Splitting the code here and editing the
+    // campaign's number to match would be exactly the move this tree forbids
+    // -- a pin moved to fit a change instead of a run. So the split waits for
+    // the run, and this comment is the reason rather than an oversight.
+    invoke_signed(&instruction, &infos, &[signer_seeds])
+        .map_err(|_| TradingSbfError::Transition)?;
     let (producer, returned) = get_return_data().ok_or(TradingSbfError::Transition)?;
     if producer != *child_program.key {
         return Err(TradingSbfError::Transition.into());

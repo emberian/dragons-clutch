@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { CAPABILITY_ACTIONS_V1, capabilityStandingV1, type CapabilityActionV1 } from './capabilityModel';
+import {
+  CAPABILITY_ACTIONS_V1,
+  capabilityRequiresMarketV1,
+  capabilityStandingV1,
+  type CapabilityActionV1,
+} from './capabilityModel';
 import {
   browserActPrerequisitesV1,
   BROWSER_CAPABILITY_SURFACE_V1,
@@ -59,7 +64,7 @@ const webRoot = fileURLToPath(new URL('..', import.meta.url));
  * `capabilityPhaseGate.test.ts` checks against `docs/reference/routes.md`, so
  * a name nobody carries is red rather than a claim the browser made up.
  */
-const ACT_FIELDS = ['id', 'stage', 'family', 'action', 'workspace', 'requiresMarket', 'anchors', 'routes', 'guarantee', 'walls'];
+const ACT_FIELDS = ['id', 'stage', 'family', 'action', 'workspace', 'subject', 'anchors', 'routes', 'guarantee', 'walls'];
 
 /**
  * Vocabulary a capability claim may never use.
@@ -348,8 +353,8 @@ describe('what an act asks for before it can be started', () => {
   it('names a Market exactly where the catalogue binds one', () => {
     for (const standing of BROWSER_CAPABILITY_STANDINGS_V1) {
       const ids = browserActPrerequisitesV1(standing).map((entry) => entry.id);
-      expect(ids.includes('market'), `${standing.action.id} disagrees with its own requiresMarket`)
-        .toBe(standing.action.requiresMarket);
+      expect(ids.includes('market'), `${standing.action.id} disagrees with its own declared subject`)
+        .toBe(capabilityRequiresMarketV1(standing.action));
     }
   });
 
