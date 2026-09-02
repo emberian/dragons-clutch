@@ -2868,3 +2868,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - COHORT-12 in flight, progressing from its own stage logs: cohort-11 closed (+41.89 SOL), seven programs redeployed and
   verified, ladder complete, **market founded at 50 bps**, every routing table read back frozen (authority None, 56/62
   addresses) — the freeze's first on-chain proof; deployer 36.56 SOL; admissions and the fee-bearing trade next.
+
+### Lane map delta — 2026-09-02 09:10
+- EMISSION `addb8204ef3d72bb0` closed at ~720k → **`a33e56a925eb6b78b`**. Landed: census gate repaired (`3c0cf2d7`: bands
+  read from the emitted table); all six V2 runtime records derive (`5fa46416`, 73 → 177 constants, all 73 prior values
+  unchanged; a consistent move leaves every test green — Lean is the only catcher); protocolInfrastructure emitted to TS
+  (`9533e300`; the scraper had already failed since `a00fc7c9`). 84/84 guarded; twin identity 157 (honest).
+  Scope correction: coreFound is 39/95 (four Rust layouts have no Lean owner — successor's unit 1); directInlineV3's
+  generator carries an eleven-way route-binding gate and must not be replaced as-is.
