@@ -467,3 +467,87 @@ Owned, in priority order:
    devnet General market compiler at all.
 
 Devnet evidence. Not mainnet evidence.
+
+## Addendum: the census can now be told what it moved, and there is still nothing to tell it
+
+`aeb316d4` (census flags) and `bf59126d` (the simulator's declarations) landed at
+07:59 and 08:00, before this cohort's fill would have run. So the §6b finding is
+closed as tooling: **`ledger-census` can now judge L8.**
+
+**It is not closed as evidence, and the reason is §6c and not the census.** The
+fill never ran, because Direct capability entry 0 is not activated, because the
+campaign report has no `execution` block. So `49c8fa92` / `be67416e` remain
+unjudged by a real fill — now for exactly one reason instead of two.
+
+The recipe is recorded here so whoever lands the recovery-to-complete step does
+not have to rediscover it. On the census taken **after** the fill, with the
+buyer's collateral source, the seller's Direct token PDA and the venue fee PDA
+all named by `--token`:
+
+```
+--declared-collateral-delta 0 \
+--declared-hoard-delta 0 \
+--declared-class-delta unclassified=0 \
+--declared-class-delta HoardPrincipal=0
+```
+
+Three things about that which are easy to get wrong:
+
+- **From the first declared class, every unnamed class is a declaration of
+  zero.** The flag is not additive commentary; supplying one makes the whole
+  vector explicit. An unknown label refuses, naming the census's ten.
+- **If the buyer's collateral source is NOT named by `--token`, both
+  `unclassified` and the collateral delta are `gross + fee`, not 0** — the atoms
+  are real and left a set the ledger does not enumerate. That is the same shape
+  as cohort-12's `VIOLATED L1`, one law over.
+- **L7 becomes applicable only with `--declared-fees-lamports`**, the sum of that
+  cycle's own transaction fees, which the simulator does not supply because its
+  census payer and its trade payer may differ. Pass it by hand from the
+  signatures if they can be named; otherwise report L7 inapplicable **by
+  construction**, and never as a pass.
+
+The simulator computes its declarations from `direct-trade-finalized.json`, not
+from the public manifest, because the public manifest lacks `priceScale`.
+
+**Report every law by name, L1 through L8, with its actual verdict.** An
+INAPPLICABLE is not a pass, and a run that prints six greens and omits the two it
+could not judge has reported a number it did not earn.
+
+## Addendum: the recovery step is not disabled, it was never written — and this is the third time
+
+Checked before declaring the wall, because "no path exists" and "I did not look"
+read identically in a report.
+
+`recovered_finalized_founding` is a real field on the execution schema
+(`campaign.rs:163`, `4332`), it is serialized on two surfaces (`3823`, `4276`),
+and a refusal guards it (`376`). **And it is assigned `false` at both of the only
+two sites that set it** — `campaign.rs:3818` and `campaign.rs:4571`. Nothing in
+the tree ever sets it true.
+
+So the reader, the schema and the refusal all exist, and the WRITER does not.
+There is no recovery path to enable, no flag to pass, no disabled branch: the
+field is a placeholder for a step that was anticipated and never built, and
+cohort-13 is the first cohort to need it.
+
+**This is the third instance of this exact shape in this project**, and it is
+worth naming as a pattern rather than a coincidence:
+
+- Cohort-12's **Wall D**: `AlreadyCurrent` was validated, audited live and
+  projected into the plan by the tree, and written by nothing in it. Closed by
+  `28ff0823` giving the disposition a writer.
+- `PERMANENT_DEVNET_UPGRADE_TARGETS_V1`: the journal re-read every row against
+  the chain, and the constant it compared them to named a substrate that had been
+  closed for cohorts. Closed by `8e1f9850` making the set an authenticated input.
+- Now `recovered_finalized_founding`: a refusal that names its own repair —
+  *"a separate recovery-to-complete step must reconstruct and authenticate
+  execution.market"* — with no such step in the tree.
+
+The pattern: **a consumer, a schema and a refusal can all be built and reviewed
+without anyone noticing that the producer is missing**, because every one of them
+is exercised by the failure path and none of them by the success path. A field
+whose only assignments are a literal `false` is the cheap detector, and it is
+greppable.
+
+Both earlier instances were closed within a day of being named, which is the
+reason to name this one precisely rather than to describe it as "the founding
+failed".

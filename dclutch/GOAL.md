@@ -3254,3 +3254,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   funds, the payer's when a payer is debited), one rule for every lifecycle-rent family; Lean first if the rule is emitted.
   → DEALER. The lock unit's frame move waits behind it.
 - Cuts: `a2b98a32f`.
+
+### Lane map delta — 2026-09-03 04:30
+- DEALER `a5b1310baba889f9b` closed (~575k) → **`a5c802fed1b3cd9b3`** lands the refund-follows-the-debit rule from its proven
+  patch (`scratchpad/RENT-RULE.patch`; NOT in Lean — StateLifecyclePolicyV5Abi is layout only; six fixtures encode the old law;
+  the builder mirror at registers.rs:1481 still writes the credit's wallet unconditionally), then the second LP Open after a
+  committed Add, then the lock frame move. `85017c63`: `DeploymentSlotMismatch 0x4022` with the flipped-bytes-and-moved-slot
+  hostile at the boundary that owns the law.
+- STRUCTURED (`5e292bbb`, `143dd997`, `f264b253`, `db50b4fa`): **`ChildRefused 0x4023`** at 16 of 19 CPI sites — the child's
+  code packed with the runtime's own u64 into the log (System refusals named for the first time), Trading's family code on the
+  wire; the ten dealer-checkpoint rows measured unmoved (105 tx, eleven refusals, all 0x4004); market.rs's site held with the
+  reason (needs one devnet market run). Tool hazard found: `commit-patch` commits from the index without writing the hunks
+  back to the working tree → fix in flight. A `--only` race with Direct broke main for four minutes; both fixes were right.
+- CLASS-DELTA closed (`aeb316d4`, `bf59126d`): `--declared-class-delta LABEL=I128`, the simulator declares from the finalized
+  fill document; L8 proven reachable and satisfiable through the census binary. COHORT-13 has the flags.
+- Cuts: `31c3e304f`, `00096ac9f`.
