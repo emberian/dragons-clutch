@@ -1,10 +1,23 @@
 {
   "schema": "dclutch-market-registry-v1",
   "cluster": "devnet",
-  "provenance": "Names, questions, outcome labels and stories are site-side editorial. Every number, phase and address beside them is read from the chain.",
+  "provenance": "Coordinate names and stories are site-side editorial, because the chain carries no words for them. Titles, questions and outcome names are DERIVED from each market's own result-domain record wherever a row leaves them out, and every number, phase, address and settlement time beside them is read from the chain.",
   "markets": {
+    "EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1": {
+      "title": "SOL/USD — which side of $98 and $102",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
+      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
+      "story": "Founded at exactly 50 basis points a side — the first market here whose fee rate a Direct fill will admit. Its boundaries were centred on a spot measured the morning it opened, not on a stale default."
+    },
     "6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4": {
       "title": "SOL/USD range — open for trading",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
       "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
       "outcomes": [
         "Below $120",
@@ -12,11 +25,15 @@
         "Above $180",
         "The source failed to report"
       ],
-      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "No fee on either side. Collateral is a devnet test token, so nothing here is worth money."
+      "resolution": "Settled from Pyth's SOL/USD feed over the market's window. If the feed could not answer, it resolved to the source-failure outcome.",
+      "story": "The programs that ran it have been closed, so it no longer decodes and nothing can move it again. Its accounts stay on devnet and stay readable in the explorer."
     },
     "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq": {
       "title": "SOL/USD range — closed by an upgrade",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
       "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
       "outcomes": [
         "Below $120",
@@ -24,11 +41,15 @@
         "Above $180",
         "The source failed to report"
       ],
-      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "Never traded. A later upgrade widened the market record by eight bytes, and this one’s narrower record is no longer a shape the deployed program accepts. It stays readable."
+      "resolution": "Settled from Pyth's SOL/USD feed over the market's window. If the feed could not answer, it resolved to the source-failure outcome.",
+      "story": "Never traded. An upgrade widened the market record by eight bytes and its narrower record stopped being a shape the program accepts. The programs that ran it are closed now; it stays readable."
     },
     "7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC": {
       "title": "SOL/USD range — first public market",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
       "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
       "outcomes": [
         "Below $120",
@@ -36,11 +57,15 @@
         "Above $180",
         "The source failed to report"
       ],
-      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "Trading was never switched on: the release it was founded with had no way to activate it, and the deadline passed. Its claims and collateral stay on devnet."
+      "resolution": "Settled from Pyth's SOL/USD feed over the market's window. If the feed could not answer, it resolved to the source-failure outcome.",
+      "story": "Trading was never switched on: the release it was founded with had no way to activate it, and the deadline passed. The programs that ran it are closed now; its claims and collateral stay on devnet."
     },
     "CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM": {
       "title": "SOL/USD range — never activated",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
       "question": "Where does the SOL/USD price finish this market's window — below its range, inside it, or above it?",
       "outcomes": [
         "Below the range",
@@ -48,11 +73,15 @@
         "Above the range",
         "The source failed to report"
       ],
-      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "Founded alongside the first public market and left unfinished. Trading was never switched on before the deadline passed."
+      "resolution": "Settled from Pyth's SOL/USD feed over the market's window. If the feed could not answer, it resolved to the source-failure outcome.",
+      "story": "Founded alongside the first public market and left unfinished. Trading was never switched on before the deadline passed, and the programs that ran it have since been closed."
     },
     "5w24EmP7Q2Kkw9y9tjMPdixLPMdJHA1xsY7Wip3k5SDm": {
       "title": "SOL/USD buckets — five ways the week can end",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
       "question": "Where does the SOL/USD price finish this market's window — below $90, $90–$98, $98–$107, $107–$116, or above $116?",
       "outcomes": [
         "Below $90",
@@ -62,11 +91,15 @@
         "Above $116",
         "The source failed to report"
       ],
-      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "The first market here whose boundaries were measured, not assumed: half and one-and-a-half standard deviations around the founding price, from thirty days of realised volatility. It charges a 50 basis point fee."
+      "resolution": "Settled from Pyth's SOL/USD feed over the market's window. If the feed could not answer, it resolved to the source-failure outcome.",
+      "story": "The first market here whose boundaries were measured rather than assumed: half and one-and-a-half standard deviations around the founding price. The programs that ran it are closed now."
     },
     "8Xky2yx3wBmDRXeNfKSuJigqiWDtwSvGvB75BSW6tPxK": {
       "title": "SOL/USD — which side of the week",
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
       "question": "Where does the SOL/USD price finish this market's window — below $98, between $98 and $107, or above $107?",
       "outcomes": [
         "Below $98",
@@ -74,8 +107,8 @@
         "Above $107",
         "The source failed to report"
       ],
-      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "The same measured boundaries as its sibling, asked with one bucket instead of five, so the middle outcome is near a coin toss. It charges a 50 basis point fee and carries the first capability seal written on chain."
+      "resolution": "Settled from Pyth's SOL/USD feed over the market's window. If the feed could not answer, it resolved to the source-failure outcome.",
+      "story": "The same measured boundaries as its sibling, asked with one bucket instead of five, and it carried the first capability seal written on chain. The programs that ran it were closed on 2026-09-01."
     }
   }
 }

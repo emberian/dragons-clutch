@@ -176,7 +176,11 @@ export default function CoreFoundWorkspace() {
         resultDomainRecord: read.resultDomainRecord,
         portfolioRecord: read.portfolioRecord,
         sourceSpecRecord: read.sourceSpecRecord,
-        manipulationFloorRecord: read.manipulationFloorRecord,
+        // A Source material with an explicitly unbounded principal policy
+        // names no floor, and the console must not paste an empty box over a
+        // reader's own value: it leaves the field exactly as it found it and
+        // says so in the provenance line beside it.
+        manipulationFloorRecord: read.manipulationFloorRecord ?? current.manipulationFloorRecord,
       }));
       setDerivedFrom({
         resultDomainRecord: read.provenance.resultDomainRecord,
@@ -184,7 +188,7 @@ export default function CoreFoundWorkspace() {
         sourceSpecRecord: read.provenance.sourceSpecRecord,
         manipulationFloorRecord: read.provenance.manipulationFloorRecord,
       });
-      setDerivation(`Four addresses read from their parent records at finalized slot ${read.observedSlot}. The capacity profile is still yours to supply.`);
+      setDerivation(`${read.manipulationFloorRecord === null ? 'Three' : 'Four'} addresses read from their parent records at finalized slot ${read.observedSlot}. The capacity profile is still yours to supply.`);
     } catch (error) {
       // A failed derivation must not leave four boxes holding a previous
       // read's answers: the fields it owns are cleared with it.

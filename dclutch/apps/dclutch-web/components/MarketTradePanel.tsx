@@ -1,7 +1,7 @@
 'use client';
 
 import Anchor from '@/components/Anchor';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
 import { admissionRequestV1, JoinStanding } from '@/components/JoinPanel';
@@ -17,7 +17,6 @@ import SendStep from '@/components/trade/steps/SendStep';
 import { type DirectParticipantReadinessV1 } from '@/lib/directParticipant';
 import { type DirectTradeSpineV1 } from '@/lib/directTradeSpine';
 import { type MarketLiabilityV1 } from '@/lib/marketDiscovery';
-import { type MarketEditorialEntryV1 } from '@/lib/marketRegistry';
 import { publishedDirectRouteManifestV1 } from '@/lib/publishedRouteManifests';
 import { type SlotClockV1 } from '@/lib/slotClock';
 import {
@@ -71,7 +70,7 @@ export default function MarketTradePanel({
   rentProgramId,
   liability,
   denomination,
-  editorial,
+  outcomes: outcomeNames,
   clock,
   nowMs,
 }: Readonly<{
@@ -91,12 +90,15 @@ export default function MarketTradePanel({
    */
   denomination: DenominationV1;
   /**
-   * The registry's names for this market's outcomes. The market page already
-   * resolved these and used them in three charts, then rendered this panel
-   * without them -- so the one place a person CHOSE an outcome was the one
-   * place it was called `claim 0`.
+   * This market's outcome names, index-ordered, or null.
+   *
+   * The market page resolves them once -- from its editorial row where it has
+   * one and from the market's own result-domain record where it does not --
+   * and hands the answer down. This panel used to take the editorial ENTRY and
+   * read `.outcomes` off it, which meant the one place a person CHOSE an
+   * outcome was the one place an unregistered market said `claim 0`.
    */
-  editorial: MarketEditorialEntryV1 | null;
+  outcomes: ReadonlyArray<string> | null;
   /**
    * The measured slot clock the detail page already reads, so a ticket's
    * deadline can be a time rather than a slot number. Null renders the exact
@@ -151,7 +153,7 @@ export default function MarketTradePanel({
    * scales are the same scale, and that is the fully-backed invariant showing
    * through the units.
    */
-  const outcomeLabel = (index: number): string => editorial?.outcomes?.[index] ?? `claim ${index}`;
+  const outcomeLabel = (index: number): string => outcomeNames?.[index] ?? `claim ${index}`;
 
   // Taking a new ticket resets the size, because a size is only ever a size OF
   // something: carrying 500 across from one maker's offer to another's is how
@@ -161,6 +163,28 @@ export default function MarketTradePanel({
     setDesired('');
     invalidatePreview();
   };
+
+  /**
+   * Ask the chain about trading on load, once per market.
+   *
+   * It used to take a button. So the market-level wall -- "founded, but never
+   * switched on", the single most consequential thing this page can say --
+   * appeared only to a reader who had already clicked a control labelled "Ask
+   * the chain about trading here", and step 1 with it. Everything else on this
+   * page reads on mount; there is no reason this was the exception, and the
+   * button stays for re-reading.
+   *
+   * Guarded by the market it read rather than by a dependency array: the
+   * machine's closures are rebuilt every render, so `[inspect]` would loop.
+   */
+  const inspectedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${endpoint}|${marketAddress}`;
+    if (inspectedFor.current === key) return;
+    inspectedFor.current = key;
+    void inspect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endpoint, marketAddress]);
 
   const gate = inspected === null ? null : marketGateV1(inspected.walls);
   const packetWall = inspected?.walls.find((wall) => wall.name === 'packet') ?? null;
@@ -215,8 +239,29 @@ export default function MarketTradePanel({
 
     {gate !== null && gate.kind === 'closed' && <MarketGateCard gate={gate} />}
 
-    {inspected !== null && gate !== null && gate.kind === 'open' && <>
-      <FlowRail steps={steps} />
+    {inspected !== null && gate !== null && gate.kind === 'open' && <FlowRail steps={steps} />}
+
+    {/*
+      STEP 1 STANDS OUTSIDE THE GATE, because the chain does.
+
+      `phase` and `activation` are walls in front of a FILL. They are not walls
+      in front of joining: a Market admits participants and takes collateral
+      while Direct execution is closed, and cohort-12 admitted two strangers on
+      a market whose Direct capability was not switched on yet. The panel used
+      to render step 1 inside the same block as steps 2-7, so a reader with a
+      wallet met a market page with no wallet control anywhere on it, could not
+      see their own Position, and could not join -- while `/console` was
+      advertising exactly that act, and the chain was accepting it.
+
+      That was the one row in the whole browser where it refused something the
+      chain accepts. Steps 2-7 stay gated, because those really are the fill.
+    */}
+    {inspected !== null && <>
+      {gate !== null && gate.kind === 'closed' && <p className="direct-status">
+        Trading is closed here, and joining is not. You can connect a wallet, read
+        your standing, and join this market now; the steps that trade appear when
+        the wall above is gone.
+      </p>}
 
       <FlowStep step={stepAt(1)}>
         <p className="direct-status" aria-live="polite">{participantStatus}</p>
@@ -264,7 +309,9 @@ export default function MarketTradePanel({
         {participant !== null && participant.status === 'incomplete' && prestateWall === null && <p className="market-refusal">Not ready: {participant.reason}</p>}
         {participant !== null && participant.status === 'refused' && <p className="market-refusal">Participant state refused: {participant.reason}</p>}
       </FlowStep>
+    </>}
 
+    {inspected !== null && gate !== null && gate.kind === 'open' && <>
       <FlowStep step={stepAt(2)}>
         {refusalFor(2) !== null && <StepRefusal refusal={refusalFor(2)!} />}
         {inspected.outcomeCount !== null && <ol className="outcome-vector">

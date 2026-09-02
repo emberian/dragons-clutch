@@ -1071,18 +1071,40 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
 /// the same instruction index. Nothing about the makers' intent changes with
 /// the route; only who is invoked first does.
 pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 4] {
-    let signatures = [
-        direct.makers[0]
-            .sign_message(&direct.chain.signed_messages[0])
-            .as_ref()
-            .try_into()
-            .expect("seller signature width"),
-        direct.makers[1]
-            .sign_message(&direct.chain.signed_messages[1])
-            .as_ref()
-            .try_into()
-            .expect("buyer signature width"),
-    ];
+    direct_top_level_instructions_with_signatures(
+        direct,
+        [
+            direct.makers[0]
+                .sign_message(&direct.chain.signed_messages[0])
+                .as_ref()
+                .try_into()
+                .expect("seller signature width"),
+            direct.makers[1]
+                .sign_message(&direct.chain.signed_messages[1])
+                .as_ref()
+                .try_into()
+                .expect("buyer signature width"),
+        ],
+    )
+}
+
+/// The same four instructions, over signatures the CALLER brings.
+///
+/// [`direct_top_level_instructions`] signs the fixture's own preimages with the
+/// fixture's own keypairs, which is the right default and is also the one thing
+/// a ticket test must not do: a signature produced two lines above the
+/// transaction proves nothing about a signature that travelled through a JSON
+/// file. `ticket_authored_intents_execute_top_level.rs` reads two authored
+/// ticket files and hands their detached signatures here, so the bytes the
+/// Ed25519 program verifies are the bytes a maker's ticket carried.
+///
+/// Everything downstream of the signatures -- the evidence encoding, the
+/// instruction index it names, the heap grant and its position -- stays here,
+/// with one author.
+pub fn direct_top_level_instructions_with_signatures(
+    direct: &DirectCase,
+    signatures: [[u8; 64]; 2],
+) -> [Instruction; 4] {
     // The heap grant rides AHEAD of the evidence, and the Hot instruction is
     // therefore at index 3 rather than 2. Both positions are forced, and by
     // opposite constraints:

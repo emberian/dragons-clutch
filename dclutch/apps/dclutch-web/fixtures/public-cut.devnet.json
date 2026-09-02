@@ -1,10 +1,10 @@
 {
   "schema": "dclutch-public-cut-v1",
   "cluster": "devnet",
-  "market": "8Xky2yx3wBmDRXeNfKSuJigqiWDtwSvGvB75BSW6tPxK",
+  "market": "EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1",
   "activity": {
-    "found": "4TMM9gHJboRtH7cRhrV4Prb5qdAw824cQD121VLKStMEcM6KHDP9EFcSM1AfusXGeoMvnR99k8UThAX33AVVoNnm",
-    "trade": "4YQLY9tsRRVnxMJBcHdjGFZ6mVGY7nynjhnpUYyQX7EaSm9RufDrKit5GYqah88qcnHwtAzwaEBdFL4brcBRzPzX",
+    "found": null,
+    "trade": null,
     "resolve": null,
     "redeem": null
   }

@@ -23,7 +23,7 @@ const LIFECYCLE = [
   ['02', 'Join', 'Pick an outcome and put up collateral to hold claims on it.', 'join'],
   ['03', 'Trade', 'Buy and sell claims with a transaction your own wallet signs.', 'trade'],
   ['04', 'Resolve', 'Not yet. After the deadline, the oracle the market named will settle it.', 'resolve'],
-  ['05', 'Redeem', 'Not yet. Winning claims will burn and release the collateral behind them.', 'redeem'],
+  ['05', 'Redeem', 'Not yet — no market has an answer. When one does, winning claims burn here and release the collateral behind them.', 'redeem'],
 ] as const;
 
 function short(address: string): string {
@@ -63,7 +63,7 @@ export default function LaunchStory() {
         <div className="launch-terminal">
           <span>release / current</span>
           <code>FOUND → JOIN → TRADE</code>
-          <p><i /> resolve and redeem come later</p>
+          <p><i /> nothing has resolved yet</p>
         </div>
       </aside>
     </section>
@@ -72,13 +72,21 @@ export default function LaunchStory() {
       <header>
         <p className="eyebrow">One market · one visible lifecycle</p>
         <h2 id="launch-lifecycle">Follow the three steps that work today.</h2>
-        <p>{opened ? 'These links open real devnet transactions, not a replay. Open the explorer at any point and read the accounts yourself.' : 'No market is open yet. When one opens, its links appear here. Until then this page shows you nothing it cannot back up.'}</p>
+        <p>{opened ? 'Every step below leads into the live market on devnet, not a replay. Open the explorer at any point and read the accounts yourself. A step shows a transaction link only once one has been read back off the chain.' : 'No market is open yet. When one opens, its links appear here. Until then this page shows you nothing it cannot back up.'}</p>
       </header>
       <ol>
         {LIFECYCLE.map(([number, title, detail, step]) => <li key={title}>
           <span>{number}</span><strong>{title}</strong><p>{detail}</p>
           {step === 'join'
-            ? <Anchor href={`${marketHref}#join`}>{opened ? 'Check your standing and join →' : 'See what joining creates →'}</Anchor>
+            /*
+              No `#join` fragment. It addressed `JoinPanel`'s default export,
+              which no route has rendered since the trade panel started
+              importing only `JoinStanding`, so every reader who followed it
+              landed at the top of the market page wondering what they had
+              missed. Joining is step 1 of the market page's own flow and that
+              page is the whole destination.
+            */
+            ? <Anchor href={marketHref}>{opened ? 'Check your standing and join →' : 'See what joining creates →'}</Anchor>
             : step === null || publicCutTransactionHrefV1(step as PublicCutActivityStepV1, cut) === null ? null : <Anchor href={publicCutTransactionHrefV1(step as PublicCutActivityStepV1, cut)!}>Open {title.toLowerCase()} transaction →</Anchor>}
         </li>)}
       </ol>
@@ -88,7 +96,7 @@ export default function LaunchStory() {
       <article className="launch-card launch-card-wide">
         <p className="eyebrow">What changed</p>
         <h2>{opened ? 'Found, join and trade fit devnet now.' : 'Deployed, not yet open.'}</h2>
-        <p>{opened ? `Founding a market stays inside Solana's ${MAX_TX_ACCOUNT_LOCKS_V2}-account limit. A trade is a portable ticket your own wallet signs. Resolving a market and redeeming winning claims are not open yet — when they are, they run on this same public market.` : `${PROTOCOL_ROLES_V1.length} programs are live on devnet and readable now. No market is open on them yet. When one opens, this page links to it and to its transactions.`}</p>
+        <p>{opened ? `Founding a market stays inside Solana's ${MAX_TX_ACCOUNT_LOCKS_V2}-account limit. A trade is a portable ticket your own wallet signs. Redeeming a winning claim runs in the browser too — no market has reached an answer yet, so there is nothing to redeem on this one.` : `${PROTOCOL_ROLES_V1.length} programs are live on devnet and readable now. No market is open on them yet. When one opens, this page links to it and to its transactions.`}</p>
         <div className="launch-tags"><span>≤{MAX_TX_ACCOUNT_LOCKS_V2} accounts</span><span>sponsored Pyth</span><span>portable Direct tickets</span><span>full collateral</span></div>
       </article>
 

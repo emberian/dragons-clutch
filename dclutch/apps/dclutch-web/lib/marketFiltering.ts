@@ -62,7 +62,12 @@ function haystack(card: MarketDiscoveryCardV1): string {
   const parts: Array<string> = [card.address];
   if (card.status !== 'refused') parts.push(card.phase, card.generation);
   if (editorial !== null) {
-    parts.push(editorial.title, editorial.question);
+    // Every editorial field is optional now, and a row that names only a
+    // coordinate is the common case: `SOL/USD` is exactly what a reader types
+    // into this box, so it is searchable text like any other.
+    if (editorial.title !== null) parts.push(editorial.title);
+    if (editorial.question !== null) parts.push(editorial.question);
+    if (editorial.coordinate !== null) parts.push(editorial.coordinate.label);
     if (editorial.outcomes !== null) parts.push(...editorial.outcomes);
   }
   return parts.join(' ').toLowerCase();

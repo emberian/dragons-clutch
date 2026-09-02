@@ -14,7 +14,8 @@ import {
   requiredBackingMeaningV1,
   type MarketDetailV1,
 } from '@/lib/marketDetail';
-import { marketEditorialV1, type MarketEditorialEntryV1 } from '@/lib/marketRegistry';
+import { marketEditorialV1, marketNarrativeV1, type MarketNarrativeV1 } from '@/lib/marketRegistry';
+import { formatWindowInstantV1, inspectMarketQuestionV1, type MarketQuestionV1 } from '@/lib/marketQuestion';
 import {
   marketActivationOutlookV1,
   provenanceChipV1,
@@ -24,9 +25,9 @@ import {
   type MarketCapabilityManifestV1,
   type MarketCollateralV1,
   type MarketDiscoveryCardV1,
-  type MarketHoardV1,
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
+import { collateralDenominationV1 } from '@/lib/marketDenomination';
 import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
 import CellStrip from '@/components/charts/CellStrip';
 import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
@@ -40,32 +41,6 @@ import { clusterNameV1 } from '@/lib/rpcDefault';
 import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
 import { watchSentenceV1 } from '@/lib/rpcSubscribe';
 import { useAccountWatchV1 } from '@/lib/useAccountWatch';
-
-/**
- * The collateral's display denomination for one Market, resolved once.
- *
- * The decimals are the vault mint's own byte and stay null until that mint
- * authenticates -- null is never read as 0, which would silently multiply
- * every quantity on the page by a million.
- *
- * The mint address is taken from the vault when it derived, and otherwise
- * from the Realm the Market root commits to, so it survives a vault that was
- * never read. When neither authenticated there is no mint to name and the
- * field is empty, which is the honest reading of "not read" rather than a
- * placeholder address.
- *
- * The unit stays null until an editorial entry names one; absent that,
- * nothing is invented and the word is `collateral`.
- */
-function collateralDenominationV1(hoard: MarketHoardV1, collateral: MarketCollateralV1): DenominationV1 {
-  return Object.freeze({
-    decimals: hoard.status === 'derived' ? hoard.mintDisplayDecimals : null,
-    unit: null,
-    mint: hoard.status === 'derived'
-      ? hoard.collateralMint
-      : collateral.status === 'bound' ? collateral.collateralMint : '',
-  });
-}
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -206,8 +181,10 @@ export function marketDecisionStatsV1(
   decoded: DecodedMarketV1 | null,
   activation: MarketActivationOutlookV1,
   denomination: DenominationV1 | null,
-  editorial: MarketEditorialEntryV1 | null,
+  narrative: MarketNarrativeV1,
   phaseMeaning: string | null,
+  derived: MarketQuestionV1 | null,
+  nowMs: number | null,
 ): readonly [DecisionStatV1, DecisionStatV1, DecisionStatV1, DecisionStatV1] {
   if (decoded === null) {
     const unread = (label: string): DecisionStatV1 => Object.freeze({ label, value: '—', detail: 'Not read yet.' });
@@ -215,7 +192,7 @@ export function marketDecisionStatsV1(
   }
 
   const winner = decoded.settlement.status === 'terminal'
-    ? editorial?.outcomes?.[decoded.settlement.winner] ?? `claim ${decoded.settlement.winner}`
+    ? narrative.outcomes?.[decoded.settlement.winner] ?? `claim ${decoded.settlement.winner}`
     : null;
   const status: DecisionStatV1 = activation.status === 'never'
     ? Object.freeze({ label: 'Status', value: 'Never traded', detail: activation.reason })
@@ -249,18 +226,60 @@ export function marketDecisionStatsV1(
     } else {
       const first = shares.shares[0];
       const leader = shares.shares.reduce((best, candidate) => candidate.basisPoints > best.basisPoints ? candidate : best, first);
-      const name = editorial?.outcomes?.[leader.index] ?? `claim ${leader.index}`;
-      leading = Object.freeze({
-        label: 'Leading outcome',
-        value: `${name} · ${formatBasisPointsV1(leader.basisPoints)}`,
-        detail: `${leader.atoms} of ${shares.totalAtoms} claims issued.`,
-      });
+      // NO LEADER IS NOT A LEADER AT 25%. A market that has only ever issued
+      // complete sets holds exactly the same count on every outcome, so the
+      // reduce above returns index 0 by tie-break and the card announced
+      // "claim 0 · 25.00%" as though something had chosen it. The shares are
+      // equal, which is the whole content: nothing has traded.
+      const level = shares.shares.every((candidate) => candidate.basisPoints === first.basisPoints);
+      const name = narrative.outcomes?.[leader.index] ?? `claim ${leader.index}`;
+      leading = level
+        ? Object.freeze({
+          label: 'Leading outcome',
+          value: 'No leader',
+          detail: `Every outcome holds the same ${formatBasisPointsV1(first.basisPoints)} of ${shares.totalAtoms} claims issued — only complete sets, so nothing has picked a side yet.`,
+        })
+        : Object.freeze({
+          label: 'Leading outcome',
+          value: `${name} · ${formatBasisPointsV1(leader.basisPoints)}`,
+          detail: `${leader.atoms} of ${shares.totalAtoms} claims issued.`,
+        });
     }
   }
 
+  /**
+   * When it settles, from the market's own window record.
+   *
+   * This said "No settlement time is published" to every reader of every
+   * market, and it was never true: the window is a `WindowSpecV1` record the
+   * market's SourceMaterial selects by digest, and it has been on chain since
+   * the founding. The three arms below are three different facts and are kept
+   * apart -- resolved, a window read, and a window that could not be read with
+   * the reason -- because "no time is published" was one string standing in
+   * for all three.
+   */
   const settles: DecisionStatV1 = decoded.settlement.status === 'terminal'
-    ? Object.freeze({ label: 'Settles', value: 'Resolved', detail: editorial?.resolution ?? decoded.settlement.label })
-    : Object.freeze({ label: 'Settles', value: '—', detail: editorial?.resolution ?? 'No settlement time is published.' });
+    ? Object.freeze({ label: 'Settles', value: 'Resolved', detail: narrative.resolution ?? decoded.settlement.label })
+    : derived?.window != null
+      ? Object.freeze({
+        label: 'Settles',
+        value: formatWindowInstantV1(derived.window.endUnixSeconds),
+        // Past and future are different facts and the page owes the
+        // difference: a window that has closed means the observation this
+        // market grades against has already happened and only the resolution
+        // is outstanding. The comparison is skipped entirely when the clock
+        // has not started, rather than guessed from the render time.
+        detail: `${nowMs !== null && BigInt(Math.floor(nowMs / 1000)) > derived.window.endUnixSeconds
+          ? 'Its window has closed and nothing has resolved it yet'
+          : 'Its window closes then'}, read from this market\u2019s own window record. ${narrative.resolution ?? 'How it settles is not on file here.'}`,
+      })
+      : Object.freeze({
+        label: 'Settles',
+        value: '—',
+        detail: derived === null
+          ? narrative.resolution ?? 'The market\u2019s own records have not been read yet.'
+          : `The window record did not read: ${derived.windowRefusal ?? 'no reason was given'}.`,
+      });
 
   return Object.freeze([status, collateral, leading, settles]);
 }
@@ -284,6 +303,16 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   // renders its address, exactly as before.
   const editorial = marketEditorialV1(address);
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this market…' });
+  /**
+   * The market's own words for itself, derived from its records.
+   *
+   * A second read rather than part of `inspectMarketDetailV1` on purpose: the
+   * detail read is what the page IS, and a market whose product records cannot
+   * be reached must still render everything else. So this one is allowed to
+   * fail alone, and when it does the page falls back to the editorial registry
+   * exactly as it always did.
+   */
+  const [derived, setDerived] = useState<MarketQuestionV1 | null>(null);
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
@@ -310,6 +339,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const read = useCallback(async () => {
     setState({ kind: 'loading', message: 'Reading this market…' });
     setClock(null);
+    setDerived(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -322,6 +352,21 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       });
       setState({ kind: 'ready', detail: next, facts, message: next.reason });
       setClock(await readSlotClockV1(client, next.floorSlot));
+      if (next.card.status === 'decoded' && next.registryProgramId !== null) {
+        try {
+          setDerived(await inspectMarketQuestionV1(client, {
+            registryProgramId: next.registryProgramId,
+            address,
+            productRecordId: next.card.identity.productRecordId,
+            resolutionPolicyId: next.card.identity.resolutionPolicyId,
+          }));
+        } catch {
+          // Left null. The page keeps every other read it made, and each
+          // surface below says plainly that this half is not on file rather
+          // than pretending the market has no question.
+          setDerived(null);
+        }
+      }
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
@@ -376,16 +421,17 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const activation: MarketActivationOutlookV1 = card === null
     ? Object.freeze({ status: 'unknown', reason: 'This market has not been read from the chain yet.' })
     : marketActivationOutlookV1(card);
-  const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, editorial, detail?.phaseMeaning ?? null);
+  const narrative = marketNarrativeV1(address, decoded?.phase ?? null, editorial, derived);
+  const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, narrative, detail?.phaseMeaning ?? null, derived, nowMs);
 
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
 
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow"><Anchor href="/markets">← all markets</Anchor> · Market</p>
-        <h1>{editorial === null ? shortAddressV1(address, 8) : editorial.title}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : card !== null && card.status === 'refused' ? 'refused' : 'unread') : decoded.phase}</em></h1>
-        {editorial !== null && <p className="market-question">{editorial.question}</p>}
-        {editorial !== null && editorial.story !== null && <p className="market-story">{editorial.story}</p>}
+        <h1>{narrative.title}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : card !== null && card.status === 'refused' ? 'refused' : 'unread') : decoded.phase}</em></h1>
+        {narrative.question !== null && <p className="market-question">{narrative.question}</p>}
+        {narrative.story !== null && <p className="market-story">{narrative.story}</p>}
       </div>
       <aside>
         <span>Address</span>
@@ -520,7 +566,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               requiredBackingNote={requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}
               caption="Claims issued per outcome, against what this market must be able to pay."
               notes={decoded.liability.supplyAtoms.map((_, index) => {
-                const outcome = editorial?.outcomes?.[index];
+                const outcome = narrative.outcomes?.[index];
                 const status = decoded.settlement.status === 'terminal'
                   ? (decoded.settlement.winner === index ? 'won' : 'lost · pays nothing')
                   : 'no answer yet';
@@ -529,7 +575,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             />
             <ol className="outcome-vector">
               {decoded.liability.supplyAtoms.map((amount, index) => {
-                const outcomeName = editorial !== null && editorial.outcomes !== null ? editorial.outcomes[index] : undefined;
+                const outcomeName = narrative.outcomes?.[index];
                 return (
                 <li key={index} className={decoded.settlement.status === 'terminal' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
                   <span>claim {index}{outcomeName === undefined ? '' : ` · ${outcomeName}`}</span>
@@ -543,13 +589,13 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
                 the ordered list, re-expressed as shares of the whole. */}
             <SupplyShareStrip
               supplies={decoded.liability.supplyAtoms}
-              outcomes={editorial?.outcomes ?? null}
+              outcomes={narrative.outcomes}
               caption={SUPPLY_SHARE_MEANING_V1}
               emptyReason="No claims issued yet."
             />
             {/* Drawn only for a market some run actually recorded; every other
                 market renders nothing here rather than an empty frame. */}
-            <MarketIssuanceHistory address={address} outcomes={editorial?.outcomes ?? null} />
+            <MarketIssuanceHistory address={address} outcomes={narrative.outcomes} />
             <details className="market-detail-drawer">
               <summary>Exact vault and answer</summary>
               <div className="market-detail-drawer-body">
@@ -600,7 +646,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       rentProgramId={deployment.programs.rent}
       liability={decoded.liability}
       denomination={denomination!}
-      editorial={editorial}
+      outcomes={narrative.outcomes}
       clock={clock}
       nowMs={nowMs}
     />}

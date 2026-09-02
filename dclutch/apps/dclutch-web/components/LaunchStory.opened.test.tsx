@@ -52,9 +52,15 @@ describe('launch story, once a market is open', () => {
     expect(html).not.toContain('RESOLVE');
     expect(html).not.toContain('REDEEM');
     expect(html).toContain('<code>FOUND → JOIN → TRADE</code>');
-    expect(html).toContain('are not open yet');
+    // Renegotiated 2026-09-02. The card used to say resolution and redemption
+    // "are not open yet", and redemption HAS been open in this browser since
+    // it shipped -- with no file, no CLI and no operator. What is still true
+    // is a fact about the markets rather than about the code, so the page says
+    // that and this case pins the distinction rather than the old sentence.
+    expect(html).not.toContain('are not open yet');
+    expect(html).toContain('no market has reached an answer yet');
     expect(html).toContain('<strong>Resolve</strong><p>Not yet.');
-    expect(html).toContain('<strong>Redeem</strong><p>Not yet.');
+    expect(html).toContain('<strong>Redeem</strong><p>Not yet — no market has an answer.');
   });
 
   it('offers no transaction link for a step that has no signature', () => {

@@ -3035,3 +3035,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `map_err(|_| Transition)` sites → surfacing treatment; a coordinate costs 74 not 72; witnesses owed a green re-pin.
 - FRAMEGUARD lane id: **`a8afaad08d0507cc5`**.
 - Cuts: `39c0a040e`.
+
+### Lane map delta — 2026-09-02 17:00
+- DIRECT successor (`b466486e`, `5dc77408`, `c346a650`, `aa11906e`): `0x8005` split into five named conjuncts (92 sites);
+  five real roles **5/5** and the former universal donor reaches its subject; the conjunct was one literal
+  (`trading_program: CUSTODY_PROGRAM_ID` at resolution_core_v3_lifecycle.rs:1961). **A market carrying a Direct root resolved
+  on real ELFs** (root planted, not founded; Resolution proven to leave the root byte-identical); four hard-coded row
+  literals were second authors of the manifest layout. **The ticket path end to end** from real ticket files through the
+  Ed25519 program to hot_v3 executing (1,269,523 CU; one flipped signature bit fails it). Redemption premise corrected: the
+  operator `build_wallet_terminal_payout_v3` has never built an instruction any chain executed — the 12 payout tests
+  hand-build the frame with no Trading in the bank → byte-identity comparison of the two builders first.
+- Cuts: `76a84c504`.

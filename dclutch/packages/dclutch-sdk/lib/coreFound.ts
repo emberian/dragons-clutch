@@ -81,6 +81,7 @@ import {
   MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
   SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
   SOURCE_SPEC_SCHEMA_ID_V1,
+  WINDOW_SPEC_SCHEMA_ID_V1,
   CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
   CORE_ACTION_FOUND_TAG,
   CORE_FOUND_ACCOUNT_COUNT_V3,
@@ -108,6 +109,7 @@ import {
   REALM_SCHEMA_RELEASE_ID_V1,
   RESULT_DOMAIN_SCHEMA_ID_V2,
   SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3,
+  SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3,
   SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3,
   SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
 } from './generated/coreFound';
@@ -710,16 +712,39 @@ function infrastructureEqual(left: ProtocolInfrastructureInspectionV1, right: Pr
     && JSON.stringify(left.rent) === JSON.stringify(right.rent);
 }
 
-/** The four dependent record addresses, and the parent each came out of. */
+/** The five dependent record addresses, and the parent each came out of. */
 export type CoreFoundDerivedRecordsV2 = Readonly<{
   resultDomainRecord: string;
   portfolioRecord: string;
   sourceSpecRecord: string;
-  manipulationFloorRecord: string;
+  /**
+   * The manipulation floor, or NULL where the Source material has none.
+   *
+   * This was typed `string` and derived unconditionally, and that made the
+   * whole derivation refuse -- `manipulation floor digest is the all-zero
+   * identity` -- on every market founded with an `ExplicitlyUnbounded`
+   * principal policy, which is what cohort-12's open market is. The policy is
+   * a canonical choice the SourceMaterialV3 states, and
+   * `validateCoreFoundSourceMaterialV3` has already proved that an all-zero
+   * floor means exactly that choice and nothing else, so an absent floor is a
+   * value here rather than a failure.
+   */
+  manipulationFloorRecord: string | null;
+  /**
+   * The window this market settles on.
+   *
+   * `/found` never asked for it -- a Found transaction does not carry the
+   * window record -- so it was the one dependent address nobody derived, and
+   * the market page consequently told every reader "no settlement time is
+   * published" about a market whose window has been on chain since it was
+   * founded. Same derivation as the four above, from a coordinate the
+   * SourceMaterialV3 names.
+   */
+  windowSpecRecord: string;
   /** The finalized floor both parents were read at. */
   observedSlot: string;
   /** One sentence per derived address, naming the record and coordinate it came from. */
-  provenance: Readonly<Record<'resultDomainRecord' | 'portfolioRecord' | 'sourceSpecRecord' | 'manipulationFloorRecord', string>>;
+  provenance: Readonly<Record<'resultDomainRecord' | 'portfolioRecord' | 'sourceSpecRecord' | 'manipulationFloorRecord' | 'windowSpecRecord', string>>;
 }>;
 
 /**
@@ -737,7 +762,7 @@ export type CoreFoundDerivedRecordsV2 = Readonly<{
  *
  * A Product record carries, at named coordinates, the digests of the result
  * domain and portfolio it selects; a SourceMaterialV3 carries the digests of
- * its source spec and its manipulation floor. Digest plus schema id is the
+ * its source spec, its manipulation floor, and the window it settles on. Digest plus schema id is the
  * whole input to the Registry's raw-record PDA, so each of those four is a
  * derivation, not a question. It runs through `deriveFinalizedRecordAddressesV1`
  * -- the Registry's own constructor, the same one `recordAuthority` checks
@@ -800,19 +825,29 @@ export async function deriveCoreFoundRecordsV2(
     if (isZero(digest)) throw new Error(`${field} is the all-zero identity`);
     return digest;
   };
+  const optional = (bytes: Uint8Array, offset: number): Uint8Array | null => {
+    const digest = slice(bytes, offset, 32);
+    return isZero(digest) ? null : digest;
+  };
   const derive = (schema: Uint8Array, digest: Uint8Array) => deriveFinalizedRecordAddressesV1(registry, schema, digest).record;
 
   return Object.freeze({
     resultDomainRecord: derive(RESULT_DOMAIN_SCHEMA_ID_V2, at(product.bytes, PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2, 'result domain digest')),
     portfolioRecord: derive(PORTFOLIO_SCHEMA_ID_V2, at(product.bytes, PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2, 'portfolio digest')),
     sourceSpecRecord: derive(SOURCE_SPEC_SCHEMA_ID_V1, at(source.bytes, SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3, 'source spec digest')),
-    manipulationFloorRecord: derive(MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, at(source.bytes, SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3, 'manipulation floor digest')),
+    manipulationFloorRecord: optional(source.bytes, SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3) === null
+      ? null
+      : derive(MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, at(source.bytes, SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3, 'manipulation floor digest')),
+    windowSpecRecord: derive(WINDOW_SPEC_SCHEMA_ID_V1, at(source.bytes, SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3, 'window spec digest')),
     observedSlot: observation.slot,
     provenance: Object.freeze({
       resultDomainRecord: `Read from the Product record at byte ${PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2}, at finalized slot ${observation.slot}.`,
       portfolioRecord: `Read from the Product record at byte ${PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2}, at finalized slot ${observation.slot}.`,
       sourceSpecRecord: `Read from the SourceMaterialV3 record at byte ${SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3}, at finalized slot ${observation.slot}.`,
-      manipulationFloorRecord: `Read from the SourceMaterialV3 record at byte ${SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3}, at finalized slot ${observation.slot}.`,
+      manipulationFloorRecord: optional(source.bytes, SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3) === null
+        ? `This Source material selects an explicitly unbounded principal policy and names no manipulation floor, read at finalized slot ${observation.slot}.`
+        : `Read from the SourceMaterialV3 record at byte ${SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3}, at finalized slot ${observation.slot}.`,
+      windowSpecRecord: `Read from the SourceMaterialV3 record at byte ${SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3}, at finalized slot ${observation.slot}.`,
     }),
   });
 }

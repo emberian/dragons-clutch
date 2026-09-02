@@ -50,6 +50,9 @@ import {
   assessWindowWidthV1,
   resolutionDeadlineV1,
 } from '@/lib/founding/windowCadence';
+import { inspectMarketDetailV1 } from '@/lib/marketDetail';
+import { inspectMarketQuestionV1 } from '@/lib/marketQuestion';
+import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient } from '@/lib/rpc';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 
@@ -117,14 +120,34 @@ function id(byte: number): string {
 export default function CreateMarketWizard() {
   const [step, setStep] = useState<StepId>('product');
 
-  // 01 — Product
+  /*
+   * 01 -- Product. THE BAND SHIPS EMPTY AND IS THEN READ, not typed.
+   *
+   * These four fields carried `12000 / 18000` around an observation of
+   * `15000`: a $150 SOL, the runbook's numbers from three months earlier. SOL
+   * was near $100 on 2026-09-02, so a wizard opened at its defaults asked
+   * whether the price finishes between $120 and $180 -- a question whose
+   * answer is already known, which is exactly the defect the founding band and
+   * `centred_cuts_v1` exist to refuse. Four devnet markets were founded
+   * unfillable before anyone noticed a stale constant, and the belief fields
+   * beside it were tuned so the gate ADMITTED the stale default.
+   *
+   * They now start blank and are filled from the market this deployment last
+   * opened, read from its own result-domain record. Blank on a failed read, so
+   * a wizard that could not reach the chain asks for a band instead of
+   * suggesting one; and the provenance line beside them says what was read,
+   * when, and which of the four is not a price.
+   */
   const [coordinateLabel, setCoordinateLabel] = useState('SOL/USD');
-  const [cutDenominator, setCutDenominator] = useState('100');
-  const [lowerEdge, setLowerEdge] = useState('12000');
-  const [upperEdge, setUpperEdge] = useState('18000');
+  const [cutDenominator, setCutDenominator] = useState('');
+  const [lowerEdge, setLowerEdge] = useState('');
+  const [upperEdge, setUpperEdge] = useState('');
   // The coordinate at founding, in the band's own ticks. Not a display value:
   // it is the one input that decides whether this partition is a question.
-  const [foundingObservation, setFoundingObservation] = useState('15000');
+  const [foundingObservation, setFoundingObservation] = useState('');
+  const [bandProvenance, setBandProvenance] = useState(() => PUBLIC_DEVNET_CUT_V1.market === null
+    ? 'This deployment has no open market to read a band from. Enter a band centred on what your Source reports today.'
+    : 'Reading the band of the market this deployment last opened…');
   /*
    * WHAT THE AUTHOR BELIEVES, which is the input the compiler's gate is
    * measured against and which this wizard did not collect at all.
@@ -173,6 +196,51 @@ export default function CreateMarketWizard() {
   };
   const [plan, setPlan] = useState<CoreFoundPlanV2 | null>(null);
   const [planStatus, setPlanStatus] = useState('No transaction has been constructed. The ladder below is the plan, not a promise.');
+
+  /**
+   * Read the last opened market's band, once, and offer it as the starting
+   * point. The operator's own edit always wins: the fill only ever lands in a
+   * field that is still empty.
+   */
+  useEffect(() => {
+    const featured = PUBLIC_DEVNET_CUT_V1.market;
+    if (featured === null) return;
+    let live = true;
+    void (async () => {
+      try {
+        const client = new SolanaRpcClient(deployment.endpoint);
+        const detail = await inspectMarketDetailV1(client, {
+          coreProgramId: deployment.programs.core,
+          registryProgramId: deployment.programs.registry,
+          address: featured,
+        });
+        if (detail.card.status !== 'decoded' || detail.registryProgramId === null) throw new Error(detail.reason);
+        const read = await inspectMarketQuestionV1(client, {
+          registryProgramId: detail.registryProgramId,
+          address: featured,
+          productRecordId: detail.card.identity.productRecordId,
+          resolutionPolicyId: detail.card.identity.resolutionPolicyId,
+        });
+        const low = read.cuts[0];
+        const high = read.cuts[read.cuts.length - 1];
+        if (!live || low === undefined || high === undefined || read.cuts.length < 2) return;
+        setCutDenominator((current) => current === '' ? read.cutDenominator.toString() : current);
+        setLowerEdge((current) => current === '' ? low.toString() : current);
+        setUpperEdge((current) => current === '' ? high.toString() : current);
+        // The midpoint, and SAID to be the midpoint. A band's centre is not a
+        // price: the market this came from was centred on a spot measured at
+        // its own founding, and that measurement is not a record anything can
+        // read back. Offering the midpoint as a shape to replace is honest;
+        // calling it an observation would not be.
+        setFoundingObservation((current) => current === '' ? ((low + high) / 2n).toString() : current);
+        setBandProvenance(`Band read from ${featured.slice(0, 5)}…${featured.slice(-4)} — its own result-domain record at finalized slot ${read.observedSlot}. The founding observation is that band’s MIDPOINT, not a price: replace it with what your Source reports for the coordinate today, and re-centre the edges on it.`);
+      } catch (error) {
+        if (!live) return;
+        setBandProvenance(`The last opened market's band did not read (${reason(error)}). Enter a band centred on what your Source reports today.`);
+      }
+    })();
+    return () => { live = false; };
+  }, [deployment]);
 
   const product = useMemo(() => {
     const denominator = bigintOrNull(cutDenominator);
@@ -380,6 +448,7 @@ export default function CreateMarketWizard() {
         <label><span>Upper band edge · ticks</span><input inputMode="numeric" value={upperEdge} onChange={(event) => setUpperEdge(event.target.value)} /></label>
         <label><span>Founding observation · ticks</span><input inputMode="numeric" value={foundingObservation} onChange={(event) => setFoundingObservation(event.target.value)} /><small className="feed-forward">What this market&rsquo;s Source reports for the coordinate today, in the same ticks as the band. The Source returns raw provider atoms and rescales nothing, so this is where a band in the wrong units becomes visible.</small></label>
       </div>
+      <p className="direct-status">{bandProvenance}</p>
       <fieldset className="direct-form-grid wizard-belief">
         <legend>What you believe the coordinate does</legend>
         <label><span>Volatility · basis points of spot over the window</span><input inputMode="numeric" value={volatilityBps} onChange={(event) => setVolatilityBps(event.target.value)} /><small className="feed-forward">A partition is not degenerate or interesting on its own — it is one or the other <em>relative to a belief</em> about where the coordinate goes. This is that belief, and the gate below is measured against it.</small></label>

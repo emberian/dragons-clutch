@@ -27,6 +27,12 @@ dclutch-custody-sbf = { path = "../../dclutch-custody-sbf", features = [
 dclutch-capability-activation-codec = { path = "../../../crates/dclutch-capability-activation-codec" }
 dclutch-series-v3-kernel = { path = "../../../crates/dclutch-series-v3-kernel" }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
+# The ONE author of a portable Direct ticket, taken with its signer so this
+# workspace can author a real ticket file rather than a second implementation of
+# the signing preimage. `ticket_authored_intents_execute_top_level` writes two
+# tickets to disk, reads them back with the same crate the CLI reads them with,
+# and hands their signatures to the Ed25519 program.
+dclutch-direct-ticket = { path = "../../../crates/dclutch-direct-ticket" }
 dclutch-direct-hot-program-test-support = { path = "direct-hot" }
 # The PDA bump-search cost model the two margin gates and the two depth censuses
 # all subtract. It lived four times in this directory -- twice in u64 and twice

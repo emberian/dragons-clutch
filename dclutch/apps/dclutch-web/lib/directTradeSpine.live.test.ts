@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEVNET_DEPLOYMENT_V1 } from './deployments';
 import { inspectDirectTradeSpineV1 } from './directTradeSpine';
+import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
 import { SolanaRpcClient } from './rpc';
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
@@ -13,18 +14,21 @@ const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
  *
  * `inspectDirectTradeSpineV1` is what the trade panel calls before any operator
  * route manifest exists, so this is the reader's first contact with the chain
- * and the place a drifted pin surfaces as a refusal. Cohort-8's two markets are
- * the subjects because they are the ones a reader was turned away from: their
- * CapabilityProgramV4 record carries the effect kernel's V4 schema, which the
- * browser pinned at V3 until `EFFECT_SCHEMA_RELEASE_ID_V4` landed.
+ * and the place a drifted pin surfaces as a refusal.
+ *
+ * THE SUBJECT IS THE MARKET THIS SITE POINTS AT, and it is read out of the
+ * public cut rather than typed here. Two cohort-8 addresses were pinned in
+ * this file, and by 2026-09-02 both were owned by a Core program that had been
+ * closed: the case asserted `spine.status === 'inspected'` about markets no
+ * deployment could decode any more, so the only live coverage of the reader's
+ * first chain contact was aimed at accounts nobody can reach. A live case that
+ * names its own subject is a live case that goes stale with the fixture it
+ * should have been reading.
  *
  * Gated on `DCLUTCH_LIVE_DEVNET=1` because it performs real network IO against
- * api.devnet.solana.com. Reads only; it signs and sends nothing.
+ * the configured devnet endpoint. Reads only; it signs and sends nothing.
  */
-const COHORT_8 = Object.freeze([
-  Object.freeze({ name: 'market21', address: '5w24EmP7Q2Kkw9y9tjMPdixLPMdJHA1xsY7Wip3k5SDm' }),
-  Object.freeze({ name: 'market22', address: '8Xky2yx3wBmDRXeNfKSuJigqiWDtwSvGvB75BSW6tPxK' }),
-]);
+const FEATURED = PUBLIC_DEVNET_CUT_V1.market;
 
 const report = (line: string) => {
   const out = process.env.DCLUTCH_LIVE_REPORT;
@@ -32,9 +36,10 @@ const report = (line: string) => {
 };
 
 describe('live devnet Direct trade spine', () => {
-  for (const market of COHORT_8) {
+  const featured = FEATURED === null ? [] : [Object.freeze({ name: 'the featured market', address: FEATURED })];
+  for (const market of featured) {
     live(`reaches inspection for ${market.name} instead of refusing its descriptor`, async () => {
-      const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+      const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
       const spine = await inspectDirectTradeSpineV1(client, {
         marketAddress: market.address,
         coreProgramId: DEVNET_DEPLOYMENT_V1.programs.core,
@@ -65,8 +70,13 @@ describe('live devnet Direct trade spine', () => {
       expect(spine.descriptorId).toMatch(/^[0-9a-f]{64}$/);
       expect(spine.outcomeCount).toBeGreaterThan(0);
       expect(spine.priceScale).toBeGreaterThan(0n);
-      // Cohort-8 was activated, so its capability root stands.
+      // The featured market's Direct capability is founded AND switched on, so
+      // its activation root stands and the panel's gate opens. A cut that
+      // headlines a market whose trading was never activated would be pointing
+      // every reader at a stepper they cannot use.
       expect(spine.rootExists).toBe(true);
+      expect(spine.walls.map((wall) => wall.name)).not.toContain('phase');
+      expect(spine.walls.map((wall) => wall.name)).not.toContain('activation');
     }, 120_000);
   }
 });

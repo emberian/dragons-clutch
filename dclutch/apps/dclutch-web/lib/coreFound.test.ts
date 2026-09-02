@@ -21,6 +21,7 @@ import {
   RESULT_DOMAIN_SCHEMA_ID_V2,
   SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
   SOURCE_SPEC_SCHEMA_ID_V1,
+  WINDOW_SPEC_SCHEMA_ID_V1,
 } from './generated/coreFound';
 import {
   CORE_FOUND_ACCOUNT_COUNT_V3,
@@ -136,7 +137,7 @@ describe('Core Found37 browser kernel', () => {
     expect(() => validateCoreFoundSourceMaterialV3(source, productDigest)).toThrow(/different Product/);
   });
 
-  it('derives the four dependent record addresses the parents already name', async () => {
+  it('derives the five dependent record addresses the parents already name', async () => {
     /**
      * THE DEFECT THIS CLOSES. `/found` asks a stranger to paste fourteen
      * base58 addresses, and its own field comments say five of them are
@@ -147,9 +148,11 @@ describe('Core Found37 browser kernel', () => {
      * find, and the one place a person can be silently wrong is the one the
      * console asked them to fill in by hand.
      *
-     * Four of the five are derivable through the Registry's own constructor
-     * from a digest the parent record carries at a named coordinate. The
-     * fifth is not, and is a routed finding rather than a fifth derivation:
+     * Five are derivable through the Registry's own constructor from a
+     * digest the parent record carries at a named coordinate -- the window
+     * among them, which `/found` never asked for at all and which is the
+     * record the market page needs to say when a market settles. One is
+     * not, and is a routed finding rather than a sixth derivation:
      * `SourceSpecV1::decode` writes its capacity-profile coordinate as a
      * bare `144` (crates/dclutch-source-contract/src/lib.rs:917), so there
      * is no named constant for the generator to emit and nothing this
@@ -165,7 +168,8 @@ describe('Core Found37 browser kernel', () => {
     put(source, 0, new TextEncoder().encode('DCLTSMV3')); putU16(source, 8, 3); source[11] = 2;
     put(source, 16, productDigest);
     put(source, 48, sourceSpecDigest);
-    put(source, 80, id(3)); put(source, 112, id(4)); put(source, 176, id(6));
+    const windowSpecDigest = id(23);
+    put(source, 80, windowSpecDigest); put(source, 112, id(4)); put(source, 176, id(6));
     put(source, 208, manipulationFloorDigest);
     const sourceDigest = await sha256(source);
 
@@ -202,6 +206,8 @@ describe('Core Found37 browser kernel', () => {
       .toBe(deriveFinalizedRecordAddressesV1(registry, SOURCE_SPEC_SCHEMA_ID_V1, sourceSpecDigest).record);
     expect(derived.manipulationFloorRecord)
       .toBe(deriveFinalizedRecordAddressesV1(registry, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, manipulationFloorDigest).record);
+    expect(derived.windowSpecRecord)
+      .toBe(deriveFinalizedRecordAddressesV1(registry, WINDOW_SPEC_SCHEMA_ID_V1, windowSpecDigest).record);
 
     // It asks the chain for the two parents a reader supplied and nothing
     // else: a derivation that quietly reads a third address is a third

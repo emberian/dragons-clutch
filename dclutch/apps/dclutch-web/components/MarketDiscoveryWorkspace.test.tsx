@@ -1,4 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+
+import { CORE_STATE_BYTES } from '@/lib/generated/coreFound';
+import { SUPERSEDED_CORE_STATE_WIDTHS } from '@/lib/marketCoreV2';
 import { describe, expect, it } from 'vitest';
 
 import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
@@ -277,7 +280,15 @@ describe('the rest of the record', () => {
     // Renegotiated 2026-08-31: "It will not guess at the difference, so it
     // declines to read them rather than show you a field it made up" is a
     // promise about our decoder's manners. Deleted; the byte counts say it.
-    expect(html).toContain('352 bytes where this build expects 360');
+    //
+    // Renegotiated again 2026-09-02, and this is why the sentence is now
+    // BUILT from the constants rather than typed: the literal it pinned said
+    // "352 bytes where this build expects 360" while the current width was
+    // 368 and 352 was two generations behind, so the pin and the copy were
+    // wrong together and agreed with each other. Asserting the constants
+    // means this case cannot pass on a stale pair again.
+    expect(html).toContain(`${SUPERSEDED_CORE_STATE_WIDTHS.join(' or ')} bytes where this build expects ${CORE_STATE_BYTES}`);
+    expect(SUPERSEDED_CORE_STATE_WIDTHS.every((width) => width < CORE_STATE_BYTES)).toBe(true);
     expect(html).toContain('3Dhpq9tufPuBMroMfUNaWhfZMPfLFh6MG7vwhJFfqjMm');
   });
 
@@ -511,8 +522,15 @@ describe('the issuance split on cards', () => {
     expect(html).toContain('Claims issued per outcome');
     expect(html).not.toContain('forecast');
     expect(html).not.toContain('has not leaned');
-    // The exact-value twin stays: the raw supply row is still on the card.
-    expect(html).toContain('500000000 · 500000000 · 500000000 · 500000000');
+    // The exact-value twin stays -- in the strip's own "Exact numbers" table,
+    // which is where a raw atom count belongs. The card's own row is the
+    // humanized figure now: the detail page printed "500 collateral" for the
+    // same market while the card printed `500000000`, three clicks apart, and
+    // the units policy is that the readable figure leads.
+    expect(html).toContain('<td>500000000</td>');
+    expect(html).toContain('500,000,000 · 500,000,000 · 500,000,000 · 500,000,000');
+    expect(html).toContain('Claims issued, per outcome');
+    expect(html).not.toContain('Claims bought');
   });
 
   it('draws no split at all when the liability was not read', () => {

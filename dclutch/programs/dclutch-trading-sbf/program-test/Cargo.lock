@@ -1769,8 +1769,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "solana-keypair",
  "solana-program",
  "solana-signature",
+ "solana-signer",
 ]
 
 [[package]]
@@ -2325,6 +2327,7 @@ dependencies = [
  "dclutch-custody-sbf",
  "dclutch-direct-codec",
  "dclutch-direct-hot-program-test-support",
+ "dclutch-direct-ticket",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
  "dclutch-general-adapter-contract",

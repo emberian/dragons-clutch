@@ -8,7 +8,11 @@ describe('/redeem public route', () => {
 
   it('opens the connected-wallet Claims redemption journey', () => {
     expect(html).toContain('Your winning claims');
-    expect(html).toContain('Payout is not open yet');
+    // The old headline said "Payout is not open yet", which stopped being true
+    // the day redemption shipped in this browser. Refused by name so it cannot
+    // come back: what is true is a fact about the markets, not about the page.
+    expect(html).not.toContain('Payout is not open yet');
+    expect(html).toContain('Nothing has resolved yet');
     expect(html).toContain('Connect your wallet');
     expect(html).toContain('What you can cash in');
   });

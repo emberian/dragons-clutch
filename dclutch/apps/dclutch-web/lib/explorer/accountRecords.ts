@@ -119,6 +119,10 @@ import {
   LIFECYCLE_RENT_CREDIT_MAGIC_V2,
   LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2,
   LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2,
+  WINDOW_SPEC_BYTES_V1,
+  WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
+  WINDOW_SPEC_MAGIC,
+  WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1,
 } from '../generated/coreFound';
 import {
   ACCOUNT_PROFILE_HEADER_BYTES_V2,
@@ -721,6 +725,13 @@ export type RecordFieldKind =
   | 'u16'
   | 'u32'
   | 'u64'
+  /**
+   * A signed 64-bit integer. The window record's two bounds are the first
+   * signed scalars any dClutch account publishes -- unix seconds, which Rust
+   * writes as `i64` -- and reading them as `u64` would render a pre-1970
+   * instant as eighteen quintillion rather than as a negative second.
+   */
+  | 'i64'
   | 'pubkey'
   | 'identity'
   | 'identity32'
@@ -1248,6 +1259,18 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Released compartments', CAPABILITY_FUNDING_STATE_RELEASED_OFFSET_V1, 'span'),
     ],
     note: null,
+  },
+  {
+    magic: WINDOW_SPEC_MAGIC,
+    name: 'Window spec',
+    family: 'Source',
+    summary: 'When a market settles: the closed interval an observation must be about for this market to grade against it.',
+    width: { kind: 'fixed', bytes: WINDOW_SPEC_BYTES_V1 },
+    fields: [
+      field('Window start', WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1, 'i64', { note: 'unix seconds, inclusive' }),
+      field('Window end', WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1, 'i64', { note: 'unix seconds, inclusive' }),
+    ],
+    note: 'Two of this record’s seven coordinates are named by the Rust that writes it, and those two are the settlement window itself. The rest — its source identity, kind, freshness budget, schedule and cadence tolerance — sit at bare numbers inside `WindowSpecV1::decode`, and this table does not restate a coordinate nobody published.',
   },
   {
     magic: MARKET_OPENING_READINESS_MAGIC_V1,
@@ -2305,11 +2328,12 @@ function readUnsigned(data: Uint8Array, offset: number, width: number): bigint {
   return value;
 }
 
-const SCALAR_WIDTHS: Readonly<Record<'u8' | 'u16' | 'u32' | 'u64', number>> = Object.freeze({
+const SCALAR_WIDTHS: Readonly<Record<'u8' | 'u16' | 'u32' | 'u64' | 'i64', number>> = Object.freeze({
   u8: 1,
   u16: 2,
   u32: 4,
   u64: 8,
+  i64: 8,
 });
 
 /**
@@ -2327,6 +2351,7 @@ function fieldWidth(spec: RecordSpec, index: number, headerEnd: number): number 
     case 'u16':
     case 'u32':
     case 'u64':
+    case 'i64':
       return SCALAR_WIDTHS[declared.kind];
     case 'enum':
       return 1;
@@ -2386,6 +2411,8 @@ function decodeValue(field_: RecordField, data: Uint8Array, width: number): Deco
     case 'u32':
     case 'u64':
       return Object.freeze({ form: 'scalar', text: readUnsigned(data, field_.offset, width).toString() });
+    case 'i64':
+      return Object.freeze({ form: 'scalar', text: BigInt.asIntN(64, readUnsigned(data, field_.offset, width)).toString() });
     case 'enum': {
       const tag = data[field_.offset];
       const named = field_.tags?.find((entry) => entry.tag === tag) ?? null;

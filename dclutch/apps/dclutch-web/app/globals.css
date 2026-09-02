@@ -216,6 +216,12 @@ p { text-wrap: pretty; }
 .trade-v3-hero aside span { color: #a2986f; font: var(--fs-micro) var(--font-geist-mono); text-transform: uppercase; letter-spacing: .08em; }
 .trade-v3-hero aside strong { margin-top: var(--sp-3); color: #e4d58f; font: 500 var(--fs-h3)/var(--lh-snug) var(--font-geist-mono); }
 .trade-v3-hero aside p { margin: var(--sp-3) 0 0; color: #b0a684; font-size: var(--fs-small); line-height: var(--lh-body); }
+/* A base58 address is one 44-character word with no break opportunity in it,
+   so at 390px the hero aside reached 406px and the whole market page scrolled
+   sideways -- measured 2026-09-02, scrollWidth 432 against a 390 viewport. The
+   address is the one string on the page a reader may want to select whole, so
+   it wraps rather than being clipped. */
+.trade-v3-hero aside p code { overflow-wrap: anywhere; word-break: break-all; }
 /* minmax(0, 1fr), not the implicit `auto` track. A `display: grid` with no
    columns declared gets one auto track, and an auto track's maximum is
    max-content -- so one wide table inside a panel pushed the TRACK to 551px
@@ -1160,6 +1166,10 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
      document still does not. */
   .product-nav nav { order: 3; flex: 1 1 100%; flex-wrap: nowrap; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
   .product-nav nav::-webkit-scrollbar { display: none; }
+  /* The row scrolls with its scrollbar hidden, so four destinations sat
+     off-screen on a phone with nothing saying they were there. The mask fades
+     the trailing edge: it is the affordance, and it costs no layout. */
+  .product-nav nav { -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 28px), transparent 100%); mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 28px), transparent 100%); }
   .product-nav nav a { flex: 0 0 auto; white-space: nowrap; }
   .product-nav .nav-side { order: 2; }
   .product-nav .preview-control { margin-left: auto; }

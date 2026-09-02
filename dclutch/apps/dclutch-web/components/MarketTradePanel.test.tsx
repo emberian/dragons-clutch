@@ -20,7 +20,7 @@ describe('the market-detail trade panel', () => {
     rentProgramId={null}
     liability={null}
     denomination={{ decimals: null, unit: null, mint: '' }}
-    editorial={null}
+    outcomes={null}
     clock={null}
     nowMs={null}
   />);

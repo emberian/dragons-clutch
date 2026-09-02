@@ -22,7 +22,13 @@ describe('the smoke story and bounty pages speak to the reader', () => {
         expect(html).not.toContain(jargon);
       }
     }
-    expect(smoke).toContain('seven protocol programs are deployed at permanent addresses on Solana devnet');
+    // "at permanent addresses" was retired on 2026-09-02, when the cohort
+    // holding those addresses was closed and redeployed from scratch. This
+    // case still pinned the old sentence and had been red since; it now pins
+    // what the page says and refuses the word that made it wrong.
+    expect(smoke).toContain('seven protocol programs are deployed on Solana devnet at the addresses this build names');
+    expect(smoke).toContain('those addresses change with it');
+    expect(smoke).not.toContain('permanent addresses');
     expect(smoke).toContain('None of these three smoke markets exists yet');
     // The page used to say everything below had been rehearsed end to end,
     // which was ahead of the machinery: the graduation market could not even be

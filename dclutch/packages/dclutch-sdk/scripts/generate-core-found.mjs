@@ -10,6 +10,7 @@ const sources = Object.freeze({
   realm: readFileSync(new URL('crates/dclutch-realm-contract/src/lib.rs', root), 'utf8'),
   source: readFileSync(new URL('crates/dclutch-source-contract/src/generated_source_material_v3.rs', root), 'utf8'),
   sourceJoin: readFileSync(new URL('crates/dclutch-source-contract/src/provider_join_v2.rs', root), 'utf8'),
+  sourceContract: readFileSync(new URL('crates/dclutch-source-contract/src/lib.rs', root), 'utf8'),
   sourceCapacity: readFileSync(new URL('crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs', root), 'utf8'),
   payoff: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs', root), 'utf8'),
   capability: readFileSync(new URL('crates/dclutch-capability-contract/src/lib.rs', root), 'utf8'),
@@ -186,6 +187,7 @@ for (const [source, name] of [
   ['product', 'PRODUCT_RECORD_SCHEMA_ID_V2'], ['product', 'RESULT_DOMAIN_SCHEMA_ID_V2'], ['product', 'PORTFOLIO_SCHEMA_ID_V2'],
   ['realm', 'REALM_SCHEMA_RELEASE_ID_V1'], ['source', 'SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3'],
   ['sourceJoin', 'SOURCE_SPEC_SCHEMA_ID_V1'], ['sourceJoin', 'SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1'],
+  ['sourceJoin', 'WINDOW_SPEC_SCHEMA_ID_V1'], ['sourceContract', 'WINDOW_SPEC_MAGIC'],
   ['sourceCapacity', 'MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1'], ['payoff', 'GRADED_BASIS_RECORD_SCHEMA_ID_V3'],
   ['payoff', 'PRICE_GATE_RECORD_SCHEMA_ID_V1'],
   ['capability', 'CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1'],
@@ -215,6 +217,19 @@ output += `export const PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2 = ${scalar('pr
 output += `export const SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_PRIMARY_SOURCE_SPEC_OFFSET')} as const;\n`;
 output += `export const SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_MANIPULATION_FLOOR_OFFSET')} as const;\n`;
 output += `export const SOURCE_MATERIAL_PRODUCT_RECORD_DIGEST_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_PRODUCT_RECORD_DIGEST_OFFSET')} as const;\n`;
+output += `export const SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_WINDOW_SPEC_OFFSET')} as const;\n`;
+
+// ------------------------------------------ when the market settles, exactly
+// The window is the one founding parameter a reader asks for by name -- "when
+// does this settle" -- and it is on chain, in a WindowSpecV1 record the
+// SourceMaterialV3 selects by digest at the coordinate above. Its own two
+// bounds were bare `48` and `56` inside `WindowSpecV1::decode`, so until
+// `WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1` existed the browser could reach
+// the record and not read it. They are named now, in the crate that writes
+// them, and emitted here rather than restated there.
+output += `export const WINDOW_SPEC_BYTES_V1 = ${scalar('sourceContract', 'WINDOW_SPEC_BYTES')} as const;\n`;
+output += `export const WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1 = ${scalar('sourceContract', 'WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1')} as const;\n`;
+output += `export const WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1 = ${scalar('sourceContract', 'WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1')} as const;\n`;
 
 output += `export const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 = new TextEncoder().encode('${byteString('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2')}');\n`;
 output += array('LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2'));

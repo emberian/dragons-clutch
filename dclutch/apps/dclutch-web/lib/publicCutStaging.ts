@@ -47,7 +47,16 @@ export function parsePublicDevnetCutV1(value: unknown): PublicDevnetCutV1 {
   const activityRaw = object(root.activity, 'public cut activity'); exactKeys(activityRaw, ACTIVITY_STEPS, 'public cut activity');
   const activity = Object.freeze(Object.fromEntries(ACTIVITY_STEPS.map((step) => [step, signature(activityRaw[step], `public cut ${step} signature`)]))) as Readonly<Record<PublicCutActivityStepV1, string | null>>;
   if (market === null && ACTIVITY_STEPS.some((step) => activity[step] !== null)) throw new Error('a pending public cut cannot name lifecycle activity');
-  if (market !== null && activity.found === null) throw new Error('a live public cut must name its founding transaction');
+  // A live cut used to be REQUIRED to name its founding transaction, and that
+  // rule is gone because it was not satisfiable and was therefore about to be
+  // satisfied by a guess. Cohort-12's Found rides an address lookup table, so
+  // the Market is not in that transaction's static keys and
+  // `getSignaturesForAddress` on the Market does not return it (checked
+  // 2026-09-02 against the Market and its Claims aggregate: thirteen and five
+  // signatures respectively, and no Core `Found` action tag among them).
+  // Naming a market whose founding signature this cut cannot verify is honest;
+  // naming a plausible neighbouring signature would not be, and a rule whose
+  // only effect is to force the second is worse than no rule.
   return Object.freeze({ schema: SCHEMA, cluster: 'devnet', market, activity });
 }
 

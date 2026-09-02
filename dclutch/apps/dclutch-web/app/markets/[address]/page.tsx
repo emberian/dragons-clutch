@@ -18,11 +18,15 @@ export async function generateMetadata({ params }: Readonly<{ params: Promise<Re
   const { address } = await params;
   const decoded = decodeURIComponent(address);
   const editorial = marketEditorialV1(decoded);
-  if (editorial === null) return {};
+  // Static metadata is built at export time with no chain read available, so
+  // it can only ever carry the editorial half. A row that names a market but
+  // not its title has nothing to put in a share card, and an empty card beats
+  // a wrong one.
+  if (editorial === null || editorial.title === null) return {};
   const title = `${editorial.title} · dClutch`;
   // The question is the description: it is what the market IS, and it is the
   // sentence a pasted link should lead with.
-  const description = editorial.question;
+  const description = editorial.question ?? undefined;
   const card = `https://clutch.dregg.pro/og/market-${decoded}.jpg`;
   return {
     title,

@@ -384,7 +384,28 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
   const status = read !== null && read.kind === 'loaded' ? read.status : null;
   const beat = beatFor(read);
 
-  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/pulse" status={status === null ? 'no simulator running' : status.halted ? 'halted' : 'simulator publishing'} />}>
+  /*
+    THE PILL FOLLOWS THE BEAT, not the file.
+
+    `status.halted` is a flag inside the last artifact that was written; the
+    beat is that artifact judged against the clock. They disagree exactly when
+    a run stops writing without halting, which is the common failure, and on
+    2026-09-02 the nav said "simulator publishing" beside a strip that said
+    "Gone quiet — overdue for its next write" about a file three days old. One
+    of the two was reading the liveness question; it is the one that decides
+    this pill now.
+  */
+  const pill = beat === null
+    ? (read === null ? 'reading the pulse' : 'no simulator running')
+    : beat.state === 'running'
+      ? 'simulator publishing'
+      : beat.state === 'stopping'
+        ? 'simulator winding down'
+        : beat.state === 'stale'
+          ? 'simulator gone quiet'
+          : 'simulator halted';
+
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/pulse" status={pill} />}>
 
     <section className="trade-v3-hero">
       <div>

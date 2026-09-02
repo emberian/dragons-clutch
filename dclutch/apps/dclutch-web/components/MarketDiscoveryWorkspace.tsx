@@ -8,7 +8,11 @@ import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
+import { CORE_STATE_BYTES } from '@/lib/generated/coreFound';
 import { type DeploymentV1 } from '@/lib/deployments';
+import { SUPERSEDED_CORE_STATE_WIDTHS } from '@/lib/marketCoreV2';
+import { collateralDenominationV1 } from '@/lib/marketDenomination';
+import { formatQuantityV1 } from '@/lib/quantity';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { docsHrefV1 } from '@/lib/flags';
 import {
@@ -32,7 +36,7 @@ import {
   type MarketSortOrderV1,
 } from '@/lib/marketFiltering';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
-import { fallbackMarketTitleV1, marketEditorialV1 } from '@/lib/marketRegistry';
+import { marketEditorialV1, marketNarrativeV1 } from '@/lib/marketRegistry';
 import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
@@ -106,14 +110,22 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
   // be switched on, so the card says that in its own words beside the phase
   // rather than editing the phase into something the accounts never claimed.
   const outlook = marketActivationOutlookV1(card);
+  const denomination = collateralDenominationV1(card.hoard, card.collateral);
+  const narrative = marketNarrativeV1(card.address, card.phase, editorial, null);
   return <article className={`market-discovery-card${outlook.status === 'never' ? ' never-trades' : ''}`}>
     <div className="market-card-top">
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
       <span className={`phase-chip phase-${card.phase.toLowerCase()}`}>{card.phase}</span>
       {outlook.status === 'never' && <span className="phase-chip never-trades">never trades</span>}
     </div>
-    <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{editorial === null ? fallbackMarketTitleV1(card.phase, card.address) : editorial.title}</Anchor></h3>
-    {editorial !== null && <p className="market-question">{editorial.question}</p>}
+    {/* One merge point for what a market is called, shared with the market
+        page: the registry where it names one, the market's own records where
+        the page has read them, the address last. The list does not perform the
+        record read -- it would be two extra round trips per card -- so an
+        unregistered market still lists by address here and gains its derived
+        title on the page it links to. */}
+    <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{narrative.title}</Anchor></h3>
+    {narrative.question !== null && <p className="market-question">{narrative.question}</p>}
     <p className="market-card-address" title={card.address}>{shortAddressV1(card.address, 10)}</p>
     {outlook.status === 'never' && <p className="market-never-trades-note">
       Trading can never be switched on. The window closed at slot {outlook.lastActivationSlot}.
@@ -122,7 +134,17 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
         the account carries is one click below. */}
     <dl className="market-card-facts">
       <div><dt>Outcomes</dt><dd>{card.liability.status === 'bound' ? card.liability.claimCount : card.liability.status}</dd></div>
-      <div><dt>Claims bought, per outcome</dt><dd>{card.liability.status === 'bound' ? card.liability.supplyAtoms.join(' · ') : card.liability.status}</dd></div>
+      {/*
+        ISSUED, not bought. Every claim on this row was minted by putting
+        collateral in for a complete set -- one claim on every outcome at once
+        -- which is the opposite of somebody picking a side. Calling the
+        founder's own complete sets "claims bought" reads as demand that does
+        not exist, and it is the same four numbers on every outcome when it
+        happens.
+      */}
+      <div><dt>Claims issued, per outcome</dt><dd>{card.liability.status === 'bound'
+        ? card.liability.supplyAtoms.map((atoms) => formatQuantityV1(atoms, denomination).display).join(' · ')
+        : card.liability.status}</dd></div>
       <div><dt>Most it could be asked to pay</dt><dd>{card.liability.status === 'bound' ? card.liability.requiredBackingAtoms : card.liability.status}</dd></div>
       <div><dt>Paid in</dt><dd>{card.collateral.status === 'bound'
         ? <span title={card.collateral.collateralMint}>{card.collateral.collateralMintShort}</span>
@@ -203,8 +225,15 @@ export function HistoricalMarketAccounts({
     title={`${count} older market${plural(count, '', 's')} this build cannot read`}
     note="not listed as current"
   >
+    {/*
+      The widths are READ, not written. This sentence said "352 bytes where
+      this build expects 360" while the current width was 368 and 352 was two
+      generations behind: a hand-typed pair of numbers next to a generated
+      constant and a maintained list of superseded ones, agreeing with neither.
+    */}
     <p className="market-empty">
-      Made by an older version of the protocol: 352 bytes where this build expects 360.
+      Made by an older version of the protocol: {SUPERSEDED_CORE_STATE_WIDTHS.join(' or ')} bytes
+      where this build expects {CORE_STATE_BYTES}.
       The explorer will still show you {plural(count, 'its', 'their')} raw bytes.
     </p>
     <ul className="market-bindings">

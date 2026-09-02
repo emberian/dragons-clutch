@@ -84,9 +84,14 @@ describe('Redemption route', () => {
   const html = renderToStaticMarkup(<PortfolioWorkspace mode="redemption" />);
 
   it('starts with the connected wallet and the live Market set instead of the representation console', () => {
-    // The headline used to offer a payout this page cannot make.
+    // The headline used to offer a payout this page cannot make, and then --
+    // once redemption shipped here -- to deny one it can. Both are refused by
+    // name; the headline states the only thing standing in the way, which is
+    // that no market has reached an answer.
     expect(html).toContain('Your winning claims');
-    expect(html).toContain('Payout is not open yet');
+    expect(html).not.toContain('Payout is not open yet');
+    expect(html).toContain('Nothing has resolved yet');
+    expect(html).toContain('no file and no operator');
     expect(html).not.toContain('Redeem your winning claims');
     // Renegotiated 2026-08-31: the wallet panel no longer takes a `purpose`
     // string describing why this page wants an address. The heading says it.

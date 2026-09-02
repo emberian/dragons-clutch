@@ -57,7 +57,7 @@ describe('launch story', () => {
     // Resolve and Redeem stay on the rail -- a reader should know where the
     // product is going -- but only in the future tense.
     expect(html).toContain('<strong>Resolve</strong><p>Not yet.');
-    expect(html).toContain('<strong>Redeem</strong><p>Not yet.');
+    expect(html).toContain('<strong>Redeem</strong><p>Not yet — no market has an answer.');
     expect(html).toContain('Follow the three steps that work today.');
   });
 

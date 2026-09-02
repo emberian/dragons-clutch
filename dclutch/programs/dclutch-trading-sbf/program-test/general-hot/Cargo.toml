@@ -27,6 +27,7 @@ dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+dclutch-trading-sbf = { path = "../..", features = ["no-entrypoint"] }
 sha2 = { version = "=0.10.9", default-features = false }
 solana-account = "=4.6.0"
 solana-compute-budget-interface = "=3.1.0"

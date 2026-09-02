@@ -196,6 +196,18 @@ pub const SOURCE_CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTSCP1";
 pub const SOURCE_SPEC_MAGIC: [u8; 8] = *b"DCLTSRC1";
 /// Canonical window-specification magic.
 pub const WINDOW_SPEC_MAGIC: [u8; 8] = *b"DCLTWIN1";
+/// Byte coordinate of a window preimage's closed lower time bound.
+///
+/// Named because a reader outside this crate needs it. The whole window a
+/// market settles on lives in this record, and the browser that has to say
+/// *when a market settles* could reach the record and not its interior: the
+/// two bounds were bare `48` and `56` inside `decode`/`to_bytes`, so any other
+/// consumer had to restate them in its own words, which is exactly the mirror
+/// `abi-coverage` refuses. `apps/dclutch-web/scripts/generate-core-found.mjs`
+/// emits these two and the browser derives its settlement time from them.
+pub const WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1: usize = 48;
+/// Byte coordinate of a window preimage's closed upper time bound.
+pub const WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1: usize = 56;
 /// Canonical statistic-specification magic.
 pub const STATISTIC_SPEC_MAGIC: [u8; 8] = *b"DCLTSTA1";
 /// Canonical resolution-policy magic.
@@ -1121,8 +1133,8 @@ impl WindowSpecV1 {
         Self::new(
             content(bytes, 16)?,
             WindowKind::decode(one(bytes, 10)?)?,
-            i64::from_le_bytes(read_array(bytes, 48)?),
-            i64::from_le_bytes(read_array(bytes, 56)?),
+            i64::from_le_bytes(read_array(bytes, WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1)?),
+            i64::from_le_bytes(read_array(bytes, WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1)?),
             u32::from_le_bytes(read_array(bytes, 64)?),
             u32::from_le_bytes(read_array(bytes, 68)?),
             content(bytes, 72)?,
@@ -1138,8 +1150,16 @@ impl WindowSpecV1 {
         let mut out = base::<WINDOW_SPEC_BYTES>(WINDOW_SPEC_MAGIC);
         put(&mut out, 10, &[self.kind.byte()]);
         put(&mut out, 16, self.source_spec_id.as_bytes());
-        put(&mut out, 48, &self.start_unix_seconds.to_le_bytes());
-        put(&mut out, 56, &self.end_unix_seconds.to_le_bytes());
+        put(
+            &mut out,
+            WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1,
+            &self.start_unix_seconds.to_le_bytes(),
+        );
+        put(
+            &mut out,
+            WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
+            &self.end_unix_seconds.to_le_bytes(),
+        );
         put(&mut out, 64, &self.max_age_seconds.to_le_bytes());
         put(&mut out, 68, &self.max_future_skew_seconds.to_le_bytes());
         put(&mut out, 72, self.schedule_id.as_bytes());

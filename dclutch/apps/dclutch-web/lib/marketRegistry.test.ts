@@ -22,7 +22,7 @@ describe('the shipped devnet market registry', () => {
     expect(MARKET_REGISTRY_V1.provenance).toContain('read from the chain');
   });
 
-  it('names the two markets that finished founding on public devnet', () => {
+  it('names the markets that finished founding on public devnet', () => {
     const flagship = MARKET_REGISTRY_V1.markets['7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC'];
     expect(flagship).toBeDefined();
     expect(flagship.title).toBe('SOL/USD range — first public market');
@@ -51,28 +51,36 @@ describe('the shipped devnet market registry', () => {
   /**
    * The market the front door headlines. Its entry is the one place a reader
    * meets a tradeable market in this site's own words, so it has to promise
-   * exactly what happened and nothing that has not: a trade is possible, and
-   * no trade has been made.
+   * exactly what happened and nothing that has not.
+   *
+   * It is also the row that proves the registry stopped being the only author.
+   * It names a TITLE, a COORDINATE and a story -- three things the chain has no
+   * word for -- and deliberately no question and no outcome list, because those
+   * restate boundaries the market's own result-domain record carries and were
+   * exactly what went stale on every market above it.
    */
-  it('names the market the public cut headlines, and does not pretend it has traded', () => {
-    const open = MARKET_REGISTRY_V1.markets['6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4'];
+  it('names the market the public cut headlines, and leaves the derivable fields to the chain', () => {
+    const open = MARKET_REGISTRY_V1.markets['EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1'];
     expect(open).toBeDefined();
-    expect(open.title).toContain('open for trading');
-    expect(open.outcomes).toHaveLength(4);
+    expect(open.title).toContain('SOL/USD');
+    expect(open.coordinate).toEqual({ label: 'SOL/USD', unitPrefix: '$' });
+    expect(open.question).toBeNull();
+    expect(open.outcomes).toBeNull();
     expect(open.resolution).toContain('Pyth');
-    // Renegotiated 2026-08-31: "No trade has been made on it yet" is a chain
-    // fact the card already prints, and one that rots. The story now carries
-    // the two things the chain does NOT say: the fee and what the collateral
-    // is worth.
-    expect(open.story).toContain('No fee');
-    expect(open.story).toContain('devnet test token');
+    expect(open.resolution).toContain('source-failure outcome');
+    // The two things the chain does NOT say and a reader acts on: the rate,
+    // and that the boundaries were measured rather than inherited.
+    expect(open.story).toContain('50 basis points');
+    expect(open.story).toContain('measured');
   });
 
   it('keeps every entry inside the editorial charter: no numbers-in-words drift', () => {
     for (const [address, entry] of Object.entries(MARKET_REGISTRY_V1.markets)) {
       // Titles and questions are prose, not data: they may never carry a raw
       // atom count or a slot number that would rot against the chain.
-      for (const text of [entry.title, entry.question, ...(entry.outcomes ?? []), entry.story ?? '']) {
+      const texts = [entry.title, entry.question, entry.coordinate?.label, ...(entry.outcomes ?? []), entry.story]
+        .filter((text): text is string => text !== null && text !== undefined);
+      for (const text of texts) {
         expect(text, `${address} editorial text carries a slot-sized number`).not.toMatch(/\d{9,}/);
       }
     }
@@ -112,5 +120,16 @@ describe('the shipped devnet market registry', () => {
       schema: 'dclutch-market-registry-v1', cluster: 'devnet', provenance: 'x',
       markets: { '7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC': { title: 't', question: 'q', outcomes: [] } },
     })).toThrow('non-empty array');
+    // Every field is optional now, so the one shape that must still refuse is
+    // a row that says nothing at all: it would be a market this file claims to
+    // know and then has no word for, which is worse than no row.
+    expect(() => parseMarketRegistryV1({
+      schema: 'dclutch-market-registry-v1', cluster: 'devnet', provenance: 'x',
+      markets: { '7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC': {} },
+    })).toThrow('says nothing');
+    expect(() => parseMarketRegistryV1({
+      schema: 'dclutch-market-registry-v1', cluster: 'devnet', provenance: 'x',
+      markets: { '7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC': { coordinate: { label: 'SOL/USD', bogus: 1 } } },
+    })).toThrow('coordinate has an unknown field');
   });
 });

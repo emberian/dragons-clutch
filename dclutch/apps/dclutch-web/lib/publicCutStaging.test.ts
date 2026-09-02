@@ -20,21 +20,21 @@ describe('public devnet cut staging', () => {
     expect(publicCutMarketHrefV1(pending)).toBe('/markets');
     expect(publicCutExplorerHrefV1(pending)).toBe('/explorer');
     // The published cut itself: the market this deployment can actually
-    // trade, and the founding transaction that created its Market record.
+    // read and join today.
     //
     // Pinned ONCE and reused. It used to be pinned twice, and when the cut
     // moved to the measured-volatility market the fixture changed and only
     // the fixture did -- so the literal below and the href literal beside it
     // disagreed with the shipped fixture and with each other.
-    const MARKET = '8Xky2yx3wBmDRXeNfKSuJigqiWDtwSvGvB75BSW6tPxK';
+    const MARKET = 'EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1';
     expect(PUBLIC_DEVNET_CUT_V1.market).toBe(MARKET);
-    expect(PUBLIC_DEVNET_CUT_V1.activity.found).not.toBeNull();
-    // It has now TRADED: the first public fill this protocol ever landed,
-    // slot 490,907,340. Resolve and redeem are still genuinely null, and the
-    // ladder says so rather than borrowing a signature from another step.
-    expect(PUBLIC_DEVNET_CUT_V1.activity.trade).toBe(
-      '4YQLY9tsRRVnxMJBcHdjGFZ6mVGY7nynjhnpUYyQX7EaSm9RufDrKit5GYqah88qcnHwtAzwaEBdFL4brcBRzPzX',
-    );
+    // Every lifecycle signature is null, and that is the honest state rather
+    // than an oversight: cohort-12's Found rides an address lookup table, so
+    // the chain cannot be asked for it by the Market's address, and no fill
+    // has executed on this cohort. A signature appears here when one has been
+    // read back, never because a step is expected to have happened.
+    expect(PUBLIC_DEVNET_CUT_V1.activity.found).toBeNull();
+    expect(PUBLIC_DEVNET_CUT_V1.activity.trade).toBeNull();
     expect(PUBLIC_DEVNET_CUT_V1.activity.resolve).toBeNull();
     expect(PUBLIC_DEVNET_CUT_V1.activity.redeem).toBeNull();
     // The featured market is registry-named, so its permalink is the exported

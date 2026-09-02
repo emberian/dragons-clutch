@@ -179,9 +179,18 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">{redemption ? 'Redeem · your connected wallet, exactly what it holds' : 'Portfolio · what one wallet holds'}</p>
-        <h1>{redemption ? <>Your winning claims.<br /><em>Payout is not open yet.</em></> : <>Everything one wallet<br /><em>holds here.</em></>}</h1>
+        {/*
+          "Payout is not open yet" was false from the moment redemption
+          shipped: the whole path -- terminal input, payout, replay account --
+          runs in this browser and needs no file from anybody. What is true is
+          narrower and is a fact about the MARKETS rather than about this page:
+          none has reached an answer, so there is nothing to redeem yet. The
+          two were being said as one sentence, and the false half was the half
+          that told a reader not to come back.
+        */}
+        <h1>{redemption ? <>Your winning claims.<br /><em>Nothing has resolved yet.</em></> : <>Everything one wallet<br /><em>holds here.</em></>}</h1>
         <p>{redemption
-          ? <>Connect your wallet to find every claim it holds. Paying winning claims out is not available yet: when a market resolves and you hold the winning side, this is where you will do it.</>
+          ? <>Connect your wallet to find every claim it holds. Redeeming runs right here, in this browser, with no file and no operator: no market on this deployment has reached an answer yet, so there is nothing to pay out — when one does and you hold the winning side, this is where you do it.</>
           : <>Paste an address, or connect a wallet, to see what claims it holds in every market on this deployment.</>}</p>
       </div>
       <aside>
