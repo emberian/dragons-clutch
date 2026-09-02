@@ -11,6 +11,7 @@ export const derive_source_provider_submit_pyth_release_v1: (a: number, b: numbe
 export const derive_source_provider_submit_pyth_v1: (a: number, b: number) => [number, number, number, number];
 export const plan_source_provider_reclaim_v1: (a: number, b: number) => [number, number, number, number];
 export const plan_source_provider_submit_v1: (a: number, b: number) => [number, number, number, number];
+export const read_source_provider_price_update_v1: (a: number, b: number) => [number, number, number, number];
 export const verify_source_provider_submit_poststate_v1: (a: number, b: number) => [number, number, number, number];
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;

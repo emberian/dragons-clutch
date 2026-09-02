@@ -60,6 +60,8 @@ try {
     `export const SOURCE_PROVIDER_SUBMIT_RECORD_FORMAT_V1 = '${rustString(owner, 'SUBMIT_RECORD_FORMAT_V1')}' as const;\n`+
     `export const SOURCE_PROVIDER_SUBMIT_PYTH_INPUT_FORMAT_V1 = '${rustString(owner, 'SUBMIT_PYTH_INPUT_FORMAT_V1')}' as const;\n`+
     `export const SOURCE_PROVIDER_SUBMIT_PYTH_FORMAT_V1 = '${rustString(owner, 'SUBMIT_PYTH_FORMAT_V1')}' as const;\n`+
+    `export const SOURCE_PROVIDER_PRICE_INPUT_FORMAT_V1 = '${rustString(owner, 'PRICE_INPUT_FORMAT_V1')}' as const;\n`+
+    `export const SOURCE_PROVIDER_PRICE_FORMAT_V1 = '${rustString(owner, 'PRICE_FORMAT_V1')}' as const;\n`+
     `export const SOURCE_PROVIDER_SUBMIT_FRESH_INPUT_FORMAT_V1 = '${rustString(owner, 'SUBMIT_FRESH_INPUT_FORMAT_V1')}' as const;\n`+
     `export const SOURCE_PROVIDER_SUBMIT_FRESH_FORMAT_V1 = '${rustString(owner, 'SUBMIT_FRESH_FORMAT_V1')}' as const;\n`+
     `export const SOURCE_PROVIDER_SUBMIT_INPUT_FORMAT_V1 = '${rustString(owner, 'SUBMIT_INPUT_FORMAT_V1')}' as const;\n`+

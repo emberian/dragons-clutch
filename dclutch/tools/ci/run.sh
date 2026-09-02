@@ -1573,17 +1573,15 @@ tier_release() {
   # -- red where nothing looks, the same shape as a tier that does not exist.
   #
   # Each is invoked with cwd = its OWN directory and the repo root on
-  # PYTHONPATH, because these suites do not share one import convention:
-  # `test_dryplan.py` does a sibling `import dryplan` and needs its directory,
-  # while `test_rehearsal.py` does `from tools.release...` and needs the repo
-  # root. Running them all one way reports a false red on the other half, which
-  # is a defect this runner has already paid for once today.
+  # PYTHONPATH, because these suites do not share one import convention: some do
+  # a sibling `import`, while `test_rehearsal.py` does `from tools.release...`
+  # and needs the repo root. Running them all one way reports a false red on the
+  # other half, which is a defect this runner has already paid for once today.
   local py_suites=(
     private-validator-lifecycle/test_preflight.py
     private-validator-lifecycle/test_chaos.py
     private_validator_upgrade/test_rehearsal.py
     devnet-flight/test_devnet_flight.py
-    devnet_upgrade_dryplan/test_dryplan.py
     lifecycle-chaos/test_lifecycle_chaos.py
     test_usage_parity.py
   )

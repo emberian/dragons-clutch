@@ -52,6 +52,11 @@ export function plan_source_provider_reclaim_v1(source: string): string;
 export function plan_source_provider_submit_v1(source: string): string;
 
 /**
+ * Read one sponsored `PriceUpdateV2` account through the Source family's own decoder.
+ */
+export function read_source_provider_price_update_v1(source: string): string;
+
+/**
  * Reauthenticate the lifecycle and Receiver update created by a submission.
  */
 export function verify_source_provider_submit_poststate_v1(source: string): string;
@@ -70,6 +75,7 @@ export interface InitOutput {
     readonly derive_source_provider_submit_pyth_v1: (a: number, b: number) => [number, number, number, number];
     readonly plan_source_provider_reclaim_v1: (a: number, b: number) => [number, number, number, number];
     readonly plan_source_provider_submit_v1: (a: number, b: number) => [number, number, number, number];
+    readonly read_source_provider_price_update_v1: (a: number, b: number) => [number, number, number, number];
     readonly verify_source_provider_submit_poststate_v1: (a: number, b: number) => [number, number, number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

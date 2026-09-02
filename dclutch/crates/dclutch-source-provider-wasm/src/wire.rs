@@ -33,6 +33,8 @@ pub(crate) const COORDINATES_INPUT_FORMAT_V1: &str =
     "dclutch-source-provider-reclaim-coordinates-input-v1";
 pub(crate) const COORDINATES_FORMAT_V1: &str = "dclutch-source-provider-reclaim-coordinates-v1";
 pub(crate) const PROGRAM_INPUT_FORMAT_V1: &str = "dclutch-source-provider-program-input-v1";
+pub(crate) const PRICE_INPUT_FORMAT_V1: &str = "dclutch-source-provider-price-input-v1";
+pub(crate) const PRICE_FORMAT_V1: &str = "dclutch-source-provider-price-v1";
 pub(crate) const PROGRAM_FORMAT_V1: &str = "dclutch-source-provider-program-v1";
 pub(crate) const SUBMIT_BASE_INPUT_FORMAT_V1: &str = "dclutch-source-provider-submit-base-input-v1";
 pub(crate) const SUBMIT_BASE_FORMAT_V1: &str = "dclutch-source-provider-submit-base-v1";
@@ -1253,4 +1255,71 @@ mod tests {
             .expect("incomplete poststate");
         assert!(incomplete.contains("\"complete\":false"));
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PriceInputWireV1 {
+    format: String,
+    receiver_program: String,
+    price_update: AccountWireV1,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PriceOutputV1 {
+    format: &'static str,
+    address: String,
+    feed_id: String,
+    price: String,
+    confidence: String,
+    exponent: i32,
+    publish_time: String,
+    posted_slot: String,
+}
+
+/// Read one sponsored `PriceUpdateV2` account, exactly as the Source family does.
+///
+/// THE DEFECT THIS CLOSES. The founding wizard's band was centred on a typed
+/// number -- 15,000 ticks, a $150 SOL, three months stale while SOL traded near
+/// $100 -- because the browser had no way to read a price and the only
+/// alternative was to restate Pyth's account layout in TypeScript. That layout
+/// already has one owner in this tree, `dclutch_pyth_svm::FullPriceUpdateV2`,
+/// and it is the same decoder the resolution path grades against. So the wizard
+/// reads the feed through this boundary rather than growing a second reader,
+/// and the number it centres on is the one the founding will resolve against.
+///
+/// The owner is checked against the receiver program the caller names, so a
+/// well-formed account belonging to something else is refused rather than
+/// decoded: a 134-byte account with the right discriminator is not a price
+/// unless the program that maintains it says so.
+pub fn read_sponsored_price_update_json_v1(source: &[u8]) -> Result<String, String> {
+    let value = bounded_exact_json(source)?;
+    let wire: PriceInputWireV1 = serde_json::from_value(value)
+        .map_err(|error| format!("Source provider price schema: {error}"))?;
+    if wire.format != PRICE_INPUT_FORMAT_V1 {
+        return Err("Source provider price input has another format".to_owned());
+    }
+    let receiver = exact_key(&wire.receiver_program, "receiver program")?;
+    let address = exact_key(&wire.price_update.address, "price update")?;
+    if exact_key(&wire.price_update.owner, "price update owner")? != receiver {
+        return Err("Source provider price update is not owned by the named receiver program".to_owned());
+    }
+    if wire.price_update.executable {
+        return Err("Source provider price update is executable".to_owned());
+    }
+    let data = exact_base64(&wire.price_update.data_base64, "price update data")?;
+    let update = dclutch_pyth_svm::FullPriceUpdateV2::parse(&data)
+        .map_err(|error| format!("Source provider price update: {error:?}"))?;
+    serde_json::to_string(&PriceOutputV1 {
+        format: PRICE_FORMAT_V1,
+        address: address.to_string(),
+        feed_id: update.feed_id().iter().map(|byte| format!("{byte:02x}")).collect(),
+        price: update.price().to_string(),
+        confidence: update.confidence().to_string(),
+        exponent: update.exponent(),
+        publish_time: update.publish_time().to_string(),
+        posted_slot: update.posted_slot().to_string(),
+    })
+    .map_err(|error| format!("Source provider price output: {error}"))
 }

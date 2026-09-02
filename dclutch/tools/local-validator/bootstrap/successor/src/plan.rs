@@ -1679,6 +1679,53 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
             ))
         })?;
     }
+    // A genesis cohort supplies its semantic release ids on the command line,
+    // and the checked-upgrade path derives them. If those two can disagree, a
+    // cohort founds under one identity and seals under another -- which is
+    // exactly what stranded cohort-12, and it cost a market. So the supplied id
+    // is checked against the one this role's own artifact derives, and a
+    // hand-computed or stale value refuses BY NAME with both.
+    //
+    // Trading and Resolution are deliberately absent: their semantics are owned
+    // by a contract rather than by an artifact, and each already has a check
+    // that names its own accusation more sharply than this one could -- see
+    // `RESOLUTION_CONTROLLER_RELEASE_ID_V7` below, which says a retired
+    // controller version was selected rather than merely that two digests
+    // differ. Adding them here would shadow the specific refusal with a generic
+    // one, which is the `map_err(|_| Coarse)` mistake wearing a validator's
+    // clothes.
+    for (role, supplied, artifact) in [
+        (
+            "registry",
+            &args.registry_semantic_release_id,
+            &args.registry_sha256,
+        ),
+        ("core", &args.core_semantic_release_id, &args.core_sha256),
+        (
+            "claims",
+            &args.claims_semantic_release_id,
+            &args.claims_sha256,
+        ),
+        (
+            "custody",
+            &args.custody_semantic_release_id,
+            &args.custody_sha256,
+        ),
+        (
+            "rent",
+            &args.rent_credit_semantic_release_id,
+            &args.rent_credit_sha256,
+        ),
+    ] {
+        let derived = crate::upgrade::checked_semantic_release_id(role, artifact)?;
+        if *supplied != derived {
+            return Err(Error::new(format!(
+                "{role} semantic release ID is {supplied}; its artifact {artifact} derives \
+                 {derived}. A supplied id that differs from the artifact's founds a cohort under \
+                 one release-set identity and seals it under another"
+            )));
+        }
+    }
     for (label, input) in [
         ("Registry", &args.deployments.registry),
         ("Core", &args.deployments.core),
@@ -2244,6 +2291,18 @@ mod tests {
         let (custody_elf, custody_sha256) = write_test_elf(&root, "dclutch_custody_sbf.so", 6);
         let (rent_credit_elf, rent_credit_sha256) = write_test_elf(&root, "dclutch_rent_sbf.so", 7);
         let program = |tag| Pubkey::new_from_array([tag; 32]);
+        // Derived, not invented: a supplied semantic id that disagrees with its
+        // own artifact is what founds a cohort under one release-set identity
+        // and seals it under another, and `validate_prepare` now refuses it.
+        let semantic = |role: &str, artifact: &str| {
+            crate::upgrade::checked_semantic_release_id(role, artifact).expect("semantic id")
+        };
+        let registry_semantic = semantic("registry", &registry_sha256);
+        let core_semantic = semantic("core", &core_sha256);
+        let claims_semantic = semantic("claims", &claims_sha256);
+        let trading_semantic = semantic("trading", &trading_sha256);
+        let custody_semantic = semantic("custody", &custody_sha256);
+        let rent_semantic = semantic("rent", &rent_credit_sha256);
         let plan = prepare(PrepareArgs {
             observed_upgrade_authority: None,
             account_dir: root.join("accounts"),
@@ -2251,20 +2310,20 @@ mod tests {
             registry_program: program(1),
             registry_elf,
             registry_sha256,
-            registry_semantic_release_id: hex(&[11; 32]),
+            registry_semantic_release_id: registry_semantic.clone(),
             core_program: program(2),
             core_elf,
             core_sha256,
-            core_semantic_release_id: hex(&[12; 32]),
+            core_semantic_release_id: core_semantic.clone(),
             core_bootstrap_upgrade_authority: program(8),
             claims_program: program(3),
             claims_elf,
             claims_sha256,
-            claims_semantic_release_id: hex(&[13; 32]),
+            claims_semantic_release_id: claims_semantic.clone(),
             trading_program: program(4),
             trading_elf,
             trading_sha256,
-            trading_semantic_release_id: hex(&[14; 32]),
+            trading_semantic_release_id: trading_semantic.clone(),
             resolution_program: program(5),
             resolution_elf,
             resolution_sha256,
@@ -2272,11 +2331,11 @@ mod tests {
             custody_program: program(6),
             custody_elf,
             custody_sha256,
-            custody_semantic_release_id: hex(&[16; 32]),
+            custody_semantic_release_id: custody_semantic.clone(),
             rent_credit_program: program(7),
             rent_credit_elf,
             rent_credit_sha256,
-            rent_credit_semantic_release_id: hex(&[17; 32]),
+            rent_credit_semantic_release_id: rent_semantic.clone(),
             checked_upgrade_set: None,
             record_publication: publication,
             deployments,

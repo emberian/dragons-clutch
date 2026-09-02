@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "11932b7424090ad16f2c34c8aa5544508399bfcc",
+  "commit": "d6c9a7b147b7a22f095d8ab270cc4204312972a3",
   "link_count": 12,
   "links": [
     {
@@ -4926,7 +4926,7 @@
       "package": "dclutch-rent-sbf"
     },
     {
-      "frame_count": 169,
+      "frame_count": 170,
       "functions": [
         {
           "frames_bytes": [
@@ -5178,9 +5178,15 @@
         },
         {
           "frames_bytes": [
-            4032
+            3200
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect36process_direct_funding_activation_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2240
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect40authenticate_direct_material_and_funding17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -9722,7 +9728,7 @@
         },
         {
           "frames_bytes": [
-            256
+            320
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v324ChildInvocationBuffersV314capture_return17h<hash>E"
         },
@@ -10167,7 +10173,7 @@
         },
         {
           "frames_bytes": [
-            1024
+            1088
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v337authenticate_accelerator_artifacts_v417h<hash>E"
         },
@@ -10215,7 +10221,7 @@
         },
         {
           "frames_bytes": [
-            3648
+            3904
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v338authenticate_accelerator_invocation_v417h<hash>E"
         },

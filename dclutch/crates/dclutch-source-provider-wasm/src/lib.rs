@@ -16,13 +16,20 @@ pub use wire::{
     derive_provider_submit_material_json_v1, derive_provider_submit_provider_release_json_v1,
     derive_provider_submit_pyth_json_v1, derive_provider_submit_pyth_release_json_v1,
     plan_provider_reclaim_json_v1, plan_provider_submit_json_v1,
-    verify_provider_submit_poststate_json_v1,
+    read_sponsored_price_update_json_v1, verify_provider_submit_poststate_json_v1,
 };
 
 /// Plan one exact permissionless provider reclaim from finalized chain state.
 #[wasm_bindgen]
 pub fn plan_source_provider_reclaim_v1(source: &str) -> Result<String, JsValue> {
     plan_provider_reclaim_json_v1(source.as_bytes()).map_err(|error| JsValue::from_str(&error))
+}
+
+/// Read one sponsored `PriceUpdateV2` account through the Source family's own decoder.
+#[wasm_bindgen]
+pub fn read_source_provider_price_update_v1(source: &str) -> Result<String, JsValue> {
+    read_sponsored_price_update_json_v1(source.as_bytes())
+        .map_err(|error| JsValue::from_str(&error))
 }
 
 /// Derive the complete reclaim routing hints from one lifecycle account.

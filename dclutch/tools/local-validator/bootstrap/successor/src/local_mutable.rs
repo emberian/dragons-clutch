@@ -129,7 +129,7 @@ pub(crate) fn build_checked_local_mutable_set_v1(
                 ));
             }
         }
-        let expected_semantic = checked_semantic_release_id(role, &gate.source_revision)?;
+        let expected_semantic = checked_semantic_release_id(role, &validated.raw_elf_sha256)?;
         let expected_slot = u64::try_from(ordinal)
             .ok()
             .and_then(|value| value.checked_add(1))
@@ -274,7 +274,7 @@ fn build_local_checked_release_v1(
             "checked local {role} reconstructed ProgramData differs from its exact plan evidence"
         )));
     }
-    let semantic_preimage = local_semantic_release_preimage_v1(role, source_revision)?;
+    let semantic_preimage = local_semantic_release_preimage_v1(role, &validated.raw_elf_sha256)?;
     if hex(&Sha256::digest(&semantic_preimage)) != pin.semantic_release_id {
         return Err(Error::new(format!(
             "checked local {role} semantic preimage differs from the plan's protocol owner"
@@ -472,35 +472,12 @@ pub(crate) fn checked_execution_release_set_bytes_v1(
     )
 }
 
-fn local_semantic_release_preimage_v1(role: &str, source_revision: &str) -> Result<Vec<u8>> {
-    let preimage = match role {
-        "core" => source_semantic_release_preimage_v1(
-            SourceSemanticRoleV1::Core,
-            source_revision.as_bytes(),
-        )
-        .map_err(|_| Error::new("Core semantic source revision is not canonical"))?
-        .to_vec(),
-        "claims" => source_semantic_release_preimage_v1(
-            SourceSemanticRoleV1::Claims,
-            source_revision.as_bytes(),
-        )
-        .map_err(|_| Error::new("Claims semantic source revision is not canonical"))?
-        .to_vec(),
-        "custody" => source_semantic_release_preimage_v1(
-            SourceSemanticRoleV1::Custody,
-            source_revision.as_bytes(),
-        )
-        .map_err(|_| Error::new("Custody semantic source revision is not canonical"))?
-        .to_vec(),
-        "trading" => DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1.to_vec(),
-        "resolution" => RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7.to_vec(),
-        _ => {
-            return Err(Error::new(format!(
-                "role {role:?} is not an execution semantic owner"
-            )));
-        }
-    };
-    Ok(preimage)
+/// The loopback substrate derives its semantic ids through the SAME owner as
+/// devnet. It used to keep a parallel copy that hashed the source revision, and
+/// a parallel copy of an identity rule is how two substrates come to disagree
+/// about what a release is.
+fn local_semantic_release_preimage_v1(role: &str, shipped_elf_sha256: &str) -> Result<Vec<u8>> {
+    crate::upgrade::checked_semantic_release_preimage_v1(role, shipped_elf_sha256)
 }
 
 fn checked_build_command_v1(role: &str, build_mode: LocalMutableBuildModeV1) -> Result<String> {
@@ -1327,7 +1304,7 @@ fn prepare_local_mutable_parsed_v1(
             *program,
             elf.clone(),
             sha256.clone(),
-            checked_semantic_release_id(role, &gate.source_revision)?,
+            checked_semantic_release_id(role, &sha256)?,
         ))
     };
     let (registry_program, registry_elf, registry_sha256, registry_semantic_release_id) =

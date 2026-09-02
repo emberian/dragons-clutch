@@ -3145,6 +3145,31 @@ fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (Progr
     fixture_with_basis(terminal, receipt_roles, ProductBasisProfileV1::Categorical)
 }
 
+/// The same resolved fixture, on a bank where the TRADING ROLE IS TRADING.
+///
+/// `fixture` activates the rational-v2 TEST CALLER in the Trading role, because
+/// the representation route drives that caller as a Trading-role caller and its
+/// signing PDA is derived under it (`caller_authority_for_digest`). That is
+/// sound for the route it serves and it is a release set no cohort has -- the
+/// three-hats substitution `5dc77408` removed from the Resolution campaign.
+///
+/// A wallet payout is `CallerRole::Claims` and never enters the Trading role
+/// (`signed_delta_v3.rs`: the Trading projection is requested only when
+/// `caller_coordinate` is `Caller`), so it can be proved on the release set a
+/// cohort actually runs. Nothing is re-pinned to get there: the release-set id
+/// moves, and with it the Market, the aggregate, the Position, the Hoard, the
+/// Custody replay and the certificate -- every one of which this harness
+/// DERIVES. The one thing that would have gone red is a pin to a document, and
+/// the payout has none.
+fn fixture_with_real_trading_role(terminal: TerminalV1) -> (ProgramTest, Fixture) {
+    fixture_with_basis_and_trading(
+        terminal,
+        ReceiptMintRoles::Both,
+        ProductBasisProfileV1::Categorical,
+        Some(trading_artifact()),
+    )
+}
+
 fn fixture_with_basis(
     terminal: TerminalV1,
     receipt_roles: ReceiptMintRoles,
@@ -8083,8 +8108,38 @@ async fn a_degree_two_curve_pays_the_cumulative_floor_partition_on_real_elfs() {
 /// canonical Position PDA's second seed.
 #[tokio::test]
 async fn a_wallet_held_position_is_paid_from_the_resolved_markets_hoard() {
-    let (test, fixture) = fixture(true);
+    // The Trading role is the real Trading program here. See
+    // `fixture_with_real_trading_role`: this is the campaign's one payout on a
+    // release set shaped like a cohort's, and it is the payout the browser's
+    // live redemption drives.
+    let (test, fixture) = fixture_with_real_trading_role(TerminalV1::Provider);
     let mut context = test.start_with_context().await;
+
+    // The bank's own activation says which program the Trading role is, and it
+    // is asserted rather than assumed: a fixture swap that quietly kept the
+    // test caller in that slot would prove exactly nothing, and this campaign's
+    // other forty-six cases still run on the caller-as-Trading release set.
+    // Read from the ACCOUNT the chain will authenticate against, not from the
+    // constructor that wrote it.
+    let activated = ActivatedExecutionReleaseSetV1::decode(
+        &observed(&mut context, fixture.activation_cache).await.data,
+    )
+    .expect("the Registry-owned activation cache");
+    assert_eq!(
+        activated
+            .role(ExecutionRoleV1::Trading)
+            .release()
+            .program()
+            .to_bytes(),
+        TRADING_PROGRAM_ID.to_bytes(),
+        "this payout must execute on a bank whose Trading role is the real Trading program",
+    );
+    assert_ne!(
+        fixture.release_set,
+        activation_cache(&artifacts()).0,
+        "the real Trading role must move the release-set id off the test caller's",
+    );
+
     create_claims_custody_replay(&mut context, &fixture).await;
     let (table, addresses) = wallet_payout_lookup_table(
         &mut context,

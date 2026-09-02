@@ -40,7 +40,7 @@ use crate::{
 };
 
 const PUBLIC_DEVNET_ENDPOINT: &str = "https://api.devnet.solana.com";
-const CARRY_FORWARD_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v1";
+const CARRY_FORWARD_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v2";
 const PREPARE_BUNDLE_SCHEMA: &str = "dclutch-prepare-programdata-capture-v1";
 const PREPARE_BUNDLE_DOMAIN: &[u8] = b"dclutch/prepare-programdata-capture/v1\n";
 const PREPARE_MANIFEST_FILE: &str = "manifest.json";
@@ -125,7 +125,20 @@ struct CarryForwardSnapshotV1 {
     commitment: String,
     rpc_method: String,
     context_slot: u64,
+    /// The Rent sysvar THIS context quoted, so a later offline re-validation
+    /// judges these balances against the rate the cluster actually charged them
+    /// rather than against `Rent::default()`. The snapshot is the only carrier
+    /// that can: the re-validator has no cluster in reach.
+    rent: CarryForwardRentV1,
     accounts: Vec<CarryForwardSnapshotAccountV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CarryForwardRentV1 {
+    lamports_per_byte_year: u64,
+    exemption_threshold: String,
+    burn_percent: u8,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -738,8 +751,21 @@ fn authenticate_carry_forward_snapshot(
         commitment: "finalized".into(),
         rpc_method: "getMultipleAccounts".into(),
         context_slot,
+        rent: carry_forward_rent_v1(rent),
         accounts: rows,
     })
+}
+
+/// The live rate, recorded exactly. `exemption_threshold` is an `f64` in the
+/// sysvar and is written as its shortest round-tripping decimal rather than a
+/// float: the offline re-validator must reproduce this number, not approximate
+/// it, and JSON floats are not a shape to bet an identity on.
+fn carry_forward_rent_v1(rent: &Rent) -> CarryForwardRentV1 {
+    CarryForwardRentV1 {
+        lamports_per_byte_year: rent.lamports_per_byte_year,
+        exemption_threshold: format!("{:?}", rent.exemption_threshold),
+        burn_percent: rent.burn_percent,
+    }
 }
 
 fn authenticate_prepare_programdata(
@@ -1266,7 +1292,7 @@ fn write_prepare_bundle_atomic(
     Ok(())
 }
 
-fn write_json_atomic_new<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_json_atomic_new<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::new("capture output omitted a parent"))?;

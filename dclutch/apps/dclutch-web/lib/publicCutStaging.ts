@@ -124,3 +124,74 @@ export function publicCutTransactionHrefV1(step: PublicCutActivityStepV1, cut = 
 export function checkedReleaseSetIdsV1(cut = PUBLIC_DEVNET_CUT_V1): ReadonlyArray<string> | null {
   return cut.market === null ? null : Object.freeze(Object.keys(cut.checkedReleases));
 }
+
+/**
+ * One sealing driver's own output, ingested verbatim.
+ *
+ * The cut's `checkedReleases` rows are NOT typed by a person. A hand-copied
+ * 64-hex triple is the mirror this whole surface exists to delete: nothing
+ * downstream can tell a mistyped digest from a real one, and the row would be
+ * exactly as authoritative either way. So the sealing driver emits this
+ * fragment and the staging tool ingests it, unchanged.
+ */
+export type CheckedReleaseFragmentV1 = Readonly<{
+  schema: 'dclutch-checked-release-fragment-v1';
+  releaseSetId: string;
+  gateDigest: string;
+  sealedSet: string;
+}>;
+
+const FRAGMENT_SCHEMA = 'dclutch-checked-release-fragment-v1';
+
+/** Parse a sealing driver's fragment, refusing any shape it does not know. */
+export function parseCheckedReleaseFragmentV1(value: unknown): CheckedReleaseFragmentV1 {
+  const root = object(value, 'checked release fragment');
+  exactKeys(root, ['schema', 'releaseSetId', 'gateDigest', 'sealedSet'], 'checked release fragment');
+  if (root.schema !== FRAGMENT_SCHEMA) throw new Error('checked release fragment has another schema');
+  return Object.freeze({
+    schema: FRAGMENT_SCHEMA,
+    releaseSetId: digest(root.releaseSetId, 'checked release fragment releaseSetId'),
+    gateDigest: digest(root.gateDigest, 'checked release fragment gateDigest'),
+    sealedSet: digest(root.sealedSet, 'checked release fragment sealedSet'),
+  });
+}
+
+/**
+ * Stage one fragment into a cut, or refuse it by name.
+ *
+ * THE REFUSAL IS THE POINT. A fragment is about one execution release set, and
+ * the only set that means anything to this cut is the one its own Market
+ * selects -- read off the chain, which is why it arrives as an argument rather
+ * than being taken on the fragment's word. A fragment for any other set is a
+ * fragment for another deployment, and staging it would put a row in this
+ * site's deployment record that turns the trade spine's `release` wall off for
+ * a market the release was never checked against. That is the exact shape of
+ * the failure the wall exists to prevent, arriving through the door meant to
+ * fix it, so it refuses and names both sets.
+ *
+ * Returns a NEW cut. Nothing here writes a file: the caller re-serializes and
+ * replaces the fixture atomically, as every other generator in this tree does.
+ */
+export function stageCheckedReleaseV1(
+  cut: PublicDevnetCutV1,
+  fragment: CheckedReleaseFragmentV1,
+  marketReleaseSetId: string,
+): PublicDevnetCutV1 {
+  if (cut.market === null) {
+    throw new Error('a pending public cut names no Market, so no checked release can be about it');
+  }
+  const selected = digest(marketReleaseSetId, 'Market execution release set');
+  if (fragment.releaseSetId !== selected) {
+    throw new Error(
+      `this checked release fragment is for execution release set ${fragment.releaseSetId}, and the cut's Market ${cut.market} selects ${selected}`,
+    );
+  }
+  const existing = cut.checkedReleases[selected] ?? null;
+  if (existing !== null && (existing.gateDigest !== fragment.gateDigest || existing.sealedSet !== fragment.sealedSet)) {
+    throw new Error(`this cut already names a different checked release for execution release set ${selected}`);
+  }
+  return Object.freeze({
+    ...cut,
+    checkedReleases: Object.freeze({ ...cut.checkedReleases, [selected]: Object.freeze({ gateDigest: fragment.gateDigest, sealedSet: fragment.sealedSet }) }),
+  });
+}

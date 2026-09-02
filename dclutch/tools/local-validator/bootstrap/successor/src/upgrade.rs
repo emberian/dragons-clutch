@@ -37,7 +37,9 @@ use dclutch_release_set_contract::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
     SourceSemanticRoleV1, source_semantic_release_preimage_v1,
 };
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
+use dclutch_resolution_codec::{
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
@@ -77,10 +79,17 @@ const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
 const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v3";
 const SET_JOURNAL_SCHEMA: &str = "dclutch-devnet-deployment-set-journal-v3";
 const SET_AUDIT_SCHEMA: &str = "dclutch-devnet-deployment-set-audit-v3";
-const CARRY_FORWARD_SNAPSHOT_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v1";
+const CARRY_FORWARD_SNAPSHOT_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v2";
 pub(crate) const CHECKED_SET_PREPARE_SCHEMA: &str = "dclutch-checked-deployment-set-release-pin-v2";
+/// What the semantic release ids in a checked pin are derived FROM.
+///
+/// Bumped 2026-09-02 with the derivation itself (decision 0012, second
+/// amendment). The v1 string named `source-semantic-release-v1`, which hashed
+/// the GIT REVISION; every consumer already compares this field, so a pin minted
+/// under the old derivation is now refused by name instead of silently mixing
+/// two identity schemes in one release set.
 pub(crate) const SEMANTIC_DERIVATION_V1: &str =
-    "source-semantic-release-v1+compiled-direct-release-v1+resolution-controller-release-v6";
+    "artifact-semantic-release-v2+compiled-direct-release-v1+resolution-controller-release-v7";
 const TARGET_ACK_FLAG: &str = "--i-accept-upgrade";
 const EXCLUSIVE_PAYER_ACK_FLAG: &str = "--i-kept-fee-payer-exclusive";
 const OPERATION_ACCOUNTING_SCOPE_V1: &str = "exclusive-payer-window-observed-net-v1";
@@ -453,7 +462,44 @@ struct CarryForwardSnapshotV1 {
     commitment: String,
     rpc_method: String,
     context_slot: u64,
+    rent: CarryForwardRentV1,
     accounts: Vec<CarryForwardSnapshotAccountV1>,
+}
+
+/// The Rent sysvar the snapshot's own finalized context quoted.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CarryForwardRentV1 {
+    lamports_per_byte_year: u64,
+    exemption_threshold: String,
+    burn_percent: u8,
+}
+
+impl CarryForwardRentV1 {
+    /// The carried rate, re-parsed rather than trusted.
+    ///
+    /// A snapshot is untrusted input: a zero rate or a non-positive threshold
+    /// would make every account in it "rent exempt", which is the one direction
+    /// this check must never be talked into.
+    fn rent(&self) -> Result<Rent> {
+        let exemption_threshold: f64 = self.exemption_threshold.parse().map_err(|_| {
+            Error::new("carry-forward snapshot Rent exemption threshold is not a number")
+        })?;
+        if self.lamports_per_byte_year == 0
+            || !exemption_threshold.is_finite()
+            || exemption_threshold <= 0.0
+            || self.burn_percent > 100
+        {
+            return Err(Error::new(
+                "carry-forward snapshot quotes a zero Rent rate, a non-positive exemption threshold, or an impossible burn",
+            ));
+        }
+        Ok(Rent {
+            lamports_per_byte_year: self.lamports_per_byte_year,
+            exemption_threshold,
+            burn_percent: self.burn_percent,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3227,7 +3273,10 @@ fn exact_account_sha256(account: &RpcAccountV1) -> String {
     hex(&hasher.finalize())
 }
 
-fn decode_snapshot_account(row: &CarryForwardSnapshotAccountV1) -> Result<Option<RpcAccountV1>> {
+fn decode_snapshot_account(
+    row: &CarryForwardSnapshotAccountV1,
+    rent: &Rent,
+) -> Result<Option<RpcAccountV1>> {
     let Some(account) = &row.account else {
         return Ok(None);
     };
@@ -3256,10 +3305,19 @@ fn decode_snapshot_account(row: &CarryForwardSnapshotAccountV1) -> Result<Option
         rent_epoch: account.rent_epoch,
         data,
     };
-    if decoded.lamports < Rent::default().minimum_balance(decoded.data.len()) {
+    // Judged against the rate THIS snapshot's context quoted, not against
+    // `Rent::default()`. The producer records it because the re-validator has no
+    // cluster in reach, and the genesis constant is neither the cluster's rate
+    // nor a conservative stand-in for it: devnet's is lower, so the default
+    // refused seven genuinely exempt accounts, and a cluster whose rate were
+    // higher would have had non-exempt accounts admitted.
+    let minimum = rent.minimum_balance(decoded.data.len());
+    if decoded.lamports < minimum {
         return Err(Error::new(format!(
-            "carry-forward {} account is not rent exempt",
-            row.role
+            "carry-forward {} account holds {} lamports over {} bytes; the rate this snapshot's context quoted requires {minimum}",
+            row.role,
+            decoded.lamports,
+            decoded.data.len()
         )));
     }
     Ok(Some(decoded))
@@ -3307,6 +3365,7 @@ fn authenticate_carry_forward(
             "carry-forward snapshot schema, endpoint, finality, RPC method, or context slot is invalid",
         ));
     }
+    let snapshot_rent = snapshot.rent.rent()?;
     let expected_labels = [
         "registry_program",
         "registry_programdata",
@@ -3342,7 +3401,7 @@ fn authenticate_carry_forward(
     let accounts = snapshot
         .accounts
         .iter()
-        .map(decode_snapshot_account)
+        .map(|row| decode_snapshot_account(row, &snapshot_rent))
         .collect::<Result<Vec<_>>>()?;
     let required = |index: usize, label: &str| {
         accounts[index]
@@ -3772,16 +3831,44 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
-pub(crate) fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
-    let fixed = match role {
-        "trading" => Some(COMPILED_DIRECT_RELEASE_ID_V1),
-        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
-        _ => None,
-    };
-    if let Some(release_id) = fixed {
-        return Ok(hex(&release_id));
+/// The Direct compiled-controller semantic preimage, code-owned by Trading.
+pub(crate) const DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/release/direct-compiled-controller-v1";
+
+/// The domain a role's artifact-derived semantic release preimage is built under.
+const ARTIFACT_SEMANTIC_RELEASE_DOMAIN_V2: &[u8] =
+    b"dclutch/checked-semantic-release/artifact/v2\n";
+
+/// The preimage of one role's semantic release id, derived from WHAT THE ID
+/// IDENTIFIES.
+///
+/// **Decision 0012, second amendment, 2026-09-02.** This used to hash the GIT
+/// REVISION for Registry, Rent, Custody, Claims and Core, while Trading and
+/// Resolution carried code-owned constants. That made every release-TOOLING
+/// commit a protocol-identity event for five roles whose program bytes had not
+/// moved: `e39efbb0` and `96a3b04e` have byte-identical Custody, Claims and Core
+/// sources -- their diff is `tools/` and `docs/` -- and minted different semantic
+/// ids, therefore a different release set, therefore a different activation,
+/// therefore a different market. It stranded cohort-12's founded market with two
+/// doors shut by one fact from opposite sides, and no commit could repair it,
+/// because no commit but `e39efbb0` has `e39efbb0`'s sha.
+///
+/// A revision is not what a release IS. So: a role with a code-owned semantic
+/// constant uses it, and a role without one uses the ordinary shipped-ELF digest
+/// the candidate already computes for it. Two commits whose program sources are
+/// byte-identical now mint one id, and a commit that really does change a
+/// program's bytes still mints a new one -- which is the property the revision
+/// hash was reaching for and missing.
+pub(crate) fn checked_semantic_release_preimage_v1(
+    role: &str,
+    shipped_elf_sha256: &str,
+) -> Result<Vec<u8>> {
+    match role {
+        "trading" => return Ok(DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1.to_vec()),
+        "resolution" => return Ok(RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7.to_vec()),
+        _ => {}
     }
-    let source_role = match role {
+    let label = match role {
         "registry" => SourceSemanticRoleV1::Registry,
         "core" => SourceSemanticRoleV1::Core,
         "claims" => SourceSemanticRoleV1::Claims,
@@ -3792,10 +3879,28 @@ pub(crate) fn checked_semantic_release_id(role: &str, source_revision: &str) -> 
                 "role {role:?} has no protocol-owned semantic release identity"
             )));
         }
-    };
-    let preimage = source_semantic_release_preimage_v1(source_role, source_revision.as_bytes())
-        .map_err(|_| Error::new("source semantic release revision is not canonical"))?;
-    Ok(digest(&preimage))
+    }
+    .label();
+    // The digest is re-parsed rather than trusted as text: a short, upper-case
+    // or non-hex artifact digest would otherwise produce a well-formed id for a
+    // malformed artifact.
+    require_digest(shipped_elf_sha256, &format!("{role} shipped ELF SHA-256"))?;
+    let mut preimage = Vec::with_capacity(
+        ARTIFACT_SEMANTIC_RELEASE_DOMAIN_V2.len() + label.len() + 1 + shipped_elf_sha256.len(),
+    );
+    preimage.extend_from_slice(ARTIFACT_SEMANTIC_RELEASE_DOMAIN_V2);
+    preimage.extend_from_slice(label.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(shipped_elf_sha256.as_bytes());
+    Ok(preimage)
+}
+
+/// One role's semantic release id: the digest of its preimage above.
+pub(crate) fn checked_semantic_release_id(role: &str, shipped_elf_sha256: &str) -> Result<String> {
+    Ok(digest(&checked_semantic_release_preimage_v1(
+        role,
+        shipped_elf_sha256,
+    )?))
 }
 
 /// Authenticate the canonical mixed deployment set for checked prepare. The
@@ -3892,7 +3997,7 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
                 dump_path: role.dump.canonical_path.clone(),
                 dump_sha256,
                 checked_candidate_elf_path: fs::canonicalize(&elf_path)?.display().to_string(),
-                checked_candidate_elf_sha256: admission.gate.raw_elf_sha256,
+                checked_candidate_elf_sha256: admission.gate.raw_elf_sha256.clone(),
                 live_elf_sha256: admission.live_elf_sha256,
                 deployment_slot: admission.baseline.observation.deployment_slot,
                 programdata_account_sha256: admission
@@ -3902,7 +4007,7 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
                     .clone(),
                 semantic_release_id: checked_semantic_release_id(
                     &role.role,
-                    &journal.source_revision,
+                    &admission.gate.raw_elf_sha256,
                 )?,
                 artifact_release_body_hex: None,
                 artifact_release_id: None,
@@ -4028,11 +4133,14 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             dump_path: role.dump.canonical_path.clone(),
             dump_sha256,
             checked_candidate_elf_path: fs::canonicalize(&elf_path)?.display().to_string(),
-            checked_candidate_elf_sha256: admission.gate.raw_elf_sha256,
+            checked_candidate_elf_sha256: admission.gate.raw_elf_sha256.clone(),
             live_elf_sha256: admission.live_elf_sha256,
             deployment_slot: after.deployment_slot,
             programdata_account_sha256: after.programdata_account_sha256.clone(),
-            semantic_release_id: checked_semantic_release_id(&role.role, &journal.source_revision)?,
+            semantic_release_id: checked_semantic_release_id(
+                &role.role,
+                &admission.gate.raw_elf_sha256,
+            )?,
             artifact_release_body_hex: None,
             artifact_release_id: None,
             carried_programdata_base64: None,
@@ -11685,6 +11793,11 @@ mod tests {
                 Some(profile_account.clone()),
             ];
             let snapshot = CarryForwardSnapshotV1 {
+                rent: CarryForwardRentV1 {
+                    lamports_per_byte_year: Rent::default().lamports_per_byte_year,
+                    exemption_threshold: format!("{:?}", Rent::default().exemption_threshold),
+                    burn_percent: Rent::default().burn_percent,
+                },
                 schema: CARRY_FORWARD_SNAPSHOT_SCHEMA.into(),
                 endpoint: "https://api.devnet.solana.com".into(),
                 commitment: "finalized".into(),
@@ -11797,6 +11910,140 @@ mod tests {
             account.data_sha256 = digest(bytes);
             self.rewrite_snapshot();
         }
+    }
+
+    /// Decision 0012's SECOND amendment: a release's semantic identity is
+    /// derived from what it identifies, so two commits whose program sources are
+    /// byte-identical mint one release set.
+    ///
+    /// This is the defect that stranded cohort-12's founded market. `e39efbb0`
+    /// and `96a3b04e` differ only in `tools/` and `docs/`; under the old
+    /// derivation their Custody, Claims and Core semantic ids differed, so the
+    /// release set differed, so the activation differed, so the market founded
+    /// under one could never be filled under the other -- and no commit could
+    /// repair it, because no commit but `e39efbb0` has `e39efbb0`'s sha.
+    #[test]
+    fn semantic_release_ids_are_derived_from_the_artifact_not_the_commit() {
+        // Two real revisions whose diff is tools/ and docs/ only.
+        const E39: &str = "e39efbb0b31afeb7a03b10a71b6e2e5d6da0e040";
+        const A96: &str = "96a3b04e3e19fe6f5729b021d7058632700ce26d";
+        // Cohort-12's real shipped ELF digests -- identical at both revisions,
+        // which is the premise the seal branch was cut on and verified by build.
+        const SHIPPED: [(&str, &str); 7] = [
+            (
+                "registry",
+                "ed70f8bda12b77d663126218ad05f36dd77c5bf3100642879cef1441a845afe7",
+            ),
+            (
+                "rent",
+                "d46e5f0a64fd7d5e296118c2e7a62a3b67aed2c2ac4420e85069fb8dca632837",
+            ),
+            (
+                "custody",
+                "2823c82351638566e295d7f7acc2e559ab61b3ea43750759e84f73bc0f80d567",
+            ),
+            (
+                "resolution",
+                "307bc81c604f1a3c52a0dc5ff1b66b094f12faf6be8f8d66b7d337e08c8873e0",
+            ),
+            (
+                "claims",
+                "268d527e600706b9062921e0a35f0ea2ba13f5bc7790a4351b6b7f0fff5e910f",
+            ),
+            (
+                "trading",
+                "b0cff55ab0ef162d7e427b8cb894f1468b1804d997ab35c52710df3268a8e3ed",
+            ),
+            (
+                "core",
+                "9ef7df559565effb780db6b26bf9fd3c89cefb2b86ae5205d37c688d1a5ea58b",
+            ),
+        ];
+
+        // The revision is no longer an input at all, so the equality below is
+        // structural rather than coincidental -- but state it as the property a
+        // reader cares about: same bytes, one id, whatever the commit was called.
+        for (role, elf) in SHIPPED {
+            let id = checked_semantic_release_id(role, elf).expect("semantic id");
+            assert_eq!(id.len(), 64);
+            assert_eq!(
+                digest(&checked_semantic_release_preimage_v1(role, elf).expect("preimage")),
+                id,
+                "{role}: the id must be the digest of its own preimage"
+            );
+        }
+        assert_ne!(E39, A96);
+
+        // The two code-owned roles are unchanged by this amendment and remain
+        // independent of the artifact: their semantics live in a contract, and a
+        // recompilation is not a new controller.
+        assert_eq!(
+            checked_semantic_release_id("trading", SHIPPED[5].1).expect("trading"),
+            hex(&COMPILED_DIRECT_RELEASE_ID_V1)
+        );
+        assert_eq!(
+            checked_semantic_release_id("resolution", SHIPPED[3].1).expect("resolution"),
+            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V7)
+        );
+        // …and they are therefore INDIFFERENT to the artifact digest, which is
+        // the one place this derivation deliberately does not look at bytes.
+        assert_eq!(
+            checked_semantic_release_id("trading", SHIPPED[0].1).expect("trading"),
+            hex(&COMPILED_DIRECT_RELEASE_ID_V1)
+        );
+
+        // The five artifact-derived roles move when, and only when, their bytes
+        // move. This is the half the old derivation got wrong in both
+        // directions: it moved on a tools/ commit, and it would NOT have moved
+        // had someone rebuilt different bytes at the same revision.
+        for (role, elf) in [SHIPPED[0], SHIPPED[1], SHIPPED[2], SHIPPED[4], SHIPPED[6]] {
+            let mine = checked_semantic_release_id(role, elf).expect("id");
+            let other_bytes = checked_semantic_release_id(
+                role,
+                "0000000000000000000000000000000000000000000000000000000000000001",
+            )
+            .expect("id");
+            assert_ne!(mine, other_bytes, "{role} must move when its bytes move");
+            // And two roles never share an id even at identical bytes: the role
+            // label is inside the preimage.
+            for (other_role, _) in [SHIPPED[0], SHIPPED[1], SHIPPED[2], SHIPPED[4], SHIPPED[6]] {
+                if other_role != role {
+                    assert_ne!(
+                        mine,
+                        checked_semantic_release_id(other_role, elf).expect("id"),
+                        "{role} and {other_role} must not collide at one artifact"
+                    );
+                }
+            }
+        }
+
+        // A malformed artifact digest does not produce a well-formed identity.
+        for bad in [
+            "",
+            "ed70f8bd",
+            "ED70F8BDA12B77D663126218AD05F36DD77C5BF3100642879CEF1441A845AFE7",
+            "zz70f8bda12b77d663126218ad05f36dd77c5bf3100642879cef1441a845afe7g",
+            E39,
+        ] {
+            assert!(
+                checked_semantic_release_id("custody", bad).is_err(),
+                "a malformed artifact digest must refuse, not mint: {bad:?}"
+            );
+        }
+        // Including, pointedly, a git revision: the old input is now refused by
+        // shape, so a caller that forgets to convert cannot silently mint the
+        // identity this amendment exists to retire.
+        assert!(
+            checked_semantic_release_id("core", A96)
+                .expect_err("a 40-hex revision is not a 64-hex artifact digest")
+                .to_string()
+                .contains("shipped ELF SHA-256")
+        );
+
+        // The disclosure moved with the rule, so a pin minted under the old
+        // derivation is refused by name rather than mixed into one release set.
+        assert!(SEMANTIC_DERIVATION_V1.starts_with("artifact-semantic-release-v2"));
+        assert!(!SEMANTIC_DERIVATION_V1.contains("source-semantic-release-v1"));
     }
 
     /// Decision 0012's amendment: the seven-role target set is an authenticated
@@ -12357,11 +12604,29 @@ mod tests {
             .expect("raw")
             .lamports = 0;
         rent.rewrite_snapshot();
+        // The refusal is judged against the rate the SNAPSHOT carried, not
+        // `Rent::default()`, and it states both numbers -- a threshold refusal
+        // that will not say what it wanted is a search rather than a finding.
+        let refusal = authenticate_carry_forward(&rent.journal)
+            .expect_err("raw rent")
+            .to_string();
         assert!(
-            authenticate_carry_forward(&rent.journal)
-                .expect_err("raw rent")
+            refusal.contains("holds 0 lamports")
+                && refusal.contains("the rate this snapshot's context quoted requires"),
+            "{refusal}"
+        );
+
+        // And the carried rate is itself untrusted input: a zero rate would make
+        // every account in the snapshot exempt, which is the one direction this
+        // check must never be talked into.
+        let mut zero_rate = MixedSetFixture::new(0);
+        zero_rate.snapshot.rent.lamports_per_byte_year = 0;
+        zero_rate.rewrite_snapshot();
+        assert!(
+            authenticate_carry_forward(&zero_rate.journal)
+                .expect_err("zero rate")
                 .to_string()
-                .contains("not rent exempt")
+                .contains("zero Rent rate")
         );
 
         let mut staging = MixedSetFixture::new(0);

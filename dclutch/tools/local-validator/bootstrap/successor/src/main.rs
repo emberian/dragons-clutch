@@ -1678,6 +1678,28 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     };
     let path = args.plan_path.clone();
     let prepared = plan::prepare(args)?;
+    // The public cut's `checkedReleases` row, emitted verbatim so nobody types
+    // it. The browser will not compute a release-set id, a gate digest or a
+    // sealed-set digest, and a hand-typed row is a mirror: the moment it drifts
+    // the site says a market is fillable that is not, or the reverse. The map is
+    // keyed exactly as `publicCutStaging.ts` keys it, with exactly the two
+    // fields it admits, so the cut splices this object in without rewriting it.
+    // An unsealed plan emits an EMPTY map rather than no key -- "none are
+    // sealed" is an answer, and an absent key is a question.
+    let cut_fragment = serde_json::json!({
+        "schema": "dclutch-public-cut-checked-releases-fragment-v1",
+        "checkedReleases": match prepared.checked_upgrade_set.as_ref() {
+            Some(set) => serde_json::json!({
+                prepared.release_set_id.clone(): {
+                    "gateDigest": set.checked_release_gate_sha256.clone(),
+                    "sealedSet": set.final_set_sha256.clone(),
+                }
+            }),
+            None => serde_json::json!({}),
+        },
+    });
+    let fragment_path = PathBuf::from(format!("{}.checked-releases.json", path.display()));
+    crate::release_capture::write_json_atomic_new(&fragment_path, &cut_fragment)?;
     let summary = serde_json::json!({
         "schema": "dclutch-local-successor-prepare-result-v1",
         "plan": path,
@@ -1693,6 +1715,8 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             .as_ref()
             .map(|set| set.final_set_sha256.as_str()),
         "genesis_account_count": prepared.genesis_accounts.len(),
+        "release_set_id": prepared.release_set_id,
+        "public_cut_checked_releases_fragment": fragment_path.display().to_string(),
     });
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&summary)?)?;

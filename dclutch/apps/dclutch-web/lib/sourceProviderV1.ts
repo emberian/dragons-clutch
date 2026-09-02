@@ -29,6 +29,8 @@ import {
   SOURCE_PROVIDER_SUBMIT_RECORD_FORMAT_V1,
   SOURCE_PROVIDER_SUBMIT_RECORD_INPUT_FORMAT_V1,
   SOURCE_PROVIDER_WASM_BYTES_V1,
+  SOURCE_PROVIDER_PRICE_FORMAT_V1,
+  SOURCE_PROVIDER_PRICE_INPUT_FORMAT_V1,
   SOURCE_PROVIDER_WASM_SHA256_V1,
 } from './generated/sourceProviderWasmV1';
 import type {
@@ -50,6 +52,7 @@ export type SourceProviderWasmV1 = Readonly<{
   derive_source_provider_submit_provider_release_v1(source: string): string;
   derive_source_provider_submit_pyth_release_v1(source: string): string;
   derive_source_provider_submit_pyth_v1(source: string): string;
+  read_source_provider_price_update_v1(source: string): string;
   derive_source_provider_submit_fresh_v1(source: string): string;
   plan_source_provider_submit_v1(source: string): string;
   verify_source_provider_submit_poststate_v1(source: string): string;
@@ -464,6 +467,7 @@ export async function loadSourceProviderWasmV1(
     derive_source_provider_submit_provider_release_v1: wasmModule.derive_source_provider_submit_provider_release_v1,
     derive_source_provider_submit_pyth_release_v1: wasmModule.derive_source_provider_submit_pyth_release_v1,
     derive_source_provider_submit_pyth_v1: wasmModule.derive_source_provider_submit_pyth_v1,
+    read_source_provider_price_update_v1: wasmModule.read_source_provider_price_update_v1,
     derive_source_provider_submit_fresh_v1: wasmModule.derive_source_provider_submit_fresh_v1,
     plan_source_provider_submit_v1: wasmModule.plan_source_provider_submit_v1,
     verify_source_provider_submit_poststate_v1: wasmModule.verify_source_provider_submit_poststate_v1,
@@ -797,5 +801,78 @@ export async function sourceProviderReclaimPoststateCompletesV1(
       && account.lamports === expected.lamports
       && account.executable === expected.executable
       && bytesBase64(account.data) === expected.dataBase64;
+  });
+}
+
+/**
+ * One sponsored price, read through the Source family's own decoder.
+ *
+ * Exact by construction and float-free: `price` and `exponent` are carried as
+ * the account states them, and `decimal` is the two divided in integers. A
+ * spot of 10003917148 at exponent -8 is the string `100.03917148` and never a
+ * double that is nearly that.
+ */
+export type SponsoredPriceV1 = Readonly<{
+  address: string;
+  feedId: string;
+  price: bigint;
+  confidence: bigint;
+  exponent: number;
+  publishTimeUnixSeconds: bigint;
+  postedSlot: string;
+  /** The price as an exact decimal string, sign included. */
+  decimal: string;
+}>;
+
+/** Format a scaled integer exactly, without touching floating point. */
+function exactDecimalV1(value: bigint, exponent: number): string {
+  if (exponent >= 0) return (value * 10n ** BigInt(exponent)).toString();
+  const scale = 10n ** BigInt(-exponent);
+  const negative = value < 0n;
+  const magnitude = negative ? -value : value;
+  const whole = magnitude / scale;
+  const fraction = (magnitude % scale).toString().padStart(-exponent, '0').replace(/0+$/, '');
+  return `${negative ? '-' : ''}${whole}${fraction === '' ? '' : `.${fraction}`}`;
+}
+
+/**
+ * Read one sponsored `PriceUpdateV2` account.
+ *
+ * The receiver program is REQUIRED and is checked inside the WASM: a 134-byte
+ * account carrying the right discriminator is not a price unless the program
+ * that maintains it says so, and a browser that decoded one anyway would be
+ * reading a shape rather than a fact.
+ */
+export async function readSponsoredPriceV1(
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  request: Readonly<{ priceUpdateAddress: string; receiverProgram: string }>,
+  /** The transport that fetches the WASM. Node has no `fetch` for a file URL. */
+  transport?: typeof fetch,
+): Promise<SponsoredPriceV1> {
+  const wasm = await loadSourceProviderWasmV1(transport);
+  const floor = await client.finalizedSlot();
+  const observation = await client.multipleAccounts([request.priceUpdateAddress], floor);
+  const account = observation.accounts[0]?.account ?? null;
+  if (account === null) throw new Error(`no sponsored price update exists at ${request.priceUpdateAddress}`);
+  const raw = object(parseJson(wasm.read_source_provider_price_update_v1(JSON.stringify({
+    format: SOURCE_PROVIDER_PRICE_INPUT_FORMAT_V1,
+    receiverProgram: key(request.receiverProgram, 'Receiver program'),
+    priceUpdate: accountJson(request.priceUpdateAddress, account),
+  })), 'Source provider price'), [
+    'address', 'confidence', 'exponent', 'feedId', 'format', 'postedSlot', 'price', 'publishTime',
+  ], 'Source provider price');
+  if (raw.format !== SOURCE_PROVIDER_PRICE_FORMAT_V1) throw new Error('Source provider price has another format');
+  const exponent = Number(raw.exponent);
+  if (!Number.isSafeInteger(exponent)) throw new Error('Source provider price exponent is not a whole number');
+  const price = BigInt(String(raw.price));
+  return Object.freeze({
+    address: key(raw.address, 'price update'),
+    feedId: String(raw.feedId),
+    price,
+    confidence: BigInt(String(raw.confidence)),
+    exponent,
+    publishTimeUnixSeconds: BigInt(String(raw.publishTime)),
+    postedSlot: String(raw.postedSlot),
+    decimal: exactDecimalV1(price, exponent),
   });
 }

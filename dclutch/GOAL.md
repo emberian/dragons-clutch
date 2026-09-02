@@ -3141,3 +3141,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   emit the SDK table); /markets derives every card's question in two observations for the page. Next: /create reads the
   price through the source-provider wasm; the cut ingests cohort-13's checked-release fragment.
 - Cuts: `8cace5baa`.
+
+### Lane map delta — 2026-09-02 22:15
+- DIRECT successor closed (~730k) → **`aff206e2fee82d0ec`**. `d6c9a7b1`: the rational campaign's Trading role is the real
+  Trading program for the wallet payout (asserted by decoding the activation cache out of the bank; **356,395 CU on both
+  banks**, the Custody CPI +4,500 = three PDA bands — "a wallet payout does not enter the Trading role" is a number now);
+  `61bffa34`: frameguard rows carried for three lanes' commits (5 rows over 1,885, every growth explained by its own commit's
+  message); tightest frame now `authenticate_accelerator_invocation_v4` at 3,904 → DEALER told. Successor: the root founded
+  through ActivateCapability + `ProviderCallerV3::Trading` on real ELFs (never run); the forwarding wall for the other 46 cases.
+- Cuts: `cec798cbb`.

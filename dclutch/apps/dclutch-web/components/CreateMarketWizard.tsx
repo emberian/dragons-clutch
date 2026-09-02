@@ -51,6 +51,7 @@ import {
   resolutionDeadlineV1,
 } from '@/lib/founding/windowCadence';
 import { inspectMarketDetailV1 } from '@/lib/marketDetail';
+import { readSponsoredPriceV1 } from '@/lib/sourceProviderV1';
 import { inspectMarketQuestionV1 } from '@/lib/marketQuestion';
 import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient } from '@/lib/rpc';
@@ -145,6 +146,21 @@ export default function CreateMarketWizard() {
   // The coordinate at founding, in the band's own ticks. Not a display value:
   // it is the one input that decides whether this partition is a question.
   const [foundingObservation, setFoundingObservation] = useState('');
+  /*
+   * THE OBSERVATION BECOMES A PRICE.
+   *
+   * The band's centre was a typed number, then (as of the derived prefill) the
+   * midpoint of the last opened market's band -- a shape to replace, and said
+   * to be one. Neither is a price. The Source family already owns a
+   * `PriceUpdateV2` decoder and already compiles to WASM for this browser, so
+   * the wizard reads the feed its market will resolve against through that
+   * boundary rather than growing a second Pyth reader in TypeScript: the
+   * number it centres on is the one the founding will grade against, and it
+   * arrives with the publish time and posted slot that say how old it is.
+   */
+  const [priceUpdateAddress, setPriceUpdateAddress] = useState('');
+  const [priceReceiverProgram, setPriceReceiverProgram] = useState('');
+  const [priceReading, setPriceReading] = useState('No feed has been read. The band below is a shape, not a price.');
   const [bandProvenance, setBandProvenance] = useState(() => PUBLIC_DEVNET_CUT_V1.market === null
     ? 'This deployment has no open market to read a band from. Enter a band centred on what your Source reports today.'
     : 'Reading the band of the market this deployment last opened…');
@@ -241,6 +257,39 @@ export default function CreateMarketWizard() {
     })();
     return () => { live = false; };
   }, [deployment]);
+
+  /**
+   * Read the selected feed and centre the band on it.
+   *
+   * Exact integers throughout: ticks are `price * denominator / 10^-exponent`
+   * taken in BigInt, so a spot of 10003917148 at exponent -8 over a
+   * denominator of 100 is 10003 ticks and never a rounded double. The band
+   * keeps the WIDTH the author already chose and moves its centre, because the
+   * width is a judgement about volatility and the centre is a fact.
+   */
+  async function readTheFeed(): Promise<void> {
+    setPriceReading('Reading the sponsored price update at finalized commitment…');
+    try {
+      const denominator = bigintOrNull(cutDenominator);
+      if (denominator === null || denominator <= 0n) throw new Error('set the cut denominator first: a price is only ticks once it has one');
+      const price = await readSponsoredPriceV1(new SolanaRpcClient(endpoint), {
+        priceUpdateAddress, receiverProgram: priceReceiverProgram,
+      });
+      if (price.exponent > 0) throw new Error('this feed publishes a positive exponent, which this wizard does not convert');
+      const ticks = (price.price * denominator) / 10n ** BigInt(-price.exponent);
+      const low = bigintOrNull(lowerEdge);
+      const high = bigintOrNull(upperEdge);
+      setFoundingObservation(ticks.toString());
+      if (low !== null && high !== null && high > low) {
+        const half = (high - low) / 2n;
+        setLowerEdge((ticks - half).toString());
+        setUpperEdge((ticks + half).toString());
+      }
+      setPriceReading(`${price.decimal} at exponent ${price.exponent}, confidence ${price.confidence.toString()} — published at unix ${price.publishTimeUnixSeconds.toString()}, posted at slot ${price.postedSlot}. That is ${ticks.toString()} ticks at this denominator, and the band above keeps its width and moves its centre onto it.`);
+    } catch (error) {
+      setPriceReading(`Refused: ${reason(error)}. The observation is unchanged.`);
+    }
+  }
 
   const product = useMemo(() => {
     const denominator = bigintOrNull(cutDenominator);
@@ -449,6 +498,15 @@ export default function CreateMarketWizard() {
         <label><span>Founding observation · ticks</span><input inputMode="numeric" value={foundingObservation} onChange={(event) => setFoundingObservation(event.target.value)} /><small className="feed-forward">What this market&rsquo;s Source reports for the coordinate today, in the same ticks as the band. The Source returns raw provider atoms and rescales nothing, so this is where a band in the wrong units becomes visible.</small></label>
       </div>
       <p className="direct-status">{bandProvenance}</p>
+      <fieldset className="direct-form-grid">
+        <legend>Read the price this market will resolve against</legend>
+        <label><span>Sponsored price update account</span><input value={priceUpdateAddress} onChange={(event) => setPriceUpdateAddress(event.target.value.trim())} spellCheck={false} /></label>
+        <label><span>Receiver program that maintains it</span><input value={priceReceiverProgram} onChange={(event) => setPriceReceiverProgram(event.target.value.trim())} spellCheck={false} /><small className="feed-forward">Checked inside the Source family&rsquo;s own decoder: a 134-byte account with the right discriminator is not a price unless the program that maintains it says so.</small></label>
+      </fieldset>
+      <div className="direct-actions">
+        <button type="button" onClick={() => void readTheFeed()} disabled={priceUpdateAddress === '' || priceReceiverProgram === ''}>Read the feed and centre the band</button>
+      </div>
+      <p className="direct-status" aria-live="polite">{priceReading}</p>
       <fieldset className="direct-form-grid wizard-belief">
         <legend>What you believe the coordinate does</legend>
         <label><span>Volatility · basis points of spot over the window</span><input inputMode="numeric" value={volatilityBps} onChange={(event) => setVolatilityBps(event.target.value)} /><small className="feed-forward">A partition is not degenerate or interesting on its own — it is one or the other <em>relative to a belief</em> about where the coordinate goes. This is that belief, and the gate below is measured against it.</small></label>
