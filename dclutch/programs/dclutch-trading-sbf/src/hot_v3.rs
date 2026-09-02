@@ -3852,8 +3852,12 @@ fn execute_authenticated_hot_v3(
         )?;
     }
     hot_heap_mark!("runtime-data");
-    let tail_count = project_tail_count(account_profile, product_outcome_count)?;
-    require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
+    let projected_tail_count = project_tail_count(account_profile, product_outcome_count)?;
+    require_tail_count_agreement_v3(product_outcome_count, projected_tail_count)?;
+    // A profile that projects no tail count operates at width zero, which is
+    // what a fixed topology means. Every item span downstream is then empty,
+    // which is the correct geometry rather than a degenerate one.
+    let tail_count = projected_tail_count.unwrap_or(0);
     // Representatives are resolved before the observation bank because the
     // logical projection key of an aliased coordinate is its representative's,
     // not its own.
@@ -4561,6 +4565,15 @@ fn commit_prepared_hot_result_v3(
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
     )?;
+    // Between the two creates, because they were one bracket and both can
+    // refuse `Commit`. The commit phase returns a STATUS rather than erroring
+    // out of a `?`, so `after-commit` prints even on a refusal and the whole of
+    // `commit_prepared_hot_result_v3` reads as one step from outside. The first
+    // mark inside it was `lifecycle-creates`, AFTER both -- so a refusal in
+    // either was indistinguishable, and 0x4005 has 237 sites in this program.
+    // Splitting them costs one log line on a diagnostic build and turns
+    // twelve-or-twenty-one into twelve or twenty-one.
+    hot_heap_mark!("commit-lifecycle-creates");
     apply_funding_creates_v5(
         prepared.program_id,
         prepared.effect.funding(),
@@ -7992,14 +8005,38 @@ fn require_common_projection_bindings_v3(
     }
 }
 
+/// The product's outcome count and the profile's projected tail must agree --
+/// WHEN THE PROFILE PROJECTS ONE.
+///
+/// It used to demand `product_outcome_count == projected_tail_count` against a
+/// `projected_tail_count` that `project_tail_count` returned as `0` for any
+/// profile carrying no `OP_PROJECT_TAIL_COUNT_U32`. A market has at least two
+/// outcomes, so `2 != 0` and the conjunct was UNSATISFIABLE for every
+/// fixed-topology profile in the protocol -- the same shape as the registered
+/// creation family's two `require_key` conjuncts, which compared a real key
+/// against thirty-two zero bytes for as long as no route reached them.
+///
+/// Measured on real ELFs 2026-09-02: the Dealer equity Add refused `Content`
+/// 0x4003 at 585,279 CU with no CPI, `product_outcome_count=3` against
+/// `projected_tail_count=0`, because an equity Add is about LP shares in a pool
+/// and has no per-outcome tail to project.
+///
+/// Nothing is weakened. A profile that DOES project a tail is held to the same
+/// equality it always was, and a profile that does not is held to the only
+/// honest value there is -- it may not arrive carrying a width it never
+/// declared. The `< 2` floor is a fact about the MARKET and applies either way.
 fn require_tail_count_agreement_v3(
     product_outcome_count: u32,
-    projected_tail_count: u32,
+    projected_tail_count: Option<u32>,
 ) -> Result<(), ProgramError> {
-    if product_outcome_count < 2 || product_outcome_count != projected_tail_count {
-        Err(TradingSbfError::Content.into())
-    } else {
-        Ok(())
+    if product_outcome_count < 2 {
+        return Err(TradingSbfError::Content.into());
+    }
+    match projected_tail_count {
+        Some(projected) if projected != product_outcome_count => {
+            Err(TradingSbfError::Content.into())
+        }
+        Some(_) | None => Ok(()),
     }
 }
 
@@ -13206,18 +13243,26 @@ fn representative_coordinates_v3(
 /// before the projection reads anything. It was never load-bearing because the
 /// only consumer of the discovered value immediately required it to equal the
 /// authenticated Product outcome count anyway.
+/// The profile's tail count, and whether it has one AT ALL.
+///
+/// `None` is not "zero". It says the AccountProfile declares no
+/// `OP_PROJECT_TAIL_COUNT_U32`, which is a legitimate and common shape -- a
+/// fixed topology with no item accounts has no width to project and no business
+/// carrying one. Collapsing that to `0` is what made
+/// `require_tail_count_agreement_v3` unsatisfiable for every such profile; see
+/// the note there.
 fn project_tail_count(
     profile: AccountProfileV2<'_>,
     authenticated_product_tail_count: u32,
-) -> Result<u32, ProgramError> {
+) -> Result<Option<u32>, ProgramError> {
     if profile
         .tail_count_projection()
         .map_err(|_| TradingSbfError::Content)?
         .is_none()
     {
-        return Ok(0);
+        return Ok(None);
     }
-    Ok(authenticated_product_tail_count)
+    Ok(Some(authenticated_product_tail_count))
 }
 
 fn require_projected_tail_count_agreement_v3(
@@ -18360,11 +18405,30 @@ mod tests {
             ),
             Ok(())
         );
-        assert_eq!(require_tail_count_agreement_v3(7, 7), Ok(()));
+        assert_eq!(require_tail_count_agreement_v3(7, Some(7)), Ok(()));
         assert_eq!(
-            require_tail_count_agreement_v3(7, 6),
+            require_tail_count_agreement_v3(7, Some(6)),
             Err(TradingSbfError::Content.into())
         );
+        // A profile that projects NO tail count is not a profile projecting
+        // zero. This is the arm that was unsatisfiable: every fixed-topology
+        // profile in the protocol arrived here as `(outcomes, 0)` and refused.
+        assert_eq!(require_tail_count_agreement_v3(3, None), Ok(()));
+        assert_eq!(require_tail_count_agreement_v3(2, None), Ok(()));
+        // It is still held to the only honest value: a projection of zero from
+        // a profile that declares one is a width nobody wrote.
+        assert_eq!(
+            require_tail_count_agreement_v3(3, Some(0)),
+            Err(TradingSbfError::Content.into())
+        );
+        // And the market floor applies either way.
+        for projected in [None, Some(0), Some(1)] {
+            assert_eq!(
+                require_tail_count_agreement_v3(1, projected),
+                Err(TradingSbfError::Content.into()),
+                "a one-outcome market is not a market",
+            );
+        }
         let mut permissions = [AccountPermission::read_only(); 5];
         permissions[0] = AccountPermission::program_owned_mutable();
         assert_eq!(

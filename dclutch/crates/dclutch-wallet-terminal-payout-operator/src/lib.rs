@@ -26,6 +26,8 @@ use solana_program::pubkey::Pubkey;
 #[allow(missing_docs)]
 pub mod wire;
 
+pub mod snapshot_wire;
+
 /// One refusal, with the reason the derivation gave for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(String);

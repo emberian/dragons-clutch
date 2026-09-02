@@ -76,6 +76,7 @@ members = [
     "crates/dclutch-user-position-admission-contract",
     "crates/dclutch-user-position-admission-wasm",
     "crates/dclutch-wallet-terminal-input-operator",
+    "crates/dclutch-wallet-terminal-input-wasm",
     "crates/dclutch-wallet-terminal-payout-operator",
     "crates/dclutch-wallet-terminal-payout-wasm",
     "crates/dclutch-versioned-message-operator",

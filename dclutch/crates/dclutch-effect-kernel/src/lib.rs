@@ -16,6 +16,13 @@ pub mod v4;
 /// Funding-owned fixed-account lifecycle declarations over exact V4 effects.
 pub mod v5;
 
+/// Lean-owned DCE5 fixed coordinates, witnesses and hostile corpus.
+///
+/// `DClutchSemantics.EffectProgramV4Abi` authors every V4 constant and byte
+/// offset; `v4` derives its wire vocabulary from here rather than restating it.
+#[allow(dead_code, missing_docs)]
+mod generated_v4_abi;
+
 /// Canonical wire magic (`DCEF`).
 pub const MAGIC: [u8; 4] = *b"DCEF";
 /// Canonical Effect IR wire version.

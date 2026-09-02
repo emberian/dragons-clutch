@@ -99,6 +99,9 @@ use dclutch_source_contract::{
 };
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::{Account, AccountSharedData};
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table, freeze_lookup_table,
+};
 use solana_program::{
     clock::Clock,
     hash::hash,
@@ -112,7 +115,9 @@ use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 use solana_system_interface::instruction::transfer;
-use solana_transaction::{InstructionError, Transaction, TransactionError};
+use solana_transaction::{
+    InstructionError, Transaction, TransactionError, versioned::VersionedTransaction,
+};
 use spl_token_interface::state::Mint as SplMint;
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x71; 32]);
@@ -1465,6 +1470,260 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
     1 + signatures * 64 + message.len()
 }
 
+/// Solana's serialized transaction packet maximum.
+///
+/// Restated here because this harness resolves independently of the protocol
+/// workspace and cannot link `dclutch_versioned_message_operator`, which owns
+/// the constant: that crate pins `solana-hash =4.6.0` and
+/// `solana-address-lookup-table-interface =3.2.0` against this harness's
+/// `solana-message =4.4.1` and `=3.1.0`, and the two pin sets have no common
+/// solution.
+///
+/// `market_retirement_v1_lifecycle.rs`, which `include!`s this file, states the
+/// same number a third time as `SOLANA_PACKET_BYTES`. Retiring that one belongs
+/// with converting the retirement checkpoint chain and is not done here: the
+/// crate that binary needs (`dclutch-representation-composition-v3-kernel`) does
+/// not compile at this moment, five files dirty under another lane mid-rename of
+/// `generated_abi`, so an edit to that file could not be proved.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// Addresses per table-extension transaction, bounded so the extension itself
+/// stays a packet.
+const EXTEND_ADDRESSES_PER_TRANSACTION_V1: usize = 20;
+
+/// What one route costs on the wire, measured both ways.
+///
+/// A conversion that reports only the number it arrived at is not a
+/// measurement, it is an assertion: the reader cannot tell whether the route
+/// moved or the instrument did. Both extents are built from the SAME
+/// instruction bytes and the SAME account set, so the only difference between
+/// them is the envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PacketExtentV1 {
+    /// The signed legacy message: every address inline. This is the number the
+    /// route could not be submitted at.
+    legacy_bytes: usize,
+    /// The signed v0 message over the route's own derived frozen table.
+    v0_bytes: usize,
+    /// Addresses the v0 message still carries inline -- payer, program ids and
+    /// signers, which no table can move.
+    static_keys: usize,
+    /// Addresses the table resolved.
+    loaded_addresses: usize,
+}
+
+/// The addresses this route's table must carry, decided by the message compiler
+/// rather than by a filter written here.
+///
+/// Two classes of address can never be looked up -- an instruction's program id
+/// has to resolve before the tables load, and a signer is authenticated by its
+/// position in the static header -- and a campaign that states that rule in its
+/// own words acquires a second author for it. So this states nothing: it offers
+/// the compiler every address the route names and keeps the ones the compiler
+/// resolved through a table. A table entry the runtime declines to use is
+/// ignored in silence and costs permanent rent, which is exactly the failure a
+/// hand-written filter produces and nothing catches.
+///
+/// `dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1` is
+/// the same probe for the protocol workspace. This harness cannot link it (see
+/// `PACKET_DATA_BYTES` above); the two agree by construction rather than by
+/// discipline, because neither states the rule.
+fn route_lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
+    let mut candidates: Vec<Pubkey> = Vec::new();
+    for instruction in instructions {
+        for account in &instruction.accounts {
+            if !candidates.contains(&account.pubkey) {
+                candidates.push(account.pubkey);
+            }
+        }
+    }
+    let probe_key = Pubkey::new_from_array([0xff; 32]);
+    assert!(
+        !candidates.contains(&probe_key) && payer != probe_key,
+        "the probe table's key must not be one of the route's own coordinates"
+    );
+    let probe = solana_message::v0::Message::try_compile(
+        &payer,
+        instructions,
+        &[solana_message::AddressLookupTableAccount {
+            key: probe_key,
+            addresses: candidates.clone(),
+        }],
+        solana_sdk::hash::Hash::default(),
+    )
+    .expect("the route compiles as a message");
+    let mut eligible = Vec::new();
+    for lookup in &probe.address_table_lookups {
+        for index in lookup
+            .writable_indexes
+            .iter()
+            .chain(lookup.readonly_indexes.iter())
+        {
+            eligible.push(candidates[usize::from(*index)]);
+        }
+    }
+    eligible.sort_unstable_by_key(Pubkey::to_bytes);
+    eligible.dedup();
+    assert!(
+        !eligible.is_empty(),
+        "a route with nothing a table can carry does not need one"
+    );
+    eligible
+}
+
+/// Create, extend and FREEZE this route's own lookup table, then wait out the
+/// slot its addresses need to become resolvable.
+///
+/// Freezing is not tidiness. A mutable table is a second authority over which
+/// addresses a submitted message actually resolves to, which is the
+/// substitution the Pyth caller refuses by name; freezing makes the routing
+/// data as fixed as the instruction bytes it routes. The rent is permanent and
+/// intended.
+async fn frozen_route_lookup_table(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+) -> (Pubkey, Vec<Pubkey>) {
+    let payer = context.payer.pubkey();
+    let addresses = route_lookup_addresses(payer, instructions);
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("pre-derivation Clock");
+    context
+        .warp_to_slot(clock.slot + 1)
+        .expect("the derivation slot must be strictly recent");
+    let (create, table) = create_lookup_table(payer, payer, clock.slot);
+    submit(context, &[create])
+        .await
+        .expect("create the route's lookup table");
+    for chunk in addresses.chunks(EXTEND_ADDRESSES_PER_TRANSACTION_V1) {
+        submit(
+            context,
+            &[extend_lookup_table(
+                table,
+                payer,
+                Some(payer),
+                chunk.to_vec(),
+            )],
+        )
+        .await
+        .expect("extend the route's lookup table");
+    }
+    submit(context, &[freeze_lookup_table(table, payer)])
+        .await
+        .expect("freeze the route's lookup table");
+    let extended = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-extension Clock");
+    context
+        .warp_to_slot(extended.slot + 1)
+        .expect("appended addresses resolve only after the slot they landed in");
+    (table, addresses)
+}
+
+/// Submit one labelled step as a v0 message over a table frozen for exactly
+/// this route, and report both extents.
+///
+/// The legacy extent is compiled from the identical instructions and thrown
+/// away unsubmitted. It is the control: it is what this route used to be, and
+/// without it a converted figure says nothing about whether the route moved or
+/// the instrument did.
+async fn submit_recorded_v0(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    label: &str,
+) -> (Result<(), BanksClientError>, PacketExtentV1) {
+    let (table, addresses) = frozen_route_lookup_table(context, instructions).await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let payer = context.payer.pubkey();
+    let mut all: Vec<&dyn Signer> = Vec::with_capacity(signers.len() + 1);
+    all.push(&context.payer);
+    all.extend(signers.iter().copied().map(|signer| signer as &dyn Signer));
+    let legacy = Transaction::new_signed_with_payer(instructions, Some(&payer), &all, blockhash);
+    let legacy_bytes = wire_extent(legacy.signatures.len(), &legacy.message.serialize());
+    let compiled = solana_message::v0::Message::try_compile(
+        &payer,
+        instructions,
+        &[solana_message::AddressLookupTableAccount {
+            key: table,
+            addresses,
+        }],
+        blockhash,
+    )
+    .expect("the route compiles as v0 over its own frozen table");
+    let static_keys = compiled.account_keys.len();
+    let loaded_addresses: usize = compiled
+        .address_table_lookups
+        .iter()
+        .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+        .sum();
+    let transaction =
+        VersionedTransaction::try_new(solana_message::VersionedMessage::V0(compiled), &all)
+            .expect("signed v0 transaction");
+    let v0_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    let extent = PacketExtentV1 {
+        legacy_bytes,
+        v0_bytes,
+        static_keys,
+        loaded_addresses,
+    };
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .as_ref()
+        .map(|metadata| {
+            (
+                metadata.log_messages.clone(),
+                metadata.compute_units_consumed,
+            )
+        })
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(v0_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    (
+        processed.result.map_err(BanksClientError::TransactionError),
+        extent,
+    )
+}
+
 /// Submit one labelled step and record the runtime's own account of it.
 ///
 /// The evidence is emitted BEFORE the caller asserts anything, so a step that
@@ -1533,9 +1792,7 @@ async fn submit_recorded(
         wire_bytes: Some(extent),
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
-    processed
-        .result
-        .map_err(BanksClientError::TransactionError)
+    processed.result.map_err(BanksClientError::TransactionError)
 }
 
 async fn provider_submit_snapshot(
@@ -2081,14 +2338,30 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         create.source_top_up_lamports,
     ));
     create_instructions.push(create.instruction);
-    submit_recorded(
+    let (created, create_extent) = submit_recorded_v0(
         &mut context,
         &create_instructions,
         &[],
         "core-v3: CreateFund creates the canonical Source funding",
     )
-    .await
-    .expect("prepay and create canonical Source funding");
+    .await;
+    created.expect("prepay and create canonical Source funding");
+    // 1,275 legacy is 43 over, which is one address: this route was over the
+    // wall by a single account and nothing in a ProgramTest would ever have
+    // said so. The prepay transfer rides in the same transaction, so the
+    // measurement is of what is actually submitted, not of the CreateFund
+    // instruction in isolation.
+    assert_eq!(
+        create_extent,
+        PacketExtentV1 {
+            legacy_bytes: 1_275,
+            v0_bytes: 877,
+            static_keys: 3,
+            loaded_addresses: 14,
+        }
+    );
+    assert!(create_extent.legacy_bytes > PACKET_DATA_BYTES);
+    assert!(create_extent.v0_bytes <= PACKET_DATA_BYTES);
 
     let source = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.source)
@@ -2898,14 +3171,29 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     let close =
         build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
             .expect("chain-derived same-lineage CloseFund");
-    submit_recorded(
+    let (closed, close_extent) = submit_recorded_v0(
         &mut context,
         &[close.instruction.clone()],
         &[],
         "core-v3: CloseFund closes all three rows of the subset ledger",
     )
-    .await
-    .expect("close all three rows in the provider-resolution subset ledger");
+    .await;
+    closed.expect("close all three rows in the provider-resolution subset ledger");
+    // Five bytes over. A route this close to the wall is not "fine": one more
+    // account, or the twelve-byte priority-fee instruction the house builder
+    // pushes unconditionally, and it is unsubmittable with no code change to
+    // blame.
+    assert_eq!(
+        close_extent,
+        PacketExtentV1 {
+            legacy_bytes: 1_237,
+            v0_bytes: 715,
+            static_keys: 2,
+            loaded_addresses: 18,
+        }
+    );
+    assert!(close_extent.legacy_bytes > PACKET_DATA_BYTES);
+    assert!(close_extent.v0_bytes <= PACKET_DATA_BYTES);
 
     assert!(observed(&mut context, fixture.source).await.is_none());
     assert!(observed(&mut context, fixture.funding).await.is_none());
@@ -3058,6 +3346,21 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         "the early refusal leaves the abandoned submission and the beneficiary untouched"
     );
 
+    // The stranger's reclaim carries the SAME instruction and the SAME signers
+    // as the early refusal above, so the two are one transaction unless the
+    // blockhash moves: the status cache is keyed on the signature, and an
+    // identical message at an identical blockhash is `AlreadyProcessed`. This
+    // campaign used to get that separation by accident, from slot progression
+    // it did not ask for and could not point at. Ask for it.
+    let reclaim_slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock")
+        .slot;
+    context
+        .warp_to_slot(reclaim_slot + 1)
+        .expect("the reclaim is a later transaction than the refusal it repeats");
     let mut abandon_clock = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -4025,14 +4328,27 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         .expect("Resolution persists the atomically founded Market's terminal certificate");
     let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
         .expect("chain-derived atomically founded terminal Accept");
-    submit_recorded(
+    let (admitted, admit_extent) = submit_recorded_v0(
         &mut context,
         &[admit.instruction],
         &[],
         "core-v3: Core admits the terminal state without a child invocation",
     )
-    .await
-    .expect("Core accepts the terminal state of an atomically founded Market");
+    .await;
+    admitted.expect("Core accepts the terminal state of an atomically founded Market");
+    // The widest of the three, 224 over. Core's outer terminal-admit frame is a
+    // 22-account constant and the request carries the rest.
+    assert_eq!(
+        admit_extent,
+        PacketExtentV1 {
+            legacy_bytes: 1_456,
+            v0_bytes: 841,
+            static_keys: 2,
+            loaded_addresses: 21,
+        }
+    );
+    assert!(admit_extent.legacy_bytes > PACKET_DATA_BYTES);
+    assert!(admit_extent.v0_bytes <= PACKET_DATA_BYTES);
 
     let terminal = CoreState::decode(
         &observed(&mut context, fixture.market)

@@ -1,0 +1,38 @@
+[package]
+name = "dclutch-wallet-terminal-input-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-wallet-terminal-input-operator = { path = "../dclutch-wallet-terminal-input-operator" }
+# For the ONE snapshot decoder both boundaries share, and stage two's wire
+# types the input is expressed in.
+dclutch-wallet-terminal-payout-operator = { path = "../dclutch-wallet-terminal-payout-operator" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+solana-program = { version = "=3.0.0", default-features = false }
+wasm-bindgen = "=0.2.127"
+
+# Two getrandom majors reach this target and each refuses wasm32 until told
+# which browser backend to use. 0.4 arrives through
+# `dclutch-direct-ticket -> solana-signature[verify] -> solana-ed25519 -> rand`,
+# and that `verify` feature is deliberate and unconditional. `RUSTFLAGS --cfg
+# getrandom_backend` alone does NOT clear it; the cargo feature is required.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2.17", features = ["js"] }
+getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
+[dev-dependencies]
+# The shared fixture, not a second copy of one.
+dclutch-wallet-terminal-payout-operator = { path = "../dclutch-wallet-terminal-payout-operator", features = ["test-fixtures"] }
+
+[lints]
+workspace = true

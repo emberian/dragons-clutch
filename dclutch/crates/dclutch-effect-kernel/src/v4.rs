@@ -10,38 +10,57 @@
 
 use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
 
+use crate::generated_v4_abi as generated;
+use generated::{
+    EFFECT_V4_BASE_BYTES_OFFSET as BASE_BYTES_OFFSET, EFFECT_V4_MAGIC_OFFSET as MAGIC_OFFSET,
+    EFFECT_V4_POLICY_OFFSET as POLICY_OFFSET, EFFECT_V4_RANGE_COUNT_OFFSET as RANGE_COUNT_OFFSET,
+    EFFECT_V4_RANGE_LENGTH_KIND_OFFSET as RANGE_LENGTH_KIND_OFFSET,
+    EFFECT_V4_RANGE_LENGTH_VALUE_OFFSET as RANGE_LENGTH_VALUE_OFFSET,
+    EFFECT_V4_RANGE_OFFSET_KIND_OFFSET as RANGE_OFFSET_KIND_OFFSET,
+    EFFECT_V4_RANGE_OFFSET_VALUE_OFFSET as RANGE_OFFSET_VALUE_OFFSET,
+    EFFECT_V4_RANGE_RESERVED_OFFSET as RANGE_RESERVED_OFFSET,
+    EFFECT_V4_RANGE_ROUTE_OFFSET as RANGE_ROUTE_OFFSET,
+    EFFECT_V4_RESERVED_HEADER_OFFSET as RESERVED_HEADER_OFFSET,
+    EFFECT_V4_RESERVED_TAIL_OFFSET as RESERVED_TAIL_OFFSET,
+    EFFECT_V4_SEMANTIC_PREFIX_BYTES_OFFSET as SEMANTIC_PREFIX_BYTES_OFFSET,
+    EFFECT_V4_SPAN_ALLOWED_EXTENSIONS_OFFSET as SPAN_ALLOWED_EXTENSIONS_OFFSET,
+    EFFECT_V4_SPAN_BASE_FIXED_ACCOUNT_COUNT_OFFSET as SPAN_BASE_FIXED_ACCOUNT_COUNT_OFFSET,
+    EFFECT_V4_SPAN_COUNT_OFFSET as SPAN_COUNT_OFFSET,
+    EFFECT_V4_SPAN_RESERVED_OFFSET as SPAN_RESERVED_OFFSET,
+    EFFECT_V4_SPAN_ROUTE_OFFSET as SPAN_ROUTE_OFFSET,
+    EFFECT_V4_SPAN_SELECTOR_COMMON_SCALAR_OFFSET as SPAN_SELECTOR_COMMON_SCALAR_OFFSET,
+    EFFECT_V4_VERSION_OFFSET as VERSION_OFFSET,
+};
+
 use super::v3::{
     Error as ErrorV3, ProgramV3, ProjectionV3, ResolvedEffectV3, ResolvedInvocationV3,
     initialize_requests, overlaps, project_effect, representative, resolved_data_range,
 };
 
 /// Distinct successor magic.
-pub const MAGIC_V4: [u8; 4] = *b"DCE5";
+pub const MAGIC_V4: [u8; 4] = generated::EFFECT_V4_MAGIC_LEAN;
 /// Successor wire version. Canonical V3 uses wire version four.
-pub const VERSION_V4: u8 = 5;
+pub const VERSION_V4: u8 = generated::EFFECT_V4_VERSION_LEAN;
 /// Finalized-record schema label.
-pub const SCHEMA_RELEASE_PREIMAGE_V4: &[u8] =
-    b"dclutch/schema/effect-program-v5-scalar-spans-and-borrowed-ranges-v2-tail-affine-semantic";
+pub const SCHEMA_RELEASE_PREIMAGE_V4: &[u8] = generated::EFFECT_V4_SCHEMA_RELEASE_PREIMAGE_LEAN;
 /// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE_V4`].
-pub const SCHEMA_RELEASE_ID_V4: [u8; 32] = [
-    0x28, 0xe4, 0xa6, 0xc2, 0x95, 0x9d, 0x49, 0x76, 0x12, 0x35, 0xb7, 0x79, 0x9a, 0xa4, 0xee, 0xcf,
-    0x28, 0x45, 0x05, 0x29, 0xb2, 0xa5, 0x0c, 0xb9, 0x2b, 0x77, 0x69, 0x6d, 0x2f, 0xfe, 0xd4, 0x8c,
-];
+pub const SCHEMA_RELEASE_ID_V4: [u8; 32] = generated::EFFECT_V4_SCHEMA_RELEASE_ID_LEAN;
 /// Exact successor header width.
-pub const HEADER_BYTES_V4: usize = 24;
+pub const HEADER_BYTES_V4: usize = generated::EFFECT_V4_HEADER_BYTES_LEAN;
 /// Exact width of one dynamic-span declaration.
-pub const DYNAMIC_SPAN_BYTES_V4: usize = 16;
+pub const DYNAMIC_SPAN_BYTES_V4: usize = generated::EFFECT_V4_DYNAMIC_SPAN_BYTES_LEAN;
 /// Exact width of one borrowed-range declaration.
-pub const BORROWED_RANGE_BYTES_V4: usize = 16;
+pub const BORROWED_RANGE_BYTES_V4: usize = generated::EFFECT_V4_BORROWED_RANGE_BYTES_LEAN;
 
-const MAX_EXTENSION_V4: u16 = 63;
-const COORDINATE_FIXED: u8 = 0;
-const COORDINATE_COMMON_SCALAR: u8 = 1;
-const COORDINATE_PRODUCT_TAIL_AFFINE: u8 = 2;
+const MAX_EXTENSION_V4: u16 = generated::EFFECT_V4_MAX_EXTENSION_LEAN;
+const COORDINATE_FIXED: u8 = generated::EFFECT_V4_FIXED_COORDINATE_KIND_LEAN;
+const COORDINATE_COMMON_SCALAR: u8 = generated::EFFECT_V4_COMMON_SCALAR_COORDINATE_KIND_LEAN;
+const COORDINATE_PRODUCT_TAIL_AFFINE: u8 =
+    generated::EFFECT_V4_PRODUCT_TAIL_AFFINE_COORDINATE_KIND_LEAN;
 
 /// Range owner for bytes consumed by authenticated request/transition
 /// semantics rather than appended to a child request.
-pub const SEMANTIC_RANGE_ROUTE_V4: u16 = u16::MAX;
+pub const SEMANTIC_RANGE_ROUTE_V4: u16 = generated::EFFECT_V4_SEMANTIC_RANGE_ROUTE_LEAN;
 
 /// Stable hostile-decode or runtime-resolution refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,17 +97,21 @@ pub type ResultV4<T> = core::result::Result<T, ErrorV4>;
 #[repr(u8)]
 pub enum BorrowedRangePolicyV4 {
     /// Prefix and ranges form one disjoint, ordered, exhaustive partition.
-    DisjointExactCoverage = 0,
+    DisjointExactCoverage = generated::EFFECT_V4_DISJOINT_EXACT_COVERAGE_POLICY_LEAN,
     /// Exact duplicate ranges may be consumed by multiple routes; distinct
     /// ranges still form one disjoint, ordered, exhaustive partition.
-    IdenticalReuseExactCoverage = 1,
+    IdenticalReuseExactCoverage = generated::EFFECT_V4_IDENTICAL_REUSE_EXACT_COVERAGE_POLICY_LEAN,
 }
 
 impl BorrowedRangePolicyV4 {
     fn decode(value: u8) -> ResultV4<Self> {
         match value {
-            0 => Ok(Self::DisjointExactCoverage),
-            1 => Ok(Self::IdenticalReuseExactCoverage),
+            generated::EFFECT_V4_DISJOINT_EXACT_COVERAGE_POLICY_LEAN => {
+                Ok(Self::DisjointExactCoverage)
+            }
+            generated::EFFECT_V4_IDENTICAL_REUSE_EXACT_COVERAGE_POLICY_LEAN => {
+                Ok(Self::IdenticalReuseExactCoverage)
+            }
             _ => Err(ErrorV4::Wire),
         }
     }
@@ -213,14 +236,24 @@ impl DynamicFixedSpanV4 {
     }
 
     fn decode(bytes: &[u8], offset: usize) -> ResultV4<Self> {
-        if slice(bytes, offset + 6, 2)?.iter().any(|value| *value != 0) {
+        if slice(
+            bytes,
+            offset + SPAN_RESERVED_OFFSET,
+            SPAN_ALLOWED_EXTENSIONS_OFFSET - SPAN_RESERVED_OFFSET,
+        )?
+        .iter()
+        .any(|value| *value != 0)
+        {
             return Err(ErrorV4::Wire);
         }
         Ok(Self {
-            route: read_u16(bytes, offset)?,
-            selector_common_scalar: read_u16(bytes, offset + 2)?,
-            base_fixed_account_count: read_u16(bytes, offset + 4)?,
-            allowed_extensions: read_u64(bytes, offset + 8)?,
+            route: read_u16(bytes, offset + SPAN_ROUTE_OFFSET)?,
+            selector_common_scalar: read_u16(bytes, offset + SPAN_SELECTOR_COMMON_SCALAR_OFFSET)?,
+            base_fixed_account_count: read_u16(
+                bytes,
+                offset + SPAN_BASE_FIXED_ACCOUNT_COUNT_OFFSET,
+            )?,
+            allowed_extensions: read_u64(bytes, offset + SPAN_ALLOWED_EXTENSIONS_OFFSET)?,
         })
     }
 
@@ -272,21 +305,25 @@ impl BorrowedRangeV4 {
     }
 
     fn decode(bytes: &[u8], offset: usize) -> ResultV4<Self> {
-        if slice(bytes, offset + 12, 4)?
-            .iter()
-            .any(|value| *value != 0)
+        if slice(
+            bytes,
+            offset + RANGE_RESERVED_OFFSET,
+            BORROWED_RANGE_BYTES_V4 - RANGE_RESERVED_OFFSET,
+        )?
+        .iter()
+        .any(|value| *value != 0)
         {
             return Err(ErrorV4::Wire);
         }
         Ok(Self {
-            route: read_u16(bytes, offset)?,
+            route: read_u16(bytes, offset + RANGE_ROUTE_OFFSET)?,
             offset: RequestCoordinateV4::decode(
-                read_u8(bytes, offset + 2)?,
-                read_u32(bytes, offset + 4)?,
+                read_u8(bytes, offset + RANGE_OFFSET_KIND_OFFSET)?,
+                read_u32(bytes, offset + RANGE_OFFSET_VALUE_OFFSET)?,
             )?,
             len: RequestCoordinateV4::decode(
-                read_u8(bytes, offset + 3)?,
-                read_u32(bytes, offset + 8)?,
+                read_u8(bytes, offset + RANGE_LENGTH_KIND_OFFSET)?,
+                read_u32(bytes, offset + RANGE_LENGTH_VALUE_OFFSET)?,
             )?,
         })
     }
@@ -394,18 +431,25 @@ impl<'a> ProgramV4<'a> {
 
     fn decode_shape(bytes: &'a [u8]) -> ResultV4<Self> {
         if bytes.len() < HEADER_BYTES_V4
-            || bytes.get(..4) != Some(MAGIC_V4.as_slice())
-            || read_u8(bytes, 4)? != VERSION_V4
-            || read_u16(bytes, 10)? != 0
-            || slice(bytes, 20, 4)?.iter().any(|value| *value != 0)
+            || bytes.get(MAGIC_OFFSET..MAGIC_OFFSET + MAGIC_V4.len()) != Some(MAGIC_V4.as_slice())
+            || read_u8(bytes, VERSION_OFFSET)? != VERSION_V4
+            || read_u16(bytes, RESERVED_HEADER_OFFSET)? != 0
+            || slice(
+                bytes,
+                RESERVED_TAIL_OFFSET,
+                HEADER_BYTES_V4 - RESERVED_TAIL_OFFSET,
+            )?
+            .iter()
+            .any(|value| *value != 0)
         {
             return Err(ErrorV4::Wire);
         }
-        let policy = BorrowedRangePolicyV4::decode(read_u8(bytes, 5)?)?;
-        let span_count = read_u16(bytes, 6)?;
-        let range_count = read_u16(bytes, 8)?;
-        let base_bytes = usize::try_from(read_u32(bytes, 12)?).map_err(|_| ErrorV4::Wire)?;
-        let semantic_prefix_bytes = read_u32(bytes, 16)?;
+        let policy = BorrowedRangePolicyV4::decode(read_u8(bytes, POLICY_OFFSET)?)?;
+        let span_count = read_u16(bytes, SPAN_COUNT_OFFSET)?;
+        let range_count = read_u16(bytes, RANGE_COUNT_OFFSET)?;
+        let base_bytes =
+            usize::try_from(read_u32(bytes, BASE_BYTES_OFFSET)?).map_err(|_| ErrorV4::Wire)?;
+        let semantic_prefix_bytes = read_u32(bytes, SEMANTIC_PREFIX_BYTES_OFFSET)?;
         if base_bytes == 0 || semantic_prefix_bytes == 0 {
             return Err(ErrorV4::Wire);
         }
@@ -1220,30 +1264,35 @@ pub fn encode_program_v4_atomic(
     }
     ProgramV3::decode(base_program)?;
     scratch.fill(0);
-    put(scratch, 0, &MAGIC_V4)?;
-    put(scratch, 4, &[VERSION_V4, policy as u8])?;
+    put(scratch, MAGIC_OFFSET, &MAGIC_V4)?;
+    put(scratch, VERSION_OFFSET, &[VERSION_V4])?;
+    put(scratch, POLICY_OFFSET, &[policy as u8])?;
     put(
         scratch,
-        6,
+        SPAN_COUNT_OFFSET,
         &u16::try_from(spans.len())
             .map_err(|_| ErrorV4::Arithmetic)?
             .to_le_bytes(),
     )?;
     put(
         scratch,
-        8,
+        RANGE_COUNT_OFFSET,
         &u16::try_from(ranges.len())
             .map_err(|_| ErrorV4::Arithmetic)?
             .to_le_bytes(),
     )?;
     put(
         scratch,
-        12,
+        BASE_BYTES_OFFSET,
         &u32::try_from(base_program.len())
             .map_err(|_| ErrorV4::Arithmetic)?
             .to_le_bytes(),
     )?;
-    put(scratch, 16, &semantic_prefix_bytes.to_le_bytes())?;
+    put(
+        scratch,
+        SEMANTIC_PREFIX_BYTES_OFFSET,
+        &semantic_prefix_bytes.to_le_bytes(),
+    )?;
     for (index, span) in spans.iter().copied().enumerate() {
         let offset = HEADER_BYTES_V4
             .checked_add(
@@ -1252,18 +1301,26 @@ pub fn encode_program_v4_atomic(
                     .ok_or(ErrorV4::Arithmetic)?,
             )
             .ok_or(ErrorV4::Arithmetic)?;
-        put(scratch, offset, &span.route.to_le_bytes())?;
         put(
             scratch,
-            offset + 2,
+            offset + SPAN_ROUTE_OFFSET,
+            &span.route.to_le_bytes(),
+        )?;
+        put(
+            scratch,
+            offset + SPAN_SELECTOR_COMMON_SCALAR_OFFSET,
             &span.selector_common_scalar.to_le_bytes(),
         )?;
         put(
             scratch,
-            offset + 4,
+            offset + SPAN_BASE_FIXED_ACCOUNT_COUNT_OFFSET,
             &span.base_fixed_account_count.to_le_bytes(),
         )?;
-        put(scratch, offset + 8, &span.allowed_extensions.to_le_bytes())?;
+        put(
+            scratch,
+            offset + SPAN_ALLOWED_EXTENSIONS_OFFSET,
+            &span.allowed_extensions.to_le_bytes(),
+        )?;
     }
     let range_start = HEADER_BYTES_V4
         .checked_add(span_bytes)
@@ -1278,10 +1335,23 @@ pub fn encode_program_v4_atomic(
             .ok_or(ErrorV4::Arithmetic)?;
         let (offset_kind, offset_value) = range.offset.encode();
         let (length_kind, length_value) = range.len.encode();
-        put(scratch, offset, &range.route.to_le_bytes())?;
-        put(scratch, offset + 2, &[offset_kind, length_kind])?;
-        put(scratch, offset + 4, &offset_value.to_le_bytes())?;
-        put(scratch, offset + 8, &length_value.to_le_bytes())?;
+        put(
+            scratch,
+            offset + RANGE_ROUTE_OFFSET,
+            &range.route.to_le_bytes(),
+        )?;
+        put(scratch, offset + RANGE_OFFSET_KIND_OFFSET, &[offset_kind])?;
+        put(scratch, offset + RANGE_LENGTH_KIND_OFFSET, &[length_kind])?;
+        put(
+            scratch,
+            offset + RANGE_OFFSET_VALUE_OFFSET,
+            &offset_value.to_le_bytes(),
+        )?;
+        put(
+            scratch,
+            offset + RANGE_LENGTH_VALUE_OFFSET,
+            &length_value.to_le_bytes(),
+        )?;
     }
     let base_start = range_start
         .checked_add(range_bytes)

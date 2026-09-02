@@ -56,23 +56,43 @@ binding was written for.
 - **Frame diagnostics.** The runner counts SBF stack-frame-overwrite
   diagnostics per artifact and refuses to run at all if the count is nonzero.
 
-## !! BOTH ENDS OF THE LIFECYCLE MISS A LEGACY PACKET !!
+## Both ends of the lifecycle missed a legacy packet, and now ride v0
 
-Measured 2026-09-01, first measurement of this family. Legacy maximum 1,232
-bytes.
+Measured 2026-09-01, first measurement of this family; converted 2026-09-02.
+Packet maximum 1,232 bytes.
 
-| transaction | bytes | over |
-|---|---:|---:|
-| CreateFund | 1,275 | **+43** |
-| terminal admit | 1,456 | **+224** |
-| CloseFund | 1,237 | **+5** |
-| activation | 1,189 | fits |
-| activation replay | 1,172 | fits |
-| abandon | 1,052 | fits |
+| transaction | legacy | over | v0 over its frozen table | static / looked up |
+|---|---:|---:|---:|---:|
+| CreateFund (with the prepay transfer) | 1,275 | **+43** | **877** | 3 / 14 |
+| terminal admit | 1,456 | **+224** | **841** | 2 / 21 |
+| CloseFund | 1,237 | **+5** | **715** | 2 / 18 |
+| activation | 1,189 | fits | stays legacy | — |
+| activation replay | 1,172 | fits | stays legacy | — |
+| abandon (both) | 1,052 | fits | stays legacy | — |
 
-Creating a fund, admitting a terminal, and closing a fund all need v0 messages
-over an Address Lookup Table. `CloseFund` misses by **five bytes**, which is the
-kind of margin that reads as an accident and behaves like a wall.
+`CloseFund` missed by **five bytes**, which is the margin that reads as an
+accident and behaves like a wall: one more account, or the twelve-byte
+priority-fee instruction the house builder pushes unconditionally, and it is
+unsubmittable with no code change to blame.
+
+The three now execute as v0 messages over a table created, extended and
+**frozen** for that route alone. The table's addresses are not written down:
+`route_lookup_addresses` offers the message compiler every address the route
+names and keeps the ones the compiler resolved through a table, so the two
+classes that can never be looked up — an instruction's program id, which must
+resolve before the tables load, and a signer, authenticated by its header
+position — are excluded by the runtime's own rule and not by a filter this
+campaign wrote. Freezing is doctrine: a mutable table is a second authority over
+which addresses a submitted message resolves to.
+
+Nothing about the three instructions moved, and this campaign's own CPI-depth
+witnesses are the control — `CreateFund` still reaches Resolution through Core
+at depths `1,1,2,3,3`, and the terminal admit still invokes no child. No
+program, ABI, Lean artifact or refusal code changed.
+
+The rest of the campaign stays legacy **on purpose**. Activation and its replay
+fit, and the abandon pair is a stranger's route: a route that has to run when
+nobody cooperated must not make table publication a liveness precondition.
 
 ## Two witnesses that check an ABSENCE
 

@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **315** codes, with meanings taken
+The tables below carry all **316** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -198,34 +198,35 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x3000` | `CoreSbfError::Instruction` | Instruction bytes or action-specific inactive fields refused. | `programs/dclutch-core-sbf/src/lib.rs:103` |
-| `0x3001` | `CoreSbfError::AccountFrame` | Account count, order, privilege, executable flag, or alias refused. | `programs/dclutch-core-sbf/src/lib.rs:105` |
-| `0x3002` | `CoreSbfError::FinalizedRecord` | Finalized record owner, PDA, cursor absence, Rent, digest, or schema refused. | `programs/dclutch-core-sbf/src/lib.rs:107` |
-| `0x3003` | `CoreSbfError::Reference` | Realm/Product/result-domain/Market identity linkage refused. | `programs/dclutch-core-sbf/src/lib.rs:109` |
-| `0x3004` | `CoreSbfError::Release` | Registry cache, Loader-backed current deployment, or release-set join refused. | `programs/dclutch-core-sbf/src/lib.rs:111` |
-| `0x3005` | `CoreSbfError::Market` | Core Market PDA, owner, width, phase, or generation refused. | `programs/dclutch-core-sbf/src/lib.rs:113` |
-| `0x3006` | `CoreSbfError::RentCredit` | RentCredit owner, bytes, PDA, or persisted beneficiary refused. | `programs/dclutch-core-sbf/src/lib.rs:115` |
-| `0x3007` | `CoreSbfError::Creation` | System, Rent, Clock, vacant account, or exact creation plan refused. | `programs/dclutch-core-sbf/src/lib.rs:117` |
-| `0x3008` | `CoreSbfError::Funding` | Capability manifest entry, funding ledger, custody, deadline, or PDA refused. | `programs/dclutch-core-sbf/src/lib.rs:119` |
-| `0x3009` | `CoreSbfError::CallerAuthority` | Canonical release-pinned Core caller authority refused. | `programs/dclutch-core-sbf/src/lib.rs:121` |
-| `0x300A` | `CoreSbfError::ChildCpi` | Selected child invocation or immediate return-data producer refused. | `programs/dclutch-core-sbf/src/lib.rs:123` |
-| `0x300B` | `CoreSbfError::ChildAck` | Child acknowledgement or post-funding physical delta refused. | `programs/dclutch-core-sbf/src/lib.rs:125` |
-| `0x300C` | `CoreSbfError::Transition` | Generated semantic transition refused. | `programs/dclutch-core-sbf/src/lib.rs:127` |
-| `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | `programs/dclutch-core-sbf/src/lib.rs:129` |
-| `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | `programs/dclutch-core-sbf/src/lib.rs:131` |
-| `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | `programs/dclutch-core-sbf/src/lib.rs:133` |
-| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:141` |
-| `0x3011` | `CoreSbfError::RecoveryWalkUnavailable` | A Source material bought a recovery walk that no live route can walk. | `programs/dclutch-core-sbf/src/lib.rs:160` |
-| `0x3012` | `CoreSbfError::PriceGateRequired` | A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate certificate account offered. | `programs/dclutch-core-sbf/src/lib.rs:168` |
-| `0x3013` | `CoreSbfError::PriceGateBasisMismatch` | The certificate account offered was not the one the authenticated basis record names. | `programs/dclutch-core-sbf/src/lib.rs:176` |
-| `0x3014` | `CoreSbfError::PriceGateHullRefused` | **The hull identity failed.** `price * mass != sum(weight * payout)` at some claim, with every payout recomputed through the production evaluator rather than read from the certificate. This is the refusal a forged certificate earns. | `programs/dclutch-core-sbf/src/lib.rs:181` |
-| `0x3015` | `CoreSbfError::PriceGateCapacity` | The certificate carried no hull atoms, or more than the affine-Caratheodory capacity of ten permits. | `programs/dclutch-core-sbf/src/lib.rs:184` |
-| `0x3016` | `CoreSbfError::PriceGateNonCanonical` | The certificate's body was non-canonical: padding past a declared width, coordinates not strictly increasing, a zero atom weight, a non-primitive weight scale, or prices not partitioning the scale. | `programs/dclutch-core-sbf/src/lib.rs:188` |
-| `0x3017` | `CoreSbfError::InfrastructurePredecessorAbsent` | The succession ceremony found no decodable V1 profile at its PDA. | `programs/dclutch-core-sbf/src/lib.rs:194` |
-| `0x3018` | `CoreSbfError::InfrastructureIdentityMoved` | A succession tried to move the Registry or Rent program identity. | `programs/dclutch-core-sbf/src/lib.rs:201` |
-| `0x3019` | `CoreSbfError::InfrastructureNotForward` | The succession does not move strictly forward. | `programs/dclutch-core-sbf/src/lib.rs:209` |
-| `0x301A` | `CoreSbfError::InfrastructureConsentMissing` | A moved binding lacks its predecessor release's bound authority. | `programs/dclutch-core-sbf/src/lib.rs:216` |
-| `0x301B` | `CoreSbfError::InfrastructureAlreadySucceeded` | The V2 profile PDA is already occupied: the succession happened. | `programs/dclutch-core-sbf/src/lib.rs:222` |
+| `0x3000` | `CoreSbfError::Instruction` | Instruction bytes or action-specific inactive fields refused. | `programs/dclutch-core-sbf/src/lib.rs:98` |
+| `0x3001` | `CoreSbfError::AccountFrame` | Account count, order, privilege, executable flag, or alias refused. | `programs/dclutch-core-sbf/src/lib.rs:100` |
+| `0x3002` | `CoreSbfError::FinalizedRecord` | Finalized record owner, PDA, cursor absence, Rent, digest, or schema refused. | `programs/dclutch-core-sbf/src/lib.rs:102` |
+| `0x3003` | `CoreSbfError::Reference` | Realm/Product/result-domain/Market identity linkage refused. | `programs/dclutch-core-sbf/src/lib.rs:104` |
+| `0x3004` | `CoreSbfError::Release` | Registry cache, Loader-backed current deployment, or release-set join refused. | `programs/dclutch-core-sbf/src/lib.rs:106` |
+| `0x3005` | `CoreSbfError::Market` | Core Market PDA, owner, width, phase, or generation refused. | `programs/dclutch-core-sbf/src/lib.rs:108` |
+| `0x3006` | `CoreSbfError::RentCredit` | RentCredit owner, bytes, PDA, or persisted beneficiary refused. | `programs/dclutch-core-sbf/src/lib.rs:110` |
+| `0x3007` | `CoreSbfError::Creation` | System, Rent, Clock, vacant account, or exact creation plan refused. | `programs/dclutch-core-sbf/src/lib.rs:112` |
+| `0x3008` | `CoreSbfError::Funding` | Capability manifest entry, funding ledger, custody, deadline, or PDA refused. | `programs/dclutch-core-sbf/src/lib.rs:114` |
+| `0x3009` | `CoreSbfError::CallerAuthority` | Canonical release-pinned Core caller authority refused. | `programs/dclutch-core-sbf/src/lib.rs:116` |
+| `0x300A` | `CoreSbfError::ChildCpi` | Selected child invocation or immediate return-data producer refused. | `programs/dclutch-core-sbf/src/lib.rs:118` |
+| `0x300B` | `CoreSbfError::ChildAck` | Child acknowledgement or post-funding physical delta refused. | `programs/dclutch-core-sbf/src/lib.rs:120` |
+| `0x300C` | `CoreSbfError::Transition` | Generated semantic transition refused. | `programs/dclutch-core-sbf/src/lib.rs:122` |
+| `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | `programs/dclutch-core-sbf/src/lib.rs:124` |
+| `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | `programs/dclutch-core-sbf/src/lib.rs:126` |
+| `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | `programs/dclutch-core-sbf/src/lib.rs:128` |
+| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:136` |
+| `0x3011` | `CoreSbfError::RecoveryWalkUnavailable` | A Source material bought a recovery walk that no live route can walk. | `programs/dclutch-core-sbf/src/lib.rs:157` |
+| `0x3012` | `CoreSbfError::PriceGateRequired` | A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate certificate account offered. | `programs/dclutch-core-sbf/src/lib.rs:165` |
+| `0x3013` | `CoreSbfError::PriceGateBasisMismatch` | The certificate account offered was not the one the authenticated basis record names. | `programs/dclutch-core-sbf/src/lib.rs:173` |
+| `0x3014` | `CoreSbfError::PriceGateHullRefused` | **The hull identity failed.** `price * mass != sum(weight * payout)` at some claim, with every payout recomputed through the production evaluator rather than read from the certificate. This is the refusal a forged certificate earns. | `programs/dclutch-core-sbf/src/lib.rs:178` |
+| `0x3015` | `CoreSbfError::PriceGateCapacity` | The certificate carried no hull atoms, or more than the affine-Caratheodory capacity of ten permits. | `programs/dclutch-core-sbf/src/lib.rs:181` |
+| `0x3016` | `CoreSbfError::PriceGateNonCanonical` | The certificate's body was non-canonical: padding past a declared width, coordinates not strictly increasing, a zero atom weight, a non-primitive weight scale, or prices not partitioning the scale. | `programs/dclutch-core-sbf/src/lib.rs:185` |
+| `0x3017` | `CoreSbfError::InfrastructurePredecessorAbsent` | The succession ceremony found no decodable V1 profile at its PDA. | `programs/dclutch-core-sbf/src/lib.rs:191` |
+| `0x3018` | `CoreSbfError::InfrastructureIdentityMoved` | A succession tried to move the Registry or Rent program identity. | `programs/dclutch-core-sbf/src/lib.rs:198` |
+| `0x3019` | `CoreSbfError::InfrastructureNotForward` | The succession does not move strictly forward. | `programs/dclutch-core-sbf/src/lib.rs:206` |
+| `0x301A` | `CoreSbfError::InfrastructureConsentMissing` | A moved binding lacks its predecessor release's bound authority. | `programs/dclutch-core-sbf/src/lib.rs:213` |
+| `0x301B` | `CoreSbfError::InfrastructureAlreadySucceeded` | The V2 profile PDA is already occupied: the succession happened. | `programs/dclutch-core-sbf/src/lib.rs:219` |
+| `0x301C` | `CoreSbfError::UnsupportedAction` | A wire action this program decodes and no longer composes. | `programs/dclutch-core-sbf/src/lib.rs:235` |
 
 ## custody
 

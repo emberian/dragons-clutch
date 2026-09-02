@@ -13,9 +13,8 @@ use dclutch_effect_kernel::{
         encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
     },
     v4::{
-        BORROWED_RANGE_BYTES_V4, BorrowedRangePolicyV4, BorrowedRangeV4, DYNAMIC_SPAN_BYTES_V4,
-        ErrorV4, HEADER_BYTES_V4, MAGIC_V4, ProgramV4, RequestCoordinateV4, SCHEMA_RELEASE_ID_V4,
-        SCHEMA_RELEASE_PREIMAGE_V4, SEMANTIC_RANGE_ROUTE_V4, VERSION_V4, encode_program_v4_atomic,
+        BORROWED_RANGE_BYTES_V4, BorrowedRangePolicyV4, BorrowedRangeV4, ErrorV4, HEADER_BYTES_V4,
+        ProgramV4, RequestCoordinateV4, SEMANTIC_RANGE_ROUTE_V4, encode_program_v4_atomic,
     },
 };
 
@@ -140,21 +139,19 @@ fn concatenate(header: &[u8], table: &[u8], base: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn lean_constants_and_layouts_match_the_live_safe_kernel() {
-    assert_eq!(generated::EFFECT_V4_MAGIC_LEAN, MAGIC_V4);
-    assert_eq!(generated::EFFECT_V4_VERSION_LEAN, VERSION_V4);
-    assert_eq!(
-        generated::EFFECT_V4_DISJOINT_EXACT_COVERAGE_POLICY_LEAN,
-        BorrowedRangePolicyV4::DisjointExactCoverage as u8
-    );
+fn lean_constants_and_layouts_are_the_pinned_dce5_coordinates() {
+    // `v4` derives every one of these from `generated`, so comparing the two
+    // would compare a name with itself. What derivation cannot give away is
+    // whether Lean still says the numbers this wire committed to, so each is
+    // pinned against its literal.
+    assert_eq!(generated::EFFECT_V4_MAGIC_LEAN, *b"DCE5");
+    assert_eq!(generated::EFFECT_V4_VERSION_LEAN, 5);
+    assert_eq!(generated::EFFECT_V4_DISJOINT_EXACT_COVERAGE_POLICY_LEAN, 0);
     assert_eq!(
         generated::EFFECT_V4_IDENTICAL_REUSE_EXACT_COVERAGE_POLICY_LEAN,
-        BorrowedRangePolicyV4::IdenticalReuseExactCoverage as u8
+        1
     );
-    assert_eq!(
-        generated::EFFECT_V4_SEMANTIC_RANGE_ROUTE_LEAN,
-        SEMANTIC_RANGE_ROUTE_V4
-    );
+    assert_eq!(generated::EFFECT_V4_SEMANTIC_RANGE_ROUTE_LEAN, u16::MAX);
     assert_eq!(generated::EFFECT_V4_FIXED_COORDINATE_KIND_LEAN, 0);
     assert_eq!(generated::EFFECT_V4_COMMON_SCALAR_COORDINATE_KIND_LEAN, 1);
     assert_eq!(
@@ -162,22 +159,24 @@ fn lean_constants_and_layouts_match_the_live_safe_kernel() {
         2
     );
     assert_eq!(generated::EFFECT_V4_MAX_EXTENSION_LEAN, 63);
-    assert_eq!(generated::EFFECT_V4_HEADER_BYTES_LEAN, HEADER_BYTES_V4);
-    assert_eq!(
-        generated::EFFECT_V4_DYNAMIC_SPAN_BYTES_LEAN,
-        DYNAMIC_SPAN_BYTES_V4
-    );
-    assert_eq!(
-        generated::EFFECT_V4_BORROWED_RANGE_BYTES_LEAN,
-        BORROWED_RANGE_BYTES_V4
-    );
+    assert_eq!(generated::EFFECT_V4_HEADER_BYTES_LEAN, 24);
+    assert_eq!(generated::EFFECT_V4_DYNAMIC_SPAN_BYTES_LEAN, 16);
+    assert_eq!(generated::EFFECT_V4_BORROWED_RANGE_BYTES_LEAN, 16);
     assert_eq!(
         generated::EFFECT_V4_SCHEMA_RELEASE_PREIMAGE_LEAN,
-        SCHEMA_RELEASE_PREIMAGE_V4
+        b"dclutch/schema/effect-program-v5-scalar-spans-and-borrowed-ranges-v2-tail-affine-semantic"
     );
+    // Proven to be that preimage's SHA-256 by
+    // `effect_v4_lean_generator_fresh::effect_v4_schema_id_is_the_exact_sha256_preimage`;
+    // pinned here too because a finalized-record identity moving is a release
+    // event, not a refactor.
     assert_eq!(
         generated::EFFECT_V4_SCHEMA_RELEASE_ID_LEAN,
-        SCHEMA_RELEASE_ID_V4
+        [
+            0x28, 0xe4, 0xa6, 0xc2, 0x95, 0x9d, 0x49, 0x76, 0x12, 0x35, 0xb7, 0x79, 0x9a, 0xa4,
+            0xee, 0xcf, 0x28, 0x45, 0x05, 0x29, 0xb2, 0xa5, 0x0c, 0xb9, 0x2b, 0x77, 0x69, 0x6d,
+            0x2f, 0xfe, 0xd4, 0x8c,
+        ]
     );
     assert_eq!(
         [

@@ -44,9 +44,11 @@ is not a source tree to copy wholesale.
   since 2026-08-30; on 2026-09-01 four lanes committed another lane's hunks by
   using `git add`/`git commit`/`-o` by hand instead. **Its known limit, learned
   the hard way:** `--only` commits the working-tree state of a path, so when two
-  lanes edit *one file* it cannot separate their hunks — stage only your own with
-  `git apply --cached` and commit *without* `--only` in that case, and say so in
-  the message. Run `cargo check` on the touched workspace before any SBF build. If
+  lanes edit *one file* it cannot separate their hunks — for that case use
+  `tools/lane.sh commit-patch <msg> <patch-file>`, which applies your patch to an
+  index it first proves empty, refuses if the staged path set differs from the
+  patch's, commits HEAD's blob plus your hunk without `--only`, and names any path
+  whose working tree still carries someone else's. Run `cargo check` on the touched workspace before any SBF build. If
   `.git/index.lock` is held, check `ps` for a live `git`/`op-ssh-sign` and wait.
 - **The live tree is `/Users/ember/dev/dclutch`. There is a STALE NESTED COPY
   of it at `/Users/ember/dev/dragons-clutch/dclutch`** — the publication subtree

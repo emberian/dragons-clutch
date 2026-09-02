@@ -16,11 +16,11 @@
       "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This campaign measured nothing before 2026-09-01."
     },
     {
-      "id": "core-v3-create-close-and-admit-do-not-fit-a-legacy-packet",
+      "id": "core-v3-create-close-and-admit-ride-v0-lookup-tables",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.wire_bytes > 1232) | .label] | sort | join(\" + \")",
-      "expect": "core-v3: CloseFund closes all three rows of the subset ledger + core-v3: Core admits the terminal state without a child invocation + core-v3: CreateFund creates the canonical Source funding",
-      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree until 4e1c4db put it on a v0 ALT. First measurement of this family: CreateFund is 1,275 bytes, CloseFund 1,237 and the terminal admit 1,456, so BOTH ENDS of the Resolution funding lifecycle AND the terminal admission need v0 messages over an Address Lookup Table. Activation (1,189), its replay (1,172) and the provider abandon (1,052) fit."
+      "query": "[.transactions[] | select(.label | test(\"CreateFund|CloseFund|admits\")) | \"\\(.label)=\\(.wire_bytes)\"] | sort | join(\" + \")",
+      "expect": "core-v3: CloseFund closes all three rows of the subset ledger=715 + core-v3: Core admits the terminal state without a child invocation=841 + core-v3: CreateFund creates the canonical Source funding=877",
+      "provenance": "These three were 1,237, 1,456 and 1,275 bytes as legacy messages against Solana's 1,232-byte PACKET_DATA_BYTES -- over by 5, 224 and 43. CloseFund's margin is the one worth reading twice: five bytes is one more account, or the twelve-byte priority-fee instruction the house builder pushes unconditionally, so it was unsubmittable in practice and no code change would have been to blame. Each now executes as a v0 message over a table frozen for that route alone, whose addresses are derived from the instruction's own account metas by the message compiler rather than by a filter this campaign wrote. Same instruction bytes, same account set, same privileges: no program, ABI, Lean artifact or refusal code changed. The rest of the campaign stays legacy on purpose -- activation at 1,189 and its replay at 1,172 fit, and the abandon pair at 1,052 is a stranger's route that must never need a table to run."
     },
     {
       "id": "core-v3-create-fund-reaches-resolution-through-core",
@@ -49,6 +49,13 @@
       "query": "[.transactions[] | select(.label | test(\"admits\")) | .logs[] | select(test(\"invoke \\\\[\")) | capture(\"invoke \\\\[(?<depth>[0-9]+)\\\\]\").depth] | join(\",\")",
       "expect": "1",
       "provenance": "A claim about ABSENCE, checked against the runtime's own invoke lines rather than against the harness's belief. programs/dclutch-core-sbf/src/resolution.rs says of AdmitTerminal that Core 'accepts it without asking Resolution to repeat the same release, product, Source, ledger, and certificate work in a child invocation'. A single depth-1 entry and no second line is that sentence, measured. It is also why `resolution/process_admit#AdmitTerminal` remains blocked with no observation while this campaign drives Core's admission to completion: the two are different routes, and only one of them runs."
+    },
+    {
+      "id": "core-v3-no-transaction-exceeds-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes != null and .wire_bytes > 1232)] | length | tostring",
+      "expect": "0",
+      "provenance": "Against Solana's 1,232-byte PACKET_DATA_BYTES. The previous witness pins three figures; this is the campaign-wide claim, and it is the one that catches a NEW row added over the limit rather than an existing row changing. Nulls are excluded on purpose: an unmeasured transaction is not a transaction that fits, and `core-v3-measured-every-transaction` is what holds that count at zero."
     }
   ]
 }

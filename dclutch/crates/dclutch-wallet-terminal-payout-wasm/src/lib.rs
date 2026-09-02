@@ -25,15 +25,9 @@ use dclutch_claims_svm::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
 };
 use dclutch_wallet_terminal_payout_operator::{
-    ObservedAccountValueV1,
-    wire::{
-        FinalizedSnapshotV1, INPUT_FORMAT, LookupTableRequirementV1, PlanInputV1, SelectedInputV1,
-        build_manifest,
-    },
+    snapshot_wire::parse_observed_snapshot_v1,
+    wire::{INPUT_FORMAT, LookupTableRequirementV1, PlanInputV1, SelectedInputV1, build_manifest},
 };
-use serde::Deserialize;
-use solana_program::pubkey::Pubkey;
-use std::str::FromStr;
 use wasm_bindgen::prelude::*;
 
 /// Exact JSON schema this boundary accepts for one observed snapshot.
@@ -52,43 +46,6 @@ pub const ADDRESSES_FORMAT_V1: &str = "dclutch-wallet-terminal-payout-addresses-
 const _: () = assert!(TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 == 36);
 const _: () = assert!(TERMINAL_SETTLEMENT_REQUEST_BYTES_V3 == 640);
 const _: () = assert!(!TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3.is_empty());
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AccountWireV1 {
-    /// The address this observation is OF. Redundant with the `keys` list on
-    /// purpose: checking the two against each other catches a transport that
-    /// reordered or mispaired them, which is the one corruption a snapshot can
-    /// suffer that still decodes cleanly and still authenticates the wrong
-    /// account.
-    key: String,
-    owner: String,
-    lamports: String,
-    executable: bool,
-    data_base64: String,
-}
-
-/// One finalized observation of every address the derivation authenticates.
-///
-/// `deny_unknown_fields` is the load-bearing half: a snapshot carrying a
-/// coordinate this boundary does not forward must fail loudly rather than be
-/// planned around.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SnapshotWireV1 {
-    format: String,
-    slot: String,
-    unix_timestamp: String,
-    /// Absent entries are carried as vacant; the derivation decides which of
-    /// the frame may be empty, and this boundary does not.
-    accounts: Vec<Option<AccountWireV1>>,
-    /// The addresses, in the exact order the derivation asked for them.
-    keys: Vec<String>,
-}
-
-fn key(value: &str, field: &str) -> Result<Pubkey, String> {
-    Pubkey::from_str(value).map_err(|_| format!("{field} is not a base58 public key"))
-}
 
 fn parse_input(input_json: &str) -> Result<PlanInputV1, String> {
     let input: PlanInputV1 = serde_json::from_str(input_json)
@@ -130,62 +87,11 @@ pub fn build_wallet_terminal_payout_manifest_json_v1(
     snapshot_json: &str,
 ) -> Result<String, String> {
     let input = parse_input(input_json)?;
-    let wire: SnapshotWireV1 = serde_json::from_str(snapshot_json)
-        .map_err(|error| format!("payout snapshot is not the exact accepted JSON: {error}"))?;
-    if wire.format != SNAPSHOT_FORMAT_V1 {
-        return Err(format!("payout snapshot format must be {SNAPSHOT_FORMAT_V1}"));
-    }
-    if wire.keys.len() != wire.accounts.len() {
-        return Err(format!(
-            "payout snapshot has {} keys and {} observations",
-            wire.keys.len(),
-            wire.accounts.len()
-        ));
-    }
-    let keys = wire
-        .keys
-        .iter()
-        .map(|value| key(value, "snapshot address"))
-        .collect::<Result<Vec<_>, _>>()?;
-    let values = wire
-        .accounts
-        .iter()
-        .zip(keys.iter())
-        .map(|(entry, expected)| match entry {
-            None => Ok(None),
-            Some(account) => {
-                if key(&account.key, "observed address")? != *expected {
-                    return Err(format!(
-                        "payout snapshot pairs an observation of {} with the slot for {expected}",
-                        account.key
-                    ));
-                }
-                Ok(Some(ObservedAccountValueV1 {
-                    owner: key(&account.owner, "observed owner")?,
-                    lamports: account
-                        .lamports
-                        .parse()
-                        .map_err(|_| "observed lamports is not a u64".to_string())?,
-                    executable: account.executable,
-                    data: STANDARD
-                        .decode(&account.data_base64)
-                        .map_err(|_| "observed data is not canonical base64".to_string())?,
-                }))
-            }
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-
-    let snapshot = FinalizedSnapshotV1::from_observed(
-        wire.slot
-            .parse()
-            .map_err(|_| "snapshot slot is not a u64".to_string())?,
-        wire.unix_timestamp
-            .parse()
-            .map_err(|_| "snapshot unix timestamp is not an i64".to_string())?,
-        &keys,
-        values,
-    )
-    .map_err(|error| format!("payout snapshot refused: {error}"))?;
+    // ONE DECODER, shared with stage one rather than copied: the format name is
+    // this boundary's, the bytes-to-snapshot mapping and the mispairing
+    // cross-check belong to the operator crate that owns the snapshot type.
+    let snapshot = parse_observed_snapshot_v1(snapshot_json, SNAPSHOT_FORMAT_V1)
+        .map_err(|error| error.to_string())?;
 
     let selected = SelectedInputV1::parse(&input, LookupTableRequirementV1::Present)
         .map_err(|error| format!("payout input refused: {error}"))?;
@@ -245,10 +151,9 @@ mod tests {
         // A width that changed between asking and answering is the shape of a
         // snapshot stitched from two reads, and the derivation must never be
         // handed one.
-        let input = serde_json::to_string(
-            &dclutch_wallet_terminal_payout_operator::wire::tests::input(),
-        )
-        .expect("fixture serializes");
+        let input =
+            serde_json::to_string(&dclutch_wallet_terminal_payout_operator::wire::tests::input())
+                .expect("fixture serializes");
         let snapshot = format!(
             r#"{{"format":"{SNAPSHOT_FORMAT_V1}","slot":"9","unixTimestamp":"1","accounts":[null],"keys":[]}}"#
         );
@@ -261,10 +166,9 @@ mod tests {
     fn refuses_an_observation_paired_with_another_address_slot() {
         // The one corruption a snapshot can suffer that still decodes cleanly
         // and still authenticates -- against the wrong account.
-        let input = serde_json::to_string(
-            &dclutch_wallet_terminal_payout_operator::wire::tests::input(),
-        )
-        .expect("fixture serializes");
+        let input =
+            serde_json::to_string(&dclutch_wallet_terminal_payout_operator::wire::tests::input())
+                .expect("fixture serializes");
         let snapshot = format!(
             r#"{{"format":"{SNAPSHOT_FORMAT_V1}","slot":"9","unixTimestamp":"1","keys":["11111111111111111111111111111112"],"accounts":[{{"key":"11111111111111111111111111111113","owner":"11111111111111111111111111111111","lamports":"1","executable":false,"dataBase64":""}}]}}"#
         );
@@ -288,12 +192,11 @@ mod tests {
     #[test]
     fn hands_back_the_derivations_own_address_list() {
         // The browser reads exactly this and never assembles its own.
-        let input = serde_json::to_string(
-            &dclutch_wallet_terminal_payout_operator::wire::tests::input(),
-        )
-        .expect("fixture serializes");
-        let addresses = wallet_terminal_payout_addresses_json_v1(&input)
-            .expect("the fixture input routes");
+        let input =
+            serde_json::to_string(&dclutch_wallet_terminal_payout_operator::wire::tests::input())
+                .expect("fixture serializes");
+        let addresses =
+            wallet_terminal_payout_addresses_json_v1(&input).expect("the fixture input routes");
         assert!(addresses.contains(ADDRESSES_FORMAT_V1));
         assert!(addresses.contains("\"accountCount\":36"));
     }

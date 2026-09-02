@@ -6925,3 +6925,53 @@ OpenBatch at N=2 no longer aborts, Trading runs to **816,888 CU** where it died 
 708,284, and refuses **`Custom(16389)` = `0x4005 TradingSbfError::Commit`**. Zero
 out-of-memory, zero access violations, zero frame diagnostics. The next wall is
 the commit phase, and it has a code and a site.
+
+## 2026-09-02 - the release hands out a System identity and never a System account
+
+**`0x4005 Commit` on OpenBatch N=2 is convicted.** It has **237 sites** in Trading,
+136 in `hot_v3.rs`, and the commit phase is the hardest place to bisect because it
+returns a **status** rather than erroring out of a `?` — `after-commit` prints
+even on a refusal, so the whole of `commit_prepared_hot_result_v3` reads as one
+step from outside.
+
+The localisation, in the order AGENTS.md prescribes:
+
+1. **The tree's own 33 checkpoints.** The run reaches `after-commit`, so the
+   commit returned a nonzero status rather than faulting.
+2. **The existing heap marks.** `lifecycle-creates`, `children-executed` and
+   `post-children` never print — so it is one of the first two calls.
+3. **One new mark between them** (`0ba29756`). It did not print: the refusal is
+   `apply_lifecycle_creates_v3`. **237 sites became twelve for one log line.**
+4. **A probe inside it**, written, read and reverted, named the conjunct — the
+   **first** one.
+
+```
+system_present = 0   state coordinate 5   payer coordinate 6   12 runtime accounts
+```
+
+`let system = system.ok_or(TradingSbfError::Commit)?` fires because the System
+program is not among the runtime accounts, where the search additionally demands
+it executable, non-signer and non-writable.
+
+### Both sides are the same party
+
+> **General's own release supplies both.** Its `StateLifecyclePolicy` says
+> *Create* for the Batch state, and its `AccountProfile` builds the runtime frame
+> that create must find the System program in.
+
+`account_rules_v3.rs` declares `TrustedBuiltinIdentityV2::SystemProgram` — an
+**identity**, into the `RESULT_OWNER` register — and names **no System account
+coordinate at all**: a grep for `system` in that file returns zero rules. The
+release hands the transition a System identity to compare against and never hands
+the commit a System account to invoke. **Two halves of one release, disagreeing
+about whether the program is available** — the fourth instance of that shape this
+session, after the frame table, the semantic basis and the product digest.
+
+### Not fixed here, and the reason is the ripple
+
+The fix is a new runtime coordinate in General's account profile, which moves
+`general_account_profile_fixed_count_v3` for **every** action — a number read by
+the accelerator's `validate_frame`, by both program-test harnesses, and by the
+recorded campaign frame counts in `general_hot_v3.rs`. That is a profile-shape
+change with a verification surface I could not close tonight, and landing it
+unverified is the debt hole rather than the fix.

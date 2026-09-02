@@ -13,6 +13,7 @@
 #
 # Subcommands:
 #   commit <msg> -- <paths...>          enforced `git commit --only`
+#   commit-patch <msg> <patch-file>     HEAD plus your hunk, for shared files
 #   fmt [--allow-root] <file.rs>...     pinned rustfmt, named files only
 #   board <text...>                     attributed, timestamped board entry
 #   guard-script <script> -- <cmd...>   inode/hash-guarded script execution
@@ -28,6 +29,7 @@ usage: lane.sh <subcommand> [args...]
 
 subcommands:
   commit <msg> -- <paths...>          enforced `git commit --only --no-gpg-sign`
+  commit-patch <msg> <patch-file>     HEAD plus your hunk, for shared files
   fmt [--allow-root] <file.rs>...     pinned rustfmt, named files only
   board <text...>                     attributed, timestamped board entry
   guard-script <script> -- <cmd...>   inode/hash-guarded script execution
@@ -182,6 +184,155 @@ lane_cmd_commit() {
     } >&2
     exit 1
   fi
+}
+
+# ---------------------------------------------------------------------------
+# commit-patch
+# ---------------------------------------------------------------------------
+
+lane_commit_patch_help() {
+  cat <<'EOF'
+usage: lane.sh commit-patch <message> <patch-file>
+
+Runs, in order:
+    git apply --cached --check <patch-file>
+    git apply --cached <patch-file>
+    git commit --no-gpg-sign -m <message>
+
+For a SHARED file that several lanes edit at once -- the workspace `members`
+list above all -- where `lane.sh commit` cannot help you.
+
+`commit --only` protects other PATHS; it cannot protect other HUNKS in a path
+you name, because it takes that path's whole current WORKING-TREE content. So
+committing Cargo.toml while another lane holds a line in it sweeps their line
+into your commit. This subcommand commits HEAD's blob plus YOUR hunk instead:
+`git apply --cached` writes only your change into the index, on top of the
+blob the index already holds from HEAD, and the working tree is never touched
+-- the other lane's line stays exactly where it was, and after your commit
+`git diff -- <file>` shows only theirs.
+
+Refuses:
+  - a non-empty index (`git diff --cached` shows anything). The whole
+    mechanism rests on the index holding HEAD's blob for your path; if
+    someone has staged something, applying on top of it commits their work
+    too, which is the hazard being closed rather than a variation of it.
+  - a staged path set that differs from the patch's own path set, checked
+    after the apply.
+  - being run outside the repository root, or with a patch file that does
+    not exist.
+
+Then it reads the commit back the way `lane.sh commit` does, and prints any
+path whose working tree still carries hunks that are NOT yours -- so you can
+see, and say, exactly whose work you left behind.
+
+Incident this prevents: `0b8c377d` swept seven files another lane had staged,
+and on 2026-09-02 both a rip lane and the Dealer lane serialised for half an
+hour on Cargo.toml because neither could commit it without taking the other's
+row. Path-granular protection is not enough for the one file every
+crate-lifecycle lane must edit.
+EOF
+}
+
+lane_cmd_commit_patch() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    lane_commit_patch_help
+    return 0
+  fi
+  if [[ $# -ne 2 ]]; then
+    lane_commit_patch_help >&2
+    lane_die "commit-patch: expected exactly <message> <patch-file>" 2
+  fi
+  local msg="$1"
+  local patch="$2"
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    lane_die "commit-patch: not inside a git working tree" 1
+  local prefix
+  prefix="$(git rev-parse --show-prefix)"
+  if [[ -n "$prefix" ]]; then
+    lane_die "commit-patch: run from the repository root, not '$prefix'" 1
+  fi
+  [[ -f "$patch" ]] || lane_die "commit-patch: no such patch file: $patch" 2
+
+  if [[ -n "$(git diff --cached --name-only)" ]]; then
+    {
+      echo "lane commit-patch: REFUSING -- the index is not empty."
+      echo "Staged paths:"
+      git diff --cached --name-only | sed 's/^/  /'
+      echo "This subcommand commits HEAD's blob plus your patch. Applying on"
+      echo "top of someone else's staged work would commit theirs too, which"
+      echo "is the exact hazard it exists to close. Unstage and retry."
+    } >&2
+    exit 1
+  fi
+
+  local -a want=()
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    want+=("$line")
+  done < <(git apply --numstat -z "$patch" 2>/dev/null | tr '\0' '\n' | awk 'NF>=3 {print $3}' | sort -u)
+  if [[ ${#want[@]} -eq 0 ]]; then
+    lane_die "commit-patch: the patch names no paths; nothing to commit" 2
+  fi
+
+  git apply --cached --check "$patch" ||
+    lane_die "commit-patch: the patch does not apply to the index (is it against HEAD?)" 1
+  git apply --cached "$patch" ||
+    lane_die "commit-patch: git apply --cached failed after its own --check passed" 1
+
+  local -a staged=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    staged+=("$line")
+  done < <(git diff --cached --name-only | sort -u)
+
+  local wanted_list staged_list
+  wanted_list="$(printf '%s\n' "${want[@]}" | sort -u)"
+  staged_list="$(printf '%s\n' "${staged[@]}" | sort -u)"
+  if [[ "$wanted_list" != "$staged_list" ]]; then
+    {
+      echo "lane commit-patch: REFUSING -- staged paths differ from the patch's."
+      echo "patch names:"; printf '  %s\n' "$wanted_list"
+      echo "index holds:"; printf '  %s\n' "$staged_list"
+      echo "Unstaging what this run applied; nothing was committed."
+    } >&2
+    git reset -q
+    exit 1
+  fi
+
+  git commit --no-gpg-sign -m "$msg" ||
+    lane_die "commit-patch: git commit failed; nothing further to verify" 1
+
+  local -a committed=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    committed+=("$line")
+  done < <(git show --no-color --name-only --pretty=format: HEAD)
+
+  local -a extra=()
+  local c
+  for c in "${committed[@]}"; do
+    if ! lane_path_covered "$c" "${want[@]}"; then
+      extra+=("$c")
+    fi
+  done
+  if [[ ${#extra[@]} -gt 0 ]]; then
+    {
+      echo "lane commit-patch: POST-COMMIT VERIFICATION FAILED."
+      echo "$(git rev-parse HEAD) touched paths the patch did not name:"
+      printf '  %s\n' "${extra[@]}"
+      echo "The commit already exists -- this wrapper does not rewrite history."
+    } >&2
+    exit 1
+  fi
+
+  local w
+  for w in "${want[@]}"; do
+    if [[ -n "$(git diff --name-only -- "$w")" ]]; then
+      echo "lane commit-patch: $w still carries hunks that are not yours (left untouched)."
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -416,6 +567,10 @@ lane_main() {
   commit)
     shift
     lane_cmd_commit "$@"
+    ;;
+  commit-patch)
+    shift
+    lane_cmd_commit_patch "$@"
     ;;
   fmt)
     shift

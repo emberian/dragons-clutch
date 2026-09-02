@@ -2,10 +2,6 @@
 
 #![allow(clippy::panic)]
 
-#[allow(dead_code, missing_docs)]
-#[path = "../src/generated_v4_abi.rs"]
-mod generated;
-
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -90,8 +86,4 @@ fn effect_v4_schema_id_is_the_exact_sha256_preimage() {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     assert_eq!(observed, expected);
-    assert_eq!(
-        generated::EFFECT_V4_SCHEMA_RELEASE_ID_LEAN,
-        SCHEMA_RELEASE_ID_V4
-    );
 }
