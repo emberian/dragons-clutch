@@ -174,7 +174,7 @@ pub fn execute_custody_route_v3<'info>(
     let replay_digest = {
         let bytes = replay
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
+            .map_err(|_| TradingSbfError::AccountData)?;
         hash(&bytes).to_bytes()
     };
     verify_custody_receipt_v3(
@@ -351,19 +351,19 @@ fn verify_custody_receipt_v3(
 ) -> Result<(), ProgramError> {
     match request {
         CustodyRequestKindV3::V1(request) => {
-            let receipt =
-                CustodyReceiptV1::decode(receipt_bytes).map_err(|_| TradingSbfError::Transition)?;
+            let receipt = CustodyReceiptV1::decode(receipt_bytes)
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
             receipt
                 .verify_for(request, request_digest, replay_digest)
-                .map_err(|_| TradingSbfError::Transition.into())
+                .map_err(|_| TradingSbfError::ChildReceipt.into())
         }
         CustodyRequestKindV3::DelegatedV2(request) => {
             let receipt = DelegatedCustodyReceiptV2::decode(receipt_bytes)
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
             receipt
                 .custody
                 .verify_for(request.custody, request_digest, replay_digest)
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
             if receipt.starts_atomic_debit != request.starts_atomic_debit
                 || receipt.terminal != request.terminal
                 || receipt.delegate_before != request.delegate_before
@@ -592,7 +592,10 @@ mod tests {
                 request_digest,
                 id(21),
             ),
-            Err(TradingSbfError::Transition.into())
+            // A receipt that does not `verify_for` this request names the
+            // CHILD, not a refused transition -- the custody CPI committed and
+            // handed back evidence for a different replay digest.
+            Err(TradingSbfError::ChildReceipt.into())
         );
     }
 

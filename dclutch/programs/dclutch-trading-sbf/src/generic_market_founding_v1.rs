@@ -477,7 +477,7 @@ pub(crate) fn authenticate_staged_checkpoint_v1(
     let ladder_digest = founding_custody_ladder_digest_v1(frame)?;
     checkpoint
         .authenticate_open_consumption(
-            Clock::get().map_err(|_| TradingSbfError::Transition)?.slot,
+            Clock::get().map_err(|_| TradingSbfError::AccountData)?.slot,
             ladder_digest,
         )
         .map_err(|_| TradingSbfError::Content)?;
@@ -918,7 +918,7 @@ pub(crate) fn authenticate_found_to_claims(
     claims: &ClaimsFoundingRequestV5,
 ) -> Result<(), ProgramError> {
     let ack =
-        GenericFoundingAckV1::decode(found_ack_raw).map_err(|_| TradingSbfError::Transition)?;
+        GenericFoundingAckV1::decode(found_ack_raw).map_err(|_| TradingSbfError::ChildReceipt)?;
     if ack.stage() != GenericFoundingStageV1::FoundAndPermit
         || ack.permit().to_bytes() != frame.permit()?.key.to_bytes()
         || account(frame.claims, 1)?.key != frame.permit()?.key
@@ -977,7 +977,7 @@ pub(crate) fn authenticate_realize_receipt(
     let receipt = decode_realize_receipt(returned)?;
     let market_data = account(frame.found, CORE_FOUND_MARKET)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let market_digest = hash(&market_data).to_bytes();
     if !receipt.realized
         || receipt.aborted_open
@@ -1071,16 +1071,16 @@ fn authenticate_claims_receipt(
     let receipt = decode_claims_receipt(returned)?;
     receipt
         .verify_for(request, hash(raw).to_bytes())
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     let aggregate = account(frame.claims, CLAIMS_AGGREGATE)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let position = account(frame.claims, CLAIMS_POSITION)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let admission = account(frame.claims, CLAIMS_ADMISSION)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let combined = hashv(&[
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
         &aggregate,
@@ -1150,16 +1150,16 @@ fn authenticate_core_ack(
     if returned.len() != GENERIC_FOUNDING_ACK_BYTES_V1 {
         return Err(TradingSbfError::Transition.into());
     }
-    let ack = GenericFoundingAckV1::decode(returned).map_err(|_| TradingSbfError::Transition)?;
+    let ack = GenericFoundingAckV1::decode(returned).map_err(|_| TradingSbfError::ChildReceipt)?;
     let core_program = frame.core_program()?;
     let permit = frame.permit()?;
     let post = if found_stage {
         let market_data = account(frame.found, CORE_FOUND_MARKET)?
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
+            .map_err(|_| TradingSbfError::AccountData)?;
         let permit_data = permit
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
+            .map_err(|_| TradingSbfError::AccountData)?;
         hashv(&[
             GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1,
             &market_data,
@@ -1169,7 +1169,7 @@ fn authenticate_core_ack(
     } else {
         let market_data = account(frame.open, 1)?
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
+            .map_err(|_| TradingSbfError::AccountData)?;
         let claims_receipt = post_dependency.ok_or(TradingSbfError::Transition)?;
         hashv(&[
             GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1,
@@ -1334,19 +1334,19 @@ pub(crate) fn decode_claims_request(
 fn decode_lock_receipt(bytes: &[u8]) -> Result<Box<ProjectedCustodyLockReceiptV1>, ProgramError> {
     ProjectedCustodyLockReceiptV1::decode(bytes)
         .map(Box::new)
-        .map_err(|_| TradingSbfError::Transition.into())
+        .map_err(|_| TradingSbfError::ChildReceipt.into())
 }
 
 fn decode_realize_receipt(bytes: &[u8]) -> Result<Box<ProjectedCustodyReceiptV1>, ProgramError> {
     ProjectedCustodyReceiptV1::decode(bytes)
         .map(Box::new)
-        .map_err(|_| TradingSbfError::Transition.into())
+        .map_err(|_| TradingSbfError::ChildReceipt.into())
 }
 
 fn decode_claims_receipt(bytes: &[u8]) -> Result<Box<ClaimsFoundingReceiptV5>, ProgramError> {
     ClaimsFoundingReceiptV5::decode(bytes)
         .map(Box::new)
-        .map_err(|_| TradingSbfError::Transition.into())
+        .map_err(|_| TradingSbfError::ChildReceipt.into())
 }
 
 pub(crate) fn account<'accounts, 'info>(

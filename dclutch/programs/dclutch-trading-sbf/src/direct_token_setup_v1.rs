@@ -238,7 +238,7 @@ fn emit_token_setup_receipt_v1(
         fee_normalization,
     }
     .to_bytes()
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(|_| TradingSbfError::Width)?;
     set_return_data(&receipt);
     Ok(())
 }
@@ -698,7 +698,7 @@ fn normalize_and_initialize_token(
     for instruction in [
         allocate(
             resource.key,
-            u64::try_from(ACCOUNT_BYTES).map_err(|_| TradingSbfError::Transition)?,
+            u64::try_from(ACCOUNT_BYTES).map_err(|_| TradingSbfError::Width)?,
         ),
         assign(resource.key, account(accounts, TOKEN_PROGRAM)?.key),
     ] {
@@ -719,7 +719,7 @@ fn normalize_and_initialize_token(
         account(accounts, COLLATERAL_MINT)?.key.to_bytes(),
         owner,
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(|_| TradingSbfError::Width)?;
     let token_instruction = Instruction {
         program_id: Pubkey::new_from_array(*specification.program_id()),
         accounts: specification
@@ -760,12 +760,12 @@ fn authenticate_token_poststate(
     let token_account = account(accounts, index)?;
     let data = token_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let expected = TokenAccount::initialized_base_bytes(
         account(accounts, COLLATERAL_MINT)?.key.to_bytes(),
         owner,
     )
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(|_| TradingSbfError::Width)?;
     if token_account.owner != account(accounts, TOKEN_PROGRAM)?.key
         || token_account.lamports() != exact_rent
         || data.as_ref() != expected.as_slice()
@@ -793,7 +793,7 @@ fn immutable_digests(accounts: &[AccountInfo<'_>]) -> Result<[[u8; 32]; 8], Prog
     {
         let data = account(accounts, index)?
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
+            .map_err(|_| TradingSbfError::AccountData)?;
         output[slot] = hash(&data).to_bytes();
     }
     Ok(output)

@@ -383,6 +383,36 @@ pub enum TradingSbfError {
     /// 92 bytes short. The allocator's own out-of-memory abort and this refusal
     /// are the same wall reported two ways, and only the abort said so.
     ScratchExhausted = 0x401E,
+    /// An account or sysvar this route must READ could not be borrowed or parsed.
+    ///
+    /// Split out of [`TradingSbfError::Transition`], and the first family to
+    /// leave it because it was never a transition at all: a `try_borrow_data`
+    /// that lost a race with an outstanding borrow, or a `Clock`/`Rent` that
+    /// did not parse, says the route could not LOOK at its inputs. Nothing was
+    /// checked and nothing was refused. A reader who saw `Transition` here went
+    /// looking for a rejected state change and found a borrow.
+    AccountData = 0x401F,
+    /// The child's returned receipt did not decode, or does not answer this request.
+    ///
+    /// Split out of [`TradingSbfError::Transition`]. The child COMMITTED --
+    /// this code is only reachable after its CPI returned success -- and then
+    /// its receipt either failed to decode at the width and magic this route
+    /// expects, or decoded and did not `verify_for` the request digest that
+    /// asked for it. Both are the same accusation ("the evidence the child
+    /// handed back is not evidence for this request") and both are a very
+    /// different investigation from a refused transition: the child is where
+    /// you look, not the kernel.
+    ChildReceipt = 0x4020,
+    /// A value did not fit the wire width or platform integer it was projected into.
+    ///
+    /// Split out of [`TradingSbfError::Transition`]. An `encode`/`to_bytes`
+    /// into a buffer that was not wide enough, or a `usize`/`u64` conversion
+    /// that did not fit. Distinct from [`TradingSbfError::Content`], which
+    /// means bytes that arrived are wrong, and from
+    /// [`TradingSbfError::Commit`], which means a write that could not land:
+    /// this one is arithmetic and width on a value the route computed itself,
+    /// so it is a defect in this program far more often than a hostile input.
+    Width = 0x4021,
 }
 
 impl TradingSbfError {
@@ -392,7 +422,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 34] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -424,6 +454,9 @@ impl TradingSbfError {
         Self::AcceleratorArtifact,
         Self::AcceleratorRuntimeView,
         Self::ScratchExhausted,
+        Self::AccountData,
+        Self::ChildReceipt,
+        Self::Width,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -464,6 +497,9 @@ impl TradingSbfError {
             Self::AcceleratorArtifact => 28,
             Self::AcceleratorRuntimeView => 29,
             Self::ScratchExhausted => 30,
+            Self::AccountData => 31,
+            Self::ChildReceipt => 32,
+            Self::Width => 33,
         }
     }
 }

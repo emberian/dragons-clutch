@@ -52,8 +52,14 @@ import {
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const webRoot = fileURLToPath(new URL('..', import.meta.url));
 
-/** The exact shape of one act. Anything else is a status someone can type. */
-const ACT_FIELDS = ['id', 'stage', 'family', 'action', 'workspace', 'requiresMarket', 'anchors', 'guarantee', 'walls'];
+/**
+ * The exact shape of one act. Anything else is a status someone can type.
+ *
+ * `routes` is not such a status. It names census route ids, every one of which
+ * `capabilityPhaseGate.test.ts` checks against `docs/reference/routes.md`, so
+ * a name nobody carries is red rather than a claim the browser made up.
+ */
+const ACT_FIELDS = ['id', 'stage', 'family', 'action', 'workspace', 'requiresMarket', 'anchors', 'routes', 'guarantee', 'walls'];
 
 /**
  * Vocabulary a capability claim may never use.

@@ -123,9 +123,9 @@ pub(crate) fn execute_shadow_aot_v3<'info>(
     if producer != *frame.accelerator_program.key || ack_bytes.len() != SHADOW_ACK_BYTES_V3 {
         return Err(TradingSbfError::Transition.into());
     }
-    let ack = ShadowAckV3::decode(&ack_bytes).map_err(|_| TradingSbfError::Transition)?;
+    let ack = ShadowAckV3::decode(&ack_bytes).map_err(|_| TradingSbfError::ChildReceipt)?;
     ack.validate_for(request, request_digest, request.accelerator_program)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     if ack.disposition() != ShadowDispositionV3::Accepted {
         return Err(TradingSbfError::Transition.into());
     }

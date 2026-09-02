@@ -250,7 +250,7 @@ pub(crate) fn execute_core_route_v3<'info>(
                 return Err(TradingSbfError::Transition.into());
             }
             let receipt = SeriesCoreAckV1::decode(&buffers.returned)
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
             receipt
                 .validate_for(
                     request,
@@ -259,7 +259,7 @@ pub(crate) fn execute_core_route_v3<'info>(
                     Identity::new(request_digest).map_err(|_| TradingSbfError::Transition)?,
                     receipt.post_resource_digest(),
                 )
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
             Ok(CoreRouteExecutionV3::ReturnedReceipt(
                 hashv(&[
                     CORE_EXECUTION_DIGEST_DOMAIN_V3,

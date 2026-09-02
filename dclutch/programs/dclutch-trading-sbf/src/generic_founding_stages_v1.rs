@@ -440,13 +440,13 @@ fn rebuild_claims_receipt_v1(
 ) -> Result<Vec<u8>, ProgramError> {
     let aggregate = account(open_window, OPEN_AGGREGATE)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let position = account(open_window, OPEN_POSITION)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let admission = account(open_window, OPEN_ADMISSION)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let combined = hashv(&[
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
         &aggregate,
@@ -528,10 +528,10 @@ fn authenticate_open_ack_v1(
     if returned.len() != GENERIC_FOUNDING_ACK_BYTES_V1 {
         return Err(TradingSbfError::Transition.into());
     }
-    let ack = GenericFoundingAckV1::decode(returned).map_err(|_| TradingSbfError::Transition)?;
+    let ack = GenericFoundingAckV1::decode(returned).map_err(|_| TradingSbfError::ChildReceipt)?;
     let market_data = account(open_window, OPEN_MARKET)?
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let post = hashv(&[
         GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1,
         &market_data,

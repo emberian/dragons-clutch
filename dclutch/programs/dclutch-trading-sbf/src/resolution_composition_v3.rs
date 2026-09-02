@@ -206,7 +206,7 @@ fn verify_and_chain(
     child_accounts: &[AccountInfo<'_>],
 ) -> Result<[u8; 32], ProgramError> {
     let receipt =
-        ProviderExecutionReceiptV3::decode(returned).map_err(|_| TradingSbfError::Transition)?;
+        ProviderExecutionReceiptV3::decode(returned).map_err(|_| TradingSbfError::ChildReceipt)?;
     verify_receipt(prepared.request, prepared.request_digest, receipt)?;
     let lifecycle = decode_lifecycle(
         child_accounts
@@ -455,8 +455,8 @@ fn decode_lifecycle(account: &AccountInfo<'_>) -> Result<ProviderUpdateLifecycle
     }
     let bytes = account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
-    ProviderUpdateLifecycleV3::decode(&bytes).map_err(|_| TradingSbfError::Transition.into())
+        .map_err(|_| TradingSbfError::AccountData)?;
+    ProviderUpdateLifecycleV3::decode(&bytes).map_err(|_| TradingSbfError::AccountData.into())
 }
 
 #[inline(never)]
@@ -541,7 +541,7 @@ fn verify_receipt(
 fn account_data_digest(account: &AccountInfo<'_>) -> Result<[u8; 32], ProgramError> {
     let bytes = account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     Ok(hash(&bytes).to_bytes())
 }
 

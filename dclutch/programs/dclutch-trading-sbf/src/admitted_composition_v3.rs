@@ -351,9 +351,9 @@ pub fn execute_admitted_aot_v3<'info>(
                     ACCELERATOR_ACK_HEADER_BYTES_V2,
                 )?;
                 let ack = AcceleratorAckV2::decode(&ack_bytes)
-                    .map_err(|_| TradingSbfError::Transition)?;
+                    .map_err(|_| TradingSbfError::ChildReceipt)?;
                 ack.validate_request(chunked, request_digest)
-                    .map_err(|_| TradingSbfError::Transition)?;
+                    .map_err(|_| TradingSbfError::ChildReceipt)?;
                 if ack.disposition() != AcceleratorDispositionV2::Accepted {
                     return Err(TradingSbfError::Transition.into());
                 }
@@ -363,7 +363,7 @@ pub fn execute_admitted_aot_v3<'info>(
                 }
                 accepted_digest = Some(bank_digest);
                 let start =
-                    usize::try_from(ack.chunk_offset()).map_err(|_| TradingSbfError::Transition)?;
+                    usize::try_from(ack.chunk_offset()).map_err(|_| TradingSbfError::Width)?;
                 let end = start
                     .checked_add(ack.payload().len())
                     .ok_or(TradingSbfError::Transition)?;
@@ -415,9 +415,9 @@ pub fn execute_admitted_aot_v3<'info>(
                 ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3,
             )?;
             let ack = AcceleratorOutputPageAckV3::decode(&ack_bytes)
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
             ack.validate_request(page_request, request_digest)
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
             if ack.disposition() != AcceleratorDispositionV2::Accepted {
                 return Err(TradingSbfError::Transition.into());
             }

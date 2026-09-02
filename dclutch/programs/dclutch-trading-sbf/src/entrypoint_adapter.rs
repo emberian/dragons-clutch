@@ -205,7 +205,7 @@ pub(crate) fn get_return_data_into_v1(
         if returned == 0 {
             return Ok(None);
         }
-        let returned = usize::try_from(returned).map_err(|_| TradingSbfError::Transition)?;
+        let returned = usize::try_from(returned).map_err(|_| TradingSbfError::Width)?;
         if returned > capacity {
             // THE RETURN IS WIDER THAN THE BORROWED BUFFER, which is a fact
             // about this allocation and NOT about the child. Refusing here read
@@ -236,7 +236,7 @@ pub(crate) fn get_return_data_into_v1(
                     &mut producer,
                 )
             };
-            let again = usize::try_from(again).map_err(|_| TradingSbfError::Transition)?;
+            let again = usize::try_from(again).map_err(|_| TradingSbfError::Width)?;
             if again != returned || again > grown {
                 // The return data changed between two reads of the same
                 // invocation, or the grown buffer still cannot hold it. Neither

@@ -245,7 +245,7 @@ fn emit_replay_receipt_v1(
         post_lamports: replay.lamports(),
     }
     .to_bytes()
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(|_| TradingSbfError::Width)?;
     set_return_data(&receipt);
     Ok(())
 }
@@ -529,15 +529,15 @@ fn authenticate_child_result(
         return Err(TradingSbfError::Transition.into());
     }
     let receipt =
-        CustodyReceiptV1::decode(&receipt_bytes).map_err(|_| TradingSbfError::Transition)?;
+        CustodyReceiptV1::decode(&receipt_bytes).map_err(|_| TradingSbfError::ChildReceipt)?;
     let bytes = replay
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let replay_digest = hash(&bytes).to_bytes();
-    let state = CustodyReplayV1::decode(&bytes).map_err(|_| TradingSbfError::Transition)?;
+    let state = CustodyReplayV1::decode(&bytes).map_err(|_| TradingSbfError::AccountData)?;
     receipt
         .verify_for(*request, request_digest, replay_digest)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     if replay.owner != custody_program.key
         || replay.lamports() != exact_rent
         || bytes.len() != CUSTODY_REPLAY_BYTES_V1

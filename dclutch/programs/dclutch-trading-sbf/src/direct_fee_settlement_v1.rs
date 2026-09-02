@@ -754,16 +754,16 @@ fn authenticate_child_result(
         return Err(TradingSbfError::Transition.into());
     }
     let receipt = DelegatedCustodyReceiptV2::decode(&receipt_bytes)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     let data = replay_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let replay_digest = hash(&data).to_bytes();
-    let replay = CustodyReplayV1::decode(&data).map_err(|_| TradingSbfError::Transition)?;
+    let replay = CustodyReplayV1::decode(&data).map_err(|_| TradingSbfError::AccountData)?;
     receipt
         .custody
         .verify_for(request.custody, request_digest, replay_digest)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     if receipt.starts_atomic_debit != request.starts_atomic_debit
         || receipt.terminal != request.terminal
         || receipt.delegate_before != request.delegate_before
@@ -803,7 +803,7 @@ fn emit_receipt(
         resulting_revision: settlement.resulting_revision,
     }
     .to_bytes()
-    .map_err(|_| TradingSbfError::Transition)?;
+    .map_err(|_| TradingSbfError::Width)?;
     set_return_data(&receipt);
     Ok(())
 }

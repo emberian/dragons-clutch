@@ -12,6 +12,7 @@ import {
 } from '@/lib/operatorSurface';
 import {
   capabilityActContractV1,
+  capabilityPhaseGateTextV1,
   evaluateCapabilityV1,
   type CapabilityStage,
 } from '@/lib/capabilityModel';
@@ -156,7 +157,7 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
         // and cannot say why is the flat-console failure in miniature; where an
         // act cannot be opened, the card says what is missing and links to the
         // page that answers it, which is always reachable.
-        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div></dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
+        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div><div><dt>Phase gate</dt><dd>{capabilityPhaseGateTextV1(verdict.phaseGate)}</dd></div></dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
           ? <Anchor href={workspace}>Open exact preflight →</Anchor>
           : workspace !== null
             ? <Anchor href={workspace}>Inspect current boundary →</Anchor>

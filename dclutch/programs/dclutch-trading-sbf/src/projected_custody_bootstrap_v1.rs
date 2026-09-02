@@ -464,7 +464,7 @@ pub fn process_controller_funding_cleanup_step2_v1(
     let checkpoint_account = account(accounts, FUNDING_ABORT_CHECKPOINT)?;
     let data = checkpoint_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let checkpoint_digest = hash(&data).to_bytes();
     drop(data);
     let remaining = close_remaining_controller_v1(program_id, accounts, checkpoint)?;
@@ -479,7 +479,7 @@ pub fn process_controller_funding_cleanup_step2_v1(
         .checked_add(remaining.rent_refund_lamports)
         .ok_or(TradingSbfError::Transition)?;
     let clock = Clock::from_account_info(account(accounts, FUNDING_ABORT_CLOCK)?)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let first = checkpoint.canonical_first_controller();
     let remaining_controller = checkpoint.canonical_remaining_controller();
     let receipt = ControllerFundingCleanupTerminalReceiptV1::new(
@@ -946,7 +946,7 @@ fn persist_first_controller_close_v1(
     let checkpoint_account = account(accounts, FUNDING_ABORT_CHECKPOINT)?;
     let checkpoint_data = checkpoint_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let prior_checkpoint_digest = hash(&checkpoint_data).to_bytes();
     drop(checkpoint_data);
     let first = checkpoint.canonical_first_controller();
@@ -961,7 +961,7 @@ fn persist_first_controller_close_v1(
         }
     };
     let clock = Clock::from_account_info(account(accounts, FUNDING_ABORT_CLOCK)?)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let next = checkpoint
         .close_first_ledger(
             clock.slot,
@@ -1043,7 +1043,7 @@ fn invoke_resolution_funding_abort_v1(
     let checkpoint_account = account(accounts, FUNDING_ABORT_CHECKPOINT)?;
     let checkpoint_data = checkpoint_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let checkpoint_digest = hash(&checkpoint_data).to_bytes();
     drop(checkpoint_data);
     let ledger = account(accounts, FUNDING_ABORT_RESOLUTION_LEDGER)?;
@@ -1051,7 +1051,7 @@ fn invoke_resolution_funding_abort_v1(
         controller_ledger_account_digest_v1(accounts, ControllerFundingControllerV1::Resolution)?;
     let ledger_data = ledger
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let ledger_account_digest = pre_market_funding_ledger_account_digest_v1(
         ledger.key.to_bytes(),
         ledger.owner.to_bytes(),
@@ -1133,7 +1133,7 @@ fn invoke_resolution_funding_abort_v1(
         return Err(TradingSbfError::Transition.into());
     }
     let receipt = PreMarketFundingAbortReceiptV1::decode(&receipt_bytes)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     if receipt.request_digest != hash(&request_bytes).to_bytes()
         || receipt.checkpoint != request.checkpoint
         || receipt.checkpoint_digest != request.checkpoint_digest
@@ -1466,7 +1466,7 @@ fn persist_projected_custody_abort_prefix_v1(
     let raw_account = account(accounts, ABORT_LOCK_RAW)?;
     let lock_data = raw_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let custody_program = account(accounts, ABORT_CUSTODY_PROGRAM)?;
     let sub_frame = subslice(
         accounts,
@@ -1483,12 +1483,12 @@ fn persist_projected_custody_abort_prefix_v1(
     let checkpoint_account = account(funding, FUNDING_ABORT_CHECKPOINT)?;
     let checkpoint_data = checkpoint_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let prior_checkpoint_digest = hash(&checkpoint_data).to_bytes();
     drop(checkpoint_data);
     let custody_poststate_digest = projected_abort_poststate_digest_v1(sub_frame)?;
     let clock = Clock::from_account_info(account(funding, FUNDING_ABORT_CLOCK)?)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let next = checkpoint
         .abort_custody(
             clock.slot,
@@ -1519,7 +1519,7 @@ fn authenticate_projected_custody_abort_receipt_v1(
     let abort_request_digest = hash(abort_bytes.as_slice()).to_bytes();
     drop(abort_bytes);
     let receipt = ProjectedCustodyReceiptV1::decode(receipt_bytes)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     let expected = ProjectedCustodyReceiptV1 {
         realized: false,
         aborted_open: false,
@@ -1555,7 +1555,7 @@ fn projected_abort_poststate_digest_v1(
         let value = account(sub_frame, index)?;
         let data = value
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
+            .map_err(|_| TradingSbfError::AccountData)?;
         *output = controller_funding_ledger_account_digest_v1(
             value.key.to_bytes(),
             value.owner.to_bytes(),
@@ -1701,7 +1701,7 @@ pub fn process_projected_custody_bootstrap_v2(
     let custody_ladder_digest = custody_ladder_digest_v1(&frame)?;
     let staged = prepared
         .stage_custody(
-            Clock::get().map_err(|_| TradingSbfError::Transition)?.slot,
+            Clock::get().map_err(|_| TradingSbfError::AccountData)?.slot,
             custody_ladder_digest,
         )
         .map_err(|_| TradingSbfError::Transition)?;
@@ -1913,13 +1913,13 @@ fn custody_ladder_digest_v1(frame: &BootstrapFrameV1<'_, '_>) -> Result<[u8; 32]
     for observation in observations {
         let data = observation
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
+            .map_err(|_| TradingSbfError::AccountData)?;
         preimage.extend_from_slice(observation.key.as_ref());
         preimage.extend_from_slice(observation.owner.as_ref());
         preimage.extend_from_slice(&observation.lamports().to_le_bytes());
         preimage.extend_from_slice(
             &u64::try_from(data.len())
-                .map_err(|_| TradingSbfError::Transition)?
+                .map_err(|_| TradingSbfError::Width)?
                 .to_le_bytes(),
         );
         preimage.extend_from_slice(&data);
@@ -1941,9 +1941,9 @@ fn write_staged_checkpoint_v1(
     }
     let mut data = target
         .try_borrow_mut_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     let current =
-        ControllerFundingCheckpointV1::decode(&data).map_err(|_| TradingSbfError::Transition)?;
+        ControllerFundingCheckpointV1::decode(&data).map_err(|_| TradingSbfError::AccountData)?;
     if current.phase() != ControllerFundingCheckpointPhaseV1::Prepared
         || current.input() != staged.input()
         || staged.phase() != ControllerFundingCheckpointPhaseV1::CustodyStaged
@@ -2226,7 +2226,7 @@ fn authenticate_resolution_ledger_poststate_v2(
     }
     let data = target
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     authenticate_resolution_ledger_poststate_bytes_v2(
         resolution_program,
         target.key,
@@ -2377,7 +2377,7 @@ fn create_trading_ledger_dust_tolerant_v1<'info>(
     }
     let mut data = target
         .try_borrow_mut_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     if data.len() != planned.bytes.len() || data.iter().any(|byte| *byte != 0) {
         return Err(TradingSbfError::Transition.into());
     }
@@ -2455,7 +2455,7 @@ fn create_prepared_checkpoint_v1<'info>(
     }
     let mut data = target
         .try_borrow_mut_data()
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
     if data.iter().any(|byte| *byte != 0) {
         return Err(TradingSbfError::Transition.into());
     }
@@ -2656,7 +2656,7 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
         return Err(TradingSbfError::Transition.into());
     }
     let receipt = PreMarketFundingReceiptV2::decode(&receipt_bytes)
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
     let poststate = authenticate_resolution_ledger_poststate_v2(
         resolution_program.key,
         target,
@@ -2969,8 +2969,8 @@ fn authenticate_poststate(
     }
     let data = state_account
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
-    let state = ProjectedCustodyStateV2::decode(&data).map_err(|_| TradingSbfError::Transition)?;
+        .map_err(|_| TradingSbfError::AccountData)?;
+    let state = ProjectedCustodyStateV2::decode(&data).map_err(|_| TradingSbfError::AccountData)?;
     if state.phase != phase
         || state.next_revision != next_revision
         || state.locked_amount != locked_amount

@@ -3196,3 +3196,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   1,158,123 CU, 241,577 spare**, post-state assertions holding; Trading's frames byte-identical across 887 rows. Owed: the
   `DeploymentSlotMismatch` discriminant (blocked on Structured's uncommitted 0x401F/0x4020); a newly reachable stage — a
   second LP Open after the Add refuses at OP_IDENTITY_EQ a=18 b=5 (`accepted.rs:8655`) → next.
+
+### Lane map delta — 2026-09-03 01:15
+- **COHORT-13 SEALED WITH AGREEING IDENTITIES** — the first full-redeploy cohort whose founded plan and sealed deployment set
+  carry the same release-set id (`82a969dd…`), seven roles already-current, final set `e6829ff9…`, at zero SOL with no key
+  opened; deployed from `315f1931`; the market is being founded from the SEALED plan, so it is reachable by both the fill and
+  the resolution. The inline-input OpenBatch (a517d27c, 19 minutes after the pin) is cohort-14's — an in-place Trading upgrade
+  would recreate cohort-12's defect; the General-manifest founding and an OpenBatch attempt against cohort-13's bytes are
+  recorded as findings either way.

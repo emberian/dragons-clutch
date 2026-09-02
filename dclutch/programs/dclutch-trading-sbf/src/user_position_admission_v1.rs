@@ -119,7 +119,7 @@ pub fn process_user_position_admission_v1(
                     claims_program.key.to_bytes(),
                     program_id.to_bytes(),
                 )
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
         }
         ProtocolPositionActionV2::Close => {
             outer
@@ -128,7 +128,7 @@ pub fn process_user_position_admission_v1(
                     request_digest,
                     claims_program.key.to_bytes(),
                 )
-                .map_err(|_| TradingSbfError::Transition)?;
+                .map_err(|_| TradingSbfError::ChildReceipt)?;
         }
     }
     Ok(())

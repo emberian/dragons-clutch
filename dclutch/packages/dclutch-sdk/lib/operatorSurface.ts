@@ -3,6 +3,11 @@ import { PublicKey } from '@solana/web3.js';
 import { ascii, hex, requireNonzero, requireZero, sha256, slice, u16 } from './bytes';
 import { classifyHeader } from './decoders';
 import {
+  decodeMarketCoreStateV2,
+  type MarketCorePhaseV2,
+  type MarketCoreReadinessV2,
+} from './marketCoreV2';
+import {
   DEVNET_DEPLOYMENT_V1,
   DEVNET_PROGRAM_EVIDENCE_V1,
   type DeploymentV1,
@@ -107,6 +112,19 @@ export type OperatorSurfaceSnapshotV1 = Readonly<{
     owner: string;
     dataBytes: number;
     header: string | null;
+    /**
+     * The Market's Core lifecycle phase and Resolution Fund readiness, decoded
+     * from these same finalized bytes, or `null` when they did not decode as a
+     * Core Market state.
+     *
+     * Carried because a client deciding whether an act can be attempted needs
+     * the prestate, not the existence: `evaluateCapabilityV1` reported READY
+     * TO PREFLIGHT for every act on an open market for as long as this
+     * observation stopped at the address (`2b0046fb`). `null` is not "any
+     * phase" and every consumer must refuse rather than assume.
+     */
+    phase: MarketCorePhaseV2 | null;
+    readiness: MarketCoreReadinessV2 | null;
   }>;
 }>;
 
@@ -479,11 +497,28 @@ export async function acquireOperatorSurfaceV1(
     const account = requireAccount(observation.accounts[nextStateIndex].account, 'Market');
     if (account.executable) throw new Error('Market is executable');
     if (account.owner !== coordinates.core) throw new Error('Market is not owned by the selected Core program');
+    // The decoder is hostile and total: it refuses a width, a magic, a version,
+    // an undefined phase tag and a phase that disagrees with its own terminal
+    // receipt. A Core-owned account that fails any of those is not a Market
+    // whose prestate anyone may act on, so it reports no phase at all rather
+    // than a decoded-looking one.
+    let phase: MarketCorePhaseV2 | null = null;
+    let readiness: MarketCoreReadinessV2 | null = null;
+    try {
+      const state = decodeMarketCoreStateV2(market, account.data);
+      phase = state.phase;
+      readiness = state.readiness;
+    } catch {
+      phase = null;
+      readiness = null;
+    }
     marketObservation = Object.freeze({
       address: market,
       owner: account.owner,
       dataBytes: account.data.length,
       header: classifyHeader(account.data),
+      phase,
+      readiness,
     });
   }
   return Object.freeze({ observedSlot: checkedObservedSlot, roles: Object.freeze(roles), deploymentPreset: presetObservation, realm: realmObservation, market: marketObservation });
