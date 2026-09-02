@@ -811,3 +811,357 @@ luck, not design, and `founding_targets` names the Open Market the whole
 recovery is for. The repair is the pattern this repository already documents and
 its cut tool already follows: temporary file on the same filesystem, producer
 exits zero, validate the shape, replace atomically.
+
+## RESOLVED: the recovery landed, the market activated, and all eight conservation laws hold
+
+Written 2026-09-02 by the COHORT-13 RESUME lane, at finalized slot 492,094,435.
+**Devnet evidence. Not mainnet evidence.**
+
+Two commits, and every act below is one of them reading the other's output:
+
+| | |
+| --- | --- |
+| deployed cohort (unchanged, no byte moved) | `315f1931f4d6bb01510a3b78ccd056149e87367f` |
+| host tools that read and repaired its evidence | `4d9b8d3fd8d8ac0e85dae3ea43861e214f24d0ae` |
+| activation root, occupied | `4GzDzNxj248uBkNLxKN2ffVzZ6cFZy158mVCeLec6ufz` |
+| the fill, finalized | `3FpQ2fSEph8WXovyYeoSG36ZwNGqenpVi3pEW4t2Xn64PQyCNhP5Cv4NCkuPxPcd4DxXqKyRtbtuc6HChYB1P2eJ` |
+
+The deployer `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP` is at
+**32.47385185 SOL, unmoved to the lamport across this entire lane.** Everything
+below was paid by the campaign payer, which went **1.663405281 → 1.524416622**:
+**0.138988659 SOL** for the activation, the participants, two admissions, a
+nine-transaction Direct session and the fee settlement.
+
+### The third wall, and the producer gap behind it
+
+`be012a46` fixed the Open verifier's clock and the recovery then ran to
+completion — six stages, all `already complete`, **zero SOL**, balances unmoved.
+But the report it wrote was still refused, one consumer over:
+
+    recovery-to-complete named a DCLTCFQ1 signature its own transaction
+    projection does not carry
+
+This one was NOT another clock defect. `authenticate_recovery_to_complete_v1`
+corroborates all six journal signatures against the report's own
+`execution.transactions`, and it is right to: an `execution` block naming
+journals no transaction row backs is assertion, not evidence. The gap was in the
+PRODUCER. `recover_completed_market_from_checkpoint` republishes nothing by
+design — `reconstruct_founding_checkpoint_v1` refuses its own republication by
+count — so DCLTGMF3 had a projecting owner in
+`finalize_existing_founding_submission_v1`, the three funding stages had one in
+`execute_funding_readiness_suffix_v1`, and **the two stages before Open had none
+at all. Six journals, four rows.**
+
+`4d9b8d3f` supplies the missing owner. Both rows are read back off chain and
+reauthenticated by `authenticate_historical_founding_transaction_v1` — the same
+helper the readiness suffix already uses, which reparses the journal signature,
+refetches the finalized packet and compares slot, packet digest, fee and compute
+units against what the journal recorded. Its test asserts the PARTITION rather
+than the fix: the stages before Open, Open itself, and the post-Open suffix must
+together be exactly `ORDER`, so a seventh stage added anywhere goes red naming
+the half whose owner is missing. Proved red before green by swapping the array's
+two entries.
+
+**The prediction in the resume brief was wrong, and usefully so.** The named next
+candidate wall — `execute_funding_readiness_suffix_v1`'s unconditional
+`authenticate_funding_readiness_route_v1(…, "accept")` — never fired. The live
+plan short-circuited at `ConsumedByFounding` and the suffix reported
+*"completed the post-Open V7 funding readiness suffix in exact order"*. The real
+next wall was a consumer one function further on, in a different file, of a
+different class.
+
+Result, on the third run: **six transactions in the projection**, in canonical
+order, every journal signature corroborated.
+
+| # | operation | finalized slot | signature |
+| --- | --- | ---: | --- |
+| 1 | DCLTCFQ1 | 491,961,396 | `31Cb2kwwKq6xTaJC7DiptWT8hPvon3efibC1RN3XNk7VUTSA1FLcqkjbmgvWQEb8M6iRTXsaz53amd92MMPZEW68` |
+| 2 | DCLTPCB2 | 491,962,044 | `2SLSaUPmp8VFG7fFmVST7ZifZoFgcnDdKDuGcGFeMPjoXm2jUSijHXaK1ZThBTjpSZimUHqY976p6nCXNQxCpppX` |
+| 3 | DCLTGMF3 | 491,963,072 | `5Ji1babqGguizfSafscVnSpeXTjXE3GqpCteUF7PQJ1r6eAs2oizENwPoK3XooisHkgVgZTxeHHNk3qTcSM47jtj` |
+| 4 | core-funding-create-v1 | 491,963,194 | `4ECUUXmKGe3gVoLdeUuE68KwLavN94enWQNeJE9vanHeX4J5Vbkh96jr3CxS6uYsUGBh8CCoXEXbGeLaee3QEpNo` |
+| 5 | resolution-funding-activate-v1 | 491,963,281 | `2fowWQzpp1utLjjTo35GNXncAzEnxpUzkpLDye1CHmFhYQ4NeTGtwBi4HDbdD688cY4X9f5qbmqmQYySaiX65x4o` |
+| 6 | core-funding-accept-v1 | 491,963,396 | `4gaisSBgnbccWHeAJYBVw74r2tVX4CDXWdFhzS41RWHY6SWuzuV5x94ZKcJZ2svsDP9EtLDTLFitKGmqbHs9qKKo` |
+
+Balances after the recovery: deployer 32.47385185, payer 1.663405281 — **unmoved
+to the lamport**, and `be012a46`'s promise held: the two refused runs left
+`campaign-open.json` byte-identical (sha256 `70ac7a0d…` before and after).
+
+### THE ACTIVATION DEADLINE WAS NOT 492,460,566 — read it from the command
+
+`HOLD_STATE.md` carried **492,460,566**, about 42 hours at spawn. The activation
+command's own report says:
+
+    "activationDeadlineSlot": 492169598
+
+At the preflight's observed slot 492,086,455 that was **83,143 slots, about 9.2
+hours** — not 42. The same discipline the brief applies to the root applies to
+the deadline: **read it from the command's own report, never from a remembered
+number.** Had the lane trusted the remembered figure and taken the fallback's
+leisurely path, the window would have closed while it waited.
+
+### The activation, and its pre-registered cross-check
+
+`devnet-direct-capability-activation-v1`, payer the campaign payer, four
+transactions, `"verdict": "ACTIVATED"`.
+
+| | slot |
+| --- | ---: |
+| `5SY8RPKi3mSivRUA5gLbQ8vNhEge7yFNk9swMJ9cCEozTERmMv15Qa9soL5xJEDHWenCasxkUo5ygkVm7uaa6SPF` | 492,086,895 |
+| `5fJ9N1CyFVV3z5KyKEmm3fYYXyh856Ag3EoGvt6gZ4qppfTgZFECitMs7zfyW9AhjV5QRk85S4R8J9prjh5ZkiEU` | 492,086,936 |
+| `PrQrxpsFbB7xTQkRmjGQnEw2zmqkh6gafdptAoLGxBwxoBUKqUGxC2rZdMYRuMUX119te8ZdLZbiYoyYmpHfLxM` | 492,086,975 |
+| `12192UWhZdUAveWQiACXCPunmx7ouEMgit74rbZBuH1ZZcUuhs2kbJWjHGX3uMMJEbDrhrYVqTffDE3hQ3qv7cq1` | 492,087,015 |
+
+Payer **1.663405281 → 1.656393297**, cost 0.007011984 SOL.
+
+**The cross-check registered before the act is the one that closed it.** The
+report's own `facts.root` is `4GzDzNxj248uBkNLxKN2ffVzZ6cFZy158mVCeLec6ufz` —
+the same address two independent derivations named in advance. Read off chain
+before the activation it was `AccountNotFound`; after, it is a **256-byte
+`DCLTCRT1` record owned by Trading `HkNhMJrERGko9mFXKq6UaL8qu2QnzqJx1hwJ5U8AVUHZ`,
+phase 0x01, 0.002431872 SOL rent**. Three authors, one address, and a vacancy
+that became an occupancy across the one transaction set that should have caused
+it.
+
+`2dGxuxe5LGdckG9r3co9u57MbMzoT5xJJTipUysgA261` is still `AccountNotFound`, as it
+will be forever. It remains evidence of nothing.
+
+**A silent success nearly ate this step.** The first `--execute` printed
+`"verdict": "planned"` and exited zero. `activate.sh` built its `--execute` flag
+into an `EXTRA` array and **never passed it to the binary**, so `--execute` ran a
+preflight and reported success having done nothing. That is AGENTS.md's
+"Distrust silent success" exactly; the verdict string, not the exit code, is what
+caught it.
+
+### The owed readbacks
+
+`market-readback.py` now runs, and both Core Market accounts read correctly —
+including the trap:
+
+| label | address | phase | readiness | generation | derived Claims aggregate |
+| --- | --- | --- | --- | ---: | --- |
+| `market` | `C4sCA56dDCuqoonU7spBS3j21tskD9DL754KiXPDmTXV` | 0x00 Founding | 0x00 Prepaid | 1 | `DddbwL8t…` VACANT |
+| `founding_market` | `6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15` | **0x01 Open** | 0x02 Consumed | **2** | `HCnz8YXLnQdLgEBb8RAPjJg7R3Eh3qQx4oQiWmqGUhsc` EXISTS, 288 bytes |
+
+`routing-readback.py` reports *"no routing table create transaction found in this
+founding"*, and that is a correct output rather than a failure: it scans the
+report's own transactions for ALT-program creates, and this founding created no
+table — it CONSUMES three that the ladder froze earlier.
+
+| stage | frozen table |
+| --- | --- |
+| DCLTCFQ1 | `7TctGEa6EBQAeAHZhBtMGdbEhar4UnxaJFwGWnY84aF5` |
+| DCLTPCB2 | `3439rxEAeXQ4U9DZKDCD1s7ys4BwF6AcWZ9qRLu6iygL` |
+| DCLTGMF3 and all three funding stages | `8DjFdk2J5BQVjVw76xYkHsjL8ACWJD3A7BmdTwKJS72w` |
+
+The `dc07c73a` freeze proof for this cohort still reads against the earlier
+section's five-table readback, not against this founding's report.
+
+### The participants, and the admissions
+
+Two 0.05 SOL transfers from the campaign payer, never the deployer:
+
+| | signature |
+| --- | --- |
+| participant-1 `H1cYAJL3aNjLda7az96r13pDixnpUc2a7XYTE3dyWg4` | `3TzhgDpidBKxXGQEc46Yu3zxseRa466H5ozunHejeUfYsUoYxm7tCPPkJx4yxe7izGjUUkpnhq5hLxBPsBnsx58` |
+| participant-2 `BVBriJDjsN7ZhGsJoJ3PET5FdkSKbcn7iDMAjA5tB6ZV` | `5HBw3au2KFXz4JSuJozYEenooxsfu5vFLvNDwMVJGHDHZgiEYRB5aLL21m7h3QTX9csUVZuM28mrrdQERWFdyjzx` |
+
+Payer **1.656393297 → 1.556383297**.
+
+Then both admissions, executed directly rather than preflighted — a preflight is
+not free on this driver:
+
+| | slot | CU | fee |
+| --- | ---: | ---: | ---: |
+| participant-1 `3crBKWVQszbx6eB1brWcyHF7wnjjnScJNzF6dBAbjxSFiv61sY2Gnp8GmzsHfq7ndCJ1XBYYwzJSed5h9JktkT2R` | 492,089,325 | 218,562 | 80,000 |
+| participant-2 `2hZtmJwpdyCM9t3d9uAGpZRnmjMNTUXCTzH14PdY53xnDnhLZVPokKhdyWRJX176SuDdQbHDE9BVbS4Vv87wKXGv` | 492,089,485 | 200,562 | 80,000 |
+| participant-2 collateral delegation `3dwjjekkT9QJqVcy3HVcHsu32vPES8RCK9xy1KpD1NcziBGXx7VicuuaYKh5vHpDRWa4DhpVbLS4aiTr24vmANCF` | 492,089,556 | 4,953 | 10,000 |
+
+Payer **1.556383297 → 1.554337728**. The delegation put exactly **201 atoms** —
+`required_buyer_collateral` — into `HJBvqz8qoUPemqDBwucnK7UgLYKsF978YNUxhqrNKkku`.
+
+**The admission refused first for a reason worth recording**: the config named
+`plan.json`, but cohort-13 is the first cohort founded from the SEALED plan and
+the admission authenticates the report's own `plan_sha256`
+(`760df09d…` = `plan-seal.json`). The refusal it earns is
+*"campaign evidence schema, plan digest, or completed execution refused"* — one
+coarse code over three conjuncts, which is why a path problem reads as a report
+problem. This is the `map_err` cost AGENTS.md names, met in the wild.
+
+### THE FILL: 1,286,187 CU, and the drift went the other way
+
+`FILL_CU_RISK.md` predicted the ceiling might be hit, since cohort-13's Trading
+ELF is 11,832 bytes larger than the build the 1,317,129 figure was measured on.
+**It was not.** Recorded beside it, as asked:
+
+| | CU | margin under 1,400,000 |
+| --- | ---: | ---: |
+| Direct lane's measurement, cohort-12 Trading `b0cff55a…` | 1,317,129 | 82,871 (5.9%) |
+| **cohort-13, Trading `1b41f552…`, measured here** | **1,286,187** | **113,813 (8.1%)** |
+
+**The drift is −30,942 CU across twenty-plus commits and a larger ELF.** A bigger
+binary bought a cheaper crossing, so the next cohort inherits a measured number
+rather than a lane's memory — and the honest reading is that this margin is still
+thin enough to re-measure every cohort, not that the hazard is retired.
+
+The whole nine-transaction session, one durable mutation per invocation:
+
+| stage | slot | CU | fee | signature |
+| --- | ---: | ---: | ---: | --- |
+| replay-setup | 492,091,905 | 158,662 | 75,000 | `4gBoKbbQE2CFHVgM228DBC1RQHKmFQGT4Tnk64s26phRg13dudTR8SPB847xLF26mcCmfZT4xgRf1CFRnRfsgR1u` |
+| token-setup | 492,092,002 | 108,800 | 75,000 | `4ekfpH6tuonx7wnfwQqy7ZjMqJw77AAwoVMB1HFrQGfxLAZn89Y9Lz2MHz8cezjAmYh9LqzAfX8GPRgVKroi9SD2` |
+| lookup-create | 492,092,120 | 10,508 | 5,000 | `Yw4QP62va8YQ1XttquRsJpavv1DaMTWxAHgxjsTKWrC8usnMQ5oUM5aB9cDvHQwDoEsAYEAp3Z94mJthnqYxSyF` |
+| lookup-extend | 492,092,232 | 11,657 | 5,000 | `5pB6yGEni6m4veTQC1vnma2ehQqhijQRyhpWU7EdreaJJ6SsqtAUxmLnv41zcPxd2cLpdJqw3a8JyQFJxWqckhD8` |
+| lookup-extend | 492,092,355 | 11,660 | 5,000 | `3EemkrmwuwuVwRtpU32CjAMosWRAW2Ye22dzh1sVcvjSpvWUetEHcB6j9A5yDz7aazFnxyx4KLKcJTYrrJgsyvGo` |
+| lookup-extend | 492,092,476 | 10,780 | 5,000 | `4EpvmiiS7UkMWeKvLLG5vQZesfyxcarxeFc5suuboSmCT8XpwWmxyaorn2T4LnM9k7weVAKkEqUKxyfuuPTxnNg3` |
+| lookup-freeze | 492,092,595 | 1,517 | 5,000 | `43bNZSWK8EoAGx1aswvSvK8Nb4x8rqyjy2deLZg61YgpYZD5b9TbhagAp61fHo1LWhRv5T7LotKnNyYbnVPubMFx` |
+| lookup-activation | 492,092,667 | — | — | (no transaction; a wait on activation) |
+| capability-seal | 492,092,785 | 738,892 | 5,000 | `4Yi8YHmYd7MceNAZPqGyGJ9SgjYsdZJwnpLf4go9yGAaj8VgdgeuTKcG1gWfBQhU55pAxzp8hyMGNDgyodr7cqN8` |
+| **hot (THE FILL)** | **492,092,896** | **1,286,187** | 15,000 | `3FpQ2fSEph8WXovyYeoSG36ZwNGqenpVi3pEW4t2Xn64PQyCNhP5Cv4NCkuPxPcd4DxXqKyRtbtuc6HChYB1P2eJ` |
+
+**2,338,663 CU and 195,000 lamports across the session**, payer
+**1.554337728 → 1.524491622**. The Hot packet is 1,167 wire bytes, 61 unique
+message accounts, 57 loaded through lookup table `DR6YzUoEXQsPEPn9dMZsgsY3wg2paDmGv4Qg4Cgz6cz7`.
+
+The terms, from the session's own finalized evidence: fill **200** at price
+1,000,000 over scale 1,000,000 — gross **200** — outcome **0**, fee **50 bps per
+side**, seller the founder `FBYW95Fo…`, buyer participant-2. Exactly the
+fee-bearing crossing at the smallest gross whose fee does not floor to zero, and
+nothing was retried at gross 199.
+
+**One host-tool defect, after the fill was already finalized.** The session's
+terminal step publishes `direct-trade-finalized.json` through
+`write_create_only_json_v1`, which publishes by `fs::hard_link` precisely so an
+existing evidence file can never be overwritten — then publishes the same path a
+second time in the same invocation and trips its own guard:
+
+    publish Direct evidence: File exists (os error 17)
+
+The three files share one mtime (13:49:13) and the failing process left its
+`.direct-trade-finalized.json.direct-evidence-55564.tmp` behind, which is what
+identifies it as a double publish rather than a collision with an earlier run.
+The evidence written was complete and authentic, so rerunning the simulator found
+the session already complete and continued. **The guard is right; publishing
+twice is the defect.** It is the same shape as the two walls above — a correct
+invariant evaluated at a moment its author did not intend — and it is the reason
+a fill that had fully landed reported as a refusal.
+
+### The fee settlement
+
+`devnet-direct-fee-settlement-v1`, permissionless, no party to the trade signing.
+The obligation was read off chain and matched the prediction to the atom:
+debtor participant-2, maker replay `86XRnuxX7ZN64eqchJ8oAYw2xLib5VFiq6hxqtzGAo51`,
+**fee_owed 2**, standing allowance 2, destination the venue fee PDA
+`2o8RqauePumkdm8yuEgd3aBm81xyr2XLBxarMgn1BVCs` owned by
+`GCeAKFmCXgkCa5ebDGXQ1q8VEaS5z8oNe9JRWgGtTa76`, custody revision 2 → 3.
+
+    signature      ChTAyLg6LtLWK1uQLE65SKifwqq9eKnZXPSJWmv4bFQRqUGKuQ4Qx2VVy6WKRQRAamV1TzfudUbiV36FVJ6MC2x
+    slot           492,094,058
+    compute units  151,913        fee 75,000 lamports
+    fee_owed after 0 (read back from chain)
+
+Payer **1.524491622 → 1.524416622**. `fee_owed after 0`, read back, is the only
+thing that distinguishes a settled fee from a sent transaction.
+
+**`settle-fee.sh` had never been run once, under any arguments.** An apostrophe
+in `producer's` inside a `${2:?…}` message inside a double-quoted string is a
+PARSE error in bash 3.2 — *"line 28: unexpected EOF while looking for matching
+'"* — so the script could not be executed at all. A script written and never
+executed looks identical to one that works until the moment it is needed.
+
+### THE CENSUS: L1 through L8, every one by name, none inapplicable
+
+At stage `cohort13-post-fee-settlement`, finalized slot 492,094,312, chained
+through `--prior` to the post-fill boundary, from the observer build at
+`4d9b8d3f`:
+
+| law | verdict |
+| --- | --- |
+| **L1** | HOLDS — tracked 1,000,000,000 atoms across 5 accounts == Mint supply 1,000,000,000 |
+| **L2** | HOLDS — the Hoard moved 0 atoms, exactly as declared; it holds 500,000,000 |
+| **L3** | HOLDS — 3 Positions sum to the aggregate supply vector [500000000, 500000000, 500000000, 500000000] |
+| **L4** | HOLDS — Hoard 500,000,000 >= worst outcome 500,000,000 x unit 1 |
+| **L5** | HOLDS — tracked collateral moved 0 atoms, exactly as declared |
+| **L6** | HOLDS — no watched account closed at this boundary |
+| **L7** | HOLDS — the payer moved −75,000 lamports, its transactions paid 75,000 in fees, watched accounts gained 0, 0 went to nothing unwatched; debit == credit + fee |
+| **L8** | HOLDS — every compartment moved exactly as declared: unclassified +0 |
+
+Declarations: `--declared-collateral-delta 0`, `--declared-hoard-delta 0`,
+`--declared-class-delta unclassified=0`, `--declared-class-delta HoardPrincipal=0`,
+`--declared-fees-lamports 75000`.
+
+**`CENSUS_L8_FINDING.md`'s premise is now obsolete, and it should be read as
+history.** It said L8 is INAPPLICABLE by construction because `ledger-census`
+hard-codes `ClassClaimV1::inapplicable` and the simulator passes no declarations.
+**`bf59126d` landed both halves** — the `--declared-class-delta LABEL=ATOMS` flag
+and the simulator wiring that computes the terms from the session's own finalized
+evidence. So this is the first cohort in which L8 judges a claim across a real
+fill instead of sitting out, and the first with **no INAPPLICABLE anywhere in
+L1..L8**. An INAPPLICABLE is not a pass, and this sweep has none to excuse.
+
+The state the laws are about, at that boundary:
+
+| account | atoms |
+| --- | ---: |
+| founder collateral wallet `AWWxWQ2xUm86FkKcT8gXkSDiezwrAw9rJm6ED3xdeArq` | 499,999,799 |
+| Hoard `8PMHP6cweSPjqpQmQurstNXKcBB855t6hXELePzdibY3` | 500,000,000 |
+| seller Direct token PDA `3ir66Yi6LsLdoJD68msEeBh7xaVJ5zWUPMMRgmcRVqFU` | **199** |
+| venue fee Direct token PDA `2o8RqauePumkdm8yuEgd3aBm81xyr2XLBxarMgn1BVCs` | **2** |
+| buyer delegated collateral `HJBvqz8qoUPemqDBwucnK7UgLYKsF978YNUxhqrNKkku` | **0** |
+
+199 + 2 = 201, the buyer's allowance spent exactly to zero; 199 is gross 200 less
+the seller's fee of 1, and the 2 in the venue account is both sides' fee. The
+claims moved with it: the founder's outcome-0 balance went 500,000,000 →
+**499,999,800** and participant-2's went 0 → **200**, while outcomes 1, 2 and 3
+did not move at all.
+
+### The census bindings, and the two halts that were the instrument working
+
+The first census VIOLATED L1 by **exactly the delegated amount**:
+
+    tracked 999999799 atoms across 2 accounts != Mint supply 1000000000;
+    201 atoms are in accounts this ledger does not name
+
+999,999,799 + 201 = 1,000,000,000 to the atom. `build-sim-config.py` tried to read
+the buyer's delegated account and the participants' Positions out of the
+FOUNDING's accounts map, where neither can ever appear — the admission is what
+creates them — so both lookups could only ever `KeyError` and both bindings were
+silently absent. The builder now reads the landed admission reports, which is the
+only author of those two facts.
+
+The second census then VIOLATED L5 by the same 201, and this one is not a defect
+at all: the tracked SET grew between the two boundaries, so a chained delta
+compares two different apertures. `bf59126d`'s own message predicts it — *"a
+buyer whose collateral source is unbound makes the tracked set grow by the atoms
+that left it, and declaring zero there would red L5 against a claim that was
+never true."* The clean baseline is therefore the complete-bindings census, and
+the fill was judged from it.
+
+Both halts were archived under `halts/`, never deleted. **Neither was a
+conservation breach; both were the ledger correctly refusing to certify a set it
+could not account for.**
+
+### Cost, against the budget
+
+| step | payer before | payer after | cost |
+| --- | ---: | ---: | ---: |
+| recovery (two refusals + the run) | 1.663405281 | 1.663405281 | **0** |
+| activation | 1.663405281 | 1.656393297 | 0.007011984 |
+| fund participants | 1.656393297 | 1.556383297 | 0.100010000 |
+| admissions + delegation | 1.556383297 | 1.554337728 | 0.002045569 |
+| Direct session (9 transactions) | 1.554337728 | 1.524491622 | 0.029846106 |
+| fee settlement | 1.524491622 | 1.524416622 | 0.000075000 |
+| | | **total** | **0.138988659** |
+
+Against a ceiling of 2 SOL beyond what `HOLD_STATE.md` priced. The deployer never
+paid for any of it and never moved.
+
+### What this cohort now has that no previous cohort had
+
+- A founding whose seal and whose founded plan carry the same release-set
+  identity, **and** whose evidence file is whole enough for every consumer.
+- An activated Direct capability at a root three independent authors named
+  before it existed.
+- A **fee-bearing** Direct crossing that landed, with its compute measured
+  against the prior build rather than remembered.
+- A fee settled to `fee_owed 0`, read back from chain.
+- **L1 through L8, all HOLDS, no INAPPLICABLE**, across that fill.

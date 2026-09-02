@@ -3356,3 +3356,22 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   HOT_FIXED_ACCOUNT_COUNT_V3 — measured LP-hot 54 → 48; the equity Add's 70 → 64 blocked by two undocumented distinctness
   copies (`parse_accelerator_readonly`; `require_record_pair` at admitted_composition_v3.rs:805 → 0x4017). Partial patch saved.
 - Cuts: `2dca87965`, `46a4b1de1`, `7576f8e32`.
+
+### 2026-09-02 15:00 EDT — THE FIRST DEVNET FILL
+- COHORT-13 RESUME closed (`4d9b8d3f` third recovery wall — a producer gap: six journals, four projected rows, fixed on the
+  template with a partition test; `236c77ad` evidence addendum): recovery wrote six corroborated rows at zero cost;
+  **ACTIVATED** — `facts.root` = 4GzDzNxj… went from AccountNotFound to a 256-byte DCLTCRT1 owned by Trading (the
+  pre-registered cross-check held); two stranger admissions; **THE FILL — 1,286,187 CU, landed and finalized** (the drift went
+  the other way: 8.1% margin, not 5.9%); **fee settled** (`fee_owed after 0` read from chain); **CENSUS: L1–L8 ALL HOLD, no
+  INAPPLICABLE** — 49c8fa92 and be67416e judged by a real fill for the first time; the census halted twice and was right both
+  times (L1 by exactly the 201 unbound atoms; L5 by a grown tracked set). Cost **0.138988659 SOL** from the payer; deployer
+  32.47385185 unmoved. Three host-tool defects repaired: `activate.sh` never passed `--execute` (a preflight printed
+  "planned" and exited zero), `settle-fee.sh` had never parsed (bash 3.2 apostrophe), `build-sim-config.py` named the wrong
+  plan and read bindings from a map the admissions cannot appear in. **HOLD_STATE.md's deadline slot was wrong** (real:
+  492,169,598 — 9.2 h at preflight); my 40.8 h bound derived from it. The Direct session publishes its finalized evidence
+  twice per invocation and trips its own create-only guard after the fill — named, unowned.
+- Market 6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15 is Open, activated, filled. Next: resolve it when its window closes
+  (relay + flagship resolution on devnet — never run there), redeem through the operator-built payout, the browser's gated
+  redemption test; the site shows the fill; then close 13 and deploy cohort-14 (Trading ≥ a517d27c, Registry ≥ 90a8563f,
+  the accelerator's release in `prepare`) for OpenBatch on chain.
+- Cuts: `f0d03ccc2`.
