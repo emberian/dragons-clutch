@@ -1249,7 +1249,18 @@ impl<'a> AccountProfileV2<'a> {
             };
         }
         if self.dynamic_fixed_span_count == 0 {
-            return if self.item_account_stride == 0 && self.item_operations == 0 {
+            // THE ITEM-RULE TABLE, not the item operations. Under this profile
+            // `item_account_stride` is the span template bank's width and
+            // nothing else, so no span table means no template bank. Item
+            // OPERATIONS are a different axis entirely: `apply_operations`
+            // walks them `0..tail_count`, over the PRODUCT tail, and the span
+            // table only shifts the account coordinate each one addresses --
+            // by zero when there are no spans. Requiring them absent here made
+            // "this profile carries no dynamic account span" and "this profile
+            // projects nothing per Product outcome" the same sentence, and they
+            // are not: General declares eleven per-outcome projections and, as
+            // of the inline input transport, no span at all.
+            return if self.item_account_stride == 0 {
                 Ok(())
             } else {
                 Err(Error::InvalidDynamicSpan)

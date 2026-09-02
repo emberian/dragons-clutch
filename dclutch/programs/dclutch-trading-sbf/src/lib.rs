@@ -367,6 +367,22 @@ pub enum TradingSbfError {
     /// This is the conjunct a candidate is computed against, so it is the one
     /// worth having its own name.
     AcceleratorRuntimeView = 0x401D,
+    /// The scratch end of the program heap could not serve a bank.
+    ///
+    /// `ScratchVecV1::with_capacity` is fail-closed: when the two ends of the
+    /// bump heap meet, `alloc_scratch` returns null and the bank refuses rather
+    /// than the allocator aborting. That refusal spelled itself `Content`, which
+    /// is 2,000-odd sites of "your bytes are wrong" -- and this is not that. It
+    /// is "this execution is too wide for the heap frame it paid for", which has
+    /// a different reader, a different remedy (a wider `RequestHeapFrame`, or a
+    /// narrower Product) and a different author.
+    ///
+    /// MEASURED, on the stride-six General `OpenBatch` ladder 2026-09-02: at
+    /// N = 30 the peak was 65,060 of 65,536 and the execution committed; at
+    /// N = 31 it reached 65,444 and refused `Content` from this exact site,
+    /// 92 bytes short. The allocator's own out-of-memory abort and this refusal
+    /// are the same wall reported two ways, and only the abort said so.
+    ScratchExhausted = 0x401E,
 }
 
 impl TradingSbfError {
@@ -376,7 +392,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -407,6 +423,7 @@ impl TradingSbfError {
         Self::AcceleratorRelease,
         Self::AcceleratorArtifact,
         Self::AcceleratorRuntimeView,
+        Self::ScratchExhausted,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -446,6 +463,7 @@ impl TradingSbfError {
             Self::AcceleratorRelease => 27,
             Self::AcceleratorArtifact => 28,
             Self::AcceleratorRuntimeView => 29,
+            Self::ScratchExhausted => 30,
         }
     }
 }

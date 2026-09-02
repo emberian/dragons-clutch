@@ -63,7 +63,7 @@ export type GeneralSuccessorPlanDocumentV5 = Readonly<{
   transactionBase64: string;
   observedSlot: bigint;
   outcomeCount: number;
-  scratchPageCount: number;
+  admittedInvocationCount: number;
   heapFrameBytes: number;
   tradingProgram: string;
   lookupTable: string;
@@ -453,13 +453,13 @@ export function decodeGeneralSuccessorPlanDocumentV5(input: string): GeneralSucc
   let raw: unknown;
   try { raw = JSON.parse(input); } catch { throw new Error('General operator plan is not JSON'); }
   const value = object(raw, 'General operator plan');
-  exactKeys(value, ['format', 'action', 'transactionBase64', 'observedSlot', 'outcomeCount', 'scratchPageCount', 'heapFrameBytes', 'tradingProgram', 'lookupTable', 'payer', 'requiredSigners', 'market', 'root', 'generation', 'releaseSet', 'rootPrestateDigest', 'familyRequestDigest', 'checkedManifestDigest', 'tradingArtifactRelease', 'generalArtifactRelease', 'productRecord', 'artifacts', 'lifecycle', 'childRoutes'], 'General operator plan');
+  exactKeys(value, ['format', 'action', 'transactionBase64', 'observedSlot', 'outcomeCount', 'admittedInvocationCount', 'heapFrameBytes', 'tradingProgram', 'lookupTable', 'payer', 'requiredSigners', 'market', 'root', 'generation', 'releaseSet', 'rootPrestateDigest', 'familyRequestDigest', 'checkedManifestDigest', 'tradingArtifactRelease', 'generalArtifactRelease', 'productRecord', 'artifacts', 'lifecycle', 'childRoutes'], 'General operator plan');
   if (value.format !== 'dclutch/general-successor-plan/v5') throw new Error('General operator plan format is not V5');
   const selectedAction = action(value.action);
   const outcomeCount = integer(value.outcomeCount, 'outcomeCount');
-  const scratchPageCount = integer(value.scratchPageCount, 'scratchPageCount');
+  const admittedInvocationCount = integer(value.admittedInvocationCount, 'admittedInvocationCount');
   const heapFrameBytes = integer(value.heapFrameBytes, 'heapFrameBytes');
-  if (outcomeCount === 0 || scratchPageCount === 0) throw new Error('General outcome and scratch-page counts must be nonzero');
+  if (outcomeCount === 0 || admittedInvocationCount === 0) throw new Error('General outcome and admitted-invocation counts must be nonzero');
   if (heapFrameBytes !== Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3) throw new Error('General heap frame differs from the measured canonical route resource');
   if (!Array.isArray(value.requiredSigners) || value.requiredSigners.length === 0 || value.requiredSigners.length > 32) throw new Error('General required signers are not a bounded nonempty array');
   const requiredSigners = Object.freeze(value.requiredSigners.map((entry, index) => address(entry, `requiredSigners[${index}]`)));
@@ -500,7 +500,7 @@ export function decodeGeneralSuccessorPlanDocumentV5(input: string): GeneralSucc
   return Object.freeze({
     format: value.format, action: selectedAction,
     transactionBase64: text(value.transactionBase64, 'transactionBase64', 4_096),
-    observedSlot: integerText(value.observedSlot, 'observedSlot'), outcomeCount, scratchPageCount, heapFrameBytes,
+    observedSlot: integerText(value.observedSlot, 'observedSlot'), outcomeCount, admittedInvocationCount, heapFrameBytes,
     tradingProgram: address(value.tradingProgram, 'tradingProgram'), lookupTable: address(value.lookupTable, 'lookupTable'), payer,
     requiredSigners, market: address(value.market, 'market'), root: address(value.root, 'root'), generation: integerText(value.generation, 'generation'),
     releaseSet: identity(value.releaseSet, 'releaseSet'), rootPrestateDigest: identity(value.rootPrestateDigest, 'rootPrestateDigest'),
@@ -570,7 +570,7 @@ export async function inspectGeneralSuccessorPlanV5(plan: GeneralSuccessorPlanDo
   if (heapProgram === undefined || !heapProgram.equals(expectedHeap.programId)
       || heapCompiled.accountKeyIndexes.length !== 0
       || !same(new Uint8Array(heapCompiled.data), new Uint8Array(expectedHeap.data))) throw new Error('General heap declaration or instruction order was substituted');
-  const minimumAccounts = Abi.GENERAL_HOT_FIXED_ACCOUNT_COUNT_V3 + 8 + plan.scratchPageCount;
+  const minimumAccounts = Abi.GENERAL_HOT_FIXED_ACCOUNT_COUNT_V3 + 8 + plan.admittedInvocationCount;
   if (compiled.accountKeyIndexes.length < minimumAccounts) throw new Error(`General transaction is shorter than the ${Abi.GENERAL_HOT_FIXED_ACCOUNT_COUNT_V3}-coordinate Hot frame + admitted strategy + canonical scratch geometry`);
   const program = message.staticAccountKeys[compiled.programIdIndex];
   if (program === undefined || program.toBase58() !== plan.tradingProgram) throw new Error('General transaction invokes another Trading program');
@@ -1090,7 +1090,7 @@ export function decodeGeneralHotReceiptV3(base64: string, inspection: GeneralPla
 
 export function generalPlanTemplateV5(): string {
   return JSON.stringify({
-    format: 'dclutch/general-successor-plan/v5', action: 'consider', transactionBase64: '', observedSlot: '0', outcomeCount: 1, scratchPageCount: 1, heapFrameBytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3,
+    format: 'dclutch/general-successor-plan/v5', action: 'consider', transactionBase64: '', observedSlot: '0', outcomeCount: 1, admittedInvocationCount: 1, heapFrameBytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3,
     tradingProgram: '', lookupTable: '', payer: '', requiredSigners: [], market: '', root: '', generation: '0', releaseSet: '', rootPrestateDigest: '',
     familyRequestDigest: '', checkedManifestDigest: '', tradingArtifactRelease: '', generalArtifactRelease: '', productRecord: '',
     artifacts: Object.fromEntries(ARTIFACT_KEYS.map((key) => [key, ''])),

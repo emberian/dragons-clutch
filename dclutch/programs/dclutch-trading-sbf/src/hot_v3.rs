@@ -575,7 +575,7 @@ fn hot_checkpoint(phase: &str) {
 /// region at the other.
 #[cfg(feature = "hot-cu-profile")]
 #[inline(never)]
-fn hot_heap_mark(label: &str) {
+pub(crate) fn hot_heap_mark(label: &str) {
     let (position, scratch) = hot_heap_outstanding();
     solana_program::log::sol_log(label);
     solana_program::log::sol_log_64(
@@ -676,6 +676,11 @@ macro_rules! hot_heap_mark {
 macro_rules! hot_heap_mark {
     ($label:literal) => {};
 }
+
+// The admitted CPI loop lives in `admitted_composition_v3`, and until this
+// export the whole loop was ONE heap span in this module -- which is how
+// twelve kilobytes of it went unattributed when the input transport changed.
+pub(crate) use hot_heap_mark as hot_heap_mark_macro;
 
 /// Shadow caller-authority PDA after six authenticated strategy extras.
 pub const HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3 + 6;

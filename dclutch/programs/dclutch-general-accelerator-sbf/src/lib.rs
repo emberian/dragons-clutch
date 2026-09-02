@@ -703,8 +703,21 @@ fn validate_request_geometry(
     request: AdmittedAcceleratorRequestV2<'_>,
 ) -> ProgramResult {
     let tail_count = request.tail_count();
-    if request.transport() != RequestTransportV2::ScratchPages
-        || tail_count == 0
+    // BOTH INPUT TRANSPORTS, because the page one cannot be produced. General
+    // used to require `ScratchPages` here, and the pages it required have no
+    // producer that can exist: the bank carries the current slot, a full page
+    // does not fit in a transaction, and every reader wants the page read-only.
+    // The inline bank rides CPI instruction data (10,240 bytes) and every bank
+    // Trading can build is at most 8,192, so General now declares no span and
+    // arrives inline. `AdmittedAcceleratorRequestV2` already refuses a non-empty
+    // inline bank under `ScratchPages` and one whose width is not
+    // `total_bank_bytes` under `Inline`, so the two conjuncts below are the
+    // whole of what this function still owes on the transport.
+    let inline = match request.transport() {
+        RequestTransportV2::Inline => true,
+        RequestTransportV2::ScratchPages => false,
+    };
+    if tail_count == 0
         || request.scalar_count()
             != general_hot_scalar_count_v3(action, tail_count)
                 .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?
@@ -713,7 +726,7 @@ fn validate_request_geometry(
             .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?
             != general_hot_candidate_bank_len_v3(action, tail_count)
                 .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?
-        || !request.inline_bank().is_empty()
+        || request.inline_bank().is_empty() == inline
     {
         return Err(GeneralAcceleratorSbfErrorV3::InvalidRequest.into());
     }
@@ -909,6 +922,22 @@ fn assemble_input_bank_into(
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
     if output.len() != bank_len {
         return Err(GeneralAcceleratorSbfErrorV3::ScratchBankLength.into());
+    }
+    // The inline bank is the whole bank, in one piece, in the CPI instruction
+    // data this request arrived in. `page_count` is zero under that transport,
+    // so the loop below would leave `cursor` at zero and refuse; the copy is
+    // here rather than inside a zero-trip loop because there are no pages to
+    // walk, not one page that happens to hold everything.
+    if page_count == 0 {
+        let inline = request.inline_bank();
+        if inline.len() != bank_len {
+            return Err(GeneralAcceleratorSbfErrorV3::ScratchBankLength.into());
+        }
+        output.copy_from_slice(inline);
+        if content(output)? != request.input_bank_digest() {
+            return Err(GeneralAcceleratorSbfErrorV3::ScratchBankDigest.into());
+        }
+        return Ok(());
     }
     let mut cursor = 0_usize;
     for page_index in 0..page_count {

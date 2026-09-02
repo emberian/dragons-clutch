@@ -726,7 +726,17 @@ impl<'region, T> ScratchVecV1<'region, T> {
         // SAFETY: `layout` has a non-zero size, which is this call's contract.
         let block = unsafe { scratch_backing::alloc(layout) };
         let Some(block) = NonNull::new(block.cast::<T>()) else {
-            return Err(TradingSbfError::Content.into());
+            // THE HEAP RAN OUT, and it says so. `alloc_scratch` returns null
+            // when the scratch end would cross the upward end -- the two bump
+            // positions meeting in the middle -- which is the same wall the
+            // upward end reports as an out-of-memory ABORT. Reporting it as
+            // `Content` put "this execution is too wide for the heap frame it
+            // paid for" among two thousand sites of "your bytes are wrong", and
+            // the two have different readers and different remedies. The two
+            // refusals above stay `Content` on purpose: a zero-sized element
+            // type and a layout that overflows `usize` are defects in the
+            // caller, not in the frame it was granted.
+            return Err(TradingSbfError::ScratchExhausted.into());
         };
         Ok(Self {
             block,

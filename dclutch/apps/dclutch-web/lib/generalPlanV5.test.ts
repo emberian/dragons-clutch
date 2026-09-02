@@ -107,7 +107,7 @@ async function fixture(action: GeneralSuccessorActionV5, outcomeCount = 1): Prom
   const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: key(204).toBase58(), instructions: [heap, instruction] }).compileToV0Message([table]));
   const artifactNames = ['programSet', 'descriptor', 'config', 'accountProfile', 'lifecyclePolicy', 'requestProfile', 'strategy', 'certificate', 'admission', 'transition', 'effect'];
   const raw: Record<string, unknown> = {
-    format: 'dclutch/general-successor-plan/v5', action, transactionBase64: base64(transaction.serialize()), observedSlot: '77', outcomeCount, scratchPageCount: 1, heapFrameBytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3,
+    format: 'dclutch/general-successor-plan/v5', action, transactionBase64: base64(transaction.serialize()), observedSlot: '77', outcomeCount, admittedInvocationCount: 1, heapFrameBytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3,
     tradingProgram: trading.toBase58(), lookupTable: lookup.toBase58(), payer: payer.toBase58(), requiredSigners: [payer.toBase58()], market: market.toBase58(), root: root.toBase58(), generation: '7',
     releaseSet: id(41), rootPrestateDigest: id(42), familyRequestDigest: hex(await sha256(requestBytes)), checkedManifestDigest: id(43), tradingArtifactRelease: id(44), generalArtifactRelease: id(45), productRecord: id(46),
     artifacts: Object.fromEntries(artifactNames.map((name, index) => [name, id(80 + index)])),

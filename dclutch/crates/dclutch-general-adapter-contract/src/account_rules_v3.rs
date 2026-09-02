@@ -8,14 +8,14 @@
 //! derived from canonical register-bank geometry.
 
 use dclutch_account_profile_contract::v2::{
-    AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, DYNAMIC_FIXED_SPAN_ENTRY_BYTES,
-    DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
-    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+    AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
+    OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+    TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
-        AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
-        RegisterGeometryV2, ScalarCoordinateV2,
+        AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+        ScalarCoordinateV2,
         encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic_with_item_operations,
     },
 };
@@ -85,8 +85,6 @@ use crate::{
 
 /// Profile13 discriminator required by every successor General account artifact.
 pub const GENERAL_ACCOUNT_PROFILE_ARTIFACT_V3: u16 = DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE;
-/// One scratch-page rule is repeated by the protected physical page count.
-pub const GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3: u16 = 1;
 
 /// Release-selected external account widths not owned by General.
 ///
@@ -179,35 +177,6 @@ fn general_child_frame_end_v3(action: Action) -> Result<u16> {
 /// Exact base logical account count before authenticated scratch pages.
 pub fn general_account_profile_fixed_count_v3(action: Action) -> Result<u16> {
     general_effect_account_count_v3(action).map_err(|_| GeneralAccountRuleErrorV3::Geometry)
-}
-
-/// Descriptor-owned dynamic scratch-page span.
-pub fn general_scratch_page_span_v3(action: Action) -> Result<DynamicFixedSpanInputV2> {
-    Ok(DynamicFixedSpanInputV2 {
-        insertion_coordinate: general_account_profile_fixed_count_v3(action)?,
-        count_scalar: u16::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT)
-            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-        rule_start: 0,
-        rule_stride: GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3,
-        minimum: 1,
-        maximum: u32::MAX,
-        step: 1,
-    })
-}
-
-/// Exact opaque readonly rule repeated for every Trading-owned scratch page.
-#[must_use]
-pub const fn general_scratch_page_rule_v3() -> AccountRuleWithPrestateInputV2 {
-    AccountRuleWithPrestateInputV2 {
-        rule: AccountRuleInputV2 {
-            privileges: AccountPrivilegesV2::new(false, false, false),
-            effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
-            alias: AccountAliasInputV2::SelfCoordinate,
-            data_length: 0,
-            data_item_stride: 0,
-        },
-        prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
-    }
 }
 
 /// Exact count of canonical fixed AccountProfile operations for one action.
@@ -1315,16 +1284,17 @@ pub fn general_account_profile_operation_v3(
 /// Refuses an action whose geometry overflows a `usize`.
 pub fn general_account_profile_bytes_v3(action: Action) -> Result<usize> {
     let fixed_count = general_account_profile_fixed_count_v3(action)?;
+    // The fixed rules and nothing else. The `+ 1` was the scratch-page span's
+    // single item-rule template and the entry beneath it was the span itself;
+    // General declares neither now.
     let rules = usize::from(fixed_count)
-        .checked_add(1)
-        .and_then(|count| count.checked_mul(RULE_BYTES))
+        .checked_mul(RULE_BYTES)
         .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
     let operations = usize::from(general_account_profile_operation_count_v3(action))
         .checked_mul(OPERATION_BYTES)
         .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
     DYNAMIC_FIXED_SPAN_HEADER_BYTES
-        .checked_add(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
-        .and_then(|value| value.checked_add(rules))
+        .checked_add(rules)
         .and_then(|value| value.checked_add(operations))
         .ok_or(GeneralAccountRuleErrorV3::Geometry)
 }
@@ -1400,13 +1370,23 @@ pub fn encode_general_account_profile_v3_atomic(
         } else {
             TrustedBuiltinIdentityV2::None
         },
-        &[general_scratch_page_span_v3(action)?],
+        // NO DYNAMIC SPAN. General's only span was the input scratch-page
+        // transport, whose page count came from the RETURN-DATA bound and whose
+        // pages have no producer that can exist -- see
+        // `docs/design/GENERAL_INPUT_TRANSPORT_2026_09_02.md`. The bank arrives
+        // inline in the CPI instruction data instead. The profile stays
+        // Profile13 because that is the encoder carrying General's trusted
+        // environment, variable-data prestates and route aliases; it now
+        // declares zero spans, which `validate_dynamic_fixed_spans` admits
+        // exactly when the item-rule table and the item operations are empty
+        // too, and both are.
+        &[],
         fixed_count,
         |coordinate| {
             general_account_profile_rule_v3(action, coordinate, widths)
                 .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
         },
-        &[general_scratch_page_rule_v3()],
+        &[],
         operations
             .get(..fixed_operation_count)
             .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
@@ -2511,8 +2491,51 @@ mod tests {
         Action::CloseCandidate,
     ];
 
+    /// The window-gated actions put the CURRENT SLOT in their register bank.
+    ///
+    /// This is small and it is the reason the input scratch-page transport
+    /// could never have a producer. `TrustedEnvironmentV2::CurrentSlot` makes
+    /// Trading seed `scalar::CURRENT_SLOT` from `Clock::get()` on every
+    /// execution, and `require_trusted_environment_v3` refuses a projection
+    /// that disagrees -- so the bank's bytes, and every digest over them, are
+    /// different in every slot. Anything outside the executing instruction that
+    /// has to STATE that bank is therefore valid for exactly one slot, which no
+    /// caller can deliver into. Measured before the transport went inline: the
+    /// same bundle one slot later refused `0x4018 AdmittedTransport` after
+    /// 501,968 CU (`1fee82fa`).
     #[test]
-    fn every_action_rule_is_total_and_scratch_span_is_physical_only() {
+    fn the_window_gated_actions_declare_the_current_slot_in_their_bank() {
+        for action in ACTIONS {
+            let bytes = general_account_profile_bytes_v3(action).expect("profile width");
+            let mut encoded = vec![0_u8; bytes];
+            let mut scratch = vec![0_u8; bytes];
+            encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut encoded)
+                .expect("account profile");
+            let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(&encoded)
+                .expect("decode");
+            let declared = matches!(
+                profile.trusted_environment(),
+                dclutch_account_profile_contract::v2::TrustedEnvironmentV2::CurrentSlot { .. }
+            );
+            assert_eq!(
+                declared,
+                matches!(
+                    action,
+                    Action::OpenBatch
+                        | Action::CloseBatch
+                        | Action::PlaceOrder
+                        | Action::CancelOrder
+                        | Action::ReleaseOrder
+                        | Action::SubmitCandidate
+                        | Action::CloseCandidate
+                ),
+                "{action:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn every_action_rule_is_total_and_no_action_declares_a_span() {
         for action in ACTIONS {
             let count = general_account_profile_fixed_count_v3(action).expect("fixed count");
             let mut coordinate = 0_u16;
@@ -2524,14 +2547,19 @@ mod tests {
                 general_account_profile_rule_v3(action, count, WIDTHS),
                 Err(GeneralAccountRuleErrorV3::Geometry)
             );
-            let span = general_scratch_page_span_v3(action).expect("span");
-            assert_eq!(span.insertion_coordinate, count);
-            assert_eq!(
-                span.count_scalar,
-                u16::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT).expect("bounded scalar")
-            );
-            assert_eq!(span.minimum, 1);
-            assert_eq!(span.maximum, u32::MAX);
+            // NO SPAN, asserted through the encoded artifact rather than
+            // through a builder that no longer exists. `scalar::INPUT_SCRATCH_PAGE_COUNT`
+            // survives as a reserved coordinate so the 151 common scalars do
+            // not renumber; nothing writes it and nothing reads it.
+            let bytes = general_account_profile_bytes_v3(action).expect("profile width");
+            let mut encoded = vec![0_u8; bytes];
+            let mut scratch = vec![0_u8; bytes];
+            encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut encoded)
+                .expect("account profile");
+            let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(&encoded)
+                .expect("decode");
+            assert_eq!(profile.dynamic_fixed_span_count(), 0);
+            assert_eq!(profile.item_account_stride(), 0);
         }
     }
 
@@ -2771,13 +2799,21 @@ mod tests {
             .expect("SubmitCandidate profile");
         let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(&output)
             .expect("canonical profile");
-        for count in [1_u32, 258] {
-            assert_eq!(
-                profile.logical_account_count_with_dynamic_spans(1, &[count]),
-                // 11 fixed accounts until the System program became one.
-                Ok(usize::from(12_u16) + usize::try_from(count).expect("tail")),
-            );
-        }
+        // THE FRAME IS THE FIXED FRAME, at every Product width. The twelve
+        // fixed accounts used to be followed by a scratch-page span whose width
+        // came from the return-data bound; the bank arrives inline now and the
+        // span is gone, so the only admitted span vector is the empty one.
+        assert_eq!(
+            profile.logical_account_count_with_dynamic_spans(1, &[]),
+            // 11 fixed accounts until the System program became one.
+            Ok(usize::from(12_u16)),
+        );
+        assert!(
+            profile
+                .logical_account_count_with_dynamic_spans(1, &[3])
+                .is_err(),
+            "a width for a span this profile does not declare must refuse",
+        );
     }
 
     /// Every child role the General Effect routes to has a program coordinate
@@ -3135,16 +3171,15 @@ mod tests {
                 profile.artifact_profile(),
                 DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
             );
-            assert_eq!(profile.dynamic_fixed_span_count(), 1);
+            assert_eq!(profile.dynamic_fixed_span_count(), 0);
             assert_eq!(profile.bytes().len(), bytes);
-            // One rule per fixed coordinate plus the single scratch-page
-            // template, which the dynamic span expands at projection time.
+            // One rule per fixed coordinate and nothing after it: the
+            // scratch-page template the span expanded is gone with the span.
             assert_eq!(
                 profile
-                    .logical_account_count_with_dynamic_spans(1, &[3])
+                    .logical_account_count_with_dynamic_spans(1, &[])
                     .expect("logical count"),
                 usize::from(general_account_profile_fixed_count_v3(action).expect("fixed count"))
-                    + 3
             );
         }
 

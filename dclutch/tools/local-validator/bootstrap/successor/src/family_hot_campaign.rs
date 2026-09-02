@@ -71,9 +71,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
-    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
-    SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
+    ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2, AcceleratorDispositionV2,
+    AcceleratorRequestV2, RequestTransportV2,
 };
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
@@ -223,7 +222,7 @@ struct FamilyHotJournalV1 {
     instruction_data_sha256: String,
     accelerator_request_sha256: String,
     input_bank_sha256: String,
-    scratch_page_count: u32,
+    admitted_invocation_count: u32,
     account_count: usize,
     legacy_packet_bytes: Option<usize>,
     signed_packet_base64: Option<String>,
@@ -262,7 +261,7 @@ struct FamilyHotActionEvidenceV1 {
     compute_units_consumed: u64,
     legacy_packet_bytes: usize,
     account_count: usize,
-    scratch_page_count: u32,
+    admitted_invocation_count: u32,
     ack_disposition: String,
     ack_sha256: String,
     journal: String,
@@ -430,7 +429,7 @@ fn run_series(arguments: &ArgumentsV1) -> Result<()> {
             instruction_data_sha256: String::new(),
             accelerator_request_sha256: String::new(),
             input_bank_sha256: String::new(),
-            scratch_page_count: 0,
+            admitted_invocation_count: 0,
             account_count: 0,
             legacy_packet_bytes: None,
             signed_packet_base64: None,
@@ -596,8 +595,14 @@ fn execute_general_action_v1(
         .map_err(|error| Error::new(format!("bank digest: {error:?}")))?;
     let scalar_count = general_hot_scalar_count_v3(action, width)
         .map_err(|error| Error::new(format!("scalar count: {error:?}")))?;
+    // INLINE, because the pages this used to plant have no producer a chain
+    // transaction can be. The bank carries the current slot, a full page is
+    // 1,072 bytes against a 1,232-byte transaction, and every reader wants the
+    // page read-only; the genesis fixtures below were the only writer that ever
+    // existed and a validator genesis file is not a route. See
+    // `docs/design/GENERAL_INPUT_TRANSPORT_2026_09_02.md`.
     let request = AcceleratorRequestV2::new(
-        RequestTransportV2::ScratchPages,
+        RequestTransportV2::Inline,
         content_v1(1)?,
         content_v1(2)?,
         content_v1(3)?,
@@ -607,14 +612,18 @@ fn execute_general_action_v1(
         scalar_count,
         GENERAL_HOT_COMMON_IDENTITIES_V3,
         0,
-        &[],
+        &bank,
     )
     .map_err(|error| Error::new(format!("accelerator request: {error:?}")))?;
-    let mut request_bytes = vec![0_u8; ACCELERATOR_REQUEST_HEADER_BYTES_V2];
+    let mut request_bytes = vec![0_u8; ACCELERATOR_REQUEST_HEADER_BYTES_V2 + bank.len()];
     request
         .encode_into(&mut request_bytes)
         .map_err(|error| Error::new(format!("accelerator request bytes: {error:?}")))?;
-    let page_count = request.chunk_count();
+    // The OUTPUT chunk count, which under `ChunkedBankV2` is the accelerator
+    // invocation count. It used to be read as the input page count too, because
+    // the two were the same number; the input pages are gone and this one is
+    // unchanged.
+    let admitted_invocation_count = request.chunk_count();
 
     // Every account the accelerator reads is a genesis fixture owned by the
     // caller program, at a derived address both phases agree on without
@@ -627,24 +636,6 @@ fn execute_general_action_v1(
             arguments.caller,
             &request_bytes,
         )?;
-    }
-
-    let mut page_keys = Vec::new();
-    for page_index in 0..page_count {
-        let key =
-            campaign_account_key_v1(arguments.caller, step.ordinal, "scratch-page", page_index);
-        if !arguments.execute {
-            let page_bytes = general_scratch_page_v1(
-                &bank,
-                bank_digest,
-                width,
-                scalar_count,
-                page_index,
-                arguments.caller,
-            )?;
-            write_genesis_account_v1(&arguments.account_dir, key, arguments.caller, &page_bytes)?;
-        }
-        page_keys.push(key);
     }
 
     let runtime_data = step.runtime.clone();
@@ -679,8 +670,6 @@ fn execute_general_action_v1(
             .ok_or_else(|| Error::new(format!("{label}: runtime coordinate {coordinate}")))?;
         *slot = key;
     }
-    frame.extend(page_keys.iter().copied());
-
     let mut metas = Vec::with_capacity(frame.len() + 2);
     metas.push(AccountMeta::new_readonly(request_account, false));
     metas.push(AccountMeta::new_readonly(arguments.accelerator, false));
@@ -710,7 +699,7 @@ fn execute_general_action_v1(
         instruction_data_sha256: hex(&Sha256::digest(&instruction_data)),
         accelerator_request_sha256: hex(&Sha256::digest(&request_bytes)),
         input_bank_sha256: hex(&Sha256::digest(&bank)),
-        scratch_page_count: page_count,
+        admitted_invocation_count,
         account_count,
         legacy_packet_bytes: None,
         signed_packet_base64: None,
@@ -820,7 +809,7 @@ fn execute_general_action_v1(
             .unwrap_or_default(),
         legacy_packet_bytes: journal.legacy_packet_bytes.unwrap_or_default(),
         account_count,
-        scratch_page_count: page_count,
+        admitted_invocation_count,
         ack_disposition: disposition.to_owned(),
         ack_sha256: hex(&Sha256::digest(&return_data.data)),
         journal: journal_path.display().to_string(),
@@ -1540,58 +1529,6 @@ fn write_bank_identity_v1(
     }
 }
 
-/// One authenticated input scratch page carrying its slice of the bank.
-fn general_scratch_page_v1(
-    bank: &[u8],
-    bank_digest: ContentId,
-    width: u32,
-    scalar_count: u32,
-    page_index: u32,
-    caller: Pubkey,
-) -> Result<Vec<u8>> {
-    let page_request = AcceleratorRequestV2::new(
-        RequestTransportV2::ScratchPages,
-        content_v1(1)?,
-        content_v1(2)?,
-        content_v1(3)?,
-        content_v1(4)?,
-        bank_digest,
-        width,
-        scalar_count,
-        GENERAL_HOT_COMMON_IDENTITIES_V3,
-        page_index,
-        &[],
-    )
-    .map_err(|error| Error::new(format!("page request: {error:?}")))?;
-    let start = usize::try_from(page_request.chunk_offset())
-        .map_err(|_| Error::new("page offset overflow"))?;
-    let end = start
-        .checked_add(ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2)
-        .unwrap_or(bank.len())
-        .min(bank.len());
-    let payload = bank
-        .get(start..end)
-        .ok_or_else(|| Error::new("page payload out of range"))?;
-    let page = AuthenticatedScratchPageV2::new(
-        ScratchPageKindV2::Input,
-        ContentId::new(caller.to_bytes())
-            .map_err(|error| Error::new(format!("caller identity: {error:?}")))?,
-        content_v1(1)?,
-        content_v1(4)?,
-        bank_digest,
-        width,
-        scalar_count,
-        GENERAL_HOT_COMMON_IDENTITIES_V3,
-        page_index,
-        payload,
-    )
-    .map_err(|error| Error::new(format!("scratch page: {error:?}")))?;
-    let mut bytes = vec![0_u8; SCRATCH_PAGE_HEADER_BYTES_V2 + page.payload().len()];
-    page.encode_into(&mut bytes)
-        .map_err(|error| Error::new(format!("scratch page bytes: {error:?}")))?;
-    Ok(bytes)
-}
-
 /// What a founded Market must carry before General is selectable on it.
 ///
 /// This is the Market-selection hook. It authors nothing and reads no chain;
@@ -1775,7 +1712,7 @@ mod tests {
             instruction_data_sha256: request_digest.to_owned(),
             accelerator_request_sha256: String::new(),
             input_bank_sha256: String::new(),
-            scratch_page_count: 0,
+            admitted_invocation_count: 0,
             account_count: 0,
             legacy_packet_bytes: None,
             signed_packet_base64: None,

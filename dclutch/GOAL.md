@@ -3170,3 +3170,19 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   pending cut refuses); the copy on EQnY… says "No checked execution release exists" rather than "waits on". Parked on:
   cohort-13's handoff, the phase table from PHASE-CENSUS, the two wallet-terminal wasm digests (dealer/direct codecs dirty).
 - Cuts: `23b2941e1`.
+
+### Lane map delta — 2026-09-03 00:15
+- GENERAL successor closed (`a517d27c`, `6fa1a63b` …): **inline input landed** — `input_page_count` asks the declared
+  transport, General declares no span, the accelerator reads the bank from CPI data, genesis pages gone; measured N=2 895,492 →
+  **797,238 CU** (−98,254; the note predicted a rise — the mechanism was right, the sign never computed), 59 → 55 accounts,
+  heap +11,004 attributed to the CPI buffer set. `ScratchExhausted 0x401E` replaces `Content` for out-of-scratch.
+  `scratch_page_count` was never a page count → `admitted_invocation_count` across operator/SDK/web. **No program-test can
+  found a General market** (the successor is a bin-only crate; no driver founds one) → COHORT-13 founds one on devnet and
+  runs OpenBatch there. Owed: refusals.md rows (0x401E, 0x801x) to a worktree after the census fix.
+- Landed by lanes not yet reported: `90a8563f`/`271ce0ed` (DEALER: the Registry records a release's deployment; **no route hashes
+  an ELF; the equity Add COMMITS with 241,577 units spare**); `1accf9e7`/`a416cd8b` (STRUCTURED: a receipt may not back itself,
+  in the account frame; the island's pins re-pinned); `7d24a851`/`4270eb65` (PHASE-CENSUS: the enumerator reads a route's
+  phase gate from the guard's constant; routes.md carries admissible prestates); `5ace0cc8` (DIRECT: the Trading caller's
+  provider route stops asking for records nobody can make); `8fc0f73b`/`72c488f7` (WEB: the cut goes pending before cohort-12
+  closes; three test files had never been running).
+- Cuts: `edaf8e7b8`, `ccff22cd3`, `632d972f8`, `e22b153a0`, `9aefc4c78`.

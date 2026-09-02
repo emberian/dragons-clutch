@@ -70,12 +70,10 @@ use dclutch_sha256_adapter::digest;
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 
 use crate::{
-    account_rules_v3::{
-        GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3, general_account_profile_fixed_count_v3,
-    },
+    account_rules_v3::general_account_profile_fixed_count_v3,
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, general_hot_item_scalar_stride_v3, scalar,
+        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, general_hot_item_scalar_stride_v3,
     },
     specialization::general_request_profile_bytes_v1,
 };
@@ -579,24 +577,16 @@ fn validate_geometry(
     validate_hot_account_profile(action, account)?;
     let expected_fixed = general_account_profile_fixed_count_v3(action)
         .map_err(|_| GeneralArtifactErrorV3::Geometry)?;
+    // ZERO SPANS, stated as the exact count rather than as a bound. General
+    // declared one -- the input scratch-page transport -- and it is gone: its
+    // width came from the return-data bound and its pages have no producer that
+    // can exist. The bank rides inline in the CPI instruction data now. Keeping
+    // the count pinned here rather than merely admitting "at most one" is what
+    // makes a profile that starts declaring a span again fail rather than agree
+    // with itself.
     if account.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         || account.fixed_account_count() != expected_fixed
-        || account.dynamic_fixed_span_count() != 1
-    {
-        return Err(GeneralArtifactErrorV3::Geometry);
-    }
-    let scratch_span = account
-        .dynamic_fixed_span(0)
-        .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
-    if scratch_span.insertion_coordinate() != expected_fixed
-        || scratch_span.count_scalar()
-            != u16::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT)
-                .map_err(|_| GeneralArtifactErrorV3::Geometry)?
-        || scratch_span.rule_start() != 0
-        || scratch_span.rule_stride() != GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3
-        || scratch_span.minimum() != 1
-        || scratch_span.maximum() != u32::MAX
-        || scratch_span.step() != 1
+        || account.dynamic_fixed_span_count() != 0
     {
         return Err(GeneralArtifactErrorV3::Geometry);
     }
@@ -620,10 +610,11 @@ fn validate_geometry(
         || account.item_identity_stride()
             != u16::try_from(GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3)
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
-        // Under Profile13 the item-rule table is repurposed exclusively as
-        // the dynamic fixed-span template bank. It is physical scratch-page
-        // geometry, not a Product-N semantic account stride.
-        || account.item_account_stride() != GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3
+        // The item-rule table was the dynamic fixed-span template bank and
+        // nothing else -- physical scratch-page geometry, never a Product-N
+        // semantic account stride -- so with no span it is empty, and the
+        // stride an empty template bank declares is zero.
+        || account.item_account_stride() != 0
         || request.common_scalar_count() != account.common_scalar_count()
         || request.item_scalar_stride() != account.item_scalar_stride()
         || request.common_identity_count() != account.common_identity_count()
@@ -1667,9 +1658,12 @@ mod tests {
                 .expect("fixture profile")
                 .fixed_account_count(),
         );
+        // The header, then one rule per fixed coordinate, then the operations.
+        // There is no span entry and no span rule template between them any
+        // more: General declares zero dynamic spans since the input bank went
+        // inline, and this offset is the encoded layout, not a derivation.
         let operation = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
-            + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
-            + (fixed_accounts + 1) * dclutch_account_profile_contract::v2::RULE_BYTES;
+            + fixed_accounts * dclutch_account_profile_contract::v2::RULE_BYTES;
         put(
             &mut hostile_profile,
             operation + 2,

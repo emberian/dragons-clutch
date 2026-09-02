@@ -1780,37 +1780,32 @@ mod tests {
             usize::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT).expect("selector coordinate");
         let mut scalars = vec![0_u64; scalar_count];
         scalars[0] = 0x55;
-        seed_authenticated_dynamic_span_counts(profile, &[3], &mut scalars)
-            .expect("authenticated width seeds selector");
-        assert_eq!(scalars[selector], 3);
+        // GENERAL DECLARES NO SPAN, so the only admitted width vector is the
+        // empty one and it seeds nothing. `INPUT_SCRATCH_PAGE_COUNT` survives
+        // as a reserved coordinate, which is why it is asserted still zero:
+        // the seeder must not write a register no span selects.
+        seed_authenticated_dynamic_span_counts(profile, &[], &mut scalars)
+            .expect("a span-free profile seeds no selector");
+        assert_eq!(scalars[selector], 0);
         assert_eq!(scalars[0], 0x55, "unrelated semantic register is unchanged");
 
-        assert_eq!(
-            seed_authenticated_dynamic_span_counts(profile, &[], &mut scalars),
-            Err(BuilderError::Spans("span-selector-count"))
-        );
-        assert_eq!(
-            seed_authenticated_dynamic_span_counts(profile, &[0], &mut scalars),
-            Err(BuilderError::Spans("span-selector-width"))
-        );
-        assert_eq!(
-            seed_authenticated_dynamic_span_counts(profile, &[3, 3], &mut scalars),
-            Err(BuilderError::Spans("span-selector-count"))
-        );
-        let mut short_bank = vec![0_u64; selector];
-        assert_eq!(
-            seed_authenticated_dynamic_span_counts(profile, &[3], &mut short_bank),
-            Err(BuilderError::Spans("span-selector-register"))
-        );
+        for stated in [&[3_u32][..], &[0][..], &[3, 3][..]] {
+            assert_eq!(
+                seed_authenticated_dynamic_span_counts(profile, stated, &mut scalars),
+                Err(BuilderError::Spans("span-selector-count")),
+                "a width for a span this profile does not declare must refuse"
+            );
+        }
         let expanded = profile
-            .logical_account_count_with_dynamic_spans(4, &[3])
+            .logical_account_count_with_dynamic_spans(4, &[])
             .expect("expanded Profile13 width");
+        assert_eq!(expanded, usize::from(profile.fixed_account_count()));
         assert_eq!(
-            lifecycle_semantic_prefix_width(profile, 4, &[3], expanded),
+            lifecycle_semantic_prefix_width(profile, 4, &[], expanded),
             Ok(usize::from(profile.fixed_account_count()))
         );
         assert_eq!(
-            lifecycle_semantic_prefix_width(profile, 4, &[3], expanded + 1),
+            lifecycle_semantic_prefix_width(profile, 4, &[], expanded + 1),
             Err(BuilderError::Lifecycle("expanded-account-width"))
         );
     }

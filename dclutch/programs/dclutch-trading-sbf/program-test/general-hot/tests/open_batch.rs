@@ -75,16 +75,10 @@ use dclutch_rent_contract::{
         LifecycleRentCreditV2,
     },
 };
-use dclutch_trading_sbf::TradingSbfError;
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{hash::hash, pubkey::Pubkey, rent::Rent};
-use solana_program_test::BanksClientError;
-use solana_sdk::{
-    instruction::InstructionError,
-    signature::{Keypair, Signer},
-    transaction::TransactionError,
-};
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 const ACCELERATOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
@@ -607,8 +601,11 @@ fn build_host_case(
         },
     )
     .expect("complete admitted OpenBatch bundle");
-    assert_eq!(built.bundle.span_counts.len(), 1);
-    assert_eq!(built.bundle.transport_span, Some(0));
+    // NO SPAN AND NO TRANSPORT SPAN. General's bank rides inline in the CPI
+    // instruction data; the four input scratch pages it used to carry are gone
+    // from the frame and there is no width for the builder to derive.
+    assert!(built.bundle.span_counts.is_empty());
+    assert_eq!(built.bundle.transport_span, None);
     HostCase {
         built,
         batch: request.batch,
@@ -647,27 +644,7 @@ fn add_case_accounts(
     }
 }
 
-/// Which slot the bank runs a bundle whose input pages were computed for one
-/// exact slot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ExecutionSlotV1 {
-    /// The slot the pages were computed for.
-    AsBuilt,
-    /// One slot later, which is the whole of what a caller-written input page
-    /// must survive to be usable from a transaction it was not written in.
-    OneSlotLater,
-}
-
 async fn execute_open_batch(outcome_count: u32) -> (u32, usize, u64) {
-    execute_open_batch_at(outcome_count, ExecutionSlotV1::AsBuilt)
-        .await
-        .expect("the as-built slot commits")
-}
-
-async fn execute_open_batch_at(
-    outcome_count: u32,
-    execution_slot: ExecutionSlotV1,
-) -> Option<(u32, usize, u64)> {
     assert_eq!(DIRECT_HOT_HEAP_FRAME_BYTES_V1, 65_536);
     let substrate = waist::fixture_substrate();
     let elves = waist::elves();
@@ -693,13 +670,13 @@ async fn execute_open_batch_at(
         releases,
         &accelerator_elf,
     );
-    assert_eq!(
-        case.built.bundle.span_counts,
-        vec![
-            u32::try_from(case.built.admitted_authorities.entries.len())
-                .expect("scratch page count")
-        ]
-    );
+    // THE TWO COUNTS HAVE COME APART, which is the whole change. The
+    // caller-authority span is still one account per accelerator invocation --
+    // the output still chunks under `ChunkedBankV2` -- and the input page span
+    // is empty. They were the same number, from the same return-data bound, and
+    // reading one for the other is what made the input transport unbuildable.
+    assert!(case.built.bundle.span_counts.is_empty());
+    assert!(!case.built.admitted_authorities.entries.is_empty());
     assert!(
         case.built.bundle.hot_instruction.accounts.len() <= 100,
         "the exact ALT route stays under the v0 account ceiling"
@@ -744,16 +721,6 @@ async fn execute_open_batch_at(
     let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer.pubkey());
     waist::add_lookup_table(&mut test, &lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
-    if execution_slot == ExecutionSlotV1::OneSlotLater {
-        context
-            .warp_to_slot(
-                substrate
-                    .bank_slot()
-                    .checked_add(1)
-                    .expect("one slot later"),
-            )
-            .expect("the bank warps one slot");
-    }
     // THE FRAME CONTROL, and the reason it is an assertion rather than a
     // diagnostic. `runtime_observations_digest` is a field of
     // `AdmittedInvocationContextV3`, and the host computes it over
@@ -848,19 +815,6 @@ async fn execute_open_batch_at(
         &[&payer],
     )
     .await;
-    if execution_slot == ExecutionSlotV1::OneSlotLater {
-        let refusal = submission.err().expect(
-            "a bundle whose input pages were computed for the previous slot must not commit",
-        );
-        assert_eq!(
-            refusal_code(&refusal),
-            Some(TradingSbfError::AdmittedTransport as u32),
-            "the stale-page refusal must be the transport's own code, not whatever the \
-             transaction refuses first: {:?}",
-            refusal.error,
-        );
-        return None;
-    }
     let execution = submission.expect("real Trading -> General accelerator OpenBatch");
     assert!(
         execution
@@ -975,35 +929,19 @@ async fn execute_open_batch_at(
         "root principal is conserved and one exact Batch principal moves from payer"
     );
     eprintln!(
-        "general-open-batch N={outcome_count} pages={} accounts={} cu={} batch={} root_revision={}=>{}",
-        case.built.bundle.span_counts[0],
+        "general-open-batch N={outcome_count} invocations={} accounts={} cu={} batch={} root_revision={}=>{}",
+        case.built.admitted_authorities.entries.len(),
         case.built.bundle.hot_instruction.accounts.len(),
         execution.compute_units_consumed,
         case.batch,
         before.revision(),
         after.revision(),
     );
-    Some((
-        case.built.bundle.span_counts[0],
+    (
+        u32::try_from(case.built.admitted_authorities.entries.len()).expect("invocation count"),
         case.built.bundle.hot_instruction.accounts.len(),
         execution.compute_units_consumed,
-    ))
-}
-
-/// The exact custom discriminant a refusal reached, or `None` when it never
-/// reached a program at all.
-fn refusal_code(refusal: &waist::RefusedExecution) -> Option<u32> {
-    match &refusal.error {
-        BanksClientError::TransactionError(TransactionError::InstructionError(
-            _,
-            InstructionError::Custom(code),
-        ))
-        | BanksClientError::SimulationError {
-            err: TransactionError::InstructionError(_, InstructionError::Custom(code)),
-            ..
-        } => Some(*code),
-        _ => None,
-    }
+    )
 }
 
 #[tokio::test]
@@ -1031,39 +969,7 @@ async fn real_elf_open_batch_commits_at_every_width_because_its_bank_does_not_gr
     assert_eq!(
         (narrow.0, narrow.1),
         (widest.0, widest.1),
-        "N=2 and N=258 must present the same page span and account frame"
+        "N=2 and N=258 must present the same invocation span and account frame"
     );
     assert_eq!((middle.0, middle.1), (widest.0, widest.1));
-}
-
-#[tokio::test]
-async fn a_caller_written_input_page_is_stale_one_slot_after_it_was_written() {
-    // WHY THIS IS THE WHOLE ON-CHAIN GAP, and not a fixture detail.
-    //
-    // General's admitted route transports its input register bank through
-    // AccountProfile-only scratch pages, and every reader -- Trading before the
-    // CPI, the Trading library inside an accelerator, and the General
-    // accelerator itself -- requires each page to be Trading-owned, READ-ONLY,
-    // and to carry `total_bank_digest == request.input_bank_digest()`. So the
-    // pages must be written by something other than the instruction that reads
-    // them, and they must carry the exact bank that instruction is about to
-    // project.
-    //
-    // That bank contains the SLOT. General's AccountProfile declares a trusted
-    // environment (`account_rules_v3::general_hot_account_profile_v3`, the
-    // `CurrentSlot` destination at `scalar::CURRENT_SLOT` = 90), Trading seeds
-    // it from `Clock::get()` on every execution, and
-    // `require_trusted_environment_v3` refuses a projection that disagrees. The
-    // input bank is therefore a different 2,744 bytes in every slot, and so is
-    // its digest.
-    //
-    // This test is the positive control for that: the same bundle, the same
-    // pages, the bank one slot later. It must refuse, and it must refuse with
-    // the transport's own discriminant rather than with whatever a stale frame
-    // trips over first.
-    assert!(
-        execute_open_batch_at(2, ExecutionSlotV1::OneSlotLater)
-            .await
-            .is_none()
-    );
 }

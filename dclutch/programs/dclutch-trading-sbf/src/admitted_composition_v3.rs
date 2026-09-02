@@ -68,7 +68,10 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use crate::{TradingSbfError, execution_strategy_v2::AuthenticatedExecutionStrategyV2};
+use crate::{
+    TradingSbfError, execution_strategy_v2::AuthenticatedExecutionStrategyV2,
+    hot_v3::hot_heap_mark_macro as hot_heap_mark,
+};
 
 const ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3: &[u8] = b"dclutch:hot-admitted-ack:v3";
 
@@ -294,6 +297,7 @@ pub fn execute_admitted_aot_v3<'info>(
         )?;
     }
 
+    hot_heap_mark!("admitted-input-bank");
     let mut transcript = hash(ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3).to_bytes();
     // One buffer set for every invocation. See `AdmittedCpiBuffersV4` for the
     // measurement that made this necessary; `first_request` sizes the request
@@ -310,6 +314,7 @@ pub fn execute_admitted_aot_v3<'info>(
             .encoded_len()
             .map_err(|_| TradingSbfError::AdmittedTransport)?,
     )?;
+    hot_heap_mark!("admitted-cpi-buffers");
     let (scalars, identities) = match profile {
         AcceleratorTransportProfileV2::ChunkedBankV2 => {
             let mut candidate = vec![0_u8; input_bank.len()];
@@ -373,6 +378,11 @@ pub fn execute_admitted_aot_v3<'info>(
                     &ack_bytes,
                 ])
                 .to_bytes();
+                // ONE MARK PER INVOCATION, and it repeats on purpose: the
+                // rendered table keys on the label and shows the last, while
+                // the raw log carries all four running totals, which is what
+                // says whether a chunk costs the same every time.
+                hot_heap_mark!("admitted-chunk");
             }
             if accepted_digest != Some(content(&candidate)?) {
                 return Err(TradingSbfError::Transition.into());

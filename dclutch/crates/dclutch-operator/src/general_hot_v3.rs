@@ -397,8 +397,14 @@ pub struct GeneralSuccessorInstructionV5 {
     pub request: GeneralDecodedRequestV3,
     /// Product-derived outcome width.
     pub outcome_count: u32,
-    /// Canonical authenticated scratch-page count for the selected bank geometry.
-    pub scratch_page_count: u32,
+    /// Accelerator invocations the selected bank geometry costs.
+    ///
+    /// This was named for the input scratch pages because their count was the
+    /// same number: both came from `classify_bank_transport_v2`, which answers
+    /// the RETURN-DATA question. The input bank is inline now and pages none of
+    /// itself; what remains is the output invocation count, which is also the
+    /// caller-authority span length, and that is what this always computed.
+    pub admitted_invocation_count: u32,
     /// Exact action-specific DCE5 child route and receipt order.
     pub child_routes: Vec<GeneralChildRouteV5>,
 }
@@ -412,8 +418,8 @@ pub struct GeneralSuccessorTransactionPlanV0 {
     pub heap_frame_bytes: u32,
     /// Canonical chain-derived controller request.
     pub request: GeneralDecodedRequestV3,
-    /// Canonical authenticated scratch-page count.
-    pub scratch_page_count: u32,
+    /// Accelerator invocations the selected bank geometry costs.
+    pub admitted_invocation_count: u32,
     /// Exact DCE5 child route and receipt order.
     pub child_routes: Vec<GeneralChildRouteV5>,
 }
@@ -502,14 +508,14 @@ pub fn build_general_successor_instruction_v5(
         product.outcome_count,
     )
     .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
-    let scratch_page_count = selected_bank_span_count_v3(bundle)?;
+    let admitted_invocation_count = selected_admitted_invocation_count_v3(bundle)?;
     let child_routes = project_child_routes_v5(bundle)?;
     Ok(GeneralSuccessorInstructionV5 {
         hot,
         heap_frame_bytes: GENERAL_HOT_HEAP_FRAME_BYTES_V3,
         request,
         outcome_count: product.outcome_count,
-        scratch_page_count,
+        admitted_invocation_count,
         child_routes,
     })
 }
@@ -530,7 +536,7 @@ pub fn compile_general_successor_v0(
         hot,
         heap_frame_bytes: report.heap_frame_bytes,
         request: report.request,
-        scratch_page_count: report.scratch_page_count,
+        admitted_invocation_count: report.admitted_invocation_count,
         child_routes: report.child_routes.clone(),
     })
 }
@@ -2020,7 +2026,7 @@ fn validate_strategy_geometry(
     state: &GeneralHotStateV3,
     bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<(), GeneralHotOperatorErrorV3> {
-    let caller_count = usize::try_from(selected_bank_span_count_v3(bundle)?)
+    let caller_count = usize::try_from(selected_admitted_invocation_count_v3(bundle)?)
         .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
     let expected = ADMITTED_AOT_FIXED_EXTRAS_V3
         .checked_add(caller_count)
@@ -2040,7 +2046,7 @@ fn validate_strategy_geometry(
     Ok(())
 }
 
-fn selected_bank_span_count_v3(
+fn selected_admitted_invocation_count_v3(
     bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<u32, GeneralHotOperatorErrorV3> {
     let scalar_count = bundle
@@ -2075,12 +2081,18 @@ fn validate_runtime_geometry(
     bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<(), GeneralHotOperatorErrorV3> {
     let profile = bundle.account_profile;
+    // ZERO SPANS. General's only dynamic span was the input scratch-page
+    // transport; the bank rides inline in the CPI instruction data now and the
+    // profile declares none. The artifact profile stays Profile13, which is the
+    // encoder carrying General's trusted environment and variable-data
+    // prestates, so this asks for the count rather than for the discriminator
+    // alone.
     if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-        || profile.dynamic_fixed_span_count() != 1
+        || profile.dynamic_fixed_span_count() != 0
     {
         return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
     }
-    let span_counts = [selected_bank_span_count_v3(bundle)?];
+    let span_counts: [u32; 0] = [];
     let logical_count = profile
         .logical_account_count_with_dynamic_spans(bundle.tail_count, &span_counts)
         .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
@@ -2123,18 +2135,10 @@ fn validate_runtime_geometry(
             .checked_add(1)
             .ok_or(GeneralHotOperatorErrorV3::Arithmetic)?;
     }
-    let span = profile
-        .dynamic_fixed_span(0)
-        .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
-    if span.count_scalar()
-        != u16::try_from(general_scalar::INPUT_SCRATCH_PAGE_COUNT)
-            .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?
-        || usize::from(span.insertion_coordinate()).checked_add(
-            usize::try_from(span_counts[0]).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
-        ) != Some(logical_count)
-    {
-        return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
-    }
+    // The span's own conjuncts are gone with the span: there is no selector to
+    // pin to `INPUT_SCRATCH_PAGE_COUNT` and no insertion coordinate to add a
+    // width to. `logical_account_count_with_dynamic_spans` above already
+    // refuses a width vector this profile does not declare.
     Ok(())
 }
 
@@ -2846,7 +2850,7 @@ mod tests {
     use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
     use dclutch_general_adapter_contract::account_rules_v3::{
         GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
-        general_account_profile_rule_v3, general_scratch_page_rule_v3,
+        general_account_profile_rule_v3,
     };
     use dclutch_general_adapter_contract::collection_v1::{
         GeneralBatchOpeningV1, GeneralOrderHeaderV1, GeneralOrderStateV1, MakerFundingV1,
@@ -2951,7 +2955,7 @@ mod tests {
         accounts: usize,
         writable: usize,
         signers: usize,
-        scratch_pages: usize,
+        admitted_invocations: usize,
         physical_runtime: usize,
     }
 
@@ -2996,7 +3000,12 @@ mod tests {
             .expect("privilege tuple is one of eight")
     }
 
-    fn general_scratch_pages_v3(action: Action, outcome_count: u32) -> usize {
+    /// Accelerator invocations, which is the caller-authority span length.
+    ///
+    /// Still `classify_bank_transport_v2`, because that is the OUTPUT question
+    /// and the output still rides return data under `ChunkedBankV2`. It no
+    /// longer counts input pages: there are none.
+    fn general_admitted_invocations_v3(action: Action, outcome_count: u32) -> usize {
         let scalars =
             general_hot_scalar_count_v3(action, outcome_count).expect("General scalar count");
         match classify_bank_transport_v2(scalars, GENERAL_HOT_COMMON_IDENTITIES_V3)
@@ -3011,7 +3020,7 @@ mod tests {
 
     fn general_frame_geometry_v3(action: Action, outcome_count: u32) -> GeneralFrameGeometryV3 {
         let widths = packet_neutral_widths();
-        let pages = general_scratch_pages_v3(action, outcome_count);
+        let invocations = general_admitted_invocations_v3(action, outcome_count);
         let logical =
             general_account_profile_fixed_count_v3(action).expect("General logical account count");
         let (mut physical_runtime, mut writable, mut signers) = (0_usize, 1_usize, 0_usize);
@@ -3033,18 +3042,17 @@ mod tests {
             writable += usize::from(is_writable);
             signers += usize::from(signer);
         }
-        let (page_signer, page_writable) = privilege_pair(general_scratch_page_rule_v3());
-        physical_runtime += pages;
-        writable += pages * usize::from(page_writable);
-        signers += pages * usize::from(page_signer);
+        // No page accounts to add to the runtime suffix, and none to grant
+        // privileges to. The caller-authority span is still one account per
+        // invocation and it sits in the strategy extras below.
         GeneralFrameGeometryV3 {
             accounts: HOT_FIXED_ACCOUNT_COUNT_V3
                 + ADMITTED_AOT_FIXED_EXTRAS_V3
-                + pages
+                + invocations
                 + (physical_runtime - HOT_RUNTIME_LOGICAL_PREFIX_V3),
             writable,
             signers,
-            scratch_pages: pages,
+            admitted_invocations: invocations,
             physical_runtime,
         }
     }
@@ -3079,7 +3087,7 @@ mod tests {
                 is_writable: index == HOT_ROOT_ACCOUNT_V3,
             });
         }
-        let strategy = ADMITTED_AOT_FIXED_EXTRAS_V3 + geometry.scratch_pages;
+        let strategy = ADMITTED_AOT_FIXED_EXTRAS_V3 + geometry.admitted_invocations;
         for _ in 0..strategy {
             accounts.push(AccountMeta::new_readonly(fresh(), false));
         }
@@ -4620,10 +4628,16 @@ mod tests {
     /// numbers are the wire this operator would actually submit.
     ///
     /// The GEN-SEVEN register-bank widening moved the common bank from 90/40
-    /// to 151/45 scalar/identity coordinates. N=258 now needs eighteen scratch
-    /// pages (and N=1 needs four), so every action carries one extra input page
-    /// and output-page authority in the Trading frame. The counts and wires
-    /// below were re-measured against the widened real-ELF campaign.
+    /// to 151/45 scalar/identity coordinates. The counts and wires below were
+    /// re-measured against the widened real-ELF campaign.
+    ///
+    /// MINUS EIGHTEEN ACCOUNTS AND THIRTY-SIX WIRE BYTES ON EVERY ROW, from the
+    /// input bank going inline. At N=258 the bank was eighteen scratch pages;
+    /// it is now eighteen fewer accounts and, at two wire bytes for each
+    /// ALT-backed readonly account, thirty-six fewer bytes. The caller-authority
+    /// span did not move -- it counts accelerator invocations, which the output
+    /// still chunks -- so the delta is uniform across all seven actions, and
+    /// that uniformity is what says this removed a count and nothing else.
     #[test]
     fn every_action_is_alt_packet_safe_at_the_canonical_runtime_width() {
         let payer = key(250);
@@ -4636,13 +4650,13 @@ mod tests {
         // array -- and both are one byte. Uniform across all seven, which is
         // what says the append moved a count and nothing else.
         for (action, accounts, wire) in [
-            (Action::Consider, 89, 710),
-            (Action::Freeze, 87, 706),
-            (Action::InitializeSettlement, 123, 968),
-            (Action::Collect, 117, 861),
-            (Action::Materialize, 115, 857),
-            (Action::Distribute, 117, 861),
-            (Action::Close, 116, 859),
+            (Action::Consider, 71, 674),
+            (Action::Freeze, 69, 670),
+            (Action::InitializeSettlement, 105, 932),
+            (Action::Collect, 99, 825),
+            (Action::Materialize, 97, 821),
+            (Action::Distribute, 99, 825),
+            (Action::Close, 98, 823),
         ] {
             let report = real_frame_report(action, 258);
             assert_eq!(report.instruction.accounts.len(), accounts, "{action:?}");
@@ -4703,17 +4717,21 @@ mod tests {
     #[test]
     fn the_derived_geometry_reproduces_the_executed_campaign_frame() {
         for (action, campaign_accounts) in [
-            (Action::Consider, 79),
-            (Action::Freeze, 77),
-            (Action::InitializeSettlement, 136),
-            (Action::Collect, 116),
-            (Action::Materialize, 114),
-            (Action::Distribute, 116),
-            (Action::Close, 133),
+            (Action::Consider, 61),
+            (Action::Freeze, 59),
+            (Action::InitializeSettlement, 118),
+            (Action::Collect, 98),
+            (Action::Materialize, 96),
+            (Action::Distribute, 98),
+            (Action::Close, 115),
         ] {
+            // THE FIXED FRAME AND NOTHING ELSE. This used to add the input
+            // page span, and every row above is eighteen smaller because that
+            // span is gone at N = 258. The caller-authority span is not a
+            // logical account -- it lives in the strategy extras, which
+            // `ADMITTED_RUNTIME_ACCOUNTS_START_V3` already covers.
             let logical =
-                usize::from(general_account_profile_fixed_count_v3(action).expect("logical count"))
-                    + general_scratch_pages_v3(action, 258);
+                usize::from(general_account_profile_fixed_count_v3(action).expect("logical count"));
             assert_eq!(
                 2 + ADMITTED_RUNTIME_ACCOUNTS_START_V3 + logical,
                 campaign_accounts,
@@ -4725,24 +4743,28 @@ mod tests {
         for action in [Action::Consider, Action::Freeze] {
             let geometry = general_frame_geometry_v3(action, 258);
             assert_eq!(
-                usize::from(general_account_profile_fixed_count_v3(action).expect("count"))
-                    + geometry.scratch_pages,
+                usize::from(general_account_profile_fixed_count_v3(action).expect("count")),
                 geometry.physical_runtime,
                 "{action:?}"
             );
         }
     }
 
-    /// N=1 and N=258 differ only by the scratch-page span, and both fit.
+    /// N=1 and N=258 differ only by the caller-authority span, and both fit.
+    ///
+    /// It used to be twice that span, because each accelerator invocation cost
+    /// a caller authority AND an input scratch page and the two counts were the
+    /// same number. The input bank is inline now, so the width moves by exactly
+    /// one account per invocation.
     #[test]
-    fn the_runtime_width_moves_only_the_scratch_page_span() {
+    fn the_runtime_width_moves_only_the_caller_authority_span() {
         for action in GENERAL_ACTIONS_V3 {
             let narrow = general_frame_geometry_v3(action, 1);
             let wide = general_frame_geometry_v3(action, 258);
             assert_eq!(
                 wide.accounts - narrow.accounts,
-                2 * (wide.scratch_pages - narrow.scratch_pages),
-                "{action:?} account width follows only the bank transport"
+                wide.admitted_invocations - narrow.admitted_invocations,
+                "{action:?} account width follows only the output invocation count"
             );
             assert_eq!(narrow.signers, wide.signers);
             assert_eq!(narrow.writable, wide.writable);

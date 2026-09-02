@@ -1850,7 +1850,6 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
- "dclutch-trading-sbf",
  "sha2 0.10.9",
  "solana-account 4.6.0",
  "solana-compute-budget-interface",

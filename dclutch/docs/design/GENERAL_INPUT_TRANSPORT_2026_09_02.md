@@ -1,8 +1,33 @@
 # General's on-chain gap is not a missing producer. The producer cannot exist.
 
-**Status:** design note with a measured proof. It changes what C-05's remaining
-work is: not "write the route that produces an input scratch page", but "stop
-requiring one".
+**Status:** LANDED at `a517d27c`. The recommendation below is what was built;
+this section records where the note was wrong.
+
+**The note's one wrong call was the sign of the CU.** It said an inline bank
+under `ChunkedBankV2` would be sent once per output chunk and warned that as a
+known cost. It is sent four times, and the ladder got **cheaper**: measured with
+a control and the change on one tree at `06ef1015`, General `OpenBatch` fell
+895,492 to 797,238 CU at N = 2, 878,152 to 794,898 at N = 13 and 897,452 to
+827,694 at N = 258. Four page accounts cost a decode, a request-binding check,
+an account borrow and a digest each; four extra sends cost a memcpy. The
+mechanism was right and the arithmetic of which side wins was never done.
+
+**What did get worse is the heap**, which the note did not predict at all: peak
+50,516 to 61,520, +11,004. The CPI request buffer accounts for +2,744 of it
+exactly (64 to 2,808 bytes, allocated once and reused); the remaining +8,260 is
+spread across the four invocations and is now named by four new
+`hot_heap_mark!` labels in `admitted_composition_v3` rather than hidden inside
+one span. Splitting it exactly is owed.
+
+The frame lost four accounts (59 to 55) and four logical coordinates (13 to 9);
+the operator's recorded packet geometry lost eighteen accounts and thirty-six
+wire bytes on every action at N = 258.
+
+---
+
+**Original status:** design note with a measured proof. It changes what C-05's
+remaining work is: not "write the route that produces an input scratch page",
+but "stop requiring one".
 
 ## What was believed
 

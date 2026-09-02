@@ -235,13 +235,18 @@ fn derive(
     })
 }
 
-/// The published General profile declares exactly one span, and no General
-/// RequestProfile writes its selector.
+/// The published General profile declares NO span, and its former selector is
+/// a register nothing writes.
 ///
-/// This is the correction to the sketched boundary: the width cannot come from
-/// a request projection, because nothing in the request reaches that register.
+/// The span was the input scratch-page transport. Its width could never come
+/// from a request projection -- nothing in the request reaches that register --
+/// and the transport it selected has no producer a chain transaction can be, so
+/// the bank rides inline in the CPI instruction data and the span is gone.
+/// `scalar::INPUT_SCRATCH_PAGE_COUNT` survives as a reserved coordinate, so the
+/// 151 common scalars do not renumber; this asserts that nothing writes it, in
+/// the request or in the profile.
 #[test]
-fn the_sole_general_span_selector_is_not_request_owned() {
+fn general_declares_no_span_and_nothing_writes_its_former_selector() {
     let target = ProjectionTargetV1 {
         kind: ProjectionRegisterKindV1::Scalar,
         space: ProjectionRegisterSpaceV1::Common,
@@ -254,18 +259,8 @@ fn the_sole_general_span_selector_is_not_request_owned() {
             profile.uses_dynamic_fixed_spans(),
             "{action:?} is profile 13"
         );
-        assert_eq!(profile.dynamic_fixed_span_count(), 1, "{action:?}");
-        let span = profile.dynamic_fixed_span(0).expect("span");
-        assert_eq!(
-            span.count_scalar(),
-            target.index,
-            "{action:?} selector is the scratch-page count"
-        );
-        assert_eq!(
-            span.insertion_coordinate(),
-            general_account_profile_fixed_count_v3(action).expect("fixed count"),
-            "{action:?} span is trailing"
-        );
+        assert_eq!(profile.dynamic_fixed_span_count(), 0, "{action:?}");
+        assert_eq!(profile.item_account_stride(), 0, "{action:?}");
         let request_profile = RequestProfileV1::decode(general_request_profile_bytes_v1(action))
             .expect("request profile");
         assert!(
@@ -277,70 +272,46 @@ fn the_sole_general_span_selector_is_not_request_owned() {
     }
 }
 
-/// The derived width is the bank transport's page count, for every action and
-/// at two Product widths.
+/// The derived width vector is empty, for every action and at every Product
+/// width, because there is no span to give a width to.
 #[test]
-fn the_derived_span_width_is_the_authenticated_page_count() {
+fn the_derived_span_width_vector_is_empty_at_every_width() {
     let admitted = strategy(StrategyDispositionV2::AdmittedAot);
     for outcome_count in [1_u32, OUTCOME_COUNT, 258] {
         for action in GENERAL_ACTIONS_V3 {
-            // The page count is per-ACTION now, not per-width alone: an action
-            // that declares no per-outcome tail has a bank that does not grow,
-            // so its span stays at the narrow-width page count for every N.
-            let expected = expected_pages(action, outcome_count);
             let set = artifacts(action);
             let widths =
                 derive(action, &set, &admitted, outcome_count).expect("General span widths");
-            assert_eq!(
-                widths,
-                vec![expected],
-                "{action:?} at N={outcome_count} spans {expected} pages"
+            assert!(
+                widths.is_empty(),
+                "{action:?} at N={outcome_count} declares a span it should not"
             );
         }
     }
 }
 
-/// With the width in hand, the profile's own geometry expands: the logical
-/// frame is exactly the fixed count plus the span, and the trailing span
-/// coordinates are the opaque readonly scratch pages.
+/// The logical frame is exactly the fixed count, at every Product width, and
+/// the query still refuses a width vector that is not the profile's shape.
 #[test]
-fn the_expanded_frame_is_the_fixed_count_plus_the_span() {
+fn the_frame_is_the_fixed_count_and_a_stated_width_refuses() {
     let admitted = strategy(StrategyDispositionV2::AdmittedAot);
     for action in GENERAL_ACTIONS_V3 {
         let set = artifacts(action);
         let profile = AccountProfileV2::decode(&set.account_profile).expect("profile decode");
         let widths = derive(action, &set, &admitted, OUTCOME_COUNT).expect("span widths");
         let fixed = usize::from(general_account_profile_fixed_count_v3(action).expect("fixed"));
-        let pages = usize::try_from(*widths.first().expect("one span")).expect("pages");
         let logical = profile_ops::logical_count(profile, OUTCOME_COUNT, &widths)
             .expect("logical count with spans");
-        assert_eq!(
-            logical,
-            fixed.checked_add(pages).expect("expanded width"),
-            "{action:?}"
-        );
-        // Every span coordinate is its own representative, and its geometry is
-        // the opaque readonly scratch-page rule.
-        for coordinate in fixed..logical {
-            let representative =
-                profile_ops::representative(profile, OUTCOME_COUNT, &widths, coordinate)
-                    .expect("representative");
-            assert_eq!(representative, coordinate, "{action:?} page {coordinate}");
-            let ordinal =
-                profile_ops::ordinal(profile, OUTCOME_COUNT, &widths, coordinate).expect("ordinal");
-            let geometry =
-                profile_ops::geometry(profile, OUTCOME_COUNT, &widths, ordinal).expect("geometry");
-            let privileges = geometry.privileges();
-            assert!(!privileges.writable(), "{action:?} page {coordinate}");
-            assert!(!privileges.signer(), "{action:?} page {coordinate}");
-        }
-        // And the query refuses a width vector that is not the profile's shape.
+        assert_eq!(logical, fixed, "{action:?}");
+        // A width for a span this profile does not declare is refused rather
+        // than silently ignored, which is what keeps a caller from re-inventing
+        // the page span by stating one.
         assert!(matches!(
-            profile_ops::logical_count(profile, OUTCOME_COUNT, &[]),
+            profile_ops::logical_count(profile, OUTCOME_COUNT, &[4]),
             Err(BuilderError::Profile(_))
         ));
         assert!(matches!(
-            profile_ops::logical_count(profile, OUTCOME_COUNT, &[pages_as_u32(pages), 1]),
+            profile_ops::physical_count(profile, OUTCOME_COUNT, &[4]),
             Err(BuilderError::Profile(_))
         ));
     }
@@ -350,38 +321,42 @@ fn pages_as_u32(value: usize) -> u32 {
     u32::try_from(value).expect("page count")
 }
 
-/// A profile-only span is admissible under exactly one disposition.
+/// A span-free profile derives the same empty width vector under every
+/// disposition.
 ///
-/// This is the seam the sketch called optional. It is not: General's profile
-/// forces the accelerated disposition, so a "run it interpreted first" General
-/// bundle cannot exist against these artifacts.
+/// It used to refuse all but `AdmittedAot`, and that refusal was the span's:
+/// a profile-only selector is admissible only when the strategy's canonical
+/// bank geometry requires scratch pages. With no span there is no selector to
+/// own, so the derivation stops caring which disposition asked. What still
+/// forces General onto the accelerated route is the Strategy record itself,
+/// not the account profile.
 #[test]
-fn a_profile_only_span_refuses_every_disposition_but_admitted_aot() {
+fn a_span_free_profile_derives_no_widths_under_every_disposition() {
     for action in GENERAL_ACTIONS_V3 {
         let set = artifacts(action);
         for disposition in [
             StrategyDispositionV2::Interpreted,
             StrategyDispositionV2::ShadowAot,
+            StrategyDispositionV2::AdmittedAot,
         ] {
             assert_eq!(
                 derive(action, &set, &strategy(disposition), OUTCOME_COUNT),
-                Err(BuilderError::Spans("unowned-span")),
+                Ok(Vec::new()),
                 "{action:?} under {disposition:?}"
             );
         }
     }
 }
 
-/// A zero-span profile still refuses a nonempty width vector, and still
-/// derives an empty one — the Direct reproduction's path, unmoved.
+/// A zero-span profile accepts the empty width vector and refuses every other,
+/// which is the Direct reproduction's path and now General's too.
 #[test]
 fn a_zero_span_profile_derives_no_widths() {
     let set = artifacts(Action::Freeze);
     let profile = AccountProfileV2::decode(&set.account_profile).expect("profile decode");
-    // The General profile is spans-typed with one span, so a width vector of
-    // the wrong length is refused rather than silently truncated.
+    assert!(profile_ops::physical_count(profile, OUTCOME_COUNT, &[]).is_ok());
     assert!(matches!(
-        profile_ops::physical_count(profile, OUTCOME_COUNT, &[]),
+        profile_ops::physical_count(profile, OUTCOME_COUNT, &[1]),
         Err(BuilderError::Profile(_))
     ));
 }
@@ -401,7 +376,7 @@ fn the_general_effect_artifact_is_current_v4_and_drives_span_geometry() {
                 OUTCOME_COUNT
             )
             .expect("current effect drives span geometry"),
-            vec![expected_pages(action, OUTCOME_COUNT)],
+            Vec::new(),
             "{action:?}"
         );
     }

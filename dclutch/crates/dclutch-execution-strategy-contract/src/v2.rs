@@ -2130,14 +2130,33 @@ impl<'a> AdmittedAcceleratorRequestV2<'a> {
 
     /// Exact canonical INPUT scratch-page count for this request's bank.
     ///
-    /// Derived from the bank width under both transports, which is what it
-    /// always was: the chunked request's `chunk_count` happens to equal it
-    /// because input and output banks share a width, and a reader who took the
-    /// output field as the input count was reading a coincidence. Input
-    /// transport is orthogonal to output transport, so the output-page profile
-    /// pages its input exactly as the chunked one does.
+    /// ASKED OF THE DECLARED TRANSPORT, not of the bank width. Input transport
+    /// is orthogonal to output transport -- the output-page profile pages its
+    /// input exactly as the chunked one does -- and this used to derive the
+    /// count from `chunk_count`, which is the RETURN-DATA bound: 1,024 bytes of
+    /// return data less the 144-byte acknowledgement header. A bank wider than
+    /// 880 bytes therefore acquired input pages because its OUTPUT would not
+    /// fit in one acknowledgement, and the reader who took the output field as
+    /// the input count was reading a coincidence one layer down from where it
+    /// had already been named.
+    ///
+    /// That coincidence was load-bearing and it was unsatisfiable. The input
+    /// bank carries the current slot, so a caller-written page is valid for one
+    /// slot; a full page is 192 + 880 = 1,072 bytes against a 1,232-byte
+    /// transaction; and every reader requires the page read-only, so the
+    /// instruction that reads it cannot write it either. See
+    /// `docs/design/GENERAL_INPUT_TRANSPORT_2026_09_02.md` and the positive
+    /// control `a_caller_written_input_page_is_stale_one_slot_after_it_was_written`.
+    ///
+    /// An inline request carries its whole bank in the CPI instruction data,
+    /// whose bound is `MAX_CPI_INSTRUCTION_DATA_LEN` = 10,240, and pages none of
+    /// it. `chunk_count` still answers the question it was written for, for the
+    /// transport that asks it.
     pub fn input_page_count(self) -> Result<u32> {
-        chunk_count(self.total_bank_bytes())
+        match self.transport() {
+            RequestTransportV2::Inline => Ok(0),
+            RequestTransportV2::ScratchPages => chunk_count(self.total_bank_bytes()),
+        }
     }
 
     /// Index into the caller-authority span this invocation is signed by.

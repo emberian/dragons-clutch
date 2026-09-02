@@ -344,7 +344,7 @@ pub struct GeneralSuccessorPlanDocumentV5 {
     transaction_base64: String,
     observed_slot: String,
     outcome_count: u32,
-    scratch_page_count: u32,
+    admitted_invocation_count: u32,
     heap_frame_bytes: u32,
     trading_program: String,
     lookup_table: String,
@@ -771,7 +771,7 @@ fn serialize_plan_v5(
         || report.action != transaction_report.action
         || successor.outcome_count != report.outcome_count
         || report.outcome_count != transaction_report.outcome_count
-        || successor.scratch_page_count != transaction.scratch_page_count
+        || successor.admitted_invocation_count != transaction.admitted_invocation_count
         || successor.heap_frame_bytes != GENERAL_HOT_HEAP_FRAME_BYTES_V3
         || transaction.heap_frame_bytes != successor.heap_frame_bytes
         || transaction_report.heap_frame_bytes != successor.heap_frame_bytes
@@ -850,7 +850,7 @@ fn serialize_plan_v5(
         transaction_base64: BASE64.encode(packet),
         observed_slot: report.observation.slot.to_string(),
         outcome_count: report.outcome_count,
-        scratch_page_count: successor.scratch_page_count,
+        admitted_invocation_count: successor.admitted_invocation_count,
         heap_frame_bytes: successor.heap_frame_bytes,
         trading_program: report.instruction.program_id.to_string(),
         lookup_table: lookup_table.key.to_string(),
@@ -1301,7 +1301,7 @@ mod tests {
             heap_frame_bytes: GENERAL_HOT_HEAP_FRAME_BYTES_V3,
             request,
             outcome_count: 3,
-            scratch_page_count: 1,
+            admitted_invocation_count: 1,
             child_routes: Vec::new(),
         };
         let heap_frame =
@@ -1351,7 +1351,7 @@ mod tests {
             },
             heap_frame_bytes: GENERAL_HOT_HEAP_FRAME_BYTES_V3,
             request,
-            scratch_page_count: successor.scratch_page_count,
+            admitted_invocation_count: successor.admitted_invocation_count,
             child_routes: Vec::new(),
         };
         let lookup = observed(lookup_key, Vec::new());

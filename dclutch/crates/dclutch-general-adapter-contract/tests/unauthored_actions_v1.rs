@@ -39,7 +39,6 @@ use dclutch_general_adapter_contract::{
     account_rules_v3::{
         GeneralAccountRuleErrorV3, general_account_profile_bytes_v3,
         general_account_profile_fixed_count_v3, general_account_profile_operation_count_v3,
-        general_scratch_page_span_v3,
     },
     effect_artifacts_v3::{
         GeneralEffectArtifactErrorV3, general_action_artifacts_authored_v3,
@@ -142,10 +141,6 @@ fn incomplete_bundle_refuses_while_its_transition_is_independently_authored() {
         assert!(
             general_account_profile_bytes_v3(action).is_err(),
             "{action:?} was given an AccountProfile width",
-        );
-        assert!(
-            general_scratch_page_span_v3(action).is_err(),
-            "{action:?} was given a dynamic span",
         );
         assert!(
             general_state_lifecycle_bytes_v3(action).is_err(),

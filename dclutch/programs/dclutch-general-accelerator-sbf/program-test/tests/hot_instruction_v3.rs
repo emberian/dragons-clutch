@@ -302,11 +302,13 @@ fn readonly(account: ObservedAccount) -> GeneralObservedAccountMetaV3 {
     }
 }
 
-/// The exact authenticated scratch-page count for this Product width.
+/// Accelerator invocations for this Product width, which is the
+/// caller-authority span length.
 ///
-/// The bank transport is the sole authority on the page span; the operator
-/// derives the same number from the effect program's register geometry.
-fn scratch_pages(action: Action, outcome_count: u32) -> u32 {
+/// Still `classify_bank_transport_v2`: that is the OUTPUT question and the
+/// output still chunks its acknowledgement. It is no longer also the input
+/// page count, because there are no input pages -- the bank rides inline.
+fn admitted_invocations(action: Action, outcome_count: u32) -> u32 {
     let scalars = general_hot_scalar_count_v3(action, outcome_count).expect("General scalar count");
     match classify_bank_transport_v2(scalars, GENERAL_HOT_COMMON_IDENTITIES_V3)
         .expect("General bank transport")
@@ -768,7 +770,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
     // The admitted-AOT transport suffix: the six certificate/admission/release
     // record coordinates, the accelerator deployment, its ProgramData, then one
     // release-pinned caller authority per acknowledgment chunk.
-    let pages = scratch_pages(Action::Freeze, OUTCOME_COUNT);
+    let invocations = admitted_invocations(Action::Freeze, OUTCOME_COUNT);
     let mut strategy_accounts = vec![
         readonly(certificate.raw),
         readonly(certificate.staging),
@@ -784,7 +786,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
             vec![0; usize::try_from(WIDTHS.trading_programdata_prefix).expect("programdata")],
         )),
     ];
-    for page in 0..pages {
+    for page in 0..invocations {
         let mut key = [0_u8; 32];
         key.get_mut(0..4)
             .expect("caller authority key prefix")
@@ -803,7 +805,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
     // with the privileges and data width the artifact declares.
     let profile =
         AccountProfileV2::decode(&selected.account_profile).expect("emitted account profile");
-    let span_counts = [pages];
+    let span_counts: [u32; 0] = [];
     let physical_count = profile
         .physical_account_count_with_dynamic_spans(OUTCOME_COUNT, &span_counts)
         .expect("physical account count");
@@ -956,7 +958,7 @@ fn expected_digests(fixture: &GeneralChainFixtureV3) -> GeneralHotArtifactDigest
 /// generator that authored those bytes, skips every aliased coordinate -- an
 /// alias is a second logical name for a physical account the frame already
 /// carries, so it costs no transaction account -- and adds the fixed prefix,
-/// the admitted-AOT transport frame and the scratch-page span. Two independent
+/// the admitted-AOT transport frame and the caller-authority span. Two independent
 /// authorities, one number.
 fn generated_instruction_accounts(action: Action) -> usize {
     let logical =
@@ -970,10 +972,12 @@ fn generated_instruction_accounts(action: Action) -> usize {
         }
         physical_runtime += 1;
     }
-    let pages =
-        usize::try_from(scratch_pages(Action::Freeze, OUTCOME_COUNT)).expect("bounded page count");
-    physical_runtime += pages;
-    HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_AOT_FIXED_EXTRAS_V3 + pages + physical_runtime
+    // No page accounts in the runtime suffix any more; the caller-authority
+    // span is still one account per invocation and it sits in the transport
+    // frame below.
+    let invocations = usize::try_from(admitted_invocations(Action::Freeze, OUTCOME_COUNT))
+        .expect("bounded invocation count");
+    HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_AOT_FIXED_EXTRAS_V3 + invocations + physical_runtime
         - HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3
 }
 
