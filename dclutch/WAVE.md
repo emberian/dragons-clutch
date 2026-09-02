@@ -6068,7 +6068,7 @@ zero frame diagnostics, name-filtered and single-threaded:
 ### The fourth conjunct has neither a holder nor an expressible rule
 
 `PRODUCT_RECORD_DIGEST` is `hash(product account)`. The AccountProfile operation
-vocabulary has **twenty-five variants and not one computes a digest** -- every
+vocabulary has **twenty operations and not one computes a digest** -- every
 projection reads bytes at an offset, or a key, owner, lamports, or tail count. So
 the register can only be projected from an account that **records** the product
 record digest as a field, and no account in the General runtime frame does.
@@ -6114,7 +6114,7 @@ fixed count.
 ### The fourth conjunct cannot be closed by any rule that exists
 
 `PRODUCT_RECORD_DIGEST` is `hash(product account)`. The AccountProfile operation
-vocabulary has **twenty-five variants and not one computes a digest** — every
+vocabulary has **twenty operations and not one computes a digest** — every
 projection reads bytes at an offset, or a key, owner, lamports, tail count. It can
 only be projected from an account that *records* the digest as a field, and none
 in the General frame does.
@@ -6133,3 +6133,65 @@ An *unlabelled* hand-written register is what hid the gap.
 Controls: 22/3 before and after (the three are the width-258 heap rows); 11/11
 account rules; the encoder generates all fifteen actions. `git diff --cached`
 caught another lane's staged file; `-o` landed only the two intended paths.
+
+## 2026-09-01 - CORRECTION: twenty operations, not twenty-five
+
+The entries above, `2d9025b3`'s message and the board post all said the
+AccountProfile V2 operation vocabulary has **twenty-five** variants. **It has
+twenty.** `AccountOperationInputV2` has twenty variants and `v2.rs` carries
+twenty opcodes, `0..=19`, one to one. The twenty-five came from counting the
+`RequireDataU8`/`U16`/`U32`/`U64` and `RequireZeroRange` **rule predicates**,
+which belong to a different enum and are not operations.
+
+The load-bearing claim is unchanged and slightly cleaner -- *none of them
+computes a digest* -- and the free opcode was stated correctly as **20**, which
+is the number the proposal actually depends on. But it is the same
+arithmetic-slip class this session found in four other lanes and in the
+scholar's own headline, committed by the lane that wrote that sentence down.
+
+> **An instrument is not exempt from the defect it measures, and a count taken
+> in passing is exactly where it gets in.**
+
+Anyone who wrote down twenty-five should replace it with twenty.
+
+## 2026-09-01 — a digest is a fourth adapter-supplied fact, and the V2 vocabulary has no Lean model
+
+`docs/design/PROJECT_DATA_DIGEST_V2.md` (`d36073e2`), a proposal, uncompiled and
+saying so at the top.
+
+**The policy question answered, and it was not the one asked.** On totality
+grounds a hash *is* admissible — SHA-256 over a bounded account is total,
+allocation-free, no floating point. But the crate forbids it for a better reason,
+in its own module doc: *"It does not inspect Solana accounts, hash content, derive
+PDAs, or authenticate Registry records."* So the interpreter must not hash — **and
+the design needs no exception to anything.** The digest is an *adapter-supplied
+observation* the operation projects, exactly as `ProjectKey`, `ProjectOwner` and
+`ProjectLamports` project adapter-supplied facts rather than reading bytes. **A
+digest is a fourth such fact.** Optional, behind an opt-in constructor the file
+already uses; a named `DataDigestUnavailable` rather than a zero register. Opcode
+20 is free; nothing renumbers.
+
+### The Lean side is a finding, not a task
+
+The Lean-emitted `generated.rs` carries the **V1** opcode table — a different ABI
+(`OP_PROJECT_KEY` is 3 there, 2 in V2). The **V2** table is hand-written in
+`v2.rs`, emitted from nowhere, with one authority. `AccountProfileV2Profile13.lean`
+says in its own words it *"does not print or replace the executable AccountProfile
+interpreter."*
+
+> **The vocabulary every profile in this tree executes has no Lean model.** A
+> twenty-first operation would get no formal scrutiny — and neither did the twenty
+> before it.
+
+Filed as its own unit rather than smuggled in as a condition of the operation.
+
+### A correction, owed and paid
+
+"Twenty-five variants" — in a commit message, the board, and two WAVE passages —
+is **wrong. It has twenty.** `AccountOperationInputV2` has twenty variants and
+`v2.rs` twenty opcodes, `0..=19`, one to one; the extra five were the
+`RequireData*`/`RequireZeroRange` **rule predicates**, a different enum. The
+load-bearing claim is unchanged and cleaner — *none of them computes a digest* —
+and the free opcode was stated correctly as 20. Same arithmetic-slip class this
+session found in four other lanes and in the scholar's own headline, **committed
+by the lane that had been naming it.**

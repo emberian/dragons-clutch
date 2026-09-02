@@ -2456,3 +2456,11 @@ inverted. Third time today. See WAVE.md, "REVERSAL".
 
 - `acbf4b5b36cee638f` NON-PRICE — **closed, row complete.** Non-price resolution exists, is witnessed twice on real ELFs (rows 0 and 1, 24/24), the founding belief is a family (`SpotBand | StatedProposition`, mismatched pair unrepresentable), zero-cut and the width-2 tension closed as consequences, observable #2 cost 35 emitted Rust lines and 23 lines of TOML.
 - `a0a5010a5119d7214` C-09 WITNESS — drive the fourteen unwitnessed resolution routes on real ELFs; bindings from observation only; structurally undrivable → `blocked.json` with reason and owner; recovery-ladder routes are ember's open ruling, not a fixture to fake.
+
+### Owed, unowned, named: a Lean model for the AccountProfile V2 vocabulary
+
+The Lean-emitted operation table is **V1**. The **V2** table — the one every profile
+in the tree executes — is hand-written in `v2.rs` with no formal model. Twenty
+operations, none modelled; a twenty-first (`ProjectDataDigest`, proposed at
+`docs/design/PROJECT_DATA_DIGEST_V2.md`) would join them. Not a condition on the
+digest; its own unit, for a lane with `formal/` authority and budget.

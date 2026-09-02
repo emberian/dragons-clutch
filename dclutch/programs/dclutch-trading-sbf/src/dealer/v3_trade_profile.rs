@@ -49,7 +49,7 @@ use super::{
         DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4, DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
         DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4, DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
         DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4, DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
-        DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4, DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
+        DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4,
         DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4,
         DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4, DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4,
         DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
@@ -605,6 +605,9 @@ fn rule_mut<const N: usize>(
 #[cfg(all(test, not(target_os = "solana")))]
 mod tests {
     use super::*;
+    // The register the REQUEST profile authors. The account pass no longer
+    // names it -- that is the repair -- so only these witnesses read it.
+    use super::super::v3_trade_artifacts::DEALER_SCENARIO_OBLIGATION_IDENTITY_V4;
 
     fn profile() -> Vec<u8> {
         let mut scratch = vec![0; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
