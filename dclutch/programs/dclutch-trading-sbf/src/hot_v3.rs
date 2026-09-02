@@ -4092,6 +4092,8 @@ fn execute_authenticated_hot_v3(
     hot_cu_checkpoint!("request-lifecycle-preplan");
 
     let candidate = if let Some(caller_authorities) = admitted_caller_authorities {
+        // THE TRANSPORT BINDING IS NOT WIRED HERE, AND THAT IS DEBT, NOT A
+        // DECISION ABOUT THE LAW. See `require_admitted_bank_matches_frame_v3`.
         execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
             program_id,
             frame,
@@ -4115,8 +4117,6 @@ fn execute_authenticated_hot_v3(
             tail_count,
             scalars: &replan_output_scalars,
             identities: &replan_output_identities,
-            frame_scalar_count: provisional_scalar_count,
-            frame_identity_count: provisional_identity_count,
         })?
     } else {
         // The fold's OUTPUT pair is the one register bank of this execution
@@ -5417,21 +5417,6 @@ struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     tail_count: u32,
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
-    /// The bank widths the ACCOUNT FRAME was carved from, not the bank's own.
-    ///
-    /// `admitted_caller_authority_count_v3` decides how many caller-authority
-    /// accounts sit between the strategy extras and the runtime slice, and it
-    /// decides it from the EFFECT's declared bank widths, before any bank
-    /// exists. The transport then chunks the bank it is handed. Two authors,
-    /// and until these fields existed nothing compared them: the only guard on
-    /// the path, `execute_admitted_aot_v3`'s
-    /// `scalar_count != context.scalar_count`, compares `view.scalars.len()`
-    /// against `admitted_context.scalar_count` -- which is ASSIGNED from
-    /// `view.scalars.len()` twenty lines earlier. A guard whose two sides move
-    /// together is not a guard, and this one had the shape of the transport
-    /// check the path most needed.
-    frame_scalar_count: usize,
-    frame_identity_count: usize,
 }
 
 struct CandidateExecutionV3 {
@@ -6782,6 +6767,29 @@ fn funding_allows_created_state_write_v5(funding: EffectProgramV5<'_>, coordinat
 #[inline(never)]
 /// Refuse a bank whose width is not the width the account frame was carved for.
 ///
+/// **NOT CALLED ON THE HOT PATH TODAY, AND THAT IS DEBT.** Said plainly because
+/// an uncalled law is otherwise indistinguishable from an enforced one, and this
+/// file has already shipped two conjuncts that could not be satisfied by any
+/// transaction.
+///
+/// The two frame-carving widths originate in `execute_authenticated_hot_v3`, and
+/// that function measured 3,904 of the SBPF v0 4,096-byte bound on 2026-09-02
+/// against its parent's 3,840. Every form of carrying them to the comparison
+/// costs the same 64-byte step and the same three `overwrites values in the
+/// frame` diagnostics: as two `usize` on the by-value `AdmittedCandidateViewV3`,
+/// as two scalar arguments on the call that already exists, as a tuple-pair call
+/// from the caller, and as a call from a `#[inline(never)]` helper. All four
+/// were measured; the only shape at zero is the binding's absence. The toolchain
+/// calls such an artifact potentially-undefined, frameguard refuses to baseline
+/// it and no checked release can be built from it, which blocked cohort-11's
+/// first on-chain trade -- so the release wins and the binding waits.
+///
+/// What it waits FOR is 64 bytes freed in `execute_authenticated_hot_v3`, which
+/// is its own unit of work and not this law's to do. The law and its seven
+/// hostile arms stay here, driven by
+/// `an_admitted_bank_must_be_the_width_its_account_frame_was_carved_for`, so the
+/// day those bytes exist the wiring is one call.
+///
 /// The admitted path derives two things from the register-bank geometry and
 /// derives them in different places from different sources. The FRAME carving
 /// (`hot_v3::execute_authenticated_hot_v3`) asks
@@ -6828,10 +6836,6 @@ fn require_admitted_bank_matches_frame_v3(
 fn execute_admitted_candidate_v3(
     view: AdmittedCandidateViewV3<'_, '_, '_, '_>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
-    require_admitted_bank_matches_frame_v3(
-        (view.scalars.len(), view.identities.len()),
-        (view.frame_scalar_count, view.frame_identity_count),
-    )?;
     let accelerator_program = view
         .strategy_extras
         .get(6)
