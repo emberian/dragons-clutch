@@ -46,9 +46,9 @@ use dclutch_resolution_codec::{
 use dclutch_resolution_core_v3_operator::{
     Observation, ObservedAccount, ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
     ResolutionVerifyFundReadySnapshotV3, build_resolution_close_fund_v3,
-    build_resolution_create_fund_v3, build_resolution_verify_fund_ready_v3,
-    validate_resolution_close_fund_report_v3, validate_resolution_create_fund_report_v3,
-    validate_resolution_verify_fund_ready_report_v3,
+    build_resolution_create_fund_v3, build_resolution_direct_close_fund_v1,
+    build_resolution_verify_fund_ready_v3, validate_resolution_close_fund_report_v3,
+    validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -919,14 +919,60 @@ pub(crate) fn retire(
     submitted += 1;
     transactions.push(evidence);
 
-    let close = build_resolution_close_fund_v3(&close_snapshot(rpc, addresses)?)
+    // ONE snapshot, TWO reports, and the split is the point.
+    //
+    // `build_resolution_close_fund_v3` remains the semantic owner of the
+    // terminal certificate, the exact three-slot discharge arithmetic and the
+    // retirement projection -- every number this stage asserts against the
+    // persisted receipt below comes from it. What it is NOT is a live
+    // execution boundary: its `instruction.program_id` is the CORE program, and
+    // Core has refused `ResolutionCoreActionV1::CloseFund` since `a34ff595`
+    // split durable activation from close. It now refuses BY NAME, as
+    // `CoreSbfError::UnsupportedAction` (0x301C) at decode, at
+    // core-sbf/src/resolution.rs:254. Submitting that instruction was a
+    // guaranteed refusal, and this campaign's binding claimed it EXECUTED --
+    // which is how the register came to credit `#CloseFund` as executed.
+    //
+    // So the plan is still V3 and the SUBMISSION is V7: the same checked plan
+    // sent straight to the program that owns the route, rather than
+    // reconstructed on both sides of a Core CPI that no longer happens. Both
+    // reports are derived from the SAME finalized observation, because two
+    // `close_snapshot` calls could observe different slots and the operator
+    // requires one observation to select every semantic input.
+    let snapshot = close_snapshot(rpc, addresses)?;
+    let close = build_resolution_close_fund_v3(&snapshot)
         .map_err(|error| Error::new(format!("chain-derived CloseFund: {error:?}")))?;
     validate_resolution_close_fund_report_v3(&close)
         .map_err(|error| Error::new(format!("CloseFund report: {error:?}")))?;
-    if close.closure_receipt != addresses.closure_receipt {
+    let direct = build_resolution_direct_close_fund_v1(&snapshot)
+        .map_err(|error| Error::new(format!("chain-derived direct CloseFund: {error:?}")))?;
+    if direct.instruction.program_id != addresses.resolution_program {
+        return Err(Error::new(format!(
+            "the direct close is addressed to {} and this Market's Resolution program is {}",
+            direct.instruction.program_id, addresses.resolution_program
+        )));
+    }
+    if direct
+        .instruction
+        .accounts
+        .iter()
+        .any(|meta| meta.is_signer)
+    {
+        return Err(Error::new(
+            "the direct Resolution close is supposed to be permissionless and unsigned, and this \
+             frame carries a signer",
+        ));
+    }
+    // Identical by construction -- the V7 builder carries the V3 planner's own
+    // receipt through -- and asserted on the report that is actually SUBMITTED,
+    // because that is the one whose execution has to create the account this
+    // campaign prepaid.
+    if direct.closure_receipt != addresses.closure_receipt
+        || close.closure_receipt != direct.closure_receipt
+    {
         return Err(Error::new(format!(
             "the operator derives the closure receipt at {} and this campaign prepaid {}",
-            close.closure_receipt, addresses.closure_receipt
+            direct.closure_receipt, addresses.closure_receipt
         )));
     }
     let before_tables = transactions.len();
@@ -934,7 +980,7 @@ pub(crate) fn retire(
         rpc,
         payer,
         "Resolution CloseFund",
-        std::slice::from_ref(&close.instruction),
+        std::slice::from_ref(&direct.instruction),
         transactions,
     )?;
     submitted += transactions.len().saturating_sub(before_tables);
@@ -946,7 +992,7 @@ pub(crate) fn retire(
         .unwrap_or(0);
     let evidence = rpc.send_v0_with_signers(
         "journey: Resolution closes the Source subtree of a retiring Market",
-        std::slice::from_ref(&close.instruction),
+        std::slice::from_ref(&direct.instruction),
         payer,
         &[],
         routing,
@@ -1046,9 +1092,15 @@ pub(crate) fn retire(
                  Resolution subset ledger is gone, the Source closure receipt binds this Market, \
                  and the Market's rent beneficiary gained exactly {} lamports: {} from the Source \
                  state, {} remaining native principal, {} of ledger rent, and {} of ledger \
-                 surplus. Both routes are permissionless and non-signing -- a Market that has \
-                 resolved may be retired by anyone, and the permission is the terminal receipt \
-                 rather than a key. THE RETIREMENT ITSELF DOES NOT RUN, and the reason is measured \
+                 surplus. The closure is the V7 DIRECT Resolution close, addressed to the \
+                 Resolution program itself rather than reconstructed on both sides of a Core CPI: \
+                 Core has refused ResolutionCoreActionV1::CloseFund since a34ff595 and now \
+                 refuses it by name as UnsupportedAction (0x301C) at decode, so the V3 \
+                 instruction this stage used to submit could only ever have been refused. The V3 \
+                 planner is still the arithmetic above -- the five lamport figures are its \
+                 declarations, checked against the persisted receipt. Both routes are \
+                 permissionless and non-signing -- a Market that has resolved may be retired by \
+                 anyone, and the permission is the terminal receipt rather than a key. THE RETIREMENT ITSELF DOES NOT RUN, and the reason is measured \
                  rather than read: `build_market_retirement_v1` refuses to compile the atomic \
                  continuation while the Hoard holds a single atom (partial Custody settlement \
                  cannot retire), and this Hoard holds {hoard_atoms}. Emptying it means redeeming, \

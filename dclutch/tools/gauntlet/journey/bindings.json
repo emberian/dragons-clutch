@@ -185,14 +185,12 @@
     {
       "label": "journey: Resolution closes the Source subtree of a retiring Market",
       "routes": [
-        "core/resolution::process#CloseFund",
-        "core/process_instruction",
-        "resolution/process_close#CloseFund",
-        "resolution/core_effect::process_core_effect"
+        "resolution/process_instruction",
+        "resolution/core_effect::process_direct_funding_close_v1"
       ],
-      "program": "core",
+      "program": "resolution",
       "outcome": "executed",
-      "note": "The Source subtree closes atomically: all three Resolution Funds are gone afterwards and a SourceClosureReceiptV2 binding THIS Market exists. The campaign asserts the Market's rent beneficiary gained exactly the lamports the operator declared -- the closure is where a Market's resolution rent comes back, and 'the balance went up' would be a direction-of-travel observation rather than a check. This stage deliberately runs BEFORE rent recovery: sweeping first would leave the larger half of the surplus sitting in the credit."
+      "note": "CORRECTED: this row claimed `executed` for four routes the transaction could not have executed, and that false claim is why the register credited `core/resolution::process#CloseFund`. The campaign built the closure with `build_resolution_close_fund_v3`, whose `instruction.program_id` is the CORE program, and Core has refused ResolutionCoreActionV1::CloseFund since `a34ff595` split durable activation from close -- now BY NAME, as CoreSbfError::UnsupportedAction (0x301C), at decode, before a single account is parsed (core-sbf/src/resolution.rs:144-146). A binding is what flips a row to `witnessed` in a register that never consults the ledger, so a claim of `executed` on a guaranteed refusal is exactly the false green this census exists to remove -- and it survived because no fold had ever been run against a real journey transcript. The campaign now submits `build_resolution_direct_close_fund_v1` from the SAME finalized snapshot: the V3 planner remains the semantic owner of the certificate, the three-slot discharge arithmetic and the retirement projection (every lamport figure the stage asserts against the persisted receipt is still its declaration), and only the execution boundary moves to the program that owns the route. The two routes named here are the ones that instruction drives, and `resolution/core_effect::process_direct_funding_close_v1` is independently proven executable against real ELFs by tools/gauntlet/resolution-core-v3 (`core-v3: CloseFund closes all three rows of the subset ledger`, 260,141 CU). WHAT THIS ROW NO LONGER CLAIMS, and why neither is a regression: `core/resolution::process#CloseFund` is now enumerated AT ITS OWN REFUSAL (resolution.rs:144) and can never execute, and `resolution/process_close#CloseFund` is reachable only through a Core-effect envelope that only Core CPIs -- which Core refuses at decode. Both are filed in blocked.json rather than left looking unstarted. This campaign has not been re-run: the journey needs a live validator and a compiled Market run-spec, so the row is corrected to what the instruction drives and its execution is owed a run."
     },
     {
       "label": "journey: sweeping past the rent floor refuses",

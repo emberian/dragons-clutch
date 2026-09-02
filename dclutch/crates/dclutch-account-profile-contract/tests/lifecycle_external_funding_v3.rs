@@ -37,9 +37,13 @@ fn funding_profile() -> Vec<u8> {
         data_length: 64,
         data_item_stride: 0,
     };
-    let exact_rule = |signer| AccountRuleInputV2 {
+    // `73ffb010` made an AuthenticateOrCreate plan require its payer to carry
+    // DEBIT_LAMPORTS, because a plan that may create the account must be able
+    // to fund it. This fixture predates that and gave the payer no permission
+    // at all, so the profile it builds is one no policy can create against.
+    let exact_rule = |signer, debit_lamports| AccountRuleInputV2 {
         privileges: AccountPrivilegesV2::new(signer, true, false),
-        effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+        effect_permissions: AccountEffectPermissionsV2::new(debit_lamports, false, false),
         alias: AccountAliasInputV2::SelfCoordinate,
         data_length: 0,
         data_item_stride: 0,
@@ -53,16 +57,27 @@ fn funding_profile() -> Vec<u8> {
             rule: lifecycle_rule,
             prestate: AccountPrestateV2::LifecycleBound,
         },
+        // Coordinate 2 is every plan's payer and is debited to fund the create.
         AccountRuleWithPrestateInputV2 {
-            rule: exact_rule(true),
+            rule: exact_rule(true, true),
             prestate: AccountPrestateV2::Exact,
         },
+        // Coordinate 3 is the RentCredit. These plans never close, so it needs
+        // no lamport permission of its own here.
         AccountRuleWithPrestateInputV2 {
-            rule: exact_rule(false),
+            rule: exact_rule(false, false),
             prestate: AccountPrestateV2::Exact,
         },
     ];
     let operations = [
+        // A debitable account that is not LifecycleBound must be anchored by a
+        // RequireOwner naming it, or the V2 encoder refuses the profile with
+        // EffectOwnerUnanchored. The payer acquired DEBIT_LAMPORTS above, so it
+        // acquires its owner relation here.
+        AccountOperationInputV2::RequireOwner {
+            account: AccountCoordinateV2::fixed(2),
+            expected: IdentityCoordinateV2::common(1),
+        },
         AccountOperationInputV2::ProjectDataU64 {
             account: AccountCoordinateV2::fixed(1),
             destination: ScalarCoordinateV2::common(2),
@@ -177,14 +192,21 @@ fn funding_table_is_sole_create_close_authority() {
     let profile_bytes = funding_profile();
     let profile = AccountProfileV3::decode(&profile_bytes).expect("V3 profile");
     let policy_bytes = policy(&[1], 2, 3);
+    let owning_bytes = policy(&[0, 1], 2, 3);
     let policy = StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &policy_bytes)
         .expect("V5 policy");
+    let owning = StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &owning_bytes)
+        .expect("V5 policy owning coordinate zero");
 
     assert_eq!(
         policy.validate_account_profile(profile.base()),
         Err(Error::ProfileMismatch),
         "a bare V2 join must not reinterpret external funding"
     );
+    // The refusal above has to be coordinate zero's unowned LifecycleBound
+    // prestate and nothing else, or it is a code reached before its subject. A
+    // policy that does own coordinate zero passes the very same bare join.
+    assert_eq!(owning.validate_account_profile(profile.base()), Ok(()));
     let _join = policy
         .validate_account_profile_with_external_funding_join(profile)
         .expect("mandatory V3 join owns coordinate zero");

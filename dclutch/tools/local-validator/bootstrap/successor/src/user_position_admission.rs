@@ -656,6 +656,9 @@ fn run_with_expected_cluster(
     let snapshot = acquire_snapshot(&mut rpc, &arguments, &plan, coordinates, &evidence)?;
     let unsigned = plan_user_position_admission_v1(&snapshot.operator)
         .map_err(|error| Error::new(format!("User Position admission plan refused: {error:?}")))?;
+    // Before the prefund, because the prefund cannot fix this and spends real
+    // lamports finding that out.
+    require_fee_payer_never_declared_readonly_v1(&unsigned.instructions, arguments.fee_payer)?;
     // The admission frame requires the owner to sign READONLY, and a System
     // transfer debiting the owner in the same transaction forces message-level
     // owner writability - the founding pays its allocated accounts in a
@@ -3319,7 +3322,21 @@ fn build_report(
     // account the frame requires readonly. Compare them here, where it costs a
     // refusal, rather than on chain, where it costs a fee and arrives as one
     // undifferentiated `Content`.
-    authenticate_compiled_privileges_v1(&compiled.message, &bounded, arguments.fee_payer)?;
+    //
+    // Only on a FINAL plan. A plan that still owes rent carries its own System
+    // transfers, which legitimately make the owner writable; under `--execute`
+    // the driver pays that rent in a separate finalized transfer and re-plans,
+    // and it is the re-planned message that gets signed. Checking the
+    // provisional shape would refuse every preflight of a participant who has
+    // not paid rent yet, which is every new one.
+    if unsigned
+        .position_top_up_lamports
+        .checked_add(unsigned.admission_top_up_lamports)
+        .ok_or_else(|| Error::new("admission rent top-up overflow"))?
+        == 0
+    {
+        authenticate_compiled_privileges_v1(&compiled.message, &bounded)?;
+    }
     let message_bytes = compiled.message.serialize();
     let message_base64 = BASE64.encode(&message_bytes);
     let mut prestate = snapshot.states.clone();
@@ -3423,6 +3440,39 @@ fn build_report(
     })
 }
 
+/// A fee payer can never satisfy a readonly meta, so refuse before spending.
+///
+/// This is the one privilege conflict that no plan, no prefund and no re-plan
+/// can resolve: the fee debits the payer, so the message marks it writable
+/// whatever the instructions ask for. If the frame declares that same account
+/// readonly anywhere, the admission is unlandable and always was.
+///
+/// It runs on the FIRST plan, before `prefund_admission_rents_v1` -- which is
+/// exactly where cohort-11 needed it. On 2026-09-01 the prefund landed
+/// (`4qMCqn7f...`), and only then did the admission wall; the rent was already
+/// spent on a transaction that could never have worked. This costs one
+/// comparison over metas the operator has already built.
+fn require_fee_payer_never_declared_readonly_v1(
+    declared: &[Instruction],
+    fee_payer: Pubkey,
+) -> Result<()> {
+    for (position, instruction) in declared.iter().enumerate() {
+        for (coordinate, meta) in instruction.accounts.iter().enumerate() {
+            if meta.pubkey == fee_payer && !meta.is_writable {
+                return Err(Error::new(format!(
+                    "instruction {position} coordinate {coordinate} declares {} readonly, and \
+                     that account is this transaction's FEE PAYER, which the message marks \
+                     writable unconditionally because the fee debits it. No plan and no \
+                     prefund can satisfy both: name a different --fee-payer",
+                    meta.pubkey
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a compiled message that does not present the declared privileges.
 /// Refuse a compiled message that does not present the declared privileges.
 ///
 /// Measured against cohort-11 on 2026-09-02: the admission refused
@@ -3442,7 +3492,6 @@ fn build_report(
 fn authenticate_compiled_privileges_v1(
     message: &VersionedMessage,
     declared: &[Instruction],
-    fee_payer: Pubkey,
 ) -> Result<()> {
     let compiled = message.instructions();
     if compiled.len() != declared.len() {
@@ -3472,17 +3521,10 @@ fn authenticate_compiled_privileges_v1(
             if signer == meta.is_signer && writable == meta.is_writable {
                 continue;
             }
-            let because = if meta.pubkey == fee_payer && writable && !meta.is_writable {
-                ". The account is this transaction's FEE PAYER, which is writable \
-                 unconditionally because the fee debits it: name a different \
-                 --fee-payer, because no instruction plan can make it readonly"
-            } else {
-                ""
-            };
             return Err(Error::new(format!(
                 "compiled instruction {position} coordinate {coordinate} ({}) is presented \
                  signer={signer} writable={writable} but the plan declared signer={} \
-                 writable={}{because}",
+                 writable={}",
                 meta.pubkey, meta.is_signer, meta.is_writable,
             )));
         }
@@ -6228,28 +6270,39 @@ mod tests {
             data: vec![7],
         }];
 
-        let refused = VersionedMessage::Legacy(Message::new_with_blockhash(
-            &declared,
-            Some(&owner.pubkey()),
-            &Hash::new_unique(),
-        ));
-        let error = authenticate_compiled_privileges_v1(&refused, &declared, owner.pubkey())
+        // The pure guard, which runs on the FIRST plan and therefore before the
+        // prefund spends anything. It needs no compiled message at all.
+        let error = require_fee_payer_never_declared_readonly_v1(&declared, owner.pubkey())
             .expect_err("an owner paying its own fee cannot sign readonly");
         let text = format!("{error:?}");
         assert!(text.contains(&owner.pubkey().to_string()), "{text}");
         assert!(text.contains("FEE PAYER"), "{text}");
         assert!(text.contains("--fee-payer"), "{text}");
-
-        // The same plan under a fee payer that is not the owner compiles to
-        // exactly the declared privileges, which is the repair that made
-        // cohort-11's two strangers admit.
         let payer = Pubkey::new_unique();
+        require_fee_payer_never_declared_readonly_v1(&declared, payer)
+            .expect("a fee payer no meta names readonly is admissible");
+
+        // And the compiled comparison itself: the same plan compiles to a
+        // writable owner under its own fee payer, and to exactly the declared
+        // privileges under a distinct one -- which is the repair that made
+        // cohort-11's two strangers admit.
+        let refused = VersionedMessage::Legacy(Message::new_with_blockhash(
+            &declared,
+            Some(&owner.pubkey()),
+            &Hash::new_unique(),
+        ));
+        let error = authenticate_compiled_privileges_v1(&refused, &declared)
+            .expect_err("the compiled message promoted the owner to writable");
+        let text = format!("{error:?}");
+        assert!(text.contains("writable=true"), "{text}");
+        assert!(text.contains("declared signer=true writable=false"), "{text}");
+
         let accepted = VersionedMessage::Legacy(Message::new_with_blockhash(
             &declared,
             Some(&payer),
             &Hash::new_unique(),
         ));
-        authenticate_compiled_privileges_v1(&accepted, &declared, payer)
+        authenticate_compiled_privileges_v1(&accepted, &declared)
             .expect("a distinct fee payer leaves the owner readonly");
     }
 

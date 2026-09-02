@@ -74,11 +74,12 @@
       "label": "core-v3: Core admits the terminal state without a child invocation",
       "routes": [
         "core/process_instruction",
-        "core/resolution::process#Retire"
+        "core/resolution::process#Retire",
+        "core/resolution::process#AdmitTerminal"
       ],
       "program": "core",
       "outcome": "executed",
-      "note": "Bound for what its INVOKE SEQUENCE proves, and deliberately claiming only two routes. Core at depth one and nothing else: 87,806 CU, no CPI at all. Two things follow. (1) `resolution/process_admit#AdmitTerminal` is NOT driven by this campaign and its blocked.json entry stays honest -- Core independently authenticates the Resolution-owned certificate rather than asking Resolution to repeat the release, product, Source, ledger and certificate work in a child invocation. (2) It is the positive control for the dead-arm finding filed against `core/resolution::process#AdmitTerminal` (resolution.rs:266): AdmitTerminal is the only action that names that arm, this transaction is that action, and it EXECUTED -- so it took the early-return block at resolution.rs:195-223 and never reached the trailing match, which would have refused CoreSbfError::Instruction. The arm is not merely undriven; the only input that could select it provably does not."
+      "note": "Bound for what its INVOKE SEQUENCE proves: Core at depth one and nothing else, 95,306 CU, no CPI at all. THE THIRD ROUTE WAS ADDED AT 60420ba6 AND THE DEAD-ARM FINDING IS CLOSED. `core/resolution::process#AdmitTerminal` used to be enumerated at resolution.rs:266 -- a trailing-match arm this transaction provably never reaches, since it takes the early-return dispatch and an arrival at 266 would have refused CoreSbfError::Instruction -- so the binding declined to claim a route whose id named code the campaign did not execute. `core: the Resolution action dispatch is where the actions are dispatched` moved the id to resolution.rs:196, which IS that early-return dispatch, so the claim is now true of the same transaction that could not honestly make it before. Nothing about the campaign changed; the id stopped pointing at dead code. What is still NOT claimed: `resolution/process_admit#AdmitTerminal`, and its blocked.json entry stays honest -- Core independently authenticates the Resolution-owned certificate rather than asking Resolution to repeat the release, product, Source, ledger and certificate work in a child invocation, which is what the `core-v3-terminal-admit-invokes-no-child` witness pins at exactly one invoked program."
     }
   ]
 }
