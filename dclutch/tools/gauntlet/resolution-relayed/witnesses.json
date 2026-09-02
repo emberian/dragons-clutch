@@ -16,18 +16,18 @@
       "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured -- which matters more here than usual, because two of them do not fit and the next witness is where that is written down."
     },
     {
-      "id": "exactly-two-relayed-transactions-do-not-fit-a-legacy-packet",
+      "id": "the-two-over-limit-relayed-routes-ride-v0-lookup-tables",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.wire_bytes > 1232) | .label] | sort | join(\" + \")",
-      "expect": "relayed consumption: a sealed graduation resolves the market + relayed transport: append observation 2",
-      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree until 4e1c4db put it on a v0 ALT. This family was never measured before 2026-08-27, and TWO of its transactions are over: the consumption at 1,534 bytes (28 accounts) and the append carrying the 424-byte VirtualPool body at 1,377 bytes. Neither can be submitted by a real relayer on a legacy message; both need v0 messages over an Address Lookup Table, exactly as the Claims campaigns already do. This witness names the two by label rather than counting them, so a THIRD transaction going over turns this red instead of passing silently, and so does fixing either one -- at which point whoever fixes it edits this expectation down. It is a recorded defect, not a tolerance."
+      "query": "[.transactions[] | select(.label | test(\"append observation 2|consumption\")) | \"\\(.label)=\\(.wire_bytes)\"] | unique | sort | join(\" + \")",
+      "expect": "relayed consumption: a sealed graduation resolves the market=733 + relayed consumption: a sealed mint-authority renunciation resolves the market=733 + relayed transport: append observation 2=1196",
+      "provenance": "Against Solana's 1,232-byte PACKET_DATA_BYTES. Consumption was 1,534 as a legacy message (+302) and the widest append 1,377 (+145); neither was submittable and ProgramTest submits no packet to say so. Both now execute as v0 messages over a table frozen for the route, derived from the route's own metas by the message compiler. The two are NOT the same kind of overrun and the figures are what shows it: consumption is key-heavy -- 27 of its 30 addresses become one-byte indexes and it lands at 733, half the maximum. The append is DATA-bound: only seven addresses are eligible (the relayer and worker sign, the ed25519 precompile and Resolution are invoked), so the table buys a constant 181 bytes on all four appends and observation 2 lands at 1,196 with 36 bytes of headroom. That is not a margin to plan on, and the lever if the chunk grows is the relay's own commit-don't-inline seam -- the append IS the chunk -- not a wider table."
     },
     {
       "id": "the-deadline-walk-fits-a-legacy-packet",
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.label | startswith(\"relayed liveness:\")) | .wire_bytes] | max | (. <= 1232) | tostring",
       "expect": "true",
-      "provenance": "The liveness walk is the one route in this family that has to work when nobody is cooperating, so it is the one that must not depend on an Address Lookup Table a silent operator might never have published. Its twenty-two-account frame serialises to 991 bytes against Solana's 1,232-byte legacy maximum -- it fits on a bare legacy message, and this checks that separately from the family's two over-limit transactions above."
+      "provenance": "The liveness walk is the one route in this family that has to work when nobody is cooperating, so it is the one that must not depend on an Address Lookup Table a silent operator might never have published. Its twenty-two-account frame serialises to 991 bytes against Solana's 1,232-byte legacy maximum -- it fits on a bare legacy message, and this checks that separately from the family's two over-limit transactions above. It stays LEGACY, and that is the point of keeping this witness separate from the packet-wide one: a route that has to run when nobody cooperated must not make table publication a liveness precondition. Every liveness transaction is 991 bytes on a plain legacy message, 241 under the maximum, and needs no table to exist."
     },
     {
       "id": "every-relayed-refusal-reached-the-programs-own-taxonomy",
@@ -46,9 +46,16 @@
     {
       "id": "the-relayed-family-executes-six-distinct-actions",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.error == null) | .label | sub(\" [0-9]+$\"; \"\")] | unique | length | tostring",
-      "expect": "6",
-      "provenance": "The family's closed action set is `RelayActionV1`: CreateRecord, AppendObservation, SealRecord, RetireRecord, ConsumeRecord, CommitDeadlineFailure -- six variants, enumerated in crates/dclutch-relay-contract/src/instruction.rs. This counts distinct COMMITTED labels (the append index stripped, since four appends are one action) and asserts the campaign drives all six rather than five plus a refusal. It is the arithmetic that stops the census rows below from overstating the family: a seventh action added to the enum with no campaign behind it turns this red."
+      "query": "[.transactions[] | select(.error == null) | .label | if test(\"create the observation record\") then \"CreateRecord\" elif test(\"append observation\") then \"AppendObservation\" elif test(\"seal the completed set\") then \"SealRecord\" elif test(\"retire the record\") then \"RetireRecord\" elif test(\"^relayed consumption:\") then \"ConsumeRecord\" elif test(\"^relayed liveness:\") then \"CommitDeadlineFailure\" else \"UNMAPPED:\\(.)\" end] | unique | sort | join(\" + \")",
+      "expect": "AppendObservation + CommitDeadlineFailure + ConsumeRecord + CreateRecord + RetireRecord + SealRecord",
+      "provenance": "The family's closed action set is `RelayActionV1`: CreateRecord, AppendObservation, SealRecord, RetireRecord, ConsumeRecord, CommitDeadlineFailure -- six variants, enumerated in crates/dclutch-relay-contract/src/instruction.rs. This asserts the campaign drives all six, by NAME rather than by counting labels. Counting labels was the earlier form and it was wrong: it read 6 because the campaign happened to have one label per action, and it went silently red at 871017cf when a second consumption market was added -- a seventh label for an action already covered. Nothing ran the runner between then and 2026-09-02, so nobody saw it. Naming the actions keeps the tripwire the count was for -- a route with no mapping here appears as `UNMAPPED:<label>` and turns this red -- while a second market for an action already driven no longer breaks it."
+    },
+    {
+      "id": "relayed-no-transaction-exceeds-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes != null and .wire_bytes > 1232)] | length | tostring",
+      "expect": "0",
+      "provenance": "Against Solana's 1,232-byte PACKET_DATA_BYTES. Three transactions -- the widest append and both consumptions -- were over it before 2026-09-02. Nulls are excluded on purpose: an unmeasured transaction is not a transaction that fits, and `relayed-measured-every-transaction` is what holds that count at zero."
     }
   ]
 }

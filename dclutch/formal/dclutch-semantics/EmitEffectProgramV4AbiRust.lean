@@ -35,12 +35,21 @@ def main : IO Unit := do
     IO.println s!"pub const {DynamicSpanField.rustName field.spec.name}: usize = {field.offset};"
   for field in borrowedRangeLayout do
     IO.println s!"pub const {BorrowedRangeField.rustName field.spec.name}: usize = {field.offset};"
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_ZERO_TABLE_HEADER_WITNESS" zeroTableHeaderWitness
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_DEALER_HEADER_WITNESS" dealerHeaderWitness
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_DEALER_RANGE_TABLE_WITNESS" dealerRangeTableWitness
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_ZERO_SPAN_COUNT_REFUSAL" hostileZeroSpanCount
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_HEADER_RESERVED_REFUSAL" hostileHeaderReserved
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_AFFINE_ZERO_STRIDE_REFUSAL" hostileAffineZeroStride
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_REVERSED_RANGES_REFUSAL" hostileReversedRanges
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_CHILD_OVERLAP_REFUSAL" hostileChildOverlap
+  IO.println "#[cfg(test)]"
   emitBytes "EFFECT_V4_CHILD_GAP_REFUSAL" hostileChildGap

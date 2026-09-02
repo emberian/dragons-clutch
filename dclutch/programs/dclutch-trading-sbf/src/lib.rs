@@ -112,20 +112,6 @@ pub mod hot_v3;
 pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
 pub mod outer;
-/// Exact Claims Founding route and ordered projected-receipt join.
-// Composed entirely of `crate::series` routes and constants, so it is gated
-// exactly as `series` is: one feature wider and `--features dealer-family`
-// alone builds this module against a module that is not there.
-#[cfg(any(feature = "families", feature = "series-family"))]
-#[allow(dead_code)]
-mod projected_claims_composition_v4;
-/// Exact current-Core Found route and acknowledgment join for projected Markets.
-// Composed entirely of `crate::series` routes and constants, so it is gated
-// exactly as `series` is: one feature wider and `--features dealer-family`
-// alone builds this module against a module that is not there.
-#[cfg(any(feature = "families", feature = "series-family"))]
-#[allow(dead_code)]
-mod projected_core_composition_v4;
 /// Family-neutral creation of the projected-Custody prestate founding needs.
 #[cfg(any(
     feature = "families",
@@ -133,14 +119,6 @@ mod projected_core_composition_v4;
     feature = "dealer-family"
 ))]
 pub mod projected_custody_bootstrap_v1;
-/// Family-neutral projected-Custody route-zero execution and receipt join.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
-))]
-#[allow(dead_code)]
-mod projected_custody_composition_v4;
 /// Compact projected-Market execution and persisted-state reconstruction.
 #[cfg(any(
     feature = "families",
@@ -148,20 +126,6 @@ mod projected_custody_composition_v4;
     feature = "dealer-family"
 ))]
 pub mod projected_market_v2;
-/// Final Core Open and Trading replay commit-last boundary.
-// Composed entirely of `crate::series` routes and constants, so it is gated
-// exactly as `series` is: one feature wider and `--features dealer-family`
-// alone builds this module against a module that is not there.
-#[cfg(any(feature = "families", feature = "series-family"))]
-#[allow(dead_code)]
-mod projected_open_composition_v4;
-/// Exact projected-Hoard realization route and receipt join.
-// Composed entirely of `crate::series` routes and constants, so it is gated
-// exactly as `series` is: one feature wider and `--features dealer-family`
-// alone builds this module against a module that is not there.
-#[cfg(any(feature = "families", feature = "series-family"))]
-#[allow(dead_code)]
-mod projected_realize_composition_v4;
 /// Family-neutral EffectProgram V3 composition for canonical Resolution CPIs.
 pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.

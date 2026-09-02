@@ -1833,26 +1833,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-dealer-sbf"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims-svm",
- "dclutch-core-contract",
- "dclutch-custody-contract",
- "dclutch-dealer-codec",
- "dclutch-economic-slice-kernel",
- "dclutch-market-core-codec",
- "dclutch-realm-contract",
- "dclutch-refusal-registry",
- "dclutch-registry-activation-auth-v1",
- "dclutch-registry-svm",
- "dclutch-release-set-contract",
- "dclutch-token-svm",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
 name = "dclutch-dealer-scenario-kernel"
 version = "0.1.0"
 
@@ -2991,6 +2971,10 @@ dependencies = [
  "dclutch-claims-svm",
  "dclutch-market-core-codec",
  "dclutch-operator",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-realm-contract",
+ "dclutch-representation-composition-v3-operator",
  "dclutch-wallet-terminal-payout-operator",
  "getrandom 0.2.17",
  "getrandom 0.4.3",

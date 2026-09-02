@@ -173,8 +173,18 @@ pub enum Error {
     InvalidFunding,
     /// Historical rent principal or immutable beneficiary was invalid.
     InvalidRent,
-    /// A current-Rent quote declaration or authenticated adapter input was invalid.
+    /// A current-Rent quote declaration or authenticated adapter input was
+    /// invalid in a way the three codes below do not name: a declaration
+    /// ordering or capacity violation, or an authenticated quote that does not
+    /// match the declaration it answers.
     InvalidRentQuote,
+    /// A quote declaration priced no data, so it commits to nothing.
+    EmptyRentQuote,
+    /// A quote declaration carried a scope tag this build does not understand.
+    UnknownRentQuoteScope,
+    /// An unscoped quote declaration carried a nonzero action, which is a
+    /// second encoding of "every action".
+    NonCanonicalRentQuoteAction,
     /// Checked lamport or affine-width arithmetic refused.
     Arithmetic,
 }
@@ -2363,7 +2373,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                 .ok_or(Error::InvalidLength)?,
         )?;
         if declaration.exact_data_len == 0 {
-            return Err(Error::InvalidRentQuote);
+            return Err(Error::EmptyRentQuote);
         }
         // An unrecognised scope is refused rather than treated as unscoped.
         // `applies_to` answers `true` for anything that is not
@@ -2374,12 +2384,12 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         if declaration.scope != QUOTE_SCOPE_EVERY_ACTION_V5
             && declaration.scope != QUOTE_SCOPE_ONE_ACTION_V5
         {
-            return Err(Error::InvalidRentQuote);
+            return Err(Error::UnknownRentQuoteScope);
         }
         // An unscoped quote carries no action, so there is exactly one encoding
         // of "every action" and a digest cannot be forged by varying dead bytes.
         if declaration.scope == QUOTE_SCOPE_EVERY_ACTION_V5 && declaration.action != 0 {
-            return Err(Error::InvalidRentQuote);
+            return Err(Error::NonCanonicalRentQuoteAction);
         }
         Ok(declaration)
     }

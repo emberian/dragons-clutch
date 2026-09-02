@@ -1002,6 +1002,15 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
             "external census: the transactions between boundaries were not driven by this \
              ledger, and it refuses to guess their fees",
         ),
+        // Same reason, same boundary: an external census did not drive the
+        // transfers between its two observations, so it cannot say which
+        // compartments they crossed. `unchanged()` would be a CLAIM -- that
+        // not one atom changed class -- and this command has no standing to
+        // make it.
+        ledger::ClassClaimV1::inapplicable(
+            "external census: the transactions between boundaries were not driven by this \
+             ledger, and it refuses to guess which compartments they crossed",
+        ),
     )?;
     let observations = census.observations();
     std::fs::write(

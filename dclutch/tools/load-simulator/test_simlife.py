@@ -837,32 +837,136 @@ class DriverPrimitiveTests(unittest.TestCase):
     def test_base58_keeps_leading_zero_bytes_as_ones(self):
         self.assertTrue(drivers.base58(bytes([0, 0, 1])).startswith("11"))
 
-    def test_the_frozen_table_containing_the_market_is_the_one_chosen(self):
-        """A founding creates five routing tables and freezes exactly one.
+    def _routing_answers(self, *, table_body: str, table_owner=drivers.ADDRESS_LOOKUP_TABLE_PROGRAM):
+        """A chain that answers the two reads by address and REFUSES a scan.
 
-        The admission must route through the FROZEN one -- passing all five
-        refuses `DuplicateAddress` -- and the founding evidence does not record
-        its address. Both facts needed to find it are on the chain: authority
-        `None`, and the market in its own address list.
+        The refusal is the control. The old discovery scanned
+        `getProgramAccounts` over the whole AddressLookupTable program, which is
+        exactly what a public endpoint will not do, so a replacement that still
+        scanned would pass a test that merely checked the answer.
         """
-        market = bytes([7] * 32)
-        other = bytes([9] * 32)
-        answers = {
-            "result": [
-                # Still extendable, and it holds the market: NOT the one.
-                {"pubkey": "still-writable", "account": {"data": [alt_account([market], frozen=False), "base64"]}},
-                # Frozen, and it holds a different market: NOT the one.
-                {"pubkey": "another-founding", "account": {"data": [alt_account([other], frozen=True), "base64"]}},
-                {"pubkey": "the-frozen-one", "account": {"data": [alt_account([other, market], frozen=True), "base64"]}},
-            ]
-        }
+        seen = []
+
+        def fake(url, method, params, timeout=60.0):
+            seen.append(method)
+            if method == "getProgramAccounts":
+                raise AssertionError(
+                    "the routing table must be looked up by address, never scanned for"
+                )
+            if method == "getTransaction":
+                return {"transaction": {"message": {
+                    "accountKeys": [
+                        "payer", "the-frozen-one", "11111111111111111111111111111111",
+                        drivers.ADDRESS_LOOKUP_TABLE_PROGRAM,
+                    ],
+                    "instructions": [
+                        {"programIdIndex": 3, "accounts": [1, 0, 0, 2], "data": "1111"},
+                    ],
+                }}}
+            if method == "getAccountInfo":
+                return {"value": {"owner": table_owner, "data": [table_body, "base64"]}}
+            raise AssertionError(f"unexpected read {method}")
+
+        return fake, seen
+
+    def _evidence_with_create(self):
+        return {"execution": {"transactions": [
+            {"label": "publish record: something else", "signature": "no",
+             "error": None},
+            {"label": drivers.FROZEN_ROUTING_TABLE_CREATE_LABEL_V1,
+             "signature": "the-create-signature", "error": None},
+        ]}}
+
+    def test_the_routing_table_is_read_by_address_and_never_scanned_for(self):
+        """Two reads: the founding's own create transaction, then the account.
+
+        Measured on cohort-11: `getProgramAccounts` over devnet's ALT program
+        returns nothing usable, so the search this replaces answered `None` for
+        a table that exists. The address was in the founding's own create
+        transaction the whole time.
+        """
+        market = drivers.base58(bytes([7] * 32))
+        fake, seen = self._routing_answers(
+            table_body=alt_account([bytes([9] * 32), bytes([7] * 32)], frozen=True)
+        )
         original = drivers.rpc
-        drivers.rpc = lambda url, method, params, timeout=60.0: answers["result"]
+        drivers.rpc = fake
         try:
-            found = drivers.frozen_routing_table_for("http://127.0.0.1:1/", drivers.base58(market))
+            found = drivers.frozen_routing_table_for(
+                "http://127.0.0.1:1/", self._evidence_with_create(), market
+            )
         finally:
             drivers.rpc = original
         self.assertEqual(found, "the-frozen-one")
+        self.assertEqual(seen, ["getTransaction", "getAccountInfo"])
+
+    def test_a_founding_that_recorded_no_create_answers_absent_without_reading(self):
+        original = drivers.rpc
+        drivers.rpc = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("an absent record must not be searched for")
+        )
+        try:
+            self.assertIsNone(
+                drivers.frozen_routing_table_for(
+                    "http://127.0.0.1:1/", {"execution": {"transactions": []}}, "M"
+                )
+            )
+        finally:
+            drivers.rpc = original
+
+    def test_a_table_that_does_not_route_this_founding_refuses_by_name(self):
+        """The authentication that makes a wrong pick a refusal, not a route."""
+        fake, _ = self._routing_answers(
+            table_body=alt_account([bytes([9] * 32)], frozen=True)
+        )
+        original = drivers.rpc
+        drivers.rpc = fake
+        try:
+            with self.assertRaises(drivers.DriverRefusal) as caught:
+                drivers.frozen_routing_table_for(
+                    "http://127.0.0.1:1/", self._evidence_with_create(),
+                    drivers.base58(bytes([7] * 32)),
+                )
+        finally:
+            drivers.rpc = original
+        self.assertIn("does not route", str(caught.exception))
+
+    def test_an_account_the_lookup_table_program_does_not_own_refuses(self):
+        """The create record names an address; the chain says what it IS."""
+        fake, _ = self._routing_answers(
+            table_body=alt_account([bytes([7] * 32)], frozen=True),
+            table_owner="11111111111111111111111111111111",
+        )
+        original = drivers.rpc
+        drivers.rpc = fake
+        try:
+            with self.assertRaises(drivers.DriverRefusal) as caught:
+                drivers.frozen_routing_table_for(
+                    "http://127.0.0.1:1/", self._evidence_with_create(),
+                    drivers.base58(bytes([7] * 32)),
+                )
+        finally:
+            drivers.rpc = original
+        self.assertIn("not the Address Lookup Table program", str(caught.exception))
+
+    def test_a_table_still_carrying_an_authority_refuses_rather_than_routes(self):
+        """An extendable table is not the frozen one the founding committed to,
+        and passing more than the frozen one refuses `DuplicateAddress` deep in
+        a founding rather than here."""
+        fake, _ = self._routing_answers(
+            table_body=alt_account([bytes([7] * 32)], frozen=False)
+        )
+        original = drivers.rpc
+        drivers.rpc = fake
+        try:
+            with self.assertRaises(drivers.DriverRefusal) as caught:
+                drivers.frozen_routing_table_for(
+                    "http://127.0.0.1:1/", self._evidence_with_create(),
+                    drivers.base58(bytes([7] * 32)),
+                )
+        finally:
+            drivers.rpc = original
+        self.assertIn("still carries an authority", str(caught.exception))
 
     def test_a_founding_evidence_without_the_market_is_refused_not_guessed(self):
         with tempfile.TemporaryDirectory() as work:

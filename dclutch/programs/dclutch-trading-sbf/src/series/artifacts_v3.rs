@@ -132,9 +132,6 @@ pub const SERIES_PREPARE_REPLAY_INITIALIZE_OFFSET_V3: usize =
 /// Normal SeriesEscrow Vault-open request-bank offset.
 pub const SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3: usize =
     SERIES_PREPARE_REPLAY_INITIALIZE_OFFSET_V3 + SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
-/// Normal founder-to-SeriesEscrow lock request-bank offset.
-pub const SERIES_PREPARE_ESCROW_LOCK_OFFSET_V3: usize =
-    SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3 + SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
 /// Exact Prepare request-bank width.
 pub const SERIES_PREPARE_IR_REQUEST_BYTES_V3: usize =
     2 * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3 + 3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
@@ -169,12 +166,6 @@ pub const SERIES_PREPARE_ESCROW_OPEN_ACCOUNT_COUNT_V3: u16 = 16;
 pub const SERIES_PREPARE_ESCROW_LOCK_ACCOUNT_COUNT_V3: u16 = 14;
 /// Refund/escrow cleanup, empty projected-Hoard abort, and permit refund.
 pub const SERIES_EXPIRE_ROUTE_COUNT_V3: usize = 5;
-/// Normal SeriesEscrow refund request-bank offset.
-pub const SERIES_EXPIRE_REFUND_OFFSET_V3: usize = 0;
-/// Normal SeriesEscrow Vault-close request-bank offset.
-pub const SERIES_EXPIRE_CLOSE_VAULT_OFFSET_V3: usize = SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
-/// Normal SeriesEscrow replay-close request-bank offset.
-pub const SERIES_EXPIRE_CLOSE_REPLAY_OFFSET_V3: usize = 2 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
 /// Empty projected-Hoard abort request-bank offset.
 pub const SERIES_EXPIRE_PROJECTED_ABORT_OFFSET_V3: usize =
     3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
@@ -324,16 +315,6 @@ impl SeriesExpireInvocationV3<'_> {
     /// Exact concatenated Core instruction width.
     pub fn child_request_len(self) -> Result<usize> {
         self.permit_request
-            .len()
-            .checked_add(self.witness.len())
-            .ok_or(SeriesArtifactErrorV3::Geometry)
-    }
-}
-
-impl SeriesConsumeInvocationV3<'_> {
-    /// Exact Core request-plus-proof width before the typed prior receipt.
-    pub fn base_request_len(self) -> Result<usize> {
-        self.core_request
             .len()
             .checked_add(self.witness.len())
             .ok_or(SeriesArtifactErrorV3::Geometry)

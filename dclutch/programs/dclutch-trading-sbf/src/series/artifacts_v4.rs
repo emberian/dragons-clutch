@@ -48,7 +48,7 @@ use super::{
     effect_v4::{
         SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4, SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4,
         SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4, SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
-        SeriesConsumeEffectV4, SeriesConsumeRouteWindowV4,
+        SeriesConsumeEffectV4,
     },
     instruction::SERIES_ACTION_HEADER_BYTES_V3,
     state::SERIES_STATE_BYTES_V3,
@@ -173,29 +173,6 @@ pub struct SeriesConsumeContinuationBundleV4<'a> {
     pub artifacts: SeriesConsumeArtifactBundleV4<'a>,
     /// Current-Core attestation of F and the ordered FundingState-list identity.
     pub found_span: AuthenticatedFoundSpanV2,
-}
-
-/// Join one already-admitted global plan to the current Core Found attestation.
-///
-/// This does not infer F from account count or the compact projected header.
-/// `AuthenticatedFoundSpanV2` can originate only from the generic Core-return
-/// verifier that binds the exact Core request, permit, FundingState list, and
-/// post-resource digest.
-pub fn authenticate_series_consume_continuation_v4<'a>(
-    artifacts: SeriesConsumeArtifactBundleV4<'a>,
-    found_span: AuthenticatedFoundSpanV2,
-) -> Result<SeriesConsumeContinuationBundleV4<'a>> {
-    if u16::from(found_span.funding_count()) != artifacts.effect.funding_count_hint() {
-        return Err(SeriesArtifactErrorV4::FoundAcknowledgement);
-    }
-    artifacts
-        .effect
-        .require_window(SeriesConsumeRouteWindowV4::LiveMarketContinuation)
-        .map_err(|_| SeriesArtifactErrorV4::Effect)?;
-    Ok(SeriesConsumeContinuationBundleV4 {
-        artifacts,
-        found_span,
-    })
 }
 
 /// Authenticate and join one complete schema-bound Series Consume bundle.

@@ -12,13 +12,10 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_market_core_codec::{Identity as CoreIdentity, SeriesCoreAckV1};
 use solana_program::{
-    account_info::AccountInfo,
-    program::{invoke, invoke_signed},
-    program_error::ProgramError,
-    pubkey::Pubkey,
+    account_info::AccountInfo, program::invoke_signed, program_error::ProgramError, pubkey::Pubkey,
 };
 use solana_sdk_ids::system_program;
-use solana_system_interface::instruction::{allocate, assign, transfer};
+use solana_system_interface::instruction::{allocate, assign};
 
 use super::{
     commit_plans::{
@@ -216,80 +213,6 @@ pub fn authenticate_ticket(
     Ok(state)
 }
 
-/// Create the vacant/dust-prefunded Ticket PDA without writing replay state.
-///
-/// The caller invokes Core after this staging step and calls
-/// [`commit_occurrence_after_ack`] only after authenticating its return data.
-#[allow(clippy::too_many_arguments)]
-pub fn stage_ticket_account<'info>(
-    program_id: &Pubkey,
-    payer: &AccountInfo<'info>,
-    root: &Pubkey,
-    ticket_record_id: ContentId,
-    ticket: &AccountInfo<'info>,
-    refund_owner: &AccountInfo<'info>,
-    system: &AccountInfo<'info>,
-    top_up: u64,
-    dust_refund: u64,
-) -> Result<(), ProgramError> {
-    if !payer.is_signer
-        || !payer.is_writable
-        || payer.executable
-        || ticket.owner != &system_program::ID
-        || ticket.data_len() != 0
-        || ticket.is_signer
-        || !ticket.is_writable
-        || ticket.executable
-        || !refund_owner.is_writable
-        || refund_owner.executable
-        || system.key != &system_program::ID
-        || !system.executable
-        || [payer.key, ticket.key, refund_owner.key, system.key]
-            .iter()
-            .enumerate()
-            .any(|(index, key)| {
-                [payer.key, ticket.key, refund_owner.key, system.key]
-                    .get(index.saturating_add(1)..)
-                    .is_some_and(|rest| rest.contains(key))
-            })
-    {
-        return Err(SeriesAccountErrorV3::Frame.into());
-    }
-    let seeds = TicketStateSeedsV3::new(root.to_bytes(), ticket_record_id);
-    let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
-    if expected != *ticket.key {
-        return Err(SeriesAccountErrorV3::State.into());
-    }
-    if top_up > 0 {
-        invoke(
-            &transfer(payer.key, ticket.key, top_up),
-            &[payer.clone(), ticket.clone(), system.clone()],
-        )
-        .map_err(|_| SeriesAccountErrorV3::Creation)?;
-    }
-    let [domain, root_seed, record] = seeds.as_slices();
-    let bump_seed = [bump];
-    let signer = [domain, root_seed, record, bump_seed.as_slice()];
-    invoke_signed(
-        &allocate(
-            ticket.key,
-            u64::try_from(SERIES_TICKET_STATE_BYTES_V3)
-                .map_err(|_| SeriesAccountErrorV3::Creation)?,
-        ),
-        &[ticket.clone(), system.clone()],
-        &[&signer],
-    )
-    .map_err(|_| SeriesAccountErrorV3::Creation)?;
-    invoke_signed(
-        &assign(ticket.key, program_id),
-        &[ticket.clone(), system.clone()],
-        &[&signer],
-    )
-    .map_err(|_| SeriesAccountErrorV3::Creation)?;
-    transfer_owned(program_id, ticket, refund_owner, dust_refund)?;
-    Ok(())
-}
-
 /// Stage every exact FundingState PDA from Ticket native custody.
 ///
 /// Realm-collateral vaults are authenticated in the pure plan and are never
@@ -414,34 +337,6 @@ pub fn stage_pending_funding<'info>(
     )
 }
 
-/// Credit every unused expired-Ticket native compartment to lifecycle Rent V2.
-///
-/// This deliberately exposes no arbitrary destination/amount capability.
-/// Hoard collateral is absent from the native remainder plan and is returned
-/// only through the authenticated Custody expiration routes.
-pub fn credit_expired_ticket_remainders(
-    program_id: &Pubkey,
-    ticket: &AccountInfo<'_>,
-    rent_credit: &AccountInfo<'_>,
-    plan: OccurrenceCommitPlanV3,
-) -> Result<(), ProgramError> {
-    let sink = plan
-        .terminal_rent_sink()
-        .ok_or(SeriesAccountErrorV3::Funding)?;
-    let amount = plan.native_from_ticket();
-    if rent_credit.key.to_bytes() != sink.credit_account().to_bytes()
-        || plan.core_request().is_some()
-        || plan
-            .native_remainders()
-            .total()
-            .map_err(|_| SeriesAccountErrorV3::Funding)?
-            != amount
-    {
-        return Err(SeriesAccountErrorV3::Funding.into());
-    }
-    transfer_owned(program_id, ticket, rent_credit, amount)
-}
-
 /// Validate exact Core return data, then persist Ticket and root candidates.
 ///
 /// This is the only successful occurrence write boundary. Root is written
@@ -464,22 +359,6 @@ pub fn commit_occurrence_after_ack(
             request_digest,
             observed_post_resource_digest,
         )
-        .map_err(|_| SeriesAccountErrorV3::Commit)?;
-    write_occurrence_candidates(root, ticket, &root_tail, &ticket_bytes)
-}
-
-/// Persist a Prepare or Expire candidate after direct controller effects.
-///
-/// The canonical hot outer calls this only after finalized controller
-/// authentication and any selected Custody CPI/receipt postchecks. Consume
-/// cannot use this function because its plan requires a Core acknowledgment.
-pub fn commit_controller_occurrence(
-    root: &AccountInfo<'_>,
-    ticket: &AccountInfo<'_>,
-    plan: OccurrenceCommitPlanV3,
-) -> Result<(), ProgramError> {
-    let (root_tail, ticket_bytes) = plan
-        .commit_controller()
         .map_err(|_| SeriesAccountErrorV3::Commit)?;
     write_occurrence_candidates(root, ticket, &root_tail, &ticket_bytes)
 }

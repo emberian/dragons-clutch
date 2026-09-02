@@ -12,12 +12,12 @@ use solana_program::pubkey::Pubkey;
 use super::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
     ConsumeSeriesEscrowPlanV3, PrepareSeriesEscrowPlanV3, SeriesConsumeCompositionErrorV3,
-    SeriesConsumeCompositionV3, SeriesV3Error, TemplateV3, TerminalSeriesEscrowPlanV3,
+    SeriesConsumeCompositionV3, SeriesV3Error, TemplateV3,
     commit_plans::{
         ClosePlanV3, LifecycleErrorV3, OccurrenceCommitPlanV3, PendingFundingPlanV3, RetirePlanV3,
         plan_close, plan_consume, plan_expire, plan_prepare, plan_retire,
     },
-    compose_series_consume_v3, consume_series_escrow_v3, expire_series_escrow_v3,
+    compose_series_consume_v3, consume_series_escrow_v3,
     instruction::{SeriesActionRequestV3, SeriesActionV3, SeriesInstructionErrorV3},
     pre_founding_series_escrow, prepare_series_escrow_v3,
     state::{SeriesStateV3, TicketStateV3},
@@ -219,24 +219,6 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             now_slot,
             rent_sink,
         )?)
-    }
-
-    /// Project the exact post-deadline SeriesEscrow refund effect.
-    pub fn plan_expire_escrow(
-        self,
-        product: AuthenticatedProductProjectionV2,
-        registry_program: AccountKeyV3,
-    ) -> Result<TerminalSeriesEscrowPlanV3, SeriesProjectorErrorV3> {
-        if self.action() != SeriesActionV3::Expire {
-            return Err(SeriesProjectorErrorV3::Frame);
-        }
-        let escrow = pre_founding_series_escrow(
-            self.required_occurrence()?,
-            self.required_ticket()?,
-            product,
-            registry_program,
-        )?;
-        Ok(expire_series_escrow_v3(escrow))
     }
 
     /// Plan deletion of one terminal replay account.

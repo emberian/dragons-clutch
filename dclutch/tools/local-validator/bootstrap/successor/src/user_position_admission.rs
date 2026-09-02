@@ -3313,6 +3313,13 @@ fn build_report(
         &snapshot.routing_tables,
     )
     .map_err(|error| Error::new(format!("admission message compilation: {error:?}")))?;
+    // The operator built every meta from `UserPositionAdmissionFrameV1`, and
+    // the program re-checks that frame against what the RUNTIME presents. Those
+    // are not the same thing: compiling into a transaction can promote an
+    // account the frame requires readonly. Compare them here, where it costs a
+    // refusal, rather than on chain, where it costs a fee and arrives as one
+    // undifferentiated `Content`.
+    authenticate_compiled_privileges_v1(&compiled.message, &bounded, arguments.fee_payer)?;
     let message_bytes = compiled.message.serialize();
     let message_base64 = BASE64.encode(&message_bytes);
     let mut prestate = snapshot.states.clone();
@@ -3414,6 +3421,73 @@ fn build_report(
         finalized: None,
         collateral: None,
     })
+}
+
+/// Refuse a compiled message that does not present the declared privileges.
+///
+/// Measured against cohort-11 on 2026-09-02: the admission refused
+/// `TradingSbfError::Content` (`0x4003`) after 12,233 CU, because the frame
+/// requires the Position owner to sign READONLY and the owner was also the fee
+/// payer -- and a fee payer is unconditionally writable, since the fee debits
+/// it. The two requirements are jointly unsatisfiable, so an admission whose
+/// owner pays its own fee can never land, and nothing said so until the chain
+/// did. The driver already prefunds rent in a separate transaction to keep the
+/// owner readonly (`prefund_admission_rents_v1`); that is the same defect one
+/// step earlier and it cannot fix this one, because the fee payer is writable
+/// whatever the instructions say.
+///
+/// The comparison is exact and covers every instruction, not just the outer:
+/// the runtime presents one privilege pair per account coordinate and the frame
+/// checks all of them.
+fn authenticate_compiled_privileges_v1(
+    message: &VersionedMessage,
+    declared: &[Instruction],
+    fee_payer: Pubkey,
+) -> Result<()> {
+    let compiled = message.instructions();
+    if compiled.len() != declared.len() {
+        return Err(Error::new(format!(
+            "compiled message carries {} instructions but the plan declared {}",
+            compiled.len(),
+            declared.len()
+        )));
+    }
+    for (position, (compiled, declared)) in compiled.iter().zip(declared).enumerate() {
+        if compiled.accounts.len() != declared.accounts.len() {
+            return Err(Error::new(format!(
+                "compiled instruction {position} carries {} accounts but the plan declared {}",
+                compiled.accounts.len(),
+                declared.accounts.len()
+            )));
+        }
+        for (coordinate, (index, meta)) in compiled
+            .accounts
+            .iter()
+            .zip(&declared.accounts)
+            .enumerate()
+        {
+            let index = usize::from(*index);
+            let signer = message.is_signer(index);
+            let writable = message.is_maybe_writable(index, None);
+            if signer == meta.is_signer && writable == meta.is_writable {
+                continue;
+            }
+            let because = if meta.pubkey == fee_payer && writable && !meta.is_writable {
+                ". The account is this transaction's FEE PAYER, which is writable \
+                 unconditionally because the fee debits it: name a different \
+                 --fee-payer, because no instruction plan can make it readonly"
+            } else {
+                ""
+            };
+            return Err(Error::new(format!(
+                "compiled instruction {position} coordinate {coordinate} ({}) is presented \
+                 signer={signer} writable={writable} but the plan declared signer={} \
+                 writable={}{because}",
+                meta.pubkey, meta.is_signer, meta.is_writable,
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn rebind_admission_observation_v1(
@@ -3677,15 +3751,6 @@ fn sign_and_submit(
     journal: &mut ReportJournalV1,
 ) -> Result<()> {
     require_prestate_unchanged(rpc, report)?;
-    let height = rpc
-        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
-        .as_u64()
-        .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))?;
-    if height > report.intent.last_valid_block_height {
-        return Err(Error::new(
-            "planned transaction blockhash expired before key load; archive this unsigned plan and construct a fresh finalized observation",
-        ));
-    }
     authenticate_genesis_again(rpc, &arguments.origin)?;
     enforce_shared_key_path(
         arguments.position_owner,
@@ -3693,6 +3758,18 @@ fn sign_and_submit(
         arguments.fee_payer,
         &arguments.fee_payer_keypair,
     )?;
+    // The blockhash is the one field of a planned admission that AGES, and it
+    // is bound here rather than at plan time because everything between the
+    // two costs real wall clock: a finalized re-observation of every semantic
+    // account, a fresh fee quote, a poststate probe and a prestate re-read.
+    // Measured on devnet 2026-09-02, the chain was producing 6.0 blocks per
+    // second, so `MAX_PROCESSING_AGE` of 150 blocks is a TWENTY-FIVE SECOND
+    // life -- shorter than that authentication pass -- and cohort-11's
+    // admission refused `BlockhashNotFound` twice with its prefund already
+    // landed. Rebinding an UNSIGNED plan is not a re-sign: no signature
+    // exists yet, so there is nothing to replay, and the rebound message is
+    // durable before the first key read exactly as the original was.
+    let bound = rebind_unsigned_admission_blockhash_v1(rpc, report, journal)?;
 
     // This is deliberately the first key-file access in the command. The
     // complete message, fee, rent arithmetic, prestate, and output destination
@@ -3722,9 +3799,10 @@ fn sign_and_submit(
         }
         Some(payer)
     };
-    let message_bytes = BASE64
-        .decode(&report.intent.message_base64)
-        .map_err(|error| Error::new(format!("persisted message base64: {error}")))?;
+    // The bytes signed are the freshly bound ones AND the durable ones; the
+    // journal was written from this very message, so a divergence here is a
+    // journal that does not describe what is about to be signed.
+    let message_bytes = bound.0;
     if sha256_hex(&message_bytes) != report.intent.message_sha256 {
         return Err(Error::new("persisted message digest changed"));
     }
@@ -3783,6 +3861,102 @@ fn sign_and_submit(
     resend_dispatching_packet_v1(rpc, arguments, report, journal, &signature.to_string())
 }
 
+/// Bind the durable UNSIGNED plan onto a fresh finalized blockhash.
+///
+/// A blockhash is not a fact about the market: it is the submission parameter
+/// that decides which banks will still accept the packet, and it is the only
+/// field of a planned admission with an expiry. Every other field is a
+/// finalized observation that this driver deliberately spends many round trips
+/// re-authenticating; the blockhash is the one that cannot survive them.
+///
+/// The replay wall is the phase, not the blockhash: only a `Planned` report
+/// with no signed packet and no expected signature may be rebound. Once a
+/// signature exists, the packet is evidence and the driver refuses to make a
+/// second one -- `resend_dispatching_packet_v1` re-sends the exact bytes or
+/// refuses, and an expired signed packet is archived rather than re-signed.
+fn rebind_unsigned_admission_blockhash_v1(
+    rpc: &mut Rpc,
+    report: &mut ReportV1,
+    journal: &mut ReportJournalV1,
+) -> Result<FreshlyBoundMessageV1> {
+    require_rebindable_unsigned_admission_v1(report)?;
+    let (recent_blockhash, last_valid_block_height) = latest_blockhash(rpc)?;
+    rebind_intent_blockhash_v1(&mut report.intent, recent_blockhash, last_valid_block_height)?;
+    report.intent_sha256 = sha256_hex(&serde_json::to_vec(&report.intent)?);
+    journal.persist(report)?;
+    Ok(FreshlyBoundMessageV1(BASE64.decode(&report.intent.message_base64).map_err(
+        |error| Error::new(format!("rebound message base64: {error}")),
+    )?))
+}
+
+/// The serialized bytes of a message bound onto a blockhash read moments ago.
+///
+/// `sign_and_submit` takes its message from one of these and from nothing
+/// else, so the ordering this module was repaired for is a type rather than a
+/// comment: a message compiled at plan time and then aged through the
+/// authentication pass has no way to reach a signature. The only constructor
+/// is `rebind_unsigned_admission_blockhash_v1`.
+struct FreshlyBoundMessageV1(Vec<u8>);
+
+/// The replay wall the rebind stands behind.
+///
+/// `Planned` with no signed packet and no expected signature is the only shape
+/// in which no signature over these bytes exists anywhere, and therefore the
+/// only shape in which replacing them can replay nothing.
+fn require_rebindable_unsigned_admission_v1(report: &ReportV1) -> Result<()> {
+    if report.phase != PhaseV1::Planned
+        || report.signed_packet_base64.is_some()
+        || report.signed_packet_sha256.is_some()
+        || report.expected_signature.is_some()
+    {
+        return Err(Error::new(
+            "REFUSED: only an unsigned Planned admission may be bound onto a fresh blockhash; a signed packet is submission evidence and is never re-signed",
+        ));
+    }
+    Ok(())
+}
+
+/// The message surgery the rebind performs, with no network in it.
+///
+/// A blockhash is a fixed thirty-two bytes in a fixed position of a compiled
+/// message, so a rebound message is the same length and the same wire cost as
+/// the one it replaces. Both of those are checked rather than assumed: a
+/// length change would mean the durable `message_base64` was not the message
+/// the durable digest and `wire_bytes` describe.
+fn rebind_intent_blockhash_v1(
+    intent: &mut IntentV1,
+    recent_blockhash: Hash,
+    last_valid_block_height: u64,
+) -> Result<()> {
+    let message_bytes = BASE64
+        .decode(&intent.message_base64)
+        .map_err(|error| Error::new(format!("persisted message base64: {error}")))?;
+    if sha256_hex(&message_bytes) != intent.message_sha256 {
+        return Err(Error::new("persisted message digest changed"));
+    }
+    let mut message: VersionedMessage = bincode::deserialize(&message_bytes)
+        .map_err(|error| Error::new(format!("persisted versioned message: {error}")))?;
+    message.set_recent_blockhash(recent_blockhash);
+    if message.recent_blockhash() != &recent_blockhash {
+        return Err(Error::new(
+            "rebound admission message did not carry the fresh blockhash",
+        ));
+    }
+    let rebound = message.serialize();
+    if rebound.len() != message_bytes.len() {
+        return Err(Error::new(format!(
+            "rebinding the admission blockhash changed the message from {} to {} bytes",
+            message_bytes.len(),
+            rebound.len()
+        )));
+    }
+    intent.recent_blockhash = recent_blockhash.to_string();
+    intent.last_valid_block_height = last_valid_block_height;
+    intent.message_sha256 = sha256_hex(&rebound);
+    intent.message_base64 = BASE64.encode(&rebound);
+    Ok(())
+}
+
 fn resend_dispatching_packet_v1(
     rpc: &mut Rpc,
     arguments: &ArgumentsV1,
@@ -3808,6 +3982,13 @@ fn resend_dispatching_packet_v1(
     }
     let wire = bincode::serialize(&transaction)
         .map_err(|error| Error::new(format!("serialize durable admission packet: {error}")))?;
+    authenticate_genesis_again(rpc, &arguments.origin)?;
+    require_prestate_unchanged(rpc, report)?;
+    // A SIGNED packet cannot be rebound -- that would be a re-sign, and the
+    // refusal below is the wall. What it can have is the measurement taken
+    // LAST: the genesis and prestate reads above used to sit between this
+    // check and the send, and at 6 blocks per second two round trips are
+    // twelve blocks of a hundred-and-fifty-block life.
     let height = rpc
         .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
         .as_u64()
@@ -3817,9 +3998,6 @@ fn resend_dispatching_packet_v1(
             "Dispatching admission packet expired while absent; archive the journal rather than re-signing",
         ));
     }
-
-    authenticate_genesis_again(rpc, &arguments.origin)?;
-    require_prestate_unchanged(rpc, report)?;
     let landed_fault_armed = chaos_fault::is_armed_for_v1(
         POSITION_ADMISSION_CHAOS_MUTATION_V1,
         BoundaryV1::LandedBeforeFinalizationFsync,
@@ -6016,6 +6194,165 @@ mod tests {
             post.push(after);
         }
         json!({"preBalances": pre, "postBalances": post})
+    }
+
+    /// The fixture's report, walked back to the unsigned shape `build_report`
+    /// leaves behind: a plan, a message, and no signature over it.
+    fn planned_unsigned_fixture() -> (ReportV1, Keypair) {
+        let owner = Keypair::new();
+        let (mut report, _) = admission_exactness_fixture_for(&owner);
+        report.phase = PhaseV1::Planned;
+        report.signed_packet_base64 = None;
+        report.signed_packet_sha256 = None;
+        report.expected_signature = None;
+        report.intent_sha256 =
+            sha256_hex(&serde_json::to_vec(&report.intent).expect("serialize intent"));
+        report.envelope_sha256 = admission_envelope_digest(&report).expect("envelope");
+        (report, owner)
+    }
+
+    #[test]
+    fn an_owner_who_pays_its_own_fee_is_refused_before_the_chain_charges_for_it() {
+        // The frame requires the Position owner to sign READONLY. A fee payer
+        // is writable unconditionally, so owner == fee payer is unsatisfiable,
+        // and cohort-11 paid 12,233 CU and a fee to learn it as `Content`.
+        let owner = Keypair::new();
+        let other = Pubkey::new_unique();
+        let declared = vec![Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![
+                // Exactly the frame's shape for the owner: signs, readonly.
+                AccountMeta::new_readonly(owner.pubkey(), true),
+                AccountMeta::new(other, false),
+            ],
+            data: vec![7],
+        }];
+
+        let refused = VersionedMessage::Legacy(Message::new_with_blockhash(
+            &declared,
+            Some(&owner.pubkey()),
+            &Hash::new_unique(),
+        ));
+        let error = authenticate_compiled_privileges_v1(&refused, &declared, owner.pubkey())
+            .expect_err("an owner paying its own fee cannot sign readonly");
+        let text = format!("{error:?}");
+        assert!(text.contains(&owner.pubkey().to_string()), "{text}");
+        assert!(text.contains("FEE PAYER"), "{text}");
+        assert!(text.contains("--fee-payer"), "{text}");
+
+        // The same plan under a fee payer that is not the owner compiles to
+        // exactly the declared privileges, which is the repair that made
+        // cohort-11's two strangers admit.
+        let payer = Pubkey::new_unique();
+        let accepted = VersionedMessage::Legacy(Message::new_with_blockhash(
+            &declared,
+            Some(&payer),
+            &Hash::new_unique(),
+        ));
+        authenticate_compiled_privileges_v1(&accepted, &declared, payer)
+            .expect("a distinct fee payer leaves the owner readonly");
+    }
+
+    #[test]
+    fn a_slow_prefund_does_not_get_to_sign_the_blockhash_its_plan_was_compiled_with() {
+        // `build_report` compiles the message at the blockhash it can see, and
+        // then the driver spends a finalized re-observation, a fresh fee quote,
+        // a poststate probe and a prestate re-read before it may sign. On
+        // devnet at six blocks a second the hundred-and-fifty-block life of
+        // that blockhash is twenty-five seconds, which is shorter than the
+        // pass -- so the fixture stands in for a prefund slow enough to consume
+        // the whole life, and the fact under test is that what gets SIGNED
+        // carries the blockhash bound last, not the one the plan was drawn at.
+        let (mut report, owner) = planned_unsigned_fixture();
+        let plan_time = report.intent.recent_blockhash.clone();
+        let plan_time_height = report.intent.last_valid_block_height;
+        let durable_wire_bytes = report.intent.wire_bytes;
+
+        let signing_time = Hash::new_unique();
+        require_rebindable_unsigned_admission_v1(&report).expect("an unsigned plan may rebind");
+        rebind_intent_blockhash_v1(&mut report.intent, signing_time, plan_time_height + 4_242)
+            .expect("rebind the unsigned plan");
+
+        assert_ne!(plan_time, signing_time.to_string());
+        assert_eq!(report.intent.recent_blockhash, signing_time.to_string());
+        assert_eq!(
+            report.intent.last_valid_block_height,
+            plan_time_height + 4_242
+        );
+
+        // The bytes `sign_and_submit` will sign, signed the way it signs them.
+        let message_bytes = BASE64
+            .decode(&report.intent.message_base64)
+            .expect("rebound message base64");
+        assert_eq!(sha256_hex(&message_bytes), report.intent.message_sha256);
+        let message: VersionedMessage =
+            bincode::deserialize(&message_bytes).expect("rebound message");
+        assert_eq!(message.recent_blockhash(), &signing_time);
+        let fee_payer = Pubkey::from_str(&report.intent.fee_payer).expect("fee payer");
+        assert_eq!(message.static_account_keys().first(), Some(&fee_payer));
+
+        // And the durable wire width `sign_and_submit` refuses a mismatch
+        // against is unchanged, because a blockhash is a fixed thirty-two
+        // bytes wherever it sits.
+        let signed = VersionedTransaction {
+            signatures: vec![Signature::default(), owner.sign_message(&message_bytes)],
+            message,
+        };
+        let wire = bincode::serialize(&signed).expect("rebound packet");
+        assert_eq!(wire.len(), durable_wire_bytes);
+    }
+
+    #[test]
+    fn a_signed_admission_is_never_rebound_onto_a_fresh_blockhash() {
+        // The wall the rebind stands behind. Once a signature over these bytes
+        // exists, replacing them is a second signature over the same intent --
+        // which is the replay this driver refuses; an expired signed packet is
+        // archived instead.
+        let (planned, _) = planned_unsigned_fixture();
+        require_rebindable_unsigned_admission_v1(&planned).expect("unsigned Planned rebinds");
+
+        let (submitted, _) = admission_exactness_fixture();
+        assert!(submitted.expected_signature.is_some());
+        assert!(require_rebindable_unsigned_admission_v1(&submitted).is_err());
+
+        for phase in [
+            PhaseV1::SignedNotSubmitted,
+            PhaseV1::Dispatching,
+            PhaseV1::Submitted,
+            PhaseV1::Finalized,
+        ] {
+            let mut report = planned.clone();
+            report.phase = phase;
+            assert!(
+                require_rebindable_unsigned_admission_v1(&report).is_err(),
+                "phase {phase:?} must not rebind"
+            );
+        }
+
+        // A Planned report is still refused the moment any signature evidence
+        // is attached to it, whatever its phase claims.
+        let (signed_shape, _) = admission_exactness_fixture();
+        for mutate in [
+            (|report: &mut ReportV1, source: &ReportV1| {
+                report.signed_packet_base64 = source.signed_packet_base64.clone()
+            }) as fn(&mut ReportV1, &ReportV1),
+            |report, source| report.signed_packet_sha256 = source.signed_packet_sha256.clone(),
+            |report, source| report.expected_signature = source.expected_signature.clone(),
+        ] {
+            let mut report = planned.clone();
+            mutate(&mut report, &signed_shape);
+            assert!(require_rebindable_unsigned_admission_v1(&report).is_err());
+        }
+    }
+
+    #[test]
+    fn a_rebind_over_a_message_that_is_not_its_durable_digest_refuses() {
+        let (mut report, _) = planned_unsigned_fixture();
+        report.intent.message_sha256 = hex(&[0x77; 32]);
+        assert!(
+            rebind_intent_blockhash_v1(&mut report.intent, Hash::new_unique(), 1).is_err(),
+            "a message whose digest is not the durable one is not the planned message"
+        );
     }
 
     #[test]

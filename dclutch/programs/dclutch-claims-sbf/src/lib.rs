@@ -597,7 +597,7 @@ fn process_remaining_instruction(
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
     // reachable solely for the current Trading General child-packet builder
     // (`dclutch-general-adapter-contract/src/child_packets.rs`) and the Dealer
-    // physical composer (`dclutch-dealer-sbf/src/lib.rs`). New families use
+    // physical composer (the deleted `dclutch-dealer-sbf`). New families use
     // LBV2 affine/signed plans; deleting those consumers permits deleting this
     // route. The comment named a third, `dclutch-trading-sbf/src/dealer/
     // physical.rs`, until 2026-09-01; that file no longer exists.

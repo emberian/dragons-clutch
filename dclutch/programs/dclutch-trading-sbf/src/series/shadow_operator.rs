@@ -16,34 +16,15 @@ use dclutch_execution_strategy_contract::{
         invocation_context_digest_v3, runtime_observations_digest_v3,
     },
     shadow_v3::{
-        SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_HEADER_BYTES_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
-        ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
+        SHADOW_REQUEST_HEADER_BYTES_V3, ShadowArtifactTupleV3, ShadowExecutionDigestsV3,
+        ShadowRequestV3, ShadowRuntimeShapeV3,
     },
-    v2::{AcceleratorTransportProfileV2, StrategyDispositionV2},
 };
-use solana_program::hash::hash;
 
-use crate::execution_strategy_v2::AuthenticatedExecutionStrategyV2;
-
-use super::{
-    artifacts_v4::SeriesConsumeArtifactBundleV4,
-    instruction::{SERIES_ACTION_MAXIMUM_BYTES_V3, SeriesActionV3},
-};
+use super::instruction::{SERIES_ACTION_MAXIMUM_BYTES_V3, SeriesActionV3};
 
 /// First exact strategy-owned physical account after the common Hot prefix.
 pub const SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3: usize = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3;
-/// Finalized translation Certificate raw record.
-pub const SERIES_SHADOW_CERTIFICATE_RAW_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3;
-/// Vacant staging cursor for the Certificate record.
-pub const SERIES_SHADOW_CERTIFICATE_STAGING_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 1;
-/// Finalized immutable accelerator ArtifactRelease raw record.
-pub const SERIES_SHADOW_ARTIFACT_RAW_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 2;
-/// Vacant staging cursor for the ArtifactRelease record.
-pub const SERIES_SHADOW_ARTIFACT_STAGING_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 3;
 /// Current accelerator Program account authenticated by the ArtifactRelease.
 pub const SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3: usize =
     SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 4;
@@ -154,59 +135,6 @@ pub struct SeriesShadowInterpreterTranscriptV3<'a> {
     pub effect: ShadowEffectProjectionV3<'a>,
 }
 
-/// Rejoin the selected Series descriptor to one authenticated Shadow release.
-pub fn select_series_shadow_accelerator_v3(
-    strategy: AuthenticatedExecutionStrategyV2,
-    bundle: SeriesConsumeArtifactBundleV4<'_>,
-) -> Result<SeriesShadowSelectionV3> {
-    if strategy.strategy().disposition() != StrategyDispositionV2::ShadowAot
-        || strategy.strategy().transport_profile()
-            != Ok(AcceleratorTransportProfileV2::ShadowTranscriptV3)
-        || strategy.strategy().request_schema().to_bytes() != SHADOW_REQUEST_SCHEMA_ID_V3
-        || strategy.strategy().ack_schema().to_bytes() != SHADOW_ACK_SCHEMA_ID_V3
-    {
-        return Err(SeriesShadowOperatorErrorV3::Strategy);
-    }
-    let descriptor_id = content_id(&bundle.descriptor.encode())?;
-    if descriptor_id != strategy.capability_program_id()
-        || bundle.descriptor != strategy.capability_program()
-        || bundle.strategy != strategy.strategy()
-    {
-        return Err(SeriesShadowOperatorErrorV3::Artifact);
-    }
-    let certificate = strategy
-        .certificate_program_id()
-        .ok_or(SeriesShadowOperatorErrorV3::Artifact)?;
-    let artifact_release_id = strategy
-        .artifact_release_id()
-        .ok_or(SeriesShadowOperatorErrorV3::Artifact)?;
-    let artifact_release = strategy
-        .artifact_release()
-        .ok_or(SeriesShadowOperatorErrorV3::Artifact)?;
-    let accelerator_program = ContentId::new(artifact_release.program().to_bytes())
-        .map_err(|_| SeriesShadowOperatorErrorV3::Identity)?;
-    let accelerator_programdata = ContentId::new(artifact_release.programdata())
-        .map_err(|_| SeriesShadowOperatorErrorV3::Identity)?;
-    Ok(SeriesShadowSelectionV3 {
-        artifacts: ShadowArtifactTupleV3 {
-            capability_program: descriptor_id,
-            account_profile: bundle.descriptor.account_profile().program(),
-            request_profile: bundle.descriptor.request_profile().program(),
-            transition: bundle.strategy.transition_program(),
-            effect: bundle.descriptor.effect().program(),
-            strategy: strategy.strategy_program_id(),
-            certificate,
-        },
-        action: bundle.request.action(),
-        family_request_digest: family_request_digest_v3(bundle.request.bytes())
-            .map_err(|_| SeriesShadowOperatorErrorV3::Request)?,
-        artifact_release: artifact_release_id.content_id(),
-        accelerator_program,
-        accelerator_programdata,
-        accelerator_semantic_release: artifact_release.semantic_release_id(),
-    })
-}
-
 /// Construct one exact generic Shadow request after chain-derived selection.
 pub fn build_series_shadow_request_v3<'a>(
     selection: SeriesShadowSelectionV3,
@@ -299,10 +227,6 @@ pub fn encode_series_shadow_request_v3(
         .ok_or(SeriesShadowOperatorErrorV3::Buffer)?
         .fill(0);
     Ok(width)
-}
-
-fn content_id(bytes: &[u8]) -> Result<ContentId> {
-    ContentId::new(hash(bytes).to_bytes()).map_err(|_| SeriesShadowOperatorErrorV3::Identity)
 }
 
 // The fixed hot prefix gained the read-only validated-artifact seal at index 38

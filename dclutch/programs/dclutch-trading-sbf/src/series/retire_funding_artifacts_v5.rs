@@ -90,8 +90,6 @@ pub const SERIES_RETIRE_ROOT_COORDINATE_V5: u16 = 0;
 pub const SERIES_RETIRE_TICKET_COORDINATE_V5: u16 = 5;
 /// Authenticated lifecycle RentCredit coordinate.
 pub const SERIES_RETIRE_RENT_CREDIT_COORDINATE_V5: u16 = 6;
-/// Readonly executable Rent program coordinate.
-pub const SERIES_RETIRE_RENT_PROGRAM_COORDINATE_V5: u16 = 7;
 /// Later privilege-free alias used to observe the complete Ticket balance.
 ///
 /// FundingV5 owns lifecycle authority at the self-representative Ticket on

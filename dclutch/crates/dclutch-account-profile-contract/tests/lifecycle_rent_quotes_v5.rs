@@ -431,29 +431,41 @@ fn quote_order_width_minimum_and_prefilled_destination_are_refused_atomically() 
 
 #[test]
 fn duplicate_unordered_zero_and_excess_declarations_are_refused_atomically() {
-    for hostile in [
-        [
-            QUOTES[0],
-            LifecycleCurrentRentQuoteInputV5 {
-                scalar_destination: 38,
-                action: None,
-                ..QUOTES[1]
-            },
-            QUOTES[2],
-            QUOTES[3],
-        ],
-        [QUOTES[1], QUOTES[0], QUOTES[2], QUOTES[3]],
-        [
-            LifecycleCurrentRentQuoteInputV5 {
-                exact_data_len: 0,
-                ..QUOTES[0]
-            },
-            QUOTES[1],
-            QUOTES[2],
-            QUOTES[3],
-        ],
+    // The first two rows are one accusation -- the declaration table is not
+    // strictly increasing by destination -- and share a code on purpose. The
+    // third is a different one and now says so.
+    for (hostile, expected) in [
+        (
+            [
+                QUOTES[0],
+                LifecycleCurrentRentQuoteInputV5 {
+                    scalar_destination: 38,
+                    action: None,
+                    ..QUOTES[1]
+                },
+                QUOTES[2],
+                QUOTES[3],
+            ],
+            Error::InvalidRentQuote,
+        ),
+        (
+            [QUOTES[1], QUOTES[0], QUOTES[2], QUOTES[3]],
+            Error::InvalidRentQuote,
+        ),
+        (
+            [
+                LifecycleCurrentRentQuoteInputV5 {
+                    exact_data_len: 0,
+                    ..QUOTES[0]
+                },
+                QUOTES[1],
+                QUOTES[2],
+                QUOTES[3],
+            ],
+            Error::EmptyRentQuote,
+        ),
     ] {
-        assert_failed_policy_encode(&hostile, Error::InvalidRentQuote);
+        assert_failed_policy_encode(&hostile, expected);
     }
 
     let excess = [LifecycleCurrentRentQuoteInputV5 {

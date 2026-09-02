@@ -51,7 +51,7 @@ post-resource digest before committing its own state.
 The exact remaining producers are
 `crates/dclutch-general-adapter-contract/src/child_packets.rs`,
 `programs/dclutch-trading-sbf/src/dealer/physical.rs`, and
-`programs/dclutch-dealer-sbf/src/lib.rs`. No new controller may use that route;
+the deleted `dclutch-dealer-sbf` prototype. No new controller may use that route;
 removing those three producers permits deletion of the generic branch and its
 EconomicSlice dependency.
 

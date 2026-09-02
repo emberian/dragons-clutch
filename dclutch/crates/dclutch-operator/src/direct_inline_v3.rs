@@ -416,27 +416,6 @@ pub struct DirectInlineHotTransactionPlanV3 {
     pub checked_manifest_digest: [u8; 32],
 }
 
-/// Exact unsigned action-neutral Direct transaction and provenance report.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectHotTransactionPlanV4 {
-    /// Packet-safe v0 message compiled through the sole canonical LUT.
-    pub message: VersionedMessagePlanV0,
-    /// Exact eventual wallet signer order, beginning with the fee payer.
-    pub required_signers: Vec<Pubkey>,
-    /// Capability-selected Direct action.
-    pub action: DirectExecutionActionV3,
-    /// Product-authenticated runtime outcome count.
-    pub outcome_count: u32,
-    /// Schema of the selected CapabilityProgramV4 descriptor.
-    pub selected_program_schema: [u8; 32],
-    /// Selected CapabilityProgramV4 content digest.
-    pub selected_program: [u8; 32],
-    /// Exact immutable Trading ArtifactRelease identity.
-    pub trading_artifact_release: [u8; 32],
-    /// Digest of the checked multiprogram manifest.
-    pub checked_manifest_digest: [u8; 32],
-}
-
 /// Stable refusal from canonical Direct transaction routing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectInlineTransactionErrorV3 {
@@ -1351,78 +1330,6 @@ fn fixed_account(
         .fixed_accounts
         .get(coordinate)
         .ok_or(Error::FixedFrameMismatch)
-}
-
-/// Compile one action-neutral Direct Hot report through the sole finalized LUT.
-pub fn compile_direct_hot_v0(
-    report: &DirectHotReportV4,
-    payer: Pubkey,
-    recent_blockhash: Hash,
-    lookup_table: &ObservedAccount,
-) -> Result<DirectHotTransactionPlanV4, DirectInlineTransactionErrorV3> {
-    if payer == Pubkey::default()
-        || report.observation.finality != Finality::Finalized
-        || report.observation.slot == 0
-        || report.selected_program_schema != CAPABILITY_PROGRAM_SCHEMA_ID_V4
-        || report.trading_artifact_release == [0; 32]
-        || report.checked_manifest_digest == [0; 32]
-        || lookup_table.observation != report.observation
-        || lookup_table.owner != lookup_table_program::id()
-        || lookup_table.executable
-    {
-        return Err(DirectInlineTransactionErrorV3::Snapshot);
-    }
-    validate_direct_hot_instruction_sequence_v4(
-        report.action,
-        report.outcome_count,
-        &report.hot_instruction_data,
-        &report.instructions,
-    )?;
-    let expected = canonical_direct_hot_lookup_addresses_v4(report, payer)?;
-    let table = AddressLookupTable::deserialize(&lookup_table.data)
-        .map_err(|_| DirectInlineTransactionErrorV3::LookupTable)?;
-    if table.addresses.as_ref() != expected.as_slice() {
-        return Err(DirectInlineTransactionErrorV3::LookupTable);
-    }
-    let message = compile_v0_message(
-        payer,
-        &report.instructions,
-        recent_blockhash,
-        report.observation,
-        core::slice::from_ref(lookup_table),
-    )
-    .map_err(DirectInlineTransactionErrorV3::Routing)?;
-    let mut required_signers = vec![payer];
-    for signer in &report.required_instruction_signers {
-        if !required_signers.contains(signer) {
-            required_signers.push(*signer);
-        }
-    }
-    if usize::from(message.required_signatures) != required_signers.len() {
-        return Err(DirectInlineTransactionErrorV3::Signer);
-    }
-    Ok(DirectHotTransactionPlanV4 {
-        message,
-        required_signers,
-        action: report.action,
-        outcome_count: report.outcome_count,
-        selected_program_schema: report.selected_program_schema,
-        selected_program: report.selected_program,
-        trading_artifact_release: report.trading_artifact_release,
-        checked_manifest_digest: report.checked_manifest_digest,
-    })
-}
-
-/// Return the sole sorted, duplicate-free LUT address sequence for generic Direct.
-pub fn canonical_direct_hot_lookup_addresses_v4(
-    report: &DirectHotReportV4,
-    payer: Pubkey,
-) -> Result<Vec<Pubkey>, DirectInlineTransactionErrorV3> {
-    canonical_lookup_addresses(
-        &report.instructions,
-        &report.required_instruction_signers,
-        payer,
-    )
 }
 
 /// Compile the exact budgeted adjacent batch through one canonical finalized LUT.

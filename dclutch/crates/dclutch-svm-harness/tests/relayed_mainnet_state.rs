@@ -821,8 +821,7 @@ fn product_graph(test: &mut ProgramTest, row: RowFixtureV1) -> ProductGraph {
         PortfolioInputV2 {
             product_id,
             result_domain_id: ProductContentId::new(domain_digest).expect("domain digest"),
-            claim_basis_id: ProductContentId::new([seed.wrapping_add(6); 32])
-                .expect("claim basis"),
+            claim_basis_id: ProductContentId::new([seed.wrapping_add(6); 32]).expect("claim basis"),
             liability_basis_id,
             representation_release_id,
             denominator: 1,
@@ -1050,7 +1049,13 @@ struct Fixture {
 /// Row 0's world, which is what every test written before row 1 existed means
 /// by "the fixture".
 fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
-    fixture_with_venue(dbc_row(), seal_threshold, extra_keys, DEPLOYMENT_SLOT, ELF_DIGEST)
+    fixture_with_venue(
+        dbc_row(),
+        seal_threshold,
+        extra_keys,
+        DEPLOYMENT_SLOT,
+        ELF_DIGEST,
+    )
 }
 
 /// Any row's world, with that row's pinned deployment.
@@ -1781,6 +1786,304 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
     1 + signatures * 64 + message.len()
 }
 
+/// Solana's serialized transaction packet maximum.
+///
+/// Restated here because this harness resolves independently of the protocol
+/// workspace and cannot link `dclutch_versioned_message_operator`, which owns
+/// the constant: that crate pins `solana-hash =4.6.0` and
+/// `solana-address-lookup-table-interface =3.2.0` against this harness's
+/// `solana-message =4.4.1` and `=3.1.0`, and the two pin sets have no common
+/// solution.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The four appends, in submission order.
+///
+/// They are one route with four payloads, and the extents differ only by the
+/// chunk each carries: observation 2 is the 424-byte `VirtualPool` body, which
+/// is what put the append route 145 bytes over the packet maximum. The other
+/// three fit as legacy messages and ride the same table anyway, because the
+/// route is one route and a client that switches envelope by payload size is a
+/// client with two code paths and one name for them.
+///
+/// **This route is DATA-bound, not key-bound, and the numbers say so.** Only
+/// seven of its addresses are eligible for a table -- the relayer and the
+/// worker sign, and the ed25519 precompile and the Resolution program are
+/// invoked -- so the table buys a constant 181 bytes, identical on all four.
+/// Observation 2 lands at 1,196 with **36 bytes of headroom**, which is not a
+/// margin to plan on. The relay's own commit-don't-inline seam is the answer if
+/// the chunk grows: the append IS the chunk, and a smaller one keeps the sealed
+/// digest exactly as it is.
+const APPEND_EXTENTS: [PacketExtentV1; 4] = [
+    PacketExtentV1 {
+        legacy_bytes: 989,
+        v0_bytes: 808,
+        static_keys: 4,
+        loaded_addresses: 7,
+    },
+    PacketExtentV1 {
+        legacy_bytes: 998,
+        v0_bytes: 817,
+        static_keys: 4,
+        loaded_addresses: 7,
+    },
+    PacketExtentV1 {
+        legacy_bytes: 1_377,
+        v0_bytes: 1_196,
+        static_keys: 4,
+        loaded_addresses: 7,
+    },
+    PacketExtentV1 {
+        legacy_bytes: 993,
+        v0_bytes: 812,
+        static_keys: 4,
+        loaded_addresses: 7,
+    },
+];
+
+/// Both consumptions carry the same 28-account frame, so they have one extent.
+const CONSUME_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 1_534,
+    v0_bytes: 733,
+    static_keys: 3,
+    loaded_addresses: 27,
+};
+
+/// What one route costs on the wire, measured both ways.
+///
+/// A conversion that reports only the number it arrived at is not a
+/// measurement, it is an assertion: the reader cannot tell whether the route
+/// moved or the instrument did. Both extents are built from the SAME
+/// instruction bytes and the SAME account set, so the only difference between
+/// them is the envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PacketExtentV1 {
+    legacy_bytes: usize,
+    v0_bytes: usize,
+    static_keys: usize,
+    loaded_addresses: usize,
+}
+
+/// The addresses this route's table must carry, decided by the message compiler
+/// rather than by a filter written here.
+///
+/// Two classes of address can never be looked up -- an instruction's program id
+/// has to resolve before the tables load, and a signer is authenticated by its
+/// position in the static header -- and a campaign that states that rule in its
+/// own words acquires a second author for it. So this states nothing: it offers
+/// the compiler every address the route names and keeps the ones the compiler
+/// resolved through a table.
+///
+/// `dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1` is
+/// the same probe for the protocol workspace; this harness cannot link it for
+/// the reason given at `PACKET_DATA_BYTES`.
+fn route_lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
+    let mut candidates: Vec<Pubkey> = Vec::new();
+    for instruction in instructions {
+        for account in &instruction.accounts {
+            if !candidates.contains(&account.pubkey) {
+                candidates.push(account.pubkey);
+            }
+        }
+    }
+    let probe_key = Pubkey::new_from_array([0xff; 32]);
+    assert!(
+        !candidates.contains(&probe_key) && payer != probe_key,
+        "the probe table's key must not be one of the route's own coordinates"
+    );
+    let probe = solana_message::v0::Message::try_compile(
+        &payer,
+        instructions,
+        &[solana_message::AddressLookupTableAccount {
+            key: probe_key,
+            addresses: candidates.clone(),
+        }],
+        solana_sdk::hash::Hash::default(),
+    )
+    .expect("the route compiles as a message");
+    let mut eligible = Vec::new();
+    for lookup in &probe.address_table_lookups {
+        for index in lookup
+            .writable_indexes
+            .iter()
+            .chain(lookup.readonly_indexes.iter())
+        {
+            eligible.push(candidates[usize::from(*index)]);
+        }
+    }
+    eligible.sort_unstable_by_key(Pubkey::to_bytes);
+    eligible.dedup();
+    assert!(
+        !eligible.is_empty(),
+        "a route with nothing a table can carry does not need one"
+    );
+    eligible
+}
+
+/// Create, extend and FREEZE this route's own lookup table, then wait out the
+/// slot its addresses need to become resolvable.
+///
+/// Freezing is not tidiness. A mutable table is a second authority over which
+/// addresses a submitted message actually resolves to, which is the
+/// substitution the Pyth caller refuses by name.
+async fn frozen_route_lookup_table(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+) -> (Pubkey, Vec<Pubkey>) {
+    let payer = context.payer.pubkey();
+    let addresses = route_lookup_addresses(payer, instructions);
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("pre-derivation Clock");
+    context
+        .warp_to_slot(clock.slot + 1)
+        .expect("the derivation slot must be strictly recent");
+    let (create, table) = solana_address_lookup_table_interface::instruction::create_lookup_table(
+        payer, payer, clock.slot,
+    );
+    submit(context, &[create], &[])
+        .await
+        .expect("create the route's lookup table");
+    for chunk in addresses.chunks(20) {
+        submit(
+            context,
+            &[
+                solana_address_lookup_table_interface::instruction::extend_lookup_table(
+                    table,
+                    payer,
+                    Some(payer),
+                    chunk.to_vec(),
+                ),
+            ],
+            &[],
+        )
+        .await
+        .expect("extend the route's lookup table");
+    }
+    submit(
+        context,
+        &[solana_address_lookup_table_interface::instruction::freeze_lookup_table(table, payer)],
+        &[],
+    )
+    .await
+    .expect("freeze the route's lookup table");
+    let extended = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-extension Clock");
+    context
+        .warp_to_slot(extended.slot + 1)
+        .expect("appended addresses resolve only after the slot they landed in");
+    (table, addresses)
+}
+
+/// Submit one labelled step as a v0 message over a table frozen for exactly
+/// this route, record it, and assert the extent it was expected to have.
+///
+/// The legacy extent is compiled from the identical instructions and thrown away
+/// unsubmitted. It is the control: without it a converted figure says nothing
+/// about whether the route moved or the instrument did.
+async fn submit_recorded_v0(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    label: &str,
+    expected: PacketExtentV1,
+) -> Result<(), BanksClientError> {
+    let (table, addresses) = frozen_route_lookup_table(context, instructions).await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let payer = context.payer.pubkey();
+    let mut all: Vec<&Keypair> = vec![&context.payer];
+    all.extend_from_slice(signers);
+    let legacy = Transaction::new_signed_with_payer(instructions, Some(&payer), &all, blockhash);
+    let legacy_bytes = wire_extent(legacy.signatures.len(), &legacy.message.serialize());
+    let compiled = solana_message::v0::Message::try_compile(
+        &payer,
+        instructions,
+        &[solana_message::AddressLookupTableAccount {
+            key: table,
+            addresses,
+        }],
+        blockhash,
+    )
+    .expect("the route compiles as v0 over its own frozen table");
+    let static_keys = compiled.account_keys.len();
+    let loaded_addresses: usize = compiled
+        .address_table_lookups
+        .iter()
+        .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+        .sum();
+    let transaction = solana_transaction::versioned::VersionedTransaction::try_new(
+        solana_message::VersionedMessage::V0(compiled),
+        &all,
+    )
+    .expect("signed v0 transaction");
+    let v0_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await?;
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .as_ref()
+        .map(|metadata| {
+            (
+                metadata.log_messages.clone(),
+                metadata.compute_units_consumed,
+            )
+        })
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(v0_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert_eq!(
+        PacketExtentV1 {
+            legacy_bytes,
+            v0_bytes,
+            static_keys,
+            loaded_addresses,
+        },
+        expected,
+        "{label}"
+    );
+    assert!(
+        expected.v0_bytes <= PACKET_DATA_BYTES,
+        "{label}: the table did not close the overrun"
+    );
+    processed.result.map_err(BanksClientError::TransactionError)
+}
+
 /// Submit, and record the runtime's own account of what happened.
 ///
 /// Identical to [`submit`] except that it names the transaction for the census
@@ -1917,11 +2220,12 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
             u16::try_from(APPEND_OBSERVATION_PREFIX_BYTES).expect("offset"),
             1,
         );
-        submit_recorded(
+        submit_recorded_v0(
             &mut context,
             &[precompile, append],
             &[&fixture.worker],
             &format!("relayed transport: append observation {index}"),
+            APPEND_EXTENTS[index],
         )
         .await
         .unwrap_or_else(|error| panic!("append {index} failed: {error:?}"));
@@ -2600,11 +2904,12 @@ async fn a_sealed_graduation_resolves_the_market_through_the_products_own_domain
     let mut context = start(&mut fixture).await;
     seal_record(&mut context, &fixture).await;
 
-    submit_recorded(
+    submit_recorded_v0(
         &mut context,
         &[fixture.consume_instruction(ConsumeSubstitution::default())],
         &[&fixture.worker],
         "relayed consumption: a sealed graduation resolves the market",
+        CONSUME_EXTENT,
     )
     .await
     .expect("consume the sealed graduation record");
@@ -2685,11 +2990,12 @@ async fn a_sealed_renunciation_resolves_the_market_through_the_products_own_doma
     let mut context = start(&mut fixture).await;
     seal_record(&mut context, &fixture).await;
 
-    submit_recorded(
+    submit_recorded_v0(
         &mut context,
         &[fixture.consume_instruction(ConsumeSubstitution::default())],
         &[&fixture.worker],
         "relayed consumption: a sealed mint-authority renunciation resolves the market",
+        CONSUME_EXTENT,
     )
     .await
     .expect("consume the sealed renunciation record");

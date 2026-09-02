@@ -50,12 +50,21 @@ def main : IO Unit := do
     IO.println s!"pub const {TermField.rustName field.spec.name}: usize = {field.offset};"
   for field in translationHeaderLayout do
     IO.println s!"pub const {TranslationHeaderField.rustName field.spec.name}: usize = {field.offset};"
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_DESCRIPTOR_WITNESS_LEAN_V3" encodeDescriptorWitness
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_GRAPH_WITNESS_LEAN_V3" encodeGraphWitness
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_TRANSLATION_WITNESS_LEAN_V3" encodeTranslationWitness
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_DESCRIPTOR_RESERVED_REFUSAL_LEAN_V3" hostileDescriptorReserved
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_GRAPH_CYCLE_REFUSAL_LEAN_V3" hostileGraphCycle
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_GRAPH_DUPLICATE_NODE_REFUSAL_LEAN_V3" hostileGraphDuplicateNode
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_GRAPH_AMBIGUOUS_ROOT_REFUSAL_LEAN_V3" hostileGraphAmbiguousRoot
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_TRANSLATION_MISMATCH_REFUSAL_LEAN_V3" hostileTranslationMismatch
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_TRANSLATION_RESERVED_REFUSAL_LEAN_V3" hostileTranslationReserved

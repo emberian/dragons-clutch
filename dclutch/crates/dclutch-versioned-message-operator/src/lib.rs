@@ -108,48 +108,81 @@ pub enum Error {
 ///
 /// A table cannot be listed by hand: the route's own account metas are the
 /// authenticated coordinates, and a hand-written list is a second author for
-/// them. It also cannot be "every address", because two classes are
-/// structurally ineligible. An instruction's program id must be resolvable
-/// before the message's tables load, and a signer is authenticated by its
-/// position in the static header, so the runtime keeps both inline whatever a
-/// table says. Handing those to `extend_lookup_table` buys no bytes and pays
-/// permanent rent for them.
+/// them. It also cannot be "every address" -- two classes are structurally
+/// ineligible, because an instruction's program id must be resolvable before
+/// the message's tables load and a signer is authenticated by its position in
+/// the static header. The runtime keeps both inline whatever a table says, so
+/// handing them to `extend_lookup_table` buys no bytes and pays permanent rent.
 ///
-/// So the eligible set is derived: every account key the route names, minus the
-/// payer, minus every instruction's program id, minus every key any meta marks
-/// as a signer -- sorted by bytes and duplicate-free, which is what makes the
-/// compiled index assignment, and therefore the pinned extent, reproducible.
+/// This does not restate that rule. It offers the message compiler every
+/// address the route names and reports back the ones the compiler chose to
+/// resolve through a table, which is the only answer that cannot drift from
+/// what the runtime will actually do. Eleven campaigns in this tree write the
+/// filter by hand and they do not agree -- one lets signers in, one excludes
+/// the actor by identity rather than by the signer bit, one takes a signer list
+/// beside the instructions that can disagree with the metas. All of them
+/// compile, because a table entry the runtime declines to use is ignored in
+/// silence.
+///
+/// The result is sorted by bytes and duplicate-free, which is what makes the
+/// compiled index assignment -- and therefore any pinned extent -- reproducible.
 ///
 /// This is the packet arithmetic and nothing else. The table it describes is
 /// transaction-routing data, exactly as this module's header says; a caller
-/// that needs the table to be frozen, precommitted or observed at a finalized
-/// slot enforces that where it builds the table, not here.
+/// that needs the table frozen, precommitted or observed at a finalized slot
+/// enforces that where it builds the table, not here.
 ///
 /// # Errors
 ///
 /// [`Error::EmptyAddresses`] when the route offers nothing a table could carry,
-/// and [`Error::TooManyAddresses`] beyond the chain's 256-address limit.
+/// [`Error::TooManyAddresses`] beyond the chain's 256-address limit, and
+/// [`Error::Compile`] when the route does not compile as a message at all.
 pub fn canonical_route_lookup_addresses_v1(
     payer: Pubkey,
     instructions: &[Instruction],
 ) -> Result<Vec<Pubkey>, Error> {
-    let mut inline = vec![payer];
+    let mut candidates: Vec<Pubkey> = Vec::new();
     for instruction in instructions {
-        if !inline.contains(&instruction.program_id) {
-            inline.push(instruction.program_id);
-        }
         for account in &instruction.accounts {
-            if account.is_signer && !inline.contains(&account.pubkey) {
-                inline.push(account.pubkey);
+            if !candidates.contains(&account.pubkey) {
+                candidates.push(account.pubkey);
             }
         }
     }
+    if candidates.is_empty() {
+        return Err(Error::EmptyAddresses);
+    }
+    if candidates.len() > LOOKUP_TABLE_MAX_ADDRESSES {
+        return Err(Error::TooManyAddresses);
+    }
+    // The probe table's own key is never a route coordinate, so it cannot be
+    // mistaken for one: it is the one address in the message that names the
+    // table rather than being carried by it.
+    let probe_key = Pubkey::new_from_array([0xff; 32]);
+    if candidates.contains(&probe_key) || payer == probe_key {
+        return Err(Error::Compile);
+    }
+    let probe = v0::Message::try_compile(
+        &payer,
+        instructions,
+        &[AddressLookupTableAccount {
+            key: probe_key,
+            addresses: candidates.clone(),
+        }],
+        Hash::default(),
+    )
+    .map_err(|_| Error::Compile)?;
     let mut eligible = Vec::new();
-    for instruction in instructions {
-        for account in &instruction.accounts {
-            if !inline.contains(&account.pubkey) && !eligible.contains(&account.pubkey) {
-                eligible.push(account.pubkey);
-            }
+    for lookup in &probe.address_table_lookups {
+        for index in lookup
+            .writable_indexes
+            .iter()
+            .chain(lookup.readonly_indexes.iter())
+        {
+            let address = candidates
+                .get(usize::from(*index))
+                .ok_or(Error::Arithmetic)?;
+            eligible.push(*address);
         }
     }
     canonical_addresses(&eligible)

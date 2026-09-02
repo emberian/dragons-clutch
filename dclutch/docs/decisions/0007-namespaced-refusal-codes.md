@@ -152,7 +152,7 @@ inside a band is a legibility question, not a correctness one.
 | `0x004` | `0x0000_4000` | `trading` | `dclutch-trading-sbf` | Program |
 | `0x005` | `0x0000_5000` | `claims` | `dclutch-claims-sbf` | Program |
 | `0x006` | `0x0000_6000` | `custody` | `dclutch-custody-sbf` | Program |
-| `0x007` | `0x0000_7000` | `dealer` | `dclutch-dealer-sbf` | Program |
+| `0x007` | `0x0000_7000` | _(retired)_ | ~~`dclutch-dealer-sbf`~~ | **RETIRED 2026-09-02 — never reallocate** |
 | `0x008` | `0x0000_8000` | `resolution` | `dclutch-resolution-proof-sbf` | Program |
 | `0x009` | `0x0000_9000` | `product-runtime-v2` | `dclutch-product-runtime-v2-sbf` | Program |
 | `0x00a` | `0x0000_A000` | `direct-aot` | `dclutch-direct-aot-sbf` | Program |

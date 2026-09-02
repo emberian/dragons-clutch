@@ -164,14 +164,14 @@ fn generated_empty_and_quote_bytes_round_trip_through_rust() {
         // Fifteen bytes: the artifact is one byte short of its declared shape.
         Error::InvalidLength,
         // Zero `exact_data_len`.
-        Error::InvalidRentQuote,
+        Error::EmptyRentQuote,
         // Nonzero byte inside the five reserved bytes after the action.
         Error::NonCanonicalReserved,
         // Scope tag `2`, which this build does not understand.
-        Error::InvalidRentQuote,
+        Error::UnknownRentQuoteScope,
         // Unscoped quote carrying a nonzero action, a second encoding of
         // "every action".
-        Error::InvalidRentQuote,
+        Error::NonCanonicalRentQuoteAction,
     ];
     assert_eq!(
         generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_REFUSAL_CORPUS.len(),

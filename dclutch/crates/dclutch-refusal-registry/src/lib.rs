@@ -154,8 +154,13 @@ pub const TRADING_REFUSAL_BASE: u32 = 0x0000_4000;
 pub const CLAIMS_REFUSAL_BASE: u32 = 0x0000_5000;
 /// Band 6 — `dclutch-custody-sbf`.
 pub const CUSTODY_REFUSAL_BASE: u32 = 0x0000_6000;
-/// Band 7 — `dclutch-dealer-sbf`.
-pub const DEALER_REFUSAL_BASE: u32 = 0x0000_7000;
+// Band 7 is RETIRED and is never reallocated. It belonged to
+// `dclutch-dealer-sbf`, deleted 2026-09-02: a standalone measurement prototype
+// its own header disclaimed as "not a second accepted Trading release
+// identity", marked `false` in the release tool's SHIPPED_LINKS, and with no
+// consumer but its own program-test. `bands_are_ascending_and_disjoint` needs
+// ascent and disjointness, not contiguity, so the gap is legal -- and a gap is
+// what a spent band should look like. See docs/decisions/0007.
 /// Band 8 — `dclutch-resolution-proof-sbf`.
 pub const RESOLUTION_REFUSAL_BASE: u32 = 0x0000_8000;
 /// Band 9 — `dclutch-product-runtime-v2-sbf`.
@@ -250,13 +255,6 @@ pub const BANDS: &[RefusalBand] = &[
         label: "custody",
         package: "dclutch-custody-sbf",
         base: CUSTODY_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
-        label: "dealer",
-        package: "dclutch-dealer-sbf",
-        base: DEALER_REFUSAL_BASE,
         span: BAND_SPAN,
         tier: BandTier::Program,
     },
@@ -541,7 +539,6 @@ mod tests {
             TRADING_REFUSAL_BASE,
             CLAIMS_REFUSAL_BASE,
             CUSTODY_REFUSAL_BASE,
-            DEALER_REFUSAL_BASE,
             RESOLUTION_REFUSAL_BASE,
             PRODUCT_RUNTIME_V2_REFUSAL_BASE,
             DIRECT_AOT_REFUSAL_BASE,

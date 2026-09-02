@@ -2005,11 +2005,16 @@ async fn claims_and_custody_execute_as_children_under_a_real_continuation() {
 /// paragraphs to satisfy a checker would be exactly the wrong trade.
 #[test]
 fn assert_no_family_reaches_the_registry_by_cpi() {
-    const ROLE_ADAPTERS: [&str; 7] = [
+    // Six, not seven: `dclutch-dealer-sbf` was deleted 2026-09-02. It was a
+    // standalone measurement prototype its own header disclaimed as "not a
+    // second accepted Trading release identity", `false` in SHIPPED_LINKS, and
+    // its only consumer was its own program-test. The shipped Dealer path is
+    // Trading's dealer family through the accelerator, and `dclutch-trading-sbf`
+    // below already covers it.
+    const ROLE_ADAPTERS: [&str; 6] = [
         "dclutch-claims-sbf",
         "dclutch-custody-sbf",
         "dclutch-core-sbf",
-        "dclutch-dealer-sbf",
         "dclutch-rent-sbf",
         "dclutch-trading-sbf",
         "dclutch-resolution-proof-sbf",

@@ -41,9 +41,10 @@ them together is how a reader ends up believing the strongest one.
 - **Packet serialisation.** The tier does depend on it, so it measures rather
   than asserting. Every recorded transaction carries `wire_bytes` the campaign
   serialised itself, and two witnesses read them back:
-  `the-deadline-walk-fits-a-legacy-packet` (true — the walk is 991 bytes) and
-  `exactly-two-relayed-transactions-do-not-fit-a-legacy-packet`, which is a
-  **recorded defect, not a tolerance**. See below.
+  `the-deadline-walk-fits-a-legacy-packet` (true — the walk is 991 bytes and
+  stays legacy on purpose) and
+  `the-two-over-limit-relayed-routes-ride-v0-lookup-tables`, which pins what the
+  conversion bought. See below.
 - **Compute and heap.** The campaign sets ProgramTest's compute maximum to
   exactly Solana's 1,400,000 and never raises it;
   `relayed-fits-the-compute-maximum` checks the largest observed consumption
@@ -61,32 +62,42 @@ them together is how a reader ends up believing the strongest one.
   them per artifact and refuses to run the campaign at all if the count is
   nonzero.
 
-## !! TWO TRANSACTIONS DO NOT FIT A LEGACY PACKET !!
+## Two transactions did not fit a legacy packet, and the fix is not the same fix
 
 Measured 2026-08-27, the first time this family's wire extents were measured at
-all:
+all; converted 2026-09-02. Packet maximum 1,232 bytes.
 
-| transaction | bytes | over |
-|---|---|---|
-| `relayed consumption: a sealed graduation resolves the market` | 1,534 | +302 |
-| `relayed transport: append observation 2` | 1,377 | +145 |
+| transaction | legacy | over | v0 over its frozen table | static / looked up |
+|---|---:|---:|---:|---:|
+| `relayed consumption` (both markets) | 1,534 | +302 | **733** | 3 / 27 |
+| `relayed transport: append observation 2` | 1,377 | +145 | **1,196** | 4 / 7 |
+| `append observation 0 / 1 / 3` | 989 / 998 / 993 | fit | 808 / 817 / 812 | 4 / 7 |
 
-Solana's legacy packet maximum is 1,232 bytes. Neither of these can be submitted
-by a real relayer on a legacy message. The consumption carries 28 accounts; the
-append carries the 424-byte `VirtualPool` body inside its attested observation.
-Both want v0 messages over an Address Lookup Table, exactly as the Claims
-campaigns already do and as `4e1c4db` did for Found31 — which was ten bytes over
-and survived every fixture test in the tree until someone measured.
+Neither could be submitted by a real relayer on a legacy message. Both now
+execute as v0 messages over a table frozen for the route, whose addresses are
+derived from the route's own metas by the message compiler rather than by a
+filter this campaign wrote.
 
-The witness names the two by label rather than counting them, so a **third**
-transaction going over turns the tier red instead of passing silently, and so
-does fixing either one — at which point whoever fixes it edits the expectation
-down. Owner: the Source/provider tier, alongside the daemon work.
+**The two are not the same kind of overrun, and the figures are what shows it.**
+Consumption is key-heavy: 27 of its 30 addresses become one-byte indexes and it
+lands at 733, comfortably under half the maximum. The append is **data-bound**.
+Only seven of its addresses are eligible for a table — the relayer and the
+worker sign, and the ed25519 precompile and Resolution are invoked — so the
+table buys a constant **181 bytes** on all four appends, and observation 2 lands
+at 1,196 with **36 bytes of headroom**. That is not a margin to plan on. If the
+chunk grows, the lever is the relay's own commit-don't-inline seam — the append
+*is* the chunk, and a smaller one keeps the sealed digest exactly as it is — not
+a wider table, because there is no wider table to be had.
+
+All four appends ride the table, not just the one that was over. The route is
+one route, and a client that picks its envelope by payload size is a client with
+two code paths and one name for them.
 
 **The walk is deliberately not on that list.** It is the one route in this
 family that has to work when nobody is cooperating, so it must not depend on an
 Address Lookup Table a silent operator might never have published. Its
 twenty-two-account frame is 991 bytes and rides a bare legacy message.
+
 
 ## Files
 

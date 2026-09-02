@@ -16,11 +16,7 @@
 //! and closure. A lifecycle policy that also claimed the Ticket's refund would
 //! be a second author for one lamport flow.
 
-use dclutch_capability_contract::{
-    CapabilityManifestV1, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
-    RealmCollateralCustodyV1,
-};
-use dclutch_core_contract::ContentId;
+use dclutch_capability_contract::{FundingStateV1, RealmCollateralCustodyV1};
 use dclutch_market_core_codec::{
     Identity as CoreIdentity, SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
@@ -37,8 +33,8 @@ use dclutch_series_v3_kernel::terminal::{
 use solana_program::pubkey::Pubkey;
 
 use super::{
-    AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2, OccurrenceV3,
-    SeriesV3Error, TemplateV3, core_request, funding_list_id,
+    AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2, SeriesV3Error,
+    TemplateV3, core_request,
     state::{SeriesStateError, SeriesStateV3, TicketStateV3},
 };
 
@@ -164,82 +160,6 @@ impl PendingFundingPlanV3 {
     pub const fn required_native(self) -> u64 {
         self.required_native
     }
-}
-
-/// Validate exact ordered pending FundingStates and plan dust-tolerant funding.
-pub fn plan_pending_funding(
-    occurrence: OccurrenceV3,
-    manifest_id: ContentId,
-    manifest: CapabilityManifestV1<'_>,
-    accounts: &[PendingFundingAccountV3],
-) -> Result<PendingFundingPlanV3, LifecycleErrorV3> {
-    if accounts.is_empty() || accounts.len() > MAXIMUM_FUNDING_STATES {
-        return Err(LifecycleErrorV3::Funding);
-    }
-    let mut keys = [Pubkey::default(); MAXIMUM_FUNDING_STATES];
-    let mut top_up = [0_u64; MAXIMUM_FUNDING_STATES];
-    let mut surplus = [0_u64; MAXIMUM_FUNDING_STATES];
-    let mut required_native = 0_u64;
-    let mut transferred = 0_u64;
-    let mut previous_entry: Option<u16> = None;
-
-    for (index, account) in accounts.iter().copied().enumerate() {
-        *keys.get_mut(index).ok_or(LifecycleErrorV3::Funding)? = account.key;
-        let state = account.state;
-        if state.status() != FundingStatus::Pending
-            || state.manifest_content_id() != manifest_id
-            || previous_entry.is_some_and(|previous| previous >= state.entry_index())
-        {
-            return Err(LifecycleErrorV3::Funding);
-        }
-        let required = account
-            .exact_state_rent
-            .checked_add(state.remaining().native_lamports_total())
-            .ok_or(LifecycleErrorV3::Arithmetic)?;
-        let desired_custody = match account.realm_collateral {
-            Some(realm) => FundingCustodyObservationV1::with_realm_collateral(
-                required,
-                account.exact_state_rent,
-                realm,
-            ),
-            None => FundingCustodyObservationV1::native_only(required, account.exact_state_rent),
-        }
-        .map_err(|_| LifecycleErrorV3::Funding)?;
-        state
-            .validate_against(manifest_id, manifest, desired_custody)
-            .map_err(|_| LifecycleErrorV3::Funding)?;
-        let (top_up_value, surplus_value) = if account.current_lamports <= required {
-            (required - account.current_lamports, 0)
-        } else {
-            (0, account.current_lamports - required)
-        };
-        *top_up.get_mut(index).ok_or(LifecycleErrorV3::Funding)? = top_up_value;
-        *surplus.get_mut(index).ok_or(LifecycleErrorV3::Funding)? = surplus_value;
-        required_native = required_native
-            .checked_add(required)
-            .ok_or(LifecycleErrorV3::Arithmetic)?;
-        transferred = transferred
-            .checked_add(top_up_value)
-            .ok_or(LifecycleErrorV3::Arithmetic)?;
-        previous_entry = Some(state.entry_index());
-    }
-    if funding_list_id(
-        keys.get(..accounts.len())
-            .ok_or(LifecycleErrorV3::Funding)?,
-    )? != occurrence.funding_list()
-        || required_native != occurrence.funds().capability_native()
-    {
-        return Err(LifecycleErrorV3::Funding);
-    }
-    Ok(PendingFundingPlanV3 {
-        count: u8::try_from(accounts.len()).map_err(|_| LifecycleErrorV3::Funding)?,
-        top_up,
-        preexisting_surplus_refund: surplus,
-        ticket_capability_refund: required_native
-            .checked_sub(transferred)
-            .ok_or(LifecycleErrorV3::Arithmetic)?,
-        required_native,
-    })
 }
 
 /// Candidate bytes and Core request for one commit-last occurrence transition.

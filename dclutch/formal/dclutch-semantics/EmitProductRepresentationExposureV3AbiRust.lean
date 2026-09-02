@@ -30,8 +30,13 @@ def main : IO Unit := do
     IO.println s!"pub const {RowField.rustName field.spec.name}: usize = {field.offset};"
   for field in termLayout do
     IO.println s!"pub const {TermField.rustName field.spec.name}: usize = {field.offset};"
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_EXPOSURE_K3_N1_WITNESS_V3" k3n1Witness
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_EXPOSURE_K3_N258_WITNESS_V3" k3n258Witness
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_EXPOSURE_RANK_CYCLE_REFUSAL_V3" rankCycleRefusal
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_EXPOSURE_WIDTH_REFUSAL_V3" widthRefusal
+  IO.println "#[cfg(test)]"
   emitBytes "COMPOSITION_EXPOSURE_RELEASE_TRANSPLANT_REFUSAL_V3" releaseTransplantRefusal

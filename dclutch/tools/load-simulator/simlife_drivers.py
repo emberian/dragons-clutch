@@ -139,42 +139,151 @@ def base58(raw: bytes) -> str:
     return text
 
 
-def frozen_routing_table_for(url: str, market_address: str) -> Optional[str]:
-    """The founding's own frozen DCLTGMF3 table, read off the chain.
+# The founding's own label for the transaction that CREATES its routing table.
+# `campaign` writes it into the evidence beside the signature, so the table is
+# one `getTransaction` away and needs no search at all.
+FROZEN_ROUTING_TABLE_CREATE_LABEL_V1 = "create DCLTGMF3 frozen routing address lookup table"
+
+
+def routing_table_create_signature_v1(evidence: dict) -> Optional[str]:
+    """The signature of the founding's own create-table transaction.
+
+    Absent for a world founded before the campaign labelled it; that is an
+    absence and answers `None`. A record that IS present and then fails to
+    authenticate is a different thing and refuses by name.
+    """
+    for entry in ((evidence.get("execution") or {}).get("transactions") or []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("label") != FROZEN_ROUTING_TABLE_CREATE_LABEL_V1:
+            continue
+        if entry.get("error"):
+            continue
+        return entry.get("signature")
+    return None
+
+
+def created_address_lookup_table_v1(url: str, signature: str) -> Optional[str]:
+    """The table one CreateLookupTable transaction created, from its own keys.
+
+    `CreateLookupTable` puts the new table at account index 0 of its own
+    instruction, so the address is in the transaction the founding already
+    recorded. This does not decode the instruction data to prove the
+    discriminant is Create: the campaign's label says which transaction this is,
+    and the account is authenticated against the chain by
+    `authenticated_frozen_routing_table_v1` before it is ever passed to a
+    driver -- so a wrong pick refuses rather than routes.
+    """
+    body = rpc(url, "getTransaction", [signature, {
+        "encoding": "json",
+        "commitment": "finalized",
+        "maxSupportedTransactionVersion": 0,
+    }])
+    if not body:
+        return None
+    message = ((body.get("transaction") or {}).get("message")) or {}
+    keys = message.get("accountKeys") or []
+    created = None
+    for instruction in (message.get("instructions") or []):
+        program = instruction.get("programIdIndex")
+        if not isinstance(program, int) or program >= len(keys):
+            continue
+        if keys[program] != ADDRESS_LOOKUP_TABLE_PROGRAM:
+            continue
+        accounts = instruction.get("accounts") or []
+        if not accounts or not isinstance(accounts[0], int) or accounts[0] >= len(keys):
+            raise DriverRefusal(
+                f"{signature} carries an Address Lookup Table instruction naming no table"
+            )
+        table = keys[accounts[0]]
+        if created is not None and created != table:
+            raise DriverRefusal(
+                f"{signature} names two different lookup tables ({created}, {table}); "
+                "this run refuses to choose one"
+            )
+        created = table
+    return created
+
+
+def authenticated_frozen_routing_table_v1(
+    url: str, address: str, market_address: str
+) -> str:
+    """The two facts that make an address THE founding's routing table.
+
+    Frozen -- authority `None`, so the extension plan is complete and nothing
+    can add to it -- and routing this founding's own market. Both are read off
+    the one account, by address.
+    """
+    import base64
+
+    value = (rpc(url, "getAccountInfo", [address, {
+        "encoding": "base64", "commitment": "finalized",
+    }]) or {}).get("value")
+    if not value:
+        raise DriverRefusal(
+            f"the founding recorded routing table {address} but the chain has no such account"
+        )
+    owner = value.get("owner")
+    if owner != ADDRESS_LOOKUP_TABLE_PROGRAM:
+        raise DriverRefusal(
+            f"routing table {address} is owned by {owner}, not the Address Lookup Table program"
+        )
+    raw = base64.b64decode(value["data"][0])
+    if len(raw) < ALT_HEADER_BYTES:
+        raise DriverRefusal(
+            f"routing table {address} is {len(raw)} bytes, shorter than a lookup table header"
+        )
+    if raw[ALT_AUTHORITY_FLAG_OFFSET] != 0:
+        raise DriverRefusal(
+            f"routing table {address} still carries an authority and can still be extended; "
+            "the admission routes only through the FROZEN table the founding committed to"
+        )
+    count = (len(raw) - ALT_HEADER_BYTES) // 32
+    addresses = {
+        base58(raw[ALT_HEADER_BYTES + 32 * index : ALT_HEADER_BYTES + 32 * (index + 1)])
+        for index in range(count)
+    }
+    if market_address not in addresses:
+        raise DriverRefusal(
+            f"frozen table {address} does not route {market_address}; it is some other "
+            "founding's table and this run refuses to admit through it"
+        )
+    return address
+
+
+def frozen_routing_table_for(
+    url: str, evidence: dict, market_address: str
+) -> Optional[str]:
+    """The founding's own frozen DCLTGMF3 table, looked up BY ITS ADDRESS.
 
     The admission message does not fit a legacy transaction and must route
     through a lookup table; SEL-SEAM measured that passing all five founding
     tables refuses `DuplicateAddress` and that exactly one -- the FROZEN one --
-    is the contract, and named as residue that the founding campaign does not
-    record its address in the evidence.
+    is the contract.
 
-    It does not have to. A frozen table is one whose authority is `None`, and
-    the founding's own is the frozen table whose address list contains the
-    market. That is two facts already on the chain, so this reads them rather
-    than asking the campaign to start writing a sixth thing down.
+    This used to SEARCH for it: `getProgramAccounts` over the whole
+    AddressLookupTable program, keeping the frozen table whose address list
+    contained the market. That cannot work on a public chain and did not.
+    Measured against cohort-11 on 2026-09-01 through a real devnet endpoint, it
+    answered `None` for a table that demonstrably exists, because devnet's ALT
+    program holds far too many accounts to enumerate through an RPC. And the
+    predicate was wrong as well as unscannable: cohort-11's frozen table routes
+    the founding's `founding_market` and sixty-three other accounts, and does
+    NOT contain the Core Market address a caller would most naturally reach for,
+    so a search given the wrong one of the two answers a confident `None`.
+
+    Nothing has to be searched. The founding's own create transaction is in the
+    evidence under its label, and `CreateLookupTable` names the table it
+    creates. Two reads by address, and the account is then authenticated
+    against the founding it claims to serve.
     """
-    import base64
-
-    accounts = rpc(url, "getProgramAccounts", [
-        ADDRESS_LOOKUP_TABLE_PROGRAM,
-        {"encoding": "base64"},
-    ]) or []
-    for entry in accounts:
-        raw = base64.b64decode(entry["account"]["data"][0])
-        if len(raw) < ALT_HEADER_BYTES:
-            continue
-        if raw[ALT_AUTHORITY_FLAG_OFFSET] != 0:
-            # An authority is still set, so this table can still be extended:
-            # it is not the frozen one the founding committed to.
-            continue
-        count = (len(raw) - ALT_HEADER_BYTES) // 32
-        addresses = {
-            base58(raw[ALT_HEADER_BYTES + 32 * index : ALT_HEADER_BYTES + 32 * (index + 1)])
-            for index in range(count)
-        }
-        if market_address in addresses:
-            return entry["pubkey"]
-    return None
+    signature = routing_table_create_signature_v1(evidence)
+    if signature is None:
+        return None
+    address = created_address_lookup_table_v1(url, signature)
+    if address is None:
+        return None
+    return authenticated_frozen_routing_table_v1(url, address, market_address)
 
 
 # Token-2022. Every market this compiler emits uses it for its collateral Mint.
@@ -538,7 +647,9 @@ def adopt_completed_founding(
             market_id, evidence, market_input, attempt / "keys",
             fee_basis_points=founding_fee_basis_points(planned),
         )
-        founded.routing_table = frozen_routing_table_for(context.rpc_url, founded.address)
+        founded.routing_table = frozen_routing_table_for(
+            context.rpc_url, body, founded.address
+        )
         adopted_activation = attempt.parent / "activation.json"
         if adopted_activation.is_file():
             founded.activation = adopted_activation
@@ -648,7 +759,9 @@ def _found_once(context: DriverContext, market_id: str, planned, attempt: int) -
         market_id, evidence, market_input, keys,
         fee_basis_points=founding_fee_basis_points(planned),
     )
-    market.routing_table = frozen_routing_table_for(context.rpc_url, market.address)
+    market.routing_table = frozen_routing_table_for(
+        context.rpc_url, json.loads(evidence.read_text()), market.address
+    )
     return market, run
 
 

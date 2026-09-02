@@ -17,7 +17,6 @@ use dclutch_effect_kernel::{
 };
 use dclutch_series_v3_kernel::{
     AccountKeyV3, AuthenticatedProductProjectionV2, composition::SeriesConsumeCompositionV3,
-    plan::SeriesReplayWitnessV3,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
 
@@ -168,11 +167,6 @@ impl<'a> SeriesConsumeExecutionPlanV3<'a> {
     /// Ordered projected Lock, Core Found, Realize, Claims, and Core Open calls.
     pub const fn calls(self) -> [SeriesStagedChildCallV3<'a>; SERIES_CONSUME_ROUTE_COUNT_V3] {
         self.calls
-    }
-
-    /// Semantic replay candidate; this function grants no authority to write it.
-    pub const fn replay_candidate(self) -> SeriesReplayWitnessV3 {
-        self.composition.replay()
     }
 
     /// Full joined semantic plan used for later receipt validation and commit.
