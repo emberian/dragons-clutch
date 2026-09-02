@@ -306,8 +306,8 @@ fn readonly(account: ObservedAccount) -> GeneralObservedAccountMetaV3 {
 ///
 /// The bank transport is the sole authority on the page span; the operator
 /// derives the same number from the effect program's register geometry.
-fn scratch_pages(outcome_count: u32) -> u32 {
-    let scalars = general_hot_scalar_count_v3(outcome_count).expect("General scalar count");
+fn scratch_pages(action: Action, outcome_count: u32) -> u32 {
+    let scalars = general_hot_scalar_count_v3(action, outcome_count).expect("General scalar count");
     match classify_bank_transport_v2(scalars, GENERAL_HOT_COMMON_IDENTITIES_V3)
         .expect("General bank transport")
     {
@@ -768,7 +768,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
     // The admitted-AOT transport suffix: the six certificate/admission/release
     // record coordinates, the accelerator deployment, its ProgramData, then one
     // release-pinned caller authority per acknowledgment chunk.
-    let pages = scratch_pages(OUTCOME_COUNT);
+    let pages = scratch_pages(Action::Freeze, OUTCOME_COUNT);
     let mut strategy_accounts = vec![
         readonly(certificate.raw),
         readonly(certificate.staging),
@@ -970,7 +970,8 @@ fn generated_instruction_accounts(action: Action) -> usize {
         }
         physical_runtime += 1;
     }
-    let pages = usize::try_from(scratch_pages(OUTCOME_COUNT)).expect("bounded page count");
+    let pages =
+        usize::try_from(scratch_pages(Action::Freeze, OUTCOME_COUNT)).expect("bounded page count");
     physical_runtime += pages;
     HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_AOT_FIXED_EXTRAS_V3 + pages + physical_runtime
         - HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3

@@ -60,7 +60,45 @@ use crate::collection_v1::{
 /// records.
 pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 151;
 /// Outcome index, quantity, three claim magnitudes, and cursor inventory.
+///
+/// The width of the item slot ENUM, which is not what every action declares.
+/// Ask [`general_hot_item_scalar_stride_v3`].
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
+
+/// The per-outcome scalar stride ONE action declares.
+///
+/// Lean is the author: `DClutchSemantics.GeneralTransitionV3.actionItemScalarStride`
+/// and `GeneralRequestProfilesV1.actionItemScalarStride` decide this, and both
+/// emitted artifacts carry the result --
+/// `GENERAL_OPEN_BATCH_ITEM_INSTRUCTIONS_V3` is 0 and
+/// `GENERAL_OPEN_BATCH_REQUEST_PROFILE_V1` carries `0x00` where the other
+/// thirteen carry `0x06`. This function is the Rust half of that decision, and
+/// `artifacts_v3` joins all four artifacts to it.
+///
+/// WHY THE TWO BATCH ACTIONS DECLARE NOTHING. The batch record has no
+/// per-outcome tail. Their effect already declared zero item operations, and
+/// the only item instruction their transition ever emitted was the shared bound
+/// check `OUTCOME < OUTCOME_COUNT` -- on a register whose sole legal value is
+/// the coordinate it occupies, which `hot_candidate_v3` refuses anything else
+/// for. Neither action read the tail it declared; the declaration was the only
+/// thing making the bank grow with the Product width.
+///
+/// WHAT IT COST, measured on the real-ELF `OpenBatch` campaign 2026-09-02
+/// before this landed: the Trading heap peak was `59,376 + 528*(N - 2)` bytes
+/// of 65,536 -- an identity that reproduced both measured peaks and predicted
+/// the abort, N = 13 peaking at 65,184 and committing while N = 14 needed
+/// 65,712 and the allocator died. Only 48 of those 528 bytes was declared
+/// width; the rest was the same width copied through eleven full-width banks a
+/// no-op `dealloc` never reclaims. At stride zero the peak is flat in N, and
+/// the scratch-page span stops growing with it because the page count is
+/// derived from the bank width.
+#[must_use]
+pub const fn general_hot_item_scalar_stride_v3(action: Action) -> u32 {
+    match action {
+        Action::OpenBatch | Action::CloseBatch => 0,
+        _ => GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+    }
+}
 /// Exact common identity-register count in the General Hot38 ABI.
 pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 45;
 /// General has no per-outcome identity tail.
@@ -591,15 +629,21 @@ pub struct GeneralHotEnvironmentV3 {
 /// or caller-provided side channels. Every value below is projected once by
 /// the selected generic profile and remains read-only at the family boundary.
 pub fn general_hot_environment_from_bank_v3(
+    action: Action,
     bank: &[u8],
     outcome_count: u32,
 ) -> Result<GeneralHotEnvironmentV3> {
-    if bank.len() != general_hot_candidate_bank_len_v3(outcome_count)?
-        || read_scalar(bank, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-    {
+    // THE WIDTH IS CHECKED AGAINST THE ACTION, AND FIRST. Everything below
+    // reads through `scalar_count`, which is where the identity bank starts,
+    // so a bank sized for a different stride must refuse here rather than be
+    // read at a rebased offset. See `BankStrideMismatch`.
+    if bank.len() != general_hot_candidate_bank_len_v3(action, outcome_count)? {
+        return Err(GeneralHotCandidateErrorV3::BankStrideMismatch);
+    }
+    if read_scalar(bank, scalar::OUTCOME_COUNT)? != u64::from(outcome_count) {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(action, outcome_count)?;
     let scalar_u32 = |coordinate| {
         u32::try_from(read_scalar(bank, coordinate)?)
             .map_err(|_| GeneralHotCandidateErrorV3::InvalidCoordinate)
@@ -687,12 +731,12 @@ pub fn project_general_open_batch_candidate_in_place_v3(
     requested_batch_id: Option<[u8; 32]>,
     candidate: &mut [u8],
 ) -> Result<()> {
-    if candidate.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate.len() != general_hot_candidate_bank_len_v3(Action::OpenBatch, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let mut root =
         GeneralRootV2::decode(root_tail).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::OpenBatch, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let product_id = read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?;
     if product_id == [0; 32]
@@ -810,7 +854,7 @@ pub fn project_general_close_batch_candidate_in_place_v3(
     requested_batch_id: Option<[u8; 32]>,
     candidate: &mut [u8],
 ) -> Result<()> {
-    if candidate.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate.len() != general_hot_candidate_bank_len_v3(Action::CloseBatch, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let mut root =
@@ -819,7 +863,7 @@ pub fn project_general_close_batch_candidate_in_place_v3(
         GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
     let opening = batch.opening();
     let state = batch.state();
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::CloseBatch, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let product_id = read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?;
     if requested_batch_id != Some(batch.batch_id())
@@ -914,7 +958,8 @@ pub fn project_general_submit_candidate_in_place_v3(
     requested_candidate_id: Option<[u8; 32]>,
     candidate: &mut [u8],
 ) -> Result<()> {
-    if candidate.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate.len() != general_hot_candidate_bank_len_v3(Action::SubmitCandidate, outcome_count)?
+    {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root =
@@ -931,7 +976,7 @@ pub fn project_general_submit_candidate_in_place_v3(
     let submitted_opening = submitted.opening();
     let submitted_state = submitted.state();
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::SubmitCandidate, outcome_count)?;
     let settlement_duration = config
         .selection_slots()
         .checked_add(config.settlement_slots())
@@ -1138,7 +1183,7 @@ pub fn project_general_place_order_candidate_in_place_v3(
     signed_order_terms: &[u8],
     candidate: &mut [u8],
 ) -> Result<()> {
-    if candidate.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate.len() != general_hot_candidate_bank_len_v3(Action::PlaceOrder, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root =
@@ -1147,7 +1192,7 @@ pub fn project_general_place_order_candidate_in_place_v3(
         GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
     let opening = batch.opening();
     let state = batch.state();
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::PlaceOrder, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let owner = read_identity(candidate, scalar_count, identity::OWNER)?;
     let order_id = read_identity(candidate, scalar_count, identity::ORDER)?;
@@ -1367,7 +1412,7 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
     requested_order_id: Option<[u8; 32]>,
     candidate: &mut [u8],
 ) -> Result<()> {
-    if candidate.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate.len() != general_hot_candidate_bank_len_v3(Action::CancelOrder, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root =
@@ -1380,7 +1425,7 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
     let before = batch.state();
     let header = order.header();
     let order_state = order.state();
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::CancelOrder, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let owner = read_identity(candidate, scalar_count, identity::OWNER)?;
     if requested_order_id != Some(order.order_id())
@@ -1610,7 +1655,7 @@ pub fn project_general_release_order_candidate_in_place_v3(
     requested_order_id: Option<[u8; 32]>,
     candidate: &mut [u8],
 ) -> Result<()> {
-    if candidate.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate.len() != general_hot_candidate_bank_len_v3(Action::ReleaseOrder, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root =
@@ -1619,7 +1664,7 @@ pub fn project_general_release_order_candidate_in_place_v3(
         GeneralOrderV1::decode(order_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
     let header = order.header();
     let state = order.state();
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::ReleaseOrder, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let owner = read_identity(candidate, scalar_count, identity::OWNER)?;
     let escrow = authenticate_order_residual_release_v1(order, current_slot)
@@ -1817,6 +1862,22 @@ pub enum GeneralHotCandidateErrorV3 {
     TailCountMismatch,
     /// Caller-owned banks were not one exact complete candidate width.
     InvalidCapacity,
+    /// The bank is not the width THIS ACTION declares a bank to be.
+    ///
+    /// Split out of `InvalidCapacity` because the two accusations have
+    /// different authors and different remedies. `InvalidCapacity` says a
+    /// caller supplied a buffer of the wrong size; this says the buffer is a
+    /// perfectly good bank for a DIFFERENT action, and the action it was
+    /// handed with declares another stride.
+    ///
+    /// It is worth its own name because of where it is raised.
+    /// `general_hot_environment_from_bank_v3` runs for every action before the
+    /// accelerator dispatches on one, and the `scalar_count` it computes is the
+    /// OFFSET at which the identity bank begins. A stride disagreement that
+    /// reached the reads below would not fail -- it would read identities from
+    /// the wrong offset and return a well-formed environment assembled from the
+    /// wrong bytes. Fail-closed and named, not silently rebased.
+    BankStrideMismatch,
     /// An authenticated child coordinate was zero, aliased, or noncanonical.
     InvalidCoordinate,
     /// Position or Custody optimistic revision could not advance.
@@ -1854,12 +1915,13 @@ pub fn authenticate_general_close_candidate_v3(
     environment: GeneralHotEnvironmentV3,
     candidate: &[u8],
 ) -> Result<WorkEscrowClosePlanV1> {
-    if candidate.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate.len() != general_hot_candidate_bank_len_v3(Action::CloseCandidate, outcome_count)?
+    {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let action_plan = authenticate_general_seven_request_v1(family_request)
         .map_err(GeneralHotCandidateErrorV3::Close)?;
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::CloseCandidate, outcome_count)?;
     let opening = submission.opening();
     let state = submission.state();
     let batch_opening = batch.opening();
@@ -1982,7 +2044,13 @@ pub fn project_general_verify_candidate_v3<'a>(
     scratch: &mut [u8],
     output: &'a mut [u8],
 ) -> Result<(ExecutionCandidateV2<'a>, GeneralVerifyCandidateProjectionV3)> {
-    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    exact_candidate_capacities(
+        Action::VerifyCandidateRow,
+        outcome_count,
+        authenticated_input,
+        scratch,
+        output,
+    )?;
     let projection = project_general_verify_candidate_to_scratch_v3(
         view,
         verifier_buffers,
@@ -2008,7 +2076,7 @@ pub fn project_general_verify_candidate_in_place_v3(
     candidate: &mut [u8],
     scratch: &mut [u8],
 ) -> Result<GeneralVerifyCandidateProjectionV3> {
-    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    let required = general_hot_candidate_bank_len_v3(Action::VerifyCandidateRow, outcome_count)?;
     if candidate.len() != required || scratch.len() != required {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
@@ -2039,7 +2107,9 @@ pub fn project_general_verify_candidate_workspace_v3(
     cursor_workspace: &mut [u8],
     expected_manifest: &[u8],
 ) -> Result<GeneralVerifyCandidateProjectionV3> {
-    if workspace.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if workspace.len()
+        != general_hot_candidate_bank_len_v3(Action::VerifyCandidateRow, outcome_count)?
+    {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let authenticated =
@@ -2127,7 +2197,7 @@ fn authenticate_general_verify_candidate_bank_v3(
     let expected_page_index = view.expected_page_index;
     let expected_row_index = view.expected_row_index;
     let expected_revision = view.expected_revision;
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::VerifyCandidateRow, outcome_count)?;
     let requested_candidate = read_identity(
         authenticated_input,
         scalar_count,
@@ -2406,24 +2476,28 @@ fn project_general_verify_candidate_summary_into_bank_v3(
     Ok(GeneralVerifyCandidateProjectionV3 { summary })
 }
 
-/// Return the exact scalar count for Product width `outcome_count`.
-pub fn general_hot_scalar_count_v3(outcome_count: u32) -> Result<u32> {
+/// Return the exact scalar count for one action at Product width `outcome_count`.
+///
+/// The action is a parameter because the stride is. Every producer and consumer
+/// of a General register bank reaches this one function, so an action that
+/// declares no tail has a bank that does not grow -- everywhere at once.
+pub fn general_hot_scalar_count_v3(action: Action, outcome_count: u32) -> Result<u32> {
     GENERAL_HOT_COMMON_SCALARS_V3
         .checked_add(
             outcome_count
-                .checked_mul(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+                .checked_mul(general_hot_item_scalar_stride_v3(action))
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
         )
         .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)
 }
 
 /// Return the exact scalar-then-identity bank width.
-pub fn general_hot_candidate_bank_len_v3(outcome_count: u32) -> Result<usize> {
+pub fn general_hot_candidate_bank_len_v3(action: Action, outcome_count: u32) -> Result<usize> {
     if outcome_count == 0 {
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
     let bytes = register_bank_bytes_v2(
-        general_hot_scalar_count_v3(outcome_count)?,
+        general_hot_scalar_count_v3(action, outcome_count)?,
         GENERAL_HOT_COMMON_IDENTITIES_V3,
     )
     .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
@@ -2484,7 +2558,7 @@ pub fn project_general_selection_candidate_v3<'a>(
     if !matches!(action, Action::Consider | Action::Freeze) {
         return Err(GeneralHotCandidateErrorV3::InvalidPlan);
     }
-    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    exact_candidate_capacities(action, outcome_count, authenticated_input, scratch, output)?;
     project_general_selection_candidate_scratch_v3(
         action,
         selection_after,
@@ -2508,7 +2582,7 @@ pub fn project_general_selection_candidate_scratch_v3(
     source: &impl GeneralCandidateBankSourceV3,
     candidate_scratch: &mut [u8],
 ) -> Result<()> {
-    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    let required = general_hot_candidate_bank_len_v3(action, outcome_count)?;
     if candidate_scratch.len() != required {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
@@ -2528,7 +2602,7 @@ pub fn project_general_selection_candidate_in_place_v3(
     outcome_count: u32,
     candidate_scratch: &mut [u8],
 ) -> Result<()> {
-    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(action, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     apply_general_selection_candidate_v3(action, selection_after, outcome_count, candidate_scratch)
@@ -2589,7 +2663,7 @@ fn apply_general_selection_candidate_v3(
     ] {
         write_scalar(candidate, coordinate, value)?;
     }
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(action, outcome_count)?;
     for (coordinate, value) in [
         (identity::CANDIDATE, header.best_candidate_id),
         (identity::SELECTION_PRODUCT, header.product_id),
@@ -2612,7 +2686,13 @@ pub fn project_general_initialize_candidate_v3<'a>(
     scratch: &mut [u8],
     output: &'a mut [u8],
 ) -> Result<ExecutionCandidateV2<'a>> {
-    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    exact_candidate_capacities(
+        Action::InitializeSettlement,
+        outcome_count,
+        authenticated_input,
+        scratch,
+        output,
+    )?;
     project_general_initialize_candidate_scratch_v3(
         cursor_after,
         outcome_count,
@@ -2632,7 +2712,7 @@ pub fn project_general_initialize_candidate_scratch_v3(
     source: &impl GeneralCandidateBankSourceV3,
     candidate_scratch: &mut [u8],
 ) -> Result<()> {
-    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    let required = general_hot_candidate_bank_len_v3(Action::InitializeSettlement, outcome_count)?;
     if candidate_scratch.len() != required {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
@@ -2656,7 +2736,9 @@ pub fn project_general_initialize_candidate_in_place_v3(
     environment: GeneralHotEnvironmentV3,
     candidate_scratch: &mut [u8],
 ) -> Result<()> {
-    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate_scratch.len()
+        != general_hot_candidate_bank_len_v3(Action::InitializeSettlement, outcome_count)?
+    {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     apply_general_initialize_candidate_v3(
@@ -2698,7 +2780,7 @@ fn apply_general_initialize_candidate_v3(
     {
         return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
     }
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(Action::InitializeSettlement, outcome_count)?;
     if read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
         || read_identity(candidate, scalar_count, identity::PARENT_REQUEST_DIGEST)?
             != environment.parent_request_digest
@@ -2847,6 +2929,7 @@ fn apply_general_initialize_candidate_v3(
 /// Product-derived capacity. The entire input is copied to scratch first;
 /// output changes only after every semantic and child-ABI coordinate accepts.
 pub fn project_general_hot_candidate_v3<'a>(
+    action: Action,
     effect_plan: &[u8],
     cursor_after: &[u8],
     outcome_count: u32,
@@ -2855,8 +2938,9 @@ pub fn project_general_hot_candidate_v3<'a>(
     scratch: &mut [u8],
     output: &'a mut [u8],
 ) -> Result<ExecutionCandidateV2<'a>> {
-    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    exact_candidate_capacities(action, outcome_count, authenticated_input, scratch, output)?;
     project_general_hot_candidate_scratch_v3(
+        action,
         effect_plan,
         cursor_after,
         outcome_count,
@@ -2870,6 +2954,7 @@ pub fn project_general_hot_candidate_v3<'a>(
 
 /// Project Collect/Materialize/Distribute/Close into one complete scratch bank.
 pub fn project_general_hot_candidate_scratch_v3(
+    action: Action,
     effect_plan: &[u8],
     cursor_after: &[u8],
     outcome_count: u32,
@@ -2877,12 +2962,13 @@ pub fn project_general_hot_candidate_scratch_v3(
     source: &impl GeneralCandidateBankSourceV3,
     candidate_scratch: &mut [u8],
 ) -> Result<()> {
-    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    let required = general_hot_candidate_bank_len_v3(action, outcome_count)?;
     if candidate_scratch.len() != required {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     source.copy_complete_bank_v3(candidate_scratch)?;
     apply_general_hot_candidate_v3(
+        action,
         effect_plan,
         cursor_after,
         outcome_count,
@@ -2897,16 +2983,18 @@ pub fn project_general_hot_candidate_scratch_v3(
 /// state. Semantic refusal may leave scratch bytes changed, but no partial
 /// bank can become authoritative because no acknowledgement is emitted.
 pub fn project_general_hot_candidate_in_place_v3(
+    action: Action,
     effect_plan: &[u8],
     cursor_after: &[u8],
     outcome_count: u32,
     environment: GeneralHotEnvironmentV3,
     candidate_scratch: &mut [u8],
 ) -> Result<()> {
-    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(action, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     apply_general_hot_candidate_v3(
+        action,
         effect_plan,
         cursor_after,
         outcome_count,
@@ -2916,6 +3004,7 @@ pub fn project_general_hot_candidate_in_place_v3(
 }
 
 fn apply_general_hot_candidate_v3(
+    action: Action,
     effect_plan: &[u8],
     cursor_after: &[u8],
     outcome_count: u32,
@@ -2933,7 +3022,7 @@ fn apply_general_hot_candidate_v3(
     {
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
-    let input_scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let input_scalar_count = general_hot_scalar_count_v3(action, outcome_count)?;
     if read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
         || read_identity(
             candidate,
@@ -3210,7 +3299,7 @@ fn apply_general_hot_candidate_v3(
             )?;
         }
     }
-    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_count = general_hot_scalar_count_v3(action, outcome_count)?;
     for (coordinate, value) in [
         (
             identity::PARENT_REQUEST_DIGEST,
@@ -3274,12 +3363,13 @@ fn apply_general_hot_candidate_v3(
 }
 
 fn exact_candidate_capacities(
+    action: Action,
     outcome_count: u32,
     authenticated_input: &[u8],
     scratch: &[u8],
     output: &[u8],
 ) -> Result<()> {
-    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    let required = general_hot_candidate_bank_len_v3(action, outcome_count)?;
     if authenticated_input.len() != required
         || scratch.len() != required
         || output.len() != required
@@ -3835,14 +3925,56 @@ mod tests {
         }
     }
 
-    fn authenticated_input(outcome_count: u32, environment: GeneralHotEnvironmentV3) -> Vec<u8> {
-        let len = general_hot_candidate_bank_len_v3(outcome_count).expect("bank length");
+    /// A BANK IS REFUSED BY NAME WHEN IT IS NOT THE WIDTH ITS ACTION DECLARES.
+    ///
+    /// `general_hot_environment_from_bank_v3` runs for every action before the
+    /// accelerator dispatches on one, and the scalar count it derives is the
+    /// OFFSET at which the identity bank begins. Before the stride became
+    /// per-action every action agreed on that offset, so nothing could
+    /// disagree; now two can, and a disagreement that got past this check would
+    /// not fail -- it would read identities from the wrong offset and hand back
+    /// a well-formed environment assembled from the wrong bytes.
+    ///
+    /// Both directions, and each with its own positive control: the same bytes
+    /// read as the action they were built for are accepted, so this is a test
+    /// of the stride and not of a malformed buffer.
+    #[test]
+    fn a_bank_built_for_another_actions_stride_refuses_by_name() {
+        for (built_for, read_as) in [
+            (Action::OpenBatch, Action::Consider),
+            (Action::Consider, Action::OpenBatch),
+            (Action::CloseBatch, Action::Collect),
+        ] {
+            let bank = authenticated_input(built_for, 4, environment());
+            // The control is stated against THIS refusal, not against success:
+            // a bare fixture bank refuses further down for reasons of content,
+            // and a control that demanded `is_ok` would be testing the fixture
+            // rather than the stride.
+            assert_ne!(
+                general_hot_environment_from_bank_v3(built_for, &bank, 4).map(|_| ()),
+                Err(GeneralHotCandidateErrorV3::BankStrideMismatch),
+                "{built_for:?} must not call its own bank the wrong width"
+            );
+            assert_eq!(
+                general_hot_environment_from_bank_v3(read_as, &bank, 4).map(|_| ()),
+                Err(GeneralHotCandidateErrorV3::BankStrideMismatch),
+                "a {built_for:?} bank read as {read_as:?} must refuse by name"
+            );
+        }
+    }
+
+    fn authenticated_input(
+        action: Action,
+        outcome_count: u32,
+        environment: GeneralHotEnvironmentV3,
+    ) -> Vec<u8> {
+        let len = general_hot_candidate_bank_len_v3(action, outcome_count).expect("bank length");
         let mut input = vec![0x7a; len];
         write_scalar(&mut input, scalar::OUTCOME_COUNT, u64::from(outcome_count))
             .expect("tail witness");
         write_identity(
             &mut input,
-            general_hot_scalar_count_v3(outcome_count).expect("scalar count"),
+            general_hot_scalar_count_v3(action, outcome_count).expect("scalar count"),
             identity::PARENT_REQUEST_DIGEST,
             environment.parent_request_digest,
         )
@@ -3875,7 +4007,7 @@ mod tests {
         config: GeneralConfigV3,
         root: GeneralRootV2,
     ) -> Vec<u8> {
-        let mut input = authenticated_input(outcome_count, environment);
+        let mut input = authenticated_input(Action::OpenBatch, outcome_count, environment);
         for (coordinate, value) in [
             (scalar::CURRENT_SLOT, 100),
             (scalar::ROOT_EXPECTED_REVISION, root.revision()),
@@ -3905,7 +4037,8 @@ mod tests {
         ] {
             write_scalar(&mut input, coordinate, value).expect("opening scalar");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count =
+            general_hot_scalar_count_v3(Action::OpenBatch, outcome_count).expect("scalar count");
         for (coordinate, value) in [
             (identity::MARKET, root.market()),
             (identity::GENERAL_CONFIG_ID, root.config_id()),
@@ -3989,7 +4122,7 @@ mod tests {
         batch: GeneralBatchV1,
         current_slot: u64,
     ) -> Vec<u8> {
-        let mut input = authenticated_input(outcome_count, environment);
+        let mut input = authenticated_input(Action::CloseBatch, outcome_count, environment);
         let opening = batch.opening();
         let state = batch.state();
         for (coordinate, value) in [
@@ -4021,7 +4154,8 @@ mod tests {
         ] {
             write_scalar(&mut input, coordinate, value).expect("closing scalar");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count =
+            general_hot_scalar_count_v3(Action::CloseBatch, outcome_count).expect("scalar count");
         for (coordinate, value) in [
             (identity::MARKET, root.market()),
             (identity::GENERAL_CONFIG_ID, root.config_id()),
@@ -4075,7 +4209,7 @@ mod tests {
         order: GeneralOrderV1<'_>,
         current_slot: u64,
     ) -> Vec<u8> {
-        let mut input = authenticated_input(outcome_count, environment);
+        let mut input = authenticated_input(Action::PlaceOrder, outcome_count, environment);
         let opening = batch.opening();
         let state = batch.state();
         let header = order.header();
@@ -4146,7 +4280,8 @@ mod tests {
             )
             .expect("deliver row");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count =
+            general_hot_scalar_count_v3(Action::PlaceOrder, outcome_count).expect("scalar count");
         for (coordinate, value) in [
             (identity::MARKET, root.market()),
             (identity::GENERAL_CONFIG_ID, root.config_id()),
@@ -4211,7 +4346,7 @@ mod tests {
         order: GeneralOrderV1<'_>,
         current_slot: u64,
     ) -> Vec<u8> {
-        let mut input = authenticated_input(outcome_count, environment);
+        let mut input = authenticated_input(Action::CancelOrder, outcome_count, environment);
         let opening = batch.opening();
         let state = batch.state();
         let header = order.header();
@@ -4276,7 +4411,8 @@ mod tests {
         ] {
             write_scalar(&mut input, coordinate, value).expect("cancel scalar");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count =
+            general_hot_scalar_count_v3(Action::CancelOrder, outcome_count).expect("scalar count");
         for (coordinate, value) in [
             (identity::MARKET, root.market()),
             (identity::GENERAL_CONFIG_ID, root.config_id()),
@@ -4318,7 +4454,7 @@ mod tests {
         current_slot: u64,
         observed_quote: u64,
     ) -> Vec<u8> {
-        let mut input = authenticated_input(outcome_count, environment);
+        let mut input = authenticated_input(Action::ReleaseOrder, outcome_count, environment);
         let header = order.header();
         let state = order.state();
         for (coordinate, value) in [
@@ -4363,7 +4499,8 @@ mod tests {
                 .expect("outcome");
             write_scalar(&mut input, base + item_scalar::QUANTITY, 1).expect("residual claim");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count =
+            general_hot_scalar_count_v3(Action::ReleaseOrder, outcome_count).expect("scalar count");
         for (coordinate, value) in [
             (identity::MARKET, root.market()),
             (identity::CANDIDATE, header.batch_id),
@@ -4455,7 +4592,7 @@ mod tests {
         .expect("canonical submission");
         let submitted_opening = submission.opening();
         let submitted_state = submission.state();
-        let mut bank = authenticated_input(outcome_count, environment);
+        let mut bank = authenticated_input(Action::SubmitCandidate, outcome_count, environment);
         for (coordinate, value) in [
             (scalar::CURRENT_SLOT, current_slot),
             (scalar::ZERO, u64::from(outcome_count)),
@@ -4533,7 +4670,8 @@ mod tests {
             write_scalar(&mut bank, base + item_scalar::OUTCOME, u64::from(item))
                 .expect("canonical outcome index");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count = general_hot_scalar_count_v3(Action::SubmitCandidate, outcome_count)
+            .expect("scalar count");
         for (coordinate, value) in [
             (identity::CANDIDATE, header.candidate_id),
             (identity::BEST_VERIFIED_DIGEST, header.candidate_id),
@@ -4603,7 +4741,8 @@ mod tests {
         let opening = submission.opening();
         let state = submission.state();
         let rent_principal = 1_000_u64;
-        let mut bank = authenticated_input(outcome_count, fixture.environment);
+        let mut bank =
+            authenticated_input(Action::CloseCandidate, outcome_count, fixture.environment);
         for (coordinate, value) in [
             (scalar::CURRENT_SLOT, current_slot),
             (
@@ -4642,7 +4781,8 @@ mod tests {
         ] {
             write_scalar(&mut bank, coordinate, value).expect("close scalar");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count = general_hot_scalar_count_v3(Action::CloseCandidate, outcome_count)
+            .expect("scalar count");
         for (coordinate, value) in [
             (identity::PARENT_REQUEST_DIGEST, opening.candidate_id),
             (identity::CANDIDATE, opening.candidate_id),
@@ -4728,7 +4868,8 @@ mod tests {
         ));
 
         let (_, _, _, mut substituted, _) = close_candidate_fixture(outcome_count, 160);
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count = general_hot_scalar_count_v3(Action::CloseCandidate, outcome_count)
+            .expect("scalar count");
         write_identity(
             &mut substituted,
             scalar_count,
@@ -4773,7 +4914,8 @@ mod tests {
     }
 
     fn execute_submit_transition(bank: &[u8], outcome_count: u32) {
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count = general_hot_scalar_count_v3(Action::SubmitCandidate, outcome_count)
+            .expect("scalar count");
         let scalars: Vec<u64> = (0..scalar_count)
             .map(|coordinate| read_scalar(bank, coordinate).expect("projected scalar"))
             .collect();
@@ -4843,7 +4985,8 @@ mod tests {
             assert_eq!(
                 read_identity(
                     &fixture.bank,
-                    general_hot_scalar_count_v3(outcome_count).expect("scalar count"),
+                    general_hot_scalar_count_v3(Action::SubmitCandidate, outcome_count)
+                        .expect("scalar count"),
                     identity::SELECTION_BATCH,
                 ),
                 Ok(fixture.batch.batch_id()),
@@ -4885,7 +5028,8 @@ mod tests {
                 &[0xee; 32],
             );
             forged_identity.candidate_id = [0xee; 32];
-            let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+            let scalar_count = general_hot_scalar_count_v3(Action::SubmitCandidate, outcome_count)
+                .expect("scalar count");
             for coordinate in [identity::CANDIDATE, identity::BEST_VERIFIED_DIGEST] {
                 write_identity(
                     &mut forged_identity.bank,
@@ -4946,7 +5090,8 @@ mod tests {
                 let mut hostile_fixture = fixture.clone();
                 write_identity(
                     &mut hostile_fixture.bank,
-                    general_hot_scalar_count_v3(outcome_count).expect("scalar count"),
+                    general_hot_scalar_count_v3(Action::SubmitCandidate, outcome_count)
+                        .expect("scalar count"),
                     coordinate,
                     [0xed; 32],
                 )
@@ -5093,7 +5238,7 @@ mod tests {
         let mut manifest_output = vec![0_u8; manifest_len];
 
         let principal = 1_000_u64;
-        let mut input = authenticated_input(outcome_count, environment);
+        let mut input = authenticated_input(Action::VerifyCandidateRow, outcome_count, environment);
         for (coordinate, value) in [
             (scalar::ROOT_EXPECTED_REVISION, 0),
             (scalar::COMPLETE_SET_MOVE, 0),
@@ -5112,7 +5257,8 @@ mod tests {
         ] {
             write_scalar(&mut input, coordinate, value).expect("verify input scalar");
         }
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count = general_hot_scalar_count_v3(Action::VerifyCandidateRow, outcome_count)
+            .expect("scalar count");
         for (coordinate, value) in [
             (
                 identity::PARENT_REQUEST_DIGEST,
@@ -5552,7 +5698,8 @@ mod tests {
         environment.rent_credit = owner;
         environment.rent_refund = owner;
         let mut candidate = cancel_order_input(outcome_count, environment, root, batch, order, 102);
-        let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+        let scalar_count =
+            general_hot_scalar_count_v3(Action::CancelOrder, outcome_count).expect("scalar count");
         write_identity(&mut candidate, scalar_count, identity::OWNER, [0x99; 32])
             .expect("hostile owner");
         let before = candidate.clone();
@@ -5680,7 +5827,7 @@ mod tests {
         let batch_id = opened_batch_id(outcome_count, environment, config, root);
         write_identity(
             &mut candidate,
-            general_hot_scalar_count_v3(outcome_count).expect("scalar count"),
+            general_hot_scalar_count_v3(Action::OpenBatch, outcome_count).expect("scalar count"),
             identity::GENERAL_CONFIG_ID,
             [0x99; 32],
         )
@@ -5709,10 +5856,11 @@ mod tests {
                 settlement_position_present: true,
                 ..environment()
             };
-            let input = authenticated_input(outcome_count, environment);
+            let input = authenticated_input(Action::Materialize, outcome_count, environment);
             let mut scratch = vec![0_u8; input.len()];
             let mut output = vec![0x55_u8; input.len()];
             let accepted = project_general_hot_candidate_v3(
+                Action::Materialize,
                 &materialize_plan(outcome_count),
                 &materialize_cursor(outcome_count),
                 outcome_count,
@@ -5725,6 +5873,7 @@ mod tests {
             assert!(matches!(accepted, ExecutionCandidateV2::Accepted(_)));
             let mut in_place = input.clone();
             project_general_hot_candidate_in_place_v3(
+                Action::Materialize,
                 &materialize_plan(outcome_count),
                 &materialize_cursor(outcome_count),
                 outcome_count,
@@ -5770,7 +5919,8 @@ mod tests {
             assert_eq!(
                 read_identity(
                     &output,
-                    general_hot_scalar_count_v3(outcome_count).expect("scalars"),
+                    general_hot_scalar_count_v3(Action::Materialize, outcome_count)
+                        .expect("scalars"),
                     identity::POSITION_ZERO_OWNER,
                 ),
                 Ok(environment.settlement_position_owner)
@@ -5785,7 +5935,8 @@ mod tests {
             environment.payer = [0x51; 32];
             environment.rent_refund = [0x52; 32];
             environment.custody_expected_revision = 0;
-            let input = authenticated_input(outcome_count, environment);
+            let input =
+                authenticated_input(Action::InitializeSettlement, outcome_count, environment);
             let mut scratch = vec![0_u8; input.len()];
             let mut output = vec![0x55_u8; input.len()];
             assert!(matches!(
@@ -5819,7 +5970,8 @@ mod tests {
             assert_eq!(
                 read_identity(
                     &output,
-                    general_hot_scalar_count_v3(outcome_count).expect("scalars"),
+                    general_hot_scalar_count_v3(Action::InitializeSettlement, outcome_count)
+                        .expect("scalars"),
                     identity::PAYER,
                 ),
                 Ok(environment.payer)
@@ -5838,13 +5990,13 @@ mod tests {
         let outcome_count = 258;
         let environment = environment();
         let plan = materialize_plan(outcome_count);
-        let canonical = authenticated_input(outcome_count, environment);
+        let canonical = authenticated_input(Action::Materialize, outcome_count, environment);
         let mut hostile_tail = canonical.clone();
         write_scalar(&mut hostile_tail, scalar::OUTCOME_COUNT, 257).expect("hostile tail");
         let mut hostile_parent = canonical;
         write_identity(
             &mut hostile_parent,
-            general_hot_scalar_count_v3(outcome_count).expect("scalars"),
+            general_hot_scalar_count_v3(Action::Materialize, outcome_count).expect("scalars"),
             identity::PARENT_REQUEST_DIGEST,
             [0x99; 32],
         )
@@ -5855,6 +6007,7 @@ mod tests {
             let before = output.clone();
             assert!(
                 project_general_hot_candidate_v3(
+                    Action::Materialize,
                     &plan,
                     &materialize_cursor(outcome_count),
                     outcome_count,

@@ -78,12 +78,7 @@ use dclutch_rent_contract::{
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{hash::hash, pubkey::Pubkey, rent::Rent};
-use solana_program_test::BanksClientError;
-use solana_sdk::{
-    instruction::InstructionError,
-    signature::{Keypair, Signer},
-    transaction::TransactionError,
-};
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 const ACCELERATOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
@@ -646,25 +641,7 @@ fn add_case_accounts(
     }
 }
 
-/// What this width is expected to do on the real ELFs.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum OpenBatchOutcomeV1 {
-    /// The whole route runs: four accelerator chunks, commit, materialized Batch.
-    Commits,
-    /// The 64 KiB heap runs out inside the admitted candidate.
-    ///
-    /// This is a WALL, not a law, and it is asserted so the wall cannot move
-    /// without saying so. `MAX_HOT_SCALARS_V3 = 512` is documented as an
-    /// SBF-heap profile bound, and for this profile it does not bind: General
-    /// `OpenBatch` declares `163 + 6*(N - 2)` scalars, so the declared bound is
-    /// not reached until N = 60, and the heap is exhausted at N = 14 -- forty-six
-    /// outcomes earlier. Measured 2026-09-02, both directions: N = 13 (229
-    /// scalars) commits and N = 14 (235 scalars) aborts, right after
-    /// `dclutch-hot-cu:candidate-transcript` at 0xd360 of 0x10000 bytes.
-    ExhaustsTheHeap,
-}
-
-async fn execute_open_batch(outcome_count: u32, expected: OpenBatchOutcomeV1) {
+async fn execute_open_batch(outcome_count: u32) -> (u32, usize, u64) {
     assert_eq!(DIRECT_HOT_HEAP_FRAME_BYTES_V1, 65_536);
     let substrate = waist::fixture_substrate();
     let elves = waist::elves();
@@ -827,47 +804,15 @@ async fn execute_open_batch(outcome_count: u32, expected: OpenBatchOutcomeV1) {
             .expect("Batch query")
             .is_none()
     );
-    let submission = waist::submit_v0_observed(
+    let execution = waist::submit_v0_observed(
         &mut context,
         &instructions,
         lookup_addresses,
         Some(&fee_payer),
         &[&payer],
     )
-    .await;
-    if expected == OpenBatchOutcomeV1::ExhaustsTheHeap {
-        let Err(refusal) = submission else {
-            panic!("this width is asserted to exhaust the heap and it committed");
-        };
-        // Named, not `is_err()`. An allocator abort is `ProgramFailedToComplete`
-        // and so is every other abort, so the log line is what says WHICH wall
-        // this is; without it the assertion would pass on a stack overflow, a
-        // panic, or a CU exhaustion and report them all as the heap.
-        assert!(
-            matches!(
-                refusal.error,
-                BanksClientError::TransactionError(TransactionError::InstructionError(
-                    2,
-                    InstructionError::ProgramFailedToComplete
-                ))
-            ),
-            "expected the allocator abort, got {:?}",
-            refusal.error
-        );
-        assert!(
-            refusal
-                .logs
-                .iter()
-                .any(|line| line.contains("memory allocation failed, out of memory")),
-            "the abort was not the heap running out"
-        );
-        eprintln!(
-            "general-open-batch N={outcome_count} HEAP WALL cu={}",
-            refusal.compute_units_consumed
-        );
-        return;
-    }
-    let execution = submission.expect("real Trading -> General accelerator OpenBatch");
+    .await
+    .expect("real Trading -> General accelerator OpenBatch");
     assert!(
         execution
             .logs
@@ -989,19 +934,39 @@ async fn execute_open_batch(outcome_count: u32, expected: OpenBatchOutcomeV1) {
         before.revision(),
         after.revision(),
     );
+    (
+        case.built.bundle.span_counts[0],
+        case.built.bundle.hot_instruction.accounts.len(),
+        execution.compute_units_consumed,
+    )
 }
 
 #[tokio::test]
-async fn real_elf_open_batch_runs_to_the_widest_width_the_heap_admits() {
-    execute_open_batch(2, OpenBatchOutcomeV1::Commits).await;
-    // THE MAXIMUM WIDTH IS A HEAP FACT, and 258 is not it. That figure came
-    // from a PACKET reading -- 1,330 bytes legacy against 918 bytes v0 -- and
-    // this campaign has been v0 since it was written, so the packet was never
-    // the wall here. What refuses at 258 is `0x4000 UnsupportedContent` at
-    // `hot_v3.rs:3986`, because General `OpenBatch` declares 1,699 scalars
-    // against `MAX_HOT_SCALARS_V3 = 512`; and below that bound the 64 KiB heap
-    // gives out first. Both are named where they are asserted; neither is
-    // weakened to make this pass.
-    execute_open_batch(13, OpenBatchOutcomeV1::Commits).await;
-    execute_open_batch(14, OpenBatchOutcomeV1::ExhaustsTheHeap).await;
+async fn real_elf_open_batch_commits_at_every_width_because_its_bank_does_not_grow() {
+    // 258 IS REACHABLE NOW, AND FLATLY. `OpenBatch` declares a zero per-outcome
+    // scalar stride -- Lean decides it in
+    // `GeneralTransitionV3.actionItemScalarStride`, and the AccountProfile,
+    // RequestProfile, transition and effect all carry the same zero -- so the
+    // register bank is 151 scalars at every Product width. The scratch-page
+    // count is derived from the bank width, so the page span does not move
+    // either, and neither does the account frame.
+    //
+    // Before this, the Trading heap peaked at `59,376 + 528*(N - 2)` of 65,536:
+    // N = 13 committed at 65,184 and N = 14 aborted needing 65,712. N = 258
+    // refused earlier still, `0x4000 UnsupportedContent` at `hot_v3.rs:3986`,
+    // because 151 + 6*258 = 1,699 scalars exceeded `MAX_HOT_SCALARS_V3` = 512.
+    // That constant needs no lift: the count is 151 at every width now.
+    let narrow = execute_open_batch(2).await;
+    let middle = execute_open_batch(13).await;
+    let widest = execute_open_batch(258).await;
+    // THE FLATNESS IS THE ASSERTION, not a remark. Equal page spans and equal
+    // account frames across a 129-fold width change is the observable form of
+    // "the bank does not grow", and it is what would go red if any one of the
+    // four artifacts started declaring a tail again.
+    assert_eq!(
+        (narrow.0, narrow.1),
+        (widest.0, widest.1),
+        "N=2 and N=258 must present the same page span and account frame"
+    );
+    assert_eq!((middle.0, middle.1), (widest.0, widest.1));
 }

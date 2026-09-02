@@ -30,7 +30,8 @@ use dclutch_realm_contract::{
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
     AuthenticatedActivationCacheBumpV1, authenticate_activated_role_with_bump_v1,
-    authenticate_activation_cache_bump_v1,
+    authenticate_activation_cache_bump_v1, authenticate_activation_cache_identity_v1,
+    require_cache_account,
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::continuation_v1::{
@@ -676,34 +677,38 @@ fn authenticate_market(
     let market = account(accounts, CORE_MARKET)?;
     let cache = account(accounts, ACTIVATION_CACHE)?;
     let registry = account(accounts, REGISTRY_PROGRAM)?;
-    let cache_bump = authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)
-        .map_err(CustodySbfError::from)?;
+    // ONE borrow, ONE decode. This used to call
+    // `authenticate_activation_cache_bump_v1`, which borrows and decodes the
+    // cache, and then borrow and decode the same immutable account AGAIN just
+    // to read the Core role out of it -- re-taking the release-set equality the
+    // first decode had already taken. `ActivatedExecutionReleaseSetViewV1::decode`
+    // validates the complete five-role projection and all ten aliasing pairs,
+    // twenty-five `decode_role` calls, every time. `require_cache_account` is
+    // kept ahead of the borrow so owner and exact width are still required
+    // before the first byte is read, and
+    // `authenticate_activation_cache_identity_v1` takes them again over the
+    // decoded view along with the release-set equality and the address.
+    require_cache_account(registry.key, cache).map_err(CustodySbfError::from)?;
+    let bytes = cache
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&bytes).map_err(|_| CustodySbfError::Release)?;
+    let cache_bump =
+        authenticate_activation_cache_identity_v1(registry, cache, &request.release_set, activated)
+            .map_err(CustodySbfError::from)?;
     if market.data_len() != STATE_BYTES {
         return Err(CustodySbfError::Release.into());
     }
-    let core_program = {
-        let bytes = cache
-            .try_borrow_data()
-            .map_err(|_| CustodySbfError::Release)?;
-        let activated = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
-            .map_err(|_| CustodySbfError::Release)?;
-        if activated
-            .execution_release_set_id()
+    let core_program = Pubkey::new_from_array(
+        *activated
+            .role(ExecutionRoleV1::Core)
             .map_err(|_| CustodySbfError::Release)?
-            .as_bytes()
-            != &request.release_set
-        {
-            return Err(CustodySbfError::Release.into());
-        }
-        Pubkey::new_from_array(
-            *activated
-                .role(ExecutionRoleV1::Core)
-                .map_err(|_| CustodySbfError::Release)?
-                .release()
-                .program()
-                .as_bytes(),
-        )
-    };
+            .release()
+            .program()
+            .as_bytes(),
+    );
+    drop(bytes);
     if market.owner != &core_program {
         return Err(CustodySbfError::Release.into());
     }

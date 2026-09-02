@@ -522,8 +522,14 @@ pub fn process_instruction(
     heap_mark!("entry");
     let request = AcceleratorRequestV2::decode(instruction_data)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?;
-    validate_request_geometry(request)?;
+    // THE GEOMETRY IS VALIDATED AFTER THE ACTION IS KNOWN, and the order is the
+    // point: `validate_request_geometry` decides how wide the bank this
+    // instruction assembles must be, and that width is per-action. It ran one
+    // line earlier until 2026-09-02, which was correct only while every action
+    // declared the same stride. `authenticate_top_level` does not read
+    // `request`, so the move costs nothing.
     let (family_request, controller) = authenticate_top_level(accounts)?;
+    validate_request_geometry(controller.action, request)?;
     let fixed_count = usize::from(
         general_account_profile_fixed_count_v3(controller.action)
             .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFrame)?,
@@ -598,17 +604,25 @@ pub fn process_instruction(
     Ok(())
 }
 
-fn validate_request_geometry(request: AcceleratorRequestV2<'_>) -> ProgramResult {
+/// Refuse a request whose geometry is not the one THIS ACTION declares.
+///
+/// The action is a parameter, and the call moved below `authenticate_top_level`
+/// to get it. Both widths this checks are per-action now, so computing them
+/// before the action was known would have pinned every request to the stride of
+/// the actions that still have a per-outcome tail -- refusing `OpenBatch` and
+/// `CloseBatch` outright, and doing it in the one place the accelerator decides
+/// how wide the bank it is about to assemble is.
+fn validate_request_geometry(action: Action, request: AcceleratorRequestV2<'_>) -> ProgramResult {
     let tail_count = request.tail_count();
     if request.transport() != RequestTransportV2::ScratchPages
         || tail_count == 0
         || request.scalar_count()
-            != general_hot_scalar_count_v3(tail_count)
+            != general_hot_scalar_count_v3(action, tail_count)
                 .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?
         || request.identity_count() != GENERAL_HOT_COMMON_IDENTITIES_V3
         || usize::try_from(request.total_bank_bytes())
             .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?
-            != general_hot_candidate_bank_len_v3(tail_count)
+            != general_hot_candidate_bank_len_v3(action, tail_count)
                 .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?
         || !request.inline_bank().is_empty()
     {
@@ -853,8 +867,9 @@ fn evaluate_candidate(
     {
         return Err(GeneralAcceleratorSemanticErrorV3::State);
     }
-    let environment = general_hot_environment_from_bank_v3(candidate, outcome_count)
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+    let environment =
+        general_hot_environment_from_bank_v3(request.action, candidate, outcome_count)
+            .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     match request.action {
         Action::OpenBatch => {
             evaluate_open_batch(request, runtime, outcome_count, environment, candidate)
@@ -999,8 +1014,12 @@ fn evaluate_verify_candidate(
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let _ = authenticated_general_domain(
         runtime,
-        general_hot_environment_from_bank_v3(candidate_bank, outcome_count)
-            .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?,
+        general_hot_environment_from_bank_v3(
+            Action::VerifyCandidateRow,
+            candidate_bank,
+            outcome_count,
+        )
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?,
     )?;
 
     let submission_data = data(runtime, GENERAL_PRIMARY_STATE_ACCOUNT_V3)?;
@@ -1502,6 +1521,7 @@ fn evaluate_settlement(
     )
     .map_err(|_| GeneralAcceleratorSemanticErrorV3::Transition)?;
     project_general_hot_candidate_in_place_v3(
+        request.action,
         &effect_workspace,
         &cursor_workspace,
         outcome_count,
@@ -1605,7 +1625,11 @@ mod tests {
         ContentId::new([value; 32]).expect("nonzero test identity")
     }
 
-    fn request(outcome_count: u32, transport: RequestTransportV2) -> AcceleratorRequestV2<'static> {
+    fn request_for(
+        action: Action,
+        outcome_count: u32,
+        transport: RequestTransportV2,
+    ) -> AcceleratorRequestV2<'static> {
         AcceleratorRequestV2::new(
             transport,
             id(1),
@@ -1614,13 +1638,13 @@ mod tests {
             id(4),
             id(5),
             outcome_count,
-            general_hot_scalar_count_v3(outcome_count).expect("scalar count"),
+            general_hot_scalar_count_v3(action, outcome_count).expect("scalar count"),
             GENERAL_HOT_COMMON_IDENTITIES_V3,
             0,
             match transport {
                 RequestTransportV2::Inline => {
-                    let bytes =
-                        general_hot_candidate_bank_len_v3(outcome_count).expect("bank bytes");
+                    let bytes = general_hot_candidate_bank_len_v3(Action::Consider, outcome_count)
+                        .expect("bank bytes");
                     alloc::boxed::Box::leak(vec![0; bytes].into_boxed_slice())
                 }
                 RequestTransportV2::ScratchPages => &[],
@@ -1632,20 +1656,59 @@ mod tests {
     #[test]
     fn scratch_geometry_accepts_product_widths_one_and_258() {
         for outcome_count in [1_u32, 258] {
-            let request = request(outcome_count, RequestTransportV2::ScratchPages);
-            validate_request_geometry(request).expect("runtime-width scratch transport");
+            let request = request_for(
+                Action::Consider,
+                outcome_count,
+                RequestTransportV2::ScratchPages,
+            );
+            validate_request_geometry(Action::Consider, request)
+                .expect("runtime-width scratch transport");
             assert_eq!(
                 usize::try_from(request.total_bank_bytes()).expect("bank bytes"),
-                general_hot_candidate_bank_len_v3(outcome_count).expect("General bank")
+                general_hot_candidate_bank_len_v3(Action::Consider, outcome_count)
+                    .expect("General bank")
             );
             assert!(request.chunk_count() > 1);
+        }
+    }
+
+    /// A REQUEST BUILT FOR ANOTHER ACTION'S STRIDE REFUSES, AND THE GATE HAS TO
+    /// KNOW THE ACTION TO SAY SO.
+    ///
+    /// This is why `validate_request_geometry` moved below
+    /// `authenticate_top_level`. It decides the width of the bank this
+    /// instruction is about to assemble, and that width is per-action since
+    /// `OpenBatch` and `CloseBatch` stopped declaring a per-outcome tail. Run
+    /// before the action was known it could only have pinned one stride, which
+    /// would have refused those two outright.
+    ///
+    /// Both directions, each with the matching-action control beside it, so a
+    /// gate that accepted everything and a gate that refused everything both
+    /// fail.
+    #[test]
+    fn a_request_built_for_another_actions_stride_refuses() {
+        for (built_for, read_as) in [
+            (Action::Consider, Action::OpenBatch),
+            (Action::OpenBatch, Action::Consider),
+        ] {
+            let request = request_for(built_for, 258, RequestTransportV2::ScratchPages);
+            validate_request_geometry(built_for, request)
+                .expect("the action it was built for accepts it");
+            assert_eq!(
+                validate_request_geometry(read_as, request),
+                Err(GeneralAcceleratorSbfErrorV3::InvalidRequest.into()),
+                "a {built_for:?} request validated as {read_as:?} must refuse"
+            );
         }
     }
 
     #[test]
     fn inline_and_zero_width_requests_refuse() {
         assert_eq!(
-            validate_request_geometry(request(1, RequestTransportV2::Inline)),
+            validate_request_geometry(
+                Action::Consider,
+                request_for(Action::Consider, 1, RequestTransportV2::Inline)
+            ),
             Err(GeneralAcceleratorSbfErrorV3::InvalidRequest.into())
         );
         let zero = AcceleratorRequestV2::new(
@@ -1663,7 +1726,7 @@ mod tests {
         )
         .expect("transport permits syntactic zero");
         assert_eq!(
-            validate_request_geometry(zero),
+            validate_request_geometry(Action::Consider, zero),
             Err(GeneralAcceleratorSbfErrorV3::InvalidRequest.into())
         );
     }

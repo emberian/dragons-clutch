@@ -62,7 +62,7 @@ use crate::{
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, item_scalar, scalar,
+        general_hot_item_scalar_stride_v3, identity, item_scalar, scalar,
     },
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
@@ -1415,7 +1415,7 @@ pub fn encode_general_account_profile_v3_atomic(
             .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
         RegisterGeometryV2 {
             common_scalars: narrow_u32(GENERAL_HOT_COMMON_SCALARS_V3)?,
-            item_scalar_stride: narrow_u32(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)?,
+            item_scalar_stride: narrow_u32(general_hot_item_scalar_stride_v3(action))?,
             common_identities: narrow_u32(GENERAL_HOT_COMMON_IDENTITIES_V3)?,
             item_identity_stride: 0,
         },
@@ -3164,5 +3164,4 @@ mod tests {
         );
         assert!(short.iter().all(|byte| *byte == 0x55));
     }
-
 }

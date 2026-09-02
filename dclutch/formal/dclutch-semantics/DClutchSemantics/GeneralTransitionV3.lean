@@ -464,10 +464,34 @@ def t (register : ItemScalarSlot) : Reg := item register.index
 def d (register : IdentitySlot) : Reg := common register.index
 
 def commonScalars : Nat := ScalarSlot.all.length
+/-- The width of the per-outcome slot ENUM, which is not what every action
+declares. See `actionItemScalarStride`. -/
 def itemScalarStride : Nat := ItemScalarSlot.all.length
 def commonIdentities : Nat := IdentitySlot.all.length
 /-- General has no per-outcome identity tail. -/
 def itemIdentityStride : Nat := 0
+
+/-- The per-outcome scalar stride ONE action declares.
+
+`openBatch` and `closeBatch` declare zero, because the batch record has no
+per-outcome tail: their effect already declares no item operations, and the only
+item instruction they ever emitted was the shared bound check `outcome <
+outcomeCount` on a register whose sole legal value is the coordinate it occupies.
+Neither action ever READ the tail it declared, and the declaration was the only
+thing making the register bank grow with the Product width.
+
+The cost it removes was measured on the real-ELF `OpenBatch` campaign on
+2026-09-02: the Trading heap peak was `59,376 + 528*(N - 2)` bytes of 65,536, an
+identity that reproduced both measured peaks and predicted the abort -- N = 13
+peaked at 65,184 and committed, N = 14 needed 65,712 and the allocator died. Of
+that 528 bytes per outcome only 48 was declared width; the rest was the same
+width copied through eleven full-width banks that a no-op `dealloc` never
+reclaims. At stride zero the peak is flat in N and the scratch-page span stops
+growing with it, because the page count is derived from the bank width. -/
+def actionItemScalarStride (action : Action) : Nat :=
+  match action with
+  | .openBatch | .closeBatch => 0
+  | _ => itemScalarStride
 
 /-- The local-state kind each action's PRIMARY state envelope carries.
 
@@ -973,6 +997,13 @@ def actionOps (action : Action) : List Op :=
     ]
 /-- The Product-owned item body, folded once per authenticated outcome. -/
 def itemOps (action : Action) : List Op :=
+  -- An action with no tail emits NO item section, not even the bound check:
+  -- there is no `outcome` register for it to read. `Instruction.wellFormed`
+  -- bounds every item operand by the declared stride, so a zero stride and a
+  -- non-empty body is not a program at all.
+  match action with
+  | .openBatch | .closeBatch => []
+  | _ =>
   .scalarLt (t .outcome) (s .outcomeCount) ::
     match action with
     | .consider | .freeze | .materialize => []
@@ -1005,7 +1036,7 @@ def itemOps (action : Action) : List Op :=
 /-- One action's complete authored program. -/
 def program (action : Action) : Program := {
   commonScalars := commonScalars
-  itemScalarStride := itemScalarStride
+  itemScalarStride := actionItemScalarStride action
   commonIdentities := commonIdentities
   itemIdentityStride := itemIdentityStride
   «prelude» := commonOps action ++ actionOps action
@@ -1030,6 +1061,29 @@ theorem the_register_schema_is_the_declared_bank :
     commonScalars = 151 ∧ itemScalarStride = 6 ∧ commonIdentities = 45 ∧
       itemIdentityStride = 0 := by native_decide
 
+/-- The SLOT SCHEMA above is not what every program declares.
+
+`itemScalarStride` is the width of the item slot enum and is unchanged; what
+moved is the stride each PROGRAM carries, which is now the action's. Stated as
+the exact list rather than by re-deriving `actionItemScalarStride`, so a program
+that stopped consulting it is a failing theorem rather than a tautology. -/
+theorem every_authored_program_declares_its_actions_stride :
+    authoredActions.map (fun action => (program action).itemScalarStride) =
+      [6, 6, 6, 6, 6, 6, 6, 0, 6, 6, 0, 6, 6, 6, 6] := by native_decide
+
+/-- Zero stride and an empty item body are the same statement, both ways.
+
+An item operand is bounded by the declared stride, so a zero-stride program with
+a non-empty body addresses a register file that does not exist; and a program
+with a tail it never emits an instruction over is declaring width nothing reads.
+`Iff`, not implication, because both directions are defects. -/
+theorem a_zero_stride_action_emits_no_item_body :
+    authoredActions.all
+        (fun action =>
+          ((program action).itemScalarStride == 0) ==
+            (program action).itemBody.isEmpty) = true := by
+  native_decide
+
 /-- Every constructor list is its own index sequence, so a reordered enum is a
 failing theorem rather than a silently renumbered bank. -/
 theorem every_slot_list_is_its_own_index_sequence :
@@ -1049,7 +1103,7 @@ theorem authored_section_counts :
           ((program action).prelude.length, (program action).itemBody.length,
             (program action).epilogue.length)) =
       [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
-        (26, 1, 0), (46, 4, 0), (50, 4, 0), (27, 1, 0), (46, 1, 0), (23, 1, 0),
+        (26, 0, 0), (46, 4, 0), (50, 4, 0), (27, 0, 0), (46, 1, 0), (23, 1, 0),
         (42, 4, 0), (34, 1, 0)] := by
   native_decide
 
@@ -1084,7 +1138,10 @@ def encodedWidth (action : Action) : Nat := (Codec.encodeProgram (program action
 
 theorem authored_encoded_widths :
     authoredActions.map encodedWidth =
-      [416, 464, 584, 632, 440, 632, 824, 680, 1232, 1328, 704, 1160, 608, 1136,
+      -- openBatch 680 -> 656 and closeBatch 704 -> 680: one 24-byte instruction
+      -- each, the bound check that had no register to bound. The 32-byte header
+      -- is unchanged; only the two zero-stride actions move.
+      [416, 464, 584, 632, 440, 632, 824, 656, 1232, 1328, 680, 1160, 608, 1136,
         872] := by
   native_decide
 
@@ -1094,9 +1151,10 @@ theorem authored_encoded_widths :
 
 /-- One register bank at Product width 1: every named coordinate set, the rest
 zero. Identities are the abstract `Nat` identities of the VM model. -/
-private def bankOf (values : List (Nat × Nat)) (identities : List (Nat × Nat)) : State :=
+private def bankOf (action : Action) (values : List (Nat × Nat))
+    (identities : List (Nat × Nat)) : State :=
   ⟨values.foldl (fun bank (coordinate, value) => bank.setIfInBounds coordinate value)
-      ((List.replicate (commonScalars + itemScalarStride) 0).toArray),
+      ((List.replicate (commonScalars + actionItemScalarStride action) 0).toArray),
     identities.foldl (fun bank (coordinate, value) => bank.setIfInBounds coordinate value)
       ((List.replicate commonIdentities 0).toArray)⟩
 
@@ -1121,7 +1179,7 @@ request/status join plus the terminal and projected order successor, so each
 hostile theorem below changes exactly one fact. -/
 private def verifyCandidateRowBank
     (status subject expectedRevision expectedPage expectedRow terminal postOrderCount : Nat) : State :=
-  bankOf (commonBank ++ [
+  bankOf .verifyCandidateRow (commonBank ++ [
       (ScalarSlot.index .candidateStatusObservation, status),
       (ScalarSlot.index .rootExpectedRevision, expectedRevision),
       (ScalarSlot.index .verifyRevisionObservation, 5),
@@ -1194,7 +1252,7 @@ theorem verify_candidate_row_refuses_wrong_status_or_subject :
 
 /-- An OpenBatch bank whose optimistic revision matches the observed root. -/
 private def openBatchBank (expectedRevision : Nat) : State :=
-  bankOf (commonBank ++ [
+  bankOf .openBatch (commonBank ++ [
       (ScalarSlot.index .currentSlot, 1000),
       (ScalarSlot.index .rootExpectedRevision, expectedRevision),
       (ScalarSlot.index .rootRevisionObservation, 5),
@@ -1223,7 +1281,7 @@ theorem open_batch_refuses_a_stale_root_revision :
 
 /-- A CloseBatch bank: window state and batch counters are the parameters. -/
 private def closeBatchBank (currentSlot orderCount openBatches : Nat) : State :=
-  bankOf (commonBank ++ [
+  bankOf .closeBatch (commonBank ++ [
       (ScalarSlot.index .currentSlot, currentSlot),
       (ScalarSlot.index .rootExpectedRevision, 6),
       (ScalarSlot.index .rootRevisionObservation, 6),
@@ -1264,7 +1322,7 @@ theorem close_batch_refuses_when_no_batch_is_open :
 are the parameters; the identity bindings hold unless a test breaks one. -/
 private def placeOrderBank
     (currentSlot orderCount maxOrders validUntil : Nat) : State :=
-  bankOf (commonBank ++ [
+  bankOf .placeOrder (commonBank ++ [
       (ScalarSlot.index .currentSlot, currentSlot),
       (ScalarSlot.index .terminalRecordBump, 9), (ScalarSlot.index .terminalCanonicalBump, 9),
       (ScalarSlot.index .terminalRentPrincipal, 1),
@@ -1339,7 +1397,7 @@ theorem place_order_refuses_a_substituted_escrow_destination :
 are the parameters; the identity bindings hold unless a test breaks one. -/
 private def cancelOrderBank
     (currentSlot phase orderCount cancelledCount batchReserve : Nat) : State :=
-  bankOf (commonBank ++ [
+  bankOf .cancelOrder (commonBank ++ [
       (ScalarSlot.index .currentSlot, currentSlot),
       (ScalarSlot.index .terminalRecordBump, 9), (ScalarSlot.index .terminalCanonicalBump, 9),
       (ScalarSlot.index .terminalRentPrincipal, 1),
@@ -1415,7 +1473,7 @@ theorem cancel_order_refuses_when_every_admission_is_already_cancelled :
 the parameters; the identity bindings hold unless a test breaks one. -/
 private def releaseOrderBank
     (phase currentSlot escrowBalance sourceVaultContext : Nat) : State :=
-  bankOf (commonBank ++ [
+  bankOf .releaseOrder (commonBank ++ [
       (ScalarSlot.index .currentSlot, currentSlot),
       (ScalarSlot.index .orderPhaseObservation, phase),
       (ScalarSlot.index .orderValidUntilSlot, 500),

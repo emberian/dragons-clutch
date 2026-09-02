@@ -196,6 +196,18 @@ def freezeCoordinates : List Operation := [
   ⟨.requireU8, false, false, 60, 0, 0⟩
 ]
 
+/-- The per-outcome scalar stride ONE action's RequestProfile declares.
+
+It must equal what the AccountProfile, transition and effect declare for the
+same action -- `dclutch-general-adapter-contract::artifacts_v3` joins all four
+and refuses any disagreement -- so `openBatch` and `closeBatch` declare zero
+here for the same reason they declare zero there: the batch record has no
+per-outcome tail. -/
+def actionItemScalarStride (action : Action) : Nat :=
+  match action with
+  | .openBatch | .closeBatch => 0
+  | _ => 6
+
 def profile (action : Action) : Profile := {
   fixedRequestBytes := ControllerRequestV2.requestBytes
   itemRequestBytes := 0
@@ -209,7 +221,7 @@ def profile (action : Action) : Profile := {
   -- Coordinates 90..150 are the GEN-SEVEN widening: the collection and
   -- candidate banks. No settlement action's request touches them.
   commonScalars := 151
-  itemScalarStride := 6
+  itemScalarStride := actionItemScalarStride action
   commonIdentities := 45
   itemIdentityStride := 0
   fixedOperations :=
@@ -270,6 +282,18 @@ theorem row_actions_project_runtime_coordinates :
       (profile .collect).commonScalars = 151 ∧
       (profile .distribute).commonScalars = 151 ∧
       (profile .consider).itemScalarStride = 6 := by native_decide
+
+/-- Every profile's declared stride, as the exact list.
+
+The common scalar bank stays 151 for every action; only the per-outcome tail
+moves, and only for the two batch actions. Stated as a list rather than by
+re-deriving `actionItemScalarStride`, so a profile that stopped consulting it
+fails rather than agrees with itself. -/
+theorem every_profile_declares_its_actions_stride :
+    actions.map (fun action => (profile action).itemScalarStride) =
+      [6, 6, 6, 6, 6, 6, 6, 0, 6, 6, 0, 6, 6, 6, 6] ∧
+    actions.all (fun action => (profile action).commonScalars == 151) = true := by
+  native_decide
 
 /-- No action's request may write the root-lifecycle conjunct at 88 or 89. -/
 theorem no_action_request_projects_the_root_lifecycle_conjunct :

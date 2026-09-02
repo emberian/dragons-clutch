@@ -396,11 +396,12 @@ fn write_scalar(bank: &mut [u8], coordinate: u32, value: u64) {
         .copy_from_slice(&value.to_le_bytes());
 }
 
-fn write_identity(bank: &mut [u8], width: u32, coordinate: u32, value: [u8; 32]) {
-    let scalar_bytes = usize::try_from(general_hot_scalar_count_v3(width).expect("scalar count"))
-        .expect("scalar count")
-        .checked_mul(8)
-        .expect("scalar bytes");
+fn write_identity(action: Action, bank: &mut [u8], width: u32, coordinate: u32, value: [u8; 32]) {
+    let scalar_bytes =
+        usize::try_from(general_hot_scalar_count_v3(action, width).expect("scalar count"))
+            .expect("scalar count")
+            .checked_mul(8)
+            .expect("scalar bytes");
     let start = scalar_bytes
         .checked_add(
             usize::try_from(coordinate)
@@ -415,7 +416,8 @@ fn write_identity(bank: &mut [u8], width: u32, coordinate: u32, value: [u8; 32])
 }
 
 fn input_bank(width: u32, action: Action) -> Vec<u8> {
-    let mut bank = vec![0_u8; general_hot_candidate_bank_len_v3(width).expect("bank width")];
+    let mut bank =
+        vec![0_u8; general_hot_candidate_bank_len_v3(action, width).expect("bank width")];
     write_scalar(&mut bank, scalar::OUTCOME_COUNT, u64::from(width));
     write_scalar(&mut bank, scalar::GENERATION, 9);
     write_scalar(&mut bank, scalar::CLAIMS_MARKET_REVISION, 7);
@@ -478,17 +480,19 @@ fn input_bank(width: u32, action: Action) -> Vec<u8> {
         (identity::RENT_PROGRAM, [11; 32]),
         (identity::GENERAL_ROOT, [12; 32]),
     ] {
-        write_identity(&mut bank, width, coordinate, value);
+        write_identity(action, &mut bank, width, coordinate, value);
     }
     let initialize = action == Action::InitializeSettlement;
     let close = action == Action::Close;
     write_identity(
+        action,
         &mut bank,
         width,
         identity::PAYER,
         if initialize { [13; 32] } else { [0; 32] },
     );
     write_identity(
+        action,
         &mut bank,
         width,
         identity::RENT_REFUND,
@@ -501,18 +505,21 @@ fn input_bank(width: u32, action: Action) -> Vec<u8> {
     let collect = action == Action::Collect;
     let distribute = action == Action::Distribute;
     write_identity(
+        action,
         &mut bank,
         width,
         identity::CUSTODY_SOURCE_OWNER,
         if collect { [19; 32] } else { [0; 32] },
     );
     write_identity(
+        action,
         &mut bank,
         width,
         identity::SOURCE_VAULT_CONTEXT,
         if collect { [0; 32] } else { [20; 32] },
     );
     write_identity(
+        action,
         &mut bank,
         width,
         identity::CUSTODY_DESTINATION_OWNER,
@@ -523,6 +530,7 @@ fn input_bank(width: u32, action: Action) -> Vec<u8> {
         },
     );
     write_identity(
+        action,
         &mut bank,
         width,
         identity::DESTINATION_VAULT_CONTEXT,
@@ -570,7 +578,7 @@ fn open_batch_bank(width: u32, root: GeneralRootV2) -> Vec<u8> {
         (identity::SELECTION_PRODUCT, product_id()),
         (identity::PRIMARY_OWNER, CALLER.to_bytes()),
     ] {
-        write_identity(&mut bank, width, coordinate, value);
+        write_identity(Action::OpenBatch, &mut bank, width, coordinate, value);
     }
     bank
 }
@@ -618,7 +626,7 @@ fn close_batch_bank(width: u32, root: GeneralRootV2, batch: GeneralBatchV1) -> V
         (identity::SELECTION_PRODUCT, opening.product_id),
         (identity::PRIMARY_OWNER, CALLER.to_bytes()),
     ] {
-        write_identity(&mut bank, width, coordinate, value);
+        write_identity(Action::CloseBatch, &mut bank, width, coordinate, value);
     }
     bank
 }
@@ -757,7 +765,7 @@ fn place_order_bank(
         (identity::RENT_CREDIT, maker),
         (identity::TRADING_PROGRAM, CALLER.to_bytes()),
     ] {
-        write_identity(&mut bank, width, coordinate, value);
+        write_identity(Action::PlaceOrder, &mut bank, width, coordinate, value);
     }
     bank
 }
@@ -893,7 +901,7 @@ fn submit_candidate_bank(
         (identity::GENERAL_ROOT, [12; 32]),
         (identity::RESULT_OWNER, system_program::ID.to_bytes()),
     ] {
-        write_identity(&mut bank, width, coordinate, value);
+        write_identity(Action::SubmitCandidate, &mut bank, width, coordinate, value);
     }
     bank
 }
@@ -932,7 +940,13 @@ fn verify_candidate_bank(
         (identity::PAYER, [0xf3; 32]),
         (identity::TRADING_PROGRAM, CALLER.to_bytes()),
     ] {
-        write_identity(&mut bank, width, coordinate, value);
+        write_identity(
+            Action::VerifyCandidateRow,
+            &mut bank,
+            width,
+            coordinate,
+            value,
+        );
     }
     bank
 }
@@ -996,7 +1010,7 @@ fn close_candidate_bank(
         (identity::PRIMARY_BENEFICIARY, opening.solver_id),
         (identity::PAYER, [0xf4; 32]),
     ] {
-        write_identity(&mut bank, width, coordinate, value);
+        write_identity(Action::CloseCandidate, &mut bank, width, coordinate, value);
     }
     bank
 }
@@ -1156,7 +1170,7 @@ fn real_sbf_fixture_wire_chunk(
     top_level_data.extend_from_slice(&family_request);
 
     let bank_digest = ContentId::new(hash(&bank).to_bytes()).expect("bank digest");
-    let scalar_count = general_hot_scalar_count_v3(width).expect("scalar count");
+    let scalar_count = general_hot_scalar_count_v3(action, width).expect("scalar count");
     let request = AcceleratorRequestV2::new(
         RequestTransportV2::ScratchPages,
         content(1),
@@ -1536,15 +1550,17 @@ fn read_chunk_scalar(ack: AcceleratorAckV2<'_>, chunk: u32, coordinate: u32) -> 
 }
 
 async fn read_v3_identity(
+    action: Action,
     width: u32,
     controller: ControllerRequestV3,
     bank: Vec<u8>,
     runtime: BTreeMap<u16, Vec<u8>>,
     coordinate: u32,
 ) -> [u8; 32] {
-    let scalar_bytes = usize::try_from(general_hot_scalar_count_v3(width).expect("scalar count"))
-        .expect("count")
-        * 8;
+    let scalar_bytes =
+        usize::try_from(general_hot_scalar_count_v3(action, width).expect("scalar count"))
+            .expect("count")
+            * 8;
     let byte = scalar_bytes + usize::try_from(coordinate).expect("identity") * 32;
     let page = u32::try_from(byte / ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2).expect("identity page");
     let (ack, _, _) = execute(real_sbf_fixture_v3_chunk(
@@ -2888,10 +2904,11 @@ async fn real_sbf_place_order_admits_canonical_signed_terms_at_runtime_widths() 
             (identity::POSITION_ONE_OWNER, order_id),
             (identity::SETTLEMENT_POSITION_OWNER, order_id),
         ] {
-            let scalar_bytes =
-                usize::try_from(general_hot_scalar_count_v3(width).expect("scalar count"))
-                    .expect("scalar count")
-                    * 8;
+            let scalar_bytes = usize::try_from(
+                general_hot_scalar_count_v3(Action::PlaceOrder, width).expect("scalar count"),
+            )
+            .expect("scalar count")
+                * 8;
             let byte = scalar_bytes + usize::try_from(coordinate).expect("identity") * 32;
             let page =
                 u32::try_from(byte / ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2).expect("identity page");
@@ -3154,8 +3171,15 @@ async fn real_sbf_submit_candidate_creates_exactly_funded_candidate_at_runtime_w
             (identity::PRIMARY_BENEFICIARY, SOLVER),
         ] {
             assert_eq!(
-                read_v3_identity(width, controller, bank.clone(), runtime.clone(), coordinate)
-                    .await,
+                read_v3_identity(
+                    Action::SubmitCandidate,
+                    width,
+                    controller,
+                    bank.clone(),
+                    runtime.clone(),
+                    coordinate,
+                )
+                .await,
                 expected,
                 "candidate subject and physical state identities must join"
             );
@@ -3529,6 +3553,7 @@ async fn real_sbf_close_candidate_conserves_work_escrow_at_runtime_widths() {
         // same physical close, even when the carrier bytes remain valid.
         let mut substituted_bank = bank;
         write_identity(
+            Action::CloseCandidate,
             &mut substituted_bank,
             width,
             identity::SELECTION_BATCH,

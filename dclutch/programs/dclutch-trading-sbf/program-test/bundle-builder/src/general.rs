@@ -151,15 +151,16 @@ pub fn build_general_open_batch_bundle_v1(
         .ok_or(BuilderError::Binding(line!()))?;
     GeneralRootV2::decode(root_tail).map_err(|_| BuilderError::Binding(line!()))?;
     let outcome_count = input.scenario.tail_count;
-    let bank_len = general_hot_candidate_bank_len_v3(outcome_count)
+    let bank_len = general_hot_candidate_bank_len_v3(Action::OpenBatch, outcome_count)
         .map_err(|_| BuilderError::Projection("general-bank-width"))?;
     let projector =
         |scalars: &mut [u64], identities: &mut [[u8; 32]]| -> Result<(), BuilderError> {
             let mut bank = vec![0_u8; bank_len];
             encode_register_bank_into(scalars, identities, &mut bank)
                 .map_err(|_| BuilderError::Projection("general-bank-encode"))?;
-            let environment = general_hot_environment_from_bank_v3(&bank, outcome_count)
-                .map_err(|_| BuilderError::Projection("general-environment"))?;
+            let environment =
+                general_hot_environment_from_bank_v3(Action::OpenBatch, &bank, outcome_count)
+                    .map_err(|_| BuilderError::Projection("general-environment"))?;
             project_general_open_batch_candidate_in_place_v3(
                 root_tail,
                 config,

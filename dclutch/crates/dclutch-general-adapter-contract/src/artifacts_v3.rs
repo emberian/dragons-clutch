@@ -75,7 +75,7 @@ use crate::{
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, scalar,
+        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, general_hot_item_scalar_stride_v3, scalar,
     },
     specialization::general_request_profile_bytes_v1,
 };
@@ -605,8 +605,14 @@ fn validate_geometry(
         || account.common_scalar_count()
             != u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
+        // THE ACTION'S STRIDE, not the flat constant. This is the head of the
+        // four-way join below -- request, transition and effect are each
+        // compared against the account profile, and the account profile is
+        // compared here. Pinning this end to the enum width would refuse every
+        // action that declares no tail while the other three agreed with each
+        // other perfectly.
         || account.item_scalar_stride()
-            != u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+            != u16::try_from(general_hot_item_scalar_stride_v3(action))
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
         || account.common_identity_count()
             != u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
@@ -1454,8 +1460,10 @@ mod tests {
                 Ok(
                     usize::try_from(GENERAL_HOT_COMMON_SCALARS_V3).expect("common scalars")
                         + usize::try_from(tail_count).expect("test tail")
-                            * usize::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
-                                .expect("item stride")
+                            * usize::try_from(
+                                crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
+                            )
+                            .expect("item stride")
                 )
             );
         }

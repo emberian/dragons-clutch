@@ -31,6 +31,49 @@ def replayMagic : List UInt8 :=
 def receiptMagic : List UInt8 :=
   [0x44, 0x43, 0x4c, 0x43, 0x55, 0x53, 0x43, 0x31] -- `DCLCUSC1`
 
+/-!
+## The Custody namespace
+
+Four PDA seed domains. The Rust stated all four itself and asserted the
+thirty-two-byte seed bound with a `const _` block, which is the right assertion
+in the wrong place: an over-long domain refuses every bump inside
+`find_program_address`, so the authority it names can never sign and every route
+through it is unreachable, and that is a fact about the domain, not about a
+crate. Stated here, it holds for every backend that prints these.
+-/
+
+/-- `[authorityDomain, market, release_set]` -- the program-owned authority. -/
+def authorityPdaDomain : String := "dclutch:custody-authority:v1"
+
+/-- `[replayDomain, market, release_set, role, context]` -- one replay state. -/
+def replayPdaDomain : String := "dclutch:custody-replay:v1"
+
+/-- `[vaultDomain, market, release_set, context, compartment]` -- one token
+vault.  A Market's Hoard is this domain at the Hoard-principal compartment. -/
+def vaultPdaDomain : String := "dclutch:custody-vault:v1"
+
+/-- Separates the adapter's token/replay poststate commitment.  Not a PDA seed,
+but held to the same bound because it is the same alphabet of domains and a
+reader should not have to know which of the four is which. -/
+def poststateDomain : String := "dclutch:custody-poststate:v1"
+
+def pdaDomains : List String :=
+  [authorityPdaDomain, replayPdaDomain, vaultPdaDomain, poststateDomain]
+
+/-- A PDA seed may be at most thirty-two bytes.  This is the `const _` assert
+the Rust carried, moved to the object it is about. -/
+theorem pda_domains_are_admissible_seeds :
+    pdaDomains.all (fun domain => domain.toUTF8.toList.length <= 32) := by
+  native_decide
+
+/-- No two domains coincide, so no two authorities can share an address. -/
+theorem pda_domains_are_pairwise_distinct : pdaDomains.Nodup := by native_decide
+
+/-- The three record magics differ, which is what makes a request, a replay
+state and a receipt distinguishable at their first eight bytes. -/
+theorem record_magics_are_pairwise_distinct :
+    [requestMagic, replayMagic, receiptMagic].Nodup := by native_decide
+
 inductive Operation where
   | initializeReplay | openVault | transfer | closeVault | closeReplay
   deriving DecidableEq, Repr
@@ -59,11 +102,40 @@ def Compartment.tag : Compartment -> UInt8
   | .hoardPrincipal => 3 | .tradingPrincipal => 4 | .feeVault => 5
   | .livenessVault => 6 | .seriesEscrow => 7 | .recoveryReserve => 8
 
+namespace Compartment
+
+def all : List Compartment := [
+  .none, .external, .settlement, .hoardPrincipal, .tradingPrincipal,
+  .feeVault, .livenessVault, .seriesEscrow, .recoveryReserve
+]
+
+def rustName : Compartment -> String
+  | .none => "CUSTODY_COMPARTMENT_NONE_TAG_V1"
+  | .external => "CUSTODY_COMPARTMENT_EXTERNAL_TAG_V1"
+  | .settlement => "CUSTODY_COMPARTMENT_SETTLEMENT_TAG_V1"
+  | .hoardPrincipal => "CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1"
+  | .tradingPrincipal => "CUSTODY_COMPARTMENT_TRADING_PRINCIPAL_TAG_V1"
+  | .feeVault => "CUSTODY_COMPARTMENT_FEE_VAULT_TAG_V1"
+  | .livenessVault => "CUSTODY_COMPARTMENT_LIVENESS_VAULT_TAG_V1"
+  | .seriesEscrow => "CUSTODY_COMPARTMENT_SERIES_ESCROW_TAG_V1"
+  | .recoveryReserve => "CUSTODY_COMPARTMENT_RECOVERY_RESERVE_TAG_V1"
+
+end Compartment
+
 theorem protected_compartments_are_distinct :
     Compartment.hoardPrincipal != .feeVault ∧
     Compartment.hoardPrincipal != .livenessVault ∧
     Compartment.hoardPrincipal != .recoveryReserve ∧
     Compartment.feeVault != .livenessVault := by decide
+
+/-- The four named pairs above were the ones a reader was told about.  Every
+compartment tag is distinct, and `all` is every compartment, so a decoder that
+walks this list cannot map two compartments onto one byte or miss one. -/
+theorem compartment_tags_are_pairwise_distinct :
+    (Compartment.all.map Compartment.tag).Nodup := by native_decide
+
+theorem compartment_names_are_unique :
+    (Compartment.all.map Compartment.rustName).Nodup := by native_decide
 
 inductive RequestField where
   | magic | version | operation | callerRole | sourceCompartment

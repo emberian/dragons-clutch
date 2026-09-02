@@ -38,7 +38,7 @@ use crate::{
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity,
+        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, general_hot_item_scalar_stride_v3, identity,
         item_scalar, scalar,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateLayoutV3},
@@ -101,8 +101,9 @@ pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, 
     match action {
         Action::SubmitCandidate => (46, 1, 0),
         Action::VerifyCandidateRow => (23, 1, 0),
-        Action::OpenBatch => (26, 1, 0),
-        Action::CloseBatch => (27, 1, 0),
+        // Zero item instructions: no tail, so no bound check. See `append_item`.
+        Action::OpenBatch => (26, 0, 0),
+        Action::CloseBatch => (27, 0, 0),
         Action::PlaceOrder => (46, 4, 0),
         Action::CancelOrder => (50, 4, 0),
         Action::ReleaseOrder => (42, 4, 0),
@@ -168,7 +169,7 @@ pub fn encode_general_transition_program_v3_atomic(
     encode_program_atomic(
         ProgramGeometryV3 {
             common_scalars: narrow(GENERAL_HOT_COMMON_SCALARS_V3)?,
-            item_scalar_stride: narrow(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)?,
+            item_scalar_stride: narrow(general_hot_item_scalar_stride_v3(action))?,
             common_identities: narrow(GENERAL_HOT_COMMON_IDENTITIES_V3)?,
             item_identity_stride: narrow(GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3)?,
         },
@@ -1274,6 +1275,14 @@ fn append_row_action(output: &mut [InstructionV3], cursor: &mut usize) -> Result
 }
 
 fn append_item(action: Action, output: &mut [InstructionV3], cursor: &mut usize) -> Result<()> {
+    // AN ACTION WITH NO TAIL EMITS NO ITEM SECTION, not even the bound check --
+    // there is no `OUTCOME` register left for it to read. `InstructionV3`
+    // bounds every item operand by the declared stride, so a zero stride with a
+    // non-empty item body is not a program. Lean states the same thing both
+    // ways in `a_zero_stride_action_emits_no_item_body`.
+    if general_hot_item_scalar_stride_v3(action) == 0 {
+        return Ok(());
+    }
     push(
         output,
         cursor,
@@ -1282,7 +1291,6 @@ fn append_item(action: Action, output: &mut [InstructionV3], cursor: &mut usize)
     match action {
         Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => {}
         Action::Consider | Action::Freeze | Action::Materialize => {}
-        // The batch record has no per-outcome tail; the bound check alone.
         Action::OpenBatch | Action::CloseBatch => {}
         Action::InitializeSettlement => push(
             output,
@@ -1610,7 +1618,7 @@ mod tests {
         );
         assert_eq!(
             GENERAL_TRANSITION_ITEM_SCALAR_STRIDE_V3,
-            GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
+            crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
         );
         assert_eq!(
             GENERAL_TRANSITION_COMMON_IDENTITIES_V3,
@@ -1640,9 +1648,12 @@ mod tests {
                 program.common_scalar_count(),
                 u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3).expect("scalar count")
             );
+            // THE ACTION'S stride, not the enum's. Restating the flat constant
+            // here would assert that no action may declare a narrower tail,
+            // which is exactly what OpenBatch and CloseBatch now do.
             assert_eq!(
                 program.item_scalar_stride(),
-                u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3).expect("item stride")
+                u16::try_from(general_hot_item_scalar_stride_v3(action)).expect("item stride")
             );
             if let Some(previous) = prior.replace(bytes) {
                 assert_ne!(prior.as_ref().expect("current"), &previous);
@@ -1660,7 +1671,8 @@ mod tests {
         lifecycle: u64,
     ) -> (std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>) {
         let scalar_count = usize::try_from(
-            GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+            GENERAL_HOT_COMMON_SCALARS_V3
+                + count * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
         )
         .expect("scalar width");
         let mut input_scalars = vec![0_u64; scalar_count];
@@ -1675,7 +1687,8 @@ mod tests {
         input_scalars[usize::try_from(scalar::ROOT_LIFECYCLE_OBSERVATION).expect("lifecycle")] =
             lifecycle;
         for item in 0..count {
-            let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            let base = GENERAL_HOT_COMMON_SCALARS_V3
+                + item * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
             input_scalars[usize::try_from(base + item_scalar::OUTCOME).expect("item")] =
                 u64::from(item);
         }
@@ -1727,7 +1740,8 @@ mod tests {
     /// the transition merely joins them and derives the two escrow tranches.
     fn submit_candidate_input_bank(count: u32) -> (std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>) {
         let scalar_count = usize::try_from(
-            GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+            GENERAL_HOT_COMMON_SCALARS_V3
+                + count * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
         )
         .expect("scalar width");
         let mut scalars = vec![0_u64; scalar_count];
@@ -1770,7 +1784,8 @@ mod tests {
         );
         put(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION, reward_rate);
         for item in 0..count {
-            let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            let base = GENERAL_HOT_COMMON_SCALARS_V3
+                + item * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
             scalars[usize::try_from(base + item_scalar::OUTCOME).expect("item outcome")] =
                 u64::from(item);
         }
@@ -2132,7 +2147,8 @@ mod tests {
             scalars[usize::try_from(coordinate).expect("scalar coordinate")] = value;
         }
         for item in 0..count {
-            let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            let base = GENERAL_HOT_COMMON_SCALARS_V3
+                + item * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
             for coordinate in [
                 item_scalar::QUANTITY,
                 item_scalar::CLAIMS_SOURCE_MAGNITUDE,

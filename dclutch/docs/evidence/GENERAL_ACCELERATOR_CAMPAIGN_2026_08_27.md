@@ -538,3 +538,62 @@ production path is the ALT-backed v0 plan, whose witness is
 `dclutch-operator::general_hot_v3::every_action_is_alt_packet_safe_at_the_canonical_runtime_width`
 — re-pinned in the same commit, widest **968 of 1,232**, which is 264 bytes of
 margin and the only number that speaks to what a validator will accept.
+
+## Addendum, 2026-09-02: OpenBatch and CloseBatch stop declaring a tail they never read
+
+**Two rows of thirteen moved, and they moved to their own N=1 rows.**
+
+| action | accounts | legacy packet | scratch pages | CU |
+|---|---:|---:|---:|---:|
+| `OpenBatch` N=258 | 77 → **63** | 1,319 → **857** | 18 → **4** | 84,840 → **49,189** |
+| `CloseBatch` N=258 | 77 → **63** | 1,351 → **889** | 18 → **4** | 87,025 → **51,375** |
+
+Every other action at N=258 is unchanged in accounts, packet and pages. Both
+moved rows are now byte-for-byte the same frame those two actions present at
+N=1, which is the whole claim: their register bank does not grow with the
+Product width, so nothing derived from its width grows either.
+
+**The packet conclusion changes for these two and only these two.** Eleven of
+the thirteen N=258 actions still exceed the 1,232-byte legacy maximum in this
+readonly CPI harness. `OpenBatch` at 857 and `CloseBatch` at 889 no longer do —
+they are legacy-packet-safe at the maximum Product width, without a lookup
+table.
+
+### Why the tail went
+
+`transition_artifacts_v3::append_item` said it in its own words before this
+landed: *"The batch record has no per-outcome tail; the bound check alone."*
+Their effect already declared zero item operations, and the one item
+instruction their transition emitted was the shared bound check `OUTCOME <
+OUTCOME_COUNT` — over a register whose only legal value is the coordinate it
+occupies, which `hot_candidate_v3` refuses anything else for. Neither action
+read the tail; declaring it was the only thing making the bank grow.
+
+Lean is the author. `DClutchSemantics.GeneralTransitionV3.actionItemScalarStride`
+and `GeneralRequestProfilesV1.actionItemScalarStride` decide the stride per
+action, and four artifacts carry the result — AccountProfile, RequestProfile,
+transition and effect — which `artifacts_v3` joins and refuses to see disagree.
+
+### The Trading heap, measured through the same instrument
+
+`programs/dclutch-trading-sbf/program-test/general-hot`, real ELFs, three
+widths, `hot-cu-profile` heap marks:
+
+| N | scalars | pages | accounts | CU | peak heap |
+|---:|---:|---:|---:|---:|---:|
+| 2 | 151 | 4 | 59 | 847,267 | 58,324 |
+| 13 | 151 | 4 | 59 | 837,427 | 58,324 |
+| 258 | 151 | 4 | 59 | 861,225 | 58,324 |
+
+Flat to the byte, 56 heap marks each, peaking at the same phase. Before this the
+peak was `59,376 + 528*(N - 2)` of 65,536 — an identity that reproduced both
+measured peaks and predicted the abort, N = 13 committing at 65,184 and N = 14
+dying needing 65,712 — and N = 258 refused earlier still with `0x4000
+UnsupportedContent` at `hot_v3.rs:3986`, because `151 + 6*258 = 1,699` scalars
+exceeded `MAX_HOT_SCALARS_V3 = 512`.
+
+That constant needed no lift and did not get one. The scalar count is 151 at
+every width now, and the old line's intercept is the new flat value: `59,376 +
+528*(N - 2)` is `58,320 + 528*N`, against 58,324 measured — four bytes of
+allocator rounding, and the 1,052-byte drop from 59,376 is exactly the two
+outcomes of tail that N = 2 itself used to carry.

@@ -361,6 +361,15 @@ pub struct DirectHotChainFixtureV5 {
     pub capability_seal_bytes: Vec<u8>,
     /// SHA-256 of the selected descriptor record.
     pub descriptor_digest: [u8; 32],
+    /// The Claims caller authority and ITS BUMP, for the campaigns that measure.
+    ///
+    /// Reported because the search that finds this address is the one search on
+    /// the ordinary route that no margin gate subtracts, and a gate cannot
+    /// subtract a depth the fixture does not hand it. `None` on the registered
+    /// creation chain, which dispatches no Claims child and so searches for no
+    /// such authority -- an honest absence rather than a zero that would read as
+    /// a first-try hit.
+    pub claims_caller_authority: Option<(Pubkey, u8)>,
 }
 
 /// One same-validator registered-order creation campaign through generic Hot.
@@ -463,6 +472,10 @@ pub fn build_direct_hot_chain_fixture_v5(
     // values by construction, not by two derivations agreeing.
     let custody_routes =
         custody_route_authorities(input, &product, &state, &capability, &realm, &request)?;
+    // Derived here as well as inside the frame builder, and the two are the same
+    // call, so the address the fixture REPORTS and the address it INSTALLS
+    // cannot drift.
+    let claims_caller_authority = claims_caller_authority_v5(input, &product, &state, &request)?;
     let mut logical = logical_accounts(
         input,
         &rent,
@@ -572,6 +585,7 @@ pub fn build_direct_hot_chain_fixture_v5(
         capability_seal,
         capability_seal_bytes,
         descriptor_digest: artifacts.descriptor_id,
+        claims_caller_authority: Some(claims_caller_authority),
     })
 }
 
@@ -2593,6 +2607,44 @@ fn custody_request_bytes(
 /// root the Effect projects into every Custody request -- and never the family
 /// request digest, which enters only as the fifth seed through the child
 /// request's hash.
+/// The Claims caller authority this trade's child walk signs under.
+///
+/// **ONE AUTHOR, AND IT NOW RETURNS ITS BUMP.** The derivation used to sit
+/// inline in `logical_accounts`, which installed the ADDRESS and threw the bump
+/// away -- and the bump is what `direct_hot_top_level_margin_gate.rs` and
+/// `direct_hot_fee_bearing_margin_gate.rs` need, because the search that finds
+/// it is the one search on this route neither gate subtracts. Both gates said
+/// so in prose and both said the packet digest was "the one seed no public
+/// fixture field carries", which was never true: every seed below is a value
+/// this function already has.
+///
+/// The cost of leaving it unsubtracted was measured, not theorised: the floor
+/// those gates call key-independent moved 4,836 CU between two builds that
+/// compile to byte-identical code -- 948 symbols and 941 stack frames, none
+/// differing -- because a relink reseeds this search and the floor is a minimum
+/// over draws that include it.
+fn claims_caller_authority_v5(
+    input: DirectHotChainInputV5,
+    product: &ProductFixture,
+    state: &StateFixture,
+    request: &[u8],
+) -> Result<(Pubkey, u8), DirectHotChainFixtureErrorV5> {
+    let claims = claims_request(input, product, state, request)?;
+    let claims_packet = hash(&claims.to_bytes()).to_bytes();
+    let claims_seeds = CallerAuthoritySeedsV1::new(
+        core_content(input.release_set)?,
+        state.market.to_bytes(),
+        ExecutionRoleV1::Trading,
+        hash(request).to_bytes(),
+        claims_packet,
+    )
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    Ok(Pubkey::find_program_address(
+        &claims_seeds.as_slices(),
+        &input.trading_program,
+    ))
+}
+
 fn custody_route_authorities(
     input: DirectHotChainInputV5,
     product: &ProductFixture,
@@ -3161,19 +3213,8 @@ fn logical_accounts(
     set(&mut logical, 10, program(input.rent_program))?;
     set(&mut logical, 11, program(system_program::ID))?;
 
-    let claims = claims_request(input, product, state, request)?;
-    let claims_bytes = claims.to_bytes();
-    let claims_packet = hash(&claims_bytes).to_bytes();
-    let claims_seeds = CallerAuthoritySeedsV1::new(
-        core_content(input.release_set)?,
-        state.market.to_bytes(),
-        ExecutionRoleV1::Trading,
-        hash(request).to_bytes(),
-        claims_packet,
-    )
-    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
-    let claims_authority =
-        Pubkey::find_program_address(&claims_seeds.as_slices(), &input.trading_program).0;
+    let (claims_authority, _claims_authority_bump) =
+        claims_caller_authority_v5(input, product, state, request)?;
     set(
         &mut logical,
         12,
@@ -4896,6 +4937,12 @@ pub mod via_builder {
             capability.buyer_maker,
         )?;
 
+        // The SAME call the hand-built path makes, so the two routes cannot
+        // report different bumps for one address -- which is the property
+        // `builder_reproduces_the_hand_built_direct_fixture` exists to hold.
+        let claims_caller_authority =
+            claims_caller_authority_v5(input, &product, &state, &request)?;
+
         let waist = WaistFactsV1 {
             registry_program: input.registry_program,
             trading_program: input.trading_program,
@@ -5361,6 +5408,7 @@ pub mod via_builder {
             capability_seal: bundle.artifacts.seal,
             capability_seal_bytes: bundle.artifacts.seal_bytes.clone(),
             descriptor_digest: bundle.artifacts.descriptor.digest,
+            claims_caller_authority: Some(claims_caller_authority),
         })
     }
 

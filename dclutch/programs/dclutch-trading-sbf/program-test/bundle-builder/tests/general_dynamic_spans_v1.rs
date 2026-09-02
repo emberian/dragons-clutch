@@ -187,8 +187,8 @@ fn request(action: Action) -> Vec<u8> {
 
 /// The page count the bank transport selects for this Product width — the
 /// number the campaign table records as "scratch pages".
-fn expected_pages(outcome_count: u32) -> u32 {
-    let scalars = general_hot_scalar_count_v3(outcome_count).expect("General scalar count");
+fn expected_pages(action: Action, outcome_count: u32) -> u32 {
+    let scalars = general_hot_scalar_count_v3(action, outcome_count).expect("General scalar count");
     match classify_bank_transport_v2(scalars, GENERAL_HOT_COMMON_IDENTITIES_V3)
         .expect("General bank transport")
     {
@@ -283,8 +283,11 @@ fn the_sole_general_span_selector_is_not_request_owned() {
 fn the_derived_span_width_is_the_authenticated_page_count() {
     let admitted = strategy(StrategyDispositionV2::AdmittedAot);
     for outcome_count in [1_u32, OUTCOME_COUNT, 258] {
-        let expected = expected_pages(outcome_count);
         for action in GENERAL_ACTIONS_V3 {
+            // The page count is per-ACTION now, not per-width alone: an action
+            // that declares no per-outcome tail has a bank that does not grow,
+            // so its span stays at the narrow-width page count for every N.
+            let expected = expected_pages(action, outcome_count);
             let set = artifacts(action);
             let widths =
                 derive(action, &set, &admitted, outcome_count).expect("General span widths");
@@ -398,7 +401,7 @@ fn the_general_effect_artifact_is_current_v4_and_drives_span_geometry() {
                 OUTCOME_COUNT
             )
             .expect("current effect drives span geometry"),
-            vec![expected_pages(OUTCOME_COUNT)],
+            vec![expected_pages(action, OUTCOME_COUNT)],
             "{action:?}"
         );
     }

@@ -60,7 +60,7 @@ use dclutch_general_config_contract::{
 
 use crate::hot_candidate_v3::{
     GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-    GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, item_scalar,
+    GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, general_hot_item_scalar_stride_v3, identity, item_scalar,
     scalar,
 };
 use crate::{
@@ -680,7 +680,7 @@ pub fn encode_general_effect_program_v3_atomic(
         item_account_stride: 0,
         common_scalars: u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
             .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
-        item_scalar_stride: u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+        item_scalar_stride: u16::try_from(general_hot_item_scalar_stride_v3(action))
             .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
         common_identities: u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
             .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
@@ -3506,9 +3506,12 @@ mod tests {
                 program.common_scalar_count(),
                 u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3).expect("common scalars")
             );
+            // THE ACTION'S stride, not the enum's. Restating the flat constant
+            // here would assert that no action may declare a narrower tail,
+            // which is exactly what OpenBatch and CloseBatch now do.
             assert_eq!(
                 program.item_scalar_stride(),
-                u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3).expect("item stride")
+                u16::try_from(general_hot_item_scalar_stride_v3(action)).expect("item stride")
             );
         }
     }
@@ -3525,7 +3528,8 @@ mod tests {
             let mut scalars = vec![
                 0_u64;
                 usize::try_from(
-                    GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+                    GENERAL_HOT_COMMON_SCALARS_V3
+                        + count * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
                 )
                 .expect("scalar width")
             ];
@@ -3584,7 +3588,8 @@ mod tests {
 
         for count in [1_u32, 258] {
             let scalar_len = usize::try_from(
-                GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+                GENERAL_HOT_COMMON_SCALARS_V3
+                    + count * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
             )
             .expect("scalar width");
             let identity_len = usize::try_from(
@@ -3601,7 +3606,8 @@ mod tests {
 
             let selected_item = count - 1;
             let selected_base = usize::try_from(
-                GENERAL_HOT_COMMON_SCALARS_V3 + selected_item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+                GENERAL_HOT_COMMON_SCALARS_V3
+                    + selected_item * crate::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
             )
             .expect("selected item base");
             for (coordinate, value) in [

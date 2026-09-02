@@ -6,7 +6,10 @@ use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     Admission, Binding, CoreState, Identity, ReleaseReceipt, ReleaseSet, RetirementAdmissions, Role,
 };
-use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
+    require_cache_account,
+};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::{
     batch_v2::RoleBatchRequestV2,
@@ -322,36 +325,35 @@ pub(crate) fn authenticate_role<'info>(
 ) -> Result<Admission, CoreSbfError> {
     require_expected_registry(registry.key, expected_registry)?;
     validate_release_accounts(cache, registry, role_program, role_programdata)?;
-    let expected_cache =
-        Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set_id], registry.key).0;
-    if cache.key != &expected_cache || cache.owner != registry.key {
-        return Err(CoreSbfError::Release);
-    }
-    let selected = {
-        let bytes = cache.try_borrow_data().map_err(|_| CoreSbfError::Release)?;
-        let view = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
-            .map_err(|_| CoreSbfError::Release)?;
-        if view
-            .execution_release_set_id()
-            .map_err(|_| CoreSbfError::Release)?
-            .to_bytes()
-            != release_set_id
-        {
-            return Err(CoreSbfError::Release);
-        }
-        release_projection(view)?
-    };
+    require_cache_account(registry.key, cache).map_err(CoreSbfError::from)?;
+    // ONE borrow, ONE decode, and no 256-way search for an address the cache
+    // already carries the bump for. This function used to derive the cache PDA
+    // by search, decode the account to build the projection, and then call
+    // `authenticate_activated_role_v1`, which borrowed and decoded the same
+    // immutable account a SECOND time and re-took the same release-set
+    // equality. `ActivatedExecutionReleaseSetViewV1::decode` validates the
+    // complete five-role projection and every aliasing pair -- twenty-five
+    // `decode_role` calls -- each time, and this route runs per role.
+    let bytes = cache.try_borrow_data().map_err(|_| CoreSbfError::Release)?;
+    let view =
+        ActivatedExecutionReleaseSetViewV1::decode(&bytes).map_err(|_| CoreSbfError::Release)?;
+    authenticate_activation_cache_identity_v1(registry, cache, &release_set_id, view)
+        .map_err(CoreSbfError::from)?;
+    let selected = release_projection(view)?;
     let registry_role = registry_role(role);
     // The current deployment is authenticated from the cache this function
     // already read, not by invoking the Registry. Core is a child of a Registry
     // continuation, so a CPI from here is reentrancy -- the Registry is already
-    // at depth one and Solana refuses depth four onto it. The role, the release
-    // set and the Program identity are all checked inside
-    // `authenticate_activated_role_v1`, which is the Registry's own code.
-    let receipt = authenticate_activated_role_v1(
-        registry,
+    // at depth one and Solana refuses depth four onto it. The read-only frame,
+    // the role and the current deployment are all checked inside
+    // `authenticate_activated_role_in_frame_v1`, which is the Registry's own
+    // code; the cache's own identity was taken by
+    // `authenticate_activation_cache_identity_v1` above, which is the other
+    // half of what `authenticate_activated_role_v1` does in one call and two
+    // decodes.
+    let receipt = authenticate_activated_role_in_frame_v1(
         cache,
-        &release_set_id,
+        view,
         registry_role,
         role_program,
         role_programdata,

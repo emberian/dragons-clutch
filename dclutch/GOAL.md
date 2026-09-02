@@ -2931,3 +2931,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   written and parked (the last unmodelled search, the Claims caller authority bump); applies when the tree is green.
 - WEB closed (`fc37c597`): a11y stops at 194 with the measured reason; two wasm verifies wait on execution-strategy-contract.
 - Cuts: `ec4993abc`, `7b961160a`.
+
+### Lane map delta — 2026-09-02 12:15
+- GENERAL `ea4c46e0` (Lean-first, one commit, 21 files, tree kept green in a worktree): **OpenBatch N=258 executes and commits**
+  at 861,225 CU with peak heap **flat at 58,324** (the old identity's intercept; 59,376 was the N=2 point) — the batch actions
+  declare a zero item stride; emission census moved exactly six rows; both hazards closed with hostiles; OpenBatch/CloseBatch
+  legacy-packet-safe at 258 without a table. Lane `a39412e2663ca5f8d` closed at ~700k → **`aefe5eec9ac4b7175`** (the two
+  protocol-wide heap repetitions: the throwaway span-width banks and the projection rotation; OUTCOME design note).
+- SLICES closed (`796a71c3`, `c4533f0f`, `7f60ccad`, `ba012c24`): the routes were already witnessed — the finding was two
+  authors, and **one shipped bug**: `delegated_custody_transfer_cpi_v2` put the Realm content digest where Custody requires
+  the raw-record PDA (refused `0x6004` on chain with the fix reverted; its only test asserted shape, not the frame). Owed:
+  dealer-checkpoint's 6 census problems (the Add's refusal moved 0x4003 → 0x4004, two bindings name the old code) → the next
+  Dealer lane; five claims-family CU rows red → CLAIMS; the re-ingest idempotency test waits on splitting `Transition 0x4004`.
+- Disk: 132 → 202 GiB free after removing closed lanes' worktrees and targets under /private/tmp (dealer, core, old
+  Structured, the heap probe, cohort-11's builds). Still held for live lanes: general-lane 26G, target-structured 13G, pop, s7-cu-target.
+- Cuts: `43d7b2e30`.

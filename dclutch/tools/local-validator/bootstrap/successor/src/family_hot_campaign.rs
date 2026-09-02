@@ -594,7 +594,7 @@ fn execute_general_action_v1(
     let bank = general_input_bank_v1(width, action, arguments.caller, step.coordinates);
     let bank_digest = ContentId::new(Sha256::digest(&bank).into())
         .map_err(|error| Error::new(format!("bank digest: {error:?}")))?;
-    let scalar_count = general_hot_scalar_count_v3(width)
+    let scalar_count = general_hot_scalar_count_v3(action, width)
         .map_err(|error| Error::new(format!("scalar count: {error:?}")))?;
     let request = AcceleratorRequestV2::new(
         RequestTransportV2::ScratchPages,
@@ -1390,7 +1390,7 @@ fn general_input_bank_v1(
     caller: Pubkey,
     coordinates: (u32, u8, u8),
 ) -> Vec<u8> {
-    let len = general_hot_candidate_bank_len_v3(width).unwrap_or_default();
+    let len = general_hot_candidate_bank_len_v3(action, width).unwrap_or_default();
     let mut bank = vec![0_u8; len];
     let settlement = matches!(
         action,
@@ -1481,7 +1481,7 @@ fn general_input_bank_v1(
             },
         ),
     ] {
-        write_bank_identity_v1(&mut bank, width, coordinate, value);
+        write_bank_identity_v1(action, &mut bank, width, coordinate, value);
     }
     // The request's coordinates, repeated into the bank the accelerator reads.
     // These are authenticated against the request, so a bank that left them
@@ -1513,8 +1513,14 @@ fn write_bank_scalar_v1(bank: &mut [u8], coordinate: u32, value: u64) {
     }
 }
 
-fn write_bank_identity_v1(bank: &mut [u8], width: u32, coordinate: u32, value: [u8; 32]) {
-    let Ok(scalar_count) = general_hot_scalar_count_v3(width) else {
+fn write_bank_identity_v1(
+    action: Action,
+    bank: &mut [u8],
+    width: u32,
+    coordinate: u32,
+    value: [u8; 32],
+) {
+    let Ok(scalar_count) = general_hot_scalar_count_v3(action, width) else {
         return;
     };
     let Ok(scalars) = usize::try_from(scalar_count) else {
@@ -1740,8 +1746,11 @@ mod tests {
     fn the_input_bank_is_the_canonical_width_for_its_outcome_count() {
         let caller = Pubkey::new_from_array([0xa2; 32]);
         for width in [1_u32, 4, 258] {
-            let expected = general_hot_candidate_bank_len_v3(width).expect("bank width");
             for action in GENERAL_ACTIONS_V3 {
+                // Per-ACTION now: an action with no per-outcome tail has a bank
+                // that does not grow with the Product width.
+                let expected =
+                    general_hot_candidate_bank_len_v3(action, width).expect("bank width");
                 assert_eq!(
                     general_input_bank_v1(width, action, caller, (0, 0, 0)).len(),
                     expected,

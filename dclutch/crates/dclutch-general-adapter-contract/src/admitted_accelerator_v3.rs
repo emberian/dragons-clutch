@@ -240,6 +240,7 @@ pub fn evaluate_general_admitted_selection_v3<'a>(
     )
     .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Candidate)?;
     acknowledge_candidate(
+        bundle.request.action,
         accelerator_request,
         invocation_context,
         artifacts,
@@ -309,6 +310,7 @@ pub fn evaluate_general_admitted_initialize_v3<'a>(
     )
     .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Candidate)?;
     acknowledge_candidate(
+        bundle.request.action,
         accelerator_request,
         invocation_context,
         artifacts,
@@ -320,6 +322,7 @@ pub fn evaluate_general_admitted_initialize_v3<'a>(
 }
 
 fn acknowledge_candidate<'a>(
+    action: Action,
     accelerator_request: &[u8],
     invocation_context: ContentId,
     artifacts: GeneralArtifactBytesV3<'_>,
@@ -349,7 +352,7 @@ fn acknowledge_candidate<'a>(
             capability_program: content(artifacts.descriptor)?,
             invocation_context,
             tail_count,
-            scalar_count: general_hot_scalar_count_v3(tail_count)
+            scalar_count: general_hot_scalar_count_v3(action, tail_count)
                 .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Candidate)?,
             identity_count: GENERAL_HOT_COMMON_IDENTITIES_V3,
         },
@@ -406,6 +409,7 @@ pub fn evaluate_general_admitted_settlement_v3<'a>(
     )
     .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
     let accelerated = project_general_hot_candidate_v3(
+        bundle.request.action,
         effect_output,
         cursor_output,
         tail_count,
@@ -436,7 +440,7 @@ pub fn evaluate_general_admitted_settlement_v3<'a>(
             capability_program: content(artifacts.descriptor)?,
             invocation_context,
             tail_count,
-            scalar_count: general_hot_scalar_count_v3(tail_count)
+            scalar_count: general_hot_scalar_count_v3(bundle.request.action, tail_count)
                 .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Candidate)?,
             identity_count: GENERAL_HOT_COMMON_IDENTITIES_V3,
         },

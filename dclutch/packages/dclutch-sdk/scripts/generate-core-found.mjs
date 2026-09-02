@@ -20,7 +20,7 @@ const sources = Object.freeze({
   operator: readFileSync(new URL('crates/dclutch-product-runtime-v2-operator/src/found.rs', root), 'utf8'),
   splineAuthoring: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/spline_product.rs', root), 'utf8'),
   claimsState: readFileSync(new URL('crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs', root), 'utf8'),
-  custody: readFileSync(new URL('crates/dclutch-custody-contract/src/lib.rs', root), 'utf8'),
+  custody: readFileSync(new URL('crates/dclutch-custody-contract/src/generated.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/coreFound.ts', import.meta.url);
 
@@ -66,14 +66,6 @@ function lifecycleRentAction(variant) {
   if (!enumeration) throw new Error('missing Rust LifecycleRentActionV2 enumeration');
   const match = enumeration[1].match(new RegExp(`\\n\\s*${variant} = ([0-9]+),`));
   if (!match) throw new Error(`missing Rust LifecycleRentActionV2::${variant} discriminant`);
-  return Number(match[1]);
-}
-
-function compartmentTag(variant) {
-  const enumeration = sources.custody.match(/pub enum CompartmentV1 \{([\s\S]*?)\n\}/);
-  if (!enumeration) throw new Error('missing Rust CompartmentV1 enumeration');
-  const match = enumeration[1].match(new RegExp(`\\n\\s*${variant} = ([0-9]+),`));
-  if (!match) throw new Error(`missing Rust CompartmentV1::${variant} discriminant`);
   return Number(match[1]);
 }
 
@@ -278,7 +270,7 @@ output += `export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().enc
 output += '\n';
 output += `export const CUSTODY_VAULT_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('custody', 'CUSTODY_VAULT_PDA_DOMAIN_V1')}');\n`;
 output += `export const CUSTODY_AUTHORITY_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('custody', 'CUSTODY_AUTHORITY_PDA_DOMAIN_V1')}');\n`;
-output += `export const CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1 = ${compartmentTag('HoardPrincipal')} as const;\n`;
+output += `export const CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1 = ${scalar('custody', 'CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1')} as const;\n`;
 
 // -------------------------------------------------------- the Realm record
 // The Realm body layout used to be re-emitted here from the crate's literals.

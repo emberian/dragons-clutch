@@ -204,6 +204,15 @@ struct DepthsV1 {
     custody_transfer_authority: u64,
     /// Custody invocations OBSERVED in the program log, not assumed.
     custody_invocations: u64,
+    /// The Claims caller authority, modelled since 2026-09-02.
+    ///
+    /// It was the last search left inside the residual, and leaving it there is
+    /// what let this file's floor move 4,836 CU between two builds that compile
+    /// to byte-identical code -- 948 symbols, 941 stack frames, none differing.
+    /// A relink reseeds it, the floor is a MINIMUM over draws that include it,
+    /// and the minimum of a resampled distribution moves when nothing it
+    /// measures does.
+    claims_caller_authority: u64,
 }
 
 impl DepthsV1 {
@@ -216,20 +225,24 @@ impl DepthsV1 {
             + self
                 .custody_invocations
                 .saturating_mul(self.custody_replay + self.custody_transfer_authority)
+            + self.claims_caller_authority
     }
 
     /// The distinct ADDRESSES this arm searches and how many times each is searched.
     ///
-    /// The Claims caller authority is absent for the same reason the top-level
-    /// gate leaves it out of its model: its packet digest is the one seed no
-    /// public fixture field carries. It is one more draw at multiplicity one,
-    /// and the floor statistic below already absorbs its luckiest attempt.
+    /// The Claims caller authority is among them since 2026-09-02.
+    ///
+    /// The sentence that stood here -- "its packet digest is the one seed no
+    /// public fixture field carries" -- was never true, and it is the reason the
+    /// search went sixteen days unsubtracted. Every seed it needs is a value
+    /// `claims_caller_authority_v5` already computes to install the account; the
+    /// fixture simply discarded the bump. It now reports it.
     fn address_multiplicities(&self) -> Vec<u64> {
         let mut out = vec![1, 1, 1];
         out.extend(self.caller_authorities.iter().map(|_| 1));
         out.push(self.custody_invocations);
         out.push(self.custody_invocations);
-        // The Claims caller authority, unmodelled above and real all the same.
+        // The Claims caller authority, modelled above and subtracted with the rest.
         out.push(1);
         out
     }
@@ -381,6 +394,24 @@ fn depths(
     )
     .1;
 
+    // The one search this file used to leave in the residual.
+    //
+    // Every OTHER site here re-derives its address and asserts it against the one
+    // the fixture reports, because a model that addressed something else would
+    // still produce a tidy number. This one cannot do that and does not pretend
+    // to: its guarantee is stronger and of a different kind. The fixture derives
+    // it ONCE in `claims_caller_authority_v5` and that single call both installs
+    // the account and reports the bump, so there is no second derivation to
+    // disagree. The check below is only that the fixture handed over something.
+    let (claims_authority_key, claims_authority_bump) = chain
+        .claims_caller_authority
+        .expect("the ordinary Direct chain dispatches a Claims child and reports its authority");
+    assert_ne!(
+        claims_authority_key,
+        Pubkey::default(),
+        "the Claims caller-authority model was handed a zero address",
+    );
+
     DepthsV1 {
         market: attempts(market_bump),
         root: attempts(root_bump),
@@ -390,6 +421,7 @@ fn depths(
         custody_replay: attempts(replay_bump),
         custody_transfer_authority: attempts(transfer_bump),
         custody_invocations,
+        claims_caller_authority: attempts(claims_authority_bump),
     }
 }
 
@@ -508,9 +540,15 @@ impl SweepV1 {
 
     /// The key-independent floor statistic: the minimum residual.
     ///
-    /// This equals `C0 + 1,500 * k`, `k` the unmodelled Claims caller
-    /// authority's attempt count on the luckiest of the swept draws, and `k = 1`
-    /// unless every draw missed on its first candidate.
+    /// Since 2026-09-02 this is `C0` and nothing else, because the model has no
+    /// unmodelled search left in it. It used to be `C0 + 1,500 * k` with `k` the
+    /// Claims caller authority's attempt count on the luckiest of the swept
+    /// draws -- and a MINIMUM OVER A LOTTERY IS NOT A CONSTANT. Every unmodelled
+    /// search is reseeded by `release_set_id`, so a relink resamples the whole
+    /// distribution, and the minimum of a resampled distribution moves even when
+    /// nothing it measures does. Measured across three relink pairs whose
+    /// Trading ELF alone differs: 0 CU, +17 CU, and +4,836 CU, the last between
+    /// two builds with 948 identical symbols and 941 identical stack frames.
     fn floor(&self) -> u64 {
         self.residuals().into_iter().min().unwrap_or_default()
     }
@@ -623,7 +661,7 @@ fn report(sweep: &SweepV1) -> Option<u64> {
         println!(
             "SEEDDEPTH\t{label}\t{}\tmarket {} CARRIED x3\troot {}\treplay {} {}\t\
              caller-authorities {:?}\tcustody-replay {} x{}\tcustody-authority {} x{}\t\
-             modelled attempts {}",
+             claims-caller-authority {}\tmodelled attempts {}",
             observation.seed,
             depth.market,
             depth.root,
@@ -634,6 +672,7 @@ fn report(sweep: &SweepV1) -> Option<u64> {
             depth.custody_invocations,
             depth.custody_transfer_authority,
             depth.custody_invocations,
+            depth.claims_caller_authority,
             depth.modelled_attempts(),
         );
     }

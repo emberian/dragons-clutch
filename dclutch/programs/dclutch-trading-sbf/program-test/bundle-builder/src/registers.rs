@@ -1772,9 +1772,10 @@ mod tests {
         )
         .expect("General Profile13");
         let profile = AccountProfileV2::decode(&bytes).expect("Profile13 decode");
-        let scalar_count =
-            usize::try_from(general_hot_scalar_count_v3(4).expect("General scalar count"))
-                .expect("host usize");
+        let scalar_count = usize::try_from(
+            general_hot_scalar_count_v3(Action::OpenBatch, 4).expect("General scalar count"),
+        )
+        .expect("host usize");
         let selector =
             usize::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT).expect("selector coordinate");
         let mut scalars = vec![0_u64; scalar_count];

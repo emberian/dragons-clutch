@@ -717,7 +717,7 @@ fn cu_budgets_tolerance(band: u64) -> u64 {
     rounded.saturating_add(10_000).max(15_000)
 }
 
-/// The six modelled key-varying search sites, at one fixture draw.
+/// The modelled search sites, at one fixture draw.
 #[derive(Clone, Copy, Debug)]
 struct SearchDepthsV1 {
     /// Not a modelled site any more: all three Market readers reproduce this
@@ -732,10 +732,19 @@ struct SearchDepthsV1 {
     custody_caller_authority: u64,
     custody_replay: u64,
     custody_transfer_authority: u64,
+    /// The Claims caller authority, modelled since 2026-09-02.
+    ///
+    /// The seventh site, and the last one left inside the residual. Leaving it
+    /// there is what let this file's floor move 4,836 CU between two builds that
+    /// compile to byte-identical code -- 948 symbols, 941 stack frames, none
+    /// differing. A relink reseeds it, the floor is a MINIMUM over draws that
+    /// include it, and the minimum of a resampled distribution moves when
+    /// nothing it measures does.
+    claims_caller_authority: u64,
 }
 
 impl SearchDepthsV1 {
-    /// Attempts across the six modelled sites. The Market is NOT among them.
+    /// Attempts across the modelled sites. The Market is NOT among them.
     const fn attempts(self) -> u64 {
         self.root
             + self.seller_replay
@@ -743,6 +752,7 @@ impl SearchDepthsV1 {
             + self.custody_caller_authority
             + self.custody_replay
             + self.custody_transfer_authority
+            + self.claims_caller_authority
     }
 }
 
@@ -948,6 +958,21 @@ fn search_depths(direct: &DirectCase, releases: Releases) -> SearchDepthsV1 {
     )
     .1;
 
+    // The seventh site. Unlike the six above it is not re-derived and compared:
+    // the fixture derives it ONCE in `claims_caller_authority_v5`, and that one
+    // call both installs the account and reports the bump, so there is no second
+    // derivation that could disagree. The check below is only that the fixture
+    // handed over something.
+    let (claims_authority_key, claims_authority_bump) = direct
+        .chain
+        .claims_caller_authority
+        .expect("the ordinary Direct chain dispatches a Claims child and reports its authority");
+    assert_ne!(
+        claims_authority_key,
+        Pubkey::default(),
+        "the Claims caller-authority model was handed a zero address",
+    );
+
     SearchDepthsV1 {
         market: attempts(market_bump),
         root: attempts(root_bump),
@@ -956,6 +981,7 @@ fn search_depths(direct: &DirectCase, releases: Releases) -> SearchDepthsV1 {
         custody_caller_authority: attempts(caller_bump),
         custody_replay: attempts(replay_bump),
         custody_transfer_authority: attempts(transfer_bump),
+        claims_caller_authority: attempts(claims_authority_bump),
     }
 }
 

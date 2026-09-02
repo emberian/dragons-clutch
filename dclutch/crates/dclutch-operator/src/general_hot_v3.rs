@@ -2996,8 +2996,9 @@ mod tests {
             .expect("privilege tuple is one of eight")
     }
 
-    fn general_scratch_pages_v3(outcome_count: u32) -> usize {
-        let scalars = general_hot_scalar_count_v3(outcome_count).expect("General scalar count");
+    fn general_scratch_pages_v3(action: Action, outcome_count: u32) -> usize {
+        let scalars =
+            general_hot_scalar_count_v3(action, outcome_count).expect("General scalar count");
         match classify_bank_transport_v2(scalars, GENERAL_HOT_COMMON_IDENTITIES_V3)
             .expect("bank transport")
         {
@@ -3010,7 +3011,7 @@ mod tests {
 
     fn general_frame_geometry_v3(action: Action, outcome_count: u32) -> GeneralFrameGeometryV3 {
         let widths = packet_neutral_widths();
-        let pages = general_scratch_pages_v3(outcome_count);
+        let pages = general_scratch_pages_v3(action, outcome_count);
         let logical =
             general_account_profile_fixed_count_v3(action).expect("General logical account count");
         let (mut physical_runtime, mut writable, mut signers) = (0_usize, 1_usize, 0_usize);
@@ -4712,7 +4713,7 @@ mod tests {
         ] {
             let logical =
                 usize::from(general_account_profile_fixed_count_v3(action).expect("logical count"))
-                    + general_scratch_pages_v3(258);
+                    + general_scratch_pages_v3(action, 258);
             assert_eq!(
                 2 + ADMITTED_RUNTIME_ACCOUNTS_START_V3 + logical,
                 campaign_accounts,

@@ -183,8 +183,11 @@ fn open_selection(outcome_count: u32) -> Vec<u8> {
 /// transition ran. `lifecycle.rs` had always written these; this file simply
 /// had not, and nothing could say so until the refusal learned to name itself.
 fn input_bank(outcome_count: u32) -> Vec<u8> {
-    let mut bank =
-        vec![0_u8; general_hot_candidate_bank_len_v3(outcome_count).expect("bank width")];
+    let mut bank = vec![
+        0_u8;
+        general_hot_candidate_bank_len_v3(Action::Freeze, outcome_count)
+            .expect("bank width")
+    ];
     write_scalar(&mut bank, scalar::OUTCOME_COUNT, u64::from(outcome_count));
     write_scalar(&mut bank, scalar::SETTLEMENT_POSITION_PRESENT, 0);
     write_scalar(&mut bank, scalar::GENERATION, CONFIG_GENERATION);
@@ -223,10 +226,11 @@ fn write_scalar(bank: &mut [u8], coordinate: u32, value: u64) {
 }
 
 fn write_identity(bank: &mut [u8], width: u32, coordinate: u32, value: [u8; 32]) {
-    let scalar_bytes = usize::try_from(general_hot_scalar_count_v3(width).expect("scalar count"))
-        .expect("scalar count")
-        .checked_mul(8)
-        .expect("scalar bytes");
+    let scalar_bytes =
+        usize::try_from(general_hot_scalar_count_v3(Action::Freeze, width).expect("scalar count"))
+            .expect("scalar count")
+            .checked_mul(8)
+            .expect("scalar bytes");
     let start = scalar_bytes
         .checked_add(
             usize::try_from(coordinate)
@@ -293,7 +297,8 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
 
     let bank = input_bank(outcome_count);
     let bank_digest = ContentId::new(hash(&bank).to_bytes()).expect("bank digest");
-    let scalar_count = general_hot_scalar_count_v3(outcome_count).expect("scalar count");
+    let scalar_count =
+        general_hot_scalar_count_v3(Action::Freeze, outcome_count).expect("scalar count");
     let request = AcceleratorRequestV2::new(
         RequestTransportV2::ScratchPages,
         content(1),
