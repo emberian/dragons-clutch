@@ -62,10 +62,10 @@ not_ok() { fail=$((fail + 1)); printf 'not ok - %s\n' "$1" >&2; }
 capture="$SCRATCH/capture.json"
 if PATH="$BIN:$PATH" "$HERE/run.sh" --source "$FIXTURE" --capture "$capture" \
     >"$SCRATCH/stdout" 2>"$SCRATCH/stderr"; then
-    ok "a fresh exact thirteen-link capture runs"
+    ok "a fresh exact full-link capture runs"
 else
     sed -n '1,12p' "$SCRATCH/stderr" >&2
-    not_ok "a fresh exact thirteen-link capture runs"
+    not_ok "a fresh exact full-link capture runs"
 fi
 
 set +e

@@ -3,7 +3,7 @@
 
 `sbf-frame-sizes.py --format json` reports the raw symbols in one fresh object.
 This tool removes only compiler-generated identity hashes, preserves colliding
-monomorphizations as a sorted multiset, and joins all thirteen program objects
+monomorphizations as a sorted multiset, and joins all twelve program objects
 into one canonical manifest. `check` requires that manifest to equal the
 committed baseline exactly: growth is red, and shrinkage is also red until the
 baseline is ratcheted down, so recovered headroom cannot silently be spent
@@ -38,7 +38,7 @@ BASELINE_SCHEMA = "dclutch-sbf-frame-baseline-v1"
 # prototype its own header disclaimed. `6590f042` moved the runner's copy of
 # this count and left the checker's behind, so every capture since has built all
 # twelve links clean and then been refused by the assembler -- which is why the
-# committed baseline is still the thirteen-link one, and why nothing has
+# committed baseline was still the thirteen-link one, and why nothing had
 # ratcheted this gate since `8c050751`. The count is pinned rather than
 # discovered on purpose (a link silently dropping out of the measurement is the
 # failure this guard exists to catch), so it moves by hand, with a reason, in
@@ -199,7 +199,9 @@ def validate_manifest(value: Any, label: str, schemas: set[str]) -> dict[str, An
     if not isinstance(links, list):
         raise MissingOrMalformed(f"{label} links are not a list")
     if value["link_count"] != EXPECTED_LINK_COUNT or len(links) != EXPECTED_LINK_COUNT:
-        raise MissingOrMalformed(f"{label} is not the exact thirteen-link manifest")
+        raise MissingOrMalformed(
+            f"{label} is not the exact {EXPECTED_LINK_COUNT}-link manifest"
+        )
     packages: list[str] = []
     for link_index, link in enumerate(links):
         if not isinstance(link, dict) or set(link) != {

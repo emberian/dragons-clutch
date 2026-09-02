@@ -2817,3 +2817,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   three clauses are real gaps: no Trading resolution route test for a Direct market, redemption host-only, ticket envelope
   never crosses a program → building them.
 - Cuts: `6220f01b4`, `79abd2210`, `673d75170`.
+
+### Lane map delta — 2026-09-02 07:30
+- K=5 (`a9435d78baa5d7612`): **my mandatory-zero ruling was VOID** — `realm`/`collateral_recipient` are mandatory NONZERO for
+  RedeemTerminal (request.rs:487-489, five producers). The packet reading's premise was also wrong by 69 B on the Hot route.
+  **Ruled: −288 plus an action-conditional header as ONE revision** → Hot Issue/Unwrap K=3 at 1,197, Claims-direct K=6; the
+  honest maximum, not a protocol-wide K=5. Distinctness debt named; witness provenance to correct.
+- DEALER `76f4c9eb`: both channel proposals refuted (no page on the route; accelerator holds nothing writable; a page must be
+  accelerator-owned; identities are not uniformly frame keys); **74% of every chunk is re-authentication** — one CPI fits,
+  two never will. → design reading lane **`afe080030dc5b0ada`** (Fable): options a/b/c/d/e with the ladder, one recommendation.
+- RIP unit 6 (`f4725f0e` preimage gate 99/99 red both ways; `10c56d61`): **`tools/relayer` `seed_deployment_slot` is never
+  called — a relayer restart re-admits an upgrade it refused** → unit 7 wires it. Five operator builders are vertical-slice
+  gaps (live routes, no campaign). **census `--check-unique` red at HEAD** from the BANDS move → EMISSION fixes bands.rs.
+- EMISSION: 82/82 guarded; `9ecb8aec` identity order Lean-owned; `1d8b999a`/`1da89dfd` refusal bands emitted through TsEmit
+  into both trees (twin identity 158/158, honest count); five TS modules one emitter away → in flight.
+- WEB `8baf2c9f`: **14 type errors → 0**; the browser could never have submitted a trade (SDK lacked sendRawTransaction).
+  DIRECT `ec451bbd`: fee completion executed for days and read NEVER-EXECUTED because nothing bound it.
+- Cuts: `929eaa683`, `b1e05164d`.

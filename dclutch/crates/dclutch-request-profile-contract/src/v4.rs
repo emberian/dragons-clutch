@@ -358,11 +358,6 @@ impl<'a> RequestProfileV4<'a> {
         self.embedded
     }
 
-    /// Exact immutable row geometry.
-    pub const fn row_geometry(self) -> RowProgramGeometryV4 {
-        self.geometry
-    }
-
     /// Exact complete request width.
     pub fn request_bytes(self) -> Result<usize> {
         complete_request_bytes(self.embedded, self.geometry)
@@ -1288,7 +1283,6 @@ mod tests {
         let bytes = profile_bytes();
         let profile =
             RequestProfileV4::decode_selected([9; 32], [9; 32], &bytes).expect("selected profile");
-        assert_eq!(profile.row_geometry(), geometry());
         assert_eq!(profile.request_bytes(), Ok(160));
         assert_eq!(
             profile.writes_register(ProjectionTargetV1 {

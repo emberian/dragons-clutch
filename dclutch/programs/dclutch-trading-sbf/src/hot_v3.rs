@@ -937,6 +937,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     let runtime_accounts = accounts
         .get(ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4..)
         .ok_or(TradingSbfError::AcceleratorFrame)?;
+    hot_cu_checkpoint!("acc-enter");
     let trading_program = account(fixed, HOT_TRADING_PROGRAM_ACCOUNT_V3)?;
     let frame = HotFrameV3::parse_accelerator_readonly(trading_program.key, fixed)?;
     let hot_instruction =
@@ -973,6 +974,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .map_err(|_| TradingSbfError::Release)?;
         ProgramDataMetadataV3View::parse(&data).map_err(|_| TradingSbfError::Release)?
     };
+    hot_cu_checkpoint!("acc-toplevel");
     let accelerator_caller = authenticate_accelerator_caller_authority_v4(
         frame.trading_program.key,
         caller_authority,
@@ -995,6 +997,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     if root_prestate != envelope.root_prestate_digest() {
         return Err(TradingSbfError::Root.into());
     }
+    hot_cu_checkpoint!("acc-caller-authority");
     let (trading_receipt, claims_program, custody_program) =
         authenticate_accelerator_activation_v4(frame, envelope)?;
     let market = authenticate_market_boxed_v3(&frame, envelope)
@@ -1020,8 +1023,10 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     }
     let rent =
         Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::AcceleratorRelease)?;
+    hot_cu_checkpoint!("acc-release-waist");
     let product_runtime = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)
         .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    hot_cu_checkpoint!("acc-product-runtime");
 
     // Same three Market-selected records as the canonical hot path, located the
     // same way: from the bumps this Market's root recorded at activation.
@@ -1109,6 +1114,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .to_bytes(),
     })?;
     drop(market);
+    hot_cu_checkpoint!("acc-records");
     let (strategy, strategy_end) = authenticate_strategy_for_accelerator_boxed_v4(
         &frame,
         strategy_evidence,
@@ -1132,12 +1138,14 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         return Err(TradingSbfError::AcceleratorArtifact.into());
     }
 
+    hot_cu_checkpoint!("acc-strategy");
     let input_bank = authenticate_accelerator_input_bank_v4(
         request,
         runtime_accounts,
         frame.trading_program.key,
     )?;
     let (scalars, identities) = decode_accelerator_register_bank_v4(request, &input_bank)?;
+    hot_cu_checkpoint!("acc-input-bank");
     let geometry = authenticate_accelerator_artifacts_v4(
         frame,
         &rent,
@@ -1150,6 +1158,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         product_runtime.runtime.outcome_count,
     )?;
 
+    hot_cu_checkpoint!("acc-artifacts");
     let context = authenticate_accelerator_context_v4(
         accelerator_program,
         frame,
@@ -1165,6 +1174,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         &geometry.representatives,
         root_prestate,
     )?;
+    hot_cu_checkpoint!("acc-context");
     Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
         request,
         envelope,

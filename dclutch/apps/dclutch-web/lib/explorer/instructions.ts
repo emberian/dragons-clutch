@@ -96,6 +96,13 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     bodyMagic: magicText(RATIONAL_REQUEST_MAGIC_V2),
   },
   {
+    // `RationalReplayCloseRequestV1`: "One request to close a spent Rational
+    // replay cursor and reclaim its rent." Wrapping creates one cursor per
+    // (descriptor, actor) and the rent for it sits with the actor who paid it.
+    routeId: 'claims/rational_representation_v2::process_replay_close',
+    summary: 'Closes a spent wrap/unwrap replay record and returns its rent to whoever paid it.',
+  },
+  {
     routeId: 'claims/signed_delta_v3::process',
     summary: 'Applies the balance changes a pool or an auction settlement worked out.',
   },
@@ -186,6 +193,18 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
   {
     routeId: 'resolution/process_reclaim#magic',
     summary: 'A resolution provider reclaims the bond it posted.',
+  },
+  {
+    // The register's own distinction, kept: `process_reclaim` "proves the
+    // submission became truth", and this route "proves it never can" -- the
+    // submitter's own deadline has passed AND the Source has left Primary or
+    // has already been discharged. Both, not either. So the word this renders
+    // is ABANDONED, which is what the magic, the request type and the handler
+    // are all named for, and it is not the same act as reclaiming a bond that
+    // was consumed.
+    routeId: 'resolution/process_abandon#magic',
+    summary:
+      'Returns the bond behind a submission the market can no longer consume, once its own deadline has passed and the source has moved on.',
   },
 ]);
 

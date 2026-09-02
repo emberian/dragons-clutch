@@ -569,14 +569,6 @@ impl CapabilityExecutionSelectionV1 {
     pub const fn config(self) -> ContentId {
         self.config
     }
-
-    /// Resolve the sole Program/artifact pair selected for this capability.
-    pub const fn execution_binding(
-        self,
-        release_set: ExecutionReleaseSetV1,
-    ) -> ExecutionRoleBindingV1 {
-        release_set.binding(ExecutionRoleV1::Trading)
-    }
 }
 
 /// The semantic execution roles in the sole canonical profile-1 order.
@@ -1006,10 +998,6 @@ mod tests {
         assert_eq!(selection.kind(), content(22));
         assert_eq!(selection.capability_release(), content(23));
         assert_eq!(selection.config(), content(24));
-        assert_eq!(
-            selection.execution_binding(fixture()),
-            fixture().binding(ExecutionRoleV1::Trading)
-        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and compare the exact thirteen-link per-function SBF frame manifest.
+# Build and compare the exact per-function SBF frame manifest, one object per link.
 #
 # Exit 0: every link freshly compiled, emitted zero overwrite diagnostics, and
 #         the complete canonical manifest matches the committed ratchet.
@@ -190,7 +190,8 @@ if [ -n "$capture" ]; then
     python3 "$tool" assemble --inventory "$inventory" --reports "$reports" \
         --output "$capture" || code=$?
     case "$code" in
-    0) printf 'frameguard: captured complete thirteen-link manifest at %s\n' "$capture" ;;
+    0) printf 'frameguard: captured the complete %s-link manifest at %s\n' \
+            "$EXPECTED_LINK_COUNT" "$capture" ;;
     1) exit "$EXIT_GATE_FAILED" ;;
     *) exit "$EXIT_PREREQ_MISSING" ;;
     esac
