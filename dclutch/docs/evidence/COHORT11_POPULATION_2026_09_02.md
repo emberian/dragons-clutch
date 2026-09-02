@@ -208,6 +208,44 @@ rather than taken from the driver:
 Both Positions were System-owned and data-empty before the run. The identities
 are campaign-local keys held under a mode-700 job directory beside the founder's.
 
+## The two Market accounts, settled against the chain
+
+The Redemption lane found the cohort-11 genesis table mixing two addresses. It
+is mixing them, and the answer is sharper than "a Market and a founding record":
+**both are Core-owned `DCLTCOR3` Market accounts of 368 bytes**, each storing
+its own address at offset 16, and they differ in **phase**.
+
+`STATE_PHASE_OFFSET` is 10 and `STATE_READINESS_OFFSET` is 11
+(`crates/dclutch-market-core-codec/src/generated.rs:38-39`). Read off chain:
+
+| campaign label | address | byte[10] phase | byte[11] readiness |
+| --- | --- | --- | --- |
+| `market` | `ARuPAuyJbJoLdMWGDzSqvcV9py25EkmMj8ABnfKP56s` | `0x00` **Founding** | `0x00` Prepaid |
+| `founding_market` | `3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6` | `0x01` **Open** | `0x02` Consumed |
+
+**`3rBfDBpa…` is the live Open Market.** The genesis file's headline row named
+`ARuPAuyJ…` as "the Market is OPEN"; that account is the one still in Founding.
+Two independent confirmations that the Open one is `3rBfDBpa…`:
+
+- the two admissions that landed in this file name it as their `core_market`
+  in their own durable prestate — an admission cannot bind a Market that is not
+  Open;
+- the founding's frozen routing table routes `3rBfDBpa…` and does not contain
+  `ARuPAuyJ…` at all, and `prepare_public_facts_v1` takes its market from
+  `campaign_address_v1(campaign, "founding_market")`.
+
+The readiness byte agrees with the story the genesis file already tells: the
+Open market reads `Consumed`, which is the post-Open V7 funding suffix
+(`core-funding-create-v1`, `resolution-funding-activate-v1`,
+`core-funding-accept-v1`) having run against it.
+
+Nothing in this lane's work bound the wrong one — the admissions, the Positions
+and the census all reach the market through the campaign evidence rather than
+through the label. The one place the wrong address appears is cosmetic: the
+simulator config's `market_address`, which is only a status-file label.
+**The reconciliation of the genesis file itself belongs to the Witness lane**;
+this section is the measurement, offered rather than duplicated.
+
 ## The census: six laws, four boundaries
 
 `ledger-census` ran once per cycle for four cycles. The first attempt **halted

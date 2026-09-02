@@ -29,9 +29,7 @@ use dclutch_resolution_codec::{
     ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{SourceResolutionPhaseV1, SourceResolutionStateV2};
-use dclutch_versioned_message_operator::{
-    build_lookup_table_creation_v1, canonical_route_lookup_addresses_v1,
-};
+use solana_address_lookup_table_interface::state::AddressLookupTable;
 
 use crate::model::TransactionEvidence;
 use crate::rpc::Rpc;
@@ -305,18 +303,30 @@ pub(crate) fn prepay_certificate(
     Ok(())
 }
 
-/// Publish a finalized routing table over one frame's routable coordinates.
+/// Publish this frame's frozen routing table, through the producer's own
+/// publisher.
 ///
-/// Mirrors the producer's `publish_routing_table` (market.rs), including its
-/// address derivation, which is now `canonical_route_lookup_addresses_v1` in
-/// both places rather than a filter written twice. The table stays
-/// authority-owned and is usable strictly after the slot that extended it.
+/// This used to be a COPY of `market.rs`'s `publish_routing_table` that
+/// documented itself as mirroring it, which is how the two came to disagree
+/// twice over: both hand-derived their address list, and only one of them
+/// froze. The vertical compiles the producer's modules by `#[path]` already, so
+/// the mirror was never necessary -- it just was not called.
 ///
-/// Both copies used to PUSH the invoked program id into the table. A program id
-/// can never be resolved through a table -- it has to be known before the
-/// message's tables load -- so the runtime kept it inline anyway, the entry
-/// bought nothing, and its rent was paid forever: 32 bytes per entry at the
-/// default rent, 222,720 lamports, for as long as the table exists.
+/// What remains here is the two things this campaign needs that the producer's
+/// return type does not carry: the table's key and its exact address list, for
+/// the daemon's `[submit.address_lookup_table]` block. Both are read back out of
+/// the OBSERVED table rather than recomputed, which is stronger than the copy
+/// was.
+///
+/// That address order is load-bearing and the reason is recorded here rather
+/// than inferred: the daemon compiles lookup indexes against the list it is
+/// handed, and the runtime resolves those indexes against the on-chain table. A
+/// list in any order other than the on-chain one delivers a PERMUTED account
+/// frame to the program, which refuses it as `0x8000 AccountFrame` while the
+/// table looks perfectly healthy from every other angle. Found by decoding the
+/// extend transaction bytes out of the blockstore after three green-looking
+/// publications. Reading the order off the observed account is what makes that
+/// unrepeatable.
 pub(crate) fn publish_routing_table(
     rpc: &mut Rpc,
     payer: &Keypair,
@@ -324,44 +334,16 @@ pub(crate) fn publish_routing_table(
     instructions: &[Instruction],
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(Pubkey, Vec<Pubkey>, Observation, Vec<ObservedAccount>)> {
-    let addresses = canonical_route_lookup_addresses_v1(payer.pubkey(), instructions)
-        .map_err(|error| Error::new(format!("{label} routing table addresses: {error:?}")))?;
-    let recent_slot = rpc.finalized_slot()?;
-    let plan =
-        build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
-            .map_err(|error| Error::new(format!("{label} routing table plan: {error:?}")))?;
-    transactions.push(rpc.send(
-        &format!("relayed vertical: create the {label} routing table"),
-        std::slice::from_ref(&plan.create),
-        payer,
-    )?);
-    for (index, extension) in plan.extensions.iter().enumerate() {
-        transactions.push(rpc.send(
-            &format!("relayed vertical: extend the {label} routing table page {index}"),
-            std::slice::from_ref(extension),
-            payer,
-        )?);
-    }
-    let extended_slot = transactions
-        .last()
-        .map(|transaction| transaction.slot)
-        .ok_or_else(|| Error::new("routing table publication recorded no slot"))?;
-    let minimum_slot = extended_slot
-        .checked_add(1)
-        .ok_or_else(|| Error::new("routing table slot overflow"))?;
-    await_finalized_slot(rpc, minimum_slot)?;
     let (observation, tables) =
-        rpc.finalized_observed_accounts(&[plan.lookup_table], minimum_slot)?;
-    // Return the CANONICAL order the plan actually extended on chain -- the
-    // builder sorts addresses by bytes -- never this function's insertion
-    // order. The daemon compiles lookup indexes against the list we hand it,
-    // and the runtime resolves those indexes against the on-chain table; a
-    // list in any other order delivers a PERMUTED account frame to the
-    // program, which refuses it as 0x8000 AccountFrame after the table looks
-    // perfectly healthy from every other angle. Found by decoding the extend
-    // transaction bytes out of the blockstore after three green-looking
-    // publications.
-    Ok((plan.lookup_table, plan.addresses, observation, tables))
+        crate::market::publish_routing_table(rpc, payer, label, instructions, transactions)?;
+    let table = tables
+        .first()
+        .ok_or_else(|| Error::new(format!("{label} routing observation omitted its table")))?;
+    let decoded = AddressLookupTable::deserialize(&table.data)
+        .map_err(|error| Error::new(format!("{label} routing table bytes: {error:?}")))?;
+    let addresses = decoded.addresses.as_ref().to_vec();
+    let key = table.key;
+    Ok((key, addresses, observation, tables))
 }
 
 pub(crate) fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {

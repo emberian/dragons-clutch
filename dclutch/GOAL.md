@@ -2701,3 +2701,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - EMISSION: admissibility table Lean-owned (`e692f8e4`, non-monotone in the profile number — a theorem states the exception);
   alias-width question answered safe and pinned (`f3694735`); now the decision-0012 admission rule's Lean corpus for Core.
 - Cuts: `98648c089`, `bc666b7b2`, `18b260248`, `f5dfc7145`, `313df674c`, `b3977fd16`.
+
+### Lane map delta — 2026-09-02 03:10
+- GENERAL `af0d560c200fa8218` handed off at ~930k tokens (it convicted `0x4018` to `account_count` 12 vs 13 — host
+  `bundle.rs:560` `logical.len()` vs chain `runtime_accounts.len()`; the bank digest is identical so the System account
+  contributed no register; do NOT split the count) → **`a39412e2663ca5f8d`** with the full state. Standing debt named at its
+  call site: `require_admitted_bank_matches_frame_v3` written, tested, unwired (the guard it replaced was x==x).
+- DIRECT's frame fix landed `58b077f8` → POPULATION resumed: measure, candidate, cohort-12, 50 bps market, trade.
+- STRUCTURED `d5a9fe9e`: the chain pays at `open_vault_count == 0` — the operator check was a wrong mirror, deleted; next wall
+  "a width typed five times". EMISSION `d418cc8b`: decision-0012 slot-pin rule has a Lean-decided corpus replayed through Core.
+  WITNESS `4879a54f`: enumerator walks diverging `let` initialisers; routes 160 → 167, seven never-counted rows behind four real
+  guards. REDEMPTION `eb2c6e99`: phase zero — zero-CLI redemption for every document; recipient ATA default next.
+- Next nearest the ceiling: DIRECT (~740k), STRUCTURED (~710k), WITNESS (~680k). Hand off on their next report if mid-unit.
+- Cuts: `af15c2599`, `9172fb401`, `9a5e1831e`.

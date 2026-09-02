@@ -3925,50 +3925,42 @@ pub(crate) fn observe_open_market(
     Ok(OpenMarketObservationV1::Open)
 }
 
-/// Publish one finalized address lookup table covering an oversized frame.
+/// Publish one finalized, FROZEN address lookup table covering an oversized
+/// frame, and read it back before anyone routes through it.
 ///
-/// Only non-signer coordinates and the invoked Program are routed; the fee
-/// payer and every signer stay in the message's static key list. The table is
-/// authority-owned so its rent stays recoverable, and it is never frozen.
+/// Only routable coordinates are carried; the fee payer, every signer and every
+/// invoked program stay in the message's static key list, because no table can
+/// move them.
+///
+/// # Why frozen, when frozen forfeits the rent
+///
+/// This function used to leave the table authority-owned, and said so: "the
+/// table is authority-owned so its rent stays recoverable, and it is never
+/// frozen." Nine call sites took that shape and two took the frozen one, which
+/// is two answers to one question.
+///
+/// A mutable table is a second authority over the transaction. A v0 message
+/// carries INDICES into the table, not addresses, and the account set is
+/// resolved at execution from whatever the table holds THEN -- so an authority
+/// that can still extend the table can change which accounts a message touches
+/// after that message is signed. On this path the table authority and the
+/// transaction payer are the same key, which makes it both halves of the route:
+/// exactly the shape this protocol refuses everywhere else. That is a defect,
+/// not a trade-off.
+///
+/// The rent is a price, and a smaller one than it looks. Nothing in this tree
+/// ever deactivated or closed one of these tables -- `plan_lookup_table_retirement_v1`
+/// exists in the operator and has no caller here -- so "recoverable" was
+/// theoretical, and what freezing actually costs is the option nobody exercised.
+/// The price is stated and pinned by
+/// `a_frozen_routing_table_costs_one_rent_exempt_minimum_per_market`.
+///
+/// The readback is not decoration. It is what makes the freeze a fact rather
+/// than an intention: the table must come back owned by the lookup-table
+/// program, non-executable, with NO authority, not deactivating, activated
+/// strictly before the observation slot, and holding exactly the address list
+/// this function planned.
 pub(crate) fn publish_routing_table(
-    rpc: &mut Rpc,
-    payer: &Keypair,
-    label: &str,
-    instructions: &[Instruction],
-    transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(Observation, Vec<ObservedAccount>)> {
-    let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions)?;
-    let recent_slot = rpc.finalized_slot()?;
-    let plan =
-        build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
-            .map_err(|error| Error::new(format!("{label} routing table plan: {error:?}")))?;
-    transactions.push(rpc.send(
-        &format!("create {label} routing address lookup table"),
-        std::slice::from_ref(&plan.create),
-        payer,
-    )?);
-    for (index, extension) in plan.extensions.iter().enumerate() {
-        transactions.push(rpc.send(
-            &format!("extend {label} routing table page {index}"),
-            std::slice::from_ref(extension),
-            payer,
-        )?);
-    }
-    let extended_slot = transactions
-        .last()
-        .map(|transaction| transaction.slot)
-        .ok_or_else(|| Error::new("routing table publication omitted a finalized slot"))?;
-    // A table is only usable strictly after the slot that last extended it.
-    let minimum_slot = extended_slot
-        .checked_add(1)
-        .ok_or_else(|| Error::new("routing table slot overflow"))?;
-    await_finalized_slot(rpc, minimum_slot)?;
-    let (observation, tables) =
-        rpc.finalized_observed_accounts(&[plan.lookup_table], minimum_slot)?;
-    Ok((observation, tables))
-}
-
-fn publish_frozen_founding_routing_table_v1(
     rpc: &mut Rpc,
     payer: &Keypair,
     label: &str,
@@ -3992,6 +3984,10 @@ fn publish_frozen_founding_routing_table_v1(
             payer,
         )?);
     }
+    // Freezing AFTER the last extension is the whole ordering constraint: the
+    // plan is one complete extension sequence, and nothing in this tree appends
+    // to one of these tables later. A stage that needed to would have to freeze
+    // after its own last append instead, and say so here.
     transactions.push(rpc.send(
         &format!("freeze {label} routing table after its one complete extension plan"),
         std::slice::from_ref(&build_lookup_table_freeze(
@@ -4004,6 +4000,7 @@ fn publish_frozen_founding_routing_table_v1(
         .last()
         .map(|transaction| transaction.slot)
         .ok_or_else(|| Error::new("frozen routing publication omitted a finalized slot"))?;
+    // A table is only usable strictly after the slot that last extended it.
     let minimum_slot = frozen_slot
         .checked_add(1)
         .ok_or_else(|| Error::new("frozen routing activation slot overflow"))?;
@@ -4022,9 +4019,9 @@ fn publish_frozen_founding_routing_table_v1(
         || decoded.meta.last_extended_slot >= observation.slot
         || decoded.addresses.as_ref() != plan.addresses.as_slice()
     {
-        return Err(Error::new(
-            "founding routing table was not exact, frozen, active, and activated",
-        ));
+        return Err(Error::new(format!(
+            "{label} routing table was not exact, frozen, active, and activated"
+        )));
     }
     Ok((observation, tables))
 }
@@ -11214,7 +11211,7 @@ fn execute_generic_market_founding(
             .collect(),
         data: Vec::new(),
     };
-    let (routing, tables) = publish_frozen_founding_routing_table_v1(
+    let (routing, tables) = publish_routing_table(
         rpc,
         payer,
         "DCLTGMF3",
@@ -11587,7 +11584,7 @@ fn execute_split_market_founding(
     };
     prestate_intact(rpc, "the split founding prestate")?;
 
-    let (routing1, tables1) = publish_frozen_founding_routing_table_v1(
+    let (routing1, tables1) = publish_routing_table(
         rpc,
         payer,
         "DCLTGFP1",
@@ -15547,6 +15544,43 @@ mod tests {
                  weight and dropping it is not free"
             );
         }
+    }
+
+    /// What freezing a routing table costs a market, derived rather than typed.
+    ///
+    /// Freezing adds no rent. A lookup table is rent-exempt for as long as it
+    /// exists either way; what freezing removes is the ability to CLOSE it and
+    /// take the rent back. So the price is the whole table's rent-exempt
+    /// minimum, and it is a price only to the extent that anyone would have
+    /// reclaimed it. Nobody was: `plan_lookup_table_retirement_v1` exists in the
+    /// operator and this tree has no caller for it, so before this change the
+    /// rent was paid forever on a table that merely retained the power to be
+    /// rewritten.
+    ///
+    /// Priced at the widest routed founding frame, DCLTGMF3's 55 addresses,
+    /// which the neighbouring extent test pins.
+    #[test]
+    fn a_frozen_routing_table_costs_one_rent_exempt_minimum_per_market() {
+        let rent = solana_program::rent::Rent::default();
+        let table_of = |addresses: usize| {
+            rent.minimum_balance(LOOKUP_TABLE_META_BYTES_V1 + addresses.saturating_mul(32))
+        };
+
+        // One table at the widest founding width: 0.01353024 SOL.
+        assert_eq!(table_of(55), 13_530_240);
+
+        // Eleven, which is what a founding run publishes through this function
+        // after the two builders became one: 0.14883264 SOL, forfeited per
+        // market rather than per run.
+        assert_eq!(table_of(55).saturating_mul(11), 148_832_640);
+
+        // And the shape of it, so a narrower frame prices itself: the entry cost
+        // is linear and the base is one account's overhead plus the table meta.
+        assert_eq!(
+            table_of(56).saturating_sub(table_of(55)),
+            222_720,
+            "one address is 32 bytes of rent-exempt table"
+        );
     }
 
     /// What one dropped table entry stops costing, derived rather than typed.
