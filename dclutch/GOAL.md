@@ -2755,3 +2755,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   wrong layer, deleted as a second name). Unit 5 (the hits==2 layer, 894 items, clusters first) → **`ae0b9b375646fb099`**.
 - Stopped the closed V0 lane and the superseded first General lane (both were still registered as running).
 - Cuts: `815bea319`.
+
+### Lane map delta — 2026-09-02 05:05
+- REDEMPTION `a07bc54d2e4753bc9` closed at ~795k → WEB **`afb43355b9428a30c`**. C-12 closed on the derivation side
+  (`eb2c6e99` phase zero, `c0bd9f53` ATA default, `84bc6026` admission path, `d8b1f30f` resolved-market live test proven down
+  to the chain's refusal on the OPEN market). **Finding: browser redemption has never worked** —
+  `walletTerminalPayoutV3.ts:967` compares a deployment field that never existed, so every payout throws; it hid in the
+  "14 type errors, none mine". Fix known (decode the activation cache through its owner); it reds two fixtures that only ever
+  passed a length check. Successor: that fix + honest fixtures, the other 12 convicted errors (incl. the SDK's missing
+  `sendRawTransaction`), the a11y 223, then the cohort-12 resolved-market run.
+- Cuts: `8009a825c`, `d00396b4d`.
