@@ -2733,3 +2733,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Core Markets; the admissions landed on the right one; both dated records corrected by addendum. `41005b27`: **67 of 305**
   refusal codes observed firing, derived from 21 campaigns' bindings (was hand-carried as 8 of 314). docs/reference green.
 - Cuts: `100dfaf49`, `6eec81e5d`, `8fd18304b`, `2f32a838b`.
+
+### Lane map delta — 2026-09-02 04:15
+- STRUCTURED `aa481a3dcafc5b3f2` handed off at ~835k tokens → **`ae1559fc2d9501927`**. Landed: the host-side vault mirror
+  deleted after the chain proved it (`d5a9fe9e`); the operator builds the Hot terminal request; the wall is ONE account of
+  artifact geometry (`RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3` 49 vs frame spec 50, typed in five places → one author,
+  defect recorded); census 143 → 24 (`f4feee8c`: 70 rows were another campaign's evidence folded in). Successor: re-derive the
+  per-index tables from the spec (49→50) so redeem→retire executes; Trading into the campaign's `programs.json`; then K=5.
+- V0 `a7d3265e9f331e145` **closed** (13 commits): frame count **zero** across twelve builds at `6a139c63`; Dealer Hot rows
+  measured (`ac24f70c`): all fit a v0 packet, **selector 1 needs 70 unique locks of 64** → Dealer's next unit after the CU.
+  Relay append and retirement chain are data-bound (no third lever). Frozen-table proof comes from cohort-12's founding.
+- WITNESS `a42033e11f655c7c5` **closed** at a clean line (`ac6d325d`: genref `--allow-dirty` has one author + a 9-assertion
+  test). RIP `cbb1ebca`: a claims receipt commits to the validated construction, not a summary.
+- Active: DIRECT `a8931c4eecc29c8fb`, GENERAL `a39412e2663ca5f8d`, DEALER `a929bd24b931c8297`, EMISSION `addb8204ef3d72bb0`,
+  STRUCTURED `ae1559fc2d9501927`, REDEMPTION `a07bc54d2e4753bc9`, RIP `a4208061e68425b0d`, POPULATION `ad6d48cc39f881e8e`.
+- Cuts: `4b029ac53`, `795dc7961`.
