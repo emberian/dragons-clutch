@@ -117,8 +117,9 @@ use dclutch_representation_composition_v3_kernel::{
 };
 use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
 use dclutch_token_svm::{
-    ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_SUFFIX,
-    PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount,
+    ACCOUNT_BYTES, CollateralAdapterReleaseV1, IMMUTABLE_OWNER_ACCOUNT_BYTES,
+    IMMUTABLE_OWNER_ACCOUNT_SUFFIX, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID,
+    TokenAccount,
 };
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
@@ -3170,6 +3171,49 @@ fn fixture_with_real_trading_role(terminal: TerminalV1) -> (ProgramTest, Fixture
         ReceiptMintRoles::Both,
         ProductBasisProfileV1::Categorical,
         Some(trading_artifact()),
+        CollateralAdapterSelectionV1::Cohort13ZeroExtension,
+    )
+}
+
+/// Which collateral adapter release this fixture's Realm is founded under.
+///
+/// A realm record on chain stores the SHA-256 of a `CollateralAdapterReleaseV1`
+/// preimage as `collateral_adapter_release_id`, and Custody selects a profile by
+/// matching it. That id is therefore not a fixture detail: it is the whole
+/// difference between a market that can pay a wallet its own associated token
+/// account and one that cannot, and it is fixed for the life of the market at
+/// founding. Both arms are exercised in this file, on the same real ELFs, with
+/// the same 170-byte destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CollateralAdapterSelectionV1 {
+    /// `228c14f9...` -- Token-2022 at exact base widths. Cohort-13 founded here.
+    Cohort13ZeroExtension,
+    /// `430369ce...` -- the same interface, admitting the ATA program's
+    /// `ImmutableOwner` on transfer participants. Cohort-14 founds here.
+    Cohort14ImmutableOwner,
+}
+
+impl CollateralAdapterSelectionV1 {
+    fn release(self) -> CollateralAdapterReleaseV1 {
+        match self {
+            Self::Cohort13ZeroExtension => {
+                CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer()
+            }
+            Self::Cohort14ImmutableOwner => {
+                CollateralAdapterReleaseV1::token_2022_immutable_owner_exact_transfer()
+            }
+        }
+    }
+}
+
+/// The same resolved real-Trading fixture, founded under cohort-14's release.
+fn fixture_on_the_immutable_owner_release(terminal: TerminalV1) -> (ProgramTest, Fixture) {
+    fixture_with_basis_and_trading(
+        terminal,
+        ReceiptMintRoles::Both,
+        ProductBasisProfileV1::Categorical,
+        Some(trading_artifact()),
+        CollateralAdapterSelectionV1::Cohort14ImmutableOwner,
     )
 }
 
@@ -3178,7 +3222,13 @@ fn fixture_with_basis(
     receipt_roles: ReceiptMintRoles,
     basis_profile: ProductBasisProfileV1,
 ) -> (ProgramTest, Fixture) {
-    fixture_with_basis_and_trading(terminal, receipt_roles, basis_profile, None)
+    fixture_with_basis_and_trading(
+        terminal,
+        receipt_roles,
+        basis_profile,
+        None,
+        CollateralAdapterSelectionV1::Cohort13ZeroExtension,
+    )
 }
 
 fn fixture_with_basis_and_trading(
@@ -3186,6 +3236,7 @@ fn fixture_with_basis_and_trading(
     receipt_roles: ReceiptMintRoles,
     basis_profile: ProductBasisProfileV1,
     real_trading_elf: Option<Vec<u8>>,
+    collateral_adapter: CollateralAdapterSelectionV1,
 ) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
@@ -3289,10 +3340,11 @@ fn fixture_with_basis_and_trading(
     } else {
         [0x73; 32]
     });
-    let adapter = PRODUCTION_ADAPTER_RELEASES
-        .get(1)
-        .copied()
-        .expect("Token-2022 production adapter");
+    let adapter = collateral_adapter.release();
+    assert!(
+        PRODUCTION_ADAPTER_RELEASES.contains(&adapter),
+        "a fixture Realm must select a release the programs can find in the catalog",
+    );
     let realm = RealmV1::new(RealmV1Input {
         token_program: TOKEN_2022_PROGRAM_ID,
         collateral_mint: collateral_mint.to_bytes(),
@@ -5377,6 +5429,7 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
         ReceiptMintRoles::Both,
         ProductBasisProfileV1::Categorical,
         Some(trading),
+        CollateralAdapterSelectionV1::Cohort13ZeroExtension,
     );
     let mut context = test.start_with_context().await;
 
@@ -5680,6 +5733,7 @@ async fn current_common_hot_terminal_redemption_executes_through_real_elves() {
         ReceiptMintRoles::Both,
         ProductBasisProfileV1::Categorical,
         Some(trading),
+        CollateralAdapterSelectionV1::Cohort13ZeroExtension,
     );
     let mut context = test.start_with_context().await;
 
@@ -8272,7 +8326,11 @@ async fn a_conventional_170_byte_associated_token_account_is_refused_by_custody_
     // account: the same mint, owner and balance, five bytes longer.
     let base = observed(&mut context, terminal.recipient).await;
     let mut suffixed = base.data.clone();
-    assert_eq!(suffixed.len(), ACCOUNT_BYTES, "the fixture plants a base account");
+    assert_eq!(
+        suffixed.len(),
+        ACCOUNT_BYTES,
+        "the fixture plants a base account"
+    );
     suffixed.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
     assert_eq!(suffixed.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
     context.set_account(
@@ -8329,7 +8387,9 @@ async fn a_conventional_170_byte_associated_token_account_is_refused_by_custody_
     let token_state = dclutch_refusal_registry::CUSTODY_REFUSAL_BASE + 6;
     assert!(
         result.logs.iter().any(|log| log
-            == &format!("Program {CUSTODY_PROGRAM_ID} failed: custom program error: {token_state:#x}")),
+            == &format!(
+                "Program {CUSTODY_PROGRAM_ID} failed: custom program error: {token_state:#x}"
+            )),
         "the refusal is Custody's TokenState at the destination: {:#?}",
         result.logs,
     );
@@ -8359,6 +8419,166 @@ async fn a_conventional_170_byte_associated_token_account_is_refused_by_custody_
     eprintln!(
         "ATA-shaped wallet payout: recipient={} bytes refusal={token_state:#x} CU={} wire={}",
         after.recipient.as_ref().expect("recipient").data.len(),
+        result.compute_units,
+        result.wire_bytes,
+    );
+}
+
+/// THE SAME 170-BYTE DESTINATION, ON A MARKET FOUNDED UNDER THE THIRD RELEASE:
+/// it commits, and the collateral goes to the account a browser derives.
+///
+/// This is the other half of
+/// `a_conventional_170_byte_associated_token_account_is_refused_by_custody_alone`,
+/// and the two are a matched pair: same real Claims, Custody, Core, Registry,
+/// Resolution and Token-2022 ELFs, same frame, same host builder, same planted
+/// account bytes, and ONE difference -- the 32 bytes the Realm record stores as
+/// `collateral_adapter_release_id`.
+///
+/// WHY THE REALM AND NOT THE CODE. Custody reaches
+/// `ExactTransferProfileV1::check_transfer_account` through
+/// `collateral_profile`, which walks `PRODUCTION_ADAPTER_RELEASES` and returns
+/// the profile of whichever entry hashes to the realm's stored id. The
+/// `ExtensionStoragePolicy` byte is INSIDE that preimage. So a market's ability
+/// to pay an ordinary wallet is fixed at founding, in a released identity, and
+/// cannot be granted afterwards by any commit -- which is why cohort-13's
+/// auxiliary 165-byte account was not a workaround for a defect a later tree
+/// repairs. It was the only destination that cohort could ever pay.
+///
+/// Cohort-14 founds under `430369ce...` and this test is the measurement that
+/// says what that buys, on real bytes rather than in a design note.
+#[tokio::test]
+async fn a_conventional_170_byte_associated_token_account_commits_under_the_third_adapter_release()
+{
+    let (test, fixture) = fixture_on_the_immutable_owner_release(TerminalV1::Provider);
+    let mut context = test.start_with_context().await;
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+
+    // The SAME planting as the refusal test, byte for byte: the ATA program's
+    // own output shape over the fixture's base account.
+    let base = observed(&mut context, terminal.recipient).await;
+    let mut suffixed = base.data.clone();
+    assert_eq!(
+        suffixed.len(),
+        ACCOUNT_BYTES,
+        "the fixture plants a base account"
+    );
+    suffixed.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+    assert_eq!(suffixed.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
+    context.set_account(
+        &terminal.recipient,
+        &AccountSharedData::from(Account {
+            lamports: Rent::default().minimum_balance(suffixed.len()).max(1),
+            data: suffixed,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        }),
+    );
+    let planted = observed(&mut context, terminal.recipient).await;
+    assert_eq!(planted.data.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
+    assert_eq!(
+        TokenAccount::parse(&planted.data),
+        Err(dclutch_token_svm::Error::InvalidLength),
+        "the base parser still refuses it; nothing was relaxed",
+    );
+
+    // THE REALM IS THE ONLY DIFFERENCE, and it is read back off the account the
+    // programs will authenticate rather than taken from the fixture builder.
+    let realm = RealmV1::decode(&observed(&mut context, terminal.realm_raw).await.data)
+        .expect("the finalized Realm record");
+    let founded: [u8; 32] =
+        hash(&CollateralAdapterReleaseV1::token_2022_immutable_owner_exact_transfer().to_bytes())
+            .to_bytes();
+    let cohort_13: [u8; 32] =
+        hash(&CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer().to_bytes())
+            .to_bytes();
+    assert_eq!(realm.collateral_adapter_release_id(), &founded);
+    assert_ne!(
+        realm.collateral_adapter_release_id(),
+        &cohort_13,
+        "if these were equal this test would be the refusal test with a different name",
+    );
+
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: ATA-shaped wallet payout on the third release",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims rational-representation-v2: a 170-byte associated token account is paid",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("ATA payout refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(
+        result.accepted,
+        "the conventional destination must be payable under the release that admits it",
+    );
+    assert!(
+        result.wire_bytes <= PACKET_LIMIT,
+        "the ATA-shaped payout must still fit a packet: {} bytes",
+        result.wire_bytes,
+    );
+
+    // THE COLLATERAL MOVED, and it moved into the 170-byte account.
+    let after = snapshot(&mut context, &fixture).await;
+    let paid = ACTOR_CLAIMS[WINNERS];
+    let recipient_after = after.recipient.as_ref().expect("recipient");
+    assert_eq!(
+        recipient_after.data.len(),
+        IMMUTABLE_OWNER_ACCOUNT_BYTES,
+        "the transfer did not truncate the extension storage it was paid into",
+    );
+    assert_eq!(
+        &recipient_after.data[ACCOUNT_BYTES..],
+        IMMUTABLE_OWNER_ACCOUNT_SUFFIX,
+        "and the suffix survived byte for byte",
+    );
+    assert_eq!(
+        TokenAccount::parse_base_or_immutable_owner(&recipient_after.data)
+            .expect("the ATA decodes after the payout")
+            .amount,
+        INITIAL_RECIPIENT_ATOMS + paid,
+    );
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard")),
+        INITIAL_HOARD_ATOMS - paid,
+    );
+    // Claims did its half too: the winning coordinate is burned and the
+    // aggregate falls by the same atoms, exactly as on a 165-byte destination.
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, WINNER),
+        0
+    );
+    assert_eq!(
+        lbv2_market_supply(&after.aggregate.data, WINNER),
+        aggregate_claims()[WINNERS] - paid,
+    );
+    assert_eq!(
+        lbv2_position_quantity(&before.actor_position.data, WINNER),
+        paid,
+    );
+    assert_eq!(
+        custody_replay_revision(after.custody_replay.as_ref().expect("Claims-role replay")),
+        CUSTODY_EXPECTED_REVISION + 1,
+    );
+    eprintln!(
+        "ATA-shaped wallet payout COMMITS: recipient={} bytes release={} CU={} wire={}",
+        recipient_after.data.len(),
+        founded
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
         result.compute_units,
         result.wire_bytes,
     );

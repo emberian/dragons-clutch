@@ -85,7 +85,30 @@ use dclutch_transition_vm::v3::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::FractionalClaimsAccountRuleV1;
+/// One exact Claims child-frame account rule supplied by the finalized
+/// physical FrameSpec compiler, never by a transaction caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalClaimsAccountRuleV1 {
+    /// Whether Claims requires signer privilege.
+    pub signer: bool,
+    /// Whether Claims requires writable privilege.
+    pub writable: bool,
+    /// Whether this coordinate must be executable.
+    pub executable: bool,
+    /// Exact observed data width selected by the physical release.
+    ///
+    /// Meaningful only when `opaque_data` is false. A zero width then means the
+    /// canonical vacant account that Claims requires to be empty.
+    pub data_length: u32,
+    /// Whether the release withholds this coordinate's bytes from the profile.
+    ///
+    /// Claims frames contain coordinates whose byte width no release compiler
+    /// can know: wallets, Mints, Token accounts, sysvars, and deployment-sized
+    /// ProgramData. Setting this emits `AuthenticatedOpaqueReadonlyData`, which
+    /// authenticates key, owner, lamports, and privileges while granting the
+    /// profile no projection or data effect over the account.
+    pub opaque_data: bool,
+}
 
 /// Logical accounts injected by common Hot before the Claims child frame.
 pub const FRACTIONAL_HOT_INJECTED_ACCOUNT_COUNT_V4: u16 = 5;

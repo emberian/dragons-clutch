@@ -12,6 +12,7 @@ mod capability_seal_close;
 mod chaos_fault;
 mod claims_custody_replay;
 mod cluster;
+mod collateral_release;
 mod direct_capability_activation;
 mod direct_close_maker;
 mod direct_fee_settlement;

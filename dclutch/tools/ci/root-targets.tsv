@@ -43,15 +43,18 @@
 # written: six `dclutch-fractional-claim-operator` targets that were ONE live
 # defect -- the V1 producer granted no effect permissions at all, so Lifecycle's
 # `Close` arm refused every bundle it built -- and `root_lifecycle_projection_v3`,
-# whose fixture frame a517d27c made stale. Both are fixed and their rows are
-# `run`.
+# whose fixture frame a517d27c made stale. `root_lifecycle_projection_v3` was
+# fixed and its row is `run`; it was re-measured on the tree that fixed it and
+# more than doubled its recorded time, 0.67s to 1.47s, which is the fix rather
+# than the load -- a red target stops at its first assertion and a green one
+# projects all fifteen actions.
 #
-# THOSE SEVEN ROWS were re-measured on the tree that fixed them, minimum of
-# EIGHT rounds rather than three because three other lanes were building and the
-# spread showed it: `chain_artifacts` read 0.85s and 11.59s inside one window.
-# `root_lifecycle_projection_v3` more than doubled its recorded time, 0.67s to
-# 1.47s, and that is the fix rather than the load -- a red target stops at its
-# first assertion and a green one projects all fifteen actions.
+# THE SIX FRACTIONAL ROWS ARE GONE BECAUSE THEIR SUBJECT IS. 3308d380a repaired
+# the V1 producer; FRACTIONAL-V1 then read what it was a producer FOR and found
+# the superseded generation of one family, not a second family. `actions` went
+# with them -- it drove `plan_fractional_action_v1`, the same generation, and was
+# not quarantined only because it never touched the builder. Seven rows, 4.85s
+# of the budget, removed with 6,428 lines and zero ELF bytes.
 #
 # `lake` and ELF targets are NOT in this file. The census classifies those from
 # source text and the tier prints its answer; a copy here would be a second
@@ -75,16 +78,9 @@ run	dclutch-fractional-claim-kernel	exposure_v2	0.44
 run	dclutch-fractional-claim-kernel	fractional_claims	0.46	
 run	dclutch-fractional-claim-kernel	projection_encode	0.40	
 run	dclutch-fractional-claim-kernel	terms_encode	0.43	
-run	dclutch-fractional-claim-operator	actions	1.14	
-run	dclutch-fractional-claim-operator	artifacts	0.64	
-run	dclutch-fractional-claim-operator	chain_artifacts	0.85	
-run	dclutch-fractional-claim-operator	claims	0.82	
-run	dclutch-fractional-claim-operator	composition	0.97	
 run	dclutch-fractional-claim-operator	exposure_action_v2	0.62	
-run	dclutch-fractional-claim-operator	exposure_v3	0.68	
 run	dclutch-fractional-claim-operator	hot_v2	0.83	
 run	dclutch-fractional-claim-operator	selected_release_v4	0.89	
-run	dclutch-fractional-claim-operator	token2022	0.86	
 run	dclutch-fractional-claim-operator	topology_v3	0.68	
 run	dclutch-general-adapter-contract	root_lifecycle_projection_v3	1.47	
 run	dclutch-general-adapter-contract	selection_decision_corpus	0.47	

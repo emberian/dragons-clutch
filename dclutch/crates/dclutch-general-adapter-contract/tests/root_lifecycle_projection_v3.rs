@@ -52,7 +52,9 @@ use dclutch_general_config_contract::{
     GENERAL_ROOT_BYTES_V2, GeneralLifecycleV2, GeneralRootV2, root::general_root_creation_tail_v2,
 };
 use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
-use dclutch_transition_vm::v3::{ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic};
+use dclutch_transition_vm::v3::{
+    Error as TransitionErrorV3, ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
+};
 
 /// Release-selected external widths; none of them can move an account count.
 const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
@@ -671,9 +673,16 @@ fn every_action_refuses_a_projected_retiring_or_retired_root() {
             let bytes = transition_program(action);
             let program = ProgramV3::decode(&bytes).expect("transition decodes");
             let projected = project(action, &root);
-            assert!(
-                fold(program, &projected).is_err(),
-                "{action:?} accepted a {lifecycle:?} capability root",
+            // Not `is_err()`: every other `TransitionErrorV3` here would be a
+            // prelude or geometry failure reached BEFORE the conjunct, which is
+            // exactly the reading this test exists to rule out. `CheckFailed`
+            // is "a checked admission relation evaluated to false", so naming it
+            // is what makes the refusal the lifecycle conjunct's and no other's.
+            assert_eq!(
+                fold(program, &projected),
+                Err(TransitionErrorV3::CheckFailed),
+                "{action:?} did not refuse a {lifecycle:?} capability root at the \
+                 lifecycle conjunct",
             );
 
             let active = project(action, &active_root);
@@ -691,7 +700,7 @@ fn every_action_refuses_a_projected_retiring_or_retired_root() {
 }
 
 /// Run one emitted transition over a projected bank exactly as the runtime does.
-fn fold(program: ProgramV3<'_>, scalars: &[u64]) -> Result<(), ()> {
+fn fold(program: ProgramV3<'_>, scalars: &[u64]) -> Result<(), TransitionErrorV3> {
     let identities = vec![[0_u8; 32]; identity_width()];
     let mut scalar_scratch = vec![0_u64; scalars.len()];
     let mut identity_scratch = vec![[0_u8; 32]; identity_width()];
@@ -713,5 +722,4 @@ fn fold(program: ProgramV3<'_>, scalars: &[u64]) -> Result<(), ()> {
             identities: &mut identity_output,
         },
     )
-    .map_err(|_| ())
 }

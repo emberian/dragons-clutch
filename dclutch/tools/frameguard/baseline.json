@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "84e37949feabfc1539fe9f14f5b192dfb1d6155a",
+  "commit": "d218b963db885a3e82a4c8389793bd113ae5ab25",
   "link_count": 12,
   "links": [
     {
@@ -6692,7 +6692,7 @@
         },
         {
           "frames_bytes": [
-            320
+            384
           ],
           "symbol": "_ZN19dclutch_trading_sbf21direct_token_setup_v117authenticate_mint17h<hash>E"
         },

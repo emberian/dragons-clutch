@@ -43,7 +43,18 @@ use spl_token_2022_interface::{
     instruction as token_instruction,
 };
 
-use crate::{Error, FractionalTokenAccountSnapshotV1, Result};
+use crate::{Error, Result};
+
+/// One chain-observed Token account or Mint with its exact owning program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalTokenAccountSnapshotV1<'a> {
+    /// Exact account key.
+    pub key: Pubkey,
+    /// Current SVM account owner; must be the selected Token-2022 program.
+    pub program_owner: Pubkey,
+    /// Exact current account data.
+    pub data: &'a [u8],
+}
 
 /// Finalized-record evidence for one terms-selected TokenBehaviorV2 record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

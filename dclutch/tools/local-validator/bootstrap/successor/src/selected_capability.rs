@@ -372,13 +372,13 @@ pub(crate) fn market_realm_identity_v1(
     use dclutch_realm_contract::{
         FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
     };
-    use dclutch_token_svm::{CollateralAdapterReleaseV1, TOKEN_2022_PROGRAM_ID};
+    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
-    let adapter = CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer();
     let realm = RealmV1::new(RealmV1Input {
         token_program: TOKEN_2022_PROGRAM_ID,
         collateral_mint: collateral_mint.to_bytes(),
-        collateral_adapter_release_id: Sha256::digest(adapter.to_bytes()).into(),
+        collateral_adapter_release_id:
+            crate::collateral_release::founded_collateral_adapter_release_id_v1(),
         mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
         freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
     })

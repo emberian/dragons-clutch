@@ -52,8 +52,8 @@ use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1;
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_token_svm::{
-    ACCOUNT_BYTES, AccountState as TokenAccountState, COption, CollateralAdapterReleaseV1, Mint,
-    TOKEN_2022_PROGRAM_ID, TokenAccount,
+    ACCOUNT_BYTES, AccountState as TokenAccountState, COption, Mint, TOKEN_2022_PROGRAM_ID,
+    TokenAccount,
     instruction::{InstructionSpec, approve_checked, initialize_account3, transfer_checked},
 };
 use dclutch_versioned_message_operator::compile_v0_message_with_optional_tables;
@@ -851,12 +851,20 @@ fn build_collateral_report_v1(
     .0;
     let realm = RealmV1::decode(&realm_account.data)
         .map_err(|error| Error::new(format!("Realm: {error:?}")))?;
-    let expected_adapter_release: [u8; 32] = Sha256::digest(
-        CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer().to_bytes(),
-    )
-    .into();
+    // THE REALM'S OWN RELEASE, ADMITTED -- not one release pinned by name.
+    // Cohort-13 founded under the Token-2022 zero-extension release and
+    // cohort-14 founds under the ImmutableOwner one; both are production
+    // releases this tree implements, and the programs that read this realm
+    // (Custody's `collateral_profile`, Core's `authenticate_vault_poststate`,
+    // Trading's `direct_token_setup_v1`) all walk the catalog rather than
+    // pinning an entry. Pinning one here would have refused every admission
+    // against a cohort-14 market with a message about the Realm's profile --
+    // a true sentence about the wrong conjunct.
+    let expected_adapter_release = *realm.collateral_adapter_release_id();
     if realm.token_program() != &TOKEN_2022_PROGRAM_ID
-        || realm.collateral_adapter_release_id() != &expected_adapter_release
+        || !crate::collateral_release::is_admitted_token_2022_collateral_release_v1(
+            &expected_adapter_release,
+        )
         || realm.mint_authority_policy() != MintAuthorityPolicy::RequireAbsent
         || realm.freeze_authority_policy() != FreezeAuthorityPolicy::RequireAbsent
     {
@@ -1751,13 +1759,14 @@ fn authenticate_collateral_chain_join_v1(intent: &CollateralIntentV1) -> Result<
     }
     let realm = RealmV1::decode(&realm_bytes)
         .map_err(|error| Error::new(format!("durable collateral Realm: {error:?}")))?;
-    let expected_adapter_release: [u8; 32] = Sha256::digest(
-        CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer().to_bytes(),
-    )
-    .into();
+    // The realm names its own release; the intent must name the SAME one and it
+    // must be one this tree implements. Two conjuncts, not one pin.
+    let expected_adapter_release = *realm.collateral_adapter_release_id();
     if realm.token_program() != &TOKEN_2022_PROGRAM_ID
         || realm.collateral_mint() != &pubkey(&intent.mint)?.to_bytes()
-        || realm.collateral_adapter_release_id() != &expected_adapter_release
+        || !crate::collateral_release::is_admitted_token_2022_collateral_release_v1(
+            &expected_adapter_release,
+        )
         || intent.collateral_adapter_release != hex(&expected_adapter_release)
         || realm.mint_authority_policy() != MintAuthorityPolicy::RequireAbsent
         || realm.freeze_authority_policy() != FreezeAuthorityPolicy::RequireAbsent
@@ -1867,10 +1876,14 @@ fn authenticate_collateral_token_byte_plan(intent: &CollateralIntentV1) -> Resul
     let participant = pubkey(&intent.participant)?;
     let custody_program = pubkey(&intent.custody_program)?;
     let custody_authority = pubkey(&intent.custody_authority)?;
-    let expected_adapter_release: [u8; 32] = Sha256::digest(
-        CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer().to_bytes(),
-    )
-    .into();
+    // This function holds no Realm account, only the intent's own declaration --
+    // which `authenticate_durable_admission_join` above has already pinned
+    // byte-exact against the live Realm. So the question left here is whether
+    // the declared release is one this tree implements at all.
+    let declared_adapter_release = decode_hex32(
+        &intent.collateral_adapter_release,
+        "collateral adapter release",
+    )?;
     let expected_custody_authority = Pubkey::find_program_address(
         &CustodyAuthoritySeedsV1::new(market.to_bytes(), release_set).as_slices(),
         &custody_program,
@@ -1881,7 +1894,9 @@ fn authenticate_collateral_token_byte_plan(intent: &CollateralIntentV1) -> Resul
         Pubkey::create_with_seed(&participant, &participant_seed, &token_program_key)
             .map_err(|error| Error::new(format!("participant token derivation: {error}")))?;
     if token_program_key.to_bytes() != TOKEN_2022_PROGRAM_ID
-        || intent.collateral_adapter_release != hex(&expected_adapter_release)
+        || !crate::collateral_release::is_admitted_token_2022_collateral_release_v1(
+            &declared_adapter_release,
+        )
         || custody_authority != expected_custody_authority
         || intent.participant_token_seed != participant_seed
         || pubkey(&intent.participant_token_account)? != participant_account
@@ -6729,8 +6744,13 @@ mod tests {
         mint_pre[44] = 9;
         mint_pre[45] = 1;
         Mint::parse(&mint_pre).expect("canonical test Mint");
+        // COHORT-13's OWN RELEASE, kept in the fixture on purpose. This
+        // admission path used to pin exactly this id; it now admits any
+        // production Token-2022 release, and a fixture that moved to the new
+        // one would stop proving that the old one is still readable.
         let adapter_release: [u8; 32] = Sha256::digest(
-            CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer().to_bytes(),
+            dclutch_token_svm::CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer()
+                .to_bytes(),
         )
         .into();
         let realm_bytes = RealmV1::new(RealmV1Input {

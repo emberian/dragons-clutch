@@ -1054,6 +1054,55 @@
       "program": "",
       "outcome": "executed",
       "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: ATA-shaped wallet payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: the Address Lookup Table the 35-account terminal frame needs. Bound per label family, this file's convention."
+    },
+    {
+      "label": "claims rational-representation-v2: ATA-shaped wallet payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: a 170-byte associated token account reaches Custody",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::TokenState",
+      "note": "THE WALL, on a Realm founded under the Token-2022 ZERO-EXTENSION adapter release. The destination is the account the Associated Token Account program actually produces -- 165 base bytes, the account-type discriminant, and one empty ImmutableOwner TLV entry: exactly 170. Claims admits it (rational_terminal_v3 parses with parse_base_or_immutable_owner) and the payout reaches CUSTODY, which selects ExactTransferProfileV1 by matching the Realm's stored collateral_adapter_release_id and gets the exact-base-widths profile. Refused TokenState (0x6006) at 363,236 CU, 1,050 wire bytes, with the Hoard, the destination balance, the Position and the Custody cursor all asserted unmoved. This is not a defect a commit repairs: the policy byte is inside the released preimage, so a market founded here can never pay a wallet's own ATA."
+    },
+    {
+      "label": "claims rational-representation-v2: ATA-shaped wallet payout on the third release: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the ATA-shaped family's create row."
+    },
+    {
+      "label": "claims rational-representation-v2: ATA-shaped wallet payout on the third release: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: a 170-byte associated token account is paid",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "THE MATCHED PAIR of the row above, and the ONE difference between them is the 32 bytes the Realm record stores as collateral_adapter_release_id: 430369ce... instead of 228c14f9..., the third CollateralAdapterReleaseV1 whose ExtensionStoragePolicy is BaseWidthsOrImmutableOwnerAccounts. Same real Claims, Custody, Core, Registry, Resolution and Token-2022 ELFs, same frame, same host builder, same planted destination bytes. 369,366 CU, 1,050 wire bytes -- 6,130 CU more than the refusal, which is what reaching the CPI and the poststate join costs. The Hoard drains to the wallet's own associated token account, the account is still 170 bytes afterwards with its ImmutableOwner suffix byte-identical, the winning coordinate is burned and the aggregate falls by the same atoms. This is the row cohort-14 founds for."
     }
   ]
 }

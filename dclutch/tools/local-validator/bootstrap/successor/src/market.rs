@@ -110,8 +110,7 @@ use dclutch_source_contract::{
     WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use dclutch_token_svm::{
-    ACCOUNT_BYTES, AccountState, CollateralAdapterReleaseV1, MINT_BYTES, Mint,
-    TOKEN_2022_PROGRAM_ID, TokenAccount,
+    ACCOUNT_BYTES, AccountState, MINT_BYTES, Mint, TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use sha2::{Digest as _, Sha256};
 use solana_address_lookup_table_interface::state::AddressLookupTable;
@@ -3962,11 +3961,10 @@ fn compile_market_bodies(
             "capability manifest was noncanonical or omitted the three Resolution funding entries",
         ));
     }
-    let adapter = CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer();
     let realm = RealmV1::new(RealmV1Input {
         token_program: TOKEN_2022_PROGRAM_ID,
         collateral_mint: collateral_mint.to_bytes(),
-        collateral_adapter_release_id: Sha256::digest(adapter.to_bytes()).into(),
+        collateral_adapter_release_id: collateral_adapter_release_id(),
         mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
         freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
     })
@@ -6208,11 +6206,12 @@ fn project_found_receipt_digest_v1(
 }
 
 /// The Realm-selected collateral adapter release this campaign publishes.
+///
+/// One author, `crate::collateral_release`. A founding SELECTS the newest
+/// release; a reader ADMITS any this tree implements. Spelling a constructor
+/// here again is how the two questions get one answer.
 fn collateral_adapter_release_id() -> [u8; 32] {
-    Sha256::digest(
-        CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer().to_bytes(),
-    )
-    .into()
+    crate::collateral_release::founded_collateral_adapter_release_id_v1()
 }
 
 fn identity_of(bytes: [u8; 32]) -> Result<Identity> {
