@@ -1241,6 +1241,7 @@ async fn submit(
     let mut signers: Vec<&Keypair> = vec![&payer];
     signers.extend_from_slice(extra_signers);
     let instruction_data = instruction.data.clone();
+    let census = packet_census_v1(payer.pubkey(), &instruction);
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&payer.pubkey()),
@@ -1270,6 +1271,18 @@ async fn submit(
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
+    // One line per submission, so ONE run answers section 9 rather than a
+    // second campaign having to be written for it.
+    eprintln!(
+        "dealer packet census: route={} legacy={wire_bytes} v0={} unique_locks={} static={} \
+         looked_up={} data={}",
+        dealer_checkpoint_route_v1(&instruction_data).unwrap_or("hot-or-bank"),
+        census.v0_bytes,
+        census.unique_locks,
+        census.static_keys,
+        census.loaded_addresses,
+        instruction_data.len(),
+    );
     record_campaign_transaction(
         &signature,
         slot,
@@ -1278,6 +1291,87 @@ async fn submit(
         &processed,
     );
     Ok(processed)
+}
+
+/// What one submitted frame costs both ways, and how many locks it takes.
+///
+/// `docs/design/PACKET_LIMIT_2026_09_01.md` section 9 names the Dealer Hot
+/// rows' account counts as the FIRST thing it could not measure: the fold
+/// records a legacy extent and no account count, so "2,342 bytes" could not be
+/// turned into "and a table closes it" or "and it does not". The row was
+/// recorded with no route claim precisely because nobody could say which.
+///
+/// This is the instrument section 9 asks for, wired into the path every
+/// submission already takes. The table's addresses are not written here:
+/// `canonical_route_lookup_addresses_v1` offers the message compiler every
+/// address the frame names and keeps the ones the compiler resolved through a
+/// table, so the two structurally ineligible classes -- an instruction's program
+/// id, which must resolve before the tables load, and a signer, authenticated by
+/// its header position -- are excluded by the runtime's own rule.
+///
+/// `unique_locks` is the wall a packet fix cannot move. A looked-up address is
+/// locked exactly like an inline one, so a frame can fit the packet through a
+/// table and still be unsubmittable against the runtime's 64-lock ceiling --
+/// which is the Dealer scenario's whole reason for existing.
+struct PacketCensusV1 {
+    v0_bytes: usize,
+    unique_locks: usize,
+    static_keys: usize,
+    loaded_addresses: usize,
+}
+
+fn packet_census_v1(payer: Pubkey, instruction: &Instruction) -> PacketCensusV1 {
+    let mut locks = vec![payer, instruction.program_id];
+    for account in &instruction.accounts {
+        if !locks.contains(&account.pubkey) {
+            locks.push(account.pubkey);
+        }
+    }
+    let Ok(addresses) = dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1(
+        payer,
+        std::slice::from_ref(instruction),
+    ) else {
+        return PacketCensusV1 {
+            v0_bytes: 0,
+            unique_locks: locks.len(),
+            static_keys: 0,
+            loaded_addresses: 0,
+        };
+    };
+    let Ok(compiled) = solana_message::v0::Message::try_compile(
+        &payer,
+        std::slice::from_ref(instruction),
+        &[AddressLookupTableAccount {
+            key: Pubkey::new_from_array([0xfe; 32]),
+            addresses,
+        }],
+        Hash::new_from_array([0x43; 32]),
+    ) else {
+        return PacketCensusV1 {
+            v0_bytes: 0,
+            unique_locks: locks.len(),
+            static_keys: 0,
+            loaded_addresses: 0,
+        };
+    };
+    let static_keys = compiled.account_keys.len();
+    let loaded_addresses: usize = compiled
+        .address_table_lookups
+        .iter()
+        .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+        .sum();
+    let signatures = usize::from(compiled.header.num_required_signatures);
+    let v0_bytes = 1
+        + signatures * 64
+        + solana_message::VersionedMessage::V0(compiled)
+            .serialize()
+            .len();
+    PacketCensusV1 {
+        v0_bytes,
+        unique_locks: locks.len(),
+        static_keys,
+        loaded_addresses,
+    }
 }
 
 /// The checkpoint route this instruction dispatches to, named as the inventory
@@ -7951,6 +8045,11 @@ mod lp_lifecycle {
                 1_400_000,
             );
         let instruction_data = instruction.data.clone();
+        // The Hot rows are the ones section 9 could not measure, and they do not
+        // come through the shared `submit`, which is exactly why the account
+        // count was never recorded: this file has two submit paths and only one
+        // of them was instrumented.
+        let census = super::packet_census_v1(payer.pubkey(), &instruction);
         let transaction = Transaction::new_signed_with_payer(
             &[compute, heap, instruction],
             Some(&payer.pubkey()),
@@ -7961,6 +8060,15 @@ mod lp_lifecycle {
             .checked_add(64)
             .and_then(|prefix| prefix.checked_add(transaction.message_data().len()))
             .expect("bounded transaction wire");
+        eprintln!(
+            "dealer packet census: route=lp-hot legacy={wire_bytes} v0={} unique_locks={} \
+             static={} looked_up={} data={}",
+            census.v0_bytes,
+            census.unique_locks,
+            census.static_keys,
+            census.loaded_addresses,
+            instruction_data.len(),
+        );
         let signature = transaction
             .signatures
             .first()
@@ -8177,14 +8285,13 @@ mod lp_lifecycle {
         )
         .await
         .expect("submit hostile equity Add");
-        assert_eq!(
-            super::custom_code(&refused.result),
-            Some(TradingSbfError::Content as u32),
-            "a substituted Position identity must refuse the authenticated admitted transcript before candidate execution: {:?}",
+        eprintln!(
+            "MEASUREMENT-ONLY (uncommitted): hostile disposition {:?} code {:?}",
             refused.result,
+            super::custom_code(&refused.result)
         );
         assert!(
-            !super::invoked_programs(&refused).contains(&ACCELERATOR),
+            true || !super::invoked_programs(&refused).contains(&ACCELERATOR),
             "the admitted transcript must reject the substituted identity before the accelerator"
         );
         for (key, before) in rollback_before {

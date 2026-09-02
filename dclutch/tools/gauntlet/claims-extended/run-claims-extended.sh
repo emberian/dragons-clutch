@@ -116,10 +116,10 @@ fi
 
 # campaign group : manifest : test target : gauntlet dir : cargo-invocation flavour
 campaigns="
-affine-batch:programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml:affine_batch_v2:claims-affine-batch:manifest
-fractional-signed-delta:programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml:fractional_signed_delta:claims-fractional-signed-delta:manifest
-rational-representation-v2:dclutch-claims-sbf:rational_representation_v2_program_test:claims-rational-representation-v2:package
-rational-lifecycle:programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml:lifecycle:claims-rational-lifecycle:manifest
+affine-batch:programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml:affine_batch_v2:claims-affine-batch:manifest:
+fractional-signed-delta:programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml:fractional_signed_delta:claims-fractional-signed-delta:manifest:
+rational-representation-v2:dclutch-claims-sbf:rational_representation_v2_program_test:claims-rational-representation-v2:package:claim_check::
+rational-lifecycle:programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml:lifecycle:claims-rational-lifecycle:manifest:
 "
 
 for entry in $campaigns; do
@@ -130,7 +130,17 @@ for entry in $campaigns; do
     target="${rest%%:*}"
     rest="${rest#*:}"
     gauntlet_name="${rest%%:*}"
-    flavour="${rest#*:}"
+    rest="${rest#*:}"
+    flavour="${rest%%:*}"
+    # A CAMPAIGN FOLDS ONLY ITS OWN EVIDENCE. `rational_representation_v2_program_test`
+    # carries the `claim_check` submodule, which is a SEPARATE campaign with its
+    # own bindings directory -- and `run-claims-claim-check.sh` already knew
+    # that: it runs the same binary filtered to `claim_check::`. This row ran it
+    # unfiltered, so it folded the other campaign's transactions into this one's
+    # ledger and the census counted every one of them as an unbound label.
+    # Measured 2026-09-02: 70 of this campaign's 143 binding problems were the
+    # other campaign's rows.
+    skip="${rest#*:}"
 
     tier_dir="$gauntlet_dir/$gauntlet_name"
     evidence_dir="$work/$group-evidence"
@@ -139,10 +149,12 @@ for entry in $campaigns; do
     echo "campaign: $group ($target)"
     if [ "$flavour" = "package" ]; then
         SBF_OUT_DIR="$sbf_out" DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR="$evidence_dir" \
-            cargo test -p "$manifest_or_package" --test "$target" -- --test-threads=1
+            cargo test -p "$manifest_or_package" --test "$target" -- --test-threads=1 \
+            ${skip:+--skip "$skip"}
     else
         SBF_OUT_DIR="$sbf_out" DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR="$evidence_dir" \
-            cargo test --manifest-path "$manifest_or_package" --test "$target" -- --test-threads=1
+            cargo test --manifest-path "$manifest_or_package" --test "$target" -- --test-threads=1 \
+            ${skip:+--skip "$skip"}
     fi
 
     evidence="$work/$group.evidence.json"

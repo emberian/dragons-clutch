@@ -346,6 +346,8 @@ pub fn process_instruction(
             packet_digest,
             table_digest,
             post_resource_digest,
+            &aggregates,
+            &rows,
             &receipt_bytes,
             &market_data,
             &[&first_post, &second_post],

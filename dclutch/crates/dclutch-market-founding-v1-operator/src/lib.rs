@@ -21,7 +21,7 @@ use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecord
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
-    SeriesFoundingPermitSeedsV1, generic_founding_funding_list_id_v1,
+    SeriesFoundingPermitSeedsV1,
 };
 use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -270,24 +270,6 @@ pub fn construct_generic_market_founding_plan_v1(
         permit,
         artifact_id: selected.content_id,
     })
-}
-
-/// Derive the artifact's ordered FundingState-list commitment from addresses.
-pub fn derive_generic_funding_list_id_v1(
-    funding_states: &[Pubkey],
-) -> Result<ContentId, GenericMarketFoundingOperatorErrorV1> {
-    let mut identities = Vec::with_capacity(funding_states.len());
-    for key in funding_states {
-        identities.push(
-            Identity::new(key.to_bytes())
-                .map_err(|_| GenericMarketFoundingOperatorErrorV1::Derivation)?,
-        );
-    }
-    content(
-        generic_founding_funding_list_id_v1(&identities)
-            .map_err(|_| GenericMarketFoundingOperatorErrorV1::Derivation)?
-            .to_bytes(),
-    )
 }
 
 fn authority(

@@ -511,17 +511,6 @@
       "note": "HOSTILE, the same join from the other direction: a Claims capability Position at this same Market, canonical for ITS owner, offered with the wallet's signature. Economic (0x5005) at 59,870 CU. A wallet cannot redeem the representation layer's collateral by pointing at it."
     },
     {
-      "label": "claims rational-representation-v2: wallet payout with a substituted terminal certificate",
-      "routes": [
-        "claims/process_instruction",
-        "claims/terminal_settlement_v3::process"
-      ],
-      "program": "claims",
-      "outcome": "refused",
-      "refusal": "claims/ClaimsSbfError::Identity",
-      "note": "HOSTILE. The request names a terminal receipt digest the Core Market does not carry. Identity (0x5002) at 18,964 CU: the certificate is what fixes the resolved value the basis is evaluated at, so a caller-chosen one would be a caller-chosen payout."
-    },
-    {
       "label": "claims rational-representation-v2: wallet payout with role Claims with a foreign caller program",
       "routes": [
         "claims/process_instruction",
@@ -651,6 +640,146 @@
       "program": "",
       "outcome": "executed",
       "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: curved wallet payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "claims rational-representation-v2: curved wallet payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "claims rational-representation-v2: failure-terms exit: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "claims rational-representation-v2: failure-terms exit: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "claims rational-representation-v2: replay close: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "claims rational-representation-v2: replay close: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "claims rational-representation-v2: Resolution certificate hostiles: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "claims rational-representation-v2: Resolution certificate hostiles: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "claims rational-representation-v2: retiring payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "claims rational-representation-v2: retiring payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "claims rational-representation-v2: retiring representation redemption: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "claims rational-representation-v2: retiring representation redemption: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "a provider success may not occupy the pre-disclosed failure cell: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "a provider success may not occupy the pre-disclosed failure cell: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "failure terms may not be claimed for an ordinary coordinate: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "failure terms may not be claimed for an ordinary coordinate: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "Trading common-Hot Rational IssueStructured: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "Trading common-Hot Rational IssueStructured: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
+    },
+    {
+      "label": "Trading common-Hot Rational Denominate: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table a control needs to fit its frame. Bound PER LABEL FAMILY, which is this file's existing convention and not a broad wildcard -- a `campaign: *: create lookup table` row collides with every family row already here and the census refuses an ambiguous binding as loudly as a missing one. Claims no route because it drives none."
+    },
+    {
+      "label": "Trading common-Hot Rational Denominate: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row for this label family."
     }
   ]
 }

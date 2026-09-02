@@ -20,6 +20,7 @@ dclutch-execution-strategy-contract = { path = "../../../crates/dclutch-executio
 dclutch-fractional-atomic-program-test = { path = "../../dclutch-claims-sbf/program-test/fractional-atomic" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
 dclutch-operator = { path = "../../../crates/dclutch-operator" }
+dclutch-versioned-message-operator = { path = "../../../crates/dclutch-versioned-message-operator" }
 dclutch-program-test-evidence = { path = "../../../tools/gauntlet/program-test-evidence" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2 = { path = "../../../crates/dclutch-product-runtime-v2" }

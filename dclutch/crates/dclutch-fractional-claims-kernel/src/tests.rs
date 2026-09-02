@@ -12,8 +12,8 @@ use dclutch_claims_svm::{
         encode_liability_basis_position_into_v2,
     },
     signed_delta_v3::{
-        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanV3,
-        SignedDeltaReceiptV3, SignedDeltaV3,
+        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaErrorV3,
+        SignedDeltaPlanV3, SignedDeltaReceiptV3, SignedDeltaV3,
     },
 };
 use dclutch_fractional_claim_contract::{
@@ -477,12 +477,93 @@ fn prepared_physical_boundary_is_byte_identical_and_refuses_commitment_substitut
             complete.packet_digest(),
             complete.table_digest(),
             complete.post_resource_digest(),
+            &aggregates,
+            &rows,
             &receipt,
             &post_market,
             &position_refs,
         ),
         Ok(())
     );
+    // THE HOSTILES FOR THE WIRING, and the first one is a control on the other
+    // two. Until 2026-09-02 this postcondition took NO TABLES AT ALL: it
+    // compared the receipt's counts against the DECLARED `shape`, so no table
+    // could have changed its answer. That is a fact about its signature, not a
+    // guess about its behaviour.
+    //
+    // (a) Malformed tables are refused while BUILDING the construction, and
+    //     that is `SignedDelta`, not `ReceiptMismatch`. Asserting the distinct
+    //     code is what proves the next two hostiles actually reach the receipt
+    //     comparison instead of dying before it -- the "hostile that never
+    //     reaches its subject" this repository has paid for twice.
+    assert_eq!(
+        validate_prepared_fractional_signed_delta_postcondition_v1(
+            prepared,
+            complete.packet_digest(),
+            complete.table_digest(),
+            complete.post_resource_digest(),
+            &aggregates,
+            rows.split_last().unwrap().1,
+            &receipt,
+            &post_market,
+            &position_refs,
+        ),
+        Err(Error::SignedDelta),
+        "a delta table that is not a valid plan is refused before any receipt is consulted"
+    );
+
+    // (b) A receipt cannot even be BUILT with a post-market revision that is
+    //     not pre + 1: the type refuses InvalidRevision. Worth pinning, because
+    //     it says the revision half of the construction check is
+    //     defence-in-depth over an already non-forgeable type rather than the
+    //     only thing standing there.
+    assert_eq!(
+        SignedDeltaReceiptV3::new(
+            SignedDeltaPlanV3::decode(&packet).unwrap(),
+            complete.packet_digest(),
+            complete.table_digest(),
+            CLAIMS,
+            complete.post_resource_digest(),
+            complete.post_market_revision() + 1,
+        )
+        .unwrap_err(),
+        SignedDeltaErrorV3::InvalidRevision
+    );
+
+    // (c) A receipt that commits to a DIFFERENT construction, with the physical
+    //     half held IDENTICAL so only a plan-owned fact can be responsible: a
+    //     second lowering of the same state at another outcome produces another
+    //     request, so the receipt's request identity is not the one the
+    //     construction carries. This is the half the old hand-rolled block
+    //     checked against a copied summary field.
+    let other_input = self::input(&state, FractionalActionV1::WholeUnwrap, 0, 2);
+    let (_, other_packet, _, _) = self::lower(other_input);
+    let divergent = SignedDeltaReceiptV3::new(
+        SignedDeltaPlanV3::decode(&other_packet).unwrap(),
+        complete.packet_digest(),
+        complete.table_digest(),
+        CLAIMS,
+        complete.post_resource_digest(),
+        complete.post_market_revision(),
+    )
+    .unwrap()
+    .to_bytes();
+    assert_eq!(
+        validate_prepared_fractional_signed_delta_postcondition_v1(
+            prepared,
+            complete.packet_digest(),
+            complete.table_digest(),
+            complete.post_resource_digest(),
+            &aggregates,
+            &rows,
+            &divergent,
+            &post_market,
+            &position_refs,
+        ),
+        Err(Error::ReceiptMismatch),
+        "a receipt carrying another request identity commits to another construction"
+    );
+
     for substitution in [0_u8, 1, 2] {
         let mut packet_digest = complete.packet_digest();
         let mut table_digest = complete.table_digest();
@@ -498,6 +579,8 @@ fn prepared_physical_boundary_is_byte_identical_and_refuses_commitment_substitut
                 packet_digest,
                 table_digest,
                 resource_digest,
+                &aggregates,
+                &rows,
                 &receipt,
                 &post_market,
                 &position_refs,

@@ -100,7 +100,14 @@ shasum -a 256 "$sbf_out"/*.so | sed 's/^/  /'
 SBF_OUT_DIR="$sbf_out" DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR="$evidence_dir" \
     cargo test \
     --manifest-path programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml \
-    --test accepted -- --test-threads=1
+    --test accepted -- --test-threads=1 --nocapture
+# --nocapture, and not for noise. `accepted.rs` prints one packet census line
+# per submission -- legacy extent, v0-over-its-own-table extent, unique locks --
+# which is the instrument PACKET_LIMIT_2026_09_01.md section 9 asks for on the
+# Dealer Hot rows. Without it the harness swallows every one of those lines on a
+# PASSING run and prints them only when a test fails, which is precisely
+# backwards for a measurement. claims-custody's runner has passed --nocapture
+# since it was written; this one had not.
 
 cargo run --quiet -p dclutch-program-test-evidence \
     --bin fold-program-test-evidence -- "$evidence_dir" "$folded"

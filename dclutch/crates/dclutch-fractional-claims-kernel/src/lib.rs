@@ -483,11 +483,14 @@ pub fn prepare_fractional_signed_delta_v1(
 
 /// Join a prepared Fractional plan to the sole Claims receipt and exact
 /// returned post-resource bytes.
+#[allow(clippy::too_many_arguments)]
 pub fn validate_prepared_fractional_signed_delta_postcondition_v1(
     expected: PreparedFractionalSignedDeltaV1,
     packet_digest: [u8; 32],
     table_digest: [u8; 32],
     post_resource_digest: [u8; 32],
+    aggregate_deltas: &[SignedDeltaV3],
+    position_deltas: &[PositionDeltaV3],
     receipt_bytes: &[u8],
     post_market: &[u8],
     post_positions: &[&[u8]],
@@ -537,23 +540,55 @@ pub fn validate_prepared_fractional_signed_delta_postcondition_v1(
     .map_err(|_| Error::ReceiptMismatch)?;
     let receipt =
         SignedDeltaReceiptV3::decode(receipt_bytes).map_err(|_| Error::ReceiptMismatch)?;
-    if receipt.caller_role() != CallerRole::Trading
-        || receipt.release_set() != expected.release_set
-        || receipt.market() != expected.market
-        || receipt.request_id() != expected.request_digest
-        || receipt.product_record_digest() != expected.product_record_digest
-        || receipt.semantic_basis_id() != expected.semantic_basis_id
-        || receipt.linked_basis_record_digest() != expected.linked_basis_record_digest
-        || receipt.pre_market_revision() != expected.pre_market_revision
-        || receipt.post_market_revision() != expected.post_market_revision
-        || receipt.claim_count() != expected.shape.claim_count
-        || receipt.position_count() != expected.shape.position_count
-        || receipt.position_delta_count() != expected.shape.position_delta_count
-    {
-        return Err(Error::ReceiptMismatch);
-    }
+    // THE INVARIANT: a receipt commitment commits to exactly the construction
+    // that was validated.
+    //
+    // This used to be twelve conjuncts written out here plus
+    // `validate_physical_commitment`, which is the same sixteen facts that
+    // `SignedDeltaReceiptV3::validate_construction` states once -- and
+    // `validate_physical_commitment`'s own doc names the alternative it
+    // expects: "the caller must separately validate the plan-owned fields
+    // through `validate_plan` OR AN EQUIVALENT NON-FORGEABLE TYPED
+    // CONSTRUCTION". The sibling path
+    // (`validate_fractional_signed_delta_postcondition_v1`) holds the packet
+    // and takes the `validate_plan` half; this path does not, and so is the
+    // one the typed construction was written for. It had a hand-rolled copy
+    // instead, and the copy was WEAKER in one specific way: it compared the
+    // receipt's position and delta counts against the DECLARED `shape`, while
+    // the construction derives them from the tables that actually exist. A
+    // shape that disagreed with its own tables was previously invisible here.
+    let header = SignedDeltaPlanInputV3 {
+        caller_role: CallerRole::Trading,
+        release_set: expected.release_set,
+        market: expected.market,
+        request_id: expected.request_digest,
+        product_record_digest: expected.product_record_digest,
+        semantic_basis_id: expected.semantic_basis_id,
+        linked_basis_record_digest: expected.linked_basis_record_digest,
+        expected_market_revision: expected.pre_market_revision,
+        claim_count: expected.shape.claim_count,
+    };
+    let one = core::slice::from_ref(&expected.positions.first);
+    let two = expected
+        .positions
+        .second
+        .map(|second| [expected.positions.first, second]);
+    let position_table = two.as_ref().map_or(one, <[_; 2]>::as_slice);
+    // These two failures are DIFFERENT facts and are kept apart deliberately:
+    // `SignedDelta` means the tables handed in do not form a valid plan at all,
+    // `ReceiptMismatch` means they do and the receipt commits to a different
+    // one. Collapsing them would make a hostile that never reaches the receipt
+    // indistinguishable from one that reaches it and is refused -- the failure
+    // mode the refusal-code rules in AGENTS.md exist to stop.
+    let construction = ValidatedSignedDeltaConstructionV3::new(
+        header,
+        position_table,
+        aggregate_deltas,
+        position_deltas,
+    )
+    .map_err(|_| Error::SignedDelta)?;
     receipt
-        .validate_physical_commitment(commitment)
+        .validate_construction(construction, commitment)
         .map_err(|_| Error::ReceiptMismatch)
 }
 
