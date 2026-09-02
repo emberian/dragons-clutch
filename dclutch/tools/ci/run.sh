@@ -154,6 +154,51 @@ tier_census() {
 }
 
 # ---------------------------------------------------------------------------
+# runbooks -- seconds. Every command a runbook publishes, replayed as `--help`.
+#
+# The complement of the release tier's `usage_parity.py`, one layer out. That
+# gate holds a TOOL's usage text to its own parser; this one holds a RUNBOOK to
+# the program it instructs. Both close the same shape -- a sentence outliving
+# the interface it describes -- and neither can see the other's half.
+#
+# It runs `--help` and nothing else, and only against a program whose own
+# source shows it handles a help flag. A program it cannot probe is reported
+# unprobed WITH THE REASON and exits 2, never 0: the gate keeps "could not be
+# checked" apart from "checked and fine", which is this file's whole exit-code
+# argument applied to itself.
+# ---------------------------------------------------------------------------
+tier_runbooks() {
+  say "runbooks -- every published command, replayed as --help"
+  local tool="$repo_root/tools/doc-commands/doc_commands.py"
+  if [ ! -f "$tool" ]; then
+    note "tools/doc-commands/doc_commands.py is not in this tree"
+    record runbooks $EXIT_PREREQ_MISSING "doc-commands absent from this tree"
+    return
+  fi
+  if ! have python3; then
+    record runbooks $EXIT_PREREQ_MISSING "python3 not on PATH"
+    return
+  fi
+  local code=0
+  (cd "$repo_root" && python3 "$tool" --root . \
+     --baseline tools/doc-commands/baseline.json --check) || code=$?
+  case "$code" in
+  0) record runbooks $EXIT_PASS ;;
+  2)
+    note "Some published command could not be probed -- its program is not"
+    note "built, or handles no help flag. Nothing is claimed about those."
+    record runbooks $EXIT_PREREQ_MISSING "a published command was not probed (its exit 2)"
+    ;;
+  *)
+    note "A runbook publishes a command a reader cannot run as written. The"
+    note "fix is the DOC or the PROGRAM, never the baseline: an accepted entry"
+    note "there has to carry a written reason a reader would agree with."
+    record runbooks $EXIT_GATE_FAILED
+    ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # seam -- ~20 seconds over ~960 Rust files, no cargo build.
 #
 # Six defect classes, each with a real pre-fix commit from this repository as
@@ -1356,6 +1401,12 @@ census    milliseconds python3            a generated file arriving with no
                                           re-emit guard, or losing one
 seam      ~20s         ast-grep           six structural seam defect classes,
                                           new findings against a triaged baseline
+runbooks  seconds      python3            every command README.md, docs/guides
+                                          and docs/operators publish, replayed
+                                          as `--help`: the program exists, and
+                                          it names the subcommand and flags the
+                                          runbook passes it. An unprobed
+                                          command is a 2, never a pass
 release   ~5s          python3            the four release-tooling REFUSAL
                                           suites: build-freshness admission,
                                           the devnet activity and demo-pulse
@@ -1405,8 +1456,8 @@ workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           fresh target dir per workspace, so it
                                           is not in `all`
 
-aliases:  cheap = census seam release
-          all   = census seam release sbom sbfcontracts web emission frameguard journey
+aliases:  cheap = census seam runbooks release
+          all   = census seam runbooks release sbom sbfcontracts web emission frameguard journey
                   programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
@@ -1453,9 +1504,9 @@ main() {
       list_tiers
       exit 0
       ;;
-    cheap) tiers+=(census seam release) ;;
-    all) tiers+=(census seam release sbom sbfcontracts web emission frameguard journey programs suites) ;;
-    census | seam | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
+    cheap) tiers+=(census seam runbooks release) ;;
+    all) tiers+=(census seam runbooks release sbom sbfcontracts web emission frameguard journey programs suites) ;;
+    census | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

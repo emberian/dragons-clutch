@@ -924,12 +924,14 @@ mod common_hot_open {
     }
 
     async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
+        // NAMES THE KEY. An `expect` that says only "observed account" turns a
+        // located defect into a search across a forty-nine coordinate frame.
         context
             .banks_client
             .get_account(key)
             .await
             .expect("account query")
-            .expect("observed account")
+            .unwrap_or_else(|| panic!("no account at {key}"))
     }
 
     async fn plan(
@@ -5008,6 +5010,21 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
     )
     .await;
 
+    // THE PROPERTY THIS HOSTILE RIDES, asserted where it cannot be a universal
+    // donor. The child caller authority is a PDA over the exact projected child
+    // request, and that request carries the family request's SHA-256 as its
+    // parent context. So one flipped family byte moves the child request, its
+    // digest, and the derived address -- and the on-chain half below is the
+    // consequence rather than the claim. Stated host-side because a chain
+    // assertion made during a wall era proves only that something refused.
+    assert_eq!(
+        RepresentationRequestV2::decode(&issue_plan.claims_child.instruction.data)
+            .expect("canonical child request")
+            .header()
+            .parent_context,
+        hash(&issue_plan.family_request).to_bytes(),
+        "the child request's parent context is the family request's digest",
+    );
     let mut substituted_digest = issue.clone();
     *substituted_digest
         .data
@@ -5030,10 +5047,19 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
     // 0x4003` in the program-failure line and renders `Custom(N)` only in the
     // transaction error, which is not in `logs`. So this assertion failed while
     // the route refused with exactly the discriminant it names.
+    // AND IT NAMES `Release`, not `Content`. That is a correction, not a
+    // relaxation: the substitution is caught by the BINDING, not by a content
+    // check. `claims_composition_v3.rs:172-184` derives the child caller
+    // authority from the exact projected request and refuses `Release` when the
+    // frame's coordinate 0 is not that address, so a flipped family byte cannot
+    // present a frame for the request it actually carries. `Content` was this
+    // island's expectation for as long as the route refused before ever
+    // reaching the binding -- which is every day of its life until 2026-09-01,
+    // and is why the expectation was never tested.
     assert_eq!(
         custom_code(&refused),
-        Some(dclutch_trading_sbf::TradingSbfError::Content as u32),
-        "the Hot content owner must name the substituted family refusal: {}",
+        Some(dclutch_trading_sbf::TradingSbfError::Release as u32),
+        "a substituted family request must fail the caller-authority binding: {}",
         refused.logs.join("\n")
     );
     assert_eq!(

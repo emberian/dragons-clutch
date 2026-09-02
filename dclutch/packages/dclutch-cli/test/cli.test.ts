@@ -14,7 +14,7 @@ import {
   parseOfferLifecycleV1,
   tradeCommand,
 } from '../src/commands/trade';
-import { run } from '../src/main';
+import { FLAG_OPTIONS, run } from '../src/main';
 
 function key(byte: number): string {
   return new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -140,6 +140,36 @@ describe('public Direct mutation boundary', () => {
     expect(out[0]).toContain('walk                             preview the funded failure walk (--dry-run required; submission disabled)');
     expect(out[0]).not.toContain('cross a sell intent');
     expect(out[0]).not.toContain('cross a buy intent');
+  });
+
+  /**
+   * The help page and the parser, held to each other.
+   *
+   * Measured 2026-09-01 by `tools/doc-commands`, which replays every command a
+   * runbook publishes as `--help`: `docs/guides/trencher.md` teaches
+   * `dclutch-terminal intent buy --route --outcome --fill --price --collateral`,
+   * and NOT ONE of those five appeared in `--help`. The prose was hand-written
+   * beside a `FLAG_OPTIONS` table it had drifted from, so a reader who typed the
+   * guide's command and then typed `--help` to check it was shown a page that
+   * did not admit the flags existed.
+   *
+   * The repair was to render the list from the parser's own table. This is the
+   * gate that keeps it rendered: a flag the parser accepts and the help omits
+   * fails here, in the tree, rather than in front of a stranger.
+   */
+  it('names every flag its parser accepts, so no flag is discoverable only from a guide', async () => {
+    const out: string[] = [];
+    await run(['--help'], {}, { out: (line) => out.push(line), err: () => undefined });
+    const help = out.join('\n');
+    const undocumented = Object.keys(FLAG_OPTIONS)
+      .filter((name) => name !== 'help')
+      .filter((name) => !help.includes(`--${name}`));
+    expect(undocumented, 'these flags are accepted and --help never mentions them').toEqual([]);
+    // And the reverse direction has a witness, so this cannot pass by the help
+    // having become a wall of every string: the five the guide teaches are here.
+    for (const flag of ['--route', '--outcome', '--fill', '--price', '--collateral']) {
+      expect(help).toContain(flag);
+    }
   });
 
   it('names both offer lifecycle choices and refuses a guessed default', () => {

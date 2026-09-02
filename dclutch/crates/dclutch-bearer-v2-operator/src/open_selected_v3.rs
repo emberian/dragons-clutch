@@ -681,7 +681,24 @@ fn encode_transition() -> Result<Vec<u8>> {
         InstructionV3::scalar_lt(s(SCALAR_SELECTED_OUTCOME), s(SCALAR_OUTCOME_COUNT)),
         InstructionV3::nonzero(s(SCALAR_QUANTITY)),
         InstructionV3::nonzero(s(SCALAR_DENOMINATOR)),
-        InstructionV3::scalar_eq(s(SCALAR_COEFFICIENT), s(SCALAR_DENOMINATOR)),
+        // NONZERO, not `scalar_eq(coefficient, denominator)` -- the identical
+        // correction the full-width sibling took, for the identical defect.
+        //
+        // The equality forces the selected coordinate's weight to D/D, so it
+        // refuses every coefficient the tree's own fixture carries
+        // (`COEFFICIENTS = [2, 3, 5]` over `DENOMINATOR = 7`), and a release
+        // that satisfied it could not survive the composition kernel anyway:
+        // `translation.rs:231` requires `gcd(D, numerators...) == 1`, and the
+        // coefficients ARE the numerators.
+        //
+        // Landed even though nothing has yet run into it -- the selected
+        // actions sit behind the full-width issue in every fixture that drives
+        // them -- because a guard that refuses the tree's own fixture is wrong
+        // whether or not anything reaches it. `nonzero` is the check the
+        // executing sibling applies to the same register
+        // (`rational-lifecycle-hot-v3/src/artifacts.rs:368-370`), and a zero
+        // coefficient is still refused before projection.
+        InstructionV3::nonzero(s(SCALAR_COEFFICIENT)),
     ];
     let width = TRANSITION_HEADER_BYTES + TRANSITION_INSTRUCTIONS * TRANSITION_INSTRUCTION_BYTES;
     let mut scratch = vec![0_u8; width];

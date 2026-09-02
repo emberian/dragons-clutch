@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Fetch the credential-free sponsored SOL/USD PriceUpdateV2 from Solana devnet.
 #
+# usage: tools/release/devnet-price-update.sh --out ABSOLUTE_NEW_FILE [--url RPC]
+#
+#   --out PATH   absolute path of the file to create; required, never overwritten
+#   --url URL    JSON-RPC endpoint (default: https://api.devnet.solana.com)
+#
 # This is a read-only input producer for `devnet-sponsored-market`: it never
 # reads a keypair, signs, submits, funds, or calls Hermes / Pyth Price Service.
 set -euo pipefail
@@ -15,7 +20,11 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --url) URL="${2:?--url needs a value}"; shift 2 ;;
         --out) OUT="${2:?--out needs a value}"; shift 2 ;;
-        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        # The whole leading comment block, found rather than counted: a
+        # hardcoded line range is a second author for where the help ends, and
+        # it was already wrong -- it stopped two lines above the flags a reader
+        # is told to pass, so `--help` did not admit --url or --out existed.
+        -h|--help) sed -n '2,/^[^#]/p' "$0" | sed '$d'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

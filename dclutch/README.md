@@ -162,8 +162,15 @@ from, that's a bug in the console — this table is the answer key.
 tools/gauntlet/run.sh --mode census
 
 # found a market on a throwaway local validator and join it as a
-# participant. It builds its own chain and tears it down afterwards:
-tools/release/private-validator-lifecycle/run.py --through participant
+# participant. It builds its own chain and tears it down afterwards, and it
+# needs a clean committed checkout and a checked release root to bind to:
+python3 tools/release/private-validator-lifecycle/run.py \
+    --repo /absolute/clean/dclutch \
+    --release-root /absolute/checked/release \
+    --validator "$(command -v solana-test-validator)" \
+    --solana "$(command -v solana)" \
+    --work /absolute/scratch/outside/the/repo \
+    --through participant
 
 # the web app's test suite:
 cd apps/dclutch-web && npm test

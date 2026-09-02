@@ -39,7 +39,12 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
-    admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
+    admitted_v3::{
+        ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_HOT_FIXED_START_V3,
+        ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
+        ADMITTED_STRATEGY_EVIDENCE_START_V3, AdmittedInvocationContextV3,
+        admitted_invocation_context_digest_v3,
+    },
     v2::{
         ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
         AcceleratorDispositionV2, AcceleratorRequestV2, AcceleratorTransportProfileV2,
@@ -66,10 +71,26 @@ use crate::{TradingSbfError, execution_strategy_v2::AuthenticatedExecutionStrate
 
 const ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3: &[u8] = b"dclutch:hot-admitted-ack:v3";
 
+// THE LAST RESTATEMENT OF THIS LAYOUT, AND IT IS GONE.
+//
+// These five were the producer's private copy of the admitted-accelerator frame
+// table. `68f7c849` derived the CONSUMER's copy from `HOT_*_ACCOUNT_V3` after
+// `0xC00A` turned out to be the accelerator telling the exact truth about a
+// table that described a design nobody emitted -- instructions sysvar at 4,
+// Trading at 5, runtime start at 18, against a real frame of 30, 26 and 48. The
+// producer's copy happened to be right, which is exactly why it was dangerous:
+// two authors that agree today and are compared by nothing.
+//
+// They are aliases now. `invoke_admitted_chunk` below is the single admitted CPI
+// site in the tree, so these constants and
+// `dclutch_execution_strategy_contract::admitted_v3` are the two ends of ONE
+// wire, and a ninth evidence account stops compiling at both ends instead of
+// shifting every runtime coordinate in one file.
 /// Caller authority in the authenticated accelerator V4 CPI frame.
-pub const ADMITTED_ACCELERATOR_CALLER_AUTHORITY_ACCOUNT_V4: usize = 0;
+pub const ADMITTED_ACCELERATOR_CALLER_AUTHORITY_ACCOUNT_V4: usize =
+    ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3;
 /// First account of the exact common Hot fixed frame.
-pub const ADMITTED_ACCELERATOR_HOT_FIXED_START_V4: usize = 1;
+pub const ADMITTED_ACCELERATOR_HOT_FIXED_START_V4: usize = ADMITTED_HOT_FIXED_START_V3;
 /// Exact number of common Hot fixed accounts carried read-only into the accelerator.
 ///
 /// This is the common Hot fixed frame, entire — so it is DERIVED from the
@@ -87,13 +108,13 @@ pub const ADMITTED_ACCELERATOR_HOT_FIXED_START_V4: usize = 1;
 pub const ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
 /// First strategy-owned Certificate/Admission/Artifact/deployment evidence account.
 pub const ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4: usize =
-    ADMITTED_ACCELERATOR_HOT_FIXED_START_V4 + ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4;
+    ADMITTED_STRATEGY_EVIDENCE_START_V3;
 /// Exact eight-account admitted strategy suffix, including Program/ProgramData.
-pub const ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4: usize = 8;
+pub const ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4: usize =
+    ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
 /// First expanded AccountProfile-ordered logical runtime observation.
 pub const ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4: usize =
-    ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4
-        + ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4;
+    ADMITTED_RUNTIME_ACCOUNTS_START_V3;
 
 /// Exact fixed evidence passed before the AccountProfile-ordered runtime slice.
 #[derive(Clone, Copy)]

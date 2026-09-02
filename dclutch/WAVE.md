@@ -5957,3 +5957,54 @@ means the staged hunk carries both.
 
 The red that caused (a hostile asserting the old discriminant) was found and fixed
 in the same lane's next commit, walking both sides of the new bound.
+
+## 2026-09-01 — IssueStructured executes, for the first time in the route's life
+
+Against ELFs built from **committed** sources (Trading `6c45fdd0…`, Claims
+`67d9d97f…`, canonical Token-2022 `e2acdfb7…` built on hbox and digest-checked
+here): Trading succeeds, the Claims program is invoked as a child and returns,
+Token-2022 commits **four** times, and every post-issue conservation assertion
+passes — including `actor + structured == supply` per coordinate. Exactly one
+`custom program error` in the run, and it is the hostile that is supposed to fail.
+
+The Structured family has crossed the Trading Hot route. It had never done so.
+
+### Wall #6 was not a wall — it was the hostile's own substitution
+
+Neither offered answer was right. The bundle builder derives the caller authority
+**exactly as the runtime does** (`CallerAuthoritySeedsV1`, same seeds, same
+program), and the frame carries that address at coordinate 5. The runtime derived
+a *different* address — so both projected child requests were dumped and diffed
+byte for byte: **33 bytes**, the 32-byte parent-context span at 144..176 plus the
+last byte of the last asset row. That last byte is the hostile's own flip: family
+digest → child parent context → child digest → derived PDA. **The refusal was the
+binding working correctly.**
+
+> **A wall read from the first refusal in the log is a wall attributed to
+> whichever transaction ran first.** The interleaved-log retraction's class from a
+> new direction: one binary, one thread, and still the wrong subject.
+
+**Method:** when a refusal names a derivation mismatch, diff the two preimages
+before theorizing about either.
+
+### The universal donor, corrected in both halves
+
+The hostile now asserts `Release`, and that is a correction rather than a
+relaxation: a substituted family request is caught by the **binding**, not by a
+content check. `Content` had been the expectation for as long as the route refused
+before reaching the binding — every day of its life — which is why it was never
+tested. And because a chain assertion made during a wall era proves only that
+*something* refused, the property is now also asserted **host-side**, where it
+cannot be a donor.
+
+The sibling `scalar_eq` at `open_selected_v3.rs:684` is corrected the same way.
+
+### The next wall: two authors for one staging cursor
+
+`plan_denominate` stops on a missing account — `fixture.linked_basis_staging`,
+**890,880 lamports before `common_hot_open::install` and `None` after it.** The
+bundle builder models the linked-basis staging cursor as closed, `install` writes
+that model into the bank, and the account is gone before any transaction runs. The
+chain never touched it. Which author is right — a finalized record's staging cursor
+genuinely *is* closed after adoption — is the next unit, settled by reading the
+adoption path rather than by a fixture edit made in passing.
