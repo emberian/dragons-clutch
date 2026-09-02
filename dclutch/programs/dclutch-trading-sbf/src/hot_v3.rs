@@ -2120,7 +2120,9 @@ fn accelerator_runtime_observations_digest_v4(
                 ),
                 owner: account.owner.to_bytes(),
                 lamports: account.lamports(),
-                data: if canonical_scratch {
+                data: if canonical_scratch
+                    || transcript_omits_loader_bytes_v3(account.owner, account.executable)
+                {
                     &[]
                 } else {
                     data.as_ref()
@@ -3989,6 +3991,27 @@ fn execute_authenticated_hot_v3(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    // THE FRAME'S CARVING AND THE TRANSPORT'S CHUNKING ARE TWO AUTHORS, joined
+    // here. The carving above asked `admitted_caller_authority_count_v3` for a
+    // caller-authority span using the effect's widths at
+    // `product_outcome_count`, because it runs before any bank exists. The bank
+    // is built at `tail_count`, and `require_tail_count_agreement_v3` lets those
+    // differ: a profile that projects NO tail count leaves `tail_count` zero
+    // while the frame was carved at an outcome count of at least two. Nothing
+    // said the two had to agree.
+    if admitted_caller_authorities.is_some() {
+        require_admitted_bank_matches_frame_v3(
+            (scalar_count, identity_count),
+            (
+                effect
+                    .scalar_count(product_outcome_count)
+                    .map_err(|_| TradingSbfError::Content)?,
+                effect
+                    .identity_count(product_outcome_count)
+                    .map_err(|_| TradingSbfError::Content)?,
+            ),
+        )?;
+    }
     let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent, selected_action)?;
     hot_heap_mark!("rent-quotes");
     hot_cu_checkpoint!("p5-geometry-rent");
@@ -4092,8 +4115,10 @@ fn execute_authenticated_hot_v3(
     hot_cu_checkpoint!("request-lifecycle-preplan");
 
     let candidate = if let Some(caller_authorities) = admitted_caller_authorities {
-        // THE TRANSPORT BINDING IS NOT WIRED HERE, AND THAT IS DEBT, NOT A
-        // DECISION ABOUT THE LAW. See `require_admitted_bank_matches_frame_v3`.
+        // The transport binding is joined above, where the bank's own widths
+        // are computed and the frame's two inputs are still live. See
+        // `require_admitted_bank_matches_frame_v3` for why it is not joined
+        // here.
         execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
             program_id,
             frame,
@@ -6487,6 +6512,37 @@ fn account_inputs_v3(
     Ok(account_inputs)
 }
 
+/// Whether a runtime coordinate's BYTES are loader state rather than prestate.
+///
+/// The runtime transcript exists so the accelerator and Trading can prove they
+/// evaluated the same accounts. For a state account that means its bytes: the
+/// revision, the balances, the widths a candidate is computed from. For an
+/// account the LOADER owns it means nothing of the kind. Its bytes are an ELF
+/// and a 45-byte deployment header, no program can write them inside this
+/// instruction, and both sides already commit its `key`, `owner`, `lamports`
+/// and `executable` -- so a substituted deployment changes the transcript
+/// through its key, and the pair is independently authenticated by
+/// `ProgramDataMetadataV3View::parse` and the Registry activation join, neither
+/// of which reads a byte past the header.
+///
+/// It is not free. MEASURED on real ELFs 2026-09-02, inside the accepted
+/// campaign's equity Add: 58 runtime accounts carrying 9,510,282 transcript
+/// bytes, of which 9,509,994 are the three loader pairs (Trading, Claims, Core)
+/// -- each bound TWICE, once at its top-level frame coordinate and once inside
+/// the Claims fixed span -- and the single widest is Trading's own
+/// 2,315,397-byte programdata. `sol_sha256` is ~0.5 CU/byte, so that transcript
+/// is ~4.75M CU against a 1,399,700 ceiling: the honest equity Add died at
+/// 1,399,692 with ZERO CPIs, and so did the hostile, at the same unit, because
+/// the cost was never about the hostility. Under this rule the same transcript
+/// is 9,865 bytes and 14,756 CU. The LP Open, which binds one executable and no
+/// programdata, digested 1,709 bytes for 3,197 CU and has always executed.
+///
+/// The rule is the one canonical scratch pages already get four lines below,
+/// for the same reason: bytes committed elsewhere are not committed here.
+fn transcript_omits_loader_bytes_v3(owner: &Pubkey, executable: bool) -> bool {
+    executable || owner == &solana_sdk_ids::bpf_loader_upgradeable::ID
+}
+
 /// The accelerator transcript digest over one observation bank.
 ///
 /// Both accelerator dispositions committed to exactly this value and each had
@@ -6508,7 +6564,9 @@ fn runtime_transcript_digest_v3(
                 key: observation.key(),
                 owner: observation.owner(),
                 lamports: observation.lamports(),
-                data: if canonical_scratch {
+                data: if canonical_scratch
+                    || transcript_omits_loader_bytes_v3(account.owner, account.executable)
+                {
                     &[]
                 } else {
                     observation.data()
@@ -6767,28 +6825,31 @@ fn funding_allows_created_state_write_v5(funding: EffectProgramV5<'_>, coordinat
 #[inline(never)]
 /// Refuse a bank whose width is not the width the account frame was carved for.
 ///
-/// **NOT CALLED ON THE HOT PATH TODAY, AND THAT IS DEBT.** Said plainly because
-/// an uncalled law is otherwise indistinguishable from an enforced one, and this
-/// file has already shipped two conjuncts that could not be satisfied by any
-/// transaction.
+/// WIRED, AND THE 64 BYTES WERE NEVER ELSEWHERE IN THE FUNCTION. Every shape
+/// that CARRIED the frame's pair to the comparison cost the same 64-byte step
+/// and the same three `overwrites values in the frame` diagnostics -- as two
+/// `usize` on the by-value `AdmittedCandidateViewV3`, as two scalar arguments,
+/// as a tuple-pair call from the caller, as a call from an `#[inline(never)]`
+/// helper, and (measured 2026-09-02) as a reuse of the carving's own
+/// `provisional_scalar_count`/`provisional_identity_count` at a join placed two
+/// hundred lines earlier. The cost was never the call. It was the two spill
+/// slots the pair needs to survive the projection, the preplan and the fold,
+/// and no rearrangement of the call can avoid paying for a value that has to
+/// live across them.
 ///
-/// The two frame-carving widths originate in `execute_authenticated_hot_v3`, and
-/// that function measured 3,904 of the SBPF v0 4,096-byte bound on 2026-09-02
-/// against its parent's 3,840. Every form of carrying them to the comparison
-/// costs the same 64-byte step and the same three `overwrites values in the
-/// frame` diagnostics: as two `usize` on the by-value `AdmittedCandidateViewV3`,
-/// as two scalar arguments on the call that already exists, as a tuple-pair call
-/// from the caller, and as a call from a `#[inline(never)]` helper. All four
-/// were measured; the only shape at zero is the binding's absence. The toolchain
-/// calls such an artifact potentially-undefined, frameguard refuses to baseline
-/// it and no checked release can be built from it, which blocked cohort-11's
-/// first on-chain trade -- so the release wins and the binding waits.
+/// So the pair is not carried. It is DERIVED AGAIN at the join, from `effect`
+/// and `product_outcome_count` -- the same two inputs, in the same two calls,
+/// that the carving itself used, both already live where the bank's own widths
+/// are computed. That is not a second author: it is one function of one pair of
+/// arguments, evaluated where it is read instead of stored where it is not.
+/// Measured on the same instrument that convicted the earlier shapes:
+/// `execute_authenticated_hot_v3` is 3,840 bytes with the binding wired, which
+/// is its width without it, and the build emits zero diagnostics.
 ///
-/// What it waits FOR is 64 bytes freed in `execute_authenticated_hot_v3`, which
-/// is its own unit of work and not this law's to do. The law and its seven
-/// hostile arms stay here, driven by
-/// `an_admitted_bank_must_be_the_width_its_account_frame_was_carved_for`, so the
-/// day those bytes exist the wiring is one call.
+/// The join is guarded on `admitted_caller_authorities.is_some()`, because a
+/// frame that carved no caller authorities carved nothing for a bank to match
+/// and an Interpreted or Shadow route must not acquire a conjunct that the
+/// admitted one needs.
 ///
 /// The admitted path derives two things from the register-bank geometry and
 /// derives them in different places from different sources. The FRAME carving
@@ -18521,6 +18582,60 @@ mod tests {
         assert_eq!(
             require_projected_tail_count_agreement_v3(profile, 7, &[6]),
             Err(TradingSbfError::Content.into())
+        );
+    }
+
+    #[test]
+    fn loader_state_contributes_its_identity_to_a_transcript_and_not_its_bytes() {
+        let programdata = |bytes: u8| {
+            vec![
+                leaked_account_with_facts([0x11; 32], [0x21; 32], 1, vec![0x01; 8], false),
+                leaked_account_with_facts(
+                    [0x12; 32],
+                    solana_sdk_ids::bpf_loader_upgradeable::ID.to_bytes(),
+                    2,
+                    vec![bytes; 4096],
+                    false,
+                ),
+            ]
+        };
+        // The ELF the loader owns is not prestate: two deployments of different
+        // bytes at the same address digest the same, which is what takes
+        // 9.5 MB out of the Dealer equity transcript.
+        assert_eq!(
+            test_runtime_transcript(&programdata(0x5a), &[]),
+            test_runtime_transcript(&programdata(0xa5), &[]),
+        );
+        // Its IDENTITY still is. A substituted deployment arrives at a
+        // different address, and the transcript refuses to agree.
+        let substituted = vec![
+            leaked_account_with_facts([0x11; 32], [0x21; 32], 1, vec![0x01; 8], false),
+            leaked_account_with_facts(
+                [0x13; 32],
+                solana_sdk_ids::bpf_loader_upgradeable::ID.to_bytes(),
+                2,
+                vec![0x5a; 4096],
+                false,
+            ),
+        ];
+        assert_ne!(
+            test_runtime_transcript(&programdata(0x5a), &[]),
+            test_runtime_transcript(&substituted, &[]),
+        );
+        // And an ordinary state account is untouched by the rule: its bytes are
+        // exactly what a candidate is evaluated against.
+        let state = |bytes: u8| {
+            vec![leaked_account_with_facts(
+                [0x11; 32],
+                [0x21; 32],
+                1,
+                vec![bytes; 8],
+                false,
+            )]
+        };
+        assert_ne!(
+            test_runtime_transcript(&state(0x01), &[]),
+            test_runtime_transcript(&state(0x02), &[]),
         );
     }
 

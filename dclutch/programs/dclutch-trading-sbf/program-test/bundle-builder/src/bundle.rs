@@ -217,6 +217,40 @@ fn placeholder_key(coordinate: usize) -> Pubkey {
 /// (lifecycle-created states, caller authorities), and re-runs until the
 /// derivations are the observed keys. Two rounds settle every known family;
 /// four is the refusal bound.
+/// The tail width the EXECUTOR will carve this frame at, which is not always
+/// the product's outcome count.
+///
+/// `hot_v3::project_tail_count` returns `None` for an AccountProfile that
+/// declares no `OP_PROJECT_TAIL_COUNT_U32`, and its caller reads that absence as
+/// width zero -- a fixed topology has no per-outcome tail to project. This host
+/// read the SCENARIO's outcome count instead, so for every such profile the two
+/// sides put a different number in `AdmittedInvocationContextV3::tail_count`,
+/// and that field is inside the digest every admitted caller-authority PDA is
+/// derived from.
+///
+/// MEASURED on real ELFs 2026-09-02, the accepted campaign's equity Add: chain
+/// `tail_count` 0 against host 3, every other context field equal to the byte --
+/// including the runtime-observations digest -- so the context digests differed,
+/// the host's authority for chunk 0 was not the one Trading derived, and
+/// `admitted_composition_v3.rs` refused `TradingSbfError::Release` 0x4001 at
+/// 763,845 CU with the accelerator never invoked. The LP Open, whose profile
+/// DOES project a tail, agreed on both sides and executed. Two authors for one
+/// number, and only one of them is the executor.
+fn projected_tail_count_v1(
+    profile: AccountProfileV2<'_>,
+    product_tail_count: u32,
+) -> Result<u32, BuilderError> {
+    if profile
+        .tail_count_projection()
+        .map_err(|_| BuilderError::Artifact)?
+        .is_none()
+    {
+        Ok(0)
+    } else {
+        Ok(product_tail_count)
+    }
+}
+
 pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderError> {
     build_bundle_with_admitted_candidate(input, None)
 }
@@ -228,7 +262,7 @@ fn build_bundle_with_admitted_candidate(
     let facts = derive_artifact_facts(input.set, input.waist, input.scenario.family_request)?;
     let profile =
         decode_execution_account_profile(facts.account_profile.schema, input.set.account_profile)?;
-    let tail_count = input.scenario.tail_count;
+    let tail_count = projected_tail_count_v1(profile, input.scenario.tail_count)?;
     // The span widths come before the frame exists: they *are* the frame's
     // width. Derived from the artifacts and the family request, exactly as the
     // Hot executor derives them before it expands one account.
@@ -515,9 +549,10 @@ fn finish_admitted_bundle(
         input.set.account_profile,
     )?;
     prepare_admitted_transport_pages(&mut bundle, input, profile)?;
+    let tail_count = projected_tail_count_v1(profile, input.scenario.tail_count)?;
     let runtime_observations_digest = admitted_runtime_observations_digest(
         profile,
-        input.scenario.tail_count,
+        tail_count,
         &bundle.span_counts,
         bundle.transport_span,
         &bundle.logical,
@@ -556,7 +591,7 @@ fn finish_admitted_bundle(
         runtime_observations_digest,
         root_prestate_digest: content(digest32(&input.fixed.root.account.data))?,
         selected_action: bundle.artifacts.action,
-        tail_count: input.scenario.tail_count,
+        tail_count,
         account_count: u32::try_from(bundle.logical.len()).map_err(|_| BuilderError::Arithmetic)?,
         scalar_count: u32::try_from(bundle.engine.input_scalars.len())
             .map_err(|_| BuilderError::Arithmetic)?,
@@ -579,7 +614,7 @@ fn finish_admitted_bundle(
         } else {
             dclutch_execution_strategy_contract::v2::RequestTransportV2::Inline
         },
-        tail_count: input.scenario.tail_count,
+        tail_count,
         scalars: &bundle.engine.input_scalars,
         identities: &bundle.engine.input_identities,
     })?;
@@ -632,9 +667,15 @@ fn admitted_runtime_observations_digest(
             // self-reference. Their keys and account facts remain in this
             // transcript; exact page bytes are independently committed by the
             // request's input-bank digest and page decoder.
-            let data = if transport
-                .as_ref()
-                .is_some_and(|range| range.contains(&coordinate))
+            // Loader state is identity, not prestate: the on-chain transcript
+            // omits an executable or upgradeable-loader-owned coordinate's
+            // bytes, so the host precompute omits exactly the same ones.
+            let loader_state = observed.executable
+                || observed.owner == solana_sdk_ids::bpf_loader_upgradeable::ID.to_bytes();
+            let data = if loader_state
+                || transport
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&coordinate))
             {
                 [].as_slice()
             } else {
@@ -800,7 +841,7 @@ fn materialize_admitted_transport_pages(
             strategy,
             invocation_context,
             bank_digest,
-            input.scenario.tail_count,
+            projected_tail_count_v1(profile, input.scenario.tail_count)?,
             scalar_count,
             identity_count,
             u32::try_from(page_index).map_err(|_| BuilderError::Arithmetic)?,

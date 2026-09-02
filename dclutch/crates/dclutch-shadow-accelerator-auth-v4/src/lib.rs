@@ -159,9 +159,25 @@ impl<'request, 'accounts, 'info>
             .zip(self.runtime_accounts)
             .zip(&runtime_data)
             .any(|((observation, runtime), data)| {
+                // Loader state is identity, not prestate. Trading's transcript
+                // omits an executable or upgradeable-loader-owned coordinate's
+                // BYTES -- they are an ELF and a 45-byte deployment header that
+                // no program can write inside this instruction, they are
+                // authenticated by the deployment pair and the activation join,
+                // and on the Dealer equity route they were 9,509,994 of
+                // 9,510,282 transcript bytes, which is ~4.75M CU of `sol_sha256`
+                // against a 1,399,700 ceiling. This side omits the same bytes by
+                // the same rule, so the two transcripts still agree exactly.
+                let bytes: &[u8] = if runtime.executable
+                    || runtime.owner == &solana_sdk_ids::bpf_loader_upgradeable::ID
+                {
+                    &[]
+                } else {
+                    data.as_ref()
+                };
                 observation.owner != runtime.owner.to_bytes()
                     || observation.lamports != runtime.lamports()
-                    || observation.data != data.as_ref()
+                    || observation.data != bytes
                     || observation.signer
                     || observation.writable
                     || observation.executable != runtime.executable

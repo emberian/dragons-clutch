@@ -154,7 +154,17 @@ pub fn process_instruction(
     let bank_bytes = usize::try_from(request.total_bank_bytes())
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let invocation = authenticate_accelerator_invocation_v4(program_id, accounts, instruction_data)
-        .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidInvocation)?;
+        .map_err(|error| {
+            // A DISCARDED CAUSE IS A SEARCH. Common Trading already decided
+            // WHICH conjunct of the release, artifact, frame and runtime view
+            // refused, and it says so in its own band; this boundary has one
+            // code for all of them because the wire cannot carry two programs'
+            // vocabularies. So the cause goes in the log, which is where a
+            // reader looks first, instead of being thrown away at the one line
+            // that knows it.
+            log_discarded_cause_v4(error);
+            DealerAcceleratorSbfErrorV4::InvalidInvocation
+        })?;
     let mut candidate = vec![0_u8; bank_bytes];
     let family_magic = invocation.family_request().get(..8);
     let selected_action = invocation.selected_action();
@@ -207,6 +217,21 @@ pub fn process_instruction(
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
     set_return_data(&output);
     Ok(())
+}
+
+/// Name an inner `ProgramError` this boundary is about to replace.
+///
+/// A protocol refusal reaches the log as its exact discriminant, so a reader
+/// greps one number instead of bisecting a route. Anything else is a runtime
+/// builtin, which is a different accusation and is said differently.
+fn log_discarded_cause_v4(error: ProgramError) {
+    match error {
+        ProgramError::Custom(code) => {
+            solana_program::msg!("dclutch-dealer-accelerator: inner refusal code");
+            solana_program::log::sol_log_64(0, 0, 0, 0, u64::from(code));
+        }
+        _ => solana_program::msg!("dclutch-dealer-accelerator: inner builtin ProgramError"),
+    }
 }
 
 fn content(bytes: &[u8]) -> Result<ContentId, DealerAcceleratorSbfErrorV4> {
