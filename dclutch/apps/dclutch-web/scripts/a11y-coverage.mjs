@@ -252,6 +252,19 @@ export function surveyContrast() {
       // changed, because picking "the nearest selector with a background" is
       // not what a cascade does. A contrast number produced by a guess is
       // worse than no number: it gets colours rewritten to satisfy it.
+      //
+      // AND THE THIRD DRAFT IS REFUSED TOO, measured rather than supposed.
+      // The obvious next move is to render the shells with jsdom -- the
+      // instrument the landmark gate already uses -- and ask
+      // `getComputedStyle`. jsdom does not resolve custom properties:
+      // `color: var(--muted)` comes back as that literal string and a
+      // `background: var(--ground)` shorthand comes back transparent. This
+      // stylesheet is var()-based by construction, so that cascade would call
+      // every background transparent. `lib/a11yCoverage.test.ts` holds that
+      // control live, with a positive control beside it, and goes red if jsdom
+      // ever gains the support. What WOULD work is not a browser either: match
+      // each rule against the RENDERED tree with `element.matches`, which jsdom
+      // does implement, and composite with this file's own `tokens()`.
       const ownPaint = painted.get(selector);
       const ancestors = selector.split(/\s+|(?=>)/).filter((part) => part !== '' && part !== '>');
       const inherited = ancestors.slice(0, -1).some((_, depth) => painted.has(ancestors.slice(0, depth + 1).join(' ')));

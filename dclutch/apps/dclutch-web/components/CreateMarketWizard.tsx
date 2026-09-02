@@ -2,7 +2,7 @@
 
 import PageShell from '@/components/PageShell';
 import Nav from '@/components/Nav';
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
 import {
@@ -33,11 +33,15 @@ import {
 import { FUNDING_COMPARTMENTS_V1 } from '@/lib/generated/capabilityManifestV1';
 import {
   composeRangeProtectionV1,
-  rangeProtectionPlacementV1,
-  RANGE_PLACEMENT_PROVISIONAL_NOTE_V1,
   formatTicksV1,
   rangeProtectionBackingV1,
 } from '@/lib/founding/rangeProtection';
+import {
+  loadPartitionQualityWasmV1,
+  requireInterestingPartitionV1,
+  type PartitionQualityReportV1,
+  type PartitionQualityWasmV1,
+} from '@/lib/founding/partitionQualityV1';
 import {
   PYTH_SOL_USD_MEASURED_P50_SECONDS_V1,
   TERMINAL_WINDOW_GUIDANCE_SECONDS_V1,
@@ -120,7 +124,25 @@ export default function CreateMarketWizard() {
   const [upperEdge, setUpperEdge] = useState('18000');
   // The coordinate at founding, in the band's own ticks. Not a display value:
   // it is the one input that decides whether this partition is a question.
-  const [foundingObservation, setFoundingObservation] = useState('15000000000');
+  const [foundingObservation, setFoundingObservation] = useState('15000');
+  /*
+   * WHAT THE AUTHOR BELIEVES, which is the input the compiler's gate is
+   * measured against and which this wizard did not collect at all.
+   *
+   * A partition is not degenerate or interesting on its own; it is one or the
+   * other RELATIVE TO A BELIEF about where the coordinate goes. Without these
+   * three fields there was no belief to state, so the only check the wizard
+   * could run was a unit-sanity bound with a provisional constant of its own.
+   * The defaults below are admitted by the real gate at the default band;
+   * a volatility of 200 bp over this window is NOT, and that is the gate
+   * working rather than a bad default -- a band six thousand ticks wide around
+   * a coordinate that moves three hundred is a market whose middle cell takes
+   * everything.
+   */
+  const [volatilityBps, setVolatilityBps] = useState('3000');
+  const [beliefWindowSlots, setBeliefWindowSlots] = useState('10000');
+  const [plausibleHalfWidths, setPlausibleHalfWidths] = useState('2');
+  const [cellShareCeilingBps, setCellShareCeilingBps] = useState('9000');
 
   // 02 — Window
   const [windowWidth, setWindowWidth] = useState('1250');
@@ -163,17 +185,60 @@ export default function CreateMarketWizard() {
   }, [coordinateLabel, cutDenominator, lowerEdge, upperEdge]);
 
   /**
-   * Where the founding observation falls in the partition just composed.
+   * The compiled partition-quality gate, loaded once.
    *
-   * Null until both the product and the observation parse; a placement the
-   * wizard cannot compute is not rendered as a reassuring one.
+   * `null` while it loads and if it fails, and the surface says which. A gate
+   * that did not load is not a gate that passed, and this wizard used to have
+   * no gate at all.
    */
-  const placement = useMemo(() => {
-    if (!product.ok) return null;
-    const observation = bigintOrNull(foundingObservation);
-    if (observation === null) return null;
-    try { return rangeProtectionPlacementV1(product.value, observation); } catch { return null; }
-  }, [product, foundingObservation]);
+  const [gate, setGate] = useState<PartitionQualityWasmV1 | null>(null);
+  const [gateFailure, setGateFailure] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    loadPartitionQualityWasmV1()
+      .then((loaded) => { if (live) setGate(loaded); })
+      .catch((error: unknown) => { if (live) setGateFailure(reason(error)); });
+    return () => { live = false; };
+  }, []);
+
+  /**
+   * What the compiler says about this partition, under this author's belief.
+   *
+   * THE MEASUREMENT IS NOT MADE HERE. `require_interesting_partition_v1` runs
+   * in `crates/dclutch-partition-quality-wasm`, compiled from the same
+   * `dclutch-product-compiler` the founding path calls, and its refusals reach
+   * the reader by the compiler's own name for them. The wizard used to run a
+   * strictly weaker unit-sanity check instead, so a market authored here was
+   * never measured by the gate that refuses degenerate partitions.
+   */
+  const quality = useMemo<
+    | Readonly<{ ok: true; report: PartitionQualityReportV1 }>
+    | Readonly<{ ok: false; message: string }>
+    | null
+  >(() => {
+    if (gate === null || !product.ok) return null;
+    const anchor = bigintOrNull(foundingObservation);
+    const denominator = bigintOrNull(cutDenominator);
+    const volatility = digitsOrNull(volatilityBps);
+    const slots = bigintOrNull(beliefWindowSlots);
+    const halfWidths = digitsOrNull(plausibleHalfWidths);
+    const ceiling = digitsOrNull(cellShareCeilingBps);
+    if (anchor === null || denominator === null || volatility === null || slots === null
+        || slots < 0n || halfWidths === null || ceiling === null) return null;
+    try {
+      return {
+        ok: true as const,
+        report: requireInterestingPartitionV1(gate, product.value.cuts, {
+          kind: 'spot-band',
+          anchor,
+          denominator,
+          volatilityBps: volatility,
+          windowSlots: slots,
+          plausibleHalfWidths: halfWidths,
+        }, ceiling),
+      };
+    } catch (error) { return { ok: false as const, message: reason(error) }; }
+  }, [gate, product, foundingObservation, cutDenominator, volatilityBps, beliefWindowSlots, plausibleHalfWidths, cellShareCeilingBps]);
 
   const window = useMemo(() => {
     const width = digitsOrNull(windowWidth);
@@ -315,12 +380,35 @@ export default function CreateMarketWizard() {
         <label><span>Upper band edge · ticks</span><input inputMode="numeric" value={upperEdge} onChange={(event) => setUpperEdge(event.target.value)} /></label>
         <label><span>Founding observation · ticks</span><input inputMode="numeric" value={foundingObservation} onChange={(event) => setFoundingObservation(event.target.value)} /><small className="feed-forward">What this market&rsquo;s Source reports for the coordinate today, in the same ticks as the band. The Source returns raw provider atoms and rescales nothing, so this is where a band in the wrong units becomes visible.</small></label>
       </div>
-      {product.ok && placement !== null && <div className={placement.refusal === null ? 'direct-status' : 'market-refusal'}>
-        {placement.refusal === null
-          ? <>A coordinate that never moved from here wins <strong>{product.value.outcomes[placement.outcomeIndex].label}</strong>. The band is reachable from it.</>
-          : <><strong>Refused · {placement.refusal}.</strong> This observation sits so far outside the band that no plausible move reaches it: every claim resolves into <strong>{product.value.outcomes[placement.outcomeIndex].label}</strong> and nobody can lose. That is the market the compiler now refuses, measured at 0 / 0 / 0 / 0 / 10000 basis points.</>}
-        <p className="wizard-rung-reason">{RANGE_PLACEMENT_PROVISIONAL_NOTE_V1}</p>
-      </div>}
+      <fieldset className="direct-form-grid wizard-belief">
+        <legend>What you believe the coordinate does</legend>
+        <label><span>Volatility · basis points of spot over the window</span><input inputMode="numeric" value={volatilityBps} onChange={(event) => setVolatilityBps(event.target.value)} /><small className="feed-forward">A partition is not degenerate or interesting on its own — it is one or the other <em>relative to a belief</em> about where the coordinate goes. This is that belief, and the gate below is measured against it.</small></label>
+        <label><span>Window · slots from founding to deadline</span><input inputMode="numeric" value={beliefWindowSlots} onChange={(event) => setBeliefWindowSlots(event.target.value)} /><small className="feed-forward">Slots, not seconds: the band the compiler measures is quoted over this market&rsquo;s own window in the unit the chain counts in, and converting here would put a second author on the slot clock.</small></label>
+        <label><span>Plausible half-widths</span><input inputMode="numeric" value={plausibleHalfWidths} onChange={(event) => setPlausibleHalfWidths(event.target.value)} /><small className="feed-forward">How many characteristic displacements the band is taken to reach each way.</small></label>
+        <label><span>Largest share one outcome may take · basis points</span><input inputMode="numeric" value={cellShareCeilingBps} onChange={(event) => setCellShareCeilingBps(event.target.value)} /><small className="feed-forward">Your ceiling, stated at or below the compiler&rsquo;s own maximum{gate === null ? '' : ` of ${gate.partition_quality_maximum_ceiling_bps_v1()}`}. Above it the compiler refuses CellShareCeilingAboveMaximum.</small></label>
+      </fieldset>
+      {gateFailure !== null && <div className="market-refusal"><strong>The partition gate did not load.</strong> {gateFailure} Nothing below has been measured against it, and a gate that did not load is not a gate that passed.</div>}
+      {gate === null && gateFailure === null && <p className="direct-status">Loading the compiled partition gate…</p>}
+      {product.ok && quality !== null && (quality.ok
+        ? <div className="direct-status">
+          <strong>Admitted · {quality.report.model}.</strong> Measured by the compiler&rsquo;s own <code>require_interesting_partition_v1</code>: outcome {quality.report.dominantCell} holds the most ex-ante mass at {quality.report.dominantShareBps} of {quality.report.ceilingBps} permitted basis points.
+          <table className="wizard-table">
+            <thead><tr><th>Ordinary cell</th><th>Ex-ante share · basis points</th></tr></thead>
+            <tbody>
+              {quality.report.cellShareBps.map((share, index) => <tr key={index} className={index === quality.report.dominantCell ? 'wizard-paying' : ''}>
+                <td>{index}</td><td>{share}</td>
+              </tr>)}
+            </tbody>
+          </table>
+          <p className="wizard-rung-reason">
+            Characteristic displacement {quality.report.characteristicDisplacement === null ? 'is not measured under this model' : `${quality.report.characteristicDisplacement.toString()} ticks`},
+            {' '}plausible half-width {quality.report.plausibleHalfWidth === null ? 'likewise' : `${quality.report.plausibleHalfWidth.toString()} ticks`}.
+            {' '}Mass landing on no ordinary cell: {quality.report.unresolvedShareBps} basis points.
+          </p>
+        </div>
+        : <div className="market-refusal">
+          <strong>Refused · {quality.message}.</strong> This is the compiler&rsquo;s own refusal, raised by the same <code>dclutch-product-compiler</code> the founding path calls — not a client&rsquo;s guess at one. A partition where one outcome takes more than your stated ceiling is a market whose answer is already known, and it is refused before it is founded rather than after.
+        </div>)}
       {product.ok ? <>
         <p className="direct-status">
           Band {formatTicksV1(product.value.cuts[0], product.value.cutDenominator)} to {formatTicksV1(product.value.cuts[1], product.value.cutDenominator)} ·

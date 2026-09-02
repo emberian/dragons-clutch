@@ -6609,3 +6609,92 @@ different CPI depths, indistinguishable under the assertion they shared; and two
 more dead dispatch arms beside `#AdmitTerminal` — one with no stated reason, one
 whose stated reason no longer holds. **Register: 19 executed, 43 blocked, 99
 unclaimed — and 8 of 314 refusal codes have ever been observed firing on chain.**
+
+## 2026-09-01 — three mirrors compiled, and the wizard finally meets its own gate
+
+The web lane's three standing mirrors were all closed the same way, and the way is
+the one this tree keeps arriving at: **compile the owner, do not write a second
+one.** Each boundary is digest-pinned, carries a `const _: () = assert!` canary
+reading widths and magics BY CONSTANT NAME, and is re-checked after loading —
+because a blob can match its digest and still come from a different tree.
+
+- **`evaluateProductV2` is deleted.** It was `ProductPayoffV2::evaluate_rational`
+  reimplemented in TypeScript, and the Studio drew its whole payout curve from it:
+  the screen was never showing the arithmetic the chain settles with. Every one of
+  the six values it was pinned to is reproduced by the compiled codec, copied
+  verbatim into the new test — which is what makes a deletion a removal rather
+  than a hope.
+- **`rangeProtectionPlacementV1` is deleted, and its own lifting plan is
+  discharged.** `apps/dclutch-web` had ZERO occurrences of `max_cell_share_bps`,
+  `founding_band` or volatility-as-input, so a market designed in the wizard was
+  never measured by the gate that refuses degenerate partitions. It now states a
+  BELIEF — spot, volatility, window in slots, reach — and
+  `require_interesting_partition_v1` measures it, both members of the belief
+  family carried.
+- **The abort path stopped throwing away the refusal machinery.** An access
+  violation carries no `Custom` code, so the reader saw
+  `InstructionError #3: ProgramFailedToComplete` while
+  `Access violation … at 0x30000fcf8` sat unparsed two lines above. The SBF
+  vocabulary — every `EbpfError` and `SyscallError` Display format, the memory
+  map, the heap bounds — is now GENERATED from the pinned crates, and the
+  diagnosis pairs the fault with the transaction's own ComputeBudget request.
+
+**THE GATE FOUND SOMETHING THE WEAKER CHECK CALLED FINE**, which is the argument
+for compiling rather than approximating. The convicted SOL/USD band (12000/18000
+over denominator 100) is degenerate against a raw Pyth observation *and* with spot
+DEAD CENTRE at a 200 bp volatility: 200 bp of 15,000 is a 300-tick displacement,
+so the whole plausible band sits inside one 6,000-tick cell and that cell takes
+the market. The deleted check measured DISTANCE FROM THE BAND; the gate measures
+where the MASS lands. Same partition, same spot, different belief — at 3,000 bp it
+is admitted at 2222/5555/2222. **A partition is not degenerate on its own.**
+
+### Runbooks got a replay owner, and it convicted its own author
+
+`tools/doc-commands` replays every command `README.md`, `docs/guides/` and
+`docs/operators/` publish, as `--help`, in a new `runbooks` CI tier. Four defects,
+all live, none visible to any existing gate — the worst being that **the
+repository's own "See it run" command could not be run by anybody**:
+`private-validator-lifecycle/run.py --through participant` requires five
+arguments it did not pass. `dclutch-terminal --help` did not admit its own flags
+existed; it now RENDERS the parser's table. And then the tier read the
+two-clients page written to answer it and found two broken commands IN IT.
+
+Its exit codes keep "could not be checked" apart from "checked and fine": an
+unprobed command is a 2, never a pass.
+
+### The contrast cascade: the third draft is refused, with a measurement
+
+Two earlier drafts guessed the painting ancestor and produced wrong findings, so
+the 223 unresolved rules have been pinned by count. The obvious third move —
+render the shells with jsdom and ask `getComputedStyle` — **does not work, and
+that is now a live test with a positive control beside it**: jsdom applies plain
+rules correctly and does not resolve custom properties at all, so a var()-based
+stylesheet computes as transparent-on-everything. The method that WOULD work is
+written down: match rules against the rendered tree with `element.matches`, which
+jsdom does implement, and composite with the survey's own tokens.
+
+### Redemption stage one: specified, and one round cheaper than it looked
+
+`produce_wallet_terminal_input_v1` is still the last CLI command between a
+stranger and a redemption, and it is NOT started here — deliberately, at the end
+of a long lane, inside a 1,394-line file. What is bought is the shape, measured
+rather than guessed:
+
+**Two RPC rounds, not three, and three pure phases.**
+`terminal_lifecycle.rs:128` reads the Core Market, then the Claims aggregate for
+the custody context, then the routed frame. The first two can be ONE round: the
+aggregate address is `find_program_address([LIABILITY_BASIS_MARKET_SEED_V2,
+market], claims)` and is derivable from the plan before any read
+(`chain_custody_context_v1:339-346`). So the boundary is:
+
+1. pure, given plan JSON + evidence JSON + market + cluster → the TWO addresses
+   to read (Market, Claims aggregate), after every file-side authentication;
+2. pure, given those two observations → `routed.addresses()`, the frame to read
+   at the floor round one established;
+3. pure, given those observations + claim index + quantity → `PlanInputV1`.
+
+That is exactly the stage-two shape already proven — *the boundary is asked which
+accounts it authenticates and exactly those are read, in exactly that order* — and
+the CLI keeps the two file reads and the RPC. Its cluster policy is already a
+parameter (`ExpectedClusterV1`), which is the one impurity that turned out not to
+be one.

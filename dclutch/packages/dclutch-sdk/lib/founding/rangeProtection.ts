@@ -191,54 +191,30 @@ export function rangeProtectionBackingV1(product: RangeProtectionProductV1, prin
  * condition — a UNIT-SANITY check — that catches the convicted case and admits
  * the lopsided ones the compiler's own tests admit.
  */
-export type RangeProtectionPlacementV1 = Readonly<{
-  /** The outcome a coordinate that never moved from here would win. */
-  outcomeIndex: number;
-  kind: RangeProtectionOutcomeV1['kind'];
-  /** Whether the band is unreachably far from the observation. */
-  certain: boolean;
-  /** The compiler refusal this partition would meet, or null. */
-  refusal: 'DegenerateOutcomePartition' | null;
-}>;
-
-/**
- * How many band widths away from the band an observation may sit before this
- * market is called unreachable rather than lopsided.
+/*
+ * `rangeProtectionPlacementV1` STOOD HERE, and its lifting plan is discharged.
  *
- * PROVISIONAL. It is not derived from anything: it is a factor chosen to sit
- * far above "off-centre by a displacement or so", which the compiler's gate
- * deliberately admits, and far below the three orders of magnitude the
- * convicted defect was out by. Lifting plan: delete it, and call
+ * It was a strictly weaker, exactly decidable unit-sanity condition with a
+ * provisional constant of its own -- "32 band widths away is unreachable" --
+ * because the real measure lived in a Rust crate the browser could not call.
+ * Its own comment named the exit: "delete it, and call
  * `require_interesting_partition_v1` with the market's own founding band once
- * `dclutch-product-compiler` reaches the browser. Until then this catches the
- * unit error and makes no claim about outcome mass.
+ * `dclutch-product-compiler` reaches the browser."
+ *
+ * The compiler reaches the browser now, through
+ * `crates/dclutch-partition-quality-wasm` and
+ * `lib/founding/partitionQualityV1.ts`. The wizard states a BELIEF -- spot,
+ * volatility, window, reach -- and the compiled gate measures the partition
+ * against it, which is the thing the weaker check could not do: a partition is
+ * not degenerate on its own, only relative to a belief about where the
+ * coordinate goes.
+ *
+ * The convicted SOL/USD case this function existed to catch moved with it and
+ * is asserted against the real gate in
+ * `lib/founding/partitionQualityV1.test.ts`, which also found something the
+ * weaker check could not: at a 200 bp volatility that band is degenerate even
+ * with spot dead centre.
+ *
+ * What stays here is what this module owns: composing the partition, its
+ * outcomes, and the backing arithmetic.
  */
-const UNREACHABLE_BAND_WIDTHS_V1 = 32n;
-
-export const RANGE_PLACEMENT_PROVISIONAL_NOTE_V1 =
-  'This is a provisional unit-sanity bound, not an outcome-mass measure: it '
-  + 'refuses a band the observation cannot plausibly reach and admits every '
-  + 'merely lopsided one. The exact measure is '
-  + 'require_interesting_partition_v1 in dclutch-product-compiler, which this '
-  + 'browser cannot yet call.';
-
-/** Place one founding observation, in the product's own ticks, in its partition. */
-export function rangeProtectionPlacementV1(
-  product: RangeProtectionProductV1,
-  observationTicks: bigint,
-): RangeProtectionPlacementV1 {
-  if (typeof observationTicks !== 'bigint') throw new Error('the founding observation must be a whole number of ticks');
-  const [low, high] = [product.cuts[0], product.cuts[1]];
-  const outcomeIndex = observationTicks < low ? 0 : observationTicks < high ? 1 : 2;
-  const width = high - low;
-  const distance = observationTicks < low ? low - observationTicks
-    : observationTicks >= high ? observationTicks - high
-    : 0n;
-  const certain = distance > width * UNREACHABLE_BAND_WIDTHS_V1;
-  return Object.freeze({
-    outcomeIndex,
-    kind: product.outcomes[outcomeIndex].kind,
-    certain,
-    refusal: certain ? ('DegenerateOutcomePartition' as const) : null,
-  });
-}

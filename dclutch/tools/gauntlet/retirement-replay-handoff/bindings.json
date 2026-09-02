@@ -1,0 +1,72 @@
+{
+  "campaign": "retirement-replay-handoff-programtest",
+  "note": "Real-ELF ProgramTest for the retirement-only Trading-to-Core Custody replay handoff: Core authenticates the market, the roles, the Claims aggregate, the Realm and the RentCredit, then CPIs into Custody, which closes the Trading-role replay and creates the Core-role one at the same seeds. Campaign: programs/dclutch-core-sbf/tests/retirement_replay_handoff_program_test.rs. It has passed against the real Core and Custody ELFs since it landed -- with EXACT refusal codes for the replay and all six hostilities, no bare is_err() anywhere -- and was INVISIBLE to the census the whole time, because it called record() for nothing. EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE: outcomes, invoked programs and refusal codes are the ones the runtime reported in an 8-transaction fold, and each label was checked to carry exactly one outcome AND one refusal code first. The Custody route is bound to ONE row, the accepted handoff, because the chain says so: all seven refusals stop inside Core before the CPI and no Custody frame appears in their logs. Binding the Custody route to a refusal Custody never saw would be exactly the false green this tier exists to remove.",
+  "bindings": [
+    {
+      "label": "core replay handoff: the Trading-role replay becomes a Core-role replay",
+      "routes": [
+        "core/retirement_replay_handoff_v1::process",
+        "custody/retirement_replay_handoff_v1::process"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The route's first census evidence of any kind, for BOTH programs. 404,580 CU across Core, Custody and the System Program: Custody alone spends 259,511 of it. Afterwards the Trading-role replay is gone, the Core-role replay decodes to the same CustodyReplayV1 with only caller_role and caller_program changed, the Market and the Hoard are byte-identical, the payer paid exactly the Core replay's rent, and the RentCredit gained exactly the Trading replay's lamports."
+    },
+    {
+      "label": "core replay handoff: replayed against the prestate it no longer has",
+      "routes": ["core/retirement_replay_handoff_v1::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Reference",
+      "note": "The route is idempotent, and the campaign says WHICH conjunct makes it so rather than that the second submission failed somehow: the Trading replay the first pass closed is now a vacant System account, so authenticate_prestate refuses it on owner and width. Custom(0x3003), 75,814 CU, Custody never invoked."
+    },
+    {
+      "label": "core replay handoff: hostile Context",
+      "routes": ["core/retirement_replay_handoff_v1::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Reference",
+      "note": "HOSTILE. The Claims aggregate owns the retirement context and Core compares it before it ever reaches the replay, so a divergent request context is a Reference and not a Custody refusal: Custom(0x3003) at 53,435 CU, Core alone."
+    },
+    {
+      "label": "core replay handoff: hostile ReplayDigest",
+      "routes": ["core/retirement_replay_handoff_v1::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Reference",
+      "note": "HOSTILE. The Trading replay's own digest conjunct. Custom(0x3003), 75,274 CU."
+    },
+    {
+      "label": "core replay handoff: hostile PartialCoreReplay",
+      "routes": ["core/retirement_replay_handoff_v1::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Reference",
+      "note": "HOSTILE, and NOT the code a reader would guess. A half-created Core replay is a Reference, not a Creation: Core authenticates the vacant Core replay in the PRESTATE -- owner, zero lamports, empty data -- and never reaches creation. Custom(0x3003), 68,406 CU."
+    },
+    {
+      "label": "core replay handoff: hostile Rent",
+      "routes": ["core/retirement_replay_handoff_v1::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Creation",
+      "note": "HOSTILE, and the earliest refusal in the campaign at 8,579 CU: the request's own rent figure is compared against the Rent sysvar before the Market is read at all. Custom(0x3007). Forty-seven times cheaper than the accepted handoff, which is what a first-conjunct refusal should look like."
+    },
+    {
+      "label": "core replay handoff: hostile Phase",
+      "routes": ["core/retirement_replay_handoff_v1::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Market",
+      "note": "HOSTILE. A market not in the phase this retirement-only route admits: Custom(0x3005), 11,242 CU."
+    },
+    {
+      "label": "core replay handoff: hostile Release",
+      "routes": ["core/retirement_replay_handoff_v1::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Release",
+      "note": "HOSTILE. The activation join: Custom(0x3004), 47,255 CU."
+    }
+  ]
+}

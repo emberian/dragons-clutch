@@ -16,6 +16,7 @@ use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     StateBumpsV1,
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
@@ -40,6 +41,7 @@ use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
+    clock::Clock,
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -780,10 +782,24 @@ fn refusal(result: Result<(), BanksClientError>) -> Option<u32> {
     }
 }
 
+/// Submit one handoff and record it for the census.
+///
+/// The campaign has driven both `core/retirement_replay_handoff_v1::process`
+/// and, by CPI, `custody/retirement_replay_handoff_v1::process` against real
+/// ELFs since it landed, and both read NEVER-EXECUTED in the route register the
+/// whole time: it emitted no evidence, so no binding could be corroborated
+/// against it. `record()` is a no-op unless a runner sets
+/// `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR`, so this stays an ordinary test.
+///
+/// The label carries the FAULT, not just the act. Six hostiles share this one
+/// call site and they raise four different codes; one label across all six
+/// would let a binding read the code off whichever ran first, which is the
+/// exact defect the census refuses.
 async fn submit(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
     handoff: Instruction,
+    label: &str,
 ) -> Result<(), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let transaction = Transaction::new_signed_with_payer(
@@ -795,7 +811,47 @@ async fn submit(
         &[&context.payer, &fixture.payer],
         blockhash,
     );
-    context.banks_client.process_transaction(transaction).await
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("a submitted transaction carries its own signature")
+        .to_string();
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message_data().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await?;
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .as_ref()
+        .map(|metadata| {
+            (
+                metadata.log_messages.clone(),
+                metadata.compute_units_consumed,
+            )
+        })
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    processed.result.map_err(BanksClientError::TransactionError)
 }
 
 async fn snapshot(context: &mut ProgramTestContext, fixture: &Fixture) -> Snapshot {
@@ -842,9 +898,14 @@ async fn real_sbf_handoff_preserves_lineage_principal_and_exact_rent_arithmetic(
     let (test, fixture) = fixture(Fault::None);
     let mut context = test.start_with_context().await;
     let before = snapshot(&mut context, &fixture).await;
-    submit(&mut context, &fixture, instruction(&fixture, Fault::None))
-        .await
-        .expect("handoff succeeds");
+    submit(
+        &mut context,
+        &fixture,
+        instruction(&fixture, Fault::None),
+        "core replay handoff: the Trading-role replay becomes a Core-role replay",
+    )
+    .await
+    .expect("handoff succeeds");
     let after = snapshot(&mut context, &fixture).await;
     assert_eq!(after.market, before.market);
     assert_eq!(after.hoard, before.hoard);
@@ -875,7 +936,15 @@ async fn real_sbf_handoff_preserves_lineage_principal_and_exact_rent_arithmetic(
     // hostilities below reach. Naming it is what distinguishes "the route is
     // idempotent" from "the second submission failed somehow".
     assert_eq!(
-        refusal(submit(&mut context, &fixture, instruction(&fixture, Fault::None)).await),
+        refusal(
+            submit(
+                &mut context,
+                &fixture,
+                instruction(&fixture, Fault::None),
+                "core replay handoff: replayed against the prestate it no longer has",
+            )
+            .await
+        ),
         Some(CORE_REFERENCE),
         "replay must refuse at the prestate it no longer has"
     );
@@ -910,7 +979,15 @@ async fn hostile_substitution_replay_partial_rent_phase_and_release_refuse_with_
         let mut context = test.start_with_context().await;
         let before = snapshot(&mut context, &fixture).await;
         assert_eq!(
-            refusal(submit(&mut context, &fixture, instruction(&fixture, fault)).await),
+            refusal(
+                submit(
+                    &mut context,
+                    &fixture,
+                    instruction(&fixture, fault),
+                    &format!("core replay handoff: hostile {fault:?}"),
+                )
+                .await
+            ),
             Some(expected),
             "{fault:?} must refuse with its own code"
         );

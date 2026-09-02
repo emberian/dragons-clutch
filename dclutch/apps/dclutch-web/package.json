@@ -21,6 +21,8 @@
     "abi:found:verify": "node scripts/generate-core-found.mjs --check",
     "abi:generic-founding": "node scripts/generate-generic-founding.mjs",
     "abi:generic-founding:verify": "node scripts/generate-generic-founding.mjs --check",
+    "abi:partition-quality-wasm": "node scripts/generate-partition-quality-wasm.mjs",
+    "abi:partition-quality-wasm:verify": "node scripts/generate-partition-quality-wasm.mjs --check",
     "abi:principal-capacity": "node scripts/generate-principal-capacity.mjs",
     "abi:principal-capacity:verify": "node scripts/generate-principal-capacity.mjs --check",
     "abi:claims-replay": "node scripts/generate-claims-custody-replay.mjs",

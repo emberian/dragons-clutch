@@ -1744,6 +1744,7 @@ dependencies = [
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
+ "dclutch-program-test-evidence",
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-activation-auth-v1",
@@ -2140,6 +2141,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-provider-transport-v3-operator"
 version = "0.1.0"
 dependencies = [
@@ -2364,6 +2369,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-sbf-bump-heap"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-series-v3-kernel"
 version = "0.1.0"
 dependencies = [
@@ -2446,6 +2458,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
+ "dclutch-sbf-bump-heap",
  "dclutch-series-v3-kernel",
  "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",

@@ -80,8 +80,63 @@ describe('accessibility coverage', () => {
     // gets colours rewritten to satisfy it.
     //
     // These 223 rules are a named wall, not a pass. Closing them needs a
-    // resolved cascade — a real browser — which this suite does not have.
+    // resolved cascade, and the test below records exactly which instrument
+    // cannot supply one and why — measured, not assumed.
     expect(report().unresolvedContrast.length).toBe(223);
+  });
+
+  /**
+   * THE THIRD DRAFT, refused before it was written.
+   *
+   * Two earlier drafts guessed the painting ancestor and produced wrong
+   * findings. The obvious third move is the instrument this suite already uses
+   * for landmark nesting: render the shells with jsdom as a library and ask
+   * `getComputedStyle` what is actually behind the text. It does not work, and
+   * the reason is worth a test rather than a sentence, because "we tried
+   * rendering" is exactly the claim a later lane would re-spend an afternoon
+   * on.
+   *
+   * jsdom resolves selector matching correctly and does NOT resolve custom
+   * properties: `color: var(--x)` comes back as the literal `var(--x)`, and a
+   * `background: var(--ground)` shorthand comes back fully transparent. This
+   * application's stylesheet is var()-based by construction — the contrast
+   * collapse made it more so — so a cascade computed that way would report
+   * every background as transparent and every colour as an unparsable string.
+   * That is a third wrong answer, not a resolution.
+   *
+   * The control is live in both directions: if jsdom ever resolves custom
+   * properties, this goes red and tells whoever reads it that the road is now
+   * open. The method that would work without one is not a browser either — it
+   * is matching each rule against the RENDERED tree with `element.matches`,
+   * which jsdom does implement, and doing the token expansion and compositing
+   * with this survey's own `tokens()`.
+   */
+  it('records why a rendered cascade cannot close the 223, and reopens if that changes', async () => {
+    const { JSDOM } = await import('jsdom');
+    const dom = new JSDOM(
+      '<!doctype html><html><head><style>'
+      + ':root{--ground:#101010;--muted:#777777}'
+      + 'body{background:var(--ground)}.card{background:#222222}.card p{color:var(--muted);font-size:12px}'
+      + '</style></head><body><div class="card"><p id="probe">x</p></div></body></html>',
+    );
+    const { window } = dom;
+    const probe = window.document.getElementById('probe');
+    expect(probe).not.toBeNull();
+    const computed = window.getComputedStyle(probe as Element);
+
+    // The positive control: jsdom DOES apply a plain stylesheet rule, so the
+    // instrument is connected and the two failures below are real.
+    expect(computed.fontSize).toBe('12px');
+    expect(window.getComputedStyle(window.document.querySelector('.card') as Element).backgroundColor)
+      .toBe('rgb(34, 34, 34)');
+
+    // And the two failures that close the road.
+    expect(computed.color, 'jsdom now resolves custom properties; a rendered cascade may be worth building')
+      .toBe('var(--muted)');
+    expect(window.getComputedStyle(window.document.body).backgroundColor,
+      'jsdom now resolves a var() background shorthand; a rendered cascade may be worth building')
+      .toBe('rgba(0, 0, 0, 0)');
+    window.close();
   });
 
   it('carries a written reason for every exemption', () => {

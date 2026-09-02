@@ -1,0 +1,40 @@
+{
+  "campaign": "retirement-replay-handoff-programtest",
+  "witnesses": [
+    {
+      "id": "handoff-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units; it is the chain's limit, not ours, and the campaign asks for exactly it with a ComputeBudget instruction rather than relying on a harness default."
+    },
+    {
+      "id": "every-handoff-frame-fits-a-legacy-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null or .wire_bytes > 1232)] | length | tostring",
+      "expect": "0",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so the campaign MEASURES: all eight of its 23-account frames serialise to 1,209 bytes and fit on a bare legacy message with no Address Lookup Table. That is worth asserting separately, because the aggregate-retirement chain this route feeds does NOT fit without one."
+    },
+    {
+      "id": "only-the-accepted-handoff-reaches-custody",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select([.logs[] | select(test(\"^Program FBy54Eo9BdNaJ1XabjVx6q5CGMBGSMBCLgxoEpQotxjT invoke\"))] | length > 0)] | length | tostring",
+      "expect": "1",
+      "provenance": "Core authenticates the market, the roles, the Claims aggregate, the Realm, the RentCredit and the whole prestate BEFORE it invokes Custody. So exactly one of the eight transactions may carry a Custody frame -- the accepted handoff. A second would mean a hostile is paying Custody compute to discover a fact Core already refused on, and would also mean this tier's Custody binding is crediting a route to evidence it did not produce. The address is this tier's gauntlet-local Custody id from programs.json."
+    },
+    {
+      "id": "every-handoff-refusal-reached-cores-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line. Every one of this campaign's seven refusals is a decision Core made on a named conjunct, and the campaign asserts the exact code for each; a bare runtime refusal appearing here would mean a hostile stopped being about the handoff."
+    },
+    {
+      "id": "the-refusals-span-four-distinct-conjunct-families",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | .error | tostring] | unique | length | tostring",
+      "expect": "4",
+      "provenance": "Reference, Creation, Market and Release. Seven hostilities collapsing to fewer families would mean the route's taxonomy had coarsened -- the map_err-that-discards-its-cause defect AGENTS.md names -- and more would mean a case started refusing somewhere new. Four is the count the campaign's own table asserts, one code at a time."
+    }
+  ]
+}

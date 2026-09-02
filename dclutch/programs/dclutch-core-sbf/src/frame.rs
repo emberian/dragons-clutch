@@ -14,6 +14,22 @@ pub use dclutch_market_core_codec::{
 pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 24;
 /// Exact account count for one-time infrastructure-profile initialization.
 pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1: usize = 15;
+/// Index of `payer` in the initialization frame.
+const INITIALIZE_PAYER_INDEX_V1: usize = 0;
+/// Index of `upgrade_authority` in the initialization frame.
+///
+/// These two name the frame's ONE permitted aliasing pair, and they are
+/// constants rather than a literal in the check because the frame has already
+/// moved underneath that literal once: `c60b25e8` inserted `genesis_profile`
+/// at index 2, which shifted the authority from 3 to 4 and left the exemption
+/// naming an account that can never alias the payer. Every core-sbf test
+/// stayed green; the first real devnet initialization refused `AccountFrame`
+/// at 3,388 compute units, because the driver pays with the key it signs with.
+const INITIALIZE_UPGRADE_AUTHORITY_INDEX_V1: usize = 4;
+const _: () = assert!(
+    INITIALIZE_UPGRADE_AUTHORITY_INDEX_V1 < INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1
+        && INITIALIZE_PAYER_INDEX_V1 < INITIALIZE_UPGRADE_AUTHORITY_INDEX_V1
+);
 /// Exact account count for the one-time infrastructure succession ceremony.
 pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V2: usize = 21;
 
@@ -801,7 +817,15 @@ fn require_distinct_except_payer_authority(
             .enumerate()
             .skip(left_index.saturating_add(1))
         {
-            if left.key == right.key && !matches!((left_index, right_index), (0, 3)) {
+            if left.key == right.key
+                && !matches!(
+                    (left_index, right_index),
+                    (
+                        INITIALIZE_PAYER_INDEX_V1,
+                        INITIALIZE_UPGRADE_AUTHORITY_INDEX_V1
+                    )
+                )
+            {
                 return Err(CoreSbfError::AccountFrame);
             }
         }
@@ -818,4 +842,97 @@ pub(crate) fn require_distinct(accounts: &[AccountInfo<'_>]) -> Result<(), CoreS
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use std::{boxed::Box, vec, vec::Vec};
+
+    use super::*;
+
+    fn info(key: Pubkey, signer: bool, writable: bool, executable: bool) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            signer,
+            writable,
+            Box::leak(Box::new(0)),
+            Box::leak(Vec::new().into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::default())),
+            executable,
+        )
+    }
+
+    /// A privilege-correct fifteen-account initialization frame.
+    fn initialize_frame(payer: Pubkey, authority: Pubkey) -> Vec<AccountInfo<'static>> {
+        let unique =
+            |signer, writable, executable| info(Pubkey::new_unique(), signer, writable, executable);
+        vec![
+            info(payer, true, true, false),
+            unique(false, true, false),
+            unique(false, true, false),
+            unique(false, false, false),
+            info(authority, true, false, false),
+            unique(false, false, false),
+            unique(false, false, false),
+            unique(false, false, true),
+            unique(false, false, false),
+            unique(false, false, false),
+            unique(false, false, false),
+            unique(false, false, true),
+            unique(false, false, false),
+            info(sysvar::rent::ID, false, false, false),
+            info(system_program::ID, false, false, true),
+        ]
+    }
+
+    /// The frame's ONE permitted aliasing pair, and it is payer/authority.
+    ///
+    /// This is the test that exemption never had. `c60b25e8` widened the frame
+    /// 14 -> 15 by inserting `genesis_profile` at index 2, which moved the
+    /// upgrade authority from 3 to 4 while the exemption went on naming 3 --
+    /// so the pair the frame exists to admit was refused, and the pair it then
+    /// named (payer aliasing `core_programdata`) is one no caller can produce.
+    /// Thirty-three core-sbf tests stayed green. The first real devnet
+    /// initialization refused `AccountFrame` after 3,388 compute units,
+    /// because the campaign pays with the authority it signs with.
+    #[test]
+    fn initialize_admits_a_payer_that_is_the_upgrade_authority_and_no_other_alias() {
+        let authority = Pubkey::new_unique();
+        assert!(
+            InitializeInfrastructureAccounts::parse(&initialize_frame(authority, authority))
+                .is_ok(),
+            "the payer may be the upgrade authority: that is the exemption's whole purpose"
+        );
+        // Positive control on the same fixture, so this cannot pass by
+        // admitting everything: distinct identities parse too.
+        assert!(
+            InitializeInfrastructureAccounts::parse(&initialize_frame(
+                Pubkey::new_unique(),
+                Pubkey::new_unique()
+            ))
+            .is_ok()
+        );
+
+        // And every OTHER aliasing pair still refuses. Rebuilding the frame
+        // with one slot's key copied from another is the only way to alias,
+        // because every other slot is `Pubkey::new_unique`.
+        for (left, right) in [(0_usize, 1_usize), (1, 2), (0, 3), (3, 4), (5, 6), (7, 11)] {
+            let mut frame = initialize_frame(Pubkey::new_unique(), Pubkey::new_unique());
+            let key = *frame[left].key;
+            let aliased = &frame[right];
+            frame[right] = info(
+                key,
+                aliased.is_signer,
+                aliased.is_writable,
+                aliased.executable,
+            );
+            assert_eq!(
+                InitializeInfrastructureAccounts::parse(&frame).err(),
+                Some(CoreSbfError::AccountFrame),
+                "slots {left} and {right} must not be allowed to alias"
+            );
+        }
+    }
 }

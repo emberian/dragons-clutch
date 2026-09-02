@@ -35,13 +35,26 @@ describe('the wizard says where the coordinate actually falls', () => {
     expect(html).toContain('the same ticks as the band');
   });
 
-  it('names the compiler refusal a band the coordinate cannot reach would meet', () => {
-    // Rendered against the wizard's own shipped default, which is the demo
-    // market's cuts and is the convicted case.
-    expect(html).toContain('DegenerateOutcomePartition');
+  it('asks for the belief the gate is measured against, which it never used to collect', () => {
+    // The three fields that make a partition measurable at all. Without a
+    // belief there is nothing for `require_interesting_partition_v1` to
+    // measure against, which is why the wizard could only run a unit-sanity
+    // bound of its own before these existed.
+    expect(html).toContain('What you believe the coordinate does');
+    expect(html).toContain('Volatility · basis points of spot over the window');
+    expect(html).toContain('Window · slots from founding to deadline');
+    expect(html).toContain('Plausible half-widths');
+    expect(html).toContain('Largest share one outcome may take · basis points');
   });
 
-  it('says its bound is provisional and names the gate that lifts it', () => {
-    expect(html).toContain('require_interesting_partition_v1');
+  it('claims no verdict before the compiled gate has loaded', () => {
+    // A STATIC render has not loaded the WASM, so there is no measurement yet
+    // and the page says exactly that. It must NOT name a refusal here: the
+    // wizard used to print `DegenerateOutcomePartition` from a check of its
+    // own, and a client that names the compiler's refusal without having asked
+    // the compiler is the thing this whole unit removed.
+    expect(html).toContain('Loading the compiled partition gate');
+    expect(html).not.toContain('DegenerateOutcomePartition');
+    expect(html).not.toContain('provisional unit-sanity bound');
   });
 });

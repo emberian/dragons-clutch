@@ -2277,6 +2277,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-partition-quality-wasm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-compiler",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "dclutch-product-compiler"
 version = "0.1.0"
 dependencies = [

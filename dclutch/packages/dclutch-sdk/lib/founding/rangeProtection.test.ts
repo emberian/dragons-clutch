@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest';
 import manifestVector from '../../fixtures/founding/campaign-manifest-vector.json';
 import {
   composeRangeProtectionV1,
-  rangeProtectionPlacementV1,
-  RANGE_PLACEMENT_PROVISIONAL_NOTE_V1,
   formatTicksV1,
   rangeProtectionBackingV1,
 } from './rangeProtection';
@@ -120,57 +118,3 @@ describe('what a founding principal buys', () => {
   });
 });
 
-describe('where the founding coordinate actually falls', () => {
-  /**
-   * THE DEFECT THIS CLOSES, and it is ember's standing complaint reduced to
-   * a line: "SOL/USD always resolves into the same bucket."
-   *
-   * The wizard shipped `cutDenominator=100` with edges `12000/18000`, cuts at
-   * 120.00 and 180.00 of a coordinate whose Source returns raw provider price
-   * atoms UNRESCALED (`crates/dclutch-source-contract/src/lib.rs:612`). A Pyth
-   * SOL/USD observation is on the order of 10^10 in those atoms, so every
-   * outcome lands in the top cell and the flagship authored market resolves
-   * into it 100% of the time. The compiler now refuses exactly that as
-   * `DegenerateOutcomePartition`, measured at `0 / 0 / 0 / 0 / 10000 bp`.
-   *
-   * Every shape check the composer already made — strictly increasing cuts,
-   * regions = cuts + 1, a gcd-normalized portfolio — passed on that market.
-   * Shape was never the missing property. WHERE THE COORDINATE IS was.
-   */
-  const band = { coordinateLabel: 'SOL/USD', cutDenominator: 100n, lowerEdgeTicks: 12_000n, upperEdgeTicks: 18_000n };
-
-  it('names the outcome a coordinate that never moves would win', () => {
-    const inside = rangeProtectionPlacementV1(composeRangeProtectionV1(band), 15_000n);
-    expect(inside.outcomeIndex).toBe(1);
-    expect(inside.kind).toBe('inside-band');
-    expect(inside.certain).toBe(false);
-  });
-
-  it('convicts the shipped SOL/USD partition against a real Pyth observation', () => {
-    // A Pyth SOL/USD price in raw atoms, the coordinate this market's own
-    // Source reports. Nothing rescales it on the way in.
-    const placement = rangeProtectionPlacementV1(composeRangeProtectionV1(band), 15_000_000_000n);
-    expect(placement.outcomeIndex).toBe(2);
-    expect(placement.kind).toBe('above-band');
-    // Not merely lopsided: the band is so far below the coordinate that no
-    // plausible move reaches it, which is the convicted defect.
-    expect(placement.certain).toBe(true);
-    expect(placement.refusal).toBe('DegenerateOutcomePartition');
-  });
-
-  it('admits a lopsided threshold that is merely off-centre', () => {
-    // The compiler's gate deliberately admits "a legitimately lopsided binary
-    // threshold placed a displacement or so away from spot". A check that
-    // refused those would be a checker that refuses everything, which is
-    // exactly what the compiler's own tests were written to avoid.
-    const offCentre = rangeProtectionPlacementV1(composeRangeProtectionV1(band), 19_000n);
-    expect(offCentre.kind).toBe('above-band');
-    expect(offCentre.certain).toBe(false);
-    expect(offCentre.refusal).toBeNull();
-  });
-
-  it('states its own bound as provisional, with the gate that lifts it', () => {
-    expect(RANGE_PLACEMENT_PROVISIONAL_NOTE_V1).toContain('provisional');
-    expect(RANGE_PLACEMENT_PROVISIONAL_NOTE_V1).toContain('require_interesting_partition_v1');
-  });
-});
