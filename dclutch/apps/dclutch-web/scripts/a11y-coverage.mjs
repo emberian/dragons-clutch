@@ -109,6 +109,29 @@ function colour(text) {
 }
 
 /** Lay a possibly translucent colour over an opaque one. */
+/**
+ * One rule's contrast AFTER its element opacity, exported so it can be proven.
+ *
+ * CSS renders an element and then composites it: the text is laid on its own
+ * background first, and the pair is dimmed over what is behind them together.
+ * So a dimmed rule that paints its own background moves BOTH sides of the
+ * ratio, not just the ink -- and a dimmed rule that paints nothing has its
+ * background unchanged and only its ink pulled toward the ground.
+ *
+ * THIS IS EXPORTED BECAUSE THE SURVEY CANNOT EXERCISE IT. Both live opacity
+ * defects were fixed by receding in colour instead, and the one dimmer left in
+ * the sheet reaches no colour rule by selector prefix -- so `alpha < 1` never
+ * fires in a real run today, and a composition path that is never taken is
+ * indistinguishable from one that is broken. `lib/a11yCoverage.test.ts` calls
+ * this directly with the two colours that were actually on the page, and holds
+ * it to the two ratios that were actually measured.
+ */
+export function effectiveContrastV1(foreground, background, ground, alpha) {
+  const painted = over(foreground, background);
+  if (alpha >= 1) return contrast(painted, background);
+  return contrast(over([...painted, alpha], ground), over([...background, alpha], ground));
+}
+
 function over([red, green, blue, alpha], base) {
   if (alpha >= 1) return [red, green, blue];
   return [0, 1, 2].map((index) => Math.round([red, green, blue][index] * alpha + base[index] * (1 - alpha)));
@@ -214,15 +237,59 @@ export function surveyContrast() {
   // Every selector that paints a background, gathered first so a colour rule
   // can ask what its own ancestors put behind it.
   const painted = new Map();
+  // AND EVERY SELECTOR THAT DIMS ONE.
+  //
+  // `opacity` composites the whole element -- its text AND its own background --
+  // over what is behind it, and it applies to every descendant unconditionally.
+  // This survey modelled it NOWHERE, so a rule could be measured at 7.72:1 and
+  // rendered at 3.63:1 and no check in this repository could tell. Two live
+  // instances were found by hand on 2026-09-02, both on /market's trade page:
+  // `.flow-rail-upcoming a { opacity: .58 }` took the seven-step rail's labels
+  // to 2.16:1, and `.flow-step-upcoming > header { opacity: .62 }` took a step's
+  // description sentence to 3.63:1. Both are fixed by receding in COLOUR, which
+  // is the form a static check can read.
+  const dimmed = new Map();
   for (const sheet of STYLESHEETS) {
     for (const rule of readFileSync(sheet, 'utf8').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       const paint = /(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)(?:;|$)/.exec(rule[2]);
-      if (paint === null) continue;
+      const fade = /(?:^|[;\s])opacity\s*:\s*([\d.]+)\s*(?:;|$)/.exec(rule[2]);
       for (const one of rule[1].split(',')) {
         const key = one.trim().split('\n').pop().trim();
-        if (key !== '' && !painted.has(key)) painted.set(key, paint[1]);
+        if (key === '') continue;
+        if (paint !== null && !painted.has(key)) painted.set(key, paint[1]);
+        if (fade !== null && Number(fade[1]) < 1) {
+          dimmed.set(key, {
+            alpha: Number(fade[1]),
+            site: `${relative(webRoot, sheet).split('\\').join('/')}:${lineOf(readFileSync(sheet, 'utf8'), rule.index)}`,
+            composed: false,
+          });
+        }
       }
     }
+  }
+
+  /**
+   * The opacity that provably applies to one selector's subject.
+   *
+   * SOUND, NOT GUESSED. Unlike a background -- where the nearest painting
+   * ancestor is a cascade question this file already refuses to answer -- an
+   * `opacity` on an element applies to that element's whole subtree, always.
+   * So a dimmer counts when it is the rule ITSELF, or when its selector is a
+   * literal compound prefix of this one, because a prefix provably names an
+   * ancestor-or-self. A dimmer that reaches a rule through a sibling state
+   * class (`.flow-rail-upcoming a` over `.flow-rail a > small`) is NOT derivable
+   * from the text of the sheet, and is reported as an open dimmer rather than
+   * folded in with a guess.
+   */
+  function dimmerFor(selector) {
+    let alpha = 1;
+    for (const [key, entry] of dimmed) {
+      if (selector === key || selector.startsWith(`${key} `) || selector.startsWith(`${key}>`)) {
+        alpha *= entry.alpha;
+        entry.composed = true;
+      }
+    }
+    return alpha;
   }
 
   const rows = [];
@@ -284,7 +351,11 @@ export function surveyContrast() {
       const size = sized === null ? null : Number(sized[1]);
       if (size !== null && size >= LARGE_TEXT_PX) continue;
 
-      const ratio = contrast(over(foreground, background), background);
+      // CSS renders the element, then composites it. So the text is laid on its
+      // own background first and the pair is dimmed over the ground together --
+      // which is why a dimmed rule that paints its own background moves BOTH
+      // sides of the ratio, not just the ink.
+      const ratio = effectiveContrastV1(foreground, background, ground, dimmerFor(selector));
       if (ratio >= CONTRAST_FLOOR) continue;
       rows.push({
         site: `${relative(webRoot, sheet).split('\\').join('/')}:${lineOf(css, rule.index)}`,
@@ -297,6 +368,9 @@ export function surveyContrast() {
   return Object.freeze({
     failing: rows.sort((left, right) => left.site.localeCompare(right.site)),
     unresolved: unresolved.sort((left, right) => left.site.localeCompare(right.site)),
+    dimmers: [...dimmed]
+      .map(([selector, entry]) => ({ selector, alpha: entry.alpha, site: entry.site, composed: entry.composed }))
+      .sort((left, right) => left.site.localeCompare(right.site)),
   });
 }
 
@@ -481,6 +555,23 @@ export function coverage() {
     unreachableScrollers: classify(found.unreachableScrollers, exempt.unreachableScrollers),
     lowContrastText: classify(surveyContrast().failing, exempt.lowContrastText),
     unresolvedContrast: surveyContrast().unresolved,
+    /**
+     * Every rule that dims text with `opacity`, and whether this survey could
+     * see through it.
+     *
+     * A dimmer this file can compose is one whose effect is already inside the
+     * contrast numbers above. A dimmer it cannot -- one that reaches its text
+     * through a sibling state class rather than a selector prefix -- is the
+     * shape that hid a 2.16:1 rail for as long as the rail existed, so it is
+     * listed rather than left silent, and clearing it needs a written reason
+     * the same way an unnamed control does.
+     */
+    dimmedText: classify(
+      surveyContrast().dimmers
+        .filter((entry) => !entry.composed)
+        .map((entry) => ({ site: entry.site, selector: entry.selector, alpha: entry.alpha })),
+      exempt.dimmedText,
+    ),
   };
 }
 
@@ -499,5 +590,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.stdout.write(`a11y: ${open(report.lowContrastText).length} small-text rules below ${CONTRAST_FLOOR}:1 on a resolvable background (${report.lowContrastText.length - open(report.lowContrastText).length} exempt)\n`);
     for (const entry of contrast.failing) process.stdout.write(`  ${String(entry.ratio).padStart(5)}:1  ${entry.site}  ${entry.selector.slice(0, 60)}\n`);
     process.stdout.write(`a11y: ${contrast.unresolved.length} rules paint small text on a background this survey will not guess\n`);
+    const composed = contrast.dimmers.filter((entry) => entry.composed).length;
+    process.stdout.write(`a11y: ${open(report.dimmedText).length} opacity rules dim text this survey cannot follow (${composed} composed, ${report.dimmedText.length - open(report.dimmedText).length} exempt)\n`);
+    for (const entry of open(report.dimmedText)) process.stdout.write(`  opacity ${entry.alpha}  ${entry.site}\n`);
   }
 }

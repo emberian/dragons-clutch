@@ -10,7 +10,16 @@ const report = coverage.coverage as () => Readonly<{
   unreachableScrollers: ReadonlyArray<Row>;
   lowContrastText: ReadonlyArray<Row & Readonly<{ ratio?: number }>>;
   unresolvedContrast: ReadonlyArray<Readonly<{ site: string; selector: string }>>;
+  dimmedText: ReadonlyArray<Row & Readonly<{ selector?: string; alpha?: number }>>;
 }>;
+/** `[r, g, b]`, or `[r, g, b, a]` for a colour that is itself translucent. */
+type Rgb = readonly [number, number, number] | readonly [number, number, number, number];
+const effectiveContrastV1 = coverage.effectiveContrastV1 as (
+  foreground: Rgb,
+  background: Rgb,
+  ground: Rgb,
+  alpha: number,
+) => number;
 const survey = coverage.survey as () => Readonly<{
   scrollingClasses: ReadonlyArray<string>;
   unnamedControls: ReadonlyArray<Readonly<{ site: string; tag: string }>>;
@@ -93,13 +102,68 @@ describe('accessibility coverage', () => {
     // which is what this number is for. `.trade-v3-preview p` sat on the
     // hairline-grid DIVIDER rather than a cell, 3.75:1 at 13px on /trade and
     // /market; it now paints the same tint over the same cell, opaque, and
-    // resolves at 5.72:1. `.flow-rail a > small` was 4.02:1 before any state,
+    // resolves at 5.72:1. `.flow-rail a > small` was 4.24:1 before any state,
     // and `.flow-rail-upcoming a { opacity: .58 }` took the seven-step trade
     // rail to 2.16:1 for the step label and 3.18:1 for the number. THE SURVEY
-    // MODELS OPACITY NOWHERE, so that whole class of defect is invisible to it
-    // even for rules it does resolve — which is the next thing worth closing
-    // here, and is named as debt rather than fixed today.
-    expect(report().unresolvedContrast.length).toBe(196);
+    // MODELLED OPACITY NOWHERE, so that whole class of defect was invisible to
+    // it even for rules it resolves. It does now; see the two cases below.
+    //
+    // 196 -> 194 with the creation-studio remnant, the last dead family left in
+    // the sheet.
+    expect(report().unresolvedContrast.length).toBe(194);
+  });
+
+  it('composes element opacity into the ratio, on the two colours that were on the page', () => {
+    /**
+     * THE POSITIVE CONTROL, and this survey needs one badly.
+     *
+     * Both live `opacity` defects were fixed by receding in COLOUR instead, and
+     * the one dimmer left in the sheet reaches no colour rule by selector
+     * prefix -- so `alpha < 1` never fires in a real run today. A composition
+     * path that is never taken is indistinguishable from one that is broken,
+     * and "0 opacity rules dim text this survey cannot follow" would read as a
+     * clean bill of health from an instrument that was disconnected.
+     *
+     * So this calls the composition directly with the colours that were
+     * actually on `/market` and holds it to the ratios that were actually
+     * measured. CSS renders the element and THEN composites it, so a dimmed
+     * anchor's own wash dims too -- which is why the rail's step label is
+     * 2.20:1 and not the 2.24:1 a hand calculation that dims only the ink
+     * produces. Getting that wrong in the safe direction is still wrong.
+     */
+    const ground: Rgb = [0x07, 0x10, 0x0c];
+    // `.flow-rail a`'s own `rgba(255,255,255,.02)`, composited over the ground
+    // the way `surveyContrast` does before it measures anything.
+    const railBackground: Rgb = [12, 21, 17];
+
+    // `.flow-rail a > small` at #6e7c73 under `.flow-rail-upcoming a { opacity: .58 }`.
+    expect(effectiveContrastV1([0x6e, 0x7c, 0x73, 1], railBackground, ground, 0.58)).toBeCloseTo(2.20, 2);
+    // The same ink with no dimmer is above the floor, which is exactly why the
+    // undimmed measurement said nothing was wrong.
+    expect(effectiveContrastV1([0x6e, 0x7c, 0x73, 1], railBackground, ground, 1)).toBeCloseTo(4.24, 2);
+    // `.flow-step > header p` at var(--muted) under `.flow-step-upcoming > header { opacity: .62 }`:
+    // a SENTENCE at 15px, measured 7.72:1 and rendered 3.63:1.
+    expect(effectiveContrastV1([0x9b, 0xa7, 0x9d, 1], ground, ground, 0.62)).toBeCloseTo(3.63, 2);
+    expect(effectiveContrastV1([0x9b, 0xa7, 0x9d, 1], ground, ground, 1)).toBeCloseTo(7.72, 2);
+
+    // And the colours that replaced them, all above the floor undimmed.
+    expect(effectiveContrastV1([0x8a, 0x98, 0x8e, 1], railBackground, ground, 1)).toBeGreaterThanOrEqual(4.5);
+    expect(effectiveContrastV1([0x7d, 0x8a, 0x81, 1], railBackground, ground, 1)).toBeGreaterThanOrEqual(4.5);
+    expect(effectiveContrastV1([0x82, 0x8f, 0x86, 1], ground, ground, 1)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('leaves no opacity rule dimming text without a composition or a written reason', () => {
+    // The ratchet the two findings above earned. A dimmer this survey cannot
+    // follow is the shape that hid a 2.20:1 rail for as long as the rail
+    // existed, so it has to be cleared the way an unnamed control is: composed,
+    // or excused in writing. `button:disabled` is the one exemption, and WCAG
+    // 1.4.3 exempts inactive components by name.
+    const open = report().dimmedText.filter((row) => row.state === 'open');
+    expect(
+      open.map((row) => `${row.site} (opacity ${row.alpha})`),
+      'recede in colour instead, or exempt it with a reason',
+    ).toEqual([]);
+    expect(report().dimmedText.length, 'the dimmer census found nothing at all, so it is not reading the sheet').toBeGreaterThan(0);
   });
 
   /**

@@ -15,5 +15,11 @@
       "sites": 2,
       "reason": "Two decorative marks, neither of which carries information a reader needs: `.launch-hero::after` stamps 'DCLUTCH / DEVNET / 2026' sideways in the corner of the launch hero at 8px, and `.chart-watermark` is a watermark by name and by function. WCAG 1.4.3 exempts incidental and decorative text, and raising either to 4.5:1 would turn a texture into a competing label. Every other rule in this file that paints small text on a background this survey can resolve is above the floor; a third failure here changes the count and reopens both."
     }
+  },
+  "dimmedText": {
+    "app/globals.css": {
+      "sites": 1,
+      "reason": "`button:disabled { opacity: .42 }` is the one remaining opacity on text this survey cannot compose, and it is the one case WCAG 1.4.3 exempts by name: an inactive user-interface component has no contrast requirement, because the point of the treatment is that the control is not available. It is listed rather than deleted so the exemption is a decision someone made about disabled controls, not a hole. A second dimmer in this file changes the count and reopens this one -- which is exactly what should happen, since the two dimmers found on 2026-09-02 were both real failures on live text."
+    }
   }
 }

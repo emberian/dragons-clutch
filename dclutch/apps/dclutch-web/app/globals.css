@@ -830,29 +830,6 @@ p { text-wrap: pretty; }
 .allocation-preview b { font: 10px var(--font-geist-mono); }
 
 /* Creation studio */
-.create-heading { display: grid; grid-template-columns: 1.15fr .6fr; gap: 70px; align-items: end; padding: clamp(58px, 7vw, 96px) 0 44px; }
-.create-heading .eyebrow { margin-bottom: 17px; }
-.create-heading h1 { font-size: clamp(40px, 5vw, 68px); }
-.create-heading > p { margin: 0 0 4px; color: var(--muted); font-size: 15px; line-height: 1.65; }
-.create-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
-.create-steps, .create-form { border: 1px solid var(--line); border-radius: 17px; background: rgba(10,19,15,.74); }
-.create-steps { position: sticky; top: 16px; padding: 10px; }
-.create-steps > div { display: grid; grid-template-columns: 27px 1fr; gap: 10px; padding: 13px 10px; border: 1px solid transparent; border-radius: 9px; opacity: .48; }
-.create-steps > div.active { border-color: var(--line); background: rgba(255,255,255,.035); opacity: 1; }
-.create-steps b { padding-top: 2px; color: var(--acid); font: 9px var(--font-geist-mono); }
-.create-steps span { display: grid; gap: 4px; }
-.create-steps strong { font-size: 11px; }
-.create-steps small { color: #718077; font-size: 9px; line-height: 1.35; }
-.create-form { padding: clamp(26px, 4vw, 48px); }
-.form-section-heading { display: flex; gap: 14px; }
-.form-section-heading > span { padding-top: 3px; color: var(--acid); font: 10px var(--font-geist-mono); }
-.form-section-heading h2 { font-size: 24px; }
-.form-section-heading p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
-.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
-.field-grid.three { grid-template-columns: repeat(3, 1fr); }
-.outcome-editor { margin-top: 25px; }
-.field-label-row { display: flex; justify-content: space-between; margin-bottom: 9px; color: #b8c2ba; font: 600 10px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .04em; }
-.field-label-row small { color: var(--dim); font: inherit; }
 button, input { font: inherit; }
 .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 72px; }
 .masthead { min-height: 78px; display: flex; gap: 20px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
@@ -1546,12 +1523,16 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 .flow-rail-blocked a > small { color: #d5c985; }
 /* UPCOMING RECEDES IN COLOUR, NOT IN OPACITY. This was `opacity: .58`, which
    composites the whole anchor over its own card and is invisible to every
-   static contrast check -- the survey models opacity nowhere. What a reader
-   actually saw on the seven-step rail was 2.16:1 for the step label, 3.18:1 for
-   the number and 4.50:1 for the title, on the primary orientation control of
-   the trade. Stating the recession as colours keeps it checkable: the dimmest
-   element here is 4.89:1 and the brightest 7.05:1, and the chrome carries the
-   rest of the difference. */
+   static contrast check -- the survey modelled opacity nowhere until
+   `effectiveContrastV1` was written FROM this defect. Composited the way CSS
+   actually does it (the element is rendered, then the whole thing is dimmed
+   over the ground, so the anchor's own wash dims too), a reader saw 2.20:1 for
+   the step label, 3.25:1 for the number and 4.60:1 for the title, on the
+   primary orientation control of the trade. Stating the recession as colours
+   keeps it checkable: 5.15:1 for the dimmest element here and 7.43:1 for the
+   brightest, against 6.16:1 for a step that is not upcoming -- the base ink was
+   4.24:1 even before any state applied -- with the chrome carrying the rest of
+   the difference. */
 .flow-rail-upcoming a { border-color: rgba(201,226,205,.09); }
 .flow-rail-upcoming a > span, .flow-rail-upcoming a > small { color: #7d8a81; }
 .flow-rail-upcoming a > strong { color: #9ba79d; }
@@ -1563,7 +1544,16 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 .flow-step > header > span { color: var(--acid); font: var(--fs-micro) var(--font-geist-mono); }
 .flow-step > header h3 { font-size: var(--fs-h3); }
 .flow-step > header p { margin: var(--sp-1) 0 0; color: var(--muted); font-size: var(--fs-base); line-height: var(--lh-body); }
-.flow-step-upcoming > header { opacity: .62; }
+/* THE SAME DEFECT AS THE RAIL, one section down. `opacity: .62` on the whole
+   header composited the step's description -- `--muted` at 15px, a SENTENCE --
+   down to 3.63:1 on the ground, and the survey models opacity nowhere so it
+   was invisible to every check in this repository. Stating the recession as
+   colours keeps it measurable: the number goes to 6.78:1, the title to 7.72:1
+   and the sentence to 5.72:1, so an upcoming step still reads as further away
+   -- it was 6.57:1, 6.70:1 and 3.63:1 dimmed -- and nothing crosses the floor. */
+.flow-step-upcoming > header > span { color: #86a355; }
+.flow-step-upcoming > header h3 { color: var(--muted); }
+.flow-step-upcoming > header p { color: #828f86; }
 .flow-blocked { margin: 0; color: #94a197; font-size: var(--fs-base); line-height: var(--lh-body); max-width: 78ch; }
 
 /* A REFUSAL, REMEDY FIRST. The remedy is a sentence and therefore sans at
