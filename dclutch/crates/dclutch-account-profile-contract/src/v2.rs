@@ -4422,6 +4422,63 @@ mod tests {
         output
     }
 
+    /// One valid zero-span profile-13 (or 14) artifact: two fixed rules and
+    /// one operation behind the 48-byte span header.
+    ///
+    /// Every width and offset comes from the emitted ABI rather than a
+    /// literal, so a header field that moves in Lean moves this fixture with
+    /// it instead of silently building the wrong bytes.
+    ///
+    /// Rule 0 is the adapter-authenticated variable-data representative; rule
+    /// 1 aliases it. `prestate_tag` is the byte under test on rule 1.
+    fn dynamic_span_profile_bytes(artifact_profile: u16, prestate_tag: u8) -> Vec<u8> {
+        let header = DYNAMIC_FIXED_SPAN_HEADER_BYTES;
+        let mut encoded_operation = [0_u8; OPERATION_BYTES];
+        encode_project_data_u16_operation_v2(&mut encoded_operation, 0, 0, 0)
+            .expect("encode u16 projection");
+        let mut output = vec![0_u8; header + 2 * RULE_BYTES + OPERATION_BYTES];
+        put(&mut output, MAGIC_OFFSET, &MAGIC);
+        for (offset, value) in [
+            (VERSION_OFFSET, VERSION),
+            (ARTIFACT_PROFILE_OFFSET, artifact_profile),
+            (FIXED_ACCOUNTS_OFFSET, 2),
+            (ITEM_ACCOUNT_STRIDE_OFFSET, 0),
+            (FIXED_OPERATIONS_OFFSET, 1),
+            (ITEM_OPERATIONS_OFFSET, 0),
+            (COMMON_SCALARS_OFFSET, 1),
+            (ITEM_SCALAR_STRIDE_OFFSET, 0),
+            (COMMON_IDENTITIES_OFFSET, 0),
+            (ITEM_IDENTITY_STRIDE_OFFSET, 0),
+            // Zero spans is a canonical profile-13 shape, which is why this
+            // fixture needs no span-entry table behind the header.
+            (DYNAMIC_FIXED_SPAN_COUNT_OFFSET, 0),
+        ] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+
+        let mut representative = [0_u8; RULE_BYTES];
+        put(
+            &mut representative,
+            RULE_PRESTATE_OFFSET,
+            &[PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA],
+        );
+        put(
+            &mut representative,
+            RULE_DATA_LENGTH_OFFSET,
+            &4_u32.to_le_bytes(),
+        );
+        put(&mut output, header, &representative);
+
+        let mut alias = [0_u8; RULE_BYTES];
+        put(&mut alias, RULE_ALIAS_KIND_OFFSET, &[ALIAS_FIXED]);
+        put(&mut alias, RULE_ALIAS_INDEX_OFFSET, &0_u16.to_le_bytes());
+        put(&mut alias, RULE_PRESTATE_OFFSET, &[prestate_tag]);
+        put(&mut output, header + RULE_BYTES, &alias);
+
+        put(&mut output, header + 2 * RULE_BYTES, &encoded_operation);
+        output
+    }
+
     fn fixed_tail_count_profile_bytes(destinations: &[u16]) -> Vec<u8> {
         let mut output =
             vec![0_u8; HEADER_BYTES + RULE_BYTES + destinations.len() * OPERATION_BYTES];
@@ -4813,6 +4870,95 @@ mod tests {
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }
+    }
+
+    #[test]
+    fn a_route_alias_can_never_be_its_own_representative() {
+        // This is what makes the empty `AuthenticatedRouteAlias` arm in the
+        // projection width match safe, and it lives in a different function
+        // from that arm, so nothing named the connection until now.
+        //
+        // `validate_rule` refuses a route-alias rule unless it is fixed, its
+        // alias kind is Fixed, and its alias index is strictly lower than its
+        // own. So the coordinate always resolves to an EARLIER, self-coordinate
+        // representative, never to itself; the projection then requires its
+        // data to be byte-identical to that representative's, and the
+        // representative's own prestate arm is what bounds the width. Let a
+        // route alias name itself and the width would be bounded nowhere.
+        let mut self_aliased = dynamic_span_profile_bytes(
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+            PRESTATE_AUTHENTICATED_ROUTE_ALIAS,
+        );
+        put(
+            &mut self_aliased,
+            DYNAMIC_FIXED_SPAN_HEADER_BYTES + RULE_BYTES + RULE_ALIAS_KIND_OFFSET,
+            &[ALIAS_SELF_COORDINATE],
+        );
+        assert_eq!(
+            AccountProfileV2::decode(&self_aliased).err(),
+            Some(Error::InvalidRouteAlias)
+        );
+
+        // Nor may it name a representative at or above its own coordinate,
+        // which is the other half of "strictly earlier".
+        let mut forward = dynamic_span_profile_bytes(
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+            PRESTATE_AUTHENTICATED_ROUTE_ALIAS,
+        );
+        put(
+            &mut forward,
+            DYNAMIC_FIXED_SPAN_HEADER_BYTES + RULE_BYTES + RULE_ALIAS_INDEX_OFFSET,
+            &1_u16.to_le_bytes(),
+        );
+        assert_eq!(
+            AccountProfileV2::decode(&forward).err(),
+            Some(Error::InvalidRouteAlias)
+        );
+    }
+
+    #[test]
+    fn span_profiles_refuse_the_alias_tag_their_predecessors_admit() {
+        // Positive control: the same artifact with the route-alias tag decodes,
+        // so every refusal below is attributable to rule 1's prestate byte and
+        // is not a code reached before its subject.
+        let admitted = dynamic_span_profile_bytes(
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+            PRESTATE_AUTHENTICATED_ROUTE_ALIAS,
+        );
+        assert_eq!(AccountProfileV2::decode(&admitted).err(), None);
+
+        // The non-monotone cell. Profiles 9 through 12 admit the
+        // variable-data-alias tag; 13 and 14 refuse it, and this artifact is
+        // otherwise exactly what those profiles would accept -- rule 1 names a
+        // self-coordinate variable-data representative at a strictly lower
+        // index, which is all the tag itself requires. So the refusal IS the
+        // admissibility table and nothing else, and widening that one cell
+        // would make both of these decode.
+        for profile in [
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+            FIXED_DATA_PREDICATE_ARTIFACT_PROFILE,
+        ] {
+            let refused = dynamic_span_profile_bytes(
+                profile,
+                PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS,
+            );
+            assert_eq!(
+                AccountProfileV2::decode(&refused).err(),
+                Some(Error::InvalidVariableDataPrestate)
+            );
+        }
+
+        // And the tag those two profiles added. It is admitted by the table and
+        // then refused by its own rule, with a DIFFERENT code -- which is the
+        // observation that the table let it through.
+        let opaque = dynamic_span_profile_bytes(
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+            PRESTATE_AUTHENTICATED_OPAQUE_READONLY_DATA,
+        );
+        assert_eq!(
+            AccountProfileV2::decode(&opaque).err(),
+            Some(Error::InvalidOpaqueDataPrestate)
+        );
     }
 
     #[test]
