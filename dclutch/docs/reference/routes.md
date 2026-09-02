@@ -27,7 +27,7 @@ stands:
 - **NEVER-EXECUTED** -- no campaign binding names it and no reason is
   recorded yet.
 
-Currently **18** of **160**
+Currently **18** of **167**
 routes are in that last group.
 
 ## claims
@@ -49,7 +49,12 @@ routes are in that last group.
 | `claims/market_closure_v1::process_checkpoint_handoff` | entry | magic `DCLTCRQ1` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:384` |
 | `claims/process_begin#Begin` | action | variant `FractionalRetirementActionV3::Begin` | NEVER-EXECUTED, no stated reason | `programs/dclutch-claims-sbf/src/fractional_retirement_v3.rs:149` |
 | `claims/process_coordinate#RetireCoordinate` | action | variant `FractionalRetirementActionV3::RetireCoordinate` | NEVER-EXECUTED, no stated reason | `programs/dclutch-claims-sbf/src/fractional_retirement_v3.rs:152` |
-| `claims/process_core_effect` | action | magic `DCLTCEF1` | blocked by rule `claims/process_core_effect`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:415` |
+| `claims/process_core_effect` | action | magic `DCLTCEF1` | blocked by rule `claims/process_core_effect*`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:415` |
+| `claims/process_core_effect#(CoreEffectActionV1::InitializeClaims,ClaimsAction::InitializeCompleteSet)` | action | tag `` | blocked by rule `claims/process_core_effect*`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:691` |
+| `claims/process_core_effect#(CoreEffectActionV1::RedeemClaims,ClaimsAction::RedeemNativeTerminal)` | action | tag `` | blocked by rule `claims/process_core_effect*`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:703` |
+| `claims/process_core_effect#(CoreEffectActionV1::SplitClaims,ClaimsAction::MintCompleteSet)` | action | tag `` | blocked by rule `claims/process_core_effect*`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:697` |
+| `claims/process_core_effect#RedeemClaims` | action | variant `CoreEffectActionV1::RedeemClaims` | blocked by rule `claims/process_core_effect*`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:758` |
+| `claims/process_core_effect#SplitClaims` | action | variant `CoreEffectActionV1::InitializeClaims`; variant `CoreEffectActionV1::SplitClaims` | blocked by rule `claims/process_core_effect*`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:755` |
 | `claims/process_finish#Finish` | action | variant `FractionalRetirementActionV3::Finish` | NEVER-EXECUTED, no stated reason | `programs/dclutch-claims-sbf/src/fractional_retirement_v3.rs:155` |
 | `claims/process_instruction` | entry | -- | executed (claims-affine-batch-programtest); executed (claims-claim-check-programtest); executed (claims-family-programtest); executed (claims-fractional-atomic-programtest); executed (claims-fractional-signed-delta-programtest); executed (claims-rational-lifecycle-programtest); executed (claims-rational-representation-v2-programtest); executed (tier1); refused (claims-affine-batch-programtest); refused (claims-claim-check-programtest); refused (claims-family-programtest); refused (claims-fractional-atomic-programtest); refused (claims-fractional-signed-delta-programtest); refused (claims-rational-lifecycle-programtest); refused (claims-rational-representation-v2-programtest); refused (structured-v2-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:1` |
 | `claims/process_open#WholeUnwrap` | action | variant `FractionalExposureActionV2::Wrap`; variant `FractionalExposureActionV2::WholeUnwrap` | blocked by rule `claims/process_open#WholeUnwrap`: Driven today, and invisible to the census for a wiring reason rather than a protocol one. | `programs/dclutch-claims-sbf/src/fractional_atomic_v3.rs:95` |
@@ -68,7 +73,7 @@ routes are in that last group.
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
 | `core/activate_capability_child#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/activate_capability_child#ActivateCapability`: Capability child activation; needs an activated capability root first. | `programs/dclutch-core-sbf/src/capability.rs:187` |
-| `core/authenticate_no_recovery_entries#None` | action | tag `` | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/resolution.rs:814` |
+| `core/authenticate_no_recovery_entries#None` | action | tag `` | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/resolution.rs:804` |
 | `core/begin_retiring::process#BeginRetiring` | entry | variant `Action::BeginRetiring`; length `REQUEST_BYTES` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:573` |
 | `core/capability::process#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/capability::process#ActivateCapability`: ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. | `programs/dclutch-core-sbf/src/capability.rs:202` |
 | `core/capability::process#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/capability::process#CloseCapability`: Capability closure; needs an activated capability root first. | `programs/dclutch-core-sbf/src/lib.rs:680` |
@@ -88,12 +93,12 @@ routes are in that last group.
 | `core/process_instruction#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:671` |
 | `core/process_instruction#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1`; magic `DCLTCRQ1` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:637` |
 | `core/process_open#Open` | action | variant `GenericFoundingStageV1::Open` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:399` |
-| `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | action | tag `` | blocked by rule `core/resolution::authenticate_recovery_policy#(recovery_id,policy)`: STRUCTURALLY UNDRIVABLE, and the emptiness is convicted rather than asserted. | `programs/dclutch-core-sbf/src/resolution.rs:793` |
-| `core/resolution::process#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/resolution.rs:196` |
-| `core/resolution::process#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | blocked by rule `core/resolution::process#CloseFund`: NOT a dead arm any more, and no longer a coverage gap of the kind this file usually records. | `programs/dclutch-core-sbf/src/resolution.rs:144` |
-| `core/resolution::process#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | executed (journey); executed (resolution-core-v3-programtest); refused (journey) | `programs/dclutch-core-sbf/src/resolution.rs:228` |
+| `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | action | tag `` | blocked by rule `core/resolution::authenticate_recovery_policy#(recovery_id,policy)`: STRUCTURALLY UNDRIVABLE, and the emptiness is convicted rather than asserted. | `programs/dclutch-core-sbf/src/resolution.rs:783` |
+| `core/resolution::process#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/resolution.rs:177` |
+| `core/resolution::process#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | blocked by rule `core/resolution::process#CloseFund`: NOT a dead arm any more, and no longer a coverage gap of the kind this file usually records. | `programs/dclutch-core-sbf/src/resolution.rs:170` |
+| `core/resolution::process#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | executed (journey); executed (resolution-core-v3-programtest); refused (journey) | `programs/dclutch-core-sbf/src/resolution.rs:175` |
 | `core/resolution::process#Retire` | entry | variant `Action::VerifyReadiness`; variant `Action::AdmitTerminal`; variant `Action::Retire`; length `resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1` | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/lib.rs:703` |
-| `core/resolution::process#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey) | `programs/dclutch-core-sbf/src/resolution.rs:179` |
+| `core/resolution::process#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey) | `programs/dclutch-core-sbf/src/resolution.rs:176` |
 | `core/retire_v1::process#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1` | blocked by rule `core/retire_v1::process#Retire`: Market retirement; needs an open, then terminal, Market. | `programs/dclutch-core-sbf/src/lib.rs:614` |
 | `core/retire_v1::process_checkpoint_prepare#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:644` |
 | `core/retire_v1::process_checkpoint_suffix` | entry | length `AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:399` |
@@ -182,6 +187,7 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
+| `resolution/core_effect::process_close#Retired` | action | variant `SourceResolutionPhaseV1::Retired` | blocked by rule `resolution/core_effect::process_close#Retired`: STRUCTURALLY UNDRIVABLE, and newly ENUMERATED rather than newly written: the census learned on 2026-09-02 to walk `let`-bound guards, and `let terminal_kind = match source.phase() { Retired => …, _ => return Err(Transition) }` (core_effect.rs:2383) became a row. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:2384` |
 | `resolution/core_effect::process_core_effect` | entry | predicate `` | executed (journey); executed (resolution-core-v3-programtest); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:320` |
 | `resolution/core_effect::process_direct_funding_activation_v1` | entry | predicate `` | executed (resolution-core-v3-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:306` |
 | `resolution/core_effect::process_direct_funding_close_v1` | entry | predicate `` | executed (journey); executed (resolution-core-v3-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:313` |
@@ -215,6 +221,7 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
+| `series-shadow/entrypoint::evaluate_selected_and_publish#accepted` | action | tag `` | blocked by rule `series-shadow/*`: Shadow accelerator, not part of the seven-role successor release set; no tier deploys it. | `programs/dclutch-series-shadow-sbf/src/entrypoint.rs:190` |
 | `series-shadow/process_instruction` | entry | -- | blocked by rule `series-shadow/*`: Shadow accelerator, not part of the seven-role successor release set; no tier deploys it. | `programs/dclutch-series-shadow-sbf/src/entrypoint.rs:1` |
 
 ## trading

@@ -151,6 +151,16 @@ const registrySource = read(
 
 // route id -> [{campaign, outcome, refusal?, file}]
 const routeEvidence = new Map();
+// Refusal id -> the campaigns whose folded evidence carried it. Derived from
+// the same bindings the census folds, never typed: `census observe` refuses to
+// admit a `refused` binding unless the chain's own `Program <id> failed:
+// custom program error: 0xN` line reports that exact code AND the program the
+// refusal id names raised it. So a refusal id reaching this map has fired on a
+// real ELF, or its tier is red.
+const refusalEvidence = new Map();
+// Refusals a campaign observed but credited to no enumerated code. They are
+// real refusals and deliberately NOT counted as an observed code.
+let uncreditedRefusals = 0;
 // binding route refs that match no inventory route id
 const unknownRefs = [];
 
@@ -172,6 +182,17 @@ for (const file of bindingsFiles) {
         outcome: b.outcome ?? "?",
         file: rel,
       });
+    }
+    if (b.outcome === "refused") {
+      if (b.refusal) {
+        if (!refusalEvidence.has(b.refusal)) refusalEvidence.set(b.refusal, []);
+        refusalEvidence.get(b.refusal).push({
+          campaign: data.campaign ?? rel,
+          file: rel,
+        });
+      } else if (b.unnamed_refusal) {
+        uncreditedRefusals += 1;
+      }
     }
   }
 }
@@ -559,20 +580,39 @@ routes are in that last group.
     ]),
   );
 
+  const observedCell = (id) => {
+    const ev = refusalEvidence.get(id);
+    if (!ev) return "--";
+    return [...new Set(ev.map((e) => e.campaign))].sort().join("; ");
+  };
+
   const sections = programs.map((p) => {
     const refusals = [...p.refusals].sort((a, b) => a.code - b.code);
     const rows = refusals.map((r) => [
       `\`${codeHex(r.code)}\``,
       `\`${r.enum_name}::${r.variant}\``,
       r.summary || "(no doc comment)",
+      observedCell(r.id),
       `\`${r.provenance}\``,
     ]);
     return (
-      `## ${p.label}\n\n` + table(["code", "refusal", "meaning", "provenance"], rows)
+      `## ${p.label}\n\n` +
+      table(["code", "refusal", "meaning", "observed firing", "provenance"], rows)
     );
   });
 
   const totalRefusals = programs.reduce((n, p) => n + p.refusals.length, 0);
+  const inventoryRefusalIds = new Set();
+  for (const p of programs) for (const r of p.refusals) inventoryRefusalIds.add(r.id);
+  const observedIds = [...refusalEvidence.keys()].filter((id) =>
+    inventoryRefusalIds.has(id),
+  );
+  const observedCount = observedIds.length;
+  const observingCampaigns = [
+    ...new Set(
+      [...refusalEvidence.values()].flat().map((e) => e.campaign),
+    ),
+  ].sort();
 
   pages.set(
     "refusals.md",
@@ -596,6 +636,55 @@ to test-only programs that are never deployed.
 
 The tables below carry all **${totalRefusals}** codes, with meanings taken
 from the source code's own documentation.
+
+## Which of these have actually fired
+
+**${observedCount} of ${totalRefusals}** codes have been observed refusing a real
+transaction against a compiled ELF.
+
+The \`observed firing\` column names the campaign that saw each one. It is
+DERIVED at generation time and never typed: it is read out of the census
+bindings under \`tools/gauntlet/*/bindings.json\`, the same place
+\`routes.md\` takes its route evidence from. Nobody maintains this number, and
+a count carried by hand is exactly what it replaces.
+
+That derivation is sound because of what a binding costs to write. \`census
+observe\` refuses to admit a \`refused\` binding unless the finalized logs carry
+\`custom program error: 0xN\` for exactly the code the refusal id names, AND the
+program the chain says raised it is the program that id belongs to. A code
+cannot reach this column by being claimed; a fold had to have seen it.
+
+**Two things this column is not.**
+
+It reads the bindings, not the ledgers. The folded observation ledgers live
+under \`/private/tmp\` and are not checked in, so the per-transaction records
+are outside this repository and this column cannot cite a signature or a slot.
+What it can say, and does, is which campaign's bindings a fold validated. If the
+ledgers are ever checked in, this column should read them instead and gain the
+citation.
+
+${
+    uncreditedRefusals === 0
+      ? "It also counts only codes credited to a program's own taxonomy. No campaign currently records an uncredited refusal."
+      : `It also counts only codes credited to a program's own taxonomy. A further
+${uncreditedRefusals} binding${uncreditedRefusals === 1 ? "" : "s"} record${uncreditedRefusals === 1 ? "s" : ""} a refusal the chain really did report but which is
+credited to no enumerated code -- a child's code propagated verbatim through the
+frame that invoked it, most often. Those are real refusals and are deliberately
+not counted above.`
+  }
+
+**And the denominator is the narrower of two.** These tables carry the
+${totalRefusals} codes belonging to the programs the route census enumerates.
+The tree as a whole declares more -- the census reports its own, larger figure
+across every package it indexes -- and the difference is codes in packages that
+have no enumerated program, so no campaign could observe them through a route.
+
+${
+    observedCount === 0
+      ? "No campaign in this tree currently binds a named refusal."
+      : `The ${observingCampaigns.length} campaigns contributing:
+${observingCampaigns.map((c) => `\`${c}\``).join(", ")}.`
+  }
 
 ## Band allocation
 
