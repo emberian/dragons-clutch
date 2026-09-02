@@ -52,7 +52,8 @@ import {
   TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
 } from './generated/walletTerminalPayoutV3';
 import { deriveClaimsAggregateAddressV2, deriveClaimsPositionAddressV2 } from './marketCoreV2';
-import { type RpcAccount, type SolanaRpcClient, type TransactionMetaObservation } from './rpc';
+import { acquireOperatorSurfaceV1, liveDevnetOperatorPresetV1 } from './operatorSurface';
+import { SolanaRpcClient as LiveSolanaRpcClient, type RpcAccount, type SolanaRpcClient, type TransactionMetaObservation } from './rpc';
 import {
   authenticateCheckedLiveDevnetPayoutPlanV3,
   buildWalletTerminalPayoutV3,
@@ -66,6 +67,7 @@ import {
   verifyFinalizedWalletTerminalPayoutTransactionV3,
   type PreparedWalletTerminalPayoutV3,
   type WalletTerminalPayoutBuildInputV3,
+  type WalletTerminalPayoutManifestV3,
   type WalletTerminalPayoutReportV3,
   type WalletTerminalPayoutRouteV3,
 } from './walletTerminalPayoutV3';
@@ -365,5 +367,119 @@ describe('wallet terminal payout v3', () => {
     await expect(finalizeWalletTerminalPayoutV3(
       client(meta, '101', Object.freeze([...rows].reverse())), signature, plan, signedWire,
     )).rejects.toThrow(/ordered account closure/);
+  });
+});
+
+/**
+ * THE PAYOUT ADMISSION, against the deployment it names.
+ *
+ * `prepareCheckedLiveDevnetWalletTerminalPayoutV3` threw on EVERY payout for
+ * as long as it existed. `authenticateCheckedLiveDevnetPayoutPlanV3` compared
+ * `deployment.deploymentPreset.executionReleaseSetId` against the plan's
+ * release set, and the operator snapshot has never carried that field: the
+ * comparison was `undefined !== <release>`, true for all inputs, so the walk
+ * ended at `payout plan release set differs from the checked activation cache`
+ * before a single payout account was read. It hid inside a type error every
+ * lane reported and no lane owned.
+ *
+ * The offline suite above cannot convict this. `exactRouteDeploymentV3`
+ * requires the plan's activation cache to be the shipped devnet PDA, and that
+ * PDA is derived from the release identity the live cache holds -- so a fixture
+ * would have to invert SHA-256 to stand in for it. The instrument that can
+ * convict it is the chain, and these two cases are that instrument.
+ *
+ * They read only: five bounded requests to acquire the operator surface, one
+ * fifteen-account read, and no transaction is built, signed or sent. Gated on
+ * `DCLUTCH_LIVE_DEVNET=1`; `DCLUTCH_LIVE_ENDPOINT` supplies an endpoint so a
+ * paid key stays in the environment. `DCLUTCH_OPEN_MARKET` overrides the market
+ * when cohort-11's is gone.
+ */
+const livePayout = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
+const OPEN_MARKET_V11 = process.env.DCLUTCH_OPEN_MARKET ?? '3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6';
+
+/**
+ * The fixture plan, re-coordinated onto the live deployment.
+ *
+ * Every coordinate `exactRouteDeploymentV3` compares against the preset is
+ * taken FROM the preset, so the plan reaches the release comparison instead of
+ * dying one step earlier on a program id. Nothing else about the plan is
+ * changed: it is still the offline fixture, and it is still wrong about the
+ * market it now names -- which is the point, because the check that must fire
+ * is downstream of the one under test.
+ */
+function liveRoutedManifestV3(manifest: WalletTerminalPayoutManifestV3, market: string, releaseSet: string): WalletTerminalPayoutManifestV3 {
+  const preset = liveDevnetOperatorPresetV1();
+  return Object.freeze({
+    ...manifest,
+    route: Object.freeze({
+      ...manifest.route,
+      market,
+      registryProgram: preset.coordinates.registry,
+      coreProgram: preset.coordinates.core,
+      claimsProgram: preset.coordinates.claims,
+      custodyProgram: preset.coordinates.custody,
+      resolutionProgram: preset.coordinates.resolution,
+      coreProgramData: preset.evidence.core.programData,
+      claimsProgramData: preset.evidence.claims.programData,
+      resolutionProgramData: preset.evidence.resolution.programData,
+      activationCache: preset.activationCache,
+    }),
+    request: Object.freeze({
+      ...manifest.request,
+      market,
+      releaseSet,
+      claimsProgram: preset.coordinates.claims,
+      custodyProgram: preset.coordinates.custody,
+    }),
+  });
+}
+
+describe('the checked live-devnet payout admission reads the deployment it names', () => {
+  livePayout('carries the release the activation cache holds, and refuses a plan naming another', async () => {
+    const client = new LiveSolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? 'https://api.devnet.solana.com');
+    const preset = liveDevnetOperatorPresetV1();
+    const surface = await acquireOperatorSurfaceV1(client, preset.coordinates, preset);
+    const onChain = surface.deploymentPreset?.executionReleaseSetId;
+    // The field the comparison needed and did not have. It comes out of the
+    // 1,288 cache bytes, through their owner's decoder, and nowhere else.
+    expect(onChain, 'the activation cache names its release set').toMatch(/^[0-9a-f]{64}$/);
+
+    const manifest = importRustWalletTerminalPayoutArtifactV3(await manifestText());
+    // id(11) is the fixture's release. It is not devnet's, and saying so is now
+    // a statement about two read values rather than about `undefined`.
+    expect(onChain).not.toBe(id(11));
+    await expect(authenticateCheckedLiveDevnetPayoutPlanV3(
+      client,
+      liveRoutedManifestV3(manifest, OPEN_MARKET_V11, id(11)),
+      manifest.request.owner,
+    )).rejects.toThrow('payout plan release set differs from the checked activation cache');
+  }, 120_000);
+
+  livePayout('walks PAST the release comparison to the chain’s own verdict on the market', async () => {
+    // THE CONVICTION. Before the operator surface decoded its cache, this exact
+    // call refused at the comparison no matter what the plan said, because the
+    // left side was `undefined`. Handed the release the chain itself reports,
+    // the walk now gets to the fifteen-account read and the Market decode, and
+    // the sentence it ends on is the one the OPEN market deserves: this plan is
+    // not the current terminal Market authority, because there is no terminal
+    // Market yet.
+    const client = new LiveSolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? 'https://api.devnet.solana.com');
+    const preset = liveDevnetOperatorPresetV1();
+    const surface = await acquireOperatorSurfaceV1(client, preset.coordinates, preset);
+    const onChain = surface.deploymentPreset?.executionReleaseSetId ?? '';
+    const manifest = importRustWalletTerminalPayoutArtifactV3(await manifestText());
+    await expect(authenticateCheckedLiveDevnetPayoutPlanV3(
+      client,
+      liveRoutedManifestV3(manifest, OPEN_MARKET_V11, onChain),
+      manifest.request.owner,
+    )).rejects.toThrow('payout plan differs from the current terminal Market authority');
+  }, 120_000);
+
+  it('says what it is waiting for while no live endpoint is named', () => {
+    // A skipped pair that states its gate is a queue entry; one that says
+    // nothing is a hole.
+    expect(
+      'set DCLUTCH_LIVE_DEVNET=1 (and optionally DCLUTCH_LIVE_ENDPOINT) to prove the payout admission against devnet',
+    ).toContain('DCLUTCH_LIVE_DEVNET');
   });
 });

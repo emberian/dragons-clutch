@@ -2800,3 +2800,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   verified-candidate record (no Lean author), `le_numeric_id`, then a Lean-emitted TS register.
 - Active: DIRECT `a8931c4eecc29c8fb` (bisecting +31k CU), GENERAL `a39412e2663ca5f8d`, DEALER `a929bd24b931c8297`, EMISSION
   `addb8204ef3d72bb0`, STRUCTURED `ae1559fc2d9501927`, WEB `afb43355b9428a30c`, RIP `ae0b9b375646fb099`, COHORT-12 `a3889c0783d45215b`.
+
+### Lane map delta — 2026-09-02 06:45
+- STRUCTURED successor closed at ~740k: **redeem→retire EXECUTES through the real Trading Hot route** (`b26d66f6`: the fiftieth
+  account is the Resolution program; six hand-typed per-index tables collapse to one `declared()` match over roles; all seven
+  ELFs byte-identical); campaign census 30 → 0 with Trading in its program map (`56fa0895`). K=5 sized, not begun →
+  **`a9435d78baa5d7612`** in a detached worktree (ruling: mandatory-zero header fields carry no information, verify at every
+  producer before taking the −64). Found: three wallet-payout CU budgets red since 08-27 → CLAIMS **`a372d0ae55f06b58a`**
+  (zero-payout shape 223,244 → 316,946 in Claims' own frame; interval 08-27 → 08-31).
+- DEALER `83f9e6e6`/`789b61fb`: the accelerator boundary has four named codes; the dealer accelerator **had no allocator**;
+  the honest Add's accelerator returns an ACCEPTED ack at 469,516 CU; the hostile refuses `equity:Claims` re-armed. Wall: a
+  1,392-byte bank through a 1,024-byte return-data limit → chunks that re-authenticate (General's OpenBatch pays the same at
+  four chunks) → Dealer designs the scratch-page output channel once for both accelerators; General adopts.
+- DIRECT: the +31k CU was already localized by `08294e17` (a process miss); +6,233 unattributed, bisecting; `settle` frame
+  4,032 → 1,728 (`2c51ecd1`, the by-value move, not my suggested borrow which measured 5,504/14 diagnostics). C-04's last
+  three clauses are real gaps: no Trading resolution route test for a Direct market, redemption host-only, ticket envelope
+  never crosses a program → building them.
+- Cuts: `6220f01b4`, `79abd2210`, `673d75170`.

@@ -1,11 +1,18 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import { hex, sha256 } from './bytes';
 import { capabilityActContractV1, evaluateCapabilityV1 } from './capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from './capabilitySurface';
 import { DEVNET_DEPLOYMENT_V1, DEVNET_PROGRAM_EVIDENCE_V1 } from './deployments';
 import {
   ACTIVATION_CACHE_BYTES,
+  ARTIFACT_RELEASE_BYTES,
+  EXECUTION_RELEASE_SET_BYTES,
+  REGISTRY_ACTIVATED_ROLE_BYTES,
+  REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET,
+  REGISTRY_ACTIVATION_PDA_SEED_V1,
+  REGISTRY_ROLES,
   UPGRADEABLE_LOADER_ID,
 } from './releaseRegistry';
 import {
@@ -14,6 +21,7 @@ import {
   acquireOperatorSurfaceV1,
   checkedLiveDevnetOperatorPresetV1,
   type OperatorCoordinatesV1,
+  type OperatorDeploymentPresetV1,
   type OperatorSurfaceSnapshotV1,
 } from './operatorSurface';
 import * as operatorSurfaceModule from './operatorSurface';
@@ -40,17 +48,114 @@ function loaderProgramData(slot: string): RpcAccount {
   return Object.freeze({ data, executable: false, lamports: '1', owner: UPGRADEABLE_LOADER_ID, space: data.length });
 }
 
-function checkedPresetClient(changes: Readonly<Record<string, RpcAccount | null>> = {}): SolanaRpcClient {
+/**
+ * One artifact release the Registry would accept, distinct in every identity.
+ *
+ * `decodeArtifactReleaseV1` requires the magic, schema and profile, a defined
+ * upgrade policy, five nonzero identities, no aliasing among Program, Loader
+ * and ProgramData, and an upgrade authority consistent with the policy. Policy
+ * 0 is `immutable`, whose authority field must be exactly zero -- which is why
+ * this writes nothing at offset 184.
+ */
+function artifactReleaseBytes(seed: number): Uint8Array {
+  const bytes = new Uint8Array(ARTIFACT_RELEASE_BYTES);
+  bytes.set(new TextEncoder().encode('DCLTARF1'), 0);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(8, 1, true);
+  view.setUint16(10, 1, true);
+  bytes[12] = 0;
+  bytes.set(new Uint8Array(32).fill(seed), 16);
+  bytes.set(new Uint8Array(32).fill(seed + 1), 48);
+  bytes.set(new Uint8Array(32).fill(seed + 2), 80);
+  bytes.set(new Uint8Array(32).fill(seed + 3), 112);
+  bytes.set(new Uint8Array(32).fill(seed + 4), 144);
+  view.setBigUint64(176, 900n, true);
+  return bytes;
+}
+
+/**
+ * A REAL activation cache, and the preset coordinate its own bytes derive.
+ *
+ * THE FIXTURE THIS REPLACES WROTE 1,288 ZERO BYTES and called it a cache. That
+ * satisfied the only question `acquireOperatorSurfaceV1` used to ask of the
+ * account -- is it this wide -- and could not have failed any other, which is
+ * exactly why the width check survived: a fixture that agrees with a weaker
+ * check can never convict it.
+ *
+ * This builds what the Registry program actually writes. Five artifact
+ * releases, each hashed to the identity stored beside it; those five projected
+ * into the 336-byte execution release set; that set hashed to the identity in
+ * the cache header. The cache then lives at the PDA that identity derives, so
+ * the preset's `activationCache` is COMPUTED FROM THE BYTES rather than
+ * asserted next to them -- which is the property the old fixture lacked and
+ * the property `decodeActivationCacheV1` checks.
+ */
+async function honestActivationCacheV1(
+  registryProgram: string,
+): Promise<Readonly<{ address: string; account: RpcAccount; releaseSetId: string }>> {
+  const artifacts = REGISTRY_ROLES.map((_role, index) => artifactReleaseBytes(10 + index * 8));
+  const artifactIds = await Promise.all(artifacts.map((bytes) => sha256(bytes)));
+  const releaseSet = new Uint8Array(EXECUTION_RELEASE_SET_BYTES);
+  releaseSet.set(new TextEncoder().encode('DCLTRLS1'), 0);
+  const releaseSetView = new DataView(releaseSet.buffer);
+  releaseSetView.setUint16(8, 1, true);
+  releaseSetView.setUint16(10, 1, true);
+  REGISTRY_ROLES.forEach((_role, index) => {
+    releaseSet.set(artifacts[index].slice(16, 48), 16 + index * 64);
+    releaseSet.set(artifactIds[index], 48 + index * 64);
+  });
+  const releaseSetIdentity = await sha256(releaseSet);
+  const data = new Uint8Array(ACTIVATION_CACHE_BYTES);
+  data.set(new TextEncoder().encode('DCLTACT1'), 0);
+  const view = new DataView(data.buffer);
+  view.setUint16(8, 1, true);
+  view.setUint16(10, 1, true);
+  data.set(releaseSetIdentity, 16);
+  REGISTRY_ROLES.forEach((_role, index) => {
+    const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES;
+    data.set(artifactIds[index], offset);
+    data.set(artifacts[index], offset + 32);
+  });
+  const address = PublicKey.findProgramAddressSync(
+    [REGISTRY_ACTIVATION_PDA_SEED_V1, releaseSetIdentity],
+    new PublicKey(registryProgram),
+  )[0].toBase58();
+  return Object.freeze({
+    address,
+    account: Object.freeze({ data, executable: false, lamports: '1', owner: registryProgram, space: data.length }),
+    releaseSetId: hex(releaseSetIdentity),
+  });
+}
+
+let honestPreset: Promise<Readonly<{ preset: OperatorDeploymentPresetV1; cache: RpcAccount; releaseSetId: string }>> | null = null;
+
+/**
+ * The shipped preset with its activation cache moved to the fixture's own
+ * release, because the shipped coordinate is a devnet PDA of a release these
+ * bytes are not. `operatorSurface.live.test.ts` is where the real one is read.
+ */
+function checkedPresetV1(): Promise<Readonly<{ preset: OperatorDeploymentPresetV1; cache: RpcAccount; releaseSetId: string }>> {
+  honestPreset ??= (async () => {
+    const shipped = liveDevnetOperatorPresetV1();
+    const cache = await honestActivationCacheV1(shipped.coordinates.registry);
+    return Object.freeze({
+      preset: Object.freeze({ ...shipped, activationCache: cache.address }),
+      cache: cache.account,
+      releaseSetId: cache.releaseSetId,
+    });
+  })();
+  return honestPreset;
+}
+
+async function checkedPresetClient(changes: Readonly<Record<string, RpcAccount | null>> = {}): Promise<SolanaRpcClient> {
+  const { preset, cache } = await checkedPresetV1();
   const accounts = new Map<string, RpcAccount | null>();
   for (const role of OPERATOR_ROLES) {
-    const evidence = liveDevnetOperatorPresetV1().evidence[role];
-    accounts.set(liveDevnetOperatorPresetV1().coordinates[role], loaderProgram(evidence.programData));
+    const evidence = preset.evidence[role];
+    accounts.set(preset.coordinates[role], loaderProgram(evidence.programData));
     accounts.set(evidence.programData, loaderProgramData(evidence.deploymentSlot));
   }
-  accounts.set(
-    liveDevnetOperatorPresetV1().activationCache,
-    account(liveDevnetOperatorPresetV1().coordinates.registry, false, ACTIVATION_CACHE_BYTES),
-  );
+  accounts.set(preset.activationCache, cache);
   for (const [address, next] of Object.entries(changes)) accounts.set(address, next);
   return {
     probe: async () => Object.freeze({
@@ -139,30 +244,64 @@ describe('unified chain-derived operator surface', () => {
       { ...DEVNET_DEPLOYMENT_V1, genesisHash: key(44) },
       DEVNET_PROGRAM_EVIDENCE_V1,
     )).toThrow(/does not pin Solana devnet genesis/);
-    const client = checkedPresetClient() as unknown as { probe: () => Promise<unknown> };
+    const { preset } = await checkedPresetV1();
+    const client = await checkedPresetClient() as unknown as { probe: () => Promise<unknown> };
     client.probe = async () => Object.freeze({ endpoint: 'https://rpc.invalid/', genesisHash: key(45), solanaCore: 'test', featureSet: null });
     await expect(acquireOperatorSurfaceV1(
       client as unknown as SolanaRpcClient,
-      liveDevnetOperatorPresetV1().coordinates,
-      liveDevnetOperatorPresetV1(),
+      preset.coordinates,
+      preset,
     )).rejects.toThrow(/live-devnet preset refused.*not Solana devnet genesis/);
   });
 
   it('reacquires every preset Loader pair and release cache before returning a checked verdict', async () => {
+    const { preset, releaseSetId } = await checkedPresetV1();
     const snapshot = await acquireOperatorSurfaceV1(
-      checkedPresetClient(),
-      liveDevnetOperatorPresetV1().coordinates,
-      liveDevnetOperatorPresetV1(),
+      await checkedPresetClient(),
+      preset.coordinates,
+      preset,
     );
     expect(snapshot.observedSlot).toBe('902');
     expect(snapshot.deploymentPreset).toEqual({
       label: 'Checked live devnet',
-      genesisHash: liveDevnetOperatorPresetV1().genesisHash,
-      activationCache: liveDevnetOperatorPresetV1().activationCache,
+      genesisHash: preset.genesisHash,
+      activationCache: preset.activationCache,
+      // The release the CACHE names, not one the preset was told. Nothing
+      // outside those 1,288 bytes produced this value, and the wallet-terminal
+      // payout path compares an imported plan's release set against it.
+      executionReleaseSetId: releaseSetId,
       deploymentSlots: Object.fromEntries(OPERATOR_ROLES.map((role) => [role, DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot])),
       upgradedSinceRecord: [],
     });
     expect(snapshot.market).toBeNull();
+  });
+
+  it('refuses the wide, empty cache the old fixture called a cache', async () => {
+    // THE CONVICTION. 1,288 zero bytes owned by the Registry is precisely what
+    // the replaced width check admitted, and precisely what a preset naming no
+    // release looks like. `decodeActivationCacheV1` refuses it at the magic.
+    const { preset } = await checkedPresetV1();
+    await expect(acquireOperatorSurfaceV1(
+      await checkedPresetClient({
+        [preset.activationCache]: account(preset.coordinates.registry, false, ACTIVATION_CACHE_BYTES),
+      }),
+      preset.coordinates,
+      preset,
+    )).rejects.toThrow(/activation cache has the wrong exact width, magic, schema, or profile/);
+  });
+
+  it('refuses a well-formed cache that is not the PDA its own release derives', async () => {
+    // Width, magic, schema, every artifact hash and the release-set projection
+    // all pass; only the address is wrong. A length check cannot see this at
+    // all, and it is the difference between reading THE deployment's cache and
+    // reading A cache someone put in front of the browser.
+    const { preset, cache } = await checkedPresetV1();
+    const elsewhere = key(77);
+    await expect(acquireOperatorSurfaceV1(
+      await checkedPresetClient({ [elsewhere]: cache }),
+      preset.coordinates,
+      Object.freeze({ ...preset, activationCache: elsewhere }),
+    )).rejects.toThrow(/activation cache is not the release-derived Registry PDA/);
   });
 
   it('reports an upgraded role rather than refusing it, and reads the live slot', async () => {
@@ -171,12 +310,13 @@ describe('unified chain-derived operator surface', () => {
     // moved past it, so the whole preset refused and /operate could not
     // inspect anything at all.
     const role = 'trading';
-    const programData = liveDevnetOperatorPresetV1().evidence[role].programData;
-    const moved = (BigInt(liveDevnetOperatorPresetV1().evidence[role].deploymentSlot) + 4_000n).toString();
+    const { preset } = await checkedPresetV1();
+    const programData = preset.evidence[role].programData;
+    const moved = (BigInt(preset.evidence[role].deploymentSlot) + 4_000n).toString();
     const snapshot = await acquireOperatorSurfaceV1(
-      checkedPresetClient({ [programData]: loaderProgramData(moved) }),
-      liveDevnetOperatorPresetV1().coordinates,
-      liveDevnetOperatorPresetV1(),
+      await checkedPresetClient({ [programData]: loaderProgramData(moved) }),
+      preset.coordinates,
+      preset,
     );
     // The slot reported is the one on chain, not the one that shipped.
     expect(snapshot.deploymentPreset?.deploymentSlots[role]).toBe(moved);
@@ -191,18 +331,19 @@ describe('unified chain-derived operator surface', () => {
     // cluster, so a deployment slot older than the recorded one cannot be a
     // later state of this program: it is a stale or wrong-generation read.
     const role = 'trading';
-    const programData = liveDevnetOperatorPresetV1().evidence[role].programData;
-    const earlier = (BigInt(liveDevnetOperatorPresetV1().evidence[role].deploymentSlot) - 1n).toString();
+    const { preset } = await checkedPresetV1();
+    const programData = preset.evidence[role].programData;
+    const earlier = (BigInt(preset.evidence[role].deploymentSlot) - 1n).toString();
     await expect(acquireOperatorSurfaceV1(
-      checkedPresetClient({ [programData]: loaderProgramData(earlier) }),
-      liveDevnetOperatorPresetV1().coordinates,
-      liveDevnetOperatorPresetV1(),
+      await checkedPresetClient({ [programData]: loaderProgramData(earlier) }),
+      preset.coordinates,
+      preset,
     )).rejects.toThrow(/trading DeploymentSlotMismatch.*preset records slot.*reports the earlier/);
 
     await expect(acquireOperatorSurfaceV1(
-      checkedPresetClient({ [liveDevnetOperatorPresetV1().activationCache]: null }),
-      liveDevnetOperatorPresetV1().coordinates,
-      liveDevnetOperatorPresetV1(),
+      await checkedPresetClient({ [preset.activationCache]: null }),
+      preset.coordinates,
+      preset,
     )).rejects.toThrow(/release activation cache is absent/);
   });
 

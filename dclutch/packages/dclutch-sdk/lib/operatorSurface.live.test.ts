@@ -25,6 +25,12 @@ describe('live devnet operator preset', () => {
     expect(snapshot.roles.map((role) => role.role)).toEqual(OPERATOR_ROLES);
     expect(snapshot.deploymentPreset?.genesisHash).toBe(liveDevnetOperatorPresetV1().genesisHash);
     expect(snapshot.deploymentPreset?.activationCache).toBe(liveDevnetOperatorPresetV1().activationCache);
+    // The release set is decoded out of the cache account, so a nonzero
+    // 32-byte identity here means the five artifacts hashed to their stored
+    // identities and their projection hashed to this. The offline suite proves
+    // the refusals; this proves the live cohort's cache still decodes at all.
+    expect(snapshot.deploymentPreset?.executionReleaseSetId).toMatch(/^[0-9a-f]{64}$/);
+    expect(snapshot.deploymentPreset?.executionReleaseSetId).not.toBe('0'.repeat(64));
     expect(snapshot.market).toBeNull();
     expect(snapshot.realm).toBeNull();
   }, 60_000);

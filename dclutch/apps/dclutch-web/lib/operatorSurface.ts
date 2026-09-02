@@ -7,8 +7,8 @@ import {
   type DeploymentV1,
   type ProgramEvidenceV1,
 } from './deployments';
+import { decodeActivationCacheV1 } from './infrastructure';
 import {
-  ACTIVATION_CACHE_BYTES,
   LOADER_V3_PROGRAM_BYTES,
   LOADER_V3_PROGRAMDATA_OFFSET,
   UPGRADEABLE_LOADER_ID,
@@ -50,6 +50,16 @@ export type OperatorSurfaceSnapshotV1 = Readonly<{
     label: OperatorDeploymentPresetV1['label'];
     genesisHash: string;
     activationCache: string;
+    /**
+     * The release set the activation cache itself names, decoded by its owner.
+     *
+     * This is the deployment's answer to "which five programs is this cohort
+     * actually running", and it is the only place a caller can get it: the
+     * preset's static table names Program addresses, not the release identity
+     * those addresses were activated under. `walletTerminalPayoutV3` compares
+     * an imported plan's release set against it before any wallet handoff.
+     */
+    executionReleaseSetId: string;
     /** Live deployment slots, read from each ProgramData header this run. */
     deploymentSlots: Readonly<Record<OperatorRole, string>>;
     /**
@@ -309,13 +319,28 @@ export async function acquireOperatorSurfaceV1(
     }
     const activationIndex = roleAddresses.length;
     const activation = requireAccount(observation.accounts[activationIndex].account, 'release activation cache');
-    if (activation.owner !== coordinates.registry || activation.executable || activation.data.length !== ACTIVATION_CACHE_BYTES) {
-      throw new Error('release activation cache is absent, partial, executable, or not owned by the preset Registry program');
+    if (activation.owner !== coordinates.registry || activation.executable) {
+      throw new Error('release activation cache is absent, executable, or not owned by the preset Registry program');
     }
+    // THE CACHE IS READ BY ITS OWNER, not measured by its length. The width
+    // test this replaces admitted 1,288 zero bytes -- an account with the
+    // right size and no content -- and produced a preset that named no
+    // release at all. `decodeActivationCacheV1` checks that same width first
+    // and then everything the width could not: the magic, schema and profile,
+    // the reserved header, that the address is the release-derived Registry
+    // PDA, that each of the five cached artifacts hashes to the identity
+    // stored beside it, and that the projected release set hashes to the
+    // identity in the header. Strictly stronger, and it yields the release id.
+    const activated = await decodeActivationCacheV1(
+      activation.data,
+      coordinates.registry,
+      deploymentPreset.activationCache,
+    );
     presetObservation = Object.freeze({
       label: deploymentPreset.label,
       genesisHash: deploymentPreset.genesisHash,
       activationCache: deploymentPreset.activationCache,
+      executionReleaseSetId: activated.releaseSetId,
       deploymentSlots: Object.freeze(deploymentSlots),
       upgradedSinceRecord: Object.freeze(OPERATOR_ROLES.filter(
         (role) => BigInt(deploymentSlots[role]) > BigInt(deploymentPreset.evidence[role].deploymentSlot),

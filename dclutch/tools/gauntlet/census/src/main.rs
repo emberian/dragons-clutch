@@ -22,6 +22,7 @@ mod enumerate;
 mod ledger;
 mod magics;
 mod model;
+mod preimages;
 mod report;
 
 use std::{collections::BTreeMap, fs, path::Path, process::ExitCode};
@@ -230,15 +231,28 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         for mirror in &magic_summary.mirrored {
             eprintln!("census: magic mirrored across packages: {mirror}");
         }
+        // Third wire object, same shape of question: an identity constant the
+        // tree documents as the SHA-256 of a label it also ships. Nothing
+        // recomputed one until this ran. See `preimages.rs`.
+        let (pairs, unpaired) = preimages::sweep(&root_path)?;
+        let (preimage_problems, preimage_summary) = preimages::check(&pairs, &unpaired);
+        eprintln!(
+            "census: {} documented schema identities, {} recomputed from their label, {} labels \
+             hashed only at run time",
+            preimage_summary.claimed, preimage_summary.verified, preimage_summary.unpaired
+        );
+
         problems.extend(magic_problems);
+        problems.extend(preimage_problems);
         if !problems.is_empty() {
             for problem in &problems {
                 eprintln!("census COLLISION: {problem}");
             }
             return Err(format!(
-                "{} refusal-code/magic problems; decision 0007 makes {} the refusal-band \
-                 allocation authority, and a duplicated instruction magic is the same class of \
-                 defect one wire object over",
+                "{} refusal-code/magic/identity problems; decision 0007 makes {} the \
+                 refusal-band allocation authority, a duplicated instruction magic is the same \
+                 class of defect one wire object over, and a schema identity that is not its \
+                 own label's digest is the third",
                 problems.len(),
                 allocation.source
             ));
