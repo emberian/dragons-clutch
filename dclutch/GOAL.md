@@ -3336,3 +3336,23 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started beside the resume: MAGICS **`a3d44f2e3d858266a`** (DCLTDMR1, d5e005d1…, DCLTSTV3; genref green; the owed refusal
   rows for five lanes' codes; emission-guard COVERAGE row) and DEALER **`a525f0a87751fcc5a`** (the trade leg's V3
   borrowed-witness RequestProfile in the bundle engine at registers.rs:802; then the 70 → 64 lock frame move).
+
+### Lane map delta — 2026-09-02 14:30 EDT
+- MAGICS closed (`944ee9be`, `53f09fa0`, `68078ccc`, `318fc1a6`): `DCLTDMR1` and the DBC discriminator were second copies
+  (tests now import the owner); **`DCLTSTV3` was two kinds that must not share** — the Series ticket state moved to `DCLTTSV3`
+  Lean-first (the template magic is digested into PDA seeds; the ticket-state magic outlives nothing), `replay.rs` binds all
+  five disjoint at compile time. Census 395/375 with 3 collisions → **393/376, none**; **genref exits 0 twice** (two passes
+  are needed: two reference pages mirror generated TS) with all eleven owed codes present; `abi:route-census` had been dead
+  since 1d8b999a moved the bands into generated_bands.rs — the browser's refusal attribution had no authority behind it.
+  abi verifies 17/27; the ten left are one class (readers scraping Rust files for symbols that moved into emitted ones) →
+  ABI-READERS **`acfb279c58bb1805e`**. **Fourth producer-missing instance:** `prepare_funding_artifacts_v5` allocates the
+  Series ticket-state PDA as 64 zero bytes that `TicketStateV3::decode` always refuses; no route writes the magic — unowned
+  (Series is loopback-only through cohort 13).
+- DEALER (`27c1cb3d`): the bundle engine reads the V3 borrowed-witness profile from the one on-chain reader (a no-witness
+  request committing through the fall-through was the conviction); LP Open 646,287 / Add 1,089,727 commit. **The trade leg's
+  wall is in the ARTIFACTS:** selector 9's EffectV4 declares six optional-Custody route spans its RequestProfile never owns,
+  and the 384-byte trade header is byte-for-byte full → an ABI change, Lean-first (in flight). **The lock-count frame move is
+  superseded:** the seal-backed alias shape already ships for Direct and reaches the same count without moving
+  HOT_FIXED_ACCOUNT_COUNT_V3 — measured LP-hot 54 → 48; the equity Add's 70 → 64 blocked by two undocumented distinctness
+  copies (`parse_accelerator_readonly`; `require_record_pair` at admitted_composition_v3.rs:805 → 0x4017). Partial patch saved.
+- Cuts: `2dca87965`, `46a4b1de1`, `7576f8e32`.
