@@ -40,5 +40,6 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [sourceProviderWasmV1](sourceProviderWasmV1.md) | from the authoritative Rust Source-provider owner and WASM artifact; do not edit. |  |
 | [sourceReadinessWasmV1](sourceReadinessWasmV1.md) | from the authoritative Rust Source-readiness owner and WASM artifact; do not edit. |  |
 | [userPositionAdmissionWasmV1](userPositionAdmissionWasmV1.md) | from the authoritative Rust admission planner and WASM artifact; do not edit. | npm run abi:user-position-admission |
+| [walletTerminalInputWasmV1](walletTerminalInputWasmV1.md) | from the authoritative Rust payout input derivation and WASM artifact; do not edit. | npm run abi:wallet-terminal-input |
 | [walletTerminalPayoutV3](walletTerminalPayoutV3.md) | by scripts/generate-wallet-terminal-payout-v3.mjs; do not edit. |  |
 | [walletTerminalPayoutWasmV1](walletTerminalPayoutWasmV1.md) | from the authoritative Rust payout derivation and WASM artifact; do not edit. | npm run abi:wallet-terminal-payout |

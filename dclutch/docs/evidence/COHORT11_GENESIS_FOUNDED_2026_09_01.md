@@ -430,4 +430,12 @@ then the Direct trade path, which additionally needs authored seller/buyer
 tickets and a checked execution release the simulator config still carries as
 placeholders.
 
+**Continued in `COHORT11_POPULATION_2026_09_02.md`**, which closes the admission
+half: two strangers hold Positions in this market and six conservation laws hold
+across four census boundaries. The blockhash was one of three walls, and the
+narrow estimate above was wrong about the other two — the frozen routing table
+had to stop being *searched* for, and the Position owner could not be its own
+fee payer, which no prefund can repair. The Direct trade remains open, and its
+residue is three named artifacts.
+
 Devnet evidence. Not mainnet evidence.

@@ -1774,7 +1774,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - hashbrown 0.17.1 (cargo)
 - heck 0.5.0 (cargo)
 - hermit-abi 0.5.2 (cargo)
-- hermit-abi 0.5.3 (cargo)
 - hex 0.4.3 (cargo)
 - hkdf 0.12.4 (cargo)
 - hmac 0.12.1 (cargo)

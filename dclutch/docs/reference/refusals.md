@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **316** codes, with meanings taken
+The tables below carry all **305** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -31,7 +31,6 @@ from the source code's own documentation.
 | `0x4000` | 0x4 | Band 4 — `dclutch-trading-sbf` |
 | `0x5000` | 0x5 | Band 5 — `dclutch-claims-sbf` |
 | `0x6000` | 0x6 | Band 6 — `dclutch-custody-sbf` |
-| `0x7000` | 0x7 | Band 7 — `dclutch-dealer-sbf` |
 | `0x8000` | 0x8 | Band 8 — `dclutch-resolution-proof-sbf` |
 | `0x9000` | 0x9 | Band 9 — `dclutch-product-runtime-v2-sbf` |
 | `0xA000` | 0xA | Band 10 — `dclutch-direct-aot-sbf` |
@@ -246,22 +245,6 @@ from the source code's own documentation.
 | `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | `programs/dclutch-custody-sbf/src/lib.rs:122` |
 | `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-custody-sbf/src/lib.rs:130` |
 
-## dealer
-
-| code | refusal | meaning | provenance |
-| --- | --- | --- | --- |
-| `0x7000` | `DealerSbfError::Instruction` | Instruction bytes did not encode one canonical Dealer request. | `programs/dclutch-dealer-sbf/src/lib.rs:109` |
-| `0x7001` | `DealerSbfError::AccountFrame` | Account count, order, privilege, aliasing, or executable status refused. | `programs/dclutch-dealer-sbf/src/lib.rs:111` |
-| `0x7002` | `DealerSbfError::AccountIdentity` | Policy, Candidate, or State owner/PDA/width authentication refused. | `programs/dclutch-dealer-sbf/src/lib.rs:113` |
-| `0x7003` | `DealerSbfError::Signature` | Actor signature or action-specific actor identity refused. | `programs/dclutch-dealer-sbf/src/lib.rs:115` |
-| `0x7004` | `DealerSbfError::Clock` | Clock account or request time binding refused. | `programs/dclutch-dealer-sbf/src/lib.rs:117` |
-| `0x7005` | `DealerSbfError::Release` | Registry CPI, receipt provenance, role, program, or release join refused. | `programs/dclutch-dealer-sbf/src/lib.rs:119` |
-| `0x7006` | `DealerSbfError::Semantic` | The total Dealer interpreter refused the transition. | `programs/dclutch-dealer-sbf/src/lib.rs:121` |
-| `0x7007` | `DealerSbfError::Claims` | The canonical Claims child action or receipt refused. | `programs/dclutch-dealer-sbf/src/lib.rs:123` |
-| `0x7008` | `DealerSbfError::Custody` | A canonical Custody child transfer, receipt, or postcondition refused. | `programs/dclutch-dealer-sbf/src/lib.rs:125` |
-| `0x7009` | `DealerSbfError::Commit` | State data could not be borrowed or commit width changed. | `programs/dclutch-dealer-sbf/src/lib.rs:127` |
-| `0x700A` | `DealerSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-dealer-sbf/src/lib.rs:135` |
-
 ## dealer-accelerator
 
 | code | refusal | meaning | provenance |
@@ -402,34 +385,34 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:180` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:182` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:184` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:186` |
-| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:188` |
-| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:190` |
-| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:192` |
-| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:200` |
-| `0x4008` | `TradingSbfError::HeapFrame` | This route needs the extended heap and the transaction did not grant it. | `programs/dclutch-trading-sbf/src/lib.rs:213` |
-| `0x4009` | `TradingSbfError::CloseSealAccount` | The account offered to `CloseSeal` is not a live canonical seal. | `programs/dclutch-trading-sbf/src/lib.rs:223` |
-| `0x400A` | `TradingSbfError::CloseSealLiveRelease` | `CloseSeal` was aimed at a seal the live Trading release still addresses. | `programs/dclutch-trading-sbf/src/lib.rs:239` |
-| `0x400B` | `TradingSbfError::CloseSealFrame` | The `CloseSeal` frame was not the exact permissionless closing shape. | `programs/dclutch-trading-sbf/src/lib.rs:248` |
-| `0x400C` | `TradingSbfError::FeeNotOwed` | The maker replay this fee settlement names records no obligation. | `programs/dclutch-trading-sbf/src/lib.rs:257` |
-| `0x400D` | `TradingSbfError::FeeDestination` | The fee destination is not a token account of the configured recipient. | `programs/dclutch-trading-sbf/src/lib.rs:265` |
-| `0x400E` | `TradingSbfError::FeeSource` | The fee source is not a token account of the debtor. | `programs/dclutch-trading-sbf/src/lib.rs:274` |
-| `0x400F` | `TradingSbfError::CloseMakerFrame` | The `CloseMakerReplay` frame was not the exact permissionless shape. | `programs/dclutch-trading-sbf/src/lib.rs:283` |
-| `0x4010` | `TradingSbfError::CloseMakerReplayAccount` | The account offered as the maker replay is not the canonical one. | `programs/dclutch-trading-sbf/src/lib.rs:292` |
-| `0x4011` | `TradingSbfError::CloseMakerFeeOutstanding` | The maker replay still owes its recorded Direct fee. | `programs/dclutch-trading-sbf/src/lib.rs:300` |
-| `0x4012` | `TradingSbfError::CloseMakerLiveIntents` | The maker replay still has registered live intents. | `programs/dclutch-trading-sbf/src/lib.rs:306` |
-| `0x4013` | `TradingSbfError::ActivationEffect` | The activation descriptor's own effect program refused its projection. | `programs/dclutch-trading-sbf/src/lib.rs:328` |
-| `0x4014` | `TradingSbfError::DescriptorKind` | The descriptor does not bind the kind the persisted selection names. | `programs/dclutch-trading-sbf/src/lib.rs:335` |
-| `0x4015` | `TradingSbfError::DescriptorManifestEntry` | The descriptor disagrees with its manifest entry's profile. | `programs/dclutch-trading-sbf/src/lib.rs:342` |
-| `0x4016` | `TradingSbfError::DescriptorRootWidth` | The descriptor's root width is not the width this root was created with. | `programs/dclutch-trading-sbf/src/lib.rs:348` |
-| `0x4017` | `TradingSbfError::AdmittedFrame` | The authenticated admitted-AOT frame or one of its Registry records. | `programs/dclutch-trading-sbf/src/lib.rs:358` |
-| `0x4018` | `TradingSbfError::AdmittedTransport` | The admitted-AOT register-bank transport: encoding, chunking, caller authority width, or the authenticated input scratch pages. | `programs/dclutch-trading-sbf/src/lib.rs:363` |
-| `0x4019` | `TradingSbfError::AdmittedContext` | The admitted-AOT invocation context: an identity that is not a valid `ContentId`, or a strategy that names no certificate, admission, or artifact release. | `programs/dclutch-trading-sbf/src/lib.rs:369` |
-| `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
-| `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
-| `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |
-| `0x4103` | `SeriesAccountErrorV3::Creation` | System creation or direct lamport transfer failed. | `programs/dclutch-trading-sbf/src/series/accounts.rs:56` |
-| `0x4104` | `SeriesAccountErrorV3::Commit` | Core acknowledgement or final state write refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:58` |
+| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:144` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:146` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:148` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:150` |
+| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:152` |
+| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:154` |
+| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:156` |
+| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:164` |
+| `0x4008` | `TradingSbfError::HeapFrame` | This route needs the extended heap and the transaction did not grant it. | `programs/dclutch-trading-sbf/src/lib.rs:177` |
+| `0x4009` | `TradingSbfError::CloseSealAccount` | The account offered to `CloseSeal` is not a live canonical seal. | `programs/dclutch-trading-sbf/src/lib.rs:187` |
+| `0x400A` | `TradingSbfError::CloseSealLiveRelease` | `CloseSeal` was aimed at a seal the live Trading release still addresses. | `programs/dclutch-trading-sbf/src/lib.rs:203` |
+| `0x400B` | `TradingSbfError::CloseSealFrame` | The `CloseSeal` frame was not the exact permissionless closing shape. | `programs/dclutch-trading-sbf/src/lib.rs:212` |
+| `0x400C` | `TradingSbfError::FeeNotOwed` | The maker replay this fee settlement names records no obligation. | `programs/dclutch-trading-sbf/src/lib.rs:221` |
+| `0x400D` | `TradingSbfError::FeeDestination` | The fee destination is not a token account of the configured recipient. | `programs/dclutch-trading-sbf/src/lib.rs:229` |
+| `0x400E` | `TradingSbfError::FeeSource` | The fee source is not a token account of the debtor. | `programs/dclutch-trading-sbf/src/lib.rs:238` |
+| `0x400F` | `TradingSbfError::CloseMakerFrame` | The `CloseMakerReplay` frame was not the exact permissionless shape. | `programs/dclutch-trading-sbf/src/lib.rs:247` |
+| `0x4010` | `TradingSbfError::CloseMakerReplayAccount` | The account offered as the maker replay is not the canonical one. | `programs/dclutch-trading-sbf/src/lib.rs:256` |
+| `0x4011` | `TradingSbfError::CloseMakerFeeOutstanding` | The maker replay still owes its recorded Direct fee. | `programs/dclutch-trading-sbf/src/lib.rs:264` |
+| `0x4012` | `TradingSbfError::CloseMakerLiveIntents` | The maker replay still has registered live intents. | `programs/dclutch-trading-sbf/src/lib.rs:270` |
+| `0x4013` | `TradingSbfError::ActivationEffect` | The activation descriptor's own effect program refused its projection. | `programs/dclutch-trading-sbf/src/lib.rs:292` |
+| `0x4014` | `TradingSbfError::DescriptorKind` | The descriptor does not bind the kind the persisted selection names. | `programs/dclutch-trading-sbf/src/lib.rs:299` |
+| `0x4015` | `TradingSbfError::DescriptorManifestEntry` | The descriptor disagrees with its manifest entry's profile. | `programs/dclutch-trading-sbf/src/lib.rs:306` |
+| `0x4016` | `TradingSbfError::DescriptorRootWidth` | The descriptor's root width is not the width this root was created with. | `programs/dclutch-trading-sbf/src/lib.rs:312` |
+| `0x4017` | `TradingSbfError::AdmittedFrame` | The authenticated admitted-AOT frame or one of its Registry records. | `programs/dclutch-trading-sbf/src/lib.rs:322` |
+| `0x4018` | `TradingSbfError::AdmittedTransport` | The admitted-AOT register-bank transport: encoding, chunking, caller authority width, or the authenticated input scratch pages. | `programs/dclutch-trading-sbf/src/lib.rs:327` |
+| `0x4019` | `TradingSbfError::AdmittedContext` | The admitted-AOT invocation context: an identity that is not a valid `ContentId`, or a strategy that names no certificate, admission, or artifact release. | `programs/dclutch-trading-sbf/src/lib.rs:333` |
+| `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:47` |
+| `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:49` |
+| `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:51` |
+| `0x4103` | `SeriesAccountErrorV3::Creation` | System creation or direct lamport transfer failed. | `programs/dclutch-trading-sbf/src/series/accounts.rs:53` |
+| `0x4104` | `SeriesAccountErrorV3::Commit` | Core acknowledgement or final state write refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:55` |

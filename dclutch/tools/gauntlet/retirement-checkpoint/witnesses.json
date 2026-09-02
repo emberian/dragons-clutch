@@ -16,11 +16,11 @@
       "provenance": "A null `wire_bytes` is the emitter's word for 'did not measure', which is honest but is not a claim that the frame fits. It matters more than usual here, because the next witness is where the campaign's real packet position is written down."
     },
     {
-      "id": "every-submitted-frame-is-over-the-legacy-packet-maximum",
+      "id": "every-checkpoint-frame-rides-the-chains-frozen-table",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.wire_bytes > 1232)] | length | tostring",
-      "expect": "12",
-      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES); ProgramTest submits no packet and cannot enforce it. ALL TWELVE transactions this campaign submits are LEGACY messages of 2,005-2,157 bytes and none of them could be submitted to a validator as they stand. That is not a contradiction of the campaign's packet claim, and the pairing must not be lost: `packet_census` in the campaign compiles each of the four instructions as a v0 message over a dedicated Address Lookup Table and measures 1,135 / 1,191 / 1,191 / 1,071 bytes, all under the maximum, and asserts that. So the chain is packet-bounded THROUGH AN ALT and is not packet-bounded without one. This witness records the submitted extent so that the distinction cannot quietly disappear; a validator tier owes the ALT frame, not this one."
+      "query": "[.transactions[] | select(.label | startswith(\"retirement checkpoint:\")) | \"\\(.label | split(\": \")[1] | split(\" \")[0])=\\(.wire_bytes)\"] | unique | sort | join(\" + \")",
+      "expect": "close-replay=1139 + close-vault=1139 + finish=1018 + finish=1019 + prepare=1083",
+      "provenance": "All twelve were 2,005 to 2,157 bytes as legacy messages against Solana's 1,232-byte PACKET_DATA_BYTES -- up to 925 over -- so not one of them could be submitted anywhere, and ProgramTest submits no packet to say so. The aggregate retirement had ALREADY been split into four transactions to get this far; the split alone does not reach the packet, and the table is what carries it. They now execute as v0 messages over ONE table frozen for the chain: the four 35-meta frames share their coordinates, so a table per route would be a rent per route for a single market's retirement. 34 of the 35 addresses become one-byte indexes and two stay static -- the payer and the invoked program, which no table can move. The two `finish` figures differ by one byte because the substituted-wallet hostile collapses two coordinates onto one address and so resolves 33 rather than 34. These are DATA-bound frames now: the requests are 744 to 864 bytes and no table touches those, so there is no third lever if a request grows. Figures here exclude the ComputeBudget instructions; AGGREGATE_RETIREMENT_CHECKPOINT_SPLIT_2026_08_28.md records 1,135/1,191/1,191/1,071, which is these numbers plus the 52 bytes of a compute-unit limit and a priority fee."
     },
     {
       "id": "every-retirement-refusal-reached-a-programs-own-taxonomy",
@@ -42,6 +42,13 @@
       "query": "[.transactions[] | select([.logs[] | select(test(\"^Program 8yRstXxCnC3jTgWtUFVRLJ51ojpkUW1kw9eRsrHhAK4R invoke\"))] | length > 0) | .label] | length | tostring",
       "expect": "2",
       "provenance": "Claims is handed off exactly once, by the prepare. Only two of the twelve transactions may reach the Claims program at all -- the accepted prepare and the hostile whose aggregate owner was substituted -- and in particular the REPLAYED prepare must not, because a replay that re-entered the handoff would be spending Claims compute to discover a fact Core already holds in its own checkpoint. The address is this tier's gauntlet-local Claims id from programs.json."
+    },
+    {
+      "id": "retirement-no-transaction-exceeds-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes != null and .wire_bytes > 1232)] | length | tostring",
+      "expect": "0",
+      "provenance": "Against Solana's 1,232-byte PACKET_DATA_BYTES. Twelve transactions were over it before 2026-09-02, which is what the earlier form of this witness recorded as a defect. Nulls are excluded on purpose: an unmeasured transaction is not a transaction that fits, and `retirement-checkpoint-measured-every-transaction` is what holds that count at zero."
     }
   ]
 }

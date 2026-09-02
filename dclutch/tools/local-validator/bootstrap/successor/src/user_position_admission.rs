@@ -3509,11 +3509,8 @@ fn authenticate_compiled_privileges_v1(
                 declared.accounts.len()
             )));
         }
-        for (coordinate, (index, meta)) in compiled
-            .accounts
-            .iter()
-            .zip(&declared.accounts)
-            .enumerate()
+        for (coordinate, (index, meta)) in
+            compiled.accounts.iter().zip(&declared.accounts).enumerate()
         {
             let index = usize::from(*index);
             let signer = message.is_signer(index);
@@ -3923,12 +3920,18 @@ fn rebind_unsigned_admission_blockhash_v1(
 ) -> Result<FreshlyBoundMessageV1> {
     require_rebindable_unsigned_admission_v1(report)?;
     let (recent_blockhash, last_valid_block_height) = latest_blockhash(rpc)?;
-    rebind_intent_blockhash_v1(&mut report.intent, recent_blockhash, last_valid_block_height)?;
+    rebind_intent_blockhash_v1(
+        &mut report.intent,
+        recent_blockhash,
+        last_valid_block_height,
+    )?;
     report.intent_sha256 = sha256_hex(&serde_json::to_vec(&report.intent)?);
     journal.persist(report)?;
-    Ok(FreshlyBoundMessageV1(BASE64.decode(&report.intent.message_base64).map_err(
-        |error| Error::new(format!("rebound message base64: {error}")),
-    )?))
+    Ok(FreshlyBoundMessageV1(
+        BASE64
+            .decode(&report.intent.message_base64)
+            .map_err(|error| Error::new(format!("rebound message base64: {error}")))?,
+    ))
 }
 
 /// The serialized bytes of a message bound onto a blockhash read moments ago.
@@ -6295,7 +6298,10 @@ mod tests {
             .expect_err("the compiled message promoted the owner to writable");
         let text = format!("{error:?}");
         assert!(text.contains("writable=true"), "{text}");
-        assert!(text.contains("declared signer=true writable=false"), "{text}");
+        assert!(
+            text.contains("declared signer=true writable=false"),
+            "{text}"
+        );
 
         let accepted = VersionedMessage::Legacy(Message::new_with_blockhash(
             &declared,

@@ -23,16 +23,12 @@ use dclutch_rent_contract::RefundAuthority;
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
-use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
-use solana_sdk::hash::Hash;
 use spl_token_interface::state::{Account as SplAccount, AccountState};
-use std::str::FromStr;
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x76; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x77; 32]);
 const CLAIMS_REVISION: u64 = 11;
 const CUSTODY_REVISION: u64 = 2;
-const SOLANA_PACKET_BYTES: usize = 1_232;
 
 struct JoinedFixture {
     base: Fixture,
@@ -1186,55 +1182,73 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     );
 }
 
-fn packet_census(
-    instruction: &Instruction,
-    payer: Pubkey,
-    recent_blockhash: Hash,
-) -> (usize, usize) {
-    let compute_budget = Pubkey::from_str("ComputeBudget111111111111111111111111111111")
-        .expect("Compute Budget program");
-    let mut limit_data = Vec::from([2_u8]);
-    limit_data.extend_from_slice(&1_400_000_u32.to_le_bytes());
-    let mut price_data = Vec::from([3_u8]);
-    price_data.extend_from_slice(&1_u64.to_le_bytes());
-    let unique = std::iter::once(payer)
+/// The four checkpoint routes' extents, one per route.
+///
+/// Every hostile submits the same instruction as the honest route it attacks,
+/// so a class has one extent and the hostiles check it too -- a hostile nobody
+/// could submit refuses nothing, which is the second reason to convert them.
+///
+/// These are DATA-bound frames, and the figures say so: 35 metas each, of which
+/// 33 become one-byte indexes, but the requests are 744 to 864 bytes and no
+/// table touches those. The aggregate retirement was already split into four
+/// transactions to get here; the table is what carries the split under the
+/// packet, and there is no third lever left if a request grows.
+const PREPARE_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_101,
+    v0_bytes: 1_083,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+const CLOSE_VAULT_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_157,
+    v0_bytes: 1_139,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+const CLOSE_REPLAY_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_157,
+    v0_bytes: 1_139,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+const FINISH_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_037,
+    v0_bytes: 1_019,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+/// The substituted-wallet hostile is 32 bytes narrower than the honest finish:
+/// the substitution collapses two coordinates onto one address, so the frame
+/// carries one fewer unique key.
+const FINISH_SUBSTITUTED_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_005,
+    v0_bytes: 1_018,
+    static_keys: 2,
+    loaded_addresses: 33,
+};
+
+/// The unique account LOCKS one instruction resolves.
+///
+/// Bytes are deliberately not measured here any more. Every checkpoint route is
+/// now submitted as a v0 message over the chain's own frozen table and pins its
+/// exact extent at the submission, so a second byte model computed here against
+/// a synthetic table would be a parallel authority for a number the campaign
+/// observes directly.
+///
+/// What survives is the wall a packet fix cannot move. The runtime's 64-lock
+/// limit counts unique addresses whether they arrive inline or through a table,
+/// so a frame that fits the packet can still be unsubmittable, and a document
+/// that reports "fits" on a 63-key frame is reporting the wrong wall.
+fn unique_account_locks(instruction: &Instruction, payer: Pubkey) -> usize {
+    std::iter::once(payer)
         .chain(std::iter::once(instruction.program_id))
         .chain(instruction.accounts.iter().map(|meta| meta.pubkey))
-        .collect::<std::collections::BTreeSet<_>>();
-    let addresses = instruction
-        .accounts
-        .iter()
-        .map(|meta| meta.pubkey)
-        .filter(|key| *key != payer && *key != instruction.program_id)
         .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let lookup = AddressLookupTableAccount {
-        key: Pubkey::new_from_array([0xfc; 32]),
-        addresses,
-    };
-    let message = v0::Message::try_compile(
-        &payer,
-        &[
-            Instruction {
-                program_id: compute_budget,
-                accounts: Vec::new(),
-                data: limit_data,
-            },
-            Instruction {
-                program_id: compute_budget,
-                accounts: Vec::new(),
-                data: price_data,
-            },
-            instruction.clone(),
-        ],
-        &[lookup],
-        recent_blockhash,
-    )
-    .expect("retirement packet compiles through its dedicated ALT");
-    let signatures = usize::from(message.header.num_required_signatures);
-    let wire_bytes = 1 + signatures * 64 + VersionedMessage::V0(message).serialize().len();
-    (unique.len(), wire_bytes)
+        .len()
 }
 
 #[tokio::test]
@@ -1265,11 +1279,6 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     assert_eq!(plan.close_replay.accounts.len(), 35);
     assert_eq!(plan.finish.accounts.len(), 35);
 
-    let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
-        .await
-        .expect("packet census blockhash");
     let census = [
         ("prepare", &plan.prepare),
         ("close-vault", &plan.close_vault),
@@ -1277,22 +1286,37 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         ("finish", &plan.finish),
     ]
     .map(|(name, instruction)| {
-        let (keys, bytes) = packet_census(instruction, context.payer.pubkey(), blockhash);
+        let keys = unique_account_locks(instruction, context.payer.pubkey());
         println!(
-            "checkpoint-retirement packet {name}: metas={} unique_keys={keys} data_bytes={} wire_bytes={bytes}",
+            "checkpoint-retirement {name}: metas={} unique_locks={keys} data_bytes={}",
             instruction.accounts.len(),
             instruction.data.len(),
         );
-        assert!(
-            bytes <= SOLANA_PACKET_BYTES,
-            "{name} is {bytes} bytes, over the Solana packet ceiling"
-        );
-        (keys, bytes)
+        keys
     });
-    assert!(
-        2_280 > SOLANA_PACKET_BYTES,
-        "the legacy wrapped instruction data alone proves its wire cliff"
-    );
+
+    // The chain's own frozen table, built before the chain runs.
+    //
+    // All four routes are 35-meta frames and all four were over the packet
+    // maximum as legacy messages -- 2,005 to 2,157, up to 925 over -- so not one
+    // of the twelve transactions below could have been submitted anywhere.
+    // ProgramTest submits no packet, which is why they all passed.
+    //
+    // ONE table for the chain, not one per route. The four frames share their
+    // coordinates, and four tables would be four rents for one market's
+    // retirement. Building it up front is also what a real controller must do:
+    // the addresses have to be finalized before the first submission can
+    // resolve them.
+    let (checkpoint_table, checkpoint_addresses) = frozen_route_lookup_table(
+        &mut context,
+        &[
+            plan.prepare.clone(),
+            plan.close_vault.clone(),
+            plan.close_replay.clone(),
+            plan.finish.clone(),
+        ],
+    )
+    .await;
 
     let before = joined_snapshot(&mut context, &fixture).await;
     let claims_prestate = before
@@ -1308,7 +1332,7 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let substituted_owner_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit_recorded(&mut context, std::slice::from_ref(&plan.prepare), &[], "retirement checkpoint: prepare against a Claims aggregate reassigned to the System program")
+        submit_recorded_over_table_v0(&mut context, std::slice::from_ref(&plan.prepare), &[], "retirement checkpoint: prepare against a Claims aggregate reassigned to the System program", checkpoint_table, &checkpoint_addresses, PREPARE_EXTENT)
             .await
             .is_err(),
         "Claims handoff refuses a substituted aggregate owner"
@@ -1320,11 +1344,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     set_account(&mut context, fixture.claims_aggregate, claims_prestate);
     assert!(
-        submit_recorded(
+        submit_recorded_over_table_v0(
             &mut context,
             std::slice::from_ref(&plan.close_vault),
             &[],
-            "retirement checkpoint: close-vault suffix before the Claims handoff"
+            "retirement checkpoint: close-vault suffix before the Claims handoff",
+            checkpoint_table,
+            &checkpoint_addresses,
+            CLOSE_VAULT_EXTENT
         )
         .await
         .is_err(),
@@ -1332,11 +1359,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     assert_eq!(joined_snapshot(&mut context, &fixture).await, before);
 
-    submit_recorded(
+    submit_recorded_over_table_v0(
         &mut context,
         std::slice::from_ref(&plan.prepare),
         &[],
         "retirement checkpoint: prepare hands the Claims aggregate to Core",
+        checkpoint_table,
+        &checkpoint_addresses,
+        PREPARE_EXTENT,
     )
     .await
     .expect("Claims handoff and ClaimsClosed checkpoint");
@@ -1368,11 +1398,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let prepared_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit_recorded(
+        submit_recorded_over_table_v0(
             &mut context,
             std::slice::from_ref(&plan.prepare),
             &[],
-            "retirement checkpoint: prepare replayed against a ClaimsClosed checkpoint"
+            "retirement checkpoint: prepare replayed against a ClaimsClosed checkpoint",
+            checkpoint_table,
+            &checkpoint_addresses,
+            PREPARE_EXTENT
         )
         .await
         .is_err(),
@@ -1392,11 +1425,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let substituted_checkpoint_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit_recorded(
+        submit_recorded_over_table_v0(
             &mut context,
             std::slice::from_ref(&plan.close_vault),
             &[],
-            "retirement checkpoint: close-vault against a checkpoint reassigned away from Core"
+            "retirement checkpoint: close-vault against a checkpoint reassigned away from Core",
+            checkpoint_table,
+            &checkpoint_addresses,
+            CLOSE_VAULT_EXTENT
         )
         .await
         .is_err(),
@@ -1409,11 +1445,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     set_account(&mut context, fixture.claims_aggregate, prepared_account);
     assert!(
-        submit_recorded(
+        submit_recorded_over_table_v0(
             &mut context,
             std::slice::from_ref(&plan.close_replay),
             &[],
-            "retirement checkpoint: close-replay before the HoardPrincipal vault closes"
+            "retirement checkpoint: close-replay before the HoardPrincipal vault closes",
+            checkpoint_table,
+            &checkpoint_addresses,
+            CLOSE_REPLAY_EXTENT
         )
         .await
         .is_err(),
@@ -1425,11 +1464,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         "phase refusal is byte/lamport atomic"
     );
 
-    submit_recorded(
+    submit_recorded_over_table_v0(
         &mut context,
         std::slice::from_ref(&plan.close_vault),
         &[],
         "retirement checkpoint: close-vault closes the HoardPrincipal vault",
+        checkpoint_table,
+        &checkpoint_addresses,
+        CLOSE_VAULT_EXTENT,
     )
     .await
     .expect("HoardPrincipal close and HoardVaultClosed checkpoint");
@@ -1442,11 +1484,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let vault_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit_recorded(
+        submit_recorded_over_table_v0(
             &mut context,
             std::slice::from_ref(&plan.close_vault),
             &[],
-            "retirement checkpoint: close-vault replayed against a HoardVaultClosed checkpoint"
+            "retirement checkpoint: close-vault replayed against a HoardVaultClosed checkpoint",
+            checkpoint_table,
+            &checkpoint_addresses,
+            CLOSE_VAULT_EXTENT
         )
         .await
         .is_err(),
@@ -1457,11 +1502,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         vault_closed_snapshot,
         "close-vault replay refusal is byte/lamport atomic"
     );
-    submit_recorded(
+    submit_recorded_over_table_v0(
         &mut context,
         std::slice::from_ref(&plan.close_replay),
         &[],
         "retirement checkpoint: close-replay closes the Custody replay",
+        checkpoint_table,
+        &checkpoint_addresses,
+        CLOSE_REPLAY_EXTENT,
     )
     .await
     .expect("Custody replay close and CustodyReplayClosed checkpoint");
@@ -1474,11 +1522,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
     );
     let replay_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
     assert!(
-        submit_recorded(
+        submit_recorded_over_table_v0(
             &mut context,
             std::slice::from_ref(&plan.close_replay),
             &[],
-            "retirement checkpoint: close-replay replayed against a CustodyReplayClosed checkpoint"
+            "retirement checkpoint: close-replay replayed against a CustodyReplayClosed checkpoint",
+            checkpoint_table,
+            &checkpoint_addresses,
+            CLOSE_REPLAY_EXTENT
         )
         .await
         .is_err(),
@@ -1498,11 +1549,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         .expect("finish refund-wallet meta")
         .pubkey = context.payer.pubkey();
     assert!(
-        submit_recorded(
+        submit_recorded_over_table_v0(
             &mut context,
             &[substituted_refund],
             &[],
-            "retirement checkpoint: finish with the immutable refund wallet substituted"
+            "retirement checkpoint: finish with the immutable refund wallet substituted",
+            checkpoint_table,
+            &checkpoint_addresses,
+            FINISH_SUBSTITUTED_EXTENT
         )
         .await
         .is_err(),
@@ -1519,11 +1573,14 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         .as_ref()
         .expect("refund wallet prestate")
         .lamports;
-    submit_recorded(
+    submit_recorded_over_table_v0(
         &mut context,
         std::slice::from_ref(&plan.finish),
         &[],
         "retirement checkpoint: finish closes checkpoint, Market and RentCredit",
+        checkpoint_table,
+        &checkpoint_addresses,
+        FINISH_EXTENT,
     )
     .await
     .expect("checkpoint then Core then Rent close");
@@ -1542,5 +1599,5 @@ async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
         wallet_before + plan.expected_refund_delta,
         "every classified rent lamport reaches the immutable refund wallet exactly once"
     );
-    assert!(census.iter().all(|(keys, _)| *keys <= 64));
+    assert!(census.iter().all(|keys| *keys <= 64));
 }

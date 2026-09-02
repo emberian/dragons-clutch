@@ -12,13 +12,6 @@
 use std::{env, fs, path::Path};
 
 use dclutch_core_contract::ContentId;
-use dclutch_series_shadow_bundle_generator::{
-    SeriesShadowBuildInputsV1, SeriesShadowSourceManifestV1,
-};
-use dclutch_series_shadow_sbf::{
-    evaluator::EmbeddedSeriesShadowBundleV4,
-    release::{SelectedSeriesShadowReleaseV1, selected_series_shadow_release_v1},
-};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_program::{pubkey::Pubkey, rent::Rent};
@@ -201,51 +194,6 @@ pub struct SeriesSelectedShadowBuildEvidenceV1 {
     pub elf: [u8; 32],
 }
 
-/// Authenticate the selected host include, source manifest, and real ELF.
-///
-/// This check does not bless a release. It proves only that the test harness,
-/// generator output, and exact compiled ELF use the same deliberately selected
-/// source. A checked `ArtifactRelease` remains the production release authority.
-pub fn authenticate_selected_shadow_build_v1(
-    manifest_bytes: &[u8],
-    generated_include: &[u8],
-    expected: SeriesShadowBuildInputsV1,
-    elves: &SeriesRealSbfElvesV1,
-) -> Result<SeriesSelectedShadowBuildEvidenceV1, SeriesRealSbfHarnessErrorV1> {
-    if generated_include.is_empty() {
-        return Err(SeriesRealSbfHarnessErrorV1::Source);
-    }
-    let manifest = SeriesShadowSourceManifestV1::decode(manifest_bytes)
-        .map_err(|_| SeriesRealSbfHarnessErrorV1::Source)?;
-    let source_manifest = content_digest(manifest_bytes)?;
-    let include_digest = content_digest(generated_include)?;
-    let selected = selected_series_shadow_release_v1()
-        .map_err(|_| SeriesRealSbfHarnessErrorV1::ReleaseSubstitution)?
-        .ok_or(SeriesRealSbfHarnessErrorV1::NoSelectedRelease)?;
-    if source_manifest != expected.source_manifest
-        || include_digest != expected.generated_include
-        || manifest.bundle_digest() != expected.bundle
-        || manifest.semantic_source() != expected.semantic_source
-        || manifest.compiler_source() != expected.compiler_source
-        || manifest.toolchain() != expected.toolchain
-        || selected.provenance.source_manifest != expected.source_manifest
-        || selected.provenance.bundle != expected.bundle
-        || selected.provenance.semantic_source != expected.semantic_source
-        || selected.provenance.compiler_source != expected.compiler_source
-        || selected.provenance.toolchain != expected.toolchain
-        || selected.bundle.certificate != expected.certificate
-        || !same_bundle(selected, manifest.generated_bundle())
-    {
-        return Err(SeriesRealSbfHarnessErrorV1::ReleaseSubstitution);
-    }
-    Ok(SeriesSelectedShadowBuildEvidenceV1 {
-        source_manifest,
-        generated_include: include_digest,
-        bundle: expected.bundle,
-        elf: elves.series_shadow_elf_digest(),
-    })
-}
-
 /// Account class whose complete prestate must survive a late refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SeriesRollbackRoleV1 {
@@ -366,34 +314,6 @@ impl SeriesRollbackSnapshotV1 {
             Err(SeriesRealSbfHarnessErrorV1::RollbackMismatch)
         }
     }
-}
-
-fn same_bundle(
-    selected: SelectedSeriesShadowReleaseV1,
-    generated: dclutch_series_shadow_bundle_generator::SeriesShadowGeneratedBundleV1<'_>,
-) -> bool {
-    let EmbeddedSeriesShadowBundleV4 {
-        capability_program,
-        account_profile,
-        request_profile,
-        lifecycle,
-        transition,
-        effect,
-        strategy,
-        certificate,
-    } = selected.bundle;
-    capability_program == generated.capability_program
-        && account_profile == generated.account_profile
-        && request_profile == generated.request_profile
-        && lifecycle == generated.lifecycle
-        && transition == generated.transition
-        && effect == generated.effect
-        && strategy == generated.strategy
-        && certificate == generated.certificate
-}
-
-fn content_digest(bytes: &[u8]) -> Result<ContentId, SeriesRealSbfHarnessErrorV1> {
-    ContentId::new(digest(bytes)).map_err(|_| SeriesRealSbfHarnessErrorV1::Source)
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {

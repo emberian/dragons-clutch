@@ -22,12 +22,6 @@ pub const CLAIMS_FOUNDING_WIRE_VERSION_V4: u16 = 4;
 pub const CLAIMS_FOUNDING_USER_OWNER_KIND_V4: u8 = 1;
 /// Canonical LiabilityBasisV2 aggregate PDA seed domain.
 pub const CLAIMS_FOUNDING_AGGREGATE_SEED_V4: &[u8] = b"dclutch:lbv2:market";
-/// Domain for the ordered post-resource transcript.
-///
-/// The adapter hashes this domain followed by the exact post aggregate,
-/// Position, and admission bytes, in that order.
-pub const CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V4: &[u8] =
-    b"dclutch/claims/founding/post-resources/v4";
 
 const VERSION_OFFSET: usize = 8;
 const OWNER_KIND_OFFSET: usize = 10;

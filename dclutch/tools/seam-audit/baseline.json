@@ -24,7 +24,6 @@
       "CUSTODY_AUTHORITY_PDA_DOMAIN_V1\tprograms/dclutch-custody-sbf/src/projected.rs": "debt-derivation-restatement",
       "CUSTODY_AUTHORITY_PDA_DOMAIN_V1\tprograms/dclutch-dealer-accelerator-sbf/program-test/src/custody_delivery.rs": "debt-derivation-restatement",
       "CUSTODY_AUTHORITY_PDA_DOMAIN_V1\tprograms/dclutch-dealer-accelerator-sbf/program-test/tests/accepted.rs": "debt-derivation-restatement",
-      "CUSTODY_AUTHORITY_PDA_DOMAIN_V1\tprograms/dclutch-dealer-sbf/src/lib.rs": "debt-derivation-restatement",
       "CUSTODY_AUTHORITY_PDA_DOMAIN_V1\tprograms/dclutch-trading-sbf/src/dealer/mod.rs": "debt-derivation-restatement",
       "CUSTODY_AUTHORITY_PDA_DOMAIN_V1\tprograms/dclutch-trading-sbf/src/dealer/tests.rs": "debt-derivation-restatement",
       "CUSTODY_AUTHORITY_PDA_DOMAIN_V1\tprograms/dclutch-trading-sbf/src/dealer/v3_multi_lp.rs": "debt-derivation-restatement",
@@ -106,6 +105,8 @@
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2\ttools/local-validator/bootstrap/successor/src/campaign.rs": "benign-sole-seed-no-helper",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2\ttools/local-validator/bootstrap/successor/src/direct_market.rs": "benign-sole-seed-no-helper",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2\ttools/local-validator/bootstrap/successor/src/market.rs": "benign-sole-seed-no-helper",
+      "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2\ttools/local-validator/bootstrap/successor/src/plan.rs": "untriaged",
+      "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2\ttools/local-validator/bootstrap/successor/src/runtime.rs": "untriaged",
       "RATIONAL_SHARD_MINT_SEED_V2\tcrates/dclutch-rational-lifecycle-hot-v3/src/compact_operator_v4.rs": "debt-derivation-restatement",
       "RATIONAL_SHARD_MINT_SEED_V2\tcrates/dclutch-rational-representation-v2-operator/src/lib.rs": "debt-derivation-restatement",
       "RATIONAL_SHARD_MINT_SEED_V2\tprograms/dclutch-claims-sbf/program-test/rational-lifecycle/tests/lifecycle.rs": "debt-derivation-restatement",
@@ -391,9 +392,6 @@
       "formal/qedsvm-direct-v12\tREGISTERED_SEED": "debt-seed-guard",
       "programs/dclutch-claims-sbf\tCLAIMS_MARKET_SEED_V2": "debt-seed-guard",
       "programs/dclutch-claims-sbf\tLIABILITY_BASIS_MARKET_SEED_V2": "debt-seed-guard",
-      "programs/dclutch-dealer-sbf\tCANDIDATE_PDA_DOMAIN_V1": "debt-seed-guard",
-      "programs/dclutch-dealer-sbf\tPOLICY_PDA_DOMAIN_V1": "debt-seed-guard",
-      "programs/dclutch-dealer-sbf\tSTATE_PDA_DOMAIN_V1": "debt-seed-guard",
       "programs/dclutch-general-accelerator-sbf\tGENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1": "debt-seed-guard",
       "tools/fractional-exterior/src\tCLAIMS_MARKET_SEED_V2": "debt-seed-guard",
       "tools/local-validator/bootstrap\tDIRECT_COLLATERAL_SEED_DOMAIN_V1": "debt-seed-guard",
@@ -642,7 +640,6 @@
       "programs/dclutch-core-sbf/src/resolution.rs": "inventory-guard-present",
       "programs/dclutch-core-sbf/src/retire_v1.rs": "inventory-guard-present",
       "programs/dclutch-core-sbf/src/series_permit_expiry_precommit_v1.rs": "inventory-guard-present",
-      "programs/dclutch-dealer-sbf/src/lib.rs": "inventory-guard-present",
       "programs/dclutch-resolution-proof-sbf/src/provider_instruction_v3.rs": "inventory-guard-present",
       "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs": "inventory-guard-present",
       "programs/dclutch-resolution-proof-sbf/src/relay_v1.rs": "inventory-guard-present",
@@ -735,6 +732,6 @@
       "programs/dclutch-trading-sbf/src/hot_v3.rs\tapply_lifecycle_creates_v3": "hazard-unset-pin"
     }
   },
-  "measured_commit": "47860c0073a21dd81421dd621e21045040a40ad7",
+  "measured_commit": "e6b7bf1af09c4ddb0a003c960ab0d7bfdcc4af99",
   "schema": "dclutch-seam-audit-v1"
 }

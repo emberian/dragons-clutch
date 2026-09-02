@@ -16,7 +16,6 @@ reachable inside an entry route's request.
 | `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 24 | 136 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:63) |
 | `core` | `dclutch-core-sbf` | 0x3 | 21 | 14 | 29 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:381) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 10 | 11 | 13 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:245) |
-| `dealer` | `dclutch-dealer-sbf` | 0x7 | 1 | 0 | 11 | `process_instruction` (programs/dclutch-dealer-sbf/src/lib.rs:415) |
 | `dealer-accelerator` | `dclutch-dealer-accelerator-sbf` | 0xD | 1 | 0 | 3 | `program_entrypoint` (programs/dclutch-dealer-accelerator-sbf/src/lib.rs:130) |
 | `direct-aot` | `dclutch-direct-aot-sbf` | 0xA | 1 | 0 | 4 | `program_entrypoint` (programs/dclutch-direct-aot-sbf/src/lib.rs:136) |
 | `general-accelerator` | `dclutch-general-accelerator-sbf` | 0xC | 1 | 0 | 20 | `program_entrypoint` (programs/dclutch-general-accelerator-sbf/src/lib.rs:500) |

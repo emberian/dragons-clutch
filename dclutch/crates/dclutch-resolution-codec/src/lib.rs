@@ -85,14 +85,8 @@ pub const SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2: &[u8] = b"dclutch/source-close/v
 /// State-derived immediate successor sequence for the one primary success certificate.
 pub const PRIMARY_CERTIFICATE_SEQUENCE_V3: u64 =
     generated_source_resolution::PRIMARY_CERTIFICATE_SEQUENCE_VALUE;
-/// Domain separating the content identity of an authenticated Pyth update.
-pub const PYTH_EVIDENCE_CONTENT_DOMAIN_V1: &[u8] = b"dclutch/pyth-evidence/v1";
 /// Domain for the exact FundingState bytes and lamport custody in a funded receipt.
 pub const FUNDED_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/funded-poststate/v1";
-/// Domain for the exact ordered Source/Core effect poststate digest.
-pub const RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/resolution-poststate/v1";
-/// Domain separating the exact three-account Resolution funding-set digest.
-pub const SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/source-funding-set/v1";
 /// Domain separating the exact Source/subset-ledger effect poststate digest.
 pub const RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2: &[u8] = b"dclutch/resolution-poststate/v2";
 /// Domain separating one exact three-entry subset-ledger prestate digest.

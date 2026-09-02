@@ -1638,6 +1638,49 @@ async fn submit_recorded_v0(
     label: &str,
 ) -> (Result<(), BanksClientError>, PacketExtentV1) {
     let (table, addresses) = frozen_route_lookup_table(context, instructions).await;
+    compile_submit_and_record_v0(context, instructions, signers, label, table, &addresses).await
+}
+
+/// The same over a table already frozen for a CHAIN of routes, asserting the
+/// extent the route was expected to have.
+///
+/// A multi-transaction chain over one market's retirement takes ONE table, not
+/// one per route: the frames share their coordinates, and a table per route is
+/// a rent per route for a single act. Building it before the chain runs is also
+/// what a real controller must do -- the addresses have to be finalized before
+/// the first submission can resolve them.
+async fn submit_recorded_over_table_v0(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    label: &str,
+    table: Pubkey,
+    addresses: &[Pubkey],
+    expected: PacketExtentV1,
+) -> Result<(), BanksClientError> {
+    let (outcome, extent) =
+        compile_submit_and_record_v0(context, instructions, signers, label, table, addresses).await;
+    assert_eq!(extent, expected, "{label}");
+    assert!(
+        expected.legacy_bytes > PACKET_DATA_BYTES,
+        "{label}: a route that already fit needs no table"
+    );
+    assert!(
+        expected.v0_bytes <= PACKET_DATA_BYTES,
+        "{label}: the table did not close the overrun"
+    );
+    outcome
+}
+
+async fn compile_submit_and_record_v0(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    label: &str,
+    table: Pubkey,
+    addresses: &[Pubkey],
+) -> (Result<(), BanksClientError>, PacketExtentV1) {
+    let addresses = addresses.to_vec();
     let blockhash = context
         .banks_client
         .get_latest_blockhash()

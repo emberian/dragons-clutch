@@ -16,11 +16,11 @@
       "provenance": "The one commit this campaign submits as a LEGACY transaction measures 1,366 bytes -- over Solana's 1,232-byte limit. That is exactly why every other commit travels as a v0 transaction over an Address Lookup Table. Asserted positively so the fact cannot quietly stop being true: if commit ever shrinks below the limit, someone should decide deliberately whether the lookup table is still wanted, rather than discovering it from a green run."
     },
     {
-      "id": "the-unmeasured-rows-are-all-and-only-commit-rows",
+      "id": "dealer-checkpoint-measured-every-transaction",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.wire_bytes == null) | select(.label | test(\" -- trading/\")) | select((.label | test(\"checkpoint_commit_v1\")) | not)] | length | tostring",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
       "expect": "0",
-      "provenance": "A null wire_bytes says the campaign did not measure, which is honest and is NOT a claim that the frame fits -- and the packet witnesses above take a max that would silently drop those rows. This pins that the unmeasured checkpoint rows are all commit rows, the ones that travel v0 over a lookup table. If a future stage started travelling v0 without saying so, this stops being zero."
+      "provenance": "A null wire_bytes says the campaign did not measure, which is honest and is NOT a claim that the frame fits -- and every packet witness beside this one takes a max, which would silently drop an unmeasured row. Until 2026-09-02 this witness could only pin that the unmeasured rows were all and only the v0 commit rows, because `submit_v0` recorded None on the belief that this package's dependency set carried no serializer for a v0 message. It does: solana-message =4.5.0 is a direct dependency and VersionedMessage serializes, which is how programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs measures the identical shape. All four of this campaign's `record_campaign_transaction` call sites now pass a measured extent, so the honest claim is the stronger one: nothing goes unmeasured, and the maxima above are over the whole population."
     },
     {
       "id": "the-hot-rows-exceed-the-packet-limit-and-therefore-claim-no-route",

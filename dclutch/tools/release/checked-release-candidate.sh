@@ -578,9 +578,23 @@ FRESHNESS_RESULT="$("$FRESHNESS_CHECKER" \
     || { echo "refusing: SBF build freshness gate failed" >&2; exit 1; }
 printf '%s\n' "$FRESHNESS_RESULT"
 printf '%s\n' "$FRESHNESS_RESULT" >> "$BUILD_LOG"
+# The authority for this set is SHIPPED_LINKS in
+# tools/local-validator/bootstrap/successor/src/upgrade.rs, and the count is
+# stated HERE as well, which is the whole defect: e6b7bf1a deleted
+# dclutch-dealer-sbf and took SHIPPED_LINKS from 13 to 12, aa7f8892 swept the
+# two Rust readers, and this third reader kept refusing every candidate at HEAD
+# because nothing makes the two agree. Found on 2026-09-02 by the POPULATION
+# lane, whose candidate run died here with all twelve links built and clean.
+#
+# DEBT, named rather than hidden: the honest repair is for the successor
+# binary to PRINT its shipped set and for this script to compare content
+# instead of counting; then the number lives in one place and a role appearing
+# or disappearing is caught by name rather than by arithmetic. That needs a new
+# subcommand on the release side, so it is not done here.
+SHIPPED_LINK_COUNT=12
 BUILD_LINK_COUNT="$(wc -l < "$BUILD_LINKS" | tr -d ' ')"
-if [ "$BUILD_LINK_COUNT" != "13" ]; then
-    echo "refusing: checked Upgrade admission requires the exact 13-link shipped set; enumerated $BUILD_LINK_COUNT" >&2
+if [ "$BUILD_LINK_COUNT" != "$SHIPPED_LINK_COUNT" ]; then
+    echo "refusing: checked Upgrade admission requires the exact $SHIPPED_LINK_COUNT-link shipped set; enumerated $BUILD_LINK_COUNT (authority: SHIPPED_LINKS in tools/local-validator/bootstrap/successor/src/upgrade.rs)" >&2
     exit 1
 fi
 

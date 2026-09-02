@@ -58,11 +58,6 @@ pub const ACCELERATOR_ACK_SCHEMA_ID_V2: [u8; 32] = [
 /// Schema label for Trading-owned [`AuthenticatedScratchPageV2`] accounts.
 pub const SCRATCH_PAGE_SCHEMA_PREIMAGE_V2: &[u8] =
     b"dclutch/schema/execution-strategy-scratch-page-v2";
-/// SHA-256 of [`SCRATCH_PAGE_SCHEMA_PREIMAGE_V2`].
-pub const SCRATCH_PAGE_SCHEMA_ID_V2: [u8; 32] = [
-    0xf0, 0x17, 0x56, 0x8c, 0xe6, 0x75, 0x6f, 0xd0, 0x52, 0xbf, 0xf9, 0x3b, 0x44, 0xa3, 0x31, 0x96,
-    0x91, 0x51, 0x97, 0x6c, 0x1f, 0xa4, 0xe1, 0x8c, 0x4c, 0x97, 0xd6, 0xf4, 0x0d, 0x94, 0xc1, 0xb5,
-];
 
 const DISPOSITION_INTERPRETED: u8 = 0;
 const DISPOSITION_SHADOW_AOT: u8 = 1;

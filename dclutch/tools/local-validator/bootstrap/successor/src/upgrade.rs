@@ -611,7 +611,7 @@ struct ValidatedUpgradeGateV1 {
 
 /// Key-free projection of one checked-release role for a localhost mutable
 /// substrate.  The local launcher consumes the same gate validator as Upgrade;
-/// it does not grow a second, weaker interpretation of the thirteen-link gate.
+/// it does not grow a second, weaker interpretation of the twelve-link gate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CheckedLocalGateRoleV1 {
     pub(crate) gate_sha256: String,
@@ -1842,7 +1842,7 @@ pub(crate) fn usage() -> &'static str {
      The command checks the Loader-v3 Program link, the \
      non-executable ProgramData account, every fact in the canonical baseline, the retained \
      authority and persistent Buffer identity. The generated checked-release gate binds the exact source \
-     commit/tree, all thirteen fresh compile logs, all thirteen zero frame reports, and every \
+     commit/tree, all twelve fresh compile logs, all twelve zero frame reports, and every \
      release ELF. The selected ELF must be the gate's canonical regular file. The command refuses \
      handwritten acceptance, path escape, symlinks, missing links, and changed evidence. It pads \
      the checked raw ELF with zeros only to the separately captured baseline width. Execute first \
@@ -5910,7 +5910,7 @@ fn validate_checked_release_gate(args: &UpgradeArgsV1) -> Result<ValidatedUpgrad
     })
 }
 
-/// Re-authenticate one role of the exact thirteen-link checked-release gate for
+/// Re-authenticate one role of the exact twelve-link checked-release gate for
 /// a localhost-only mutable substrate.  This is deliberately a projection of
 /// the Upgrade validator above: local evidence and devnet Upgrade evidence
 /// share one gate authority, while retaining different deployment journals.
@@ -6027,7 +6027,7 @@ fn validate_checked_release_gate_selection(
             "checked-release gate omitted solana_cli_version",
         ));
     }
-    if gate.link_count != u64::try_from(SHIPPED_LINKS.len()).expect("thirteen links fit u64")
+    if gate.link_count != u64::try_from(SHIPPED_LINKS.len()).expect("twelve links fit u64")
         || gate.links.len() != SHIPPED_LINKS.len()
     {
         return Err(Error::new(format!(
@@ -6267,7 +6267,7 @@ fn validate_checked_mixed_gate_selection(
         || gate.links.len() != SHIPPED_LINKS.len()
     {
         return Err(Error::new(
-            "mixed checked gate schema, candidate source, CLI, or all-13 width differs",
+            "mixed checked gate schema, candidate source, CLI, or all-12 width differs",
         ));
     }
     require_lower_hex(
@@ -12180,7 +12180,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_generated_gate_validates_all_thirteen_links() {
+    fn canonical_generated_gate_validates_all_twelve_links() {
         let fixture = Fixture::new();
         let gate = validate_checked_release_gate(&fixture.args).expect("canonical gate");
         assert_eq!(gate.raw_elf, fixture.raw_elf);
@@ -12188,7 +12188,7 @@ mod tests {
             gate.gate_sha256,
             fixture.args.expected_checked_release_gate_sha256
         );
-        assert_eq!(fixture.gate.links.len(), 13);
+        assert_eq!(fixture.gate.links.len(), 12);
     }
 
     #[test]
@@ -12528,7 +12528,7 @@ mod tests {
             validate_checked_release_gate(&missing.args)
                 .expect_err("missing link")
                 .to_string()
-                .contains("all 13 shipped links")
+                .contains("all 12 shipped links")
         );
 
         let mut duplicate = Fixture::new();

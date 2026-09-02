@@ -1270,7 +1270,13 @@ async fn submit(
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
-    record_campaign_transaction(&signature, slot, Some(wire_bytes), &instruction_data, &processed);
+    record_campaign_transaction(
+        &signature,
+        slot,
+        Some(wire_bytes),
+        &instruction_data,
+        &processed,
+    );
     Ok(processed)
 }
 
@@ -1358,7 +1364,10 @@ fn record_campaign_transaction(
     if dclutch_program_test_evidence::evidence_directory().is_none() {
         return;
     }
-    let case = std::thread::current().name().unwrap_or("unnamed").to_owned();
+    let case = std::thread::current()
+        .name()
+        .unwrap_or("unnamed")
+        .to_owned();
     let failure = processed
         .result
         .clone()
@@ -2602,7 +2611,11 @@ fn reservation_evidence(
 
 /// The Custody-derived address of one reservation receipt.
 fn reservation_receipt_address(scenario: &Scenario, ordinal: u8) -> Pubkey {
-    reservation_receipt_address_for(scenario, ordinal, DealerScenarioReservationActionV1::Reserve)
+    reservation_receipt_address_for(
+        scenario,
+        ordinal,
+        DealerScenarioReservationActionV1::Reserve,
+    )
 }
 
 /// The receipt address for one ordinal AND ONE ACTION.
@@ -3797,12 +3810,28 @@ async fn submit_v0(
     let payer = context.payer.insecure_clone();
     let transaction =
         VersionedTransaction::try_new(message, &[&payer]).expect("signed v0 transaction");
-    // A v0 transaction with an Address Lookup Table has no serializer in this
-    // package's dependency set, and `wire_bytes: None` is the emitter's own word
-    // for "this campaign did not measure". It is NOT a claim that the frame
-    // fits, which is why the packet witness excludes the unmeasured rather than
-    // taking a max that would silently drop them.
-    let wire_bytes = None;
+    // The v0 rows used to record `wire_bytes: None` on the belief that this
+    // package's dependency set carried no serializer for a v0 message. It does:
+    // `solana-message =4.5.0` is a direct dependency and `VersionedMessage`
+    // serializes, which is how `rational_representation_v2_program_test.rs`
+    // measures the identical shape. So the eighteen commit rows were recorded as
+    // "this campaign did not measure" -- honest, and an absence the packet
+    // witness then had to exclude rather than check. They are measured now, on
+    // the same short-vector-plus-signatures arithmetic as the legacy rows above,
+    // so the two transports are comparable and the witness can stop excluding
+    // anything.
+    let wire_bytes = Some(
+        1_usize
+            .checked_add(
+                transaction
+                    .signatures
+                    .len()
+                    .checked_mul(64)
+                    .expect("signatures"),
+            )
+            .and_then(|prefix| prefix.checked_add(transaction.message.serialize().len()))
+            .expect("bounded v0 transaction wire"),
+    );
     let signature = transaction
         .signatures
         .first()

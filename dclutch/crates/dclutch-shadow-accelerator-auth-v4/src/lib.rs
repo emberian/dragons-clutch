@@ -28,7 +28,12 @@ use dclutch_execution_strategy_contract::{
     shadow_digest_v3::{
         ShadowRuntimeObservationV3, family_request_digest_v3, runtime_observations_digest_v3,
     },
-    shadow_v3::{SHADOW_RUNTIME_ACCOUNTS_START_V3, ShadowRequestV3},
+    shadow_v3::{
+        SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, SHADOW_ACTIVATION_ACCOUNT_V3,
+        SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3,
+        SHADOW_RUNTIME_ACCOUNTS_START_V3, SHADOW_TRADING_PROGRAM_ACCOUNT_V3,
+        SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3, ShadowRequestV3,
+    },
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -193,12 +198,12 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
     if accounts.len() != expected_accounts {
         return Err(ShadowAcceleratorAuthErrorV4::Content.into());
     }
-    let caller_authority = account(accounts, 0)?;
-    let activation = account(accounts, 1)?;
-    let registry = account(accounts, 2)?;
-    let trading_program = account(accounts, 3)?;
-    let trading_programdata = account(accounts, 4)?;
-    let accelerator_programdata = account(accounts, 5)?;
+    let caller_authority = account(accounts, SHADOW_CALLER_AUTHORITY_ACCOUNT_V3)?;
+    let activation = account(accounts, SHADOW_ACTIVATION_ACCOUNT_V3)?;
+    let registry = account(accounts, SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3)?;
+    let trading_program = account(accounts, SHADOW_TRADING_PROGRAM_ACCOUNT_V3)?;
+    let trading_programdata = account(accounts, SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3)?;
+    let accelerator_programdata = account(accounts, SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3)?;
     let runtime_accounts = accounts
         .get(SHADOW_RUNTIME_ACCOUNTS_START_V3..)
         .ok_or(ShadowAcceleratorAuthErrorV4::Content)?;
@@ -326,6 +331,25 @@ fn account<'a, 'info>(
         .ok_or_else(|| ShadowAcceleratorAuthErrorV4::Content.into())
 }
 
+// The six head slots of the accelerator CPI frame are the ones this module
+// reads, and until 2026-09-02 it read them as bare 0..5 while importing
+// `SHADOW_RUNTIME_ACCOUNTS_START_V3` -- the tail of the very same block -- for
+// its length check. Both sides of a seam naming the same frame, one by
+// constant and one by hand, is how a renumbering reaches production silently.
+// These pins make the head positions a checked fact: the frame is exhaustive,
+// ordered, and contiguous with the runtime start, so inserting or reordering a
+// slot cannot compile without moving the declaration too.
+const _: () = assert!(SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 == 0);
+const _: () = assert!(SHADOW_ACTIVATION_ACCOUNT_V3 == SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 + 1);
+const _: () = assert!(SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3 == SHADOW_ACTIVATION_ACCOUNT_V3 + 1);
+const _: () = assert!(SHADOW_TRADING_PROGRAM_ACCOUNT_V3 == SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3 + 1);
+const _: () =
+    assert!(SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3 == SHADOW_TRADING_PROGRAM_ACCOUNT_V3 + 1);
+const _: () =
+    assert!(SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 == SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3 + 1);
+const _: () =
+    assert!(SHADOW_RUNTIME_ACCOUNTS_START_V3 == SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1);
+
 #[cfg(test)]
 mod tests {
     use alloc::{boxed::Box, vec, vec::Vec};
@@ -342,6 +366,33 @@ mod tests {
             Box::leak(Box::new(Pubkey::new_unique())),
             false,
         )
+    }
+
+    #[test]
+    fn every_named_head_slot_is_refused_by_name_when_the_frame_is_short() {
+        // `account` is the only reader of the head slots. A frame one short of
+        // the runtime start must refuse at the LAST named slot and nowhere
+        // else -- which is what makes the six constants a partition of the
+        // head rather than six numbers that happen to be small.
+        let frame: Vec<AccountInfo<'static>> = (0..SHADOW_RUNTIME_ACCOUNTS_START_V3 - 1)
+            .map(|_| readonly_test_account(Pubkey::new_unique()))
+            .collect();
+        for slot in [
+            SHADOW_CALLER_AUTHORITY_ACCOUNT_V3,
+            SHADOW_ACTIVATION_ACCOUNT_V3,
+            SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3,
+            SHADOW_TRADING_PROGRAM_ACCOUNT_V3,
+            SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3,
+        ] {
+            account(&frame, slot).expect("every slot below the last is present");
+        }
+        let refusal = account(&frame, SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3)
+            .expect_err("the last named head slot is absent from a short frame");
+        assert_eq!(
+            refusal,
+            ShadowAcceleratorAuthErrorV4::Content.into(),
+            "a missing head account is a Content refusal, named from the enum"
+        );
     }
 
     #[test]

@@ -2784,25 +2784,6 @@ impl CapabilityFundingVaultDerivationV1 {
     }
 }
 
-/// Canonical physical roles an adapter must authenticate when applicable.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FundingCustodyRoleV1 {
-    /// Program-owned funding-state PDA holding its Rent plus native principal.
-    FundingState,
-    /// Canonical PDA signing optional Realm-token movement.
-    CapabilityFundingAuthority,
-    /// Canonical token-account PDA holding Realm collateral.
-    RealmCollateralVault,
-    /// Immutable Realm-selected collateral mint.
-    RealmCollateralMint,
-    /// Immutable Realm-selected token program.
-    RealmTokenProgram,
-    /// Pre-existing immutable beneficiary RentCredit for all close lamports.
-    NativeRentCredit,
-    /// Immutable same-mint token account for close principal and gifts.
-    RealmTokenBeneficiary,
-}
-
 fn validate_custody_binding(
     quote: FundingQuoteV1,
     custody: FundingCustodyObservationV1,
