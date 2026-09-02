@@ -2714,3 +2714,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   guards. REDEMPTION `eb2c6e99`: phase zero — zero-CLI redemption for every document; recipient ATA default next.
 - Next nearest the ceiling: DIRECT (~740k), STRUCTURED (~710k), WITNESS (~680k). Hand off on their next report if mid-unit.
 - Cuts: `af15c2599`, `9172fb401`, `9a5e1831e`.
+
+### Lane map delta — 2026-09-02 03:30
+- DIRECT `a00611258f691f981` handed off at ~856k tokens → **`a8931c4eecc29c8fb`**. Landed: frame restored (`58b077f8`; the
+  64-byte step was `ab5a63db`'s transport binding, not the tail-count law — seven shapes of the law all measured 3,904),
+  fee rate single-author (setup reads the authenticated config; band ≤500 enforced once, 501 refuses `InvalidFee`),
+  `compile_direct_hot_v0` deleted (`21c8a075`). Parked: `scratchpad/lookup-one-author.patch` (packet shrinks 1,198 → 1,167;
+  read before landing). Successor's order: **the fee-bearing fill's 115,003 CU overage of the 1.4M ceiling** (the only
+  reason cohort-11's trade had to be gross ≤199), the parked patch, then resolution / redemption / every close / portable-ticket.
+- GENERAL successor owns the transport binding AND the 64 frame bytes it needs, as one unit.

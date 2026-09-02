@@ -15,13 +15,20 @@ pub const DIRECT_TOKEN_SETUP_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTDTS1";
 pub const DIRECT_TOKEN_SETUP_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTDTR1";
 /// Implemented wire version.
 pub const DIRECT_TOKEN_SETUP_VERSION_V1: u16 = 1;
+use crate::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1;
+
 /// Exact request width.
 pub const DIRECT_TOKEN_SETUP_REQUEST_BYTES_V1: usize = 216;
 /// Exact receipt width.
 pub const DIRECT_TOKEN_SETUP_RECEIPT_BYTES_V1: usize = 680;
 /// Exact top-level account count owned by the adapter route.
 pub const DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1: usize = 23;
-/// The one Direct fee rate admitted by this setup release.
+/// The rate the canonical bootstrap founds a Direct market at.
+///
+/// IT IS NOT A PROTOCOL BOUND AND THIS MODULE NO LONGER REFUSES ON IT. The
+/// protocol band is `DIRECT_MAX_FEE_BASIS_POINTS_V1`, enforced once, by
+/// `DirectExecutionConfigV1::new`. This constant is what the local-validator
+/// bootstrap chooses, and a founder may choose otherwise inside the band.
 pub const DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1: u16 = 50;
 /// Domain separating the exact ordered account frame commitment.
 pub const DIRECT_TOKEN_SETUP_FRAME_DOMAIN_V1: &[u8] = b"dclutch/direct/token-setup-frame/v1";
@@ -79,7 +86,7 @@ pub enum DirectTokenSetupErrorV1 {
     ZeroIdentity,
     /// A role or pair of token coordinates aliased.
     Alias,
-    /// The selected fee rate was not the release-pinned 50 basis points.
+    /// The selected fee rate was outside the protocol band.
     InvalidFee,
     /// Rent normalization facts were inconsistent or overflowed.
     InvalidNormalization,
@@ -276,7 +283,9 @@ impl DirectTokenSetupReceiptV1 {
         ] {
             require_nonzero(value)?;
         }
-        if self.fee_basis_points != DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1 {
+        // The BAND, which is the protocol's, not a point, which was this
+        // module's alone. See `DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1`.
+        if self.fee_basis_points > DIRECT_MAX_FEE_BASIS_POINTS_V1 {
             return Err(DirectTokenSetupErrorV1::InvalidFee);
         }
         if self.seller_token == self.fee_token
@@ -708,9 +717,28 @@ mod tests {
             .new(),
             Err(DirectTokenSetupErrorV1::Alias)
         );
+        // 49 is INSIDE the band and is admitted now. The receipt records the
+        // rate the finalized config states; it does not have an opinion about
+        // which rate a market chose. A market at 30 basis points is the reason
+        // this changed -- cohort-11's config says 30, this module used to demand
+        // exactly 50, and since this route is the sole creator of the seller's
+        // and the venue's token accounts that market could never trade and its
+        // record could never be repaired.
+        for admitted in [0, 30, 49, 50, DIRECT_MAX_FEE_BASIS_POINTS_V1] {
+            assert!(
+                DirectTokenSetupReceiptV1 {
+                    fee_basis_points: admitted,
+                    ..base
+                }
+                .new()
+                .is_ok(),
+                "{admitted} basis points is inside the protocol band",
+            );
+        }
+        // The BAND still refuses, by name, one point above it.
         assert_eq!(
             DirectTokenSetupReceiptV1 {
-                fee_basis_points: 49,
+                fee_basis_points: DIRECT_MAX_FEE_BASIS_POINTS_V1 + 1,
                 ..base
             }
             .new(),

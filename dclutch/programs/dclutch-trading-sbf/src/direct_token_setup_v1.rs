@@ -96,6 +96,13 @@ struct AuthenticatedSetupV1 {
     token_program: [u8; 32],
     seller_owner: [u8; 32],
     fee_recipient: [u8; 32],
+    /// The venue rate this market's finalized config states.
+    ///
+    /// FROM THE CONFIG, like `fee_recipient` two lines up. This route already
+    /// authenticates that record and already trusts one of its fields; pinning
+    /// its neighbour to a literal made the same record half-authoritative, and
+    /// four markets were founded dead because of it.
+    fee_basis_points: u16,
     seller_token: [u8; 32],
     fee_token: [u8; 32],
     rent_refund: [u8; 32],
@@ -226,7 +233,7 @@ fn emit_token_setup_receipt_v1(
         payer: account(accounts, PAYER)?.key.to_bytes(),
         seller_poststate_digest,
         fee_poststate_digest,
-        fee_basis_points: DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1,
+        fee_basis_points: authenticated.fee_basis_points,
         seller_normalization,
         fee_normalization,
     }
@@ -320,6 +327,7 @@ fn authenticate_semantics(
         return Err(TradingSbfError::Content.into());
     }
     Ok(AuthenticatedSetupV1 {
+        fee_basis_points: config.fee_basis_points(),
         release_set: market.identity.selected_release_set.to_bytes(),
         realm_id: market.identity.realm_id.to_bytes(),
         config_id,
@@ -474,9 +482,20 @@ fn authenticate_root_and_config(
         &config_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    if config.fee_basis_points() != DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1 {
-        return Err(TradingSbfError::Content.into());
-    }
+    // THE RATE IS THE CONFIG'S, AND THE BAND IS ALREADY ENFORCED ABOVE.
+    // `decode_selected` calls `DirectExecutionConfigV1::new`, which refuses any
+    // rate over `DIRECT_MAX_FEE_BASIS_POINTS_V1`. This route used to additionally
+    // demand exactly 50, which is neither the protocol band nor anything the
+    // rest of the release believes: `settle_inline_ordinary_v2` computes both
+    // fees with `fee_floor_v2(gross, execution.config.fee_basis_points)`, from
+    // the record, at whatever rate it states.
+    //
+    // The cost of the extra conjunct was total and silent. This route is the SOLE
+    // creator of the seller's and the venue's Direct token accounts and every
+    // fill needs them, so a market founded at any other rate could never trade --
+    // and the config record is finalized and immutable, so it could never be
+    // repaired either. Four markets were founded that way, cohort-11's included
+    // (`62kFf7i2vRkG...`, 30 basis points), before anything refused.
     Ok((config_id, config))
 }
 
@@ -863,7 +882,14 @@ mod tests {
                 || self.seller_token != self.expected_seller_token
                 || self.fee_token != self.expected_fee_token
                 || self.seller_token == self.fee_token
-                || self.fee_basis_points != DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1
+                // THE BAND, NOT THE POINT. This mirror demanded exactly 50 while
+                // the route it models did, and updating one without the other is
+                // how a test keeps a removed law alive in the only place a reader
+                // would look for it. The protocol bound is
+                // `DIRECT_MAX_FEE_BASIS_POINTS_V1`, enforced once, by
+                // `DirectExecutionConfigV1::new`.
+                || self.fee_basis_points
+                    > dclutch_direct_codec::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1
                 || self.generation == u64::MAX
             {
                 Err(TradingSbfError::Content)

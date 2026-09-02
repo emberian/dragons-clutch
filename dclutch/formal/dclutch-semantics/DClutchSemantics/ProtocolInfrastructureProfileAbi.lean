@@ -61,6 +61,17 @@ mutated: V2 lives at its own one-seed PDA domain and is written once by the
 succession ceremony (`docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md` §5).
 -/
 
+/-- Per-Core PDA seed domain for the immutable infrastructure profile.
+
+One seed, so Solana's 32-byte seed bound is the constraint the theorem below
+states.  The Rust carried this string by hand while every other coordinate of
+the profile derived. -/
+def profilePdaDomainV1 : List UInt8 :=
+  "dclutch:infrastructure:v1".toUTF8.toList
+
+theorem pda_domain_is_one_admissible_seed : profilePdaDomainV1.length <= 32 := by
+  native_decide
+
 def profileMagicV2 : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x49, 0x4e, 0x46, 0x32]
 def initializeMagicV2 : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x49, 0x49, 0x4e, 0x32]
 def schemaVersionV2 : Nat := 2

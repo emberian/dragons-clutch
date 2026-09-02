@@ -49,10 +49,11 @@ pub const PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1: [u8; 32] = [
     0x45, 0x0e, 0xec, 0xe4, 0x59, 0x23, 0x30, 0x55, 0xce, 0x9a, 0xba, 0xd5, 0xbf, 0xce, 0x89, 0x83,
     0x80, 0xeb, 0xad, 0x75, 0xde, 0x0a, 0x16, 0x87, 0xbf, 0x77, 0xce, 0xd2, 0xa7, 0xae, 0xef, 0x8d,
 ];
-/// Per-Core PDA seed domain for the immutable infrastructure profile.
-pub const PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1: &[u8] = b"dclutch:infrastructure:v1";
-
-const _: () = assert!(PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1.len() <= 32);
+// The PDA seed domain now derives from
+// `EmitProtocolInfrastructureProfileAbiRust`, re-exported through `lib.rs`
+// alongside every other coordinate of this profile. Lean's
+// `pda_domain_is_one_admissible_seed` carries the 32-byte seed bound that the
+// hand-written `const _: () = assert!(..)` used to.
 
 /// Immutable per-Core selection of exact Registry and Rent artifact releases.
 ///
