@@ -2999,3 +2999,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   → SEAL **`a4794424565254512`**: the amendment, the rent fix, seal cohort-12 from the branch, the fee-bearing trade, settlement,
   ledger-census across the fill.
 - Cuts: `c18efc5c9`.
+
+### Lane map delta — 2026-09-02 15:30
+- CHANNEL closed (`93bd4f60` contract — 33 lines inside an existing emission, zero census rows; `4f30d4ce` dealer; `0f53b668`,
+  `a4c5add4` general): **the output-page transport is built for both accelerators, inert until a Strategy record names it**
+  (ember's 0003 ruling). Measured: General OpenBatch N=2 whole bank in ONE CPI at 51,404 CU (one of its former four chunks was
+  50,201); the equity Add runs its whole route in one CPI at 455,790 and exceeds the budget in the tail with **3,773 left** —
+  the route's own weight, not the transport. Refusal census 383 → 386. `ScratchPageKindV2::Candidate` deleted (no producer
+  ever). **INPUT scratch pages have no live producer — General cannot execute on a real chain today** → GENERAL successor.
+- DEALER successor **`a5b1310baba889f9b`**: the equity route's weight (the accelerator's 131,202 artifacts phase re-authenticates
+  records Trading already committed to — the double-decode class the substrate sweep did not cover), `frontier.rs` red
+  (unowned twice), then the 70 → 46 lock design.
+- Active: SEAL `a4794424565254512`, WEB `abcbd5c6f9e5eace9`, DIRECT `a2b6881d3727766fd`, GENERAL `aefe5eec9ac4b7175`, CLAIMS
+  `a372d0ae55f06b58a`, EMISSION `a33e56a925eb6b78b`, STRUCTURED-landing `adfb985d94c714707`, DEALER `a5b1310baba889f9b`.
+- Cuts: `5b4674565`.
