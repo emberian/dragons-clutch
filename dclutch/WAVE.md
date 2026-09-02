@@ -6087,3 +6087,49 @@ does not.**
 Control, separately: the accelerator program-test is 22 passed / 3 failed before
 and after, the three being the same width-258 heap rows; the account-rules module
 is 11/11; the encoder generates all fifteen actions.
+
+## 2026-09-01 — the basis had a holder and no rule; the digest has neither
+
+OpenBatch at N=2 advanced two conjuncts on real Trading ELFs: `0xC00A
+InstructionsSysvarAccount` → `ConfigMarket` → **`ProductIdentity`**.
+
+**The root cannot hold the basis.** `GeneralRootV2` is 128 bytes with a
+**sixteen-byte reserved tail** — no basis field and not enough reserve for one
+32-byte identity. Sourcing from the root is `GENERAL_ROOT_BYTES_V2` 128 → 160 plus
+a write in the activation tail the founding path composes: **a root ABI change,
+not a rule.** So the rule sources the authenticated **Portfolio** record at
+`PORTFOLIO_CLAIM_BASIS_ID_OFFSET` — the Product-side authority for the same value,
+already this profile's source for operation zero, already in the General frame.
+It meets the constraint that mattered: **it is not the config.**
+
+**The index is derived, and two wrong attempts bought that.** The fixed body ends
+in a two-operation derived block (creation-payer owner anchor, then the root
+identity, which must stay last). Appending past them orphaned their ordinals, and a
+literal at the root identity's old slot was **silently claimed by the owner anchor
+that had shifted into it** — both surfacing as `Geometry` on `Consider`, the
+cheapest action and first to run out of arms. PlaceOrder's item operations, literal
+`30`/`31` and correct only while the fixed body never grew, now derive from the
+fixed count.
+
+### The fourth conjunct cannot be closed by any rule that exists
+
+`PRODUCT_RECORD_DIGEST` is `hash(product account)`. The AccountProfile operation
+vocabulary has **twenty-five variants and not one computes a digest** — every
+projection reads bytes at an offset, or a key, owner, lamports, tail count. It can
+only be projected from an account that *records* the digest as a field, and none
+in the General frame does.
+
+> **The basis had a holder and no rule; this has neither.** A digest projection is
+> the missing primitive.
+
+### Labelled, not deleted
+
+`freeze.rs` runs no profile — it hand-builds the bank, so **the harness is the
+producer there**, and there is no green available for deleting its hand-written
+`CONFIG_CLAIM_BASIS_ID`: measured, it refuses `ConfigMarket` at both widths
+without it. It keeps the value and now **names the real rule it stands in for.**
+An *unlabelled* hand-written register is what hid the gap.
+
+Controls: 22/3 before and after (the three are the width-258 heap rows); 11/11
+account rules; the encoder generates all fifteen actions. `git diff --cached`
+caught another lane's staged file; `-o` landed only the two intended paths.

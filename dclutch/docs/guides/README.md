@@ -9,6 +9,9 @@
 - [Client developers guide](client-developers.md) — building a bot,
   dashboard, or integration: the SDK, the CLI, and a working example of
   each core flow.
+- [Two clients](two-clients.md) — this repository ships two command-line
+  programs. Which one you have, which one a runbook means, and how to
+  build either.
 - [Trencher guide](trencher.md) — the same protocol in trench terms: what
   you'd actually hold, why the payout can't be walked back, and the
   standing bounty.

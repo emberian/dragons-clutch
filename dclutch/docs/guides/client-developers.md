@@ -13,10 +13,12 @@ Two packages in this repository are yours:
   flows, and a small read-only RPC client. It never opens a connection,
   touches a key, or submits a transaction by itself: you hand it an endpoint,
   and a caller-specific durable workflow owns signing and submission.
-- **`@dclutch/cli`** (`packages/dclutch-cli`) — the `dclutch` terminal
+- **`@dclutch/cli`** (`packages/dclutch-cli`) — the `dclutch-terminal`
   client, built entirely on the SDK. When you wonder how to wire a flow up,
   read the command that already does it (`src/commands/` is ~200 lines per
-  flow).
+  flow). Its executable is `dclutch-terminal`, not `dclutch`: the bare name
+  belongs to the Rust reader binary in `tools/dclutch-cli`, which is the one
+  that ships. [Two clients](two-clients.md) is the whole distinction.
 
 Neither is on npm yet. Inside the repository, depend on the SDK with
 `"@dclutch/sdk": "file:../../packages/dclutch-sdk"` and import modules
