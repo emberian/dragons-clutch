@@ -1,8 +1,16 @@
 # The sponsored-push window: a griefing vector that is not there, and a widening that is not applied
 
-Status: **finding.** It changes no program byte. Claims below are
+Status: **finding, §4 amended.** It changes no program byte. Claims below are
 verified-from-source, read at commit `62a0b7fb5` (`tools/lane.sh` HEAD at the
 time of writing); symbols are the citation and line numbers are hints.
+
+**Amendment, 2026-09-02 (TIDY).** §4 overstated twice and both are corrected in
+place below, with the evidence: its census of `contains_observation`'s callers
+missed a third one outside the crate, and its headline claim — that a market's
+admissible window depends on which product family it bought — is false, and was
+false at `62a0b7fb5`. §2's retraction and §5's account of where an outage's
+money goes are unchanged and stand. New citations in §4 are read at
+`60e9b860a`; where a line moved under `0b0a05e93` both numbers are given.
 
 It exists to retract one claim and to keep two smaller ones the retraction
 uncovered.
@@ -20,10 +28,14 @@ uncovered.
    `publish_time` fails `window.contains_observation`"*) is therefore **not
    owed**, and must not be landed: it would be a second copy of a check the
    route already makes.
-3. What is real and does remain owed is a **disagreement between two spellings
-   of one admission predicate** (§4): `cadence_tolerance_seconds` widens the
-   admissible window on the multi-observation routes and is inert on the
-   single-snapshot Pyth routes, and nothing anywhere says that is deliberate.
+3. Two spellings of one admission predicate did exist (§4):
+   `cadence_tolerance_seconds` widens the admissible window on the
+   multi-observation routes and was inert on the single-snapshot Pyth routes.
+   **They could not disagree on any constructible window**, so nothing was ever
+   admitted or refused differently on account of it — this note originally said
+   otherwise and §4 now carries the refutation. The duplication was still a
+   second author for one predicate, and `0b0a05e93` removed it as the identity
+   everywhere reachable. Not owed.
 4. An oracle outage on a market with no recovery policy converts, exactly and
    by design, into revenue for whoever minted the failure claims (§5). Cohort-13
    is the worked example and the numbers are named.
@@ -141,58 +153,105 @@ that cannot occur.
 
 ---
 
-## 4. The real finding: one predicate, two spellings, different answers
+## 4. One predicate, two spellings — and the difference was unreachable
 
 `WindowSpecV1::contains_observation`
-(`crates/dclutch-source-contract/src/lib.rs`, ~line 1212) says of itself:
+(`crates/dclutch-source-contract/src/lib.rs`, ~line 1212) said of itself, at
+`62a0b7fb5` and before `0b0a05e93` rewrote it:
 
 > The tolerance widens the window symmetrically: a sample admitted at the first
 > or last scheduled position may land up to the tolerance outside
 > `[start, end]`, and **this is the one place that widening is stated.**
 
-It is not the one place the widening is *read*. `contains_observation` has
-exactly two callers, both inside `dclutch-source-contract`:
+It is not the one place the widening is *read*. **This note first said
+`contains_observation` had "exactly two callers, both inside
+`dclutch-source-contract`". It had three, and the third was outside the crate:**
 
 - `lib.rs:1549` — the scheduled-median statistic's per-sample admission;
 - `lib.rs:2173` — `NormalizedProviderEvidenceV1::validate`, reached from
   `lib.rs:3965` (multi-observation statistic aggregation) and `lib.rs:4458`
-  (the `SharedObservationChild` accumulation).
+  (the `SharedObservationChild` accumulation);
+- `tools/local-validator/bootstrap/successor/src/flagship_resolution.rs:1941`
+  — `validate_observation_fields`, the **offchain preflight** the flagship
+  resolution runs before it submits a sponsored observation. Present at
+  `62a0b7fb5` at that exact line, so it was there to be found.
 
-Both of those are **multi-observation** routes. The two **single-snapshot Pyth**
-routes — relayed (`provider_v3.rs`) and sponsored
-(`sponsored_push_v1.rs`) — reach the window only through
+The first two are **multi-observation** routes. The two **single-snapshot Pyth**
+routes — relayed (`provider_v3.rs`) and sponsored (`sponsored_push_v1.rs`) —
+reached the window only through
 `PythProviderAdapterObligationV2::normalize_authenticated_update`, whose bound
-is the raw `[start, end]` quoted in §2. Neither of them calls `validate`; nothing
-outside `dclutch-source-contract` names `NormalizedProviderEvidenceV1` at all.
+was the raw `[start, end]` quoted in §2. Neither of them calls `validate`;
+nothing outside `dclutch-source-contract` names `NormalizedProviderEvidenceV1`
+at all. The third is offchain and is the subject of the next two paragraphs.
 
-**So `cadence_tolerance_seconds` is inert on the single-observation routes.** A
-market that bought a positive tolerance gets it on a scheduled-median product
-and does not get it on a Pyth snapshot product, and no comment on either side
-says that is intended. Cohort-13 carried `cadence_tolerance_seconds = 0`, where
-the two spellings coincide exactly, which is why nothing showed.
+**"Both inside `dclutch-source-contract`" reported a sweep's scope as a
+result.** A census run inside the crate cannot surface a caller outside it; the
+sentence stated the absence anyway. That is §2's error one level out — there an
+absent *symbol* was read as an absent conjunct, here an absent *hit* was read as
+an absent caller — and the cheap defence is the same shape: before writing
+"exactly N callers", name the tree the sweep covered.
 
-**And the code says it is an oversight, in its own words.**
-`normalize_authenticated_update`'s doc comment (`provider_join_v2.rs:204`)
-introduces its two bounds as *"matching `NormalizedProviderEvidenceV1::validate`"*
-— the very function whose window bound is `contains_observation` and therefore
-widened. At `cadence_tolerance_seconds = 0` the two match exactly and the
-comment is true; at any positive tolerance the comment asserts an equality the
-code does not have. A deliberate narrowing would not have been written as a
-claim of sameness.
+**And the missed caller was the one that actually diverged.** The preflight used
+`contains_observation`, the *wide* spelling, while the program route it stands in
+front of compared `start`/`end` itself — an offchain gate strictly more
+permissive than the onchain one it predicts, which is the drift direction worth
+finding and the one this census scoped out. Since `0b0a05e93` the program site
+calls the same predicate (`provider_join_v2.rs:244`), so all four sites — two
+statistic routes, the Pyth route, the preflight — read one author.
 
-This is a `map_err`-shaped defect one level up: not a discarded cause, a
-*duplicated predicate*. The failure mode when two spellings drift is a market
-whose admissible set depends on which product family it chose, discoverable only
-by reading both.
+**So `cadence_tolerance_seconds` was inert on the single-observation routes.**
+This note then wrote that *"a market that bought a positive tolerance gets it on
+a scheduled-median product and does not get it on a Pyth snapshot product"*, and
+that the failure mode is *"a market whose admissible set depends on which product
+family it chose"*. **That is false, and it was false at `62a0b7fb5`.** No market
+can buy a positive tolerance on a window a Pyth snapshot route will accept. Two
+independent gates, both already at that commit:
 
-**The candidate repair** is the smaller of the two directions: make
-`normalize_authenticated_update` call `contains_observation` instead of
-comparing `start`/`end` itself, so the widening is stated once and read
-everywhere, and pair it with a hostile at a positive tolerance that is red
-before the change and green after. The alternative — declaring the single-shot
-routes deliberately unwidened — is defensible but must then be *written down at
-both sites*, because right now `contains_observation`'s doc comment asserts
-something false.
+- `WindowSpecV1::tolerating_cadence` (`lib.rs:1118`) is the **sole mutator** of
+  `cadence_tolerance_seconds` — every constructor and `WindowSpecV1::decode`
+  (`lib.rs:1153`) pass through it — and it refuses `InvalidWindow` for a nonzero
+  tolerance on a `WindowKind::Terminal` window (`lib.rs:1119`, unmoved since).
+  The single-snapshot obligation's join refuses any window whose kind is *not*
+  `Terminal` (`provider_join_v2.rs:183`, `LinkageMismatch`). A positive
+  tolerance and a Pyth snapshot route cannot occupy the same window.
+- `validate_cadence_tolerance_pairing` (`lib.rs:1612`, `62a0b7fb5:1605`; called
+  at `:1541` and `:3962`) separately refuses `NonCanonicalStatistic` for a
+  nonzero tolerance under any statistic but `OddScheduledMedian`.
+
+Either gate alone settles it, and neither is about the product family the market
+chose: the tolerance is unrepresentable on the window, not read differently by
+two consumers of it. Cohort-13's `cadence_tolerance_seconds = 0` is therefore
+**not** why nothing showed — nothing could have shown, on any market.
+
+The same overstatement runs one paragraph further.
+`normalize_authenticated_update`'s doc comment (`provider_join_v2.rs:204`) did
+introduce its two bounds as *"matching `NormalizedProviderEvidenceV1::validate`"*
+while spelling the window bound itself, and that is a duplicated predicate worth
+removing. But the claim built on it — that *"at any positive tolerance the
+comment asserts an equality the code does not have"* — quantifies over states
+the constructors refuse. At every tolerance reachable on that obligation the two
+did match, and the comment was true.
+
+So this is a `map_err`-shaped defect one level up — not a discarded cause, a
+*duplicated predicate* — and its cost was a **second author**, not a wrong
+answer. That cost is still real: a window kind that one day carries both a
+cadence and a snapshot route would reintroduce the divergence with nothing
+going red.
+
+**The candidate repair landed at `0b0a05e93`**, and in the smaller of the two
+directions: `normalize_authenticated_update` now calls `contains_observation`
+(`provider_join_v2.rs:244`) rather than comparing `start`/`end` itself. Because
+of the gates above it is **the identity everywhere reachable**, so the hostile
+this note asked for — red before the change, green after — could not be written
+against any window a Pyth route accepts. What stands in its place is
+`a_terminal_window_cannot_reach_the_single_snapshot_route_with_a_tolerance`
+(`provider_join_v2.rs:687`), which pins all three gates by construction and
+then shows the widening is real wherever it *is* reachable, on a
+`ScheduledInterval` window: `end + 120` admitted, `end + 121` refused
+(`:734`–`:737`). Both doc comments were rewritten to say why
+the tolerance is structurally zero on those routes rather than to assert a
+sameness (`lib.rs:1216`, `provider_join_v2.rs:213`), which is the second
+direction's obligation discharged as well.
 
 **Owner.** The source contract's admission predicate is **not Lean-emitted**:
 `crates/dclutch-source-contract/src/generated_window_spec_v1.rs` is emitted by
@@ -203,8 +262,9 @@ are hand-written Rust. So this is not a Lean-first repair, and it is not this
 lane's to land: `crates/dclutch-source-contract` and
 `programs/dclutch-resolution-proof-sbf` are both held by the lane that landed
 `f6e9b8d08` (`source: the Source resolution state gets the second admission
-type`) and that owns the window-spec emission. **Queued to that owner, with the
-hostile named above as its gate.**
+type`) and that owns the window-spec emission. **Queued to that owner, and
+closed by it at `0b0a05e93`** — which is also where the sharper reading above
+came from.
 
 ---
 
