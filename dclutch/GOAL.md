@@ -3555,3 +3555,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the two; they agree now. → TIDY **`(spawned)`**: the design note's §4 overstates twice; clippy red in
   source_admission_v1.rs (f6e9b8d08).
 - Cuts: `7c7d93b24`, `0c338096d`.
+- DIRECT-LAYER closed (`4d13fe2af`, rows `588d280f1`): **programs/dclutch-trading-sbf/src/direct/ was the pre-artifact plan
+  generation of the registered Direct family — deleted (6,572 lines)**; three pieces of evidence (inline.rs called itself "an
+  oracle, not a family dispatch authority" and hot_v3 grew that oracle from the codec; the landed dispatch 3e4ff9980 called
+  neither escrow module; sell_escrow's header contradicted the measured Sell); **the ELF is byte-identical with and without
+  it** (the SBF linker collected all of it — llvm-nm finds zero direct::* symbols; positive control 182 hot_v3 symbols after a
+  first run with an empty $NM printed a confident zero); Trading frames 955 → 901; the one unreachable admission constant
+  retired; census green by deletion. The untracked registered_terminal_artifacts_v4.rs is codex's WIP (letter :184-187,
+  "preserve it unregistered"), a real sibling of actions 7/8, and does not compile since this morning's `refund_source`
+  field — left. Owed: the codec's now-consumerless registered/complementary planners (a second wave, deliberately not
+  taken while the draft sits in that crate). Pre-existing red: the extended-heap-profile admission test → DEALER (told).

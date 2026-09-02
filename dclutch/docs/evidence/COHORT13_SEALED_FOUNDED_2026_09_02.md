@@ -1893,3 +1893,153 @@ Where cohort-13 now stands:
 | Retirement | still owned-loopback only |
 
 Devnet evidence. Not mainnet evidence.
+
+## Addendum: THE BROWSER'S TWO RED BYTES — one closed, one convicted, and the ATA is cohort-14's
+
+The redemption-UX lane opened against the previous addendum's §5, which left the
+browser's live redemption red at two measured bytes and repaired neither. One is
+closed. The other turned out to have a third refusing site nobody had looked at,
+and that site cannot be edited — only released again.
+
+Tree root `/Users/ember/dev/dclutch`, commit `e0594084`.
+
+### 1. The chunker split by the bound that did not bind
+
+`acquireFinalizedAccountsInChunksV1` respected `getMultipleAccounts`'s 32-KEY
+limit and had no byte bound of its own, so the frame round's first chunk was
+**5,272,883 bytes** against `MAX_RPC_RESPONSE_BYTES` — reproduced exactly, to
+within a slot's drift of the 5,269,020 the previous addendum recorded.
+
+It now learns every address's length first, in one `dataSlice` round, and plans
+chunks under both bounds. Two facts made that cheap, and both are measured
+against devnet rather than assumed:
+
+| | |
+| --- | --- |
+| `space` under a `dataSlice` | the account's FULL data length — a one-byte slice over the seven cohort-13 ProgramData accounts returned `2,320,197` for the largest |
+| the whole frame's sizing round | **5,035 bytes** (3,947 + 1,088), against the 5.27 MB body chunk it plans |
+
+Cohort-13's 38-address frame plans as **24 + 14 keys**:
+
+| chunk | keys | predicted | measured | under 4 MiB |
+| --- | ---: | ---: | ---: | --- |
+| frame 0 | 24 | 2,685,808 | 2,681,669 | yes |
+| frame 1 | 14 | 2,597,904 | 2,595,186 | yes |
+
+The estimator is conservative on both, which is the direction that matters: a
+planner that underestimates plans a chunk the node refuses. The measured frame —
+every address and the length the node reported for it — is committed as
+`fixtures/cohort13-terminal-frame-sizes-v1.json` in both trees, and the unit
+test plans it.
+
+### 2. The check that fix uncovered could not be satisfied by any node
+
+Behind the byte bound stood `chunked finalized acquisition returned different
+context slots`, which read as the strongest possible statement about a composite
+read and was in fact **unsatisfiable**. `getMultipleAccounts` answers from the
+node's current finalized bank, and devnet's advances while a round is in flight:
+
+| attempt | chunk 0 slot | chunk 1 slot | elapsed |
+| --- | ---: | ---: | ---: |
+| 0 | 492,178,904 | 492,178,906 | 715 ms |
+| 1 | 492,178,908 | 492,178,910 | 528 ms |
+| 2 | 492,178,912 | 492,178,914 | 653 ms |
+| 3 | 492,178,915 | 492,178,917 | 563 ms |
+
+Two slots apart, four times out of four. It had never fired because every round
+this client made until now fit in a single chunk, and the byte bound stopped the
+first round that did not before its second chunk was ever requested.
+
+The composite is now **proved** to be one picture instead of asserted to be:
+every chunk but the last is read again after the last, at the greatest slot
+observed, and must return byte for byte identical. A single-chunk round pays
+nothing for this, which is every round but the frame.
+
+### 3. The conventional destination: admitted twice, refused once
+
+`TokenAccount::parse_base_or_immutable_owner` admits exactly the extension the
+ATA program forces and nothing else, with a hostile that six other extension
+types still refuse at the identical 170-byte width. Its test vector is the
+founder's own ATA `4BENW7Yg…`, read off devnet: 170 bytes, account-type byte `2`,
+extension `7` at length `0`.
+
+| site | now |
+| --- | --- |
+| Claims `rational_terminal_v3.rs:625` | admits — and `terminal_settlement_v3` calls this one function instead of carrying a second copy of it |
+| the host-side builder `wallet_terminal_payout_v3` | admits, and its poststate projection copies the suffix rather than dropping it, because the chain hashes the whole account |
+| both browser wasm derivations | inherit the admission |
+| **Custody's `ExactTransferProfileV1`** | **still refuses, and must** |
+
+**Why Custody is not an edit.** Its
+`ExtensionStoragePolicy::ExactBaseWidthsOnly` byte sits inside the
+`CollateralAdapterReleaseV1` preimage; a realm stores the SHA-256 of that
+preimage on chain as `collateral_adapter_release_id`; Custody selects a profile
+by matching it. Widening the release under an unchanged id would make the tree
+and the chain disagree about what one identity means, and would break every
+operator read against every market founded under it — this one included. The
+repair is a **third** adapter release beside the two that exist, selected by
+realms a later cohort founds;
+`docs/design/TOKEN_2022_IMMUTABLE_OWNER_DESTINATION_2026_09_02.md` carries its
+shape.
+
+Measured on real Claims, Custody and Token-2022 ELFs, in the Claims
+program-test: with a 170-byte ATA-shaped destination the payout **builds,
+submits, reaches Custody, spends 345,149 CU and refuses `0x6006`
+(`CustodySbfError::TokenState`)** — with the Hoard, the destination balance, the
+Position and the Custody cursor all asserted unmoved. Its control is the same
+payout into a 165-byte destination, which commits. Before this lane the builder
+refused *offline*, so no transaction existed and the chain was never asked.
+
+**So cohort-13's auxiliary account was never a workaround.** Its deployed
+Custody carries the old rule in shipped bytes; the 165-byte account created by
+hand is the only destination that cohort could ever have paid, under any version
+of this tree. **Cohort-14 founds its realm on the new release and pays a
+wallet's own ATA** — the destination the input operator has documented all
+along, and the one the browser now derives when a reader supplies nothing.
+
+### 4. The browser's live redemption test is green
+
+`walletTerminalRedemption.live.test.ts` against cohort-13, Helius devnet:
+**4 of 4**. It now tests a market that is resolved AND PAID, which has two honest
+readings and makes both:
+
+- a holder who still holds something (the founder's 499,999,800 atoms at the
+  losing outcome 0) derives a complete input across all four rounds, over
+  `recipient` **`4BENW7Yg…` — the derived ATA, filled in because nothing was
+  supplied** — and stops only at a lookup table, which is an account somebody
+  must create in a signed transaction;
+- a holder already paid (the founder at claim 3) is refused *"payout quantity
+  must be within 1..=0 atoms at claim index 3"* — at their balance, by name,
+  after the same four rounds.
+
+Both cases assert the byte bound is not what refuses them, so a regression in
+the chunk planner fails here by name rather than as an unexplained red.
+
+### 5. The page now says what the answer means
+
+`Resolved — The source failed to report` named a claim and never said what it
+was. The market page carries three sentences above the exact values: the data
+source never reported, the market did not get stuck, it settled on the fallback
+outcome it named and paid for before it opened; anyone holding that claim cashes
+in at one collateral unit per claim atom; every other claim is worth exactly
+nothing and is not waiting for anything. The first draft rendered inside a
+COLLAPSED drawer — the capture caught it, which is why it now sits in the page's
+own flow.
+
+The portfolio hero said *"Nothing has resolved yet"*. That is a census, it went
+false on the day this market was paid, and it is the second census in that hero
+to rot; both are refused by name in the tests now. A holder with zero at the
+winning claim is told so where the number is, instead of after two clicks of a
+redemption they cannot make.
+
+| capture | words | `$` | hex ids | scrollWidth | page errors |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| market page, 1280×900 | 1,005 | 18 | 0 | 1,280 | 0 |
+| market page, 390×844 | 1,263 | 19 | 0 | 390 | 0 |
+
+Accessibility: **0 open failures on all four arms**. The unresolved-contrast wall
+moves 194 → 196 for the new block and its eyebrow, which are the same
+translucent-tint pair `.phase-meaning` already contributes and which the
+instrument cannot resolve either.
+
+Devnet evidence. Not mainnet evidence.

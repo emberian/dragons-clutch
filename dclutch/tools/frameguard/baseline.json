@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "0b0a05e9322fa907c3cf60a7524abd02188084bc",
+  "commit": "4d13fe2afa1ee8f2b53b08931c71f4922e7c2ba6",
   "link_count": 12,
   "links": [
     {
@@ -6100,7 +6100,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 955,
+      "frame_count": 901,
       "functions": [
         {
           "frames_bytes": [
@@ -6168,12 +6168,6 @@
             0
           ],
           "symbol": "_ZN111_$LT$alloc..vec..Vec$LT$T$GT$$u20$as$u20$alloc..vec..spec_from_iter_nested..SpecFromIterNested$LT$T$C$I$GT$$GT$9from_iter17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN113_$LT$dclutch_claims_svm..protocol_position_v2..ProtocolPositionCloseReceiptV2$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -8882,7 +8876,7 @@
         },
         {
           "frames_bytes": [
-            1024
+            1216
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer23v3_accelerator_accounts30seal_collateral_observation_v417h<hash>E"
         },
@@ -9185,312 +9179,6 @@
             512
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer9v3_equity24preflight_pool_equity_v317h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow14append_request17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow15validate_replay17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            1344
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow17validate_accounts17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow24DirectBuyEscrowContextV28validate17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            3904
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow26prepare_buy_escrow_fill_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            2112
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow27prepare_buy_escrow_terminal17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow28prepare_buy_escrow_unwind_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow31prepare_buy_escrow_full_fill_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            2176
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow34prepare_buy_escrow_registration_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            128
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow6derive17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            1344
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow7request17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            640
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow16position_request17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            256
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow19validate_record_key17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            768
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow21prepare_sell_close_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            384
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow24sell_fill_expectation_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            64
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow25DirectSellEscrowContextV28validate17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow25validate_record_admission17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            384
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow26validate_position_accounts17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            704
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow28prepare_sell_registration_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            768
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow28validate_sell_affine_plan_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            2880
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow28verify_sell_close_receipt_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            1152
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow29verify_sell_affine_receipt_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            640
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow30prepare_sell_user_admission_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            1728
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow32verify_sell_admission_receipt_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            128
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct11sell_escrow6derive17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary25validate_candidate_record17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            128
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary34DirectComplementaryClaimsContextV28validate17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            384
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary36DirectComplementaryPhysicalContextV28validate17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            960
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary37validate_complementary_claims_item_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            704
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary37validate_complementary_claims_plan_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            3328
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary39project_complementary_custody_effect_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary41validate_complementary_custody_request_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            64
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary43validate_complementary_custody_aggregate_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            1152
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct13complementary45verify_direct_complementary_claims_receipt_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline17candidate_context17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            192
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline20base_custody_request17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            192
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline24validate_maker_lifecycle17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline31verify_inline_claims_receipt_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            576
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline32encode_inline_state_candidate_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline32verify_inline_custody_receipt_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            2624
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline35prepare_inline_ordinary_physical_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            448
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline41project_inline_custody_effect_physical_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            1792
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline42verify_inline_effect_partition_physical_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            128
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct6inline6derive17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            576
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct8physical23encode_record_candidate17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            768
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct8physical45encode_registered_ordinary_state_candidate_v217h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            128
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct9lifecycle15validate_create17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct9lifecycle19validate_maker_plan17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            448
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct9lifecycle41validate_registered_creation_lifecycle_v317h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            320
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct9lifecycle45validate_registered_record_close_lifecycle_v317h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            128
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6direct9lifecycle6derive17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -11353,6 +11041,12 @@
           "frames_bytes": [
             0
           ],
+          "symbol": "_ZN53_$LT$T$u20$as$u20$core..slice..cmp..SliceContains$GT$14slice_contains17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
           "symbol": "_ZN5alloc3fmt6format17h<hash>E"
         },
         {
@@ -11370,7 +11064,6 @@
         },
         {
           "frames_bytes": [
-            64,
             0
           ],
           "symbol": "_ZN5alloc3vec16Vec$LT$T$C$A$GT$16into_boxed_slice17h<hash>E"
@@ -11389,7 +11082,6 @@
         },
         {
           "frames_bytes": [
-            128,
             128,
             128,
             128,
@@ -11471,12 +11163,6 @@
             0
           ],
           "symbol": "_ZN74_$LT$core..result..Result$LT$T$C$E$GT$$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN76_$LT$dclutch_custody_contract..ContextV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [

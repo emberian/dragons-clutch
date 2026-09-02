@@ -1272,16 +1272,29 @@ fn activate_one_effect(
     let destination = account(accounts, effect_index + 3)?;
     let state_data = state
         .try_borrow_data()
-        .map_err(|_| CustodySbfError::Replay)?;
+        .map_err(|_| CustodySbfError::ReservationRecord)?;
     let mut reservation = Box::new(
         DealerScenarioReservationStateV1::decode(&state_data)
-            .map_err(|_| CustodySbfError::Replay)?,
+            .map_err(|_| CustodySbfError::ReservationRecord)?,
     );
     drop(state_data);
     let original = effect.custody;
+    // FOUR ACCUSATIONS, NOT ONE. This join was a single fifteen-conjunct
+    // disjunction publishing `Replay` -- a code whose own doc comment says it
+    // means "Replay PDA, owner, bytes, or revision", none of which this join
+    // examines. An account this program does not own, a reservation belonging
+    // to another activation, a substituted destination and an escrow the chain
+    // never created all arrived at the caller as one number, and separating
+    // them cost a throwaway instrumented build on 2026-09-02. They are
+    // separated here, in the order a reader would ask them: is this a
+    // reservation at all, is it THIS one, is its frame the one it recorded,
+    // and does the chain hold the escrow it published.
     if state.owner != program_id
         || !DEALER_SCENARIO_ACTIVE_RESERVATION_ADMISSIBLE_STATES_V1.admits(reservation.status)
-        || reservation.ordinal != ordinal
+    {
+        return Err(CustodySbfError::ReservationRecord.into());
+    }
+    if reservation.ordinal != ordinal
         || reservation.effect_count != effect.effect_count
         || reservation.batch != account(accounts, ACT_BATCH)?.key.to_bytes()
         || reservation.checkpoint != account(accounts, ACT_CHECKPOINT)?.key.to_bytes()
@@ -1294,14 +1307,19 @@ fn activate_one_effect(
             )
             .to_bytes()
         || reservation.effect_digest != effect.effect_digest
-        || reservation.source != original.source
+    {
+        return Err(CustodySbfError::ReservationIdentity.into());
+    }
+    if reservation.source != original.source
         || reservation.destination != destination.key.to_bytes()
         || reservation.escrow != escrow.key.to_bytes()
         || reservation.mint != account(accounts, ACT_MINT)?.key.to_bytes()
         || reservation.token_program != account(accounts, ACT_TOKEN_PROGRAM)?.key.to_bytes()
-        || reservation.effect_poststate_digest != account_digest(escrow)?
     {
-        return Err(CustodySbfError::Replay.into());
+        return Err(CustodySbfError::ReservationFrame.into());
+    }
+    if reservation.effect_poststate_digest != account_digest(escrow)? {
+        return Err(CustodySbfError::ReservationEscrowPrestate.into());
     }
     let request = activate_request(original, *state.key, *escrow.key);
     request

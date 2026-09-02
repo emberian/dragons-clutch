@@ -129,6 +129,46 @@ pub enum CustodySbfError {
     /// upgrade authority the release names shipped new bytes, so the cached
     /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x600C,
+    /// The account at the reservation coordinate is not an activatable reservation.
+    ///
+    /// Split out of [`CustodySbfError::Replay`], whose own doc comment says it
+    /// means "Replay PDA, owner, bytes, or revision" -- and the reservation
+    /// join is none of those. `activate_one_effect` published `Replay` from a
+    /// FIFTEEN-conjunct disjunction plus two decodes, so an account this
+    /// program does not own, a reservation already activated, and a cursor at
+    /// the wrong revision were one code with one reader.
+    ///
+    /// This is the shallowest of the four: the bytes at the coordinate are not
+    /// this program's, do not decode as a reservation state, or decode as one
+    /// whose status is not activatable.
+    ReservationRecord = 0x600D,
+    /// The reservation is a valid one, but not the one this effect names.
+    ///
+    /// Split out of [`CustodySbfError::Replay`]. Ordinal, effect count, batch,
+    /// checkpoint, parent request digest, effects-manifest digest, or effect
+    /// digest: every one of them says the record found is a real reservation
+    /// belonging to a DIFFERENT activation, which is a different investigation
+    /// from a malformed record and a different one again from a frame that
+    /// does not match.
+    ReservationIdentity = 0x600E,
+    /// The accounts handed in are not the ones the reservation recorded.
+    ///
+    /// Split out of [`CustodySbfError::Replay`]. Source, destination, escrow,
+    /// mint or token program: the reservation is the right one and its frame
+    /// was substituted, which is the hostile shape this join exists to refuse
+    /// and the one that most deserves its own word.
+    ReservationFrame = 0x600F,
+    /// The escrow the chain holds is not the poststate the reservation published.
+    ///
+    /// Split out of [`CustodySbfError::Replay`], and it is the conjunct that
+    /// cost the most to find: on 2026-09-02 a scenario SPLIT off a live
+    /// campaign reached this comparison with an escrow that had never been
+    /// created by anything, and locating it took a throwaway instrumented
+    /// build because fifteen conjuncts shared one code. It says the
+    /// reservation and the chain disagree about the escrow itself -- a
+    /// reservation published against a poststate the chain does not hold --
+    /// which is neither a substituted frame nor a wrong activation.
+    ReservationEscrowPrestate = 0x6010,
 }
 
 impl CustodySbfError {
@@ -138,7 +178,7 @@ impl CustodySbfError {
     /// [`CustodySbfError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 17] = [
         Self::Instruction,
         Self::AccountFrame,
         Self::Release,
@@ -152,12 +192,16 @@ impl CustodySbfError {
         Self::Commit,
         Self::Expiry,
         Self::ReleaseSuperseded,
+        Self::ReservationRecord,
+        Self::ReservationIdentity,
+        Self::ReservationFrame,
+        Self::ReservationEscrowPrestate,
     ];
 
     /// This refusal's position in [`CustodySbfError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a fourteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// an eighteenth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -174,6 +218,10 @@ impl CustodySbfError {
             Self::Commit => 10,
             Self::Expiry => 11,
             Self::ReleaseSuperseded => 12,
+            Self::ReservationRecord => 13,
+            Self::ReservationIdentity => 14,
+            Self::ReservationFrame => 15,
+            Self::ReservationEscrowPrestate => 16,
         }
     }
 }

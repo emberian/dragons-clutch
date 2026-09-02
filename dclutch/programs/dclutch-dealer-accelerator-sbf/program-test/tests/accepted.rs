@@ -4961,6 +4961,27 @@ async fn a_replayed_delivery_refuses_and_the_collateral_does_not_move_twice() {
         "a replayed delivery must fail closed; observed {:?}",
         processed.result
     );
+    // NAMED, not merely refused. This was the bare `is_err()` above and nothing
+    // else, and the comment beside it said the case "would refuse three times
+    // over" and "reaches the first of them" without saying WHICH -- which is
+    // the second kind of bare `is_err()` the ledger describes: a hostile that
+    // reaches its subject and has no word for what it found.
+    //
+    // It is `Replay`, and the prediction that it would be the reservation's own
+    // status was WRONG. Predicted `ReservationRecord` from the state machine
+    // before the run, observed `0x6005`, and the run is right: the batch's
+    // pinned replay prestate digest is recomputed against a cursor the first
+    // delivery already advanced, and that gate sits ahead of `activate_one_effect`
+    // entirely. So the reservation join is never reached here, which is exactly
+    // what this assertion now pins -- and it is a real replay accusation, not
+    // the reservation-join borrowing of the same code that
+    // `ReservationRecord`/`ReservationIdentity`/`ReservationFrame`/
+    // `ReservationEscrowPrestate` were split out of.
+    assert_eq!(
+        custom_code(&processed.result.clone().map(|_| ())),
+        Some(CUSTODY_REPLAY),
+        "the replay is answered by the batch's replay prestate digest, ahead of the reservation join"
+    );
     assert_eq!(
         account_body(&mut context, delivery.destination).await,
         Some(destination_once),
@@ -5173,9 +5194,14 @@ async fn a_substituted_destination_refuses_on_the_owner_the_request_names() {
         "a destination the request does not name must fail closed; observed {:?}",
         processed.result
     );
-    // Depth: every reservation-join refusal is coded Replay, so a token-state
-    // refusal proves the case cleared them all and was answered by the external
-    // destination owner the request itself names.
+    // Depth: the reservation join refuses under four codes of its own --
+    // ReservationRecord, ReservationIdentity, ReservationFrame and
+    // ReservationEscrowPrestate, split out of Replay so this assertion means
+    // something. A token-state refusal proves the case cleared all four and was
+    // answered by the external destination owner the request itself names. It
+    // used to read "every reservation-join refusal is coded Replay", which was
+    // true and was the problem: the join shared one code with the replay
+    // cursor, so clearing it and clearing the cursor were indistinguishable.
     assert_eq!(
         custom_code(&processed.result.clone().map(|_| ())),
         Some(CUSTODY_TOKEN_STATE),
