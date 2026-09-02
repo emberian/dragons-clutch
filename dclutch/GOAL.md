@@ -2974,3 +2974,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - DIRECT old lane closed: both margin ratchets **green and pinned** (`d580f4f7`, `a0852855`: fee-bearing 1,297,792, zero-fee
   1,297,923 + 1,500 slack; ±124 stated as residual noise).
 - Cuts: `cd68a9ed9`.
+
+### Lane map delta — 2026-09-02 14:15
+- COHORT-12: **Direct capability ACTIVATED** (`2hr4RJJT…`, root `88jJTMmU…` exists, ~185,000 slots before the deadline) — the
+  deadline's premise was wrong: activation needs only plan/market-input/report/payer; only the FILL needs the checked release.
+  My coupling; the lane read the command's arguments before racing. Both release-tool fixes landed: **`28ff0823`** the
+  candidate ships the ORDINARY trading link (profiled build kept as measurement; two new refusals proved red on cohort-12's
+  real descriptor; candidate green, twelve links zero diagnostics); `devnet-deployment-set-already-current-v1` writer in-tree
+  (key-free, byte equality against a fresh observation, refuses a bound receipt). Seal blocked at HEAD (the candidate certifies
+  the commit it is handed; deployed Trading is e39efbb0's ordinary build) → **seal from a branch at e39efbb0 + the two tool
+  commits**, then the fee-bearing trade; if the digests differ, cohort-13 from HEAD. Evidence `d4433646`. Deployer 36.56 SOL.
+- Cuts: `af9aaa60f`.

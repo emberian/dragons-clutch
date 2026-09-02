@@ -32,11 +32,7 @@ use dclutch_direct_hot_program_test_support::waist::{
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 
 /// Attempts `find_program_address` makes to land on `bump`, at 1,500 CU each.
-const fn attempts(bump: u8) -> u32 {
-    256 - bump as u32
-}
-
-const ATTEMPT_COST_CU: u32 = 1_500;
+use dclutch_program_test_evidence::pda_search::{ATTEMPT_COST_CU, attempts};
 
 #[test]
 fn the_activation_cache_depth_is_a_property_of_the_build_not_of_the_keys() {

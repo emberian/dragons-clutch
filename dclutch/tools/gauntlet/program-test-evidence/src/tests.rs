@@ -207,3 +207,33 @@ fn a_measured_wire_extent_is_carried_and_an_unmeasured_one_says_so() {
     });
     assert!(unmeasured.contains("\"wire_bytes\": null"), "{unmeasured}");
 }
+
+#[test]
+fn the_pda_search_model_is_the_runtimes_charging_rule() {
+    use crate::pda_search::{ATTEMPT_COST_CU, attempts, census_cost_cu, cost_cu};
+    // A search landing on the first candidate tried is one attempt, not zero:
+    // `create_program_address` is charged up front.
+    assert_eq!(attempts(255), 1);
+    assert_eq!(cost_cu(255), ATTEMPT_COST_CU);
+    // The deepest a search can go, and the shape of everything between.
+    assert_eq!(attempts(0), 256);
+    assert_eq!(attempts(254), 2);
+    assert_eq!(cost_cu(254), 3_000);
+    // A census is the sum, and an empty census costs nothing -- which is what
+    // makes "this route pays no search" expressible rather than a special case.
+    assert_eq!(census_cost_cu(&[]), 0);
+    assert_eq!(census_cost_cu(&[255, 254]), 4_500);
+    // The measured wallet-payout step: eleven attempts is the +16,500 that moved
+    // three budget rows between 3fa1a432 and 5767be46.
+    assert_eq!(11 * ATTEMPT_COST_CU, 16_500);
+    // The whole domain, because the four Direct gate and census files that used
+    // to declare this rule now widen THESE items -- two of them to u64 -- and a
+    // widening is only value-preserving if the rule is. Checking all 256 bumps
+    // is what makes reading those three-line adapters enough.
+    for bump in 0..=u8::MAX {
+        assert_eq!(u64::from(attempts(bump)), 256 - u64::from(bump));
+        assert_eq!(cost_cu(bump), attempts(bump) * ATTEMPT_COST_CU);
+        assert_eq!(census_cost_cu(&[bump]), cost_cu(bump));
+        assert_eq!(census_cost_cu(&[bump, bump]), 2 * cost_cu(bump));
+    }
+}

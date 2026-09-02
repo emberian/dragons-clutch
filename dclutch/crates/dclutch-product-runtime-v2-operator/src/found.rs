@@ -7,8 +7,9 @@
 
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_market_core_codec::{
-    Action, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2,
-    MarketIdentity, REQUEST_BYTES, Request, STATE_BYTES,
+    Action, FOUND_ACCOUNT_ROLES_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
+    FOUND_PRICE_GATE_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2, MarketIdentity, REQUEST_BYTES,
+    Request, STATE_BYTES,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -848,51 +849,69 @@ fn decode_rent(account: AccountObservationV2<'_>) -> Result<Rent> {
 }
 
 fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
-    let accounts = vec![
-        AccountMeta::new(state.payer.key, true),
-        AccountMeta::new(state.market.key, false),
-        AccountMeta::new_readonly(state.rent_credit.key, false),
-        AccountMeta::new_readonly(state.rent_program.key, false),
-        AccountMeta::new_readonly(state.realm.record.raw.key, false),
-        AccountMeta::new_readonly(state.realm.record.staging.key, false),
-        AccountMeta::new_readonly(state.product.raw.key, false),
-        AccountMeta::new_readonly(state.product.staging.key, false),
-        AccountMeta::new_readonly(state.result_domain.raw.key, false),
-        AccountMeta::new_readonly(state.result_domain.staging.key, false),
-        AccountMeta::new_readonly(state.portfolio.raw.key, false),
-        AccountMeta::new_readonly(state.portfolio.staging.key, false),
-        AccountMeta::new_readonly(state.linked_basis.raw.key, false),
-        AccountMeta::new_readonly(state.linked_basis.staging.key, false),
-        AccountMeta::new_readonly(state.source_material.record.raw.key, false),
-        AccountMeta::new_readonly(state.source_material.record.staging.key, false),
-        AccountMeta::new_readonly(state.source_spec.record.raw.key, false),
-        AccountMeta::new_readonly(state.source_spec.record.staging.key, false),
-        AccountMeta::new_readonly(state.capacity_profile.record.raw.key, false),
-        AccountMeta::new_readonly(state.capacity_profile.record.staging.key, false),
-        AccountMeta::new_readonly(state.manipulation_floor.record.raw.key, false),
-        AccountMeta::new_readonly(state.manipulation_floor.record.staging.key, false),
-        AccountMeta::new_readonly(state.capability_manifest.record.raw.key, false),
-        AccountMeta::new_readonly(state.capability_manifest.record.staging.key, false),
-        AccountMeta::new_readonly(state.activation_cache.key, false),
-        AccountMeta::new_readonly(state.core_program.key, false),
-        AccountMeta::new_readonly(state.core_programdata.key, false),
-        AccountMeta::new_readonly(state.registry_program.key, false),
-        AccountMeta::new_readonly(state.rent.key, false),
-        AccountMeta::new_readonly(state.system_program.key, false),
-        AccountMeta::new_readonly(state.infrastructure_profile.key, false),
-        AccountMeta::new_readonly(state.registry_artifact.raw.key, false),
-        AccountMeta::new_readonly(state.registry_artifact.staging.key, false),
-        AccountMeta::new_readonly(state.registry_programdata.key, false),
-        AccountMeta::new_readonly(state.rent_artifact.raw.key, false),
-        AccountMeta::new_readonly(state.rent_artifact.staging.key, false),
-        AccountMeta::new_readonly(state.rent_programdata.key, false),
+    // **The canonical projection below is one literal and stays one.** The SDK
+    // and web ABI generators read `found_metas` by regex and derive the 37
+    // account labels from exactly this `vec![...]`; splitting the extension into
+    // its own step is what keeps the canonical frame something a machine can
+    // still recognise, and what keeps a TypeScript client that never founds
+    // curvature working with no change at all.
+    //
+    // It carries the account keys and nothing else. Each slot's writable and
+    // signer privilege comes from `FOUND_ACCOUNT_ROLES_V3`, which Lean emits
+    // from the same frame this order belongs to, so the order and the
+    // privileges can no longer be edited apart -- which is exactly what
+    // thirty-seven hand-written `new`/`new_readonly` choices, one per line,
+    // allowed.
+    let keys = vec![
+        state.payer.key,
+        state.market.key,
+        state.rent_credit.key,
+        state.rent_program.key,
+        state.realm.record.raw.key,
+        state.realm.record.staging.key,
+        state.product.raw.key,
+        state.product.staging.key,
+        state.result_domain.raw.key,
+        state.result_domain.staging.key,
+        state.portfolio.raw.key,
+        state.portfolio.staging.key,
+        state.linked_basis.raw.key,
+        state.linked_basis.staging.key,
+        state.source_material.record.raw.key,
+        state.source_material.record.staging.key,
+        state.source_spec.record.raw.key,
+        state.source_spec.record.staging.key,
+        state.capacity_profile.record.raw.key,
+        state.capacity_profile.record.staging.key,
+        state.manipulation_floor.record.raw.key,
+        state.manipulation_floor.record.staging.key,
+        state.capability_manifest.record.raw.key,
+        state.capability_manifest.record.staging.key,
+        state.activation_cache.key,
+        state.core_program.key,
+        state.core_programdata.key,
+        state.registry_program.key,
+        state.rent.key,
+        state.system_program.key,
+        state.infrastructure_profile.key,
+        state.registry_artifact.raw.key,
+        state.registry_artifact.staging.key,
+        state.registry_programdata.key,
+        state.rent_artifact.raw.key,
+        state.rent_artifact.staging.key,
+        state.rent_programdata.key,
     ];
-    // **The canonical projection above is one literal and stays one.** The
-    // SDK and web ABI generators read `found_metas` by regex and derive the
-    // 37 account labels and roles from exactly that `vec![...]`; splitting the
-    // extension into its own step is what keeps the canonical frame something
-    // a machine can still recognise, and what keeps a TypeScript client that
-    // never founds curvature working with no change at all.
+    let accounts = keys
+        .into_iter()
+        .zip(FOUND_ACCOUNT_ROLES_V3)
+        .map(|(key, (writable, signer))| {
+            if writable {
+                AccountMeta::new(key, signer)
+            } else {
+                AccountMeta::new_readonly(key, signer)
+            }
+        })
+        .collect();
     let accounts = extend_with_price_gate(accounts, state.price_gate);
     debug_assert_eq!(
         accounts
@@ -903,17 +922,28 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
     accounts
 }
 
-/// Append the `DCLTPGT1` certificate pair, when the basis needs one.
-///
-/// Last, and only when offered, so every coordinate a deployed caller already
-/// builds keeps its index.
 fn extend_with_price_gate(
     mut accounts: Vec<AccountMeta>,
     certificate: Option<FinalizedRecordObservationV2<'_>>,
 ) -> Vec<AccountMeta> {
     if let Some(certificate) = certificate {
-        accounts.push(AccountMeta::new_readonly(certificate.raw.key, false));
-        accounts.push(AccountMeta::new_readonly(certificate.staging.key, false));
+        // The appended pair takes the last two entries of the same emitted
+        // table, so the extension cannot acquire a privilege the frame does not
+        // declare for it.
+        for (key, (writable, signer)) in [certificate.raw.key, certificate.staging.key]
+            .into_iter()
+            .zip(
+                FOUND_ACCOUNT_ROLES_V3[FOUND_PRICE_GATE_RAW_INDEX_V3..]
+                    .iter()
+                    .copied(),
+            )
+        {
+            accounts.push(if writable {
+                AccountMeta::new(key, signer)
+            } else {
+                AccountMeta::new_readonly(key, signer)
+            });
+        }
     }
     accounts
 }

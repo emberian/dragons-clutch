@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**90 generated files from 84 emitters. 90 guarded (84 emitters), 0 unguarded (0 emitters).**
+**91 generated files from 85 emitters. 91 guarded (85 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -50,7 +50,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-liability-basis-v2-kernel/check-generated-price-gate.sh` | shell | `EmitLiabilityBasisV2PriceGateRust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/check-generated-spline.sh` | shell | `EmitLiabilityBasisV2SplineRust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/check-generated.sh` | shell | `EmitLiabilityBasisV2Rust.lean` |
-| `crates/dclutch-market-core-codec/check.sh` | shell | `EmitMarketCorePhysicalRust.lean`, `EmitMarketCoreRust.lean`, `EmitMarketRetirementV1Rust.lean` |
+| `crates/dclutch-market-core-codec/check.sh` | shell | `EmitCoreFoundFrameV3Rust.lean`, `EmitMarketCorePhysicalRust.lean`, `EmitMarketCoreRust.lean`, `EmitMarketRetirementV1Rust.lean` |
 | `crates/dclutch-market-core-codec/tests/capability_funding_header_v2.rs` | cargo-test | `EmitCapabilityFundingHeaderV2Rust.lean` |
 | `crates/dclutch-market-core-codec/tests/series_found_ack_v2_generator_fresh.rs` | cargo-test | `EmitSeriesCoreFoundAckV2Rust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/check-generated-basis-corpus-v3.sh` | shell | `EmitProductBasisV3CorpusRust.lean` |
@@ -139,6 +139,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-liability-basis-v2-kernel/src/generated_spline.rs` | `EmitLiabilityBasisV2SplineRust.lean` |
 | `crates/dclutch-market-core-codec/src/generated.rs` | `EmitMarketCoreRust.lean` |
 | `crates/dclutch-market-core-codec/src/generated_capability_funding_header_v2.rs` | `EmitCapabilityFundingHeaderV2Rust.lean` |
+| `crates/dclutch-market-core-codec/src/generated_found_frame_v3.rs` | `EmitCoreFoundFrameV3Rust.lean` |
 | `crates/dclutch-market-core-codec/src/generated_physical.rs` | `EmitMarketCorePhysicalRust.lean` |
 | `crates/dclutch-market-core-codec/src/generated_retirement_v1.rs` | `EmitMarketRetirementV1Rust.lean` |
 | `crates/dclutch-market-core-codec/src/generated_series_found_ack_v2.rs` | `EmitSeriesCoreFoundAckV2Rust.lean` |

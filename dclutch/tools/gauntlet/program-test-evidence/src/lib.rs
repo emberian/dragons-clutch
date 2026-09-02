@@ -279,5 +279,64 @@ fn json_string(value: &str) -> String {
     out
 }
 
+/// The one author of the PDA bump-search cost model.
+///
+/// # Why this is shared rather than declared where it is used
+///
+/// Four Direct gate and census files declared `ATTEMPT_COST_CU` and `attempts`
+/// for themselves -- two in `u64`, two in `u32` -- and the claims-extended
+/// budgets need the same arithmetic to state a re-pin as a constant instead of
+/// a draw. Six copies of a runtime constant is six places to be wrong about the
+/// runtime, and the thing they model is not any one route's property: it is how
+/// `sol_try_find_program_address` is charged.
+///
+/// # The model
+///
+/// The syscall charges `create_program_address_units` once up front and again
+/// for every candidate it rejects, so a search that lands on bump `b` makes
+/// `256 - b` attempts and costs `1,500` CU each. Nothing else on these routes
+/// moves with a seed.
+///
+/// This matters because a PDA seeded by `release_set_id` -- which hashes the
+/// five deployed ELF digests -- redraws its depth whenever ANY lane changes ANY
+/// of the five programs. Measured on the claims wallet payout: +16,500 CU on
+/// three budget rows between `3fa1a432` and `5767be46` with no source change to
+/// the route at all, and every difference across a 2026-08-28..08-31 sweep a
+/// multiple of 1,500. A gate that does not subtract this is asserting a draw.
+///
+/// The subtraction is only sound with a COMPLETE census of the searches a route
+/// reaches; the proof that a census is complete is that the residual holds
+/// constant across draws that move the raw number. See
+/// `programs/dclutch-trading-sbf/program-test/tests/direct_hot_top_level_margin_gate.rs`,
+/// which carries that argument at length for the Direct route.
+pub mod pda_search {
+    /// CU charged per `create_program_address` candidate, accepted or rejected.
+    pub const ATTEMPT_COST_CU: u32 = 1_500;
+
+    /// Attempts `find_program_address` makes to land on `bump`.
+    #[must_use]
+    pub const fn attempts(bump: u8) -> u32 {
+        256 - bump as u32
+    }
+
+    /// CU one `find_program_address` spends to land on `bump`.
+    #[must_use]
+    pub const fn cost_cu(bump: u8) -> u32 {
+        attempts(bump) * ATTEMPT_COST_CU
+    }
+
+    /// CU a frame spends over every search in a census, given each one's bump.
+    #[must_use]
+    pub fn census_cost_cu(bumps: &[u8]) -> u32 {
+        let mut total = 0;
+        let mut index = 0;
+        while index < bumps.len() {
+            total += cost_cu(bumps[index]);
+            index += 1;
+        }
+        total
+    }
+}
+
 #[cfg(test)]
 mod tests;

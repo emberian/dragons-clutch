@@ -67,6 +67,10 @@ name = "emit-claims-market-closure-v1-rust"
 root = "EmitClaimsMarketClosureV1Rust"
 
 [[lean_exe]]
+name = "emit-core-found-frame-v3-rust"
+root = "EmitCoreFoundFrameV3Rust"
+
+[[lean_exe]]
 name = "emit-custody-abi-rust"
 root = "EmitCustodyAbiRust"
 

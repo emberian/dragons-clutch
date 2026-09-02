@@ -28,6 +28,12 @@ dclutch-capability-activation-codec = { path = "../../../crates/dclutch-capabili
 dclutch-series-v3-kernel = { path = "../../../crates/dclutch-series-v3-kernel" }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
 dclutch-direct-hot-program-test-support = { path = "direct-hot" }
+# The PDA bump-search cost model the two margin gates and the two depth censuses
+# all subtract. It lived four times in this directory -- twice in u64 and twice
+# in u32 -- for a rule that belongs to the runtime rather than to any route, and
+# the claims-extended budgets need the same arithmetic. One author, here,
+# because `direct-hot` above already depends on this crate.
+dclutch-program-test-evidence = { path = "../../../tools/gauntlet/program-test-evidence" }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
 dclutch-general-adapter-contract = { path = "../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-config-contract = { path = "../../../crates/dclutch-general-config-contract" }

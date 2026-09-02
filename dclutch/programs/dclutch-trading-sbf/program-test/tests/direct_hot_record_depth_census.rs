@@ -57,11 +57,7 @@ use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 
 /// Attempts `find_program_address` makes to land on `bump`, at 1,500 CU each.
-const fn attempts(bump: u8) -> u32 {
-    256 - bump as u32
-}
-
-const ATTEMPT_COST_CU: u32 = 1_500;
+use dclutch_program_test_evidence::pda_search::{ATTEMPT_COST_CU, attempts};
 
 /// Seeds swept. Thirty-two, for the reason `direct_hot_top_level_margin_gate.rs`
 /// gives at length: twelve understated that gate's worst draw by 7,659 CU. A

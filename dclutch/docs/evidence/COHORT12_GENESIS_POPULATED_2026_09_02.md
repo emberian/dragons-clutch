@@ -648,4 +648,127 @@ name the artifact the gate certifies and the artifact production runs, put the
 two digests side by side, and require them to be equal rather than merely both
 present.
 
+## Addendum, 2026-09-02: the market is ACTIVATED, and the deadline was not attached to what it looked attached to
+
+The UX reading lane found, and was right about, a vacancy with a clock on it:
+`EQnYCUMkz…` had Direct trading **founded but not activated**, no activation root
+at `88jJTMmU…`, and capability entry 0 had to be activated by **slot 492,091,890**
+or the market could never trade — the fate of the four earlier devnet markets.
+
+**It is activated.** Read back off chain:
+
+| | |
+| --- | --- |
+| activation signature | `2hr4RJJTS12XmszvLUFysFq9k27E5DKT67sSa1wdv44hvdnTMzCmVbYW6oiG5YSkCiHxwMeUiCAvm1rFZguMbcQJ` |
+| activation root `88jJTMmUGr4tB92SwAVpNnQ5CYnWYsg19cu3ULgrZmd4` | **exists**, 256 B, `DCLTCRT1`, owner Trading `Ahzug4zY…`, phase Open |
+| entry / generation | 0 / 2 |
+| deadline slot | 492,091,890 |
+| activated near slot | 491,906,637 — about **185,000 slots** to spare |
+| instruction | 35 accounts, 528 bytes, fee 75,000 lamports from the campaign payer |
+
+**And the premise attached to the deadline was wrong, which is the part worth
+writing down.** The reading held that the already-current seal and the checked
+execution release were what activation needed. They are not.
+`devnet-direct-capability-activation-v1` takes `--plan`, `--market-input`,
+`--campaign-report` and a payer — **all of which this cohort has had since the
+founding finished.** Had the two been coupled, a nine-hour clock would have been
+run against two release-tool changes that, as measured below, cannot be landed
+for this cohort at all. Activation and fill are separate gates, and only the fill
+needs the checked execution release.
+
+The activation also published a **sixth** frozen routing table, which extends the
+`dc07c73a` proof past the founding path: `create DIRECT-ACT frozen routing
+address lookup table` (`7GrhHyWV…`), two extends, then `freeze DIRECT-ACT routing
+table after its one complete extension plan` (`bKa52k8V…`).
+
+## Addendum: the two release-tool changes, and why this cohort still cannot be sealed
+
+Both fixes named in the previous addendum are landed (`28ff0823`).
+
+**Wall C is closed at its cause.** `checked-release-candidate.sh` no longer admits
+the profiled build. `sbf_feature_suffix` splits into a shipped suffix (empty for
+every package) and a measurement suffix (Trading alone); the frame gate keeps the
+profile, a new explicit profiled build keeps existing so its digest can be stated
+beside the shipped one, and `metadata.txt`'s `build_command` describes the shipped
+artifact. Two new refusals: the profiled measurement may not be byte-identical to
+the shipped link — if it were, the feature has stopped doing anything and the
+profile is a lie rather than a measurement — and Trading's provenance must carry
+the feature in its **frame** command and not in its **plain** one. That second
+gate was proved red against cohort-12's own real pre-fix descriptor before it was
+trusted:
+
+```
+refusing: the shipped Trading command carries --features hot-cu-profile, so the
+gate would admit a diagnostic build no cohort runs:
+  … cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml --features hot-cu-profile -- --locked
+```
+
+**Wall D is closed.** `devnet-deployment-set-already-current-v1` writes the
+disposition the reader has always validated: key-free, read-only against the
+cluster, admitting on byte equality against a fresh finalized observation and
+refusing by name — with both digests — any role that differs. It also refuses a
+role that already has a receipt, and one with a receipt *file* on disk, because
+the journal loader rejects a receipt that exists while no digest is pinned and
+this command will not delete evidence to get past it. Three fake-chain tests: the
+admit path asserts the row it writes **reloads through the real loader**, the
+refusal path asserts the journal is byte-identical afterwards, and preflight
+writes nothing.
+
+**And cohort-12 still cannot be sealed, measured twice.**
+
+1. `checked-release-candidate.sh` refuses unless it *is* the script at
+   `--commit`: `refusing: invoke the checked-release runner from the exact
+   --commit source revision`. Correct, and it means **the fix cannot be applied
+   retroactively to `e39efbb0`** — the commit whose bytes are live.
+2. A gate at any commit carrying the fix therefore describes that commit's bytes.
+   Built and compared rather than inferred: HEAD's **ordinary** Trading link is
+   `1d92debe9a24d11cee73b3a8da3d6b01b935ada3c4b1df6429f0bbb4674e7319` at 2,308,328
+   bytes, against the deployed `b0cff55ab0ef162d7e427b8cb894f1468b1804d997ab35c52710df3268a8e3ed`
+   at 2,308,320. Twenty-one commits touched `programs/` and `crates/` since
+   `e39efbb0`.
+
+Trading can therefore never be `already-current` for this cohort, so the seal
+fails, so the checked execution release cannot be built, so **the fee-bearing
+trade and `ledger-census` across the fill remain undone on cohort-12** and
+`49c8fa92` / `be67416e` remain unjudged by a real fill.
+
+What the two fixes buy is the next cohort: one deployed from a commit that
+contains them seals in place with no upgrade, no new release set and no second
+founding — and can trade.
+
+### The repaired candidate is green, and the gate now admits the bytes a cohort runs
+
+Run from a worktree at `28ff0823` — the candidate refuses to run as any commit
+but its own, so proving the fix means running the fixed script as itself:
+
+```
+source_revision=28ff0823b53c8c17b202cbe2432ca14c9fb2888c
+sbf_build_freshness=passed            sbf_build_freshness_links=12
+sbf_build_diagnostics_total=0         trading=0   (all twelve links zero)
+checked Upgrade gate  sha256=91379329972a6881d5f9d7698046776f7aa6ce060369d4fd665ac4496ffa0af5
+CANDIDATE_EXIT=0
+```
+
+The gate's Trading link is now the **ordinary** artifact, and the candidate states
+both digests rather than leaving a reader to guess which one was admitted:
+
+```
+trading_elf_sha256=1d92debe9a24d11cee73b3a8da3d6b01b935ada3c4b1df6429f0bbb4674e7319
+trading_elf_bytes=2308328
+trading_profiled_elf_sha256=d2eb0013e3e0e1345d76b10d9197f11600815fd1355f15e805e9069ef4745d77
+trading_profiled_elf_bytes=2314456
+trading_admitted_artifact=shipped
+```
+
+`provenance/trading.json` carries the inverse of what it carried before the fix:
+`shipped_elf` is `1d92debe…`, the feature is **absent** from `plain_build.invocation`
+and **present** in `frame_measurement.invocation`. The profiled measurement is
+6,128 bytes larger and is never admitted.
+
+The admitted digest `1d92debe…` was independently reproduced by an ordinary
+`cargo build-sbf` of `dclutch-trading-sbf` in a separate detached worktree at the
+same commit — two builds, two roots, one digest. **That is the property the whole
+repair exists for: the gate now certifies an artifact a cohort would actually
+deploy.**
+
 Devnet evidence. Not mainnet evidence.

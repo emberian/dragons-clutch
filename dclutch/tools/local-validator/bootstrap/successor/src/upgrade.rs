@@ -1863,6 +1863,21 @@ pub(crate) fn usage() -> &'static str {
      transaction, payload, authority, deployment slot, and dump. There is no force, recycle, \
      close, set-upgrade-authority, mainnet, testnet, unknown cluster, multi-role, or \
      implicit-wallet path.\n\n\
+  dclutch-local-successor-bootstrap devnet-deployment-set-already-current-v1 \\
+     --rpc-url HTTPS_URL --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
+     --journal ABSOLUTE_JSON --role ROLE --baseline ABSOLUTE_JSON --dump ABSOLUTE_SO \\
+     [--execute]\n\n\
+     Journal one role as AlreadyCurrent, the disposition the set reader has always \
+     validated and audited live and that nothing in this tree could WRITE. A genesis \
+     cohort installs the checked candidate directly, so its roles already run the bytes \
+     an Upgrade would install, and devnet-upgrade-v1 refuses exactly that -- \"current \
+     live payload already equals candidate without a bound receipt\" -- which left such a \
+     cohort unable to complete a deployment set at all. This is the other half of that \
+     refusal. KEY-FREE and READ-ONLY against the cluster: no keypair is opened, nothing \
+     is signed or submitted. Admission is BYTE EQUALITY ALONE, checked against a fresh \
+     finalized observation rather than the journal's own claim; a role whose live payload \
+     differs is refused by name with both digests and told to run a real Upgrade instead. \
+     Without --execute it reports the comparison and writes nothing.\n\n\
   dclutch-local-successor-bootstrap devnet-deployment-set-journal-v2 \
      --rpc-url HTTPS_URL \
      --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
@@ -1917,6 +1932,303 @@ fn parse_set_args(arguments: Vec<String>) -> Result<UpgradeSetArgsV1> {
         journal_path: absolute(&take("--journal")?, "--journal")?,
         solana_cli: absolute(&take("--solana-cli")?, "--solana-cli")?,
     })
+}
+
+/// The `devnet-deployment-set-already-current-v1` command name.
+pub(crate) const ALREADY_CURRENT_COMMAND_V1: &str = "devnet-deployment-set-already-current-v1";
+
+/// What the writer reports, whether or not it wrote.
+#[derive(Clone, Debug, Serialize)]
+struct AlreadyCurrentReportV1 {
+    schema: String,
+    command: String,
+    role: String,
+    program_id: String,
+    programdata_id: String,
+    checked_candidate_elf_sha256: String,
+    live_elf_sha256: String,
+    equal: bool,
+    observed_slot: u64,
+    journaled: bool,
+    journal_sha256_before: String,
+    journal_sha256_after: Option<String>,
+}
+
+struct AlreadyCurrentArgsV1 {
+    origin: ClusterOriginV1,
+    journal_path: PathBuf,
+    role: String,
+    baseline_path: PathBuf,
+    dump_path: PathBuf,
+    execute: bool,
+}
+
+fn parse_already_current_args(arguments: Vec<String>) -> Result<AlreadyCurrentArgsV1> {
+    let mut values = std::collections::BTreeMap::<String, String>::new();
+    let mut execute = false;
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        if argument == "--execute" {
+            execute = true;
+            continue;
+        }
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if !matches!(
+            argument.as_str(),
+            "--rpc-url"
+                | DEVNET_ACKNOWLEDGMENT_FLAG
+                | "--journal"
+                | "--role"
+                | "--baseline"
+                | "--dump"
+        ) {
+            return Err(Error::new(format!(
+                "unknown {ALREADY_CURRENT_COMMAND_V1} argument: {argument}"
+            )));
+        }
+        if values.insert(argument.clone(), value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let take = |label: &str| {
+        values
+            .get(label)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("{label} is required")))
+    };
+    let origin = ClusterOriginV1::parse(
+        &take("--rpc-url")?,
+        Some(&take(DEVNET_ACKNOWLEDGMENT_FLAG)?),
+    )?;
+    if !matches!(origin, ClusterOriginV1::AcknowledgedDevnet { .. }) {
+        return Err(Error::new(format!(
+            "{ALREADY_CURRENT_COMMAND_V1} admits exact public devnet only"
+        )));
+    }
+    Ok(AlreadyCurrentArgsV1 {
+        origin,
+        journal_path: absolute(&take("--journal")?, "--journal")?,
+        role: take("--role")?,
+        baseline_path: absolute(&take("--baseline")?, "--baseline")?,
+        dump_path: absolute(&take("--dump")?, "--dump")?,
+        execute,
+    })
+}
+
+/// Journal one role as `AlreadyCurrent`, on byte equality alone.
+///
+/// The reader, the live auditor and the plan projection for this disposition
+/// have existed since cohort-8; nothing in the tree could WRITE one, so a
+/// genesis cohort -- which installs the checked candidate directly and is
+/// therefore already running the bytes an Upgrade would install -- had no way
+/// to complete a deployment set at all. `devnet-upgrade-v1` refuses precisely
+/// that case ("current live payload already equals candidate without a bound
+/// receipt"), and correctly: an upgrade that changes nothing has no receipt to
+/// bind. This is the other half of that refusal.
+///
+/// Key-free and read-only against the cluster. Admission is byte equality and
+/// nothing else, checked against a FRESH finalized observation rather than
+/// against the journal's own claim.
+fn journal_already_current_v1(args: &AlreadyCurrentArgsV1) -> Result<AlreadyCurrentReportV1> {
+    journal_already_current_with_runner(args, &mut ReadOnlyRpcRunnerV1)
+}
+
+fn journal_already_current_with_runner(
+    args: &AlreadyCurrentArgsV1,
+    runner: &mut impl CliRunner,
+) -> Result<AlreadyCurrentReportV1> {
+    let (mut journal, journal_sha256_before) = load_set_journal_path(&args.journal_path)?;
+    let gate_path = PathBuf::from(&journal.checked_release_gate.canonical_path);
+    let authority = parse_pubkey(
+        &journal.retained_upgrade_authority,
+        "deployment-set retained authority",
+    )?;
+    let payer = parse_pubkey(&journal.fee_payer, "deployment-set fee payer")?;
+
+    // Registry and Rent are CarryForward and are never a role this writes.
+    let index = journal
+        .roles
+        .iter()
+        .position(|role| role.role == args.role)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "deployment-set journal has no role {}; it names {}",
+                args.role,
+                journal
+                    .roles
+                    .iter()
+                    .map(|role| role.role.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+    if index < 2 {
+        return Err(Error::new(format!(
+            "role {} is a CarryForward row, which is neither an Upgrade nor AlreadyCurrent",
+            args.role
+        )));
+    }
+    if journal.roles[index].receipt.sha256.is_some() {
+        return Err(Error::new(format!(
+            "role {} already carries a bound Upgrade receipt; an AlreadyCurrent row has none",
+            args.role
+        )));
+    }
+    // And no receipt FILE either. The journal loader refuses a receipt that
+    // exists while the journal pins no digest, so writing the row over one
+    // would produce a journal that cannot be read back. Refuse here instead,
+    // where the operator can still see which file is in the way -- and never
+    // delete it, because a receipt is evidence.
+    let receipt_path = PathBuf::from(&journal.roles[index].receipt.canonical_path);
+    if receipt_path.exists() {
+        return Err(Error::new(format!(
+            "role {} has a receipt file at {}; an AlreadyCurrent row has none, and this command \
+             will not remove evidence",
+            args.role,
+            receipt_path.display()
+        )));
+    }
+
+    let role_row = journal.roles[index].clone();
+    let program_id = parse_pubkey(&role_row.program_id, "deployment-set Program")?;
+    let programdata_id = parse_pubkey(&role_row.programdata_id, "deployment-set ProgramData")?;
+    let elf_path = set_role_elf_path(&gate_path, &role_row.role)?;
+    let role_args = UpgradeArgsV1 {
+        origin: args.origin.clone(),
+        role: role_row.role.clone(),
+        program_id,
+        programdata_id,
+        expected_upgrade_authority: authority,
+        authority_keypair: PathBuf::from("/already-current-authority-not-read"),
+        fee_payer: payer,
+        fee_payer_keypair: PathBuf::from("/already-current-fee-payer-not-read"),
+        buffer_pubkey: Pubkey::default(),
+        buffer_keypair: PathBuf::from("/already-current-buffer-not-read"),
+        deployment_set_journal_path: args.journal_path.clone(),
+        elf_path,
+        checked_release_gate_path: gate_path,
+        expected_checked_release_gate_sha256: journal.checked_release_gate.sha256.clone(),
+        expected_source_revision: journal.source_revision.clone(),
+        expected_source_tree_sha256: journal.source_tree_sha256.clone(),
+        baseline_path: args.baseline_path.clone(),
+        receipt_path: PathBuf::from(&role_row.receipt.canonical_path),
+        dump_path: args.dump_path.clone(),
+        solana_cli: PathBuf::from("/already-current-solana-not-run"),
+        expected_deployment_solana_cli_version: journal.solana_cli_version.clone(),
+        target_acknowledgment: format!("{}:{}", role_row.role, role_row.program_id),
+        exclusive_payer_window_acknowledgment: None,
+        execute: false,
+        preflight: false,
+        stop_after_buffer_ready: false,
+        adopt_existing_buffer: false,
+        adopt_finalized_cli_upgrade_signature: None,
+    };
+    // The gate, the source revision, the tree digest and the baseline are all
+    // re-authenticated here; the candidate digest below is the gate's, padded to
+    // the live width, which is the same value the live auditor compares against.
+    let admission = admit_upgrade(&role_args)?;
+    let observation = read_snapshot(runner, &role_args, admission.baseline.context_slot)?;
+    let live_elf_sha256 = observation.loader.live_elf_sha256.clone();
+    let equal = live_elf_sha256 == admission.live_elf_sha256;
+    let mut report = AlreadyCurrentReportV1 {
+        schema: "dclutch-devnet-already-current-write-v1".into(),
+        command: ALREADY_CURRENT_COMMAND_V1.into(),
+        role: role_row.role.clone(),
+        program_id: role_row.program_id.clone(),
+        programdata_id: role_row.programdata_id.clone(),
+        checked_candidate_elf_sha256: admission.live_elf_sha256.clone(),
+        live_elf_sha256: live_elf_sha256.clone(),
+        equal,
+        observed_slot: observation.context_slot,
+        journaled: false,
+        journal_sha256_before,
+        journal_sha256_after: None,
+    };
+    if !equal {
+        // Refused BY NAME, with both digests, because this is the whole gate:
+        // an AlreadyCurrent row asserts equality and nothing weaker.
+        return Err(Error::new(format!(
+            "role {} is NOT already current: the cluster reads {} and the checked candidate is {}. \
+             An AlreadyCurrent row is admitted on byte equality alone, so this role needs a real \
+             Upgrade (devnet-upgrade-v1) rather than this command",
+            role_row.role, live_elf_sha256, admission.live_elf_sha256
+        )));
+    }
+    if !args.execute {
+        return Ok(report);
+    }
+
+    // The dump is the deployed bytes, read back and written where the journal
+    // says they live: the live auditor re-reads it and requires it to equal both
+    // the pinned digest and the checked candidate.
+    if let Some(parent) = args.dump_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&args.dump_path, &admission.candidate_live)?;
+    let dump_sha256 = digest(&admission.candidate_live);
+    if dump_sha256 != live_elf_sha256 {
+        return Err(Error::new(format!(
+            "role {} dump {dump_sha256} is not the live payload {live_elf_sha256}",
+            role_row.role
+        )));
+    }
+    let baseline_bytes = read_regular_reference(&args.baseline_path, "already-current baseline")?;
+    let row = &mut journal.roles[index];
+    row.disposition = CheckedDeploymentDispositionV1::AlreadyCurrent;
+    row.baseline = Some(SetPinnedFileV1 {
+        canonical_path: args.baseline_path.display().to_string(),
+        sha256: digest(&baseline_bytes),
+    });
+    row.receipt = SetOptionalFileV1 {
+        canonical_path: row.receipt.canonical_path.clone(),
+        sha256: None,
+    };
+    row.dump = SetOptionalFileV1 {
+        canonical_path: args.dump_path.display().to_string(),
+        sha256: Some(dump_sha256),
+    };
+    row.already_current = Some(SetAlreadyCurrentV1 {
+        observed_slot: observation.context_slot,
+        live_elf_sha256,
+    });
+    let rendered = serde_json::to_vec_pretty(&journal)?;
+    let mut rendered = rendered;
+    rendered.push(b'\n');
+    // Reject before replacing: the journal we are about to write must load.
+    let _: UpgradeSetJournalV1 = serde_json::from_slice(&rendered)
+        .map_err(|error| Error::new(format!("rewritten set journal does not reload: {error}")))?;
+    let temporary = args.journal_path.with_extension("json.already-current.tmp");
+    fs::write(&temporary, &rendered)?;
+    fs::rename(&temporary, &args.journal_path)?;
+    report.journaled = true;
+    report.journal_sha256_after = Some(digest(&rendered));
+    Ok(report)
+}
+
+/// A runner that answers only the one read this command makes.
+struct ReadOnlyRpcRunnerV1;
+
+impl CliRunner for ReadOnlyRpcRunnerV1 {
+    fn run(&mut self, _arguments: &[String]) -> Result<CliOutput> {
+        Err(Error::new(
+            "the already-current writer runs no CLI: it is key-free and read-only",
+        ))
+    }
+
+    fn read_snapshot(&mut self, query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
+        read_snapshot_via_rpc(query)
+    }
+}
+
+pub(crate) fn run_already_current(arguments: Vec<String>) -> Result<()> {
+    let args = parse_already_current_args(arguments)?;
+    let report = journal_already_current_v1(&args)?;
+    let mut stdout = std::io::stdout();
+    serde_json::to_writer_pretty(&mut stdout, &report)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
 }
 
 fn audit_set_journal_with_runner(
@@ -11782,6 +12094,132 @@ mod tests {
         assert!(
             error.to_string().contains("finalized account absence"),
             "{error}"
+        );
+    }
+
+    /// Build writer arguments for the custody row of a mixed set journal.
+    fn already_current_args(fixture: &MixedSetFixture, execute: bool) -> AlreadyCurrentArgsV1 {
+        let row = fixture
+            .journal
+            .roles
+            .iter()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        AlreadyCurrentArgsV1 {
+            origin: fixture.args.origin.clone(),
+            journal_path: fixture.args.journal_path.clone(),
+            role: "custody".into(),
+            baseline_path: PathBuf::from(
+                &row.baseline
+                    .as_ref()
+                    .expect("custody baseline")
+                    .canonical_path,
+            ),
+            dump_path: PathBuf::from(&row.dump.canonical_path),
+            execute,
+        }
+    }
+
+    /// A role whose bytes are the candidate but which carries no receipt: the
+    /// shape a GENESIS cohort is in, and the one no command could journal.
+    fn mixed_set_genesis_shaped() -> MixedSetFixture {
+        // One "completed" upgrade puts custody's live payload at the candidate.
+        let mut fixture = MixedSetFixture::new(1);
+        let row = fixture
+            .journal
+            .roles
+            .iter_mut()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        // Then take the receipt away: the cluster still reports the candidate as
+        // live, and nothing claims an upgrade produced it. That is exactly a
+        // genesis deploy, and exactly what `devnet-upgrade-v1` refuses.
+        row.disposition = CheckedDeploymentDispositionV1::Upgrade;
+        row.receipt.sha256 = None;
+        row.already_current = None;
+        // A genesis role has no receipt FILE either, and the journal loader
+        // refuses one that exists while no digest is pinned.
+        let receipt_path = PathBuf::from(&row.receipt.canonical_path);
+        if receipt_path.exists() {
+            fs::remove_file(&receipt_path).expect("remove fixture receipt");
+        }
+        let mut rendered = serde_json::to_vec_pretty(&fixture.journal).expect("journal JSON");
+        rendered.push(b'\n');
+        fs::write(&fixture.args.journal_path, &rendered).expect("rewrite journal");
+        fixture
+    }
+
+    #[test]
+    fn a_role_already_running_the_candidate_is_journaled_already_current() {
+        let mut fixture = mixed_set_genesis_shaped();
+        let args = already_current_args(&fixture, true);
+        let report = journal_already_current_with_runner(&args, &mut fixture.runner)
+            .expect("a role already running the candidate is admitted");
+        assert!(report.equal, "{report:?}");
+        assert!(report.journaled, "{report:?}");
+        assert_eq!(report.role, "custody");
+        assert_eq!(report.live_elf_sha256, report.checked_candidate_elf_sha256);
+
+        // The row the reader has always validated: no receipt, a dump equal to
+        // the live payload, and the equality pinned with the slot it was read at.
+        let (journal, _) = load_set_journal_path(&args.journal_path).expect("rewritten journal");
+        let row = journal
+            .roles
+            .iter()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        assert_eq!(
+            row.disposition,
+            CheckedDeploymentDispositionV1::AlreadyCurrent
+        );
+        assert!(
+            row.receipt.sha256.is_none(),
+            "an AlreadyCurrent row has no receipt"
+        );
+        assert_eq!(
+            row.dump.sha256.as_deref(),
+            Some(report.live_elf_sha256.as_str())
+        );
+        let pinned = row.already_current.as_ref().expect("pinned equality");
+        assert_eq!(pinned.live_elf_sha256, report.live_elf_sha256);
+        assert_eq!(pinned.observed_slot, report.observed_slot);
+        assert!(row.baseline.is_some(), "the baseline fixes the width");
+    }
+
+    #[test]
+    fn a_role_whose_bytes_differ_is_refused_by_name_and_nothing_is_written() {
+        // No completed upgrades: custody's live payload is the predecessor, which
+        // is the ordinary case a real Upgrade exists for.
+        let mut fixture = MixedSetFixture::new(0);
+        let args = already_current_args(&fixture, true);
+        let before = fs::read(&args.journal_path).expect("journal before");
+        let refusal = journal_already_current_with_runner(&args, &mut fixture.runner)
+            .expect_err("a role whose bytes differ is refused");
+        let text = refusal.to_string();
+        assert!(text.contains("is NOT already current"), "{text}");
+        assert!(text.contains("byte equality alone"), "{text}");
+        assert!(text.contains("devnet-upgrade-v1"), "{text}");
+        assert_eq!(
+            fs::read(&args.journal_path).expect("journal after"),
+            before,
+            "a refused role must leave the journal byte-identical"
+        );
+    }
+
+    #[test]
+    fn without_execute_the_already_current_writer_writes_nothing() {
+        let mut fixture = mixed_set_genesis_shaped();
+        let args = already_current_args(&fixture, false);
+        let before = fs::read(&args.journal_path).expect("journal before");
+        let report = journal_already_current_with_runner(&args, &mut fixture.runner)
+            .expect("preflight reports the comparison");
+        assert!(report.equal);
+        assert!(!report.journaled);
+        assert!(report.journal_sha256_after.is_none());
+        assert_eq!(
+            fs::read(&args.journal_path).expect("journal after"),
+            before,
+            "a preflight must write nothing"
         );
     }
 

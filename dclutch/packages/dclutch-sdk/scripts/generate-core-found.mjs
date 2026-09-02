@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
   core: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated.rs', root), 'utf8'),
-  foundFrame: readFileSync(new URL('crates/dclutch-market-core-codec/src/found_frame_v3.rs', root), 'utf8'),
+  foundFrame: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated_found_frame_v3.rs', root), 'utf8'),
   physical: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated_physical.rs', root), 'utf8'),
   product: readFileSync(new URL('crates/dclutch-product-runtime-v2-admission/src/lib.rs', root), 'utf8'),
   realm: readFileSync(new URL('crates/dclutch-realm-contract/src/lib.rs', root), 'utf8'),
@@ -57,30 +57,71 @@ function array(name, values) {
   return `export const ${name} = Uint8Array.from([${values.map((value) => `0x${value.toString(16).padStart(2, '0')}`).join(', ')}]);\n`;
 }
 
+// The frame's PRIVILEGES are no longer inferred from which constructor the
+// operator happened to call on each of thirty-seven lines. They come from
+// `FOUND_ACCOUNT_ROLES_V3`, which Lean emits from the frame itself; the
+// operator builds its metas from the same table. What is still read out of the
+// operator is the ORDER of account keys, because the labels below are keyed on
+// those field paths.
+function foundAccountRoles() {
+  const table = sources.foundFrame.match(/FOUND_ACCOUNT_ROLES_V3: \[\(bool, bool\); [0-9]+\] = \[([\s\S]*?)\n\];/);
+  if (!table) throw new Error('missing emitted Found account role table');
+  return table[1].split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const entry = line.match(/^\((true|false), (true|false)\),\s*\/\/ (\S+)$/);
+      if (!entry) throw new Error(`unparsed emitted Found role entry ${line}`);
+      return Object.freeze({ field: entry[3], writable: entry[1] === 'true', signer: entry[2] === 'true' });
+    });
+}
+
 function foundAccountMetas() {
   const marker = sources.operator.indexOf('fn found_metas');
   const nextFunction = sources.operator.indexOf('\nfn ', marker + 1);
   const body = marker < 0 ? '' : sources.operator.slice(marker, nextFunction < 0 ? undefined : nextFunction);
-  const projection = body.match(/let accounts = vec!\[\s*([\s\S]*?)\n\s*\];/);
+  const projection = body.match(/let keys = vec!\[\s*([\s\S]*?)\n\s*\];/);
   if (!projection) throw new Error('missing canonical Found account projection');
-  return projection[1].split('\n')
+  const fields = projection[1].split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const meta = line.match(/^AccountMeta::(new|new_readonly)\((state\.[a-z_.]+)\.key, (true|false)\),$/);
-      if (!meta) throw new Error(`unparsed canonical Found account meta ${line}`);
-      return Object.freeze({ field: meta[2], writable: meta[1] === 'new', signer: meta[3] === 'true' });
+      const key = line.match(/^(state\.[a-z_.]+)\.key,$/);
+      if (!key) throw new Error(`unparsed canonical Found account key ${line}`);
+      return key[1];
     });
+  const roles = foundAccountRoles();
+  return fields.map((field, index) => {
+    const role = roles[index];
+    if (role === undefined || role.field !== field) {
+      throw new Error(`the operator's slot ${index} is ${field}; the emitted frame says ${role && role.field}`);
+    }
+    return Object.freeze({ field, writable: role.writable, signer: role.signer });
+  });
 }
 
 function foundPriceGateAccountMetas() {
   const marker = sources.operator.indexOf('fn extend_with_price_gate');
   const nextFunction = sources.operator.indexOf('\nfn ', marker + 1);
   const body = marker < 0 ? '' : sources.operator.slice(marker, nextFunction < 0 ? undefined : nextFunction);
-  const entries = [...body.matchAll(/accounts\.push\(AccountMeta::(new|new_readonly)\((certificate\.[a-z_.]+)\.key, (true|false)\)\);/g)]
-    .map((match) => Object.freeze({ field: match[2], writable: match[1] === 'new', signer: match[3] === 'true' }));
-  if (entries.length === 0) throw new Error('missing canonical Found price-gate extension');
-  return entries;
+  const projection = body.match(/for \(key, \(writable, signer\)\) in \[([^\]]*)\]/);
+  if (!projection) throw new Error('missing canonical Found price-gate extension');
+  const fields = projection[1].split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const key = entry.match(/^(certificate\.[a-z_.]+)\.key$/);
+      if (!key) throw new Error(`unparsed Found price-gate key ${entry}`);
+      return key[1];
+    });
+  const roles = foundAccountRoles().slice(scalar('foundFrame', 'FOUND_PRICE_GATE_RAW_INDEX_V3'));
+  return fields.map((field, index) => {
+    const role = roles[index];
+    if (role === undefined || role.field !== field) {
+      throw new Error(`the price-gate extension's slot ${index} is ${field}; the emitted frame says ${role && role.field}`);
+    }
+    return Object.freeze({ field, writable: role.writable, signer: role.signer });
+  });
 }
 
 const FOUND_ACCOUNT_LABELS = Object.freeze({

@@ -116,3 +116,7 @@ This package intentionally has no dependency on the neighboring research
 repositories or on the Rust implementation.  The Rust implementation is a
 differential oracle, not a source of formal definitions.
 -/
+import DClutchSemantics.AbiCoverage
+import DClutchSemantics.ClaimsLiabilityBasisStateV2Abi
+import DClutchSemantics.CoreFoundFrameV3Abi
+import DClutchSemantics.LifecycleRentV2Abi

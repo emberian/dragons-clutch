@@ -159,6 +159,9 @@ fn run() -> Result<()> {
         Some("devnet-upgrade-extend-v1") => upgrade::run_extension(arguments.collect()),
         Some("devnet-upgrade-v1") => upgrade::run(arguments.collect()),
         Some("devnet-deployment-set-journal-v2") => upgrade::run_set_journal(arguments.collect()),
+        Some(command) if command == upgrade::ALREADY_CURRENT_COMMAND_V1 => {
+            upgrade::run_already_current(arguments.collect())
+        }
         Some("devnet-carry-forward-capture-v1") => {
             release_capture::run_carry_forward(arguments.collect())
         }

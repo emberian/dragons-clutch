@@ -65,6 +65,7 @@
 //! the five carried readers spend reading the tail. Floor 1,323,242 ->
 //! 1,318,826, worst 1,363,745 -> 1,345,829, band 24,000 -> 16,501.
 
+use dclutch_program_test_evidence::pda_search;
 use solana_account::AccountSharedData;
 use solana_program::{instruction::InstructionError, pubkey::Pubkey};
 use solana_program_test::BanksClientError;
@@ -126,15 +127,14 @@ const GATE_SEEDS: u64 = 32;
 
 /// 1,500 CU per candidate a bump search rejects, and per `create_program_address`.
 ///
-/// `sol_try_find_program_address` charges `create_program_address_units` once up
-/// front and again for every rejected candidate, so a search landing on bump
-/// `b` costs `(256 - b) * 1,500`. This is the ONLY thing on this route whose
-/// cost moves with a participant key.
-const ATTEMPT_COST_CU: u64 = 1_500;
+/// The rule and the number are `dclutch_program_test_evidence::pda_search`'s;
+/// these two items only widen them to this gate's arithmetic width, so the four
+/// files in this directory that subtract searches state the model once.
+const ATTEMPT_COST_CU: u64 = pda_search::ATTEMPT_COST_CU as u64;
 
 /// Attempts `find_program_address` makes to land on `bump`.
 const fn attempts(bump: u8) -> u64 {
-    256 - bump as u64
+    pda_search::attempts(bump) as u64
 }
 
 /// The seven key-varying search SITES this route still pays, over seven addresses.

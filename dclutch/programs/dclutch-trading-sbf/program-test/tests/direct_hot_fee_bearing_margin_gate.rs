@@ -85,6 +85,7 @@
 //! about a stranger's keys, which is a geometric distribution and not a
 //! constant -- the margin gate's own argument.
 
+use dclutch_program_test_evidence::pda_search;
 use solana_program::{instruction::InstructionError, pubkey::Pubkey};
 use solana_program_test::BanksClientError;
 use solana_sdk::{signature::Signer, transaction::TransactionError};
@@ -114,14 +115,17 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 const GATE_SEEDS: u64 = 32;
 
 /// 1,500 CU per candidate a bump search rejects, and per `create_program_address`.
-const ATTEMPT_COST_CU: u64 = 1_500;
+///
+/// The rule and the number are `dclutch_program_test_evidence::pda_search`'s;
+/// this widens them to this gate's arithmetic width.
+const ATTEMPT_COST_CU: u64 = pda_search::ATTEMPT_COST_CU as u64;
 
 /// The protocol maximum a transaction may consume, and the budget this route asks for.
 const PROTOCOL_CEILING: u64 = 1_400_000;
 
 /// Attempts `find_program_address` makes to land on `bump`.
 const fn attempts(bump: u8) -> u64 {
-    256 - bump as u64
+    pda_search::attempts(bump) as u64
 }
 
 /// The two shapes the Direct route has, named by what they cost.

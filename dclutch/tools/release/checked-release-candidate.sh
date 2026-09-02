@@ -251,8 +251,27 @@ series-shadow:dclutch-series-shadow-sbf:dclutch_series_shadow_sbf"
 # suffix so the command recorded in every evidence surface is the command that
 # ran, while the other checked links remain byte-for-byte on their ordinary
 # release invocation.
+#
+# THE SHIPPED ARTIFACT IS NEVER THE PROFILED ONE.  Until 2026-09-02 this suffix
+# fed the shipped build too, so the gate ADMITTED a `--features hot-cu-profile`
+# Trading link -- a diagnostic build that no cohort may run, because
+# `build-elfs.sh` deliberately builds the deployable Trading ELF without it.
+# The two therefore differed by construction, and since the gate admits its
+# twelve links as a SET, that made the gate unable to authorize ANY role of any
+# cohort against the bytes that cohort actually runs: measured on cohort-12,
+# where six of seven role ELFs were identical to the candidate's and the custody
+# upgrade preflight still refused "trading ELF bytes or SHA-256 changed after
+# checked-release admission".
+#
+# So: the shipped link, its digest, its checked record and its receipts come
+# from the ORDINARY invocation for every package; the profile stays exactly what
+# it is, a measurement, and feeds the frame gate and the profiled-artifact row.
 HOT_CU_PROFILE_FEATURE="--features hot-cu-profile"
-sbf_feature_suffix() {
+sbf_shipped_feature_suffix() {
+    # Deliberately unconditional: no package ships a feature-gated artifact.
+    :
+}
+sbf_profile_feature_suffix() {
     if [ "$1" = "dclutch-trading-sbf" ]; then
         printf ' %s' "$HOT_CU_PROFILE_FEATURE"
     fi
@@ -536,7 +555,7 @@ while IFS=$'\t' read -r label package; do
     link_log="$WORK/build-$label.log"
     link_target="$(target_dir_for "$package")"
     build_target_relative="${link_target#"$WORK"/}"
-    build_feature_suffix="$(sbf_feature_suffix "$package")"
+    build_feature_suffix="$(sbf_shipped_feature_suffix "$package")"
     build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked"
     printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$link_log"
     printf 'dclutch-sbf-build-invocation-v1=%s\n' "$build_invocation" >> "$link_log"
@@ -545,14 +564,8 @@ while IFS=$'\t' read -r label package; do
     fi
     (
         cd "$SOURCE"
-        if [ "$package" = "dclutch-trading-sbf" ]; then
-            CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" \
-                    --features hot-cu-profile -- --locked
-        else
-            CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
-        fi
+        CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
+            cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
     ) >>"$link_log" 2>&1
     cat "$link_log" >> "$BUILD_LOG"
     count="$(grep -c "$DIAGNOSTIC_PATTERN" "$link_log" || true)"
@@ -569,6 +582,48 @@ while IFS=$'\t' read -r label package; do
             || { echo "refusing: staged named-role ELF is not regular for $label" >&2; exit 1; }
     fi
 done < "$BUILD_LINKS"
+
+# ------------------------------------------ the profiled Trading measurement
+# The profile is a real thing worth building and worth naming; what it is not
+# is the shipped artifact. It is built HERE, from the same archived source and
+# the same commit as the shipped link, so the candidate can state both digests
+# and a reader can see at a glance that they differ and which one ships.
+# Nothing downstream consumes this path: the frame gate makes its own
+# `-Zemit-stack-sizes` build, and the checked records, the gate and every
+# receipt are cut from `elf/trading.so`.
+PROFILED_DIR="$WORK/profiled"
+mkdir -p "$PROFILED_DIR"
+PROFILED_TRADING_SHA256=""
+if grep -q '^trading	dclutch-trading-sbf$' "$BUILD_LINKS"; then
+    profiled_log="$WORK/build-trading-profiled.log"
+    profiled_target="$WORK/profiled-target-trading"
+    rm -rf "$profiled_target"
+    profiled_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=profiled-target-trading cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml $HOT_CU_PROFILE_FEATURE -- --locked"
+    printf 'dclutch-sbf-profiled-run-v1=%s\n' "$BUILD_RUN_ID" > "$profiled_log"
+    printf 'dclutch-sbf-profiled-invocation-v1=%s\n' "$profiled_invocation" >> "$profiled_log"
+    echo "build: trading profiled measurement (diagnostic, never shipped)"
+    (
+        cd "$SOURCE"
+        CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$profiled_target" \
+            cargo build-sbf --manifest-path "programs/dclutch-trading-sbf/Cargo.toml" \
+                --features hot-cu-profile -- --locked
+    ) >>"$profiled_log" 2>&1
+    cat "$profiled_log" >> "$BUILD_LOG"
+    [ -f "$profiled_target/deploy/dclutch_trading_sbf.so" ] \
+        || { echo "refusing: profiled Trading measurement build emitted no artifact" >&2; exit 1; }
+    cp "$profiled_target/deploy/dclutch_trading_sbf.so" "$PROFILED_DIR/trading.so"
+    PROFILED_TRADING_SHA256="$(sha256 "$PROFILED_DIR/trading.so")"
+    # The whole point of the 2026-09-02 repair: these two must NOT be equal, and
+    # the shipped one is the one every downstream artifact is cut from. If they
+    # ever are equal the feature has stopped doing anything and the profile is
+    # a lie rather than a measurement.
+    if [ "$PROFILED_TRADING_SHA256" = "$(sha256 "$ELF_DIR/trading.so")" ]; then
+        echo "refusing: the profiled Trading measurement is byte-identical to the shipped link, so --features hot-cu-profile changed nothing" >&2
+        exit 1
+    fi
+    echo "trading shipped  sha256=$(sha256 "$ELF_DIR/trading.so")"
+    echo "trading profiled sha256=$PROFILED_TRADING_SHA256 (measurement only, never admitted)"
+fi
 
 FRESHNESS_RESULT="$("$FRESHNESS_CHECKER" \
     --work "$WORK" \
@@ -628,7 +683,7 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
         frame_raw="$FRAME_DIR/$label.raw.txt"
         frame_report="$FRAME_DIR/$label.txt"
         rm -rf "$frame_target"
-        frame_feature_suffix="$(sbf_feature_suffix "$package")"
+        frame_feature_suffix="$(sbf_profile_feature_suffix "$package")"
         frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$frame_feature_suffix -- --locked"
         printf 'dclutch-sbf-frame-run-v1=%s\n' "$BUILD_RUN_ID" > "$frame_build_log"
         printf 'dclutch-sbf-frame-invocation-v1=%s\n' "$frame_invocation" >> "$frame_build_log"
@@ -695,9 +750,10 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
         done
         link_target="$(target_dir_for "$package")"
         build_target_relative="${link_target#"$WORK"/}"
-        build_feature_suffix="$(sbf_feature_suffix "$package")"
+        build_feature_suffix="$(sbf_shipped_feature_suffix "$package")"
+        frame_feature_suffix="$(sbf_profile_feature_suffix "$package")"
         build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked"
-        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked"
+        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$frame_feature_suffix -- --locked"
         build_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/build-$label.log" | tail -n 1)"
         frame_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/frame-build-$label.log" | tail -n 1)"
         object_stem="$(printf '%s' "$package" | tr '-' '_')"
@@ -730,6 +786,24 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
     [ "$profile_provenance_count" = "1" ] \
         && grep -Fq -- "$HOT_CU_PROFILE_FEATURE" "$PROVENANCE_DIR/trading.json" \
         || { echo "refusing: hot-cu-profile provenance must name Trading alone" >&2; exit 1; }
+    # And it must have reached only the MEASUREMENT half of Trading's own
+    # descriptor. This is the gate that would have caught the defect it was
+    # written for: before 2026-09-02 the feature sat in Trading's plain build
+    # command, which is what made the admitted artifact a diagnostic build.
+    python3 - "$PROVENANCE_DIR/trading.json" "$HOT_CU_PROFILE_FEATURE" <<'PROFILE_HALF'
+import json, sys
+body = json.load(open(sys.argv[1]))
+feature = sys.argv[2]
+shipped = body["plain_build"]["invocation"]
+frame = body["frame_measurement"]["invocation"]
+if feature in shipped:
+    raise SystemExit(
+        "refusing: the shipped Trading command carries "
+        f"{feature}, so the gate would admit a diagnostic build no cohort runs:\n  {shipped}")
+if feature not in frame:
+    raise SystemExit(
+        f"refusing: the Trading frame measurement command lost {feature}:\n  {frame}")
+PROFILE_HALF
 else
     echo "checked Upgrade gate: not emitted because zero diagnostics in strict mode were not established" >&2
 fi
@@ -857,11 +931,10 @@ for entry in $ROLES; do
         printf 'solana_version=%s\n' "$SOLANA_VERSION"
         printf 'cargo_build_sbf_version=%s\n' "$BUILD_SBF_VERSION"
         printf 'target_triple=%s\n' "$TARGET_TRIPLE"
-        if [ "$package" = "dclutch-trading-sbf" ]; then
-            printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml --features hot-cu-profile -- --locked\n' "$package"
-        else
-            printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked\n' "$package"
-        fi
+        # The shipped artifact's own command, which now carries no feature for
+        # any package. The profiled measurement command lives in the link's
+        # provenance descriptor, where it describes the frame build that ran.
+        printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked\n' "$package"
         # Strictly ascending, unique, and each one load-bearing.
         printf 'assumption=Loader V3 Program and ProgramData bytes were constructed offline from the exact ELF; no chain was observed\n'
         printf 'assumption=cargo_lock_digest is SHA-256 of the exact Cargo.lock that resolved this package\n'
@@ -1044,6 +1117,13 @@ fi
         dir="$EVIDENCE/$role"
         printf '%s_elf_sha256=%s\n' "$role" "$(sha256 "$ELF_DIR/$role.so")"
         printf '%s_elf_bytes=%s\n' "$role" "$(wc -c < "$ELF_DIR/$role.so" | tr -d ' ')"
+        # Both digests, side by side, because the whole 2026-09-02 defect was a
+        # reader who could not tell which artifact the gate had admitted.
+        if [ "$role" = "trading" ] && [ -n "$PROFILED_TRADING_SHA256" ]; then
+            printf 'trading_profiled_elf_sha256=%s\n' "$PROFILED_TRADING_SHA256"
+            printf 'trading_profiled_elf_bytes=%s\n' "$(wc -c < "$PROFILED_DIR/trading.so" | tr -d ' ')"
+            printf 'trading_admitted_artifact=shipped\n'
+        fi
         printf '%s_program_id=%s\n' "$role" "$(sed -n 's/^program_id=//p' "$dir/loader-accounts.txt")"
         printf '%s_programdata_id=%s\n' "$role" "$(sed -n 's/^programdata_id=//p' "$dir/loader-accounts.txt")"
         printf '%s_checked_manifest_sha256=%s\n' "$role" "$(sha256 "$dir/checked.bin")"
