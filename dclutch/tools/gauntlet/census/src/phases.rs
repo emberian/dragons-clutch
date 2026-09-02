@@ -72,7 +72,98 @@ const MACHINES: &[Machine] = &[
         primary_constructor: "states",
         secondary: None,
     },
+    Machine {
+        admission_type: "DealerScenarioCheckpointAdmissionV1",
+        label: "dealer-checkpoint",
+        primary: "DealerScenarioCheckpointPhaseV1",
+        primary_constructor: "states",
+        secondary: None,
+    },
+    Machine {
+        admission_type: "DealerScenarioReservationAdmissionV1",
+        label: "dealer-reservation",
+        primary: "DealerScenarioReservationStateStatusV1",
+        primary_constructor: "states",
+        secondary: None,
+    },
 ];
+
+/// Programs whose routes consult NO persisted state machine at all.
+///
+/// "No constant was read here" and "there is no discriminant to read" are
+/// different facts, and printing them the same way tells a client to keep
+/// waiting for a phase answer that will never come. Registry's eleven routes
+/// are the whole of this list: they authenticate ownership, PDA derivation,
+/// account vacancy and digest identity, and every one of those is a fact
+/// about the ACCOUNTS in the frame rather than about a lifecycle byte
+/// somebody persisted.
+///
+/// This is a DECLARATION, and it is carried rather than derived, because no
+/// AST rule distinguishes "reads no discriminant" from "reads one this table
+/// has not been told about". What keeps it from silently outliving the state
+/// model is [`no_persisted_discriminant`]'s two checks: the program must
+/// declare no admission constant, and its sources must name no known
+/// machine's discriminant. Adding a `Phase` read to Registry makes the
+/// declaration unclassified in the same run.
+const NO_PERSISTED_DISCRIMINANT: &[(&str, &str)] = &[(
+    "registry",
+    "ownership, PDA derivation, account vacancy and digest identity; the Registry \
+     persists no lifecycle discriminant for a route to consult",
+)];
+
+/// The declared reason a program has no state machine, checked not to be
+/// stale.
+///
+/// Returns the reason, or an `Unclassified` naming the file that refutes it.
+pub fn no_persisted_discriminant(
+    label: &str,
+    crate_src: &std::path::Path,
+    root: &std::path::Path,
+    declared_constants: usize,
+) -> Result<Option<String>, Unclassified> {
+    let Some((_, reason)) = NO_PERSISTED_DISCRIMINANT
+        .iter()
+        .find(|(program, _)| *program == label)
+    else {
+        return Ok(None);
+    };
+    if declared_constants > 0 {
+        return Err(Unclassified {
+            context: format!("{label} declares it has no state machine"),
+            expression: format!("{declared_constants} admission constants"),
+            provenance: crate::enumerate::relative(root, crate_src),
+            reason: "a program that declares no persisted discriminant cannot also \
+                     declare an admissible-state set over one"
+                .into(),
+        });
+    }
+    for path in rust_sources(crate_src).map_err(|error| Unclassified {
+        context: format!("{label} declares it has no state machine"),
+        expression: String::new(),
+        provenance: crate::enumerate::relative(root, crate_src),
+        reason: error,
+    })? {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for machine in MACHINES {
+            if !text.contains(&format!("{}::", machine.primary)) {
+                continue;
+            }
+            return Err(Unclassified {
+                context: format!("{label} declares it has no state machine"),
+                expression: machine.primary.to_string(),
+                provenance: crate::enumerate::relative(root, &path),
+                reason: format!(
+                    "this program reads {}, so it does consult a persisted \
+                     discriminant and the declaration is stale",
+                    machine.primary
+                ),
+            });
+        }
+    }
+    Ok(Some((*reason).to_string()))
+}
 
 /// The machine one declaration type belongs to.
 fn machine(admission_type: &str) -> Option<&'static Machine> {
@@ -402,6 +493,8 @@ struct BranchSide {
 
 struct GuardVisitor<'a> {
     index: &'a AdmissionIndex,
+    /// The crate whose functions and struct fields type a method receiver.
+    crate_index: &'a CrateIndex,
     scan: GuardScan,
     /// The variants whose match arm we are inside. Empty is unconditional; an
     /// or-pattern arm holds every variant it names.
@@ -409,15 +502,112 @@ struct GuardVisitor<'a> {
     /// Whether we are inside a boolean branch, whose contents gate only the
     /// executions that took it.
     conditional: bool,
+    /// The type of `self` in the body being scanned, when it is a method.
+    self_type: Option<String>,
+    /// Every local name in scope and the type it holds, seeded from the
+    /// signature. This is what makes `context.validate(false)` resolvable.
+    bindings: BTreeMap<String, String>,
 }
 
 impl<'a> GuardVisitor<'a> {
     fn fresh(&self) -> GuardVisitor<'a> {
         GuardVisitor {
             index: self.index,
+            crate_index: self.crate_index,
             scan: GuardScan::default(),
             variant: self.variant.clone(),
             conditional: self.conditional,
+            self_type: self.self_type.clone(),
+            bindings: self.bindings.clone(),
+        }
+    }
+
+    /// The type one receiver expression holds, if this crate can name it.
+    ///
+    /// Deliberately partial. A receiver whose type is written in a dependency
+    /// crate, or built by a shape not modelled here, resolves to nothing and
+    /// falls through to the unique-method-name rule, which refuses on
+    /// ambiguity. Guessing is what a census must not do; the under-count is
+    /// already a legend entry.
+    fn receiver_type(&self, expr: &Expr) -> Option<String> {
+        match strip(expr) {
+            Expr::Path(path) => {
+                let mut segments = path.path.segments.iter();
+                let (Some(first), None) = (segments.next(), segments.next()) else {
+                    return None;
+                };
+                let name = first.ident.to_string();
+                if name == "self" {
+                    return self.self_type.clone();
+                }
+                self.bindings.get(&name).cloned()
+            }
+            Expr::Field(field) => {
+                let owner = self.receiver_type(&field.base)?;
+                let syn::Member::Named(name) = &field.member else {
+                    return None;
+                };
+                self.crate_index
+                    .field_type(&owner, &name.to_string())
+                    .map(str::to_string)
+            }
+            Expr::MethodCall(call) => {
+                let owner = self.receiver_type(&call.receiver)?;
+                self.crate_index
+                    .resolve_method(&owner, &call.method.to_string())?
+                    .output
+                    .clone()
+            }
+            Expr::Call(call) => {
+                let Expr::Path(path) = call.func.as_ref() else {
+                    return None;
+                };
+                self.crate_index
+                    .resolve(&render_path(&path.path))?
+                    .output
+                    .clone()
+            }
+            Expr::Try(inner) => self.receiver_type(&inner.expr),
+            Expr::Reference(inner) => self.receiver_type(&inner.expr),
+            Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+                self.receiver_type(&unary.expr)
+            }
+            Expr::Struct(structure) => structure
+                .path
+                .segments
+                .last()
+                .map(|last| last.ident.to_string()),
+            _ => None,
+        }
+    }
+
+    /// How a call this scan resolved is spelled for the descent.
+    fn method_target(&self, call: &syn::ExprMethodCall) -> Option<String> {
+        let name = call.method.to_string();
+        if let Some(owner) = self.receiver_type(&call.receiver)
+            && self.crate_index.resolve_method(&owner, &name).is_some()
+        {
+            return Some(format!("{owner}::{name}"));
+        }
+        let sole = self.crate_index.sole_method(&name)?;
+        let owner = sole.self_type.clone()?;
+        Some(format!("{owner}::{name}"))
+    }
+
+    /// Record one resolved call target under whatever condition encloses it.
+    fn note_call(&mut self, target: String) {
+        if self.conditional {
+            self.scan.conditional.insert(target);
+        } else if self.variant.is_empty() {
+            self.scan.calls.insert(target);
+        } else {
+            for variant in &self.variant {
+                self.scan
+                    .calls_by_variant
+                    .entry(variant.clone())
+                    .or_default()
+                    .insert(target.clone());
+            }
         }
     }
 
@@ -491,22 +681,50 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
 
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
         if let Expr::Path(path) = node.func.as_ref() {
-            let target = render_path(&path.path);
-            if self.conditional {
-                self.scan.conditional.insert(target);
-            } else if self.variant.is_empty() {
-                self.scan.calls.insert(target);
-            } else {
-                for variant in &self.variant {
-                    self.scan
-                        .calls_by_variant
-                        .entry(variant.clone())
-                        .or_default()
-                        .insert(target.clone());
-                }
-            }
+            self.note_call(render_path(&path.path));
         }
         visit::visit_expr_call(self, node);
+    }
+
+    /// A method call is a call, and for six Trading routes it is THE call.
+    ///
+    /// `input.context.validate(false)?` runs a body holding two phase gates,
+    /// and until this existed the descent saw a path-call enumerator walk past
+    /// it. The receiver's type is resolved first and the method looked up under
+    /// it; a receiver this crate cannot type falls back to the sole method of
+    /// that name, and a name carried by two types resolves to nothing rather
+    /// than to a guess.
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        if let Some(target) = self.method_target(node) {
+            self.note_call(target);
+        }
+        visit::visit_expr_method_call(self, node);
+    }
+
+    /// A `let` names a type, and a receiver is usually a local.
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        visit::visit_local(self, node);
+        let (name, declared) = match &node.pat {
+            Pat::Type(typed) => {
+                let Pat::Ident(ident) = typed.pat.as_ref() else {
+                    return;
+                };
+                (
+                    ident.ident.to_string(),
+                    crate::enumerate::declared_type_name(&typed.ty),
+                )
+            }
+            Pat::Ident(ident) => {
+                let Some(init) = &node.init else {
+                    return;
+                };
+                (ident.ident.to_string(), self.receiver_type(&init.expr))
+            }
+            _ => return,
+        };
+        if let Some(declared) = declared {
+            self.bindings.insert(name, declared);
+        }
     }
 
     fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
@@ -525,6 +743,31 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
             self.visit_expr(&arm.body);
             self.variant = outer;
         }
+    }
+
+    /// A `for` body may run zero times, so what it gates is not every
+    /// route's gate.
+    ///
+    /// The same defect as the one-sided `if`, one construct over, and it was
+    /// live: Trading's commit route authenticates each locked reservation
+    /// inside `for ordinal in 0..context.effect_count`, and a scenario whose
+    /// evaluation selected NO Custody effect commits with that loop never
+    /// entered -- the codec seals such a checkpoint straight to `Reserved`.
+    /// Attributing the `Active` reservation set to the route would have told
+    /// a client the commit needs a live escrow that does not exist.
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.visit_expr(&node.expr);
+        let body = node.body.clone();
+        let (_, scan) = self.side(|inner| inner.visit_block(&body));
+        self.absorb_conditional(scan);
+    }
+
+    /// A `while` body may run zero times, for the same reason.
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.visit_expr(&node.cond);
+        let body = node.body.clone();
+        let (_, scan) = self.side(|inner| inner.visit_block(&body));
+        self.absorb_conditional(scan);
     }
 
     /// An `if` is a boolean selection, and the census cannot evaluate it.
@@ -657,21 +900,36 @@ impl<'a> GuardMap<'a> {
         }
     }
 
-    fn scan(&mut self, module: &str, path: &str) -> Option<(String, &GuardScan)> {
-        let function = self.crate_index.resolve_from(module, path)?;
-        let key = format!("{}::{}", function.module, function.name);
+    /// One function body's scan, with the identity it is cached under and the
+    /// module its own calls resolve from.
+    ///
+    /// Two types in one module may each carry a `validate`, so a method's
+    /// identity carries the type it is written on; the MODULE is returned
+    /// separately because that -- not the identity -- is what resolves the
+    /// calls the body makes.
+    fn scan(&mut self, module: &str, path: &str) -> Option<(String, String, &GuardScan)> {
+        let crate_index = self.crate_index;
+        let function = crate_index.resolve_from(module, path)?;
+        let key = match &function.self_type {
+            Some(owner) => format!("{}::{owner}::{}", function.module, function.name),
+            None => format!("{}::{}", function.module, function.name),
+        };
+        let here = function.module.clone();
         if !self.scans.contains_key(&key) {
             let mut visitor = GuardVisitor {
                 index: self.index,
+                crate_index,
                 scan: GuardScan::default(),
                 variant: BTreeSet::new(),
                 conditional: false,
+                self_type: function.self_type.clone(),
+                bindings: function.inputs.iter().cloned().collect(),
             };
             visitor.visit_block(&function.block);
             self.scans.insert(key.clone(), visitor.scan);
         }
         let scan = self.scans.get(&key)?;
-        Some((key, scan))
+        Some((key, here, scan))
     }
 
     /// Every gate one side of an `if` reaches, following its calls under the
@@ -698,7 +956,7 @@ impl<'a> GuardMap<'a> {
             if self.boundaries.contains(&path) {
                 continue;
             }
-            let Some((key, scan)) = self.scan(&module, &path) else {
+            let Some((key, here, scan)) = self.scan(&module, &path) else {
                 continue;
             };
             if !seen.insert(key.clone()) {
@@ -710,9 +968,6 @@ impl<'a> GuardMap<'a> {
             {
                 names.extend(keyed.iter().cloned());
             }
-            let here = key
-                .rsplit_once("::")
-                .map_or(String::new(), |(module, _)| module.to_string());
             let mut calls: Vec<String> = scan.calls.iter().cloned().collect();
             if let Some(selected) = selected
                 && let Some(keyed) = scan.calls_by_variant.get(selected)
@@ -773,7 +1028,7 @@ impl<'a> GuardMap<'a> {
             if depth > 0 && self.boundaries.contains(&path) {
                 continue;
             }
-            let Some((key, scan)) = self.scan(&module, &path) else {
+            let Some((key, here, scan)) = self.scan(&module, &path) else {
                 continue;
             };
             if !seen.insert(key.clone()) {
@@ -785,9 +1040,6 @@ impl<'a> GuardMap<'a> {
             {
                 names.extend(keyed.iter().cloned());
             }
-            let here = key
-                .rsplit_once("::")
-                .map_or(String::new(), |(module, _)| module.to_string());
             for pair in scan.alternatives.clone() {
                 pending.push((here.clone(), pair, depth));
             }
@@ -1051,15 +1303,21 @@ mod tests {
                 },
             );
         }
+        let crate_index = crate::enumerate::index_source("m", source);
         let file = syn::parse_file(source).expect("parses");
         let Item::Fn(function) = &file.items[0] else {
             panic!("not a fn")
         };
         let mut visitor = GuardVisitor {
             index: &index,
+            crate_index: &crate_index,
             scan: GuardScan::default(),
             variant: BTreeSet::new(),
             conditional: false,
+            self_type: None,
+            bindings: crate::enumerate::signature_inputs(&function.sig)
+                .into_iter()
+                .collect(),
         };
         visitor.visit_block(&function.block);
         visitor.scan
@@ -1168,6 +1426,126 @@ mod tests {
             scan.calls_by_variant.get("Close"),
             Some(&["close".to_string()].into_iter().collect())
         );
+    }
+
+    /// The no-state-machine declaration refuses to outlive its state model.
+    ///
+    /// Its positive control, and the reason it is a checked declaration
+    /// rather than a footnote: a run in which nothing fires and a run in which
+    /// the instrument is disconnected print the same thing. So both refutations
+    /// are exercised here -- a program that also declares an admissible set,
+    /// and a program whose sources read a known machine's discriminant.
+    #[test]
+    fn a_declaration_of_no_state_machine_is_refuted_by_its_own_sources() {
+        let base =
+            std::env::temp_dir().join(format!("dclutch-census-no-machine-{}", std::process::id()));
+        let source = base.join("src");
+        std::fs::create_dir_all(&source).expect("temp dir");
+        std::fs::write(source.join("lib.rs"), "pub fn process() {}\n").expect("write");
+
+        assert_eq!(
+            no_persisted_discriminant("core", &source, &base, 0).expect("not declared"),
+            None,
+            "a program not on the list declares nothing"
+        );
+        assert!(
+            no_persisted_discriminant("registry", &source, &base, 0)
+                .expect("declared")
+                .is_some()
+        );
+        let refuted = no_persisted_discriminant("registry", &source, &base, 3)
+            .expect_err("an admission constant refutes the declaration");
+        assert!(refuted.reason.contains("admissible-state set"));
+
+        std::fs::write(
+            source.join("lib.rs"),
+            "pub fn process(phase: Phase) -> bool { phase == Phase::Open }\n",
+        )
+        .expect("write");
+        let refuted = no_persisted_discriminant("registry", &source, &base, 0)
+            .expect_err("a discriminant read refutes the declaration");
+        assert_eq!(refuted.expression, "Phase");
+        assert!(refuted.reason.contains("declaration is stale"));
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A method call is followed, and the receiver's type is what picks the
+    /// body.
+    ///
+    /// `validate` collides two ways in Trading alone, so the name cannot pick
+    /// it: `context.validate()` runs `Context::validate` because `context` is
+    /// a parameter declared `Context`, and nothing else.
+    #[test]
+    fn a_method_call_is_resolved_through_the_receivers_type() {
+        let scan = scan_body(
+            "fn process(context: Context) { context.validate(); }
+             struct Context {}
+             impl Context { fn validate(&self) {} }
+             struct Other {}
+             impl Other { fn validate(&self) {} }",
+            &[],
+        );
+        assert!(scan.calls.contains("Context::validate"), "{:?}", scan.calls);
+        assert!(!scan.calls.contains("Other::validate"));
+    }
+
+    /// A receiver reached through a field carries that field's type.
+    ///
+    /// `input.context.validate(false)` is how the Direct venue writes it, and
+    /// the type is two hops from the signature.
+    #[test]
+    fn a_field_receiver_is_typed_through_the_struct_it_belongs_to() {
+        let scan = scan_body(
+            "fn process(input: Input) { input.context.validate(false); }
+             struct Input { context: Context }
+             struct Context {}
+             impl Context { fn validate(&self, terminal: bool) {} }",
+            &[],
+        );
+        assert!(scan.calls.contains("Context::validate"), "{:?}", scan.calls);
+    }
+
+    /// A method name carried by two types resolves to neither.
+    ///
+    /// The same rule `CrateIndex::resolve` keeps for free functions: refusing
+    /// is an under-count, and guessing attributes one venue's set to another
+    /// venue's routes.
+    #[test]
+    fn an_ambiguous_method_name_on_an_untyped_receiver_is_refused() {
+        let scan = scan_body(
+            "fn process() { anything().validate(); }
+             struct A {}
+             impl A { fn validate(&self) {} }
+             struct B {}
+             impl B { fn validate(&self) {} }",
+            &[],
+        );
+        assert!(
+            !scan.calls.iter().any(|call| call.ends_with("::validate")),
+            "{:?}",
+            scan.calls
+        );
+    }
+
+    /// A `for` body may run zero times, so it gates only what entered it.
+    ///
+    /// Measured, not theorised: Trading's commit route reads each locked
+    /// reservation inside `for ordinal in 0..effect_count`, and a scenario
+    /// that selected no Custody effect commits with the loop never entered.
+    /// Read as unconditional, the route published a reservation set it does
+    /// not always require.
+    #[test]
+    fn a_gate_inside_a_loop_is_not_every_routes_gate() {
+        for source in [
+            "fn process() { for ordinal in 0..count { check(A_V1); } authenticate(); }",
+            "fn process() { while more { check(A_V1); } authenticate(); }",
+        ] {
+            let scan = scan_body(source, &["A_V1"]);
+            assert!(scan.unconditional.is_empty(), "{:?}", scan.unconditional);
+            assert!(scan.conditional.contains("A_V1"));
+            assert!(!scan.calls.contains("check"), "{:?}", scan.calls);
+            assert!(scan.calls.contains("authenticate"));
+        }
     }
 
     /// An action route starts its scan at every ancestor as well as itself.

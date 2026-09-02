@@ -40,6 +40,19 @@ pub struct ProgramSurface {
     /// are printed in the report rather than dropped: an enumerator that
     /// silently under-counts is the same mirror failure one level up.
     pub unclassified: Vec<Unclassified>,
+    /// Why this program's routes consult no persisted state machine at all.
+    ///
+    /// A DIFFERENT FACT from an empty gate list, and the difference is the
+    /// whole reason it is a field rather than a footnote: "the census read no
+    /// constant here" says nothing about whether one exists, while this says
+    /// the program's state model has no lifecycle discriminant to consult, so
+    /// a client will never get a phase answer no matter how much of the tree
+    /// gets named. Rendered as its own value in the phase column.
+    ///
+    /// It is a DECLARATION, carried with the two checks in
+    /// `NO_PERSISTED_DISCRIMINANT`, not something derived from the AST.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_persisted_discriminant: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

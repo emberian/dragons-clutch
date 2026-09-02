@@ -242,11 +242,32 @@ pub(crate) fn at(relative: &str, span: Span) -> Provenance {
 }
 
 /// One function the enumerator can follow into, keyed by module path.
+#[derive(Clone)]
 pub(crate) struct FunctionFact {
     pub(crate) module: String,
     pub(crate) name: String,
     pub(crate) block: Block,
     relative: String,
+    /// The type this is an inherent method of, for an `impl` item.
+    ///
+    /// A free function has none. This is what lets a call written
+    /// `context.validate()` be resolved to the body that actually runs: the
+    /// receiver's type is resolved first, and the method is looked up under
+    /// it. Six Trading guards were invisible to the census for exactly the
+    /// want of it -- `self.core_market.phase()` inside a `validate()` nothing
+    /// followed.
+    pub(crate) self_type: Option<String>,
+    /// Each named parameter and the type it was declared with.
+    ///
+    /// The seed of receiver-type resolution: `context.validate(false)` names
+    /// a parameter, and the signature is where its type is written.
+    pub(crate) inputs: Vec<(String, String)>,
+    /// The type this returns, unwrapped through one generic layer.
+    ///
+    /// `Result<PlanV2>` reads as `PlanV2`, because a `?` at the call site is
+    /// what the caller binds. Used to type a `let` whose initializer is a
+    /// call.
+    pub(crate) output: Option<String>,
     /// The function exists only when compiling for the SBF target.
     ///
     /// `#[cfg(target_os = "solana")]` is this tree's marker for loader
@@ -258,9 +279,15 @@ pub(crate) struct FunctionFact {
 }
 
 /// A parsed program crate: every function in it, indexed for call resolution.
+///
+/// It also carries each struct's field types, because a receiver is as often
+/// a field of a parameter (`input.context.validate(..)`) as the parameter
+/// itself, and a type that cannot be named cannot have its method followed.
 #[derive(Default)]
 pub(crate) struct CrateIndex {
     functions: Vec<FunctionFact>,
+    /// Struct name -> field name -> the field's declared type.
+    fields: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl CrateIndex {
@@ -307,6 +334,15 @@ impl CrateIndex {
     /// answer what the compiler answers. Falls back to the cautious rule when
     /// the caller's own module has no such item.
     pub(crate) fn resolve_from(&self, module: &str, path: &str) -> Option<&FunctionFact> {
+        // `Type::method` is how a resolved method call is spelled, and it is
+        // also how an associated function is written in source. Either way the
+        // qualifier names a type, so try that reading before the module one.
+        if let Some((qualifier, name)) = path.rsplit_once("::")
+            && !qualifier.contains("::")
+            && let Some(method) = self.resolve_method(qualifier, name)
+        {
+            return Some(method);
+        }
         if !path.contains("::") {
             let mut local = self
                 .functions
@@ -319,6 +355,50 @@ impl CrateIndex {
             }
         }
         self.resolve(path)
+    }
+
+    /// The inherent method `name` on `self_type`, if exactly one is written.
+    ///
+    /// Exact by construction: an inherent method is unique on its type, and
+    /// two `impl` blocks writing the same name on the same type do not
+    /// compile. Two DIFFERENT types may each have a `validate`, which is
+    /// precisely why the receiver's type has to be resolved before the lookup
+    /// -- `CrateIndex::resolve` refuses `validate` outright, and is right to.
+    pub(crate) fn resolve_method(&self, self_type: &str, name: &str) -> Option<&FunctionFact> {
+        let mut matches = self
+            .functions
+            .iter()
+            .filter(|fact| fact.name == name && fact.self_type.as_deref() == Some(self_type));
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
+    }
+
+    /// The sole inherent method named `name` anywhere in this crate.
+    ///
+    /// The fallback for a receiver whose type this index cannot name -- a
+    /// value from a dependency crate, or an expression shape not modelled.
+    /// It REFUSES on ambiguity rather than picking one, which is the same
+    /// rule [`CrateIndex::resolve`] keeps for free functions: `validate`
+    /// collides two ways in Trading alone, so a guesser would have attributed
+    /// one venue's phase set to another's routes.
+    pub(crate) fn sole_method(&self, name: &str) -> Option<&FunctionFact> {
+        let mut matches = self
+            .functions
+            .iter()
+            .filter(|fact| fact.name == name && fact.self_type.is_some());
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
+    }
+
+    /// The declared type of one field of one struct.
+    pub(crate) fn field_type(&self, owner: &str, field: &str) -> Option<&str> {
+        self.fields.get(owner)?.get(field).map(String::as_str)
     }
 }
 
@@ -339,33 +419,217 @@ fn module_path_for(crate_src: &Path, file: &Path) -> String {
 }
 
 fn index_crate(root: &Path, crate_src: &Path) -> Result<CrateIndex, String> {
-    let mut functions = Vec::new();
-    for path in rust_sources(crate_src)? {
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(file) = syn::parse_file(&text) else {
-            continue;
-        };
-        let module = module_path_for(crate_src, &path);
-        let relative = relative(root, &path);
-        collect_functions(&file.items, &module, &relative, &mut functions);
-    }
-    Ok(CrateIndex { functions })
+    index_sources(root, &[crate_src.to_path_buf()])
 }
 
-fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut Vec<FunctionFact>) {
+/// Index every `src` root given, in order, as one namespace.
+fn index_sources(root: &Path, sources: &[PathBuf]) -> Result<CrateIndex, String> {
+    let mut index = CrateIndex::default();
+    for crate_src in sources {
+        for path in rust_sources(crate_src)? {
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(file) = syn::parse_file(&text) else {
+                continue;
+            };
+            let module = module_path_for(crate_src, &path);
+            let relative = relative(root, &path);
+            collect_functions(&file.items, &module, &relative, &mut index);
+        }
+    }
+    Ok(index)
+}
+
+/// The type a declaration names, unwrapped through one generic layer.
+///
+/// `Result<PlanV2>` is `PlanV2` and `&DirectContextV2` is `DirectContextV2`,
+/// because what a caller binds after a `?` or a borrow is the inner type. A
+/// shape with no single named type -- a tuple, a closure, `impl Trait` --
+/// yields nothing, and the receiver is then resolved by the fallback rule or
+/// not at all.
+pub(crate) fn declared_type_name(declared: &syn::Type) -> Option<String> {
+    match declared {
+        syn::Type::Path(path) => {
+            let last = path.path.segments.last()?;
+            if let syn::PathArguments::AngleBracketed(arguments) = &last.arguments
+                && let Some(syn::GenericArgument::Type(inner)) = arguments
+                    .args
+                    .iter()
+                    .find(|argument| matches!(argument, syn::GenericArgument::Type(_)))
+            {
+                return declared_type_name(inner);
+            }
+            Some(last.ident.to_string())
+        }
+        syn::Type::Reference(reference) => declared_type_name(&reference.elem),
+        syn::Type::Paren(inner) => declared_type_name(&inner.elem),
+        syn::Type::Group(inner) => declared_type_name(&inner.elem),
+        _ => None,
+    }
+}
+
+/// One function's named parameters and their declared types.
+pub(crate) fn signature_inputs(signature: &syn::Signature) -> Vec<(String, String)> {
+    let mut inputs = Vec::new();
+    for argument in &signature.inputs {
+        let syn::FnArg::Typed(typed) = argument else {
+            continue;
+        };
+        let syn::Pat::Ident(ident) = typed.pat.as_ref() else {
+            continue;
+        };
+        if let Some(declared) = declared_type_name(&typed.ty) {
+            inputs.push((ident.ident.to_string(), declared));
+        }
+    }
+    inputs
+}
+
+fn signature_output(signature: &syn::Signature, self_type: Option<&str>) -> Option<String> {
+    let syn::ReturnType::Type(_, declared) = &signature.output else {
+        return None;
+    };
+    let named = declared_type_name(declared)?;
+    if named == "Self" {
+        return self_type.map(str::to_string);
+    }
+    Some(named)
+}
+
+fn function_fact(
+    function: &syn::ItemFn,
+    module: &str,
+    relative: &str,
+    self_type: Option<&str>,
+) -> FunctionFact {
+    FunctionFact {
+        module: module.to_string(),
+        name: function.sig.ident.to_string(),
+        block: (*function.block).clone(),
+        relative: relative.to_string(),
+        self_type: self_type.map(str::to_string),
+        inputs: signature_inputs(&function.sig),
+        output: signature_output(&function.sig, self_type),
+        machine_boundary: cfg_texts(&function.attrs)
+            .iter()
+            .any(|text| text.contains("target_os = \"solana\"")),
+    }
+}
+
+/// Every first-party crate a program's manifest reaches, transitively.
+///
+/// A guard is written where its state machine's discriminant lives, which for
+/// six of this tree's machines is a codec crate rather than a program. The
+/// dispatch index is deliberately the program's own crate -- adding foreign
+/// functions to it makes an entrypoint name ambiguous and the route walk
+/// refuses, which is right -- so the guard descent gets its own wider index
+/// instead, and this is what tells it how wide.
+///
+/// Read from the manifests rather than globbed, so a crate a program does not
+/// depend on can never contribute a gate to its routes.
+fn first_party_dependencies(root: &Path, manifest: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut frontier = vec![manifest.to_path_buf()];
+    while let Some(manifest) = frontier.pop() {
+        let Ok(text) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let Some(directory) = manifest.parent() else {
+            continue;
+        };
+        for line in text.lines() {
+            let Some(rest) = line.split_once("path = \"") else {
+                continue;
+            };
+            let Some((relative, _)) = rest.1.split_once('"') else {
+                continue;
+            };
+            // `path = "src/lib.rs"` in a `[lib]` section is not a dependency.
+            if !relative.starts_with("..") {
+                continue;
+            }
+            let Ok(crate_root) = directory.join(relative).canonicalize() else {
+                continue;
+            };
+            if !crate_root.starts_with(root) || !seen.insert(crate_root.clone()) {
+                continue;
+            }
+            let source = crate_root.join("src");
+            if source.is_dir() {
+                found.push(source);
+            }
+            frontier.push(crate_root.join("Cargo.toml"));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Index one source text as if it were a whole crate.
+///
+/// The guard-scan tests need a real index rather than an empty one now that a
+/// method call is resolved through it.
+#[cfg(test)]
+pub(crate) fn index_source(module: &str, source: &str) -> CrateIndex {
+    let file = syn::parse_file(source).expect("parses");
+    let mut index = CrateIndex::default();
+    collect_functions(&file.items, module, "src/lib.rs", &mut index);
+    index
+}
+
+fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut CrateIndex) {
     for item in items {
         match item {
-            Item::Fn(function) => out.push(FunctionFact {
-                module: module.to_string(),
-                name: function.sig.ident.to_string(),
-                block: (*function.block).clone(),
-                relative: relative.to_string(),
-                machine_boundary: cfg_texts(&function.attrs)
-                    .iter()
-                    .any(|text| text.contains("target_os = \"solana\"")),
-            }),
+            Item::Fn(function) => out
+                .functions
+                .push(function_fact(function, module, relative, None)),
+            // An inherent `impl`'s methods are indexed under the type they are
+            // written on. A trait `impl` is deliberately skipped: the same
+            // method name then belongs to many types, and a census that
+            // followed one would be guessing which.
+            Item::Impl(block) => {
+                if block.trait_.is_some() {
+                    continue;
+                }
+                let Some(owner) = declared_type_name(&block.self_ty) else {
+                    continue;
+                };
+                for inner in &block.items {
+                    let syn::ImplItem::Fn(method) = inner else {
+                        continue;
+                    };
+                    let self_type = Some(owner.as_str());
+                    out.functions.push(FunctionFact {
+                        module: module.to_string(),
+                        name: method.sig.ident.to_string(),
+                        block: method.block.clone(),
+                        relative: relative.to_string(),
+                        self_type: self_type.map(str::to_string),
+                        inputs: signature_inputs(&method.sig),
+                        output: signature_output(&method.sig, self_type),
+                        machine_boundary: cfg_texts(&method.attrs)
+                            .iter()
+                            .any(|text| text.contains("target_os = \"solana\"")),
+                    });
+                }
+            }
+            Item::Struct(structure) => {
+                let syn::Fields::Named(named) = &structure.fields else {
+                    continue;
+                };
+                let owner = structure.ident.to_string();
+                let entry = out.fields.entry(owner).or_default();
+                for field in &named.named {
+                    let (Some(name), Some(declared)) =
+                        (field.ident.as_ref(), declared_type_name(&field.ty))
+                    else {
+                        continue;
+                    };
+                    entry.insert(name.to_string(), declared);
+                }
+            }
             Item::Mod(inner) => {
                 // Skip `#[cfg(test)]` modules: test code is not a public entry.
                 if has_cfg_test(&inner.attrs) {
@@ -777,13 +1041,7 @@ impl DispatchWalk<'_> {
                 );
                 // Follow into the handler to find its action tags.
                 if let Some(function) = self.index.resolve(&target) {
-                    let function = FunctionFact {
-                        module: function.module.clone(),
-                        name: function.name.clone(),
-                        block: function.block.clone(),
-                        relative: function.relative.clone(),
-                        machine_boundary: function.machine_boundary,
-                    };
+                    let function = function.clone();
                     self.walk_function(&function, depth + 1, Some(&route_id), &[], cfg);
                 }
             }
@@ -1337,6 +1595,20 @@ pub fn enumerate(
             return Err(format!("no crate root at {}", lib.display()));
         }
         let index = index_crate(root, &crate_src)?;
+        // The guard descent reads a wider namespace than the dispatch walk:
+        // this program's own crate first, then every first-party crate it
+        // depends on. `resolve_from` prefers the caller's own module, so a
+        // name a program and a codec share still resolves to the one the
+        // compiler picks.
+        let mut guard_sources = vec![crate_src.clone()];
+        guard_sources.extend(first_party_dependencies(
+            root,
+            &root
+                .join("programs")
+                .join(&target.package)
+                .join("Cargo.toml"),
+        ));
+        let guard_index = index_sources(root, &guard_sources)?;
         let text =
             fs::read_to_string(&lib).map_err(|error| format!("read {}: {error}", lib.display()))?;
         let file: File =
@@ -1412,13 +1684,7 @@ pub fn enumerate(
                 });
                 continue;
             };
-            let function = FunctionFact {
-                module: function.module.clone(),
-                name: function.name.clone(),
-                block: function.block.clone(),
-                relative: function.relative.clone(),
-                machine_boundary: function.machine_boundary,
-            };
+            let function = function.clone();
             // The entrypoint shim usually forwards straight to
             // `process_instruction`. Walking it at depth 0 makes that forward a
             // route; unwrap it so the real dispatch branches are the entries.
@@ -1438,7 +1704,7 @@ pub fn enumerate(
         // against, following its handler's calls and stopping at the next
         // route boundary. A route the walk finds no constant for carries none,
         // and the census says exactly that rather than inferring one.
-        let mut guards = GuardMap::new(admissions, &index, &routes);
+        let mut guards = GuardMap::new(admissions, &guard_index, &routes);
         let attributed: Vec<Vec<crate::model::PhaseAdmission>> =
             routes.iter().map(|route| guards.for_route(route)).collect();
         for (route, admissible) in routes.iter_mut().zip(attributed) {
@@ -1458,6 +1724,25 @@ pub fn enumerate(
                 .filter(|entry| entry.provenance.starts_with(&package_prefix))
                 .cloned(),
         );
+        // A program with no persisted lifecycle discriminant says so as a
+        // column value; a declaration the sources refute becomes unclassified
+        // in the same run rather than outliving the state model.
+        let declared_constants = routes
+            .iter()
+            .flat_map(|route| route.admissible_prestates.iter())
+            .count();
+        let no_persisted_discriminant = match crate::phases::no_persisted_discriminant(
+            &target.label,
+            &crate_src,
+            root,
+            declared_constants,
+        ) {
+            Ok(reason) => reason,
+            Err(stale) => {
+                unclassified.push(stale);
+                None
+            }
+        };
         unclassified.sort_by(|left, right| left.provenance.cmp(&right.provenance));
 
         programs.push(ProgramSurface {
@@ -1468,6 +1753,7 @@ pub fn enumerate(
             routes,
             refusals,
             unclassified,
+            no_persisted_discriminant,
         });
     }
 
@@ -1521,13 +1807,7 @@ fn unwrap_forwarding_shim(index: &CrateIndex, start: FunctionFact) -> FunctionFa
         if next.name == current.name && next.module == current.module {
             break;
         }
-        current = FunctionFact {
-            module: next.module.clone(),
-            name: next.name.clone(),
-            block: next.block.clone(),
-            relative: next.relative.clone(),
-            machine_boundary: next.machine_boundary,
-        };
+        current = next.clone();
     }
     current
 }
@@ -1698,9 +1978,7 @@ mod local_initialiser_tests {
         let constants = ConstantIndex {
             facts: BTreeMap::new(),
         };
-        let index = CrateIndex {
-            functions: Vec::new(),
-        };
+        let index = CrateIndex::default();
         let mut walk = DispatchWalk {
             label: "core",
             index: &index,

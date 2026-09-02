@@ -519,6 +519,7 @@ mod tests {
                     provenance: "programs/dclutch-core-sbf/src/lib.rs:99".into(),
                 }],
                 unclassified: Vec::new(),
+                no_persisted_discriminant: None,
             }],
         }
     }

@@ -16,6 +16,12 @@ use dclutch_custody_contract::{
     OperationV1,
 };
 use dclutch_dealer_codec::{
+    scenario_admission_v1::{
+        DEALER_SCENARIO_ACTIVE_RESERVATION_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_COMMITTED_CHECKPOINT_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_CUSTODY_ROLLBACK_CHECKPOINT_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_RESERVE_CHECKPOINT_ADMISSIBLE_STATES_V1,
+    },
     scenario_checkpoint_v1::{
         DEALER_SCENARIO_CHECKPOINT_BYTES_V1, DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1,
         DealerScenarioCheckpointInputV1, DealerScenarioCheckpointPhaseV1,
@@ -299,7 +305,7 @@ fn authenticate_effect(
         .slot;
     match action {
         DealerScenarioReservationActionV1::Reserve => {
-            if checkpoint.phase != DealerScenarioCheckpointPhaseV1::Evaluated
+            if !DEALER_SCENARIO_RESERVE_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(checkpoint.phase)
                 || checkpoint.reservation_count != ordinal
                 || slot > checkpoint.input.expires_at
             {
@@ -312,11 +318,9 @@ fn authenticate_effect(
                 .checked_sub(checkpoint.rollback_count)
                 .and_then(|value| value.checked_sub(1))
                 .ok_or(CustodySbfError::Replay)?;
-            if !matches!(
-                checkpoint.phase,
-                DealerScenarioCheckpointPhaseV1::Reserved
-                    | DealerScenarioCheckpointPhaseV1::RollingBack
-            ) || expected != ordinal
+            if !DEALER_SCENARIO_CUSTODY_ROLLBACK_CHECKPOINT_ADMISSIBLE_STATES_V1
+                .admits(checkpoint.phase)
+                || expected != ordinal
                 || slot <= checkpoint.input.expires_at
             {
                 return Err(CustodySbfError::Expiry.into());
@@ -771,7 +775,7 @@ fn rollback(
         .copied()
         .ok_or(CustodySbfError::Replay)?;
     if state_account.owner != program_id
-        || state.status != DealerScenarioReservationStateStatusV1::Active
+        || !DEALER_SCENARIO_ACTIVE_RESERVATION_ADMISSIBLE_STATES_V1.admits(state.status)
         || state.batch != account(accounts, BATCH)?.key.to_bytes()
         || state.checkpoint != checkpoint_key
         || state.effect_digest != authenticated.effect_digest
@@ -1110,7 +1114,7 @@ fn require_committed_checkpoint(
     checkpoint: &CheckpointFactsV1,
     effect_count: u8,
 ) -> Result<(), ProgramError> {
-    if checkpoint.phase != DealerScenarioCheckpointPhaseV1::Committed
+    if !DEALER_SCENARIO_COMMITTED_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(checkpoint.phase)
         || checkpoint.effect_count != effect_count
         || checkpoint.reservation_count != effect_count
         || checkpoint.rollback_count != 0
@@ -1234,7 +1238,7 @@ fn require_activation_effect_join(
         .ok_or(CustodySbfError::Replay)?;
     if checkpoint.input != first_checkpoint.input
         || checkpoint.digest != first_checkpoint.digest
-        || checkpoint.phase != DealerScenarioCheckpointPhaseV1::Committed
+        || !DEALER_SCENARIO_COMMITTED_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(checkpoint.phase)
         || checkpoint.reservation_count != batch.effect_count
         || checkpoint.rollback_count != 0
         || checkpoint.reservation_receipt != receipt_digest
@@ -1276,7 +1280,7 @@ fn activate_one_effect(
     drop(state_data);
     let original = effect.custody;
     if state.owner != program_id
-        || reservation.status != DealerScenarioReservationStateStatusV1::Active
+        || !DEALER_SCENARIO_ACTIVE_RESERVATION_ADMISSIBLE_STATES_V1.admits(reservation.status)
         || reservation.ordinal != ordinal
         || reservation.effect_count != effect.effect_count
         || reservation.batch != account(accounts, ACT_BATCH)?.key.to_bytes()

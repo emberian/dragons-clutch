@@ -24,12 +24,16 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_dealer_codec::{
+    scenario_admission_v1::{
+        DEALER_SCENARIO_ACTIVE_RESERVATION_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_COMMIT_CHECKPOINT_ADMISSIBLE_STATES_V1,
+    },
     scenario_checkpoint_v1::{
         DEALER_SCENARIO_CHECKPOINT_BYTES_V1, DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1,
         DEALER_SCENARIO_CLAIMS_PRESTATE_DOMAIN_V1, DEALER_SCENARIO_CUSTODY_PRESTATE_DOMAIN_V1,
         DEALER_SCENARIO_PAGE_RECEIPT_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
-        DealerScenarioCheckpointInputV1, DealerScenarioCheckpointPhaseV1,
-        DealerScenarioCheckpointV1, DealerScenarioCommitEvidenceV1, DealerScenarioEvaluationV1,
+        DealerScenarioCheckpointInputV1, DealerScenarioCheckpointV1,
+        DealerScenarioCommitEvidenceV1, DealerScenarioEvaluationV1,
     },
     scenario_custody_reservation_v1::{
         DEALER_SCENARIO_CUSTODY_EFFECT_BYTES_V1, DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1,
@@ -37,8 +41,7 @@ use dclutch_dealer_codec::{
         DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1,
         DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1, DealerScenarioCustodyEffectManifestV1,
         DealerScenarioCustodyEffectV1, DealerScenarioReservationBatchStatusV1,
-        DealerScenarioReservationBatchV1, DealerScenarioReservationStateStatusV1,
-        DealerScenarioReservationStateV1,
+        DealerScenarioReservationBatchV1, DealerScenarioReservationStateV1,
     },
     scenario_evaluation_receipt_v1::{
         DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1, DealerScenarioEvaluationReceiptV1,
@@ -1055,7 +1058,7 @@ fn commit_geometry_v1(
     let checkpoint_account = account(accounts, COMMIT_CHECKPOINT)?;
     let checkpoint = read_checkpoint(program_id, checkpoint_account)?.0;
     require_checkpoint_pda(program_id, checkpoint_account, checkpoint)?;
-    if checkpoint.phase() != DealerScenarioCheckpointPhaseV1::Reserved {
+    if !DEALER_SCENARIO_COMMIT_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(checkpoint.phase()) {
         return Err(TradingSbfError::Transition.into());
     }
     let request_data = account(accounts, COMMIT_REQUEST)?
@@ -1638,7 +1641,7 @@ fn authenticate_locked_effect_v1(
                 .get(index)
                 .copied()
                 .ok_or(TradingSbfError::Content)?
-        || state.status != DealerScenarioReservationStateStatusV1::Active
+        || !DEALER_SCENARIO_ACTIVE_RESERVATION_ADMISSIBLE_STATES_V1.admits(state.status)
         || state.ordinal != ordinal
         || state.effect_count != context.effect_count
         || state.batch != context.batch

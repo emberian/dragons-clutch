@@ -16,6 +16,8 @@ pub mod config_v4;
 
 /// Runtime-width finite-scenario collateral planning for the V2 successor.
 pub mod scenario;
+/// Named admissible states for the two Dealer scenario state machines.
+pub mod scenario_admission_v1;
 /// Durable lock-bounded preparation checkpoint for Dealer scenario commits.
 pub mod scenario_checkpoint_v1;
 /// Custody-owned effect, batch, and reservation state for staged acceptance.

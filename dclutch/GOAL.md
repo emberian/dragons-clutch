@@ -3493,3 +3493,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the operator pins, Custody's 15-conjunct Replay split.
 - RESOLUTION-2 landed `31d09aed2` — **cohort-13 REDEEMS**: the account terminal payout gets a public arm (report pending).
 - Cuts: `167d522ff`, `28cea584f`, `36dbf847e`, `9206c4533`.
+- EMISSION closed (15 commits; `eb8439b39` WindowSpecV1 had two authors at opposite ends — Rust literals at the head, a Lean
+  cursor asserted as a bare literal at the tail — now one; `f2fa4392` the product admission's four layouts, whose existing
+  two-sided byte vector has an env-var escape hatch (`DCLUTCH_WRITE_WIRE_VECTOR=1` greens a moved wire); `a25a2aa77` a
+  regression of its own caught by route-binding.mjs, fixed by retiring two scrapers; `0f066f26d`/`ba96d8527` the Dealer
+  profile vector as a test, then the census: **124 root-workspace integration targets are compiled by `--all-targets` and
+  executed by no tier** (80 cheap, 33 lake, 11 ELF) — refused to wire them unmeasured; coreFound **79 → 91 of 97** by the
+  instrument's count; census 95/95). Owed: six coreFound reads; the 700-line browser profile mirror's retirement.
+  → CI-TARGETS **`(spawned)`**: measure the 80, wire the cheap ones into a budgeted tier, close the escape hatch.
+- Cuts: `9fd134161`.

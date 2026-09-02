@@ -401,8 +401,9 @@ cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -
   --signer YOUR_SPONSOR_PUBKEY
 ```
 
-The input is one routing document. Each `raw`/`staging` pair names an existing
-finalized Registry record and its vacant staging account:
+The input is one routing document, and `devnet-sponsored-push-input-v1` writes
+it (see below). Each `raw`/`staging` pair names an existing finalized Registry
+record and its vacant staging account:
 
 ```json
 {
@@ -484,6 +485,65 @@ reuse the captured rent beneficiary as that transaction's payer.
 `coreProgramdata` is required only by `admit-terminal`; an input authored for
 the five sponsored-push actions may omit it, and the admission then refuses by
 naming the field.
+
+### `devnet-sponsored-push-input-v1`: who writes the input
+
+```sh
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -- \
+  devnet-sponsored-push-input-v1 \
+  --rpc-url https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --plan /absolute/path/plan.json \
+  --evidence /absolute/path/campaign-open.json \
+  --market MARKET_PUBKEY \
+  --lookup-table FROZEN_TABLE_PUBKEY \
+  --terminal-sequence 1 \
+  --output /absolute/path/sponsored-market.json
+```
+
+Two files and two addresses; everything else is derived and then checked
+against a persisted fact. Each of the eleven record pairs is
+`record_pair(registry, schema, digest)` over the sealed campaign report's own
+`data_sha256`, and the derivation refuses when the derived raw address is not
+the persisted one — so every pair is a reproduction rather than a
+transcription. The activation cache comes from the Market's own selected
+release set and is checked against the plan's; the Source state is derived from
+the Market and its generation and checked against the report's row; generation
+and release set come off the Market, never off the plan alone; the four Pyth
+addresses come out of the sponsored release record read from chain, and the two
+Loader ProgramData addresses from the Loader's own derivation.
+
+The last check is the strongest: the document is handed back through the
+consumer's own `InputKeysV1::parse` before it is written, and producer and
+consumer share one `SponsoredInputV1`. A field the producer emits that the
+consumer would refuse cannot reach a file. The command never overwrites an
+existing output path.
+
+### `prepay-certificate`: funding the seat the walk will take
+
+`settle` and `commit-failure` call `initialize_certificate_at_kind`, which
+allocates and assigns but does **not** fund. The seat must already hold
+`rent.minimum_balance(312)` before the walk runs. On 2026-09-02 cohort-13's
+failure walk refused `0x8002 ResolutionError::OutputState` after 305,522 CU for
+exactly this reason: the gauntlet's `prepay_certificate` is a local-only
+caller, and the devnet path had no arm of its own.
+
+```sh
+  --action prepay-certificate --prepay-for commit-failure --signer YOUR_PUBKEY
+```
+
+`--prepay-for` names the walk whose seat is being funded, in the same
+vocabulary `--action` uses, and admits only `settle` and `commit-failure`: the
+seat address carries the certificate kind in its seeds, and before the walk
+runs the Source phase is still `Primary` and cannot say which kind is coming.
+
+The instruction is a System transfer of exactly the shortfall, and the rent
+comes from the Rent **sysvar** in the same finalized snapshot the walk will read
+— not from a second `getMinimumBalanceForRentExemption` round trip, which would
+be a second source of truth for one figure. Three states refuse by name rather
+than by silence: a seat owned by anything but the System program, a seat
+carrying a body, and a seat that already holds its rent (`nothing to prepay` is
+not an error condition dressed as a transfer).
 
 ### `admit-terminal`: telling Core the certificate exists
 

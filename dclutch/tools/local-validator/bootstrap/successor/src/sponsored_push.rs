@@ -17,23 +17,32 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+use dclutch_market_core_codec::CoreState;
 use dclutch_operator::{Finality, Observation, ObservedAccount};
-use dclutch_pyth_svm::{
-    FULL_PRICE_UPDATE_V2_LEN, FullPriceUpdateV2, PythSponsoredPushReleaseV1,
-    devnet_sponsored_sol_usd_release_v1,
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_pyth_svm::{
+    FULL_PRICE_UPDATE_V2_LEN, FullPriceUpdateV2, PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
+    PythSponsoredPushReleaseV1, devnet_sponsored_sol_usd_release_v1,
+};
+use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, SPONSORED_PUSH_CANDIDATE_PDA_DOMAIN_V1,
-    SPONSORED_PUSH_HEAD_PDA_DOMAIN_V1, SPONSORED_PUSH_RECEIPT_PDA_DOMAIN_V1, SponsoredPushActionV1,
-    SponsoredPushCandidateV1, SponsoredPushHeadV1, SponsoredPushInstructionV1,
+    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    SPONSORED_PUSH_CANDIDATE_PDA_DOMAIN_V1, SPONSORED_PUSH_HEAD_PDA_DOMAIN_V1,
+    SPONSORED_PUSH_RECEIPT_PDA_DOMAIN_V1, SponsoredPushActionV1, SponsoredPushCandidateV1,
+    SponsoredPushHeadV1, SponsoredPushInstructionV1,
 };
 use dclutch_resolution_core_v3_operator::{
     ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
 };
 use dclutch_source_contract::{
-    ProviderReleaseV1, SourceAccessProfile, SourceResolutionPhaseV1, SourceResolutionStateV2,
-    SourceSpecV1,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
+    SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -46,15 +55,17 @@ use solana_program::{
     pubkey::Pubkey,
 };
 use solana_sdk::signature::{Keypair, Signer};
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::transfer;
 
 use crate::{
     Error, Result, absolute,
-    campaign::read_keypair_file,
+    campaign::{parse_campaign_terminal_evidence_with_expected_cluster_v1, read_keypair_file},
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
-    model::{AccountEvidence, TransactionEvidence},
+    model::{AccountEvidence, SuccessorPlan, TransactionEvidence},
     plan::{hex, pubkey},
     rpc::{Rpc, RpcAccount, SignedVersionedPacketV1, WritePolicyV1, account_evidence},
+    terminal_lifecycle::{authenticate_plan_source, required_account, routed_record},
     wallet_terminal::authenticate_role,
 };
 
@@ -63,7 +74,7 @@ const REPORT_FORMAT: &str = "dclutch-sponsored-push-exterior-report-v2";
 const SUCCESS_CERTIFICATE_KIND: u8 = 1;
 const FAILURE_CERTIFICATE_KIND: u8 = 4;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecordPairInputV1 {
     raw: String,
@@ -76,7 +87,7 @@ impl RecordPairInputV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SponsoredAccountsInputV1 {
     registry_program: String,
@@ -114,7 +125,7 @@ struct SponsoredAccountsInputV1 {
     lookup_table: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SponsoredInputV1 {
     format: String,
@@ -138,6 +149,16 @@ enum ExteriorActionV1 {
     /// built by `build_resolution_admit_terminal_v3` from the same finalized
     /// snapshot this command already authenticates.
     AdmitTerminal,
+    /// Fund the certificate seat the next terminal walk will initialize.
+    ///
+    /// `initialize_certificate_at_kind` allocates and assigns; it does not
+    /// fund. The seat must already hold `rent.minimum_balance(312)` when the
+    /// walk runs, and on 2026-09-02 cohort-13's failure walk refused `0x8002`
+    /// after 305,522 CU because nothing on the devnet path had put it there --
+    /// the gauntlet's `prepay_certificate` is a local-only caller. This is the
+    /// public arm of the same act, and it is a System transfer, not a protocol
+    /// instruction.
+    PrepayCertificate,
     CloseCandidate,
     CloseHead,
 }
@@ -149,6 +170,7 @@ impl ExteriorActionV1 {
             "settle" => Ok(Self::Settle),
             "commit-failure" => Ok(Self::CommitFailure),
             "admit-terminal" => Ok(Self::AdmitTerminal),
+            "prepay-certificate" => Ok(Self::PrepayCertificate),
             "close-candidate" => Ok(Self::CloseCandidate),
             "close-head" => Ok(Self::CloseHead),
             _ => Err(Error::new(format!(
@@ -163,7 +185,7 @@ impl ExteriorActionV1 {
             Self::Capture => Some(SponsoredPushActionV1::Capture),
             Self::Settle => Some(SponsoredPushActionV1::Settle),
             Self::CommitFailure => Some(SponsoredPushActionV1::CommitFailure),
-            Self::AdmitTerminal => None,
+            Self::AdmitTerminal | Self::PrepayCertificate => None,
             Self::CloseCandidate => Some(SponsoredPushActionV1::CloseCandidate),
             Self::CloseHead => Some(SponsoredPushActionV1::CloseHead),
         }
@@ -177,8 +199,22 @@ impl ExteriorActionV1 {
     const fn terminal(self) -> bool {
         matches!(
             self,
-            Self::Settle | Self::CommitFailure | Self::AdmitTerminal
+            Self::Settle | Self::CommitFailure | Self::AdmitTerminal | Self::PrepayCertificate
         )
+    }
+
+    /// Whether this action initializes a terminal certificate seat.
+    const fn writes_a_certificate(self) -> bool {
+        matches!(self, Self::Settle | Self::CommitFailure)
+    }
+
+    /// The certificate kind tag this walk's seat carries in its seeds.
+    const fn certificate_kind(self) -> Option<u8> {
+        match self {
+            Self::Settle => Some(SUCCESS_CERTIFICATE_KIND),
+            Self::CommitFailure => Some(FAILURE_CERTIFICATE_KIND),
+            _ => None,
+        }
     }
 
     /// Whether the transaction's fee payer must not appear in the instruction.
@@ -204,6 +240,13 @@ struct ArgumentsV1 {
     signer: Option<Pubkey>,
     signer_keypair: Option<PathBuf>,
     candidate: Option<Pubkey>,
+    /// Which terminal walk's seat `prepay-certificate` funds.
+    ///
+    /// The seat address carries the certificate KIND in its seeds, and before
+    /// the walk runs the Source phase cannot say which kind is coming -- it is
+    /// still `Primary`. So the caller names the walk, in the same vocabulary
+    /// `--action` uses, and anything but the two terminal walks refuses.
+    prepay_for: Option<ExteriorActionV1>,
     execute: bool,
 }
 
@@ -243,6 +286,11 @@ impl ArgumentsV1 {
                     "--signer-keypair",
                 )?,
                 "--candidate" => set_once(&mut parsed.candidate, pubkey(&value)?, "--candidate")?,
+                "--prepay-for" => set_once(
+                    &mut parsed.prepay_for,
+                    ExteriorActionV1::parse(&value)?,
+                    "--prepay-for",
+                )?,
                 _ => {
                     return Err(Error::new(format!(
                         "unknown sponsored-push argument: {argument}"
@@ -253,6 +301,21 @@ impl ArgumentsV1 {
         if !parsed.execute && parsed.signer_keypair.is_some() {
             return Err(Error::new(
                 "--signer-keypair is refused during read-only preflight; add --execute",
+            ));
+        }
+        if (parsed.action == Some(ExteriorActionV1::PrepayCertificate))
+            != parsed.prepay_for.is_some()
+        {
+            return Err(Error::new(
+                "--prepay-for is required exactly for prepay-certificate",
+            ));
+        }
+        if parsed
+            .prepay_for
+            .is_some_and(|walk| !walk.writes_a_certificate())
+        {
+            return Err(Error::new(
+                "--prepay-for must name settle or commit-failure: those are the two walks that initialize a certificate seat",
             ));
         }
         Ok(parsed)
@@ -452,15 +515,17 @@ pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
 pub(crate) const fn usage() -> &'static str {
     "  dclutch-local-successor-bootstrap devnet-sponsored-push-v1 --rpc-url URL \
      --i-mean-devnet DEVNET_GENESIS --input ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON \
-     --action capture|settle|commit-failure|admit-terminal|close-candidate|close-head \
-     --signer PUBKEY [--candidate PUBKEY] [--execute] [--signer-keypair ABSOLUTE_JSON]"
+     --action capture|settle|commit-failure|admit-terminal|prepay-certificate|close-candidate|close-head \
+     --signer PUBKEY [--candidate PUBKEY] [--prepay-for settle|commit-failure] [--execute] \
+     [--signer-keypair ABSOLUTE_JSON]"
 }
 
 pub(crate) const fn owned_loopback_usage() -> &'static str {
     "  dclutch-local-successor-bootstrap local-private-validator-sponsored-push-v1 \
      --rpc-url http://127.0.0.1:PORT --input ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON \
-     --action capture|settle|commit-failure|admit-terminal|close-candidate|close-head \
-     --signer PUBKEY [--candidate PUBKEY] [--execute] [--signer-keypair ABSOLUTE_JSON]"
+     --action capture|settle|commit-failure|admit-terminal|prepay-certificate|close-candidate|close-head \
+     --signer PUBKEY [--candidate PUBKEY] [--prepay-for settle|commit-failure] [--execute] \
+     [--signer-keypair ABSOLUTE_JSON]"
 }
 
 fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
@@ -498,6 +563,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     let signer = args
         .signer
         .ok_or_else(|| Error::new("--signer is required"))?;
+    let prepay_for = args.prepay_for;
     let input_sha256 = hex(&Sha256::digest(&input_bytes));
     let input_lookup_table = pubkey(&input.accounts.lookup_table)?;
     let mut rpc = Rpc::connect_cluster(
@@ -524,7 +590,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         )?;
         report
     } else {
-        let prepared = prepare(&mut rpc, &input, action, signer, args.candidate)?;
+        let prepared = prepare(&mut rpc, &input, action, signer, args.candidate, prepay_for)?;
         let writable = writable_keys(&prepared.instruction);
         let report = ExteriorReportV1 {
             format: REPORT_FORMAT.to_owned(),
@@ -578,7 +644,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         // Reauthenticate every live input immediately before signing.  The
         // reviewed preflight remains the authority: if a mutable provider body
         // moved the candidate, the caller must create and review a new report.
-        let prepared = prepare(&mut rpc, &input, action, signer, args.candidate)?;
+        let prepared = prepare(&mut rpc, &input, action, signer, args.candidate, prepay_for)?;
         let current = PlannedInstructionV1::new(&prepared.instruction);
         authenticate_reprepared_coordinates(&report, &prepared.coordinates)?;
         if current != report.instruction {
@@ -830,6 +896,12 @@ fn authenticate_report_coordinates(
                 && report.receipt.is_none()
                 && optional_matches(14, report.certificate.as_deref())?
         }
+        // A System transfer names its destination at index 1.
+        ExteriorActionV1::PrepayCertificate => {
+            report.candidate.is_none()
+                && report.receipt.is_none()
+                && optional_matches(1, report.certificate.as_deref())?
+        }
         ExteriorActionV1::CloseCandidate => {
             optional_matches(2, report.candidate.as_deref())?
                 && report.certificate.is_none()
@@ -910,6 +982,7 @@ fn prepare(
     action: ExteriorActionV1,
     signer: Pubkey,
     requested_candidate: Option<Pubkey>,
+    prepay_for: Option<ExteriorActionV1>,
 ) -> Result<PreparedV1> {
     let keys = InputKeysV1::parse(input)?;
     let release_account = rpc.required_account(keys.sponsored_release.0, "sponsored release")?;
@@ -947,6 +1020,7 @@ fn prepare(
         }
         ExteriorActionV1::CommitFailure
         | ExteriorActionV1::AdmitTerminal
+        | ExteriorActionV1::PrepayCertificate
         | ExteriorActionV1::CloseHead => None,
     };
     let certificate = match action {
@@ -969,6 +1043,16 @@ fn prepare(
             keys.resolution_program,
             keys.source_state,
             terminal_certificate_kind(rpc, keys.source_state, keys.resolution_program)?,
+            input.terminal_sequence,
+        )),
+        // The seat is addressed by the walk the caller named, not by a phase
+        // that has not happened yet.
+        ExteriorActionV1::PrepayCertificate => Some(certificate_address(
+            keys.resolution_program,
+            keys.source_state,
+            prepay_for
+                .and_then(ExteriorActionV1::certificate_kind)
+                .ok_or_else(|| Error::new("prepay-certificate requires --prepay-for"))?,
             input.terminal_sequence,
         )),
         _ => None,
@@ -1361,6 +1445,29 @@ fn authenticate_final_coordinates(
                 ));
             }
         }
+        // The seat must still be exactly what a prepay is for: System-owned,
+        // bodiless, and short of its rent. Each of the three is refused by its
+        // own name, because "the transfer refused" and "the walk already ran"
+        // are different facts and the second one is not an error.
+        ExteriorActionV1::PrepayCertificate => {
+            let seat = coordinates
+                .certificate
+                .ok_or_else(|| Error::new("prepay-certificate seat missing"))?;
+            if let Some(account) = snapshot.optional(seat) {
+                if account.owner != system_program::ID || account.executable {
+                    return Err(Error::new(format!(
+                        "certificate seat {seat} is already occupied by {}; a prepay funds a seat the walk has not taken yet",
+                        account.owner
+                    )));
+                }
+                if !account.data.is_empty() {
+                    return Err(Error::new(format!(
+                        "certificate seat {seat} already carries {} bytes; this is not a vacant seat",
+                        account.data.len()
+                    )));
+                }
+            }
+        }
         ExteriorActionV1::CloseCandidate | ExteriorActionV1::CloseHead => {}
     }
     Ok(())
@@ -1444,6 +1551,9 @@ fn build_instruction(
     if action == ExteriorActionV1::AdmitTerminal {
         return admit_terminal_instruction(input, keys, coordinates, snapshot);
     }
+    if action == ExteriorActionV1::PrepayCertificate {
+        return prepay_certificate_instruction(signer, coordinates, snapshot);
+    }
     let data = SponsoredPushInstructionV1 {
         action: action
             .wire()
@@ -1458,8 +1568,10 @@ fn build_instruction(
         ExteriorActionV1::Capture => capture_metas(signer, keys, coordinates)?,
         ExteriorActionV1::Settle => settle_metas(signer, keys, coordinates, snapshot)?,
         ExteriorActionV1::CommitFailure => failure_metas(signer, keys, coordinates)?,
-        ExteriorActionV1::AdmitTerminal => {
-            return Err(Error::new("terminal admission builds its own Core frame"));
+        ExteriorActionV1::AdmitTerminal | ExteriorActionV1::PrepayCertificate => {
+            return Err(Error::new(
+                "the Core admission and the seat prepay build their own frames",
+            ));
         }
         ExteriorActionV1::CloseCandidate => close_candidate_metas(keys, coordinates, snapshot)?,
         ExteriorActionV1::CloseHead => close_head_metas(keys, coordinates, snapshot)?,
@@ -1542,6 +1654,44 @@ fn admit_terminal_instruction(
         )));
     }
     Ok(report.instruction)
+}
+
+/// Fund one terminal certificate seat to exactly its rent, and no further.
+///
+/// The rent comes from the Rent SYSVAR in this same finalized snapshot, not
+/// from a second `getMinimumBalanceForRentExemption` round trip: the walk that
+/// will consume this seat reads the same sysvar in the same way, so taking the
+/// number from anywhere else is a second source of truth for one figure.
+///
+/// The transfer is exactly the shortfall. A seat that already holds its rent is
+/// a refusal rather than a zero-lamport transfer, because "the prepay is done"
+/// and "the prepay just ran" are different facts and only one of them should
+/// produce a signature.
+fn prepay_certificate_instruction(
+    signer: Pubkey,
+    coordinates: &CoordinatesV1,
+    snapshot: &SnapshotV1,
+) -> Result<Instruction> {
+    let seat = coordinates
+        .certificate
+        .ok_or_else(|| Error::new("prepay-certificate seat missing"))?;
+    if seat == signer {
+        return Err(Error::new("the certificate seat cannot be its own funder"));
+    }
+    let rent: solana_sdk::rent::Rent =
+        bincode::deserialize(&snapshot.required(sysvar::rent::ID, "Rent sysvar")?.data)
+            .map_err(|error| Error::new(format!("Rent sysvar: {error}")))?;
+    let required = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+    let held = snapshot
+        .optional(seat)
+        .map_or(0, |account| account.lamports);
+    let shortfall = required.saturating_sub(held);
+    if shortfall == 0 {
+        return Err(Error::new(format!(
+            "certificate seat {seat} already holds {held} lamports against the {required} its {RESOLUTION_CERTIFICATE_BYTES_V2}-byte body needs; nothing to prepay"
+        )));
+    }
+    Ok(transfer(&signer, &seat, shortfall))
 }
 
 /// A staging cursor, read as vacant only where the snapshot actually looked.
@@ -1938,6 +2088,359 @@ fn write_report_replace(path: &Path, report: &ExteriorReportV1) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// The producer: `dclutch-sponsored-push-exterior-input-v1`, authored from chain
+// ---------------------------------------------------------------------------
+
+/// The public arm's producer command name.
+pub(crate) const INPUT_COMMAND_DEVNET_V1: &str = "devnet-sponsored-push-input-v1";
+/// The owned-loopback producer command name.
+pub(crate) const INPUT_COMMAND_LOOPBACK_V1: &str =
+    "local-private-validator-sponsored-push-input-v1";
+
+const fn input_command(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => INPUT_COMMAND_DEVNET_V1,
+        ExpectedClusterV1::OwnedLoopback => INPUT_COMMAND_LOOPBACK_V1,
+    }
+}
+
+pub(crate) const fn input_usage() -> &'static str {
+    "  dclutch-local-successor-bootstrap devnet-sponsored-push-input-v1 --rpc-url URL \
+     --i-mean-devnet DEVNET_GENESIS --plan ABSOLUTE_JSON --evidence ABSOLUTE_JSON \
+     --market PUBKEY --lookup-table PUBKEY --output ABSOLUTE_NEW_JSON \
+     [--terminal-sequence U64]"
+}
+
+pub(crate) const fn input_owned_loopback_usage() -> &'static str {
+    "  dclutch-local-successor-bootstrap local-private-validator-sponsored-push-input-v1 \
+     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON --evidence ABSOLUTE_JSON \
+     --market PUBKEY --lookup-table PUBKEY --output ABSOLUTE_NEW_JSON \
+     [--terminal-sequence U64]"
+}
+
+pub(crate) fn run_devnet_input(arguments: Vec<String>) -> Result<()> {
+    run_input(arguments, ExpectedClusterV1::Devnet)
+}
+
+pub(crate) fn run_owned_loopback_input(arguments: Vec<String>) -> Result<()> {
+    run_input(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+struct InputArgumentsV1 {
+    origin: ClusterOriginV1,
+    plan: PathBuf,
+    evidence: PathBuf,
+    market: Pubkey,
+    lookup_table: Pubkey,
+    terminal_sequence: u64,
+    output: PathBuf,
+}
+
+/// Author one `dclutch-sponsored-push-exterior-input-v1` from finalized state.
+///
+/// # Why this exists
+///
+/// The consumer above was written, shipped, exercised and used to resolve a
+/// devnet market, and until this function nothing in the tree WROTE its input.
+/// A sweep for the format string found the consumer, a keeper that checks one
+/// field of it, a README example and a doc -- the producer-missing shape, where
+/// a reader, a schema and a refusal all exist with nothing that emits the thing
+/// they judge. Cohort-13's document was assembled by hand from chain, one
+/// address at a time, by solving each record's schema against its own digest
+/// until the known address reproduced.
+///
+/// This is that walk, as a command.
+///
+/// # What it takes and what it refuses to be told
+///
+/// Two files and two addresses. The plan names the deployment; the sealed
+/// campaign report names each record's persisted body; `--market` names the
+/// Market and `--lookup-table` the frozen routing table. Everything else is
+/// DERIVED and then cross-checked against a persisted fact:
+///
+/// - every record pair is `record_pair(registry, schema, digest)` over the
+///   report's own `data_sha256`, and `routed_record` refuses when the derived
+///   raw address is not the persisted one -- so each of the eleven pairs is a
+///   reproduction rather than a transcription, which is exactly the property
+///   the hand-authored document had;
+/// - the activation cache is derived from `ACTIVATION_PDA_DOMAIN_V1` and the
+///   Market's OWN selected release set, then checked against the plan's;
+/// - the Source state is derived from the Market and its generation, then
+///   checked against the report's row;
+/// - generation and release set come off the Market, never off the plan alone;
+/// - the four Pyth addresses come out of the sponsored release RECORD read from
+///   chain, and the two ProgramData addresses from the Loader's own derivation.
+///
+/// # The last check is the strongest one
+///
+/// The document is handed back through `InputKeysV1::parse` before it is
+/// written. The producer and the consumer share one `SponsoredInputV1`, so a
+/// field this emits that the consumer would refuse cannot reach a file.
+fn run_input(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let args = parse_input_arguments(arguments, expected)?;
+    expected.authenticate(&args.origin)?;
+    let mut rpc = Rpc::connect_cluster(&args.origin, WritePolicyV1::ReadsOnly)?;
+
+    let plan_bytes = fs::read(&args.plan)?;
+    let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)
+        .map_err(|error| Error::new(format!("successor plan: {error}")))?;
+    let evidence_bytes = fs::read(&args.evidence)?;
+    let evidence =
+        parse_campaign_terminal_evidence_with_expected_cluster_v1(&evidence_bytes, expected)?;
+    authenticate_plan_source(&plan_bytes, &evidence.plan_sha256)?;
+
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let resolution = pubkey(&plan.resolution.program_id)?;
+
+    // The Market is the authority for its own generation and release set. The
+    // plan's release set is a cross-check, not the source.
+    let market_account = rpc.required_account(args.market, "Core Market")?;
+    if market_account.owner != core || market_account.executable {
+        return Err(Error::new(format!(
+            "Market {} is owned by {}, not the plan's Core {core}",
+            args.market, market_account.owner
+        )));
+    }
+    let state = CoreState::decode(&market_account.data)
+        .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
+    let release_set = state.identity.selected_release_set.to_bytes();
+    if release_set != hex32(&plan.release_set_id)? {
+        return Err(Error::new(
+            "the Market selected a release set the plan does not name",
+        ));
+    }
+    let generation = state.identity.generation;
+    if generation == 0 {
+        return Err(Error::new("a founded Market never carries generation zero"));
+    }
+
+    let activation_cache =
+        Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set], &registry).0;
+    if activation_cache != pubkey(&plan.activation)? {
+        return Err(Error::new(format!(
+            "the release set's activation cache derives to {activation_cache}, and the plan names {}",
+            plan.activation
+        )));
+    }
+
+    let source_state = Pubkey::find_program_address(
+        &[
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            args.market.as_ref(),
+            &generation.to_le_bytes(),
+        ],
+        &resolution,
+    )
+    .0;
+    let persisted_source =
+        pubkey(&required_account(&evidence, "resolution_source_state")?.address)?;
+    if source_state != persisted_source {
+        return Err(Error::new(format!(
+            "the Source resolution state derives to {source_state}, and the campaign recorded {persisted_source}"
+        )));
+    }
+
+    let pair = |label: &str, schema: [u8; 32]| -> Result<RecordPairInputV1> {
+        let routed = routed_record(&evidence, label, registry, schema)?;
+        Ok(RecordPairInputV1 {
+            raw: routed.raw.to_string(),
+            staging: routed.staging.to_string(),
+        })
+    };
+
+    // The sponsored release RECORD carries the four Pyth addresses. Reading
+    // them here, from the record this Market selected, is what keeps the runbook
+    // out of the document.
+    let sponsored = pair(
+        "pyth_sponsored_push_release_record",
+        PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
+    )?;
+    let sponsored_account =
+        rpc.required_account(pubkey(&sponsored.raw)?, "sponsored release record")?;
+    if sponsored_account.owner != registry {
+        return Err(Error::new(
+            "the sponsored release record is not Registry-owned",
+        ));
+    }
+    let release = PythSponsoredPushReleaseV1::decode(&sponsored_account.data)
+        .map_err(|error| Error::new(format!("sponsored release: {error:?}")))?;
+    let compiled = devnet_sponsored_sol_usd_release_v1()
+        .map_err(|error| Error::new(format!("compiled sponsored release: {error:?}")))?;
+    if release.to_bytes() != compiled.to_bytes() {
+        return Err(Error::new(
+            "the Market's sponsored release is not the compiled devnet SOL/USD release",
+        ));
+    }
+    let receiver_program = Pubkey::new_from_array(release.receiver_program());
+    let push_oracle_program = Pubkey::new_from_array(release.push_oracle_program());
+
+    let accounts = SponsoredAccountsInputV1 {
+        registry_program: registry.to_string(),
+        activation_cache: activation_cache.to_string(),
+        core_program: core.to_string(),
+        core_programdata: pubkey(&plan.core.programdata_id)?.to_string(),
+        resolution_program: resolution.to_string(),
+        resolution_programdata: pubkey(&plan.resolution.programdata_id)?.to_string(),
+        market: args.market.to_string(),
+        source_state: source_state.to_string(),
+        source_material: pair(
+            "source_material_record",
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        )?,
+        source_spec: pair("source_spec_record", SOURCE_SPEC_SCHEMA_ID_V1)?,
+        provider_release: pair("provider_release_record", PROVIDER_RELEASE_SCHEMA_ID_V1)?,
+        adapter_config: pair(
+            "pyth_adapter_config_record",
+            PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+        )?,
+        window: pair("window_spec_record", WINDOW_SPEC_SCHEMA_ID_V1)?,
+        statistic: pair("statistic_spec_record", STATISTIC_SPEC_SCHEMA_ID_V1)?,
+        sponsored_release: sponsored,
+        product: pair("product_record", PRODUCT_RECORD_SCHEMA_ID_V2)?,
+        result_domain: pair("result_domain_record", RESULT_DOMAIN_SCHEMA_ID_V2)?,
+        portfolio: pair("portfolio_record", PORTFOLIO_SCHEMA_ID_V2)?,
+        capability_manifest: pair(
+            "capability_manifest_record",
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        )?,
+        failure_funding: required_account(&evidence, "resolution_funding_ledger")?
+            .address
+            .clone(),
+        price_account: Pubkey::new_from_array(release.price_account()).to_string(),
+        receiver_program: receiver_program.to_string(),
+        receiver_programdata: loader_programdata(receiver_program).to_string(),
+        push_oracle_program: push_oracle_program.to_string(),
+        push_oracle_programdata: loader_programdata(push_oracle_program).to_string(),
+        receiver_config: Pubkey::new_from_array(release.receiver_config()).to_string(),
+        lookup_table: args.lookup_table.to_string(),
+    };
+    let document = SponsoredInputV1 {
+        format: INPUT_FORMAT.to_owned(),
+        generation,
+        terminal_sequence: args.terminal_sequence,
+        release_set: hex(&release_set),
+        accounts,
+    };
+
+    // The routing table is routing, never authority, and it must already be
+    // what the consumer will demand of it.
+    let table_slot = rpc.finalized_slot()?;
+    let table = rpc.required_account(args.lookup_table, "sponsored routing table")?;
+    authenticate_frozen_routing_table(&ObservedAccount {
+        observation: Observation {
+            slot: table_slot,
+            unix_timestamp: 0,
+            finality: Finality::Finalized,
+        },
+        key: args.lookup_table,
+        owner: table.owner,
+        lamports: table.lamports,
+        executable: table.executable,
+        data: table.data.clone(),
+    })?;
+
+    // The producer's own output, read back through the consumer's parser. One
+    // struct, one format constant, one set of address rules: a document this
+    // emits that the consumer would refuse cannot reach a file.
+    let serialized = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    let reparsed: SponsoredInputV1 = serde_json::from_str(&serialized)
+        .map_err(|error| Error::new(format!("the emitted document did not re-parse: {error}")))?;
+    InputKeysV1::parse(&reparsed)?;
+
+    write_new_document(&args.output, serialized.as_bytes())?;
+    println!("{serialized}");
+    Ok(())
+}
+
+/// The Loader's own ProgramData derivation, never a written-down address.
+fn loader_programdata(program: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+/// Write a document only where none exists, and never truncate one that does.
+fn write_new_document(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| match error.kind() {
+            ErrorKind::AlreadyExists => Error::new(format!(
+                "{} already exists; a producer never overwrites a document another run may be using",
+                path.display()
+            )),
+            _ => Error::new(format!("{}: {error}", path.display())),
+        })?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn parse_input_arguments(
+    arguments: Vec<String>,
+    expected: ExpectedClusterV1,
+) -> Result<InputArgumentsV1> {
+    let mut rpc_url = None;
+    let mut acknowledgment = None;
+    let mut plan = None;
+    let mut evidence = None;
+    let mut market = None;
+    let mut lookup_table = None;
+    let mut terminal_sequence = None;
+    let mut output = None;
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        let slot = match argument.as_str() {
+            "--rpc-url" => &mut rpc_url,
+            flag if flag == DEVNET_ACKNOWLEDGMENT_FLAG && expected == ExpectedClusterV1::Devnet => {
+                &mut acknowledgment
+            }
+            "--plan" => &mut plan,
+            "--evidence" => &mut evidence,
+            "--market" => &mut market,
+            "--lookup-table" => &mut lookup_table,
+            "--terminal-sequence" => &mut terminal_sequence,
+            "--output" => &mut output,
+            other => {
+                return Err(Error::new(format!(
+                    "unknown {} argument: {other}",
+                    input_command(expected)
+                )));
+            }
+        };
+        if slot.replace(value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let required = |value: Option<String>, label: &str| {
+        value.ok_or_else(|| Error::new(format!("{label} is required")))
+    };
+    let rpc_url = required(rpc_url, "--rpc-url")?;
+    Ok(InputArgumentsV1 {
+        origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
+        plan: PathBuf::from(absolute(Some(required(plan, "--plan")?), "--plan")?),
+        evidence: PathBuf::from(absolute(
+            Some(required(evidence, "--evidence")?),
+            "--evidence",
+        )?),
+        market: pubkey(&required(market, "--market")?)?,
+        lookup_table: pubkey(&required(lookup_table, "--lookup-table")?)?,
+        terminal_sequence: terminal_sequence
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .map_err(|error| Error::new(format!("--terminal-sequence: {error}")))
+            })
+            .transpose()?
+            .unwrap_or_default(),
+        output: PathBuf::from(absolute(Some(required(output, "--output")?), "--output")?),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2085,6 +2588,196 @@ mod tests {
                 "{other:?} lost its sponsored-push wire discriminant"
             );
         }
+    }
+
+    /// `--prepay-for` exists for exactly one action and admits exactly the two
+    /// walks that initialize a seat.
+    #[test]
+    fn the_prepay_target_is_required_where_it_means_something_and_nowhere_else() {
+        let base = |extra: &[&str]| {
+            let mut out = vec![
+                "--rpc-url".to_owned(),
+                "http://127.0.0.1:21400".to_owned(),
+                "--input".to_owned(),
+                "/abs/in.json".to_owned(),
+                "--output".to_owned(),
+                "/abs/out.json".to_owned(),
+                "--signer".to_owned(),
+                key(9).to_string(),
+            ];
+            out.extend(extra.iter().map(|value| (*value).to_owned()));
+            out
+        };
+        assert!(
+            ArgumentsV1::parse(base(&["--action", "prepay-certificate"])).is_err(),
+            "prepay-certificate without a named walk has no seat to address"
+        );
+        assert!(
+            ArgumentsV1::parse(base(&["--action", "capture", "--prepay-for", "settle"])).is_err(),
+            "a walk named for an action that funds nothing is a caller mistake"
+        );
+        let Err(refusal) = ArgumentsV1::parse(base(&[
+            "--action",
+            "prepay-certificate",
+            "--prepay-for",
+            "close-head",
+        ])) else {
+            panic!("close-head initializes no certificate seat");
+        };
+        assert!(
+            refusal
+                .0
+                .contains("--prepay-for must name settle or commit-failure"),
+            "expected the named-walk refusal, got: {refusal}"
+        );
+        for walk in ["settle", "commit-failure"] {
+            assert!(
+                ArgumentsV1::parse(base(&[
+                    "--action",
+                    "prepay-certificate",
+                    "--prepay-for",
+                    walk
+                ]))
+                .is_ok(),
+                "{walk} initializes a certificate seat and must be nameable"
+            );
+        }
+    }
+
+    /// The transfer is the shortfall, the rent comes from the sysvar, and a
+    /// seat that is already funded is a refusal rather than a zero transfer.
+    #[test]
+    fn a_seat_prepay_transfers_the_shortfall_and_refuses_a_funded_seat() {
+        let seat = key(60);
+        let signer = key(61);
+        let rent = solana_sdk::rent::Rent::default();
+        let required = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+        let snapshot = |held: Option<u64>| SnapshotV1 {
+            observation: Observation {
+                slot: 5,
+                unix_timestamp: 9,
+                finality: Finality::Finalized,
+            },
+            accounts: BTreeMap::from([
+                (
+                    sysvar::rent::ID,
+                    Some(RpcAccount {
+                        lamports: 1,
+                        owner: sysvar::ID,
+                        executable: false,
+                        rent_epoch: 0,
+                        data: bincode::serialize(&rent).expect("rent bytes"),
+                    }),
+                ),
+                (
+                    seat,
+                    held.map(|lamports| RpcAccount {
+                        lamports,
+                        owner: system_program::ID,
+                        executable: false,
+                        rent_epoch: 0,
+                        data: Vec::new(),
+                    }),
+                ),
+            ]),
+        };
+        let coordinates = CoordinatesV1 {
+            release_id: [7; 32],
+            head: key(62),
+            candidate: None,
+            certificate: Some(seat),
+            receipt: None,
+        };
+
+        let vacant = prepay_certificate_instruction(signer, &coordinates, &snapshot(None))
+            .expect("a vacant seat is prepayable");
+        assert_eq!(vacant.program_id, system_program::ID);
+        assert_eq!(
+            u64::from_le_bytes(
+                vacant.data[4..12]
+                    .try_into()
+                    .expect("a System transfer carries eight lamport bytes")
+            ),
+            required,
+            "a vacant seat needs its whole rent"
+        );
+
+        let partial = prepay_certificate_instruction(signer, &coordinates, &snapshot(Some(11)))
+            .expect("a partly funded seat is topped up");
+        assert_eq!(
+            u64::from_le_bytes(partial.data[4..12].try_into().expect("lamport bytes")),
+            required - 11,
+            "the transfer is the shortfall, never the whole rent again"
+        );
+
+        let Err(refusal) =
+            prepay_certificate_instruction(signer, &coordinates, &snapshot(Some(required)))
+        else {
+            panic!("a seat already at its rent has nothing to prepay");
+        };
+        assert!(
+            refusal.0.contains("nothing to prepay"),
+            "expected the already-funded refusal, got: {refusal}"
+        );
+    }
+
+    /// The producer and the consumer share one struct, so a document the
+    /// producer emits is a document the consumer parses -- including the
+    /// `coreProgramdata` an older input omits.
+    #[test]
+    fn the_emitted_document_is_the_document_the_consumer_reads() {
+        let pair = |a: u8, b: u8| RecordPairInputV1 {
+            raw: key(a).to_string(),
+            staging: key(b).to_string(),
+        };
+        let emitted = SponsoredInputV1 {
+            format: INPUT_FORMAT.to_owned(),
+            generation: 2,
+            terminal_sequence: 1,
+            release_set: hex(&[0x5a; 32]),
+            accounts: SponsoredAccountsInputV1 {
+                registry_program: key(1).to_string(),
+                activation_cache: key(2).to_string(),
+                core_program: key(3).to_string(),
+                core_programdata: key(4).to_string(),
+                resolution_program: key(5).to_string(),
+                resolution_programdata: key(6).to_string(),
+                market: key(7).to_string(),
+                source_state: key(8).to_string(),
+                source_material: pair(10, 11),
+                source_spec: pair(12, 13),
+                provider_release: pair(14, 15),
+                adapter_config: pair(16, 17),
+                window: pair(18, 19),
+                statistic: pair(20, 21),
+                sponsored_release: pair(22, 23),
+                product: pair(24, 25),
+                result_domain: pair(26, 27),
+                portfolio: pair(28, 29),
+                capability_manifest: pair(30, 31),
+                failure_funding: key(32).to_string(),
+                price_account: key(33).to_string(),
+                receiver_program: key(34).to_string(),
+                receiver_programdata: key(35).to_string(),
+                push_oracle_program: key(36).to_string(),
+                push_oracle_programdata: key(37).to_string(),
+                receiver_config: key(38).to_string(),
+                lookup_table: key(39).to_string(),
+            },
+        };
+        let text = serde_json::to_string(&emitted).expect("the producer's own serialization");
+        let read: SponsoredInputV1 =
+            serde_json::from_str(&text).expect("the consumer's own deserialization");
+        let keys = InputKeysV1::parse(&read).expect("every address parses");
+        assert_eq!(keys.core_programdata, Some(key(4)));
+        assert_eq!(read.format, INPUT_FORMAT);
+        assert_eq!(read.generation, 2);
+        // The camelCase spelling is part of the contract with every input
+        // already on disk, so it is asserted rather than assumed.
+        assert!(
+            text.contains("\"coreProgramdata\"") && text.contains("\"terminalSequence\""),
+            "the emitted document must use the input's own field spellings"
+        );
     }
 
     /// An input authored before this arm existed still deserializes, and the

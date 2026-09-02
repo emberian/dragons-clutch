@@ -484,9 +484,17 @@ reachable inside an entry route's request.
 // An empty list is NOT "every phase" -- it is "no phase gate was read here" --
 // and the two must not print the same, because a client that cannot tell them
 // apart is the defect this column exists to close.
-function phaseGate(route) {
+function phaseGate(route, program) {
   const gates = route.admissible_prestates ?? [];
-  if (gates.length === 0) return "no phase gate";
+  // "no constant was read here" and "there is no discriminant to read" are
+  // different facts about a route, and a client that cannot tell them apart
+  // keeps waiting for a phase answer that will never arrive. The census
+  // declares the second per program, with its own staleness checks.
+  if (gates.length === 0) {
+    return program?.no_persisted_discriminant
+      ? "no state machine"
+      : "no phase gate";
+  }
   // Every set NAMES ITS MACHINE. The whole content of a declaration is which
   // discriminant it constrains, and a Market is `Open` for the entire span in
   // which its Source moves `Primary` to `Resolved` -- so a cell that dropped
@@ -523,6 +531,14 @@ function phaseGate(route) {
   const sections = [];
   const neverExecuted = [];
   let gatedRoutes = 0;
+  const noMachine = programs
+    .filter((p) => p.no_persisted_discriminant)
+    .map(
+      (p) =>
+        `\`${p.label}\`'s ${p.routes.length} routes authenticate ` +
+        `${p.no_persisted_discriminant}.`,
+    )
+    .join(" ");
   for (const p of programs) {
     const routes = [...p.routes].sort((a, b) => (a.id < b.id ? -1 : 1));
     const rows = routes.map((r) => {
@@ -547,7 +563,7 @@ function phaseGate(route) {
         `\`${r.id}\``,
         r.kind,
         sel || "--",
-        phaseGate(r),
+        phaseGate(r, p),
         st.text,
         `\`${r.provenance}\``,
       ];
@@ -608,8 +624,10 @@ Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}**
 routes are in that last group.
 
 The **phase** column is the route's own guard, not a summary of one. It is
-the named admission constant the guard checks against -- a
-\`MarketAdmissionV1\` or a \`SourceAdmissionV1\` -- read out of the Rust that
+the named admission constant the guard checks against -- one admission type
+per persisted state machine, \`MarketAdmissionV1\`,
+\`SourceAdmissionV1\`, \`DealerScenarioCheckpointAdmissionV1\` and
+\`DealerScenarioReservationAdmissionV1\` today -- read out of the Rust that
 enforces it, so a reader is reading the conjunct the program executes.
 \`market: Founding+Ready\` is an exact prestate; a bare \`market: Retiring\` is a
 guard that names no readiness and so admits every one. It is a NECESSARY
@@ -631,12 +649,21 @@ execution, so the route admits their INTERSECTION. A reader that treats the
 first as the second reports that a route admitting three phases admits none.
 
 **no phase gate** means no constant was read for that route -- an authoring
-route with no Market phase to consult, a guard still written inline, a guard
-reached only under a boolean branch, or a route the enumerator could not
-follow into. It does not mean the route admits every phase, and a consumer
-that treats the two alike is repeating the defect this column was added to
-close. **${gatedRoutes}** of **${inventoryRouteIds.size}** routes carry one
-today.
+route with no state to consult, a guard still written inline, a guard reached
+only under a boolean branch or inside a loop that may not be entered, a guard
+in a crate this program's dispatch does not reach, or a route the enumerator
+could not follow into. It does not mean the route admits every phase, and a
+consumer that treats the two alike is repeating the defect this column was
+added to close. **${gatedRoutes}** of **${inventoryRouteIds.size}** routes
+carry a gate today.
+
+**no state machine** is a DIFFERENT fact, and it is the program's own
+declaration rather than an absence: this program persists no lifecycle
+discriminant for any route to consult, so no amount of further naming will
+ever put a set in these cells. ${noMachine} It is carried in the census with
+two checks -- such a program must declare no admissible-state set, and its
+sources must name no known machine's discriminant -- so a state model that
+grows one makes the declaration unclassified in the same run.
 
 ` +
       sections.join("\n\n") +

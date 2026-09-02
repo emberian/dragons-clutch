@@ -316,6 +316,12 @@ fn run() -> Result<()> {
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
+        Some(command) if command == sponsored_push::INPUT_COMMAND_DEVNET_V1 => {
+            sponsored_push::run_devnet_input(arguments.collect())
+        }
+        Some(command) if command == sponsored_push::INPUT_COMMAND_LOOPBACK_V1 => {
+            sponsored_push::run_owned_loopback_input(arguments.collect())
+        }
         Some(command) if command == source_abort_exterior::COMMAND_V1 => {
             source_abort_exterior::run(arguments.collect())
         }
@@ -2146,6 +2152,8 @@ fn usage() {
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", sponsored_push::usage());
     println!("{}", sponsored_push::owned_loopback_usage());
+    println!("{}", sponsored_push::input_usage());
+    println!("{}", sponsored_push::input_owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
     println!("{}", wallet_terminal_payout_exterior::usage());
     println!("{}", wallet_terminal_payout_exterior::devnet_usage());

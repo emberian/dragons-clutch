@@ -15,7 +15,16 @@
 //! cluster lock census, execute children, and close/refund the account.
 
 use super::{Error as CodecError, array_at, byte_at, put, put_byte, put_u64, u64_at};
-use crate::scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1;
+use crate::{
+    scenario_admission_v1::{
+        DEALER_SCENARIO_CLEANUP_CHECKPOINT_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_COLLECTING_CHECKPOINT_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_COMMIT_CHECKPOINT_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_RESERVE_CHECKPOINT_ADMISSIBLE_STATES_V1,
+        DEALER_SCENARIO_ROLLBACK_CHECKPOINT_ADMISSIBLE_STATES_V1,
+    },
+    scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1,
+};
 
 /// Maximum canonical preparation pages for one Dealer scenario.
 pub const DEALER_SCENARIO_PREPARATION_PAGES_V1: usize = 6;
@@ -528,7 +537,7 @@ impl DealerScenarioCheckpointV1 {
         checkpoint_prestate_digest: [u8; 32],
         reservation_receipt_digest: [u8; 32],
     ) -> CheckpointResultV1<Self> {
-        if self.phase != DealerScenarioCheckpointPhaseV1::Evaluated {
+        if !DEALER_SCENARIO_RESERVE_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(self.phase) {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
         }
         self.require_live_slot(current_slot)?;
@@ -573,12 +582,7 @@ impl DealerScenarioCheckpointV1 {
         prior_reservation_receipt_digest: [u8; 32],
         rollback_receipt_digest: [u8; 32],
     ) -> CheckpointResultV1<Self> {
-        if !matches!(
-            self.phase,
-            DealerScenarioCheckpointPhaseV1::Evaluated
-                | DealerScenarioCheckpointPhaseV1::Reserved
-                | DealerScenarioCheckpointPhaseV1::RollingBack
-        ) {
+        if !DEALER_SCENARIO_ROLLBACK_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(self.phase) {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
         }
         if current_slot <= self.input.expires_at {
@@ -634,7 +638,7 @@ impl DealerScenarioCheckpointV1 {
         current_slot: u64,
         evidence: DealerScenarioCommitEvidenceV1,
     ) -> CheckpointResultV1<()> {
-        if self.phase != DealerScenarioCheckpointPhaseV1::Reserved {
+        if !DEALER_SCENARIO_COMMIT_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(self.phase) {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
         }
         self.require_live_slot(current_slot)?;
@@ -710,7 +714,7 @@ impl DealerScenarioCheckpointV1 {
         if current_slot <= self.input.expires_at {
             return Err(DealerScenarioCheckpointErrorV1::Expiry);
         }
-        if self.phase == DealerScenarioCheckpointPhaseV1::Committed
+        if !DEALER_SCENARIO_CLEANUP_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(self.phase)
             || self.reservation_count != self.rollback_count
         {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
@@ -775,7 +779,7 @@ impl DealerScenarioCheckpointV1 {
     }
 
     fn require_live_collecting(self, current_slot: u64) -> CheckpointResultV1<()> {
-        if self.phase != DealerScenarioCheckpointPhaseV1::Collecting {
+        if !DEALER_SCENARIO_COLLECTING_CHECKPOINT_ADMISSIBLE_STATES_V1.admits(self.phase) {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
         }
         self.require_live_slot(current_slot)

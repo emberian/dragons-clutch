@@ -379,6 +379,31 @@ tier_web() {
   fi
   local failed=0 ran=0
   local dir
+  # The selector-9 profile vector, from the side that AUTHORS the bytes.
+  #
+  # `dealer_scenario_profile_vector.rs` writes a fixture from the Rust encoder
+  # and `dealerAccountProfileV3.vector.test.ts` checks the browser's mirror
+  # against it. The vitest half below runs; the Rust half is a ROOT-WORKSPACE
+  # integration target, and no tier in this file executes one of those -- the
+  # program tier runs a different workspace, the journey tier runs `--bins`,
+  # and the workspaces tier is `cargo check`. So the fixture was armed in one
+  # direction only, and the direction it missed is the one that produced the
+  # defect it exists for: when the ENCODER moves and the fixture is not
+  # regenerated, the mirror and the fixture stay consistent WITH EACH OTHER and
+  # the TypeScript half stays green while both are stale together. efca6966 was
+  # exactly that, and CI would have been green through it.
+  #
+  # Filtered to the one target: no ELF, no validator, no SBF build, 0.01s after
+  # a compile. It belongs beside the web half rather than in a Rust tier
+  # because the two halves are one instrument and a reader should find them
+  # together.
+  if (cd "$repo_root" && cargo test -p dclutch-trading-sbf \
+        --test dealer_scenario_profile_vector -q >/dev/null 2>&1); then
+    note "selector-9 profile vector: encoder side green"
+  else
+    note "selector-9 profile vector: the ENCODER moved and the fixture did not"
+    failed=1
+  fi
   for dir in apps/dclutch-web packages/dclutch-sdk; do
     local full="$repo_root/$dir"
     [ -d "$full/node_modules" ] || {
