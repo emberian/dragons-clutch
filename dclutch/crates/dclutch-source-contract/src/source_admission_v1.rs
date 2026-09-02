@@ -52,13 +52,17 @@ impl SourceAdmissionV1 {
     pub const NONE: Self = Self { states: 0 };
 
     /// Admit exactly the listed states.
+    ///
+    /// Walked by slice pattern rather than by index: the crate denies
+    /// `clippy::indexing_slicing`, and in a `const fn` the lint's own `.get`
+    /// suggestion does not apply, so the loop carries no index to bound.
     #[must_use]
     pub const fn states(states: &[SourceResolutionPhaseV1]) -> Self {
         let mut admitted = 0u8;
-        let mut position = 0;
-        while position < states.len() {
-            admitted |= 1u8 << state_tag(states[position]);
-            position += 1;
+        let mut remaining = states;
+        while let [state, rest @ ..] = remaining {
+            admitted |= 1u8 << state_tag(*state);
+            remaining = rest;
         }
         Self { states: admitted }
     }
@@ -111,6 +115,27 @@ mod tests {
         }
     }
 
+    /// A set of several states admits exactly those and nothing else.
+    ///
+    /// Every real caller lists more than one -- the reclaim set in
+    /// `programs/dclutch-resolution-proof-sbf/src/market_admission_v1.rs:89`
+    /// lists five -- while the cases above pass only the empty slice and
+    /// single-element slices, which a constructor that stopped after its first
+    /// entry would satisfy.
+    #[test]
+    fn a_listed_set_admits_exactly_what_it_lists() {
+        let listed = [
+            SourceResolutionPhaseV1::Recovery,
+            SourceResolutionPhaseV1::Resolved,
+            SourceResolutionPhaseV1::Retired,
+        ];
+        let set = SourceAdmissionV1::states(&listed);
+        assert!(!set.is_empty());
+        for state in EVERY_STATE {
+            assert_eq!(set.admits(state), listed.contains(&state), "{state:?}");
+        }
+    }
+
     /// The tags are the wire discriminants, not a second numbering.
     ///
     /// `SourceResolutionPhaseV1::decode` maps bytes 0..=5 to these variants,
@@ -119,7 +144,11 @@ mod tests {
     #[test]
     fn the_bit_index_is_the_wire_tag() {
         for (tag, state) in EVERY_STATE.into_iter().enumerate() {
-            assert_eq!(u8::try_from(tag).unwrap(), state as u8);
+            assert_eq!(
+                tag,
+                usize::from(state as u8),
+                "{state:?} sits at an index that is not its wire tag"
+            );
         }
     }
 }

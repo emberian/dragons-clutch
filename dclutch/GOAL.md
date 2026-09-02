@@ -3577,3 +3577,9 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   destination that cohort could ever pay. Live redemption test **4/4 green** on the resolved-and-paid market. Captures:
   1,005 words / 18 $ / 0 hex at 1280. Owed: stage two needs a lookup table someone signs.
 - Cuts: `feab86c68`, `196484c79`.
+- Started 20:15 EDT: COHORT-14 PREP **`a68057d74bd0c624f`** (deploys nothing): the third Custody adapter release admitting
+  ImmutableOwner on the destination (a new release id — the old one's law stands for markets founded under it); the
+  General accelerator's ArtifactRelease in `prepare` with its deployment observation; an in-window relay step (cohort-13's
+  window closed with no relay inside it); the cohort-14 runbook in-tree — close 13 → deploy ≥ {a517d27c, 90a8563f,
+  e7ecfb2ef, the adapter} → both a Direct and a General-manifest market → fill → census → honest resolution → ATA payout →
+  OpenBatch on chain.
