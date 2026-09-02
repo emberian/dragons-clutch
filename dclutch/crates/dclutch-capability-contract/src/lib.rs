@@ -17,6 +17,14 @@ pub mod controller_funding_checkpoint;
 /// Terminal receipt for the second durable controller-funding cleanup transaction.
 pub mod controller_funding_cleanup_receipt;
 /// Typed funding quotes, custody observations, PDA projections, and transitions.
+/// Lean-decided activation decision cases for `funding::FundingLedgerV2`.
+///
+/// `DClutchSemantics.CapabilityFundingLedgerV2` owns the rule; the Rust stays a
+/// hand-written mirror and this corpus is what makes the two answerable.
+#[cfg(test)]
+#[allow(dead_code, missing_docs)]
+mod generated_funding_activation_corpus;
+
 pub mod funding;
 /// Lean-emitted byte coordinates for the `DCLTCAP1` manifest, the `DCLTFQ01`
 /// typed funding quote, the `DCLTCFS1` funding state, and the `DCLTMOR1`

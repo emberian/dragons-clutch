@@ -215,6 +215,10 @@ name = "emit-product-runtime-v2-rust"
 root = "EmitProductRuntimeV2Rust"
 
 [[lean_exe]]
+name = "emit-capability-funding-activation-corpus-rust"
+root = "EmitCapabilityFundingActivationCorpusRust"
+
+[[lean_exe]]
 name = "emit-protocol-infrastructure-pin-corpus-rust"
 root = "EmitProtocolInfrastructurePinCorpusRust"
 

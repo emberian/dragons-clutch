@@ -88,6 +88,7 @@ import DClutchSemantics.CapabilityExecutionAbi
 import DClutchSemantics.RequestProfileAbi
 import DClutchSemantics.RequestProfileV4Abi
 import DClutchSemantics.StateLifecyclePolicyV5Abi
+import DClutchSemantics.CapabilityFundingLedgerV2
 import DClutchSemantics.AccountProfileAbi
 import DClutchSemantics.AccountProfileV2Abi
 import DClutchSemantics.AccountProfileV2Profile13

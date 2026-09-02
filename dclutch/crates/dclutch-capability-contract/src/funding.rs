@@ -3737,6 +3737,121 @@ mod tests {
         assert_eq!(bytes, insufficient_prestate);
     }
 
+    /// Replay every Lean-decided activation case through `activate_in_place`.
+    ///
+    /// `CapabilityFundingLedgerV2.lean` was an import-graph island: nothing
+    /// imported it while this function shipped on chain. The corpus is the
+    /// bridge, and the module is now imported by the root.
+    ///
+    /// Two conjuncts are deliberately outside the corpus and named in the Lean
+    /// docstring: the `PrepaidLazy` activation deadline, which Lean has no
+    /// notion of, and the post-write re-authentication, which is atomicity
+    /// rather than rule.
+    #[test]
+    fn lean_activation_corpus_replays_through_funding_ledger_v2() {
+        use crate::generated_funding_activation_corpus::{
+            FUNDING_ACTIVATION_COMPARTMENTS, FUNDING_ACTIVATION_VECTORS_V1,
+            FUNDING_ACTIVATION_ZEROED,
+        };
+
+        const ORDER: [FundingCompartment; 7] = [
+            FundingCompartment::Rent,
+            FundingCompartment::Creation,
+            FundingCompartment::Work,
+            FundingCompartment::Provider,
+            FundingCompartment::Bounty,
+            FundingCompartment::Liquidity,
+            FundingCompartment::Service,
+        ];
+        assert_eq!(FUNDING_ACTIVATION_COMPARTMENTS, ORDER.len());
+
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+
+        for vector in FUNDING_ACTIVATION_VECTORS_V1 {
+            let mut bytes = [0_u8; 264];
+            FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111)
+                .expect("initialize");
+
+            // Drive slot 1 to this vector's status through the real transitions;
+            // writing a status byte by hand would bypass the authentication the
+            // rule is stated over.
+            if vector.status > 0 {
+                FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, 1, 9)
+                    .expect("reach Active");
+            }
+            if vector.status == 2 {
+                let exact_rent = 100;
+                let ledger_lamports = exact_rent
+                    + FundingLedgerV2::decode(&bytes)
+                        .expect("ledger")
+                        .authenticate(manifest_id, manifest)
+                        .expect("manifest")
+                        .remaining_native_lamports_total()
+                        .expect("native total");
+                let custody =
+                    FundingLedgerCloseCustodyV2::native_only(ledger_lamports, exact_rent, [99; 32])
+                        .expect("close custody");
+                FundingLedgerV2::close_slot_in_place(&mut bytes, manifest_id, manifest, 1, custody)
+                    .expect("reach Closed");
+            }
+
+            let before = FundingLedgerV2::decode(&bytes)
+                .expect("pre ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("pre manifest")
+                .slot(1)
+                .expect("pre slot")
+                .remaining();
+
+            let result =
+                FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, 1, 11);
+            assert_eq!(result.is_ok(), vector.admits, "{}", vector.name);
+
+            if !vector.admits {
+                assert_eq!(
+                    result.err(),
+                    Some(Error::InvalidFundingStatus),
+                    "{}",
+                    vector.name
+                );
+                continue;
+            }
+
+            let after = FundingLedgerV2::decode(&bytes)
+                .expect("post ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("post manifest")
+                .slot(1)
+                .expect("post slot");
+            assert_eq!(
+                after.status(),
+                FundingLedgerStatusV2::Active,
+                "{}",
+                vector.name
+            );
+            assert_eq!(after.activation_slot(), 11, "{}", vector.name);
+
+            // Lean owns which compartments the release zeroes; the Rust writes
+            // remaining[0] and remaining[1] by hand, and this is what says those
+            // are the right two and that the other five are untouched.
+            for (index, compartment) in ORDER.into_iter().enumerate() {
+                let observed = after.remaining().compartment(compartment).amount();
+                if *FUNDING_ACTIVATION_ZEROED.get(index).expect("zeroed flag") {
+                    assert_eq!(observed, 0, "{} compartment {index}", vector.name);
+                } else {
+                    assert_eq!(
+                        observed,
+                        before.compartment(compartment).amount(),
+                        "{} compartment {index}",
+                        vector.name
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn funding_ledger_v2_close_tombstones_one_slot_and_refunds_rent_only_last() {
         let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];

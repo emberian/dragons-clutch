@@ -106,7 +106,10 @@ Cohort-11's frozen table `6Pwb16HHphgvDbr6RW4p7k82qTGDccQHizJzk3LDXZwk` routes
 `founding_market` `3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6` and sixty-three
 other accounts. It does **not** contain the Core Market
 `ARuPAuyJbJoLdMWGDzSqvcV9py25EkmMj8ABnfKP56s`, which is the address a reader
-naturally reaches for. A search handed the wrong one of those two answers a
+naturally reaches for. [**Corrected by the addendum dated 2026-09-02 at the end
+of this file: both addresses are Core Market accounts, and `3rBfDBpa…` is the
+live one. The paragraph's conclusion about the scan is unaffected; the labels
+are not.**] A search handed the wrong one of those two answers a
 confident `None` even on a chain small enough to scan.
 
 Nothing has to be searched. The founding's own create transaction is in the
@@ -367,7 +370,9 @@ demonstration must therefore be small.
 | `--lifecycle` | `fok` | both sides; the pair gate demands lifecycle 0 |
 | `--side` | `sell` / `buy` | seller side 0, buyer side 1, distinct makers |
 
-**`--market` is the `founding_market`, not the Core Market.** The producer takes
+**`--market` is the `founding_market`, not the Core Market.** [Corrected by the
+2026-09-02 addendum: the `founding_market` **is** the live Core Market account;
+see below.] The producer takes
 it from `campaign_address_v1(campaign, "founding_market")`
 (`direct_trade_producer.rs:2061`) — `3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6`,
 not `ARuPAuyJ…`. This is the same trap the routing table set, and it is worth
@@ -577,5 +582,55 @@ refusing: 3 SBF build diagnostics; fix them at their owner, or re-run with
 The link-count refusal had been *masking* this one. **The trading stack-frame
 regression at `bfc8383f` is the open residue**, left to its owner with an exact
 commit rather than a window.
+
+Devnet evidence. Not mainnet evidence.
+
+
+## Addendum, 2026-09-02: both addresses are Core Markets, and the admissions landed on the right one
+
+Read from chain today, Helius devnet RPC, `finalized` commitment, by
+`getAccountInfo` on each address; the API key was read from `~/.helius-key` at
+use time and is not reproduced anywhere. Nothing was written.
+
+**The two-address trap this file names is real, but its labels are backwards.**
+This file says `3rBfDBpa…` is "the `founding_market`, not the Core Market" and
+that `ARuPAuyJ…` is "the Core Market". On chain both are Core Market accounts —
+`DCLTCOR3`, 368 bytes, owner `FinXxc9dr…` — and the live one is `3rBfDBpa…`:
+
+| address | generation | phase / readiness | derived Claims aggregate |
+| --- | --- | --- | --- |
+| `ARuPAuyJbJoLdMWGDzSqvcV9py25EkmMj8ABnfKP56s` | 1 | `Founding` / `Prepaid` | `ERd4rTg9…` — **VACANT** |
+| `3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6` | 2 | **`Open` / `Consumed`** | `5wdhigoU…` — exists |
+
+`COHORT11_GENESIS_FOUNDED_2026_09_01.md` carries the same error in its founding
+table and now carries the same addendum.
+
+**THE ADMISSIONS LANDED AGAINST THE ACCOUNT THIS LANE NAMED, and that account is
+the right one.** The producer took `--market` from
+`campaign_address_v1(campaign, "founding_market")` = `3rBfDBpa…`, and both
+participant Positions read back off chain confirm it:
+
+| account | magic | its aggregate | Position owner |
+| --- | --- | --- | --- |
+| `5SYqhNVT8hUetS6GopkxdVNXWpKfHG1CpMwwZKXzVtAP` | `DCLLBP02`, 160 B | `5wdhigoU…` | `5nTAZrNL…` |
+| `4AHZpdJi8RFoh2VUKGuNqzgnqqjzXA5x2naHq8t5Mjue` | `DCLLBP02`, 160 B | `5wdhigoU…` | `BffsiBzZ…` |
+
+and `5wdhigoU…`'s own `LOGICAL_MARKET` field (bytes 24..56) reads `3rBfDBpa…`.
+Both admissions `G5JTNALR…` and `48KkQPsu…` are 512-byte `DCLPPS02` accounts
+owned by Claims. So the execution was correct throughout and only the prose
+mislabels which of the two addresses is which.
+
+**Derived, not inferred.**
+`find_program_address(["dclutch:lbv2:market", market], HQYqqdzn…)` reproduces
+`5wdhigoU…` from `3rBfDBpa…` at bump 250, and gives `ERd4rTg967WjVoezjFzko8rGtXrz9XDrJ2URvk8LcZ7U`
+for `ARuPAuyJ…`, which has no account. That is the Redemption lane's
+"derived aggregate vacant" measurement, reproduced from a second direction.
+
+**What this does not change.** The frozen-routing-table finding stands exactly
+as written: `getProgramAccounts` over the ALT program returns nothing usable on
+devnet, the search answered an absence rather than a refusal, and the two reads
+by address that replaced it are still the fix. The predicate was wrong for the
+reason given — it looked for the wrong address — and the correct address to look
+for is the live Core Market `3rBfDBpa…`, which is what the table routes.
 
 Devnet evidence. Not mainnet evidence.

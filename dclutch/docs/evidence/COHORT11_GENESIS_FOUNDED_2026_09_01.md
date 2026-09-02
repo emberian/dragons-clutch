@@ -330,6 +330,11 @@ all five earlier stages Complete, and Succession now means *the genesis V2 is on
 chain, born at V2, and matches the plan's pin* rather than *this plan has no
 ceremony*.
 
+> **The `Market` row below is corrected by the addendum dated 2026-09-02 at the
+> end of this file.** The address it names is a Core Market account, but it is
+> not the one the other rows of this table belong to. The original row is left
+> as written; the correction is read off chain and stated there.
+
 | what | address |
 | --- | --- |
 | Market (`DCLTCOR3`, 368 B, owner `FinXxc9dr…`) | `ARuPAuyJbJoLdMWGDzSqvcV9py25EkmMj8ABnfKP56s` |
@@ -437,5 +442,50 @@ narrow estimate above was wrong about the other two — the frozen routing table
 had to stop being *searched* for, and the Position owner could not be its own
 fee payer, which no prefund can repair. The Direct trade remains open, and its
 residue is three named artifacts.
+
+Devnet evidence. Not mainnet evidence.
+
+
+## Addendum, 2026-09-02: the `Market` row names the wrong one of two Core Markets
+
+Read from chain today, Helius devnet RPC, `finalized` commitment, by
+`getAccountInfo` on each address; the API key was read from `~/.helius-key` at
+use time and is not reproduced anywhere. Nothing was written.
+
+**There are TWO Core Market accounts for this cohort**, and the table above
+names the wrong one. Both are `DCLTCOR3`, 368 bytes, owned by the Core program
+`FinXxc9dr…`, and both carry the same realm `Adkwb63a…`, product record
+`2Hf2zCJj…`, resolution policy `3KzuusDW…`, capability manifest `6PBCs7i4…`
+and selected release set `GPXP4T1Q…` — the same compiled SOL/USD product. They
+differ in the two fields that matter:
+
+| address | generation | phase / readiness | derived Claims aggregate |
+| --- | --- | --- | --- |
+| `ARuPAuyJbJoLdMWGDzSqvcV9py25EkmMj8ABnfKP56s` | 1 | `Founding` / `Prepaid` | `ERd4rTg967WjVoezjFzko8rGtXrz9XDrJ2URvk8LcZ7U` — **VACANT** |
+| `3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6` | 2 | **`Open` / `Consumed`** | `5wdhigoUUNDaQFjqBmVUTmyh5ihqjxUNV6sdaNt6izxE` — exists |
+
+So the market that OPENED, and that every other row of the table above belongs
+to, is `3rBfDBpa…`. The row that says `Market` names a generation-1 account
+still in `Founding` with nothing hanging off it.
+
+**Derived, not inferred.** The Claims aggregate is
+`find_program_address(["dclutch:lbv2:market", market], HQYqqdzn…)`. Re-deriving
+it here reproduces `5wdhigoU…` from `3rBfDBpa…` at bump 250, and
+`ERd4rTg9…` from `ARuPAuyJ…` at bump 253, which is vacant. The aggregate's own
+body agrees independently: bytes 24..56 of `5wdhigoU…` — its
+`LOGICAL_MARKET` field — read `3rBfDBpa…`. Two sources, one answer.
+
+The rest of the table stands and is confirmed by the same read: the founder
+Position `AB6HppHW…` (160 B, `DCLLBP02`) names aggregate `5wdhigoU…` and owner
+`BmDp2LRf…`, the held founder key; the admission `3HyBinfq…` is 512 B,
+`DCLPPS02`, Claims-owned.
+
+**One further correction, to the load simulator paragraph below.** It binds
+"market `ARuPAuyJ…`, mint `H5zmg8nV…`, Claims aggregate `5wdhigoU…`" — a pair
+that cannot both be true, because that aggregate belongs to `3rBfDBpa…`. The
+market in that config should read `3rBfDBpa…`.
+
+This is a labelling error in a dated record, not a defect in what ran. Nothing
+about the founding, the 188 transactions, or the `completed: true` is affected.
 
 Devnet evidence. Not mainnet evidence.

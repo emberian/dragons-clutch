@@ -125,6 +125,70 @@ theorem activation_zeros_rent_and_creation
     simp [activationRemaining, creation]
   · simp_all
 
+/-! ## Activation decision corpus
+
+`FundingLedgerV2::activate_in_place` in `dclutch-capability-contract` mirrors
+`activate` by hand, and until now this module was an import-graph island: the
+lakefile glob was the only reason it compiled, and nothing anywhere consumed
+it. These vectors are the bridge.
+
+Two asymmetries the corpus does NOT paper over, both named here so a reader
+finds them before assuming agreement:
+
+* the Rust refuses a `PrepaidLazy` entry whose activation deadline has
+  elapsed, a conjunct this module has no notion of at all;
+* the Rust re-decodes and re-authenticates the ledger after the write, which is
+  an adapter-level atomicity check rather than part of the rule.
+
+Everything else -- which statuses activate, which compartments the activation
+release zeroes, and which it must leave untouched -- is decided here. -/
+
+def Status.tag : Status → Nat
+  | .pending => 0
+  | .active => 1
+  | .closed => 2
+
+def Status.rustName : Status → String
+  | .pending => "Pending"
+  | .active => "Active"
+  | .closed => "Closed"
+
+/-- Which compartments activation zeroes.  `activationRemaining` is the only
+owner of the boundary; the Rust writes `remaining[0]` and `remaining[1]` by
+hand and this is what says those are the right two. -/
+def activationZeroed : List Bool :=
+  (List.range 7).map (fun compartment => decide (compartment < 2))
+
+structure ActivationVector where
+  name : String
+  status : Status
+
+/-- One vector per status, which is the whole domain of `activate`. -/
+def activationVectors : List ActivationVector := [
+  { name := "pending_slot_activates", status := .pending },
+  { name := "activation_replay_refuses", status := .active },
+  { name := "closed_slot_does_not_reactivate", status := .closed }
+]
+
+/-- Whether `activate` admits this vector's status.  The remaining amounts do
+not enter the decision, which is itself the point: activation is gated on
+status alone. -/
+def ActivationVector.admits (vector : ActivationVector) : Bool :=
+  (activate ⟨vector.status, 0, fun _ => 0⟩ 1).isSome
+
+theorem activation_zeroes_exactly_rent_and_creation :
+    activationZeroed = [true, true, false, false, false, false, false] := by
+  native_decide
+
+/-- Exactly one status activates, and the corpus covers all three. -/
+theorem activation_vectors_admit_exactly_pending :
+    activationVectors.map ActivationVector.admits = [true, false, false] := by
+  native_decide
+
+theorem activation_vectors_cover_every_status :
+    activationVectors.map (fun vector => vector.status.tag) = [0, 1, 2] := by
+  native_decide
+
 /-- One physical subset ledger. `rowToEntry` is the canonical ascending map
 from physical rows to selected manifest indices. -/
 structure Ledger (manifestCount rowCount : Nat) where
