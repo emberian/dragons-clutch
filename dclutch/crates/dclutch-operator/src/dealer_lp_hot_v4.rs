@@ -33,6 +33,10 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4;
+use dclutch_execution_strategy_contract::admitted_v3::{
+    ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
+    ADMITTED_STRATEGY_EVIDENCE_START_V3,
+};
 use dclutch_execution_strategy_contract::v2::{
     AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
@@ -58,8 +62,16 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = 8;
-const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize = 6;
+// The admitted CPI frame's evidence suffix is owned by
+// `dclutch_execution_strategy_contract::admitted_v3`, which derives every slot
+// from `ADMITTED_STRATEGY_EVIDENCE_START_V3` and pins the span's length to its
+// last named account. The coordinates below are that table read relative to the
+// start of the suffix, because `strategy_accounts` is the suffix, not the whole
+// frame -- so they are subtracted from the contract's absolute coordinates
+// rather than restated as the numbers they currently evaluate to.
+const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
+const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize =
+    ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3 - ADMITTED_STRATEGY_EVIDENCE_START_V3;
 const DEALER_LP_INJECTED_ACCOUNT_COUNT_V4: usize = 5;
 
 /// Same-finalized physical inputs for one Dealer LP lifecycle instruction.

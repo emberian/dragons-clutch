@@ -298,28 +298,14 @@ fn settle(
 ) -> Result<SettlementV1, ProgramError> {
     let obligation = authenticate_obligation(program_id, accounts, request)?;
     let fee_request = derive_fee_request(accounts, request, program_id, obligation)?;
-    let request_bytes = fee_request.encode().map_err(|_| TradingSbfError::Content)?;
-    let custody_request_digest = hash(&request_bytes).to_bytes();
     let expected_revision = fee_request.custody.expected_revision;
     let resulting_revision = fee_request.custody.resulting_revision;
-    let bump = authenticate_caller_authority(
+    let custody_request_digest = sign_and_invoke(
+        accounts,
         program_id,
-        accounts,
-        &fee_request.custody,
-        custody_request_digest,
+        fee_request,
+        obligation.fee_owed,
         request.caller_authority_hint(),
-    )?;
-    // The obligation is cleared BEFORE the child moves anything, so no path
-    // through the CPI can observe a maker replay that still owes what the
-    // transfer is already spending. The transaction is the rollback boundary
-    // either way; the ordering is what makes that argument unnecessary.
-    clear_fee_owed(accounts, obligation.fee_owed)?;
-    invoke_custody(
-        accounts,
-        &request_bytes,
-        &fee_request.custody,
-        custody_request_digest,
-        bump,
         request.custody_relay(),
     )?;
     authenticate_child_result(
@@ -597,6 +583,53 @@ fn derive_fee_request(
 }
 
 /// Reproduce the caller authority the request's own digest names.
+/// Encode the request, address the authority it names, and spend it.
+///
+/// **THIS FUNCTION EXISTS TO OWN 776 BYTES.** `DelegatedCustodyRequestV2::encode`
+/// returns a `DELEGATED_CUSTODY_REQUEST_BYTES_V2` array, and while that array
+/// lived in `settle` it made `settle` the deepest frame in the whole Trading
+/// link -- 4,032 of 4,096, sixty-four bytes from a toolchain that calls the
+/// overflow undefined behaviour. The bytes are needed at exactly three
+/// consecutive points and nowhere else: to be hashed, to address the caller
+/// authority through that hash, and to be handed to the child. So they live in
+/// the frame of the function that does those three things, and `settle` holds
+/// only the digest that outlives them.
+///
+/// The order is load-bearing and is the order it was written in. The obligation
+/// is cleared BEFORE the child moves anything, so no path through the CPI can
+/// observe a maker replay that still owes what the transfer is already
+/// spending. The transaction is the rollback boundary either way; the ordering
+/// is what makes that argument unnecessary.
+#[inline(never)]
+fn sign_and_invoke(
+    accounts: &[AccountInfo<'_>],
+    program_id: &Pubkey,
+    fee_request: DelegatedCustodyRequestV2,
+    fee_owed: u64,
+    caller_authority_hint: Option<u8>,
+    custody_relay: [u8; 2],
+) -> Result<[u8; 32], ProgramError> {
+    let request_bytes = fee_request.encode().map_err(|_| TradingSbfError::Content)?;
+    let request_digest = hash(&request_bytes).to_bytes();
+    let bump = authenticate_caller_authority(
+        program_id,
+        accounts,
+        &fee_request.custody,
+        request_digest,
+        caller_authority_hint,
+    )?;
+    clear_fee_owed(accounts, fee_owed)?;
+    invoke_custody(
+        accounts,
+        &request_bytes,
+        &fee_request.custody,
+        request_digest,
+        bump,
+        custody_relay,
+    )?;
+    Ok(request_digest)
+}
+
 #[inline(never)]
 fn authenticate_caller_authority(
     program_id: &Pubkey,

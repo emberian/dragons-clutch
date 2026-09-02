@@ -17,8 +17,14 @@
 
 use core::convert::TryFrom;
 
+use crate::generated_runtime_wire_v2 as wire;
+
 /// Version accepted by every successor General record in this module.
-pub const RUNTIME_WIDTH_VERSION_V2: u16 = 2;
+///
+/// `DClutchSemantics.GeneralRuntimeWireV2` authors this tag. That module models
+/// two of the V2 family's records in full; the tag itself is family-wide and
+/// every record below carries it.
+pub const RUNTIME_WIDTH_VERSION_V2: u16 = wire::RUNTIME_WIRE_VERSION_V2;
 /// Exact fixed bytes before the Candidate simplex tail.
 pub const CANDIDATE_HEADER_BYTES_V2: usize = 128;
 /// Exact fixed bytes before the Execution receive and deliver tails.
@@ -28,18 +34,22 @@ pub const PAGE_HEADER_BYTES_V2: usize = 64;
 /// Exact fixed bytes before the Settlement Cursor inventory tail.
 pub const SETTLEMENT_CURSOR_HEADER_BYTES_V2: usize = 88;
 /// Exact fixed bytes before the Verified Candidate input and output tails.
-pub const VERIFIED_CANDIDATE_HEADER_BYTES_V2: usize = 160;
+///
+/// Lean-derived: `GeneralRuntimeWireV2` walks the field sequence and this is
+/// where the walk ends. Nothing in this file states a coordinate the Lean does
+/// not.
+pub const VERIFIED_CANDIDATE_HEADER_BYTES_V2: usize = wire::VERIFIED_CANDIDATE_HEADER_BYTES_V2;
 
 const CANDIDATE_MAGIC: [u8; 8] = *b"DCGCAN02";
 const EXECUTION_MAGIC: [u8; 8] = *b"DCGEXE02";
 const PAGE_MAGIC: [u8; 8] = *b"DCGPAG02";
 const SETTLEMENT_CURSOR_MAGIC: [u8; 8] = *b"DCGSET02";
-const VERIFIED_CANDIDATE_MAGIC: [u8; 8] = *b"DCGVER02";
+const VERIFIED_CANDIDATE_MAGIC: [u8; 8] = wire::VERIFIED_CANDIDATE_MAGIC_V2;
 
 const CANDIDATE_PHASE: u8 = 1;
 const EXECUTION_PHASE: u8 = 2;
 const PAGE_PHASE: u8 = 3;
-const VERIFIED_PHASE: u8 = 9;
+const VERIFIED_PHASE: u8 = wire::VERIFIED_CANDIDATE_PHASE_V2;
 
 /// Typed canonical Settlement Cursor coordinates for generic Effect writes.
 ///
@@ -808,82 +818,82 @@ pub struct VerifiedCandidateLayoutV2;
 impl VerifiedCandidateLayoutV2 {
     /// Magic field offset.
     pub const fn magic() -> u32 {
-        0
+        wire::VERIFIED_CANDIDATE_MAGIC_OFFSET_V2
     }
 
     /// Version field offset.
     pub const fn version() -> u32 {
-        8
+        wire::VERIFIED_CANDIDATE_VERSION_OFFSET_V2
     }
 
     /// Phase field offset.
     pub const fn phase() -> u32 {
-        10
+        wire::VERIFIED_CANDIDATE_PHASE_OFFSET_V2
     }
 
     /// Outcome-count field offset.
     pub const fn outcome_count() -> u32 {
-        12
+        wire::VERIFIED_CANDIDATE_OUTCOME_COUNT_OFFSET_V2
     }
 
     /// Page-count field offset.
     pub const fn page_count() -> u32 {
-        16
+        wire::VERIFIED_CANDIDATE_PAGE_COUNT_OFFSET_V2
     }
 
     /// Candidate-coordinate field offset.
     pub const fn candidate_coordinate() -> u32 {
-        20
+        wire::VERIFIED_CANDIDATE_CANDIDATE_COORDINATE_OFFSET_V2
     }
 
     /// Terminal verifier revision offset.
     pub const fn revision() -> u32 {
-        24
+        wire::VERIFIED_CANDIDATE_REVISION_OFFSET_V2
     }
 
     /// Candidate identity offset.
     pub const fn candidate_id() -> u32 {
-        32
+        wire::VERIFIED_CANDIDATE_CANDIDATE_ID_OFFSET_V2
     }
 
     /// Product identity offset.
     pub const fn product_id() -> u32 {
-        64
+        wire::VERIFIED_CANDIDATE_PRODUCT_ID_OFFSET_V2
     }
 
     /// Batch identity offset.
     pub const fn batch_id() -> u32 {
-        96
+        wire::VERIFIED_CANDIDATE_BATCH_ID_OFFSET_V2
     }
 
     /// Filled-lots aggregate offset.
     pub const fn filled_lots() -> u32 {
-        128
+        wire::VERIFIED_CANDIDATE_FILLED_LOTS_OFFSET_V2
     }
 
     /// Quote-debit aggregate offset.
     pub const fn quote_debit() -> u32 {
-        136
+        wire::VERIFIED_CANDIDATE_QUOTE_DEBIT_OFFSET_V2
     }
 
     /// Quote-credit aggregate offset.
     pub const fn quote_credit() -> u32 {
-        144
+        wire::VERIFIED_CANDIDATE_QUOTE_CREDIT_OFFSET_V2
     }
 
     /// Price-scale offset.
     pub const fn price_scale() -> u32 {
-        152
+        wire::VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2
     }
 
     /// First claim-input tail byte.
     pub const fn claim_inputs_base() -> u32 {
-        160
+        wire::VERIFIED_CANDIDATE_TAIL_BASE_OFFSET_V2
     }
 
     /// Width of one tail item.
     pub const fn tail_item_stride() -> u32 {
-        8
+        wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2
     }
 }
 
@@ -904,17 +914,44 @@ impl<'a> VerifiedCandidateV2<'a> {
             VERIFIED_PHASE,
         )?;
         let header = VerifiedCandidateHeaderV2 {
-            outcome_count: u32_at(bytes, 12)?,
-            page_count: u32_at(bytes, 16)?,
-            candidate_coordinate: u32_at(bytes, 20)?,
-            revision: u64_at(bytes, 24)?,
-            candidate_id: array32_at(bytes, 32)?,
-            product_id: array32_at(bytes, 64)?,
-            batch_id: array32_at(bytes, 96)?,
-            filled_lots: u64_at(bytes, 128)?,
-            quote_debit: u64_at(bytes, 136)?,
-            quote_credit: u64_at(bytes, 144)?,
-            price_scale: u64_at(bytes, 152)?,
+            outcome_count: u32_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_OUTCOME_COUNT_OFFSET_V2 as usize,
+            )?,
+            page_count: u32_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_PAGE_COUNT_OFFSET_V2 as usize,
+            )?,
+            candidate_coordinate: u32_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_CANDIDATE_COORDINATE_OFFSET_V2 as usize,
+            )?,
+            revision: u64_at(bytes, wire::VERIFIED_CANDIDATE_REVISION_OFFSET_V2 as usize)?,
+            candidate_id: array32_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_CANDIDATE_ID_OFFSET_V2 as usize,
+            )?,
+            product_id: array32_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_PRODUCT_ID_OFFSET_V2 as usize,
+            )?,
+            batch_id: array32_at(bytes, wire::VERIFIED_CANDIDATE_BATCH_ID_OFFSET_V2 as usize)?,
+            filled_lots: u64_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_FILLED_LOTS_OFFSET_V2 as usize,
+            )?,
+            quote_debit: u64_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_QUOTE_DEBIT_OFFSET_V2 as usize,
+            )?,
+            quote_credit: u64_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_QUOTE_CREDIT_OFFSET_V2 as usize,
+            )?,
+            price_scale: u64_at(
+                bytes,
+                wire::VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2 as usize,
+            )?,
         };
         exact_width(bytes, verified_candidate_len(header.outcome_count)?)?;
         validate_verified_candidate_header(header)?;
@@ -936,27 +973,83 @@ impl<'a> VerifiedCandidateV2<'a> {
         exact_width(output, verified_candidate_len(header_value.outcome_count)?)?;
         output.fill(0);
         write_header(output, &VERIFIED_CANDIDATE_MAGIC, VERIFIED_PHASE)?;
-        put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.page_count)?;
-        put_u32(output, 20, header_value.candidate_coordinate)?;
-        put_u64(output, 24, header_value.revision)?;
-        put(output, 32, &header_value.candidate_id)?;
-        put(output, 64, &header_value.product_id)?;
-        put(output, 96, &header_value.batch_id)?;
-        put_u64(output, 128, header_value.filled_lots)?;
-        put_u64(output, 136, header_value.quote_debit)?;
-        put_u64(output, 144, header_value.quote_credit)?;
-        put_u64(output, 152, header_value.price_scale)?;
+        put_u32(
+            output,
+            wire::VERIFIED_CANDIDATE_OUTCOME_COUNT_OFFSET_V2 as usize,
+            header_value.outcome_count,
+        )?;
+        put_u32(
+            output,
+            wire::VERIFIED_CANDIDATE_PAGE_COUNT_OFFSET_V2 as usize,
+            header_value.page_count,
+        )?;
+        put_u32(
+            output,
+            wire::VERIFIED_CANDIDATE_CANDIDATE_COORDINATE_OFFSET_V2 as usize,
+            header_value.candidate_coordinate,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_REVISION_OFFSET_V2 as usize,
+            header_value.revision,
+        )?;
+        put(
+            output,
+            wire::VERIFIED_CANDIDATE_CANDIDATE_ID_OFFSET_V2 as usize,
+            &header_value.candidate_id,
+        )?;
+        put(
+            output,
+            wire::VERIFIED_CANDIDATE_PRODUCT_ID_OFFSET_V2 as usize,
+            &header_value.product_id,
+        )?;
+        put(
+            output,
+            wire::VERIFIED_CANDIDATE_BATCH_ID_OFFSET_V2 as usize,
+            &header_value.batch_id,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_FILLED_LOTS_OFFSET_V2 as usize,
+            header_value.filled_lots,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_QUOTE_DEBIT_OFFSET_V2 as usize,
+            header_value.quote_debit,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_QUOTE_CREDIT_OFFSET_V2 as usize,
+            header_value.quote_credit,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2 as usize,
+            header_value.price_scale,
+        )?;
         let outputs = verified_outputs_offset(header_value.outcome_count)?;
         for (index, value) in claim_inputs.iter().enumerate() {
             put_u64(
                 output,
-                tail_offset(VERIFIED_CANDIDATE_HEADER_BYTES_V2, index, 8)?,
+                tail_offset(
+                    VERIFIED_CANDIDATE_HEADER_BYTES_V2,
+                    index,
+                    wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+                )?,
                 *value,
             )?;
         }
         for (index, value) in claim_outputs.iter().enumerate() {
-            put_u64(output, tail_offset(outputs, index, 8)?, *value)?;
+            put_u64(
+                output,
+                tail_offset(
+                    outputs,
+                    index,
+                    wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+                )?,
+                *value,
+            )?;
         }
         Ok(())
     }
@@ -974,23 +1067,71 @@ impl<'a> VerifiedCandidateV2<'a> {
         output: &mut [u8],
     ) -> RuntimeWidthResultV2<()> {
         validate_verified_candidate_header(header_value)?;
-        let tail_bytes = derived_len(0, header_value.outcome_count, 8)?;
+        let tail_bytes = derived_len(
+            0,
+            header_value.outcome_count,
+            wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+        )?;
         exact_width(claim_inputs_le, tail_bytes)?;
         exact_width(claim_outputs_le, tail_bytes)?;
         exact_width(output, verified_candidate_len(header_value.outcome_count)?)?;
         output.fill(0);
         write_header(output, &VERIFIED_CANDIDATE_MAGIC, VERIFIED_PHASE)?;
-        put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.page_count)?;
-        put_u32(output, 20, header_value.candidate_coordinate)?;
-        put_u64(output, 24, header_value.revision)?;
-        put(output, 32, &header_value.candidate_id)?;
-        put(output, 64, &header_value.product_id)?;
-        put(output, 96, &header_value.batch_id)?;
-        put_u64(output, 128, header_value.filled_lots)?;
-        put_u64(output, 136, header_value.quote_debit)?;
-        put_u64(output, 144, header_value.quote_credit)?;
-        put_u64(output, 152, header_value.price_scale)?;
+        put_u32(
+            output,
+            wire::VERIFIED_CANDIDATE_OUTCOME_COUNT_OFFSET_V2 as usize,
+            header_value.outcome_count,
+        )?;
+        put_u32(
+            output,
+            wire::VERIFIED_CANDIDATE_PAGE_COUNT_OFFSET_V2 as usize,
+            header_value.page_count,
+        )?;
+        put_u32(
+            output,
+            wire::VERIFIED_CANDIDATE_CANDIDATE_COORDINATE_OFFSET_V2 as usize,
+            header_value.candidate_coordinate,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_REVISION_OFFSET_V2 as usize,
+            header_value.revision,
+        )?;
+        put(
+            output,
+            wire::VERIFIED_CANDIDATE_CANDIDATE_ID_OFFSET_V2 as usize,
+            &header_value.candidate_id,
+        )?;
+        put(
+            output,
+            wire::VERIFIED_CANDIDATE_PRODUCT_ID_OFFSET_V2 as usize,
+            &header_value.product_id,
+        )?;
+        put(
+            output,
+            wire::VERIFIED_CANDIDATE_BATCH_ID_OFFSET_V2 as usize,
+            &header_value.batch_id,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_FILLED_LOTS_OFFSET_V2 as usize,
+            header_value.filled_lots,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_QUOTE_DEBIT_OFFSET_V2 as usize,
+            header_value.quote_debit,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_QUOTE_CREDIT_OFFSET_V2 as usize,
+            header_value.quote_credit,
+        )?;
+        put_u64(
+            output,
+            wire::VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2 as usize,
+            header_value.price_scale,
+        )?;
         put(output, VERIFIED_CANDIDATE_HEADER_BYTES_V2, claim_inputs_le)?;
         put(
             output,
@@ -1012,7 +1153,7 @@ impl<'a> VerifiedCandidateV2<'a> {
             tail_offset(
                 VERIFIED_CANDIDATE_HEADER_BYTES_V2,
                 usize_from_u32(index)?,
-                8,
+                wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
             )?,
         )
     }
@@ -1025,7 +1166,7 @@ impl<'a> VerifiedCandidateV2<'a> {
             tail_offset(
                 verified_outputs_offset(self.header.outcome_count)?,
                 usize_from_u32(index)?,
-                8,
+                wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
             )?,
         )
     }
@@ -1066,7 +1207,11 @@ pub fn settlement_cursor_len(outcome_count: u32) -> RuntimeWidthResultV2<usize> 
 
 /// Return the exact Verified Candidate width for a hostile runtime outcome count.
 pub fn verified_candidate_len(outcome_count: u32) -> RuntimeWidthResultV2<usize> {
-    derived_len(VERIFIED_CANDIDATE_HEADER_BYTES_V2, outcome_count, 16)
+    derived_len(
+        VERIFIED_CANDIDATE_HEADER_BYTES_V2,
+        outcome_count,
+        wire::VERIFIED_CANDIDATE_TAIL_COUNT_V2 * wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+    )
 }
 
 fn validate_candidate_header(value: CandidateHeaderV2) -> RuntimeWidthResultV2<()> {
@@ -1163,7 +1308,11 @@ fn execution_deliver_offset(outcome_count: u32) -> RuntimeWidthResultV2<usize> {
 }
 
 fn verified_outputs_offset(outcome_count: u32) -> RuntimeWidthResultV2<usize> {
-    derived_len(VERIFIED_CANDIDATE_HEADER_BYTES_V2, outcome_count, 8)
+    derived_len(
+        VERIFIED_CANDIDATE_HEADER_BYTES_V2,
+        outcome_count,
+        wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+    )
 }
 
 fn derived_len(header: usize, count: u32, item_width: usize) -> RuntimeWidthResultV2<usize> {

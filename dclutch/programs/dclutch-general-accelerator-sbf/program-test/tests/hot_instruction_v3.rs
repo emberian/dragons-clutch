@@ -43,6 +43,7 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
+use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
 use dclutch_execution_strategy_contract::v2::{
     BankTransportV2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -977,13 +978,15 @@ fn generated_instruction_accounts(action: Action) -> usize {
 
 /// Admitted-AOT transport accounts carried between Hot38 and the runtime frame.
 ///
-/// Trading's own `ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2` minus its
-/// `INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2`: the certificate, admission and
-/// ArtifactRelease record pairs plus the accelerator deployment and its
-/// ProgramData. Those two constants live in the Trading program crate, which
-/// this detached workspace does not depend on, so the count is restated here
-/// and the builder's own `StrategyGeometry` refusal is what pins it.
-const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = 8;
+/// The certificate, admission and ArtifactRelease record pairs plus the
+/// accelerator deployment and its ProgramData. The comment here used to derive
+/// the count from Trading's `ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2` minus its
+/// `INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2` and restate it as `8`, on the ground
+/// that those two live in the Trading program crate this detached workspace
+/// does not depend on. It does not need them: the span is owned by
+/// `admitted_v3`, in the execution-strategy contract this file already imports,
+/// and that owner pins its length to its own last named coordinate.
+const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
 
 /// Build, then mutate one field of the accepted snapshot and re-run the builder.
 fn refuse_after(

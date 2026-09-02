@@ -1073,6 +1073,66 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# locks -- does every tracked Cargo workspace's lockfile still RESOLVE.
+#
+# The cheap half of `workspaces`, split out because the expensive half is not on
+# `all` and this class of defect is therefore caught only at a cut. It is caught
+# late and it is caught expensively: on 2026-09-02 THREE separate checked release
+# candidates refused on a stale lock, each after eight minutes of building
+# everything -- `b2ac8a79` for cohort-11, the successor workspace in `9c5e039a`,
+# and the root workspace in the commit that added this tier. Each was ONE LINE:
+# a lane added a path dependency to a Cargo.toml and did not record it.
+#
+# `cargo metadata --locked --offline` compiles NOTHING, so this is 70 workspaces
+# in under thirty seconds -- measured 28.7s on the author's laptop, against the
+# many minutes `workspaces` needs. That is cheap enough to run on every push,
+# which is the whole argument for splitting it out.
+#
+# One root failure CASCADES: a member crate resolves through its workspace root,
+# so a stale root lock reports every member stale too. Fixing the root's single
+# line cleared all fourteen rows in the run that motivated this. The report says
+# so, because fourteen rows reads as fourteen problems.
+#
+# WHAT IT DOES NOT CATCH, stated so the green is not read as more than it is.
+# `--manifest-path` on a crate that is a MEMBER of an outer workspace resolves
+# that outer workspace, so a member carrying its own `Cargo.lock` has that lock
+# checked only insofar as the root's is: breaking one directly leaves this tier
+# green, which I measured before shipping it. Discovering true workspace roots
+# from their `[workspace]` tables is what `check-all-workspaces.py` does, and it
+# stays the cut tier for that reason. This one is the cheap net under the root
+# and the genuine standalone roots, not a replacement for it.
+tier_locks() {
+  say "locks -- every tracked Cargo workspace lock resolves"
+  if ! have cargo; then
+    record locks $EXIT_PREREQ_MISSING "cargo not on PATH"
+    return
+  fi
+  local stale=() manifest dir
+  # EVERY row runs and every row is reported; no early stop.
+  while IFS= read -r manifest; do
+    dir="$(dirname "$manifest")"
+    [ -f "$dir/Cargo.toml" ] || continue
+    if ! (cd "$repo_root" && env -u CARGO_TARGET_DIR cargo metadata \
+        --locked --offline --format-version 1 \
+        --manifest-path "$dir/Cargo.toml" >/dev/null 2>&1); then
+      stale+=("${dir#"$repo_root"/}")
+    fi
+  done < <(find "$repo_root" -name Cargo.lock -not -path '*/target/*' | sort)
+  if [ "${#stale[@]}" != 0 ]; then
+    note "These workspaces have a lockfile that no longer resolves:"
+    local row
+    for row in "${stale[@]}"; do note "    $row"; done
+    note "A member resolves through its workspace ROOT, so if '.' is listed the"
+    note "others may be its cascade: fix the root lock and re-run before reading"
+    note "this as ${#stale[@]} separate problems."
+    note "Each is one \`cargo metadata --offline\` in a clean worktree, committed"
+    note "with the manifest change that needed it."
+    record locks $EXIT_GATE_FAILED "${#stale[@]} workspace lockfile(s) do not resolve under --locked"
+    return
+  fi
+  record locks $EXIT_PASS
+}
+
 # workspaces -- does EVERY tracked Cargo workspace still check. The cut tier.
 #
 # The root workspace is not an inventory of this repository: program-test,
@@ -1701,9 +1761,9 @@ main() {
       list_tiers
       exit 0
       ;;
-    cheap) tiers+=(census fmt seam runbooks release) ;;
-    all) tiers+=(census fmt seam runbooks release sbom sbfcontracts web emission frameguard journey programs suites) ;;
-    census | fmt | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
+    cheap) tiers+=(census fmt locks seam runbooks release) ;;
+    all) tiers+=(census fmt locks seam runbooks release sbom sbfcontracts web emission frameguard journey programs suites) ;;
+    census | fmt | locks | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

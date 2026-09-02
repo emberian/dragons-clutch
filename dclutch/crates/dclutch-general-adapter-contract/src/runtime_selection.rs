@@ -12,6 +12,7 @@ use dclutch_sha256_adapter::digest;
 use dclutch_general_codec::SelectionPolicyV1;
 
 use crate::{
+    generated_runtime_wire_v2 as wire,
     runtime_verify::{
         RuntimeCandidateComparisonKeyV2, RuntimeVerifyErrorV2, runtime_candidate_key_better_v2,
         runtime_verified_balance_v2,
@@ -20,12 +21,16 @@ use crate::{
 };
 
 /// Exact byte width of a successor General selection cursor.
-pub const RUNTIME_SELECTION_CURSOR_BYTES_V2: usize = 224;
+///
+/// This layout has one author and it is `DClutchSemantics.GeneralRuntimeWireV2`,
+/// which derives every offset below by walking a field sequence. Nothing in this
+/// file may state a coordinate the Lean does not.
+pub const RUNTIME_SELECTION_CURSOR_BYTES_V2: usize = wire::RUNTIME_SELECTION_CURSOR_BYTES_V2;
 
-const MAGIC: [u8; 8] = *b"DCGSEL02";
-const VERSION: u16 = 2;
-const PHASE_OPEN: u8 = 1;
-const PHASE_FROZEN: u8 = 2;
+const MAGIC: [u8; 8] = wire::RUNTIME_SELECTION_MAGIC_V2;
+const VERSION: u16 = wire::RUNTIME_WIRE_VERSION_V2;
+const PHASE_OPEN: u8 = wire::RUNTIME_SELECTION_PHASE_OPEN_V2;
+const PHASE_FROZEN: u8 = wire::RUNTIME_SELECTION_PHASE_FROZEN_V2;
 
 /// Typed canonical offsets consumed by the generic EffectProgram artifact.
 ///
@@ -47,82 +52,82 @@ impl RuntimeSelectionLayoutV2 {
 
     /// Magic byte offset.
     pub const fn magic() -> u32 {
-        0
+        wire::RUNTIME_SELECTION_MAGIC_OFFSET_V2
     }
 
     /// Version byte offset.
     pub const fn version() -> u32 {
-        8
+        wire::RUNTIME_SELECTION_VERSION_OFFSET_V2
     }
 
     /// Open/frozen phase byte offset.
     pub const fn phase() -> u32 {
-        10
+        wire::RUNTIME_SELECTION_PHASE_OFFSET_V2
     }
 
     /// Product-derived outcome-count byte offset.
     pub const fn outcome_count() -> u32 {
-        12
+        wire::RUNTIME_SELECTION_OUTCOME_COUNT_OFFSET_V2
     }
 
     /// Optimistic selection revision byte offset.
     pub const fn revision() -> u32 {
-        16
+        wire::RUNTIME_SELECTION_REVISION_OFFSET_V2
     }
 
     /// Count of distinct submitted certificates considered.
     pub const fn submitted_count() -> u32 {
-        24
+        wire::RUNTIME_SELECTION_SUBMITTED_COUNT_OFFSET_V2
     }
 
     /// Coordinate of the selected Candidate in its immutable Batch.
     pub const fn best_candidate_coordinate() -> u32 {
-        28
+        wire::RUNTIME_SELECTION_BEST_CANDIDATE_COORDINATE_OFFSET_V2
     }
 
     /// Verification revision of the selected certificate.
     pub const fn best_verified_revision() -> u32 {
-        32
+        wire::RUNTIME_SELECTION_BEST_VERIFIED_REVISION_OFFSET_V2
     }
 
     /// Exact price denominator shared by the comparison domain.
     pub const fn price_scale() -> u32 {
-        40
+        wire::RUNTIME_SELECTION_PRICE_SCALE_OFFSET_V2
     }
 
     /// Product content identity byte offset.
     pub const fn product_id() -> u32 {
-        48
+        wire::RUNTIME_SELECTION_PRODUCT_ID_OFFSET_V2
     }
 
     /// Batch content identity byte offset.
     pub const fn batch_id() -> u32 {
-        80
+        wire::RUNTIME_SELECTION_BATCH_ID_OFFSET_V2
     }
 
     /// Interpreted selection-policy content identity byte offset.
     pub const fn policy_id() -> u32 {
-        112
+        wire::RUNTIME_SELECTION_POLICY_ID_OFFSET_V2
     }
 
     /// Best valid submitted Candidate identity byte offset.
     pub const fn best_candidate_id() -> u32 {
-        144
+        wire::RUNTIME_SELECTION_BEST_CANDIDATE_ID_OFFSET_V2
     }
 
     /// Digest of the exact selected verified-candidate record.
     pub const fn best_verified_digest() -> u32 {
-        176
+        wire::RUNTIME_SELECTION_BEST_VERIFIED_DIGEST_OFFSET_V2
     }
 
     /// Filled-lots component of the persisted best-candidate comparison key.
     pub const fn best_filled_lots() -> u32 {
-        208
+        wire::RUNTIME_SELECTION_BEST_FILLED_LOTS_OFFSET_V2
     }
 
     /// Quote-surplus component of the persisted best-candidate comparison key.
     pub const fn best_quote_surplus() -> u32 {
-        216
+        wire::RUNTIME_SELECTION_BEST_QUOTE_SURPLUS_OFFSET_V2
     }
 }
 
@@ -197,27 +202,57 @@ impl<'a> RuntimeSelectionCursorV2<'a> {
     /// Decode one exact canonical selection cursor.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() != RUNTIME_SELECTION_CURSOR_BYTES_V2
-            || bytes.get(..8) != Some(MAGIC.as_slice())
-            || read_u16(bytes, 8)? != VERSION
-            || byte(bytes, 11)? != 0
+            || bytes.get(..wire::RUNTIME_SELECTION_MAGIC_BYTES_V2) != Some(MAGIC.as_slice())
+            || read_u16(bytes, wire::RUNTIME_SELECTION_VERSION_OFFSET_V2 as usize)? != VERSION
+            || byte(bytes, wire::RUNTIME_SELECTION_RESERVED_OFFSET_V2 as usize)? != 0
         {
             return Err(RuntimeSelectionErrorV2::InvalidEncoding);
         }
         let header = RuntimeSelectionHeaderV2 {
-            outcome_count: read_u32(bytes, 12)?,
-            revision: read_u64(bytes, 16)?,
-            submitted_count: read_u32(bytes, 24)?,
-            best_candidate_coordinate: read_u32(bytes, 28)?,
-            best_verified_revision: read_u64(bytes, 32)?,
-            price_scale: read_u64(bytes, 40)?,
-            product_id: read_array32(bytes, 48)?,
-            batch_id: read_array32(bytes, 80)?,
-            policy_id: read_array32(bytes, 112)?,
-            best_candidate_id: read_array32(bytes, 144)?,
-            best_verified_digest: read_array32(bytes, 176)?,
-            best_filled_lots: read_u64(bytes, 208)?,
-            best_quote_surplus: read_u64(bytes, 216)?,
-            phase: RuntimeSelectionPhaseV2::decode(byte(bytes, 10)?)?,
+            outcome_count: read_u32(
+                bytes,
+                wire::RUNTIME_SELECTION_OUTCOME_COUNT_OFFSET_V2 as usize,
+            )?,
+            revision: read_u64(bytes, wire::RUNTIME_SELECTION_REVISION_OFFSET_V2 as usize)?,
+            submitted_count: read_u32(
+                bytes,
+                wire::RUNTIME_SELECTION_SUBMITTED_COUNT_OFFSET_V2 as usize,
+            )?,
+            best_candidate_coordinate: read_u32(
+                bytes,
+                wire::RUNTIME_SELECTION_BEST_CANDIDATE_COORDINATE_OFFSET_V2 as usize,
+            )?,
+            best_verified_revision: read_u64(
+                bytes,
+                wire::RUNTIME_SELECTION_BEST_VERIFIED_REVISION_OFFSET_V2 as usize,
+            )?,
+            price_scale: read_u64(
+                bytes,
+                wire::RUNTIME_SELECTION_PRICE_SCALE_OFFSET_V2 as usize,
+            )?,
+            product_id: read_array32(bytes, wire::RUNTIME_SELECTION_PRODUCT_ID_OFFSET_V2 as usize)?,
+            batch_id: read_array32(bytes, wire::RUNTIME_SELECTION_BATCH_ID_OFFSET_V2 as usize)?,
+            policy_id: read_array32(bytes, wire::RUNTIME_SELECTION_POLICY_ID_OFFSET_V2 as usize)?,
+            best_candidate_id: read_array32(
+                bytes,
+                wire::RUNTIME_SELECTION_BEST_CANDIDATE_ID_OFFSET_V2 as usize,
+            )?,
+            best_verified_digest: read_array32(
+                bytes,
+                wire::RUNTIME_SELECTION_BEST_VERIFIED_DIGEST_OFFSET_V2 as usize,
+            )?,
+            best_filled_lots: read_u64(
+                bytes,
+                wire::RUNTIME_SELECTION_BEST_FILLED_LOTS_OFFSET_V2 as usize,
+            )?,
+            best_quote_surplus: read_u64(
+                bytes,
+                wire::RUNTIME_SELECTION_BEST_QUOTE_SURPLUS_OFFSET_V2 as usize,
+            )?,
+            phase: RuntimeSelectionPhaseV2::decode(byte(
+                bytes,
+                wire::RUNTIME_SELECTION_PHASE_OFFSET_V2 as usize,
+            )?)?,
         };
         validate_header(header)?;
         Ok(Self { bytes, header })
@@ -397,22 +432,86 @@ fn encode_into(header: RuntimeSelectionHeaderV2, output: &mut [u8]) -> Result<()
     }
     validate_header(header)?;
     output.fill(0);
-    put(output, 0, &MAGIC)?;
-    put(output, 8, &VERSION.to_le_bytes())?;
-    put_byte(output, 10, header.phase.tag())?;
-    put(output, 12, &header.outcome_count.to_le_bytes())?;
-    put(output, 16, &header.revision.to_le_bytes())?;
-    put(output, 24, &header.submitted_count.to_le_bytes())?;
-    put(output, 28, &header.best_candidate_coordinate.to_le_bytes())?;
-    put(output, 32, &header.best_verified_revision.to_le_bytes())?;
-    put(output, 40, &header.price_scale.to_le_bytes())?;
-    put(output, 48, &header.product_id)?;
-    put(output, 80, &header.batch_id)?;
-    put(output, 112, &header.policy_id)?;
-    put(output, 144, &header.best_candidate_id)?;
-    put(output, 176, &header.best_verified_digest)?;
-    put(output, 208, &header.best_filled_lots.to_le_bytes())?;
-    put(output, 216, &header.best_quote_surplus.to_le_bytes())
+    put(
+        output,
+        wire::RUNTIME_SELECTION_MAGIC_OFFSET_V2 as usize,
+        &MAGIC,
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_VERSION_OFFSET_V2 as usize,
+        &VERSION.to_le_bytes(),
+    )?;
+    put_byte(
+        output,
+        wire::RUNTIME_SELECTION_PHASE_OFFSET_V2 as usize,
+        header.phase.tag(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_OUTCOME_COUNT_OFFSET_V2 as usize,
+        &header.outcome_count.to_le_bytes(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_REVISION_OFFSET_V2 as usize,
+        &header.revision.to_le_bytes(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_SUBMITTED_COUNT_OFFSET_V2 as usize,
+        &header.submitted_count.to_le_bytes(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_BEST_CANDIDATE_COORDINATE_OFFSET_V2 as usize,
+        &header.best_candidate_coordinate.to_le_bytes(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_BEST_VERIFIED_REVISION_OFFSET_V2 as usize,
+        &header.best_verified_revision.to_le_bytes(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_PRICE_SCALE_OFFSET_V2 as usize,
+        &header.price_scale.to_le_bytes(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_PRODUCT_ID_OFFSET_V2 as usize,
+        &header.product_id,
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_BATCH_ID_OFFSET_V2 as usize,
+        &header.batch_id,
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_POLICY_ID_OFFSET_V2 as usize,
+        &header.policy_id,
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_BEST_CANDIDATE_ID_OFFSET_V2 as usize,
+        &header.best_candidate_id,
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_BEST_VERIFIED_DIGEST_OFFSET_V2 as usize,
+        &header.best_verified_digest,
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_BEST_FILLED_LOTS_OFFSET_V2 as usize,
+        &header.best_filled_lots.to_le_bytes(),
+    )?;
+    put(
+        output,
+        wire::RUNTIME_SELECTION_BEST_QUOTE_SURPLUS_OFFSET_V2 as usize,
+        &header.best_quote_surplus.to_le_bytes(),
+    )
 }
 
 fn validate_header(header: RuntimeSelectionHeaderV2) -> Result<()> {
@@ -713,10 +812,12 @@ mod tests {
             &mut selection,
         )
         .expect("selection");
-        assert_eq!(RuntimeSelectionLayoutV2::magic(), 0);
-        assert_eq!(RuntimeSelectionLayoutV2::version(), 8);
-        assert_eq!(RuntimeSelectionLayoutV2::best_filled_lots(), 208);
-        assert_eq!(RuntimeSelectionLayoutV2::best_quote_surplus(), 216);
+        // The four literal offsets that used to sit here have moved to
+        // `DClutchSemantics.GeneralRuntimeWireV2`, which derives them and pins
+        // them in `runtime_wire_placements_are_exact`. Restating them here made
+        // this test a second author of two coordinates; what it is for is that
+        // the typed projection and the decoder agree on where a value lives,
+        // which is what the reads below check.
         assert_eq!(
             selection[RuntimeSelectionLayoutV2::phase() as usize],
             PHASE_OPEN

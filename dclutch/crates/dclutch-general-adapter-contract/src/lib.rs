@@ -60,6 +60,11 @@ pub mod runtime_settlement;
 pub mod runtime_verify;
 /// Runtime-width borrowed records without fixed outcome or page capacities.
 pub mod runtime_width;
+
+#[rustfmt::skip]
+#[allow(dead_code, missing_docs)]
+#[path = "generated_runtime_wire_v2.rs"]
+mod generated_runtime_wire_v2;
 /// Stateless General binding to generic Shadow-AOT and chunked accelerator transport.
 pub mod shadow_accelerator_v3;
 /// Lean-owned action-specific request projections for generic Trading.

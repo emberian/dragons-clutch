@@ -2782,3 +2782,21 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `f49089cf` a header coordinate the codec read differently from the emitter. DEALER `074a30ed`: the equity Add's transcript
   was 9.5 MB of ELF with a two-author tail.
 - Cuts: `307bb3526`, `eb3ee1060`, `64b9d9d73`.
+
+### Lane map delta — 2026-09-02 06:00
+- POPULATION `ad6d48cc39f881e8e` closed: **release candidate GREEN at `e39efbb0`** (first in this cohort line; four one-line
+  defects between the frame fix and green, two of them the stale-lock class → `90cc4b24` adds a 28.7 s `locks` CI tier over
+  70 workspaces). Cohort-12 staged whole (`~/jobs/dclutch-cohort12-20260902/`: keys, runbook at 50 bps, ELFs byte-identical
+  twice) and stopped before the irreversible close. → COHORT-12 **`a3889c0783d45215b`** executes the spending half: close
+  cohort-11, redeploy, ladder, found at 50 bps, admissions, a FEE-BEARING trade + settlement, census across the fill.
+- DEALER `074a30ed`: the runtime transcript hashed **9.5 MB of loader programdata** (~4.75M CU) — the earlier "Add executes at
+  1.04M" came from artifacts with frame diagnostics and is struck; loader bytes are identity, not prestate (four sites);
+  `tail_count` had two authors. Honest Add now reaches the accelerator: `0xD001` with one code for the whole view → split.
+  A disarmed hostile (`assert!(true || …)` from `ac24f70c`) must be re-armed when the Add executes.
+- RIP unit 5 (`f49089cf`, `d07885d4`): 30 generated offsets wired where generic helpers hardcoded them; preimage→id pairs
+  (94) verified by no gate → unit 6 adds it to census; 21 test-only shipped builders to adjudicate. Three operator geometry
+  tests red since `e3298c9a` → GENERAL.
+- EMISSION successor: unguarded emissions **0**; GeneralV5Assurance corpus (`02a0f461`); next the 224-byte cursor and the
+  verified-candidate record (no Lean author), `le_numeric_id`, then a Lean-emitted TS register.
+- Active: DIRECT `a8931c4eecc29c8fb` (bisecting +31k CU), GENERAL `a39412e2663ca5f8d`, DEALER `a929bd24b931c8297`, EMISSION
+  `addb8204ef3d72bb0`, STRUCTURED `ae1559fc2d9501927`, WEB `afb43355b9428a30c`, RIP `ae0b9b375646fb099`, COHORT-12 `a3889c0783d45215b`.

@@ -1910,6 +1910,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-direct-codec",
  "dclutch-market-core-codec",
+ "dclutch-operator",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",

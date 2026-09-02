@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**78 generated files from 76 emitters. 78 guarded (76 emitters), 0 unguarded (0 emitters).**
+**79 generated files from 77 emitters. 79 guarded (77 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -36,6 +36,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-execution-strategy-contract/tests/v2_generator_fresh.rs` | cargo-test | `EmitExecutionStrategyV2AbiRust.lean` |
 | `crates/dclutch-fractional-claim-kernel/check-generated.sh` | shell | `EmitFractionalClaimV1AbiRust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/request_profiles_generator_fresh.rs` | cargo-test | `EmitGeneralRequestProfilesV1Rust.lean` |
+| `crates/dclutch-general-adapter-contract/tests/runtime_wire_v2_generator_fresh.rs` | cargo-test | `EmitGeneralRuntimeWireV2Rust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/selection_decision_corpus_generator_fresh.rs` | cargo-test | `EmitGeneralSelectionDecisionCorpusRust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/transition_programs_generator_fresh.rs` | cargo-test | `EmitGeneralTransitionV3Rust.lean` |
 | `crates/dclutch-general-codec/tests/generator_fresh.rs` | cargo-test | `EmitGeneralControllerAbiRust.lean` |
@@ -111,6 +112,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-execution-strategy-contract/src/generated_v2.rs` | `EmitExecutionStrategyV2AbiRust.lean` |
 | `crates/dclutch-fractional-claim-kernel/src/generated_abi.rs` | `EmitFractionalClaimV1AbiRust.lean` |
 | `crates/dclutch-general-adapter-contract/src/generated_request_profiles_v1.rs` | `EmitGeneralRequestProfilesV1Rust.lean` |
+| `crates/dclutch-general-adapter-contract/src/generated_runtime_wire_v2.rs` | `EmitGeneralRuntimeWireV2Rust.lean` |
 | `crates/dclutch-general-adapter-contract/src/generated_transition_programs_v3.rs` | `EmitGeneralTransitionV3Rust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/generated/selection_decision_corpus_v1.rs` | `EmitGeneralSelectionDecisionCorpusRust.lean` |
 | `crates/dclutch-general-codec/src/generated_general_controller.rs` | `EmitGeneralControllerAbiRust.lean` |

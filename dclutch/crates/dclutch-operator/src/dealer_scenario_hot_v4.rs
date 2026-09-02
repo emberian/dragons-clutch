@@ -49,8 +49,21 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = 8;
-const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize = 6;
+use dclutch_execution_strategy_contract::admitted_v3::{
+    ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
+    ADMITTED_STRATEGY_EVIDENCE_START_V3,
+};
+
+// The admitted CPI frame's evidence suffix is owned by
+// `dclutch_execution_strategy_contract::admitted_v3`, which derives every slot
+// from `ADMITTED_STRATEGY_EVIDENCE_START_V3` and pins the span's length to its
+// last named account. The coordinates below are that table read relative to the
+// start of the suffix, because `strategy_accounts` is the suffix, not the whole
+// frame -- so they are subtracted from the contract's absolute coordinates
+// rather than restated as the numbers they currently evaluate to.
+const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
+const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize =
+    ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3 - ADMITTED_STRATEGY_EVIDENCE_START_V3;
 /// Number of fixed Hot coordinates a Dealer scenario injects ahead of its
 /// packed runtime suffix.
 pub const DEALER_HOT_INJECTED_ACCOUNTS_V4: usize = 5;

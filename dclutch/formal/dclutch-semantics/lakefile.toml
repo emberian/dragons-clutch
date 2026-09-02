@@ -223,6 +223,10 @@ name = "emit-general-selection-decision-corpus-rust"
 root = "EmitGeneralSelectionDecisionCorpusRust"
 
 [[lean_exe]]
+name = "emit-general-runtime-wire-v2-rust"
+root = "EmitGeneralRuntimeWireV2Rust"
+
+[[lean_exe]]
 name = "emit-capability-funding-activation-corpus-rust"
 root = "EmitCapabilityFundingActivationCorpusRust"
 
