@@ -21,7 +21,7 @@ use dclutch_direct_codec::successor::{
     RegisteredOrdinarySettlementV2, RegisteredRecordAfterFillV2, RegisteredRecordCloseV2,
     RegisteredTerminalResultV2, settle_registered_ordinary_v2,
 };
-use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
+use dclutch_market_core_codec::CoreMarketViewV1;
 use solana_program::pubkey::Pubkey;
 
 use super::lifecycle::{
@@ -30,6 +30,9 @@ use super::lifecycle::{
 };
 use super::physical::{
     DirectExternalCollateralV2, DirectExternalDebitV2, DirectPhysicalError, Result,
+};
+use crate::market_admission_v1::{
+    TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1, TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1,
 };
 
 /// Three canonical Custody steps create one funded Buy reserve.
@@ -55,12 +58,9 @@ pub struct DirectBuyEscrowContextV2 {
 impl DirectBuyEscrowContextV2 {
     fn validate(self, terminal: bool) -> Result<()> {
         let phase_valid = if terminal {
-            matches!(
-                self.core_market.phase(),
-                Phase::Open | Phase::Terminal | Phase::Retiring
-            )
+            TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(self.core_market.phase())
         } else {
-            self.core_market.phase() == Phase::Open
+            TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(self.core_market.phase())
         };
         if self.direct_root == [0; 32]
             || self.trading_program == [0; 32]

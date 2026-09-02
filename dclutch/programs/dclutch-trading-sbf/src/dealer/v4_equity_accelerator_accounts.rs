@@ -28,9 +28,7 @@ use dclutch_dealer_codec::{
     root_tail::{ROOT_TAIL_BYTES, RootTail},
     scenario::ClaimsInventoryObservation,
 };
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
-};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
@@ -69,6 +67,7 @@ use super::{
     },
     v3_profile::dealer_equity_logical_account_count_v3,
 };
+use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 
 const CLAIMS_MARKET_RELATIVE_V4: usize = 1;
 const CLAIMS_BASIS_RECORD_RELATIVE_V4: usize = 2;
@@ -732,7 +731,7 @@ fn authenticate_core_market(
     )
     .0;
     if derived != *core_market.key
-        || core.phase != CorePhase::Open
+        || !TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase)
         || core.identity.market_id.to_bytes() != request.market
         || core.identity.generation != request.generation
         || core.identity.realm_id.to_bytes() != config.realm()

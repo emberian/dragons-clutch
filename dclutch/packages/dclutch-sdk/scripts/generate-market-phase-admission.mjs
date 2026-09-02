@@ -20,6 +20,14 @@
  * with `tools/genref/generate.sh --check` byte-gating the middle arrow and
  * `--check` here gating the last one.
  *
+ * WHAT A CELL COMPOSES. A route's cell is a conjunction of gates separated by
+ * `; `, and each gate may be a disjunction of alternatives separated by
+ * ` or ` -- the two branches of one guard written as a selection, of which
+ * exactly one runs. The admissible set is therefore the INTERSECTION over
+ * conjuncts of the UNION within each, computed over all fifteen
+ * `(phase, readiness)` pairs. Merging the phase lists instead, which this
+ * parser did while no route carried two gates, unions what should intersect.
+ *
  * WHAT THIS TABLE IS NOT. It is a NECESSARY condition per route and never a
  * sufficient one. An act whose prestate is excluded cannot succeed, and that
  * is a refutation a client may publish. An act whose prestate is admitted has
@@ -58,23 +66,61 @@ for (const line of referenceSource.split('\n')) {
 }
 if (routes.length < 100) throw new Error(`only ${routes.length} route rows parsed from routes.md; the format moved`);
 
+// A cell is a CONJUNCTION of gates separated by `; `, and each gate may be a
+// DISJUNCTION of alternatives separated by ` or ` -- the two branches of one
+// guard written as a selection, of which exactly one runs. So the route's
+// admissible prestates are the intersection over conjuncts of the union over
+// each conjunct's alternatives, computed here over all fifteen pairs rather
+// than approximated by merging phase lists. Merging was what this parser used
+// to do, and it was invisible only because no route had ever carried two.
+const pairKey = (phase, readiness) => `${phase}+${readiness}`;
+const EVERY_PAIR = PHASES.flatMap((phase) => READINESS.map((readiness) => pairKey(phase, readiness)));
+
+function declarationPairs(route, declaration) {
+  const pairs = new Set();
+  for (const term of declaration.replace(/^`|`$/g, '').split(', ')) {
+    const [phase, readiness] = term.split('+');
+    if (!PHASES.includes(phase)) throw new Error(`route ${route} names phase ${phase}, which is not a Core phase`);
+    if (readiness === undefined) {
+      // A guard that names no readiness admits every one, which is what
+      // `MarketAdmissionV1::phases` means and what the page prints bare.
+      for (const every of READINESS) pairs.add(pairKey(phase, every));
+      continue;
+    }
+    if (!READINESS.includes(readiness)) {
+      throw new Error(`route ${route} names readiness ${readiness}, which is not a Core readiness`);
+    }
+    pairs.add(pairKey(phase, readiness));
+  }
+  return pairs;
+}
+
 const gates = [];
 for (const entry of routes) {
   if (entry.phase === 'no phase gate') continue;
-  const declarations = entry.phase.split('; ').map((one) => one.replace(/^`|`$/g, ''));
-  const phases = [];
-  const prestates = [];
-  for (const declaration of declarations) {
-    for (const term of declaration.split(', ')) {
-      const [phase, readiness] = term.split('+');
-      if (!PHASES.includes(phase)) throw new Error(`route ${entry.route} names phase ${phase}, which is not a Core phase`);
-      if (readiness !== undefined && !READINESS.includes(readiness)) {
-        throw new Error(`route ${entry.route} names readiness ${readiness}, which is not a Core readiness`);
-      }
-      if (!phases.includes(phase)) phases.push(phase);
-      if (readiness !== undefined) prestates.push([phase, readiness]);
+  let admitted = new Set(EVERY_PAIR);
+  for (const conjunct of entry.phase.split('; ')) {
+    const united = new Set();
+    for (const alternative of conjunct.split(' or ')) {
+      for (const pair of declarationPairs(entry.route, alternative)) united.add(pair);
     }
+    admitted = new Set([...admitted].filter((pair) => united.has(pair)));
   }
+  if (admitted.size === 0) {
+    // Contradictory gates on one route: either the census attributed a gate
+    // to a route that cannot reach it, or the route is genuinely dead. Both
+    // are findings, and publishing an empty set as a table row would hide
+    // them behind a client that simply refuses everything.
+    throw new Error(`route ${entry.route} admits no prestate at all: ${entry.phase}`);
+  }
+  // `prestates` stays empty for a set that admits every readiness in each of
+  // its phases -- the phase-projection shape a phase-only guard has -- so the
+  // exact column keeps meaning "this guard constrained readiness".
+  const phases = PHASES.filter((phase) => READINESS.some((readiness) => admitted.has(pairKey(phase, readiness))));
+  const exact = phases.some((phase) => !READINESS.every((readiness) => admitted.has(pairKey(phase, readiness))));
+  const prestates = exact
+    ? phases.flatMap((phase) => READINESS.filter((readiness) => admitted.has(pairKey(phase, readiness))).map((readiness) => [phase, readiness]))
+    : [];
   gates.push({ route: entry.route, phases, prestates });
 }
 if (gates.length === 0) throw new Error('routes.md published no phase gate at all; the column is gone or empty');

@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "efca6966381f24f42db7008d4a70a25df4f199db",
+  "commit": "90061c166636ea54a17dcaf2fddd4a35849ec831",
   "link_count": 12,
   "links": [
     {
@@ -5826,7 +5826,7 @@
         },
         {
           "frames_bytes": [
-            1600
+            1664
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v338authenticate_market_and_infrastructure17h<hash>E"
         },
@@ -6100,7 +6100,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 952,
+      "frame_count": 953,
       "functions": [
         {
           "frames_bytes": [
@@ -9203,6 +9203,12 @@
             1344
           ],
           "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow17validate_accounts17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6direct10buy_escrow24DirectBuyEscrowContextV28validate17h<hash>E"
         },
         {
           "frames_bytes": [

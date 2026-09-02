@@ -36,11 +36,12 @@ use dclutch_direct_codec::{
         InlineOrdinaryInputV2, InlineOrdinarySettlementV2, MakerReplaySeedsV1,
     },
 };
-use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
+use dclutch_market_core_codec::CoreMarketViewV1;
 use solana_program::pubkey::Pubkey;
 
 use super::physical::{DirectPhysicalError, Result};
 
+use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 pub use dclutch_direct_codec::inline_candidate_v2::{
     DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2, DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2,
     DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3, DirectInlineCollateralFrameV2,
@@ -373,7 +374,7 @@ fn validate_context(
             return Err(DirectPhysicalError::ZeroIdentity);
         }
     }
-    if context.core_market.phase() != Phase::Open
+    if !TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(context.core_market.phase())
         || release.bindings[1].program.to_bytes() != context.claims_program
         || release.bindings[2].program.to_bytes() != context.trading_program
         || context.direct_root == context.seller_maker_root

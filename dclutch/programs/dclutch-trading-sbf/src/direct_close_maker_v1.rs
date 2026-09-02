@@ -80,7 +80,7 @@ use dclutch_effect_kernel::v2::{
     AccountInput, AccountPermission, ProgramV2 as EffectProgramV2, ResolvedEffect,
     SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2, project_with_aliases_and_requests_atomic,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
@@ -98,6 +98,7 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{TradingSbfError, dispatch::TradingFamilyContextV1};
 
+use crate::market_admission_v1::TRADING_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1;
 pub use dclutch_direct_codec::close_maker_v1::DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1;
 
 struct Accounts<'accounts, 'info> {
@@ -659,7 +660,7 @@ fn authenticate_market_bytes(
             .map_err(|_| TradingSbfError::Content)?
             .as_slice()
             != data
-        || state.phase != Phase::Retiring
+        || !TRADING_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
         || state.identity.market_id.to_bytes() != request.market
         || state.identity.selected_release_set.to_bytes() != release_set
         || state.identity.registry_program.to_bytes() != registry.to_bytes()

@@ -109,6 +109,7 @@ pub mod generic_market_founding_v1;
 /// Family-neutral authenticated V3 hot execution outer.
 pub mod hot_v3;
 /// Family-neutral native-signature evidence authentication and register seeding.
+pub mod market_admission_v1;
 pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
 pub mod outer;

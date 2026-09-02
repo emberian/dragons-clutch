@@ -23,7 +23,7 @@ use dclutch_direct_codec::successor::{
     DirectRegisteredIntentV2, RegisteredFillCandidateV2, RegisteredIntentCreationV2,
     RegisteredIntentSeedsV2, RegisteredRecordAfterFillV2, RegisteredRecordCloseV2,
 };
-use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
+use dclutch_market_core_codec::CoreMarketViewV1;
 use solana_program::{hash::hash, pubkey::Pubkey};
 
 use super::lifecycle::{
@@ -31,6 +31,9 @@ use super::lifecycle::{
     validate_registered_record_close_lifecycle_v3,
 };
 use super::physical::{DirectPhysicalError, Result};
+use crate::market_admission_v1::{
+    TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1, TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1,
+};
 
 /// Exact physical accounts for one Claims-owned protocol Position lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,12 +104,9 @@ pub struct DirectSellEscrowContextV2 {
 impl DirectSellEscrowContextV2 {
     fn validate(self, terminal: bool) -> Result<()> {
         let phase_valid = if terminal {
-            matches!(
-                self.core_market.phase(),
-                Phase::Open | Phase::Terminal | Phase::Retiring
-            )
+            TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(self.core_market.phase())
         } else {
-            self.core_market.phase() == Phase::Open
+            TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(self.core_market.phase())
         };
         if self.direct_root == [0; 32]
             || self.trading_program == [0; 32]

@@ -3443,3 +3443,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   non-endpoint roles as fixed coordinates ahead of every span. Unit 2 (the alias lock shape) still one-series-or-nothing.
   → DEALER **`a2bbdb8d4511b10bb`**: the sequencing wall, the profile shape, unit 2 as one series.
 - Cuts: `f64c17f26`.
+- EMISSION reported (`2bf7ef90` the selector-9 trade header Lean-owned — real author programs/dclutch-trading-sbf/src/dealer/
+  v3_trade.rs; **23 of 28 coordinates were bare decimals written twice**, one selector offset had four authors; census 93/93;
+  a name-table transposition the Rust cannot see reds the guard alone; `25792c06` rows; `c7b28ba6` **coreFound's "82 of 95"
+  was computed by nothing** — the generator now derives 79 of 97 with an OWNED_FLOOR ratchet, and finds 18 unowned incl.
+  dclutch-source-contract's WindowSpec, a whole unowned byte layout; `151849be` the Lean lib root was missing FIVE modules,
+  not one, and a1cb5217's premise was wrong — the lakefile glob compiles them, the root's list is the entry point;
+  `333043db` the Series ticket-state producer gap named beside the refusing decode — the write authority is granted and
+  never exercised). Incident owned: `rm -f fg-a.json` deleted another lane's `fg-A.json` (macOS case-insensitivity) — the
+  warning is in run.sh's header; per-lane capture subdirectories now. Lane resumed: the one owed capture, then WindowSpec.

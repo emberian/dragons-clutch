@@ -22,7 +22,7 @@ use dclutch_direct_codec::{
     },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
@@ -39,6 +39,7 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::TradingSbfError;
 use crate::child_refused_v1;
+use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 
 /// Exact top-level account count: the thirteen-account Custody frame followed
 /// by the executable Custody program.
@@ -425,7 +426,7 @@ fn authenticate_market(
             .to_bytes()
         || state.identity.registry_program.to_bytes() != account(accounts, REGISTRY)?.key.to_bytes()
         || state.identity.generation != request.generation
-        || state.phase != Phase::Open
+        || !TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
         || hash(&data).to_bytes() != request.expected_market_digest
     {
         return Err(TradingSbfError::Content.into());
@@ -569,6 +570,7 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_market_core_codec::Phase;
     use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
 
     use super::*;

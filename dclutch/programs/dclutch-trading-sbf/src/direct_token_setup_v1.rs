@@ -30,7 +30,7 @@ use dclutch_direct_codec::{
         direct_token_setup_frame_digest_v1,
     },
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
@@ -55,6 +55,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
+use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 use crate::{
     TradingSbfError, child_refused_v1,
     execution_strategy_v2::authenticate_activated_current_deployment,
@@ -371,7 +372,7 @@ fn authenticate_market(
             .as_slice()
             != data.as_ref()
         || hash(&data).to_bytes() != request.expected_market_digest
-        || state.phase != Phase::Open
+        || !TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
         || state.identity.market_id.to_bytes() != request.market
         || state.identity.generation != request.generation
         || state.identity.registry_program.to_bytes() != account(accounts, REGISTRY)?.key.to_bytes()

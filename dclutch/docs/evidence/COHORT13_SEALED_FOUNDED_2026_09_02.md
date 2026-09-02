@@ -1165,3 +1165,335 @@ paid for any of it and never moved.
   against the prior build rather than remembered.
 - A fee settled to `fee_owed 0`, read back from chain.
 - **L1 through L8, all HOLDS, no INAPPLICABLE**, across that fill.
+
+## Addendum: RESOLUTION — the window closed unobserved, and the only reachable terminal is the failure walk
+
+The resolution lane opened at 18:00 UTC on 2026-09-02 and read the window off
+chain before anything else. **The window had already closed, nine minutes
+earlier.** Everything below follows from that one fact, and the useful part of
+this section is not the outcome but the four conjuncts that decide it.
+
+### The window, read from its own account
+
+`window_spec_record` `4CM5e6Eq7nXcAnYbEnhP9Jqfkp6BrsYdokks5dLwQCEu`, 112 bytes,
+owned by Registry `8XsxVn35…`, magic `DCLTWIN1`:
+
+| field | offset | value |
+| --- | ---: | --- |
+| kind | 10 | `1` = `WindowKind::Terminal` |
+| source_spec_id | 16 | `09d17c26…6287d` (= the Source spec record's own digest) |
+| start_unix_seconds | 48 | **1788369759** = 2026-09-02 **17:22:39 UTC** / 13:22:39 EDT |
+| end_unix_seconds | 56 | **1788371559** = 2026-09-02 **17:52:39 UTC** / 13:52:39 EDT |
+| max_age_seconds | 64 | **7200** |
+| max_future_skew_seconds | 68 | 1 |
+| schedule_id | 72 | `e7b6b794…919c` |
+| cadence_tolerance_seconds | 104 | **0** |
+
+Width exactly 1,800 s, as founded. The lane's briefing carried "around
+15:00–16:00 EDT"; the account says 13:22:39–13:52:39 EDT. **Read the window from
+the account, never from a handoff** — this is the third time in this cohort that
+a remembered number and a read one disagreed, after the activation deadline and
+the activation root.
+
+### Whether the protocol admits a post-window observation: it does, and it cannot help
+
+`crates/dclutch-source-contract/src/lib.rs:2146-2158`, `NormalizedEvidenceV1::validate`,
+carries **two different clocks**, and only one of them is about lateness:
+
+- `window.contains_observation(self.observation_unix_seconds)` — at
+  `cadence_tolerance_seconds == 0` this is exactly the closed interval
+  `[1788369759, 1788371559]`; else `Error::InvalidObservationSchedule`.
+- `self.publication_unix_seconds` within `[clock − max_age, clock + max_future_skew]`
+  = `[clock − 7200, clock + 1]`; else `Error::InvalidPublicationTime`.
+
+So a submission *after* the window is admissible — the protocol never demanded
+that the transaction land inside the window. What it demands is an observation
+**whose own timestamp** is inside it. The relay is a snapshot of one fixed
+mutable account, and that account had moved on.
+
+`PythSponsoredPushReleaseV1` pins the **exact** `price_account`
+(`crates/dclutch-pyth-svm/src/sponsored_push.rs`, field `price_account`), and the
+market's copy of that release — record `5YdUbRHreVcLzBP9D6WAU8jZc7ncHD4iXPyjL8iCua9i`,
+592 bytes — carries `7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE` at byte 240.
+Read at 18:02:55 UTC that account held `publish_time` **1788372175**, 616 seconds
+past the window's end, at **$99.337** (price 9,933,701,838, expo −8, conf
+±$0.0212, posted slot 491,921,765). There is no second account the market would
+accept and no way to make the sponsored one publish backwards. **The honest
+observation for this window is permanently unavailable** — not late, not
+missing-but-recoverable: unreachable.
+
+Every one of those six Pyth addresses was read back out of the on-chain release
+record rather than typed from the runbook.
+
+### What the protocol does instead, and where its deadline is
+
+`programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs` states the whole
+lifecycle in its own module doc: *"Candidate admission closes at
+`window.end + max_age`; settlement and head-vacant funded failure begin only
+after that same strict deadline."* The two conjuncts sit eleven hundred lines
+apart and point opposite ways:
+
+| action | line | conjunct | refusal |
+| --- | ---: | --- | --- |
+| `Capture` | 131 | `clock.unix_timestamp > primary_deadline` | `ProviderFreshness` |
+| `Settle` / `CommitFailure` | 875 | `clock.unix_timestamp <= deadline` | `ProviderFreshness` |
+
+`primary_deadline = end + max_age = 1788371559 + 7200 =` **1788378759**
+= 19:52:39 UTC / **15:52:39 EDT**. The last second a candidate could be admitted
+and the first second a terminal could be committed are adjacent and disjoint.
+
+`SourceResolutionStateV2::exhaust_after_primary_deadline` refuses a market whose
+material carries a recovery policy (`RecoveryNotExhausted`) — *"a policy means
+the market bought named alternative sources, and skipping them would take an
+outcome away from the holders who paid for them."* This market bought none:
+`source_material_record` `2nomjpYBmbJu37apysDdpuhACa955yACNvz3bW2fgGAq`,
+`DCLTSMV3`, has `RECOVERY_PRESENT` byte 10 = **0** and a zero recovery-policy
+digest. So the walk is open, and it is the only thing that is.
+
+### The griefing vector this exposes, which is the finding worth keeping
+
+Between a window closing and its primary deadline — here a **two-hour** gap, and
+in general exactly `max_age_seconds` — capture is still legal, permissionless,
+and **does not check window admissibility**. `process_capture` builds the
+candidate from whatever `publish_time` the account holds, then
+`initialize_head_account` runs on any vacant head (lines 175-212). Nothing in
+that path consults `contains_observation`.
+
+One such transaction is enough to strand the market permanently:
+
+| route | conjunct | refusal |
+| --- | --- | --- |
+| `Settle` | candidate's `observation_unix_seconds` outside the window | `ProviderWindow` (mapped from `InvalidObservationSchedule` at `sponsored_push_v1.rs:1150`) |
+| `CommitFailure` | head must be system-owned and `data_is_empty` (`:1662-1669`) | `SponsoredPush` |
+| `CloseHead` | `terminal_source_for_cleanup` admits only `Resolved`/`FailureCommitted`/`Retired` (`:1445-1450`) | `Transition` |
+
+Settle cannot consume it, failure cannot step around it, and cleanup cannot
+remove it because cleanup requires the terminality that neither route can now
+reach. **A market whose window closes unobserved has a `max_age_seconds`-wide
+interval in which one permissionless capture makes it unresolvable forever.**
+The lane's first operational decision was therefore *not* to capture, and the
+head `FzUpoPVQdMFgxvkMbLVoTuJK5Nvsa33y82FyTmsBRcPs` was confirmed vacant before
+and after every step.
+
+This is not a defect in the failure walk; it is a missing conjunct in capture.
+The cheap fix is to refuse a capture whose `publish_time` fails
+`window.contains_observation`, which costs one call in a function that already
+holds the window. It is queued as owed, not as done.
+
+### The exterior input has no producer, so it was authored from chain
+
+`devnet-sponsored-push-v1` consumes `dclutch-sponsored-push-exterior-input-v1`.
+A sweep for that string finds the consumer (`sponsored_push.rs:55`), a validator
+that checks a field of it (`tools/release/devnet-sponsored-keeper.py:45`), a
+README example, and one doc — **and no producer anywhere in the tree.** This is
+the producer-missing shape again: a reader, a schema and a refusal all built,
+with nothing that writes the thing.
+
+So the document was assembled from authenticated on-chain facts, and every field
+carries its own check rather than a memory:
+
+- Each of the eleven `raw`/`staging` pairs is
+  `find_program_address([RAW_RECORD_PDA_SEED_V1 | STAGING_CURSOR_PDA_SEED_V1, schema, digest], registry)`
+  (`provider_instruction_v3.rs:1037-1040`). The schema for each record was not
+  looked up — it was **solved for**, by trying every 32-byte schema constant in
+  `crates/` until one reproduced the record's known address from its own
+  on-chain digest. All eleven solved uniquely, which makes each raw address a
+  reproduction rather than a transcription, and all eleven staging accounts read
+  back vacant.
+- `activationCache` `HETBPPJFC7HbxmPdCnU4f1bmZEDABXG98b1KV1YfJnQg` is
+  `find_program_address(["dclutch:release-activation:v1", release_set], registry)`
+  (`relay_transport_v1.rs:294-297`), occupied, 1,288 bytes, registry-owned.
+- `resolutionProgramdata` derived from the loader came out
+  `D7nZhwBe81dN2RgnGinxz2YDYh9vFBWLos5Yd7aCBZDR`, **which is the exact string
+  `observed-ids.tsv` recorded at deploy time** — an independent join between a
+  derivation made now and a fact written seven hours earlier.
+
+The routing table is routing and not authority: `authenticate_frozen_routing_table`
+requires only ALT ownership, `authority == None`, `deactivation_slot == u64::MAX`,
+`last_extended_slot < observation.slot`, and nonempty. Cohort-13's five frozen
+founding tables all qualify; `3439rxEAeXQ4U9DZKDCD1s7ys4BwF6AcWZ9qRLu6iygL`
+(DCLTPCB2, 56 addresses) was chosen because it covers 18 of the 29 accounts in
+the failure frame, which is the smallest packet of the five.
+
+The read-only preflight **planned**, which is what proves the hand-authored
+document: 29 account metas resolved, instruction data
+`DCLTSPI1` + action `5` + generation `2` + terminal sequence `1`, digest
+`1049d3c4d1f5302baa9a02c30248302b9aaa7127ab8e54e88b17f5633145a955`, certificate
+seat `7S9tCjXTHMPjtAoRq3uUPGDRfy2hG4rtQtAN5Uybd8Za` vacant, head vacant.
+
+### Who owns what, before anything moved
+
+The failure selector is `ResultDomainV2::failure_selector() = region_count`. With
+cuts `9600, 10000` over denominator 100 there are three ordinary regions, four
+outcomes, and **the failure outcome is selector 3**. All three Positions are
+`DCLLBP02`, 160 bytes, Claims-owned, four claim slots at offset 128:
+
+| holder | key | 0: < $96.00 | 1: $96.00–$100.00 | 2: > $100.00 | 3: FAILURE |
+| --- | --- | ---: | ---: | ---: | ---: |
+| founder | `FBYW95Fo…` | 499,999,800 | 500,000,000 | 500,000,000 | **500,000,000** |
+| participant-1 | `H1cYAJL3…` | 0 | 0 | 0 | 0 |
+| participant-2 | `BVBriJDj…` | **200** | 0 | 0 | 0 |
+| aggregate `HCnz8YXL…` | — | 500,000,000 | 500,000,000 | 500,000,000 | 500,000,000 |
+
+Every column sums to the aggregate exactly, which is the fill's conservation
+re-read from the positions rather than from the trade's own report: the Direct
+crossing sold participant-2 **200 atoms of outcome 0** and the founder is short
+exactly that.
+
+**So the failure walk pays the founder and pays the two strangers nothing.**
+Participant-2 bought outcome 0 (SOL/USD below $96.00) and holds no failure
+claims; participant-1 holds nothing at all. That is not the walk misbehaving — it
+is precisely the property `exhaust_after_primary_deadline` documents, that *"a
+silent provider cannot make a market unresolvable, only drive it to a
+pre-disclosed outcome"* — but it should be said plainly, because the outcome a
+buyer gets when the oracle goes quiet is the one the founder minted and kept.
+
+For the record of what the honest outcome *would* have been: the sponsored feed
+read $99.337 twelve minutes after the window closed, with a 5-minute EMA of
+$98.60, both inside the $96.00–$100.00 cut — **outcome 1**, not the outcome
+participant-2 bought. Hermes' historical endpoint now requires authorization
+(HTTP 401), so this is a bracket from the live account either side of the
+window, not a reading of the window itself, and it is labelled as one. It is
+narrative, not evidence: nothing on chain will ever carry it.
+
+### THE WALL: the failure certificate seat has no funder on the devnet path
+
+The walk was armed to fire the instant it became legal and it did, at
+19:52:52 UTC — thirteen seconds after the deadline. **It refused, `0x8002`,
+after 305,522 CU.** Band 8 is Resolution, and `0x8002` is
+`ResolutionError::OutputState` (`programs/dclutch-resolution-proof-sbf/src/lib.rs:49`).
+Nothing moved: payer unchanged to the lamport, Source state still `Primary`,
+certificate still vacant, funding ledger byte-identical.
+
+`OutputState` is a coarse code — the exact idiom AGENTS.md names as this tree's
+most expensive — but it localized in one step rather than by bisection, because
+of what it *rules out*. Planning maps its failures through
+`map_funded_walk_error` (`relay_transport_v1.rs:1291-1299`), and that function
+cannot produce `OutputState` at all: `Request→Instruction`,
+`Source→SourceMaterial`, `Product→ProductDomain`, `Transition→Transition`,
+`Funding→Funding`. **So every walk semantic had already passed** — deadline,
+material, absent recovery policy, product domain, escrow authentication, the
+`Primary → Exhausted → FailureCommitted` transition, and the certificate's own
+shape validation. Only the write could have refused, and the write is
+`commit_deadline_failure` (`:1465`), which reaches `initialize_certificate_at_kind`
+(`:1918`) first.
+
+There the conjunct is `:1951-1957`:
+
+```rust
+if certificate.owner != &system_program::ID
+    || certificate.data_len() != 0
+    || certificate.lamports() < minimum      // minimum = rent.minimum_balance(312)
+    || certificate.executable
+{ return Err(ResolutionError::OutputState.into()); }
+```
+
+**The route allocates and assigns; it never funds.** The certificate seat must
+already hold its own rent before the instruction runs. `7S9tCjXTHMPjtAoRq3uUPGDRfy2hG4rtQtAN5Uybd8Za`
+held **zero**, and `getMinimumBalanceForRentExemption(312)` on devnet is
+**2,786,520** lamports.
+
+This is a caller obligation by design, and the tree says so in the one place it
+is discharged: `tools/gauntlet/relayed-vertical/src/relayworld.rs:282` —
+*"Prepay one certificate destination: the route allocates and assigns"* — and
+`vertical.rs:792` prepays **both** destinations because success and failure are
+different addresses. The harness fixture prepays it too
+(`resolution_core_v3_lifecycle.rs:3978`).
+
+**Nothing on the devnet path does.** `devnet-sponsored-push-v1` has five actions
+and none of them is a prepay; the README's sponsored-push section documents the
+routing table, the journal ladder, and the cleanup payer rule, and never mentions
+that `settle` and `commit-failure` both land on an account the caller must fund
+first. So the second producer gap in this lane sits directly behind the first:
+the exterior input has no producer, and the seat that input's terminal actions
+write to has no funder.
+
+That it appeared on `commit-failure` is an accident of which terminal we
+reached. **`settle` allocates its certificate through the same
+`initialize_certificate_at_kind`**, so an honest resolution on this cohort would
+have hit the identical refusal at the identical line — this is not a
+failure-walk defect, it is the terminal seat, and it was in front of both doors.
+
+Owed, in order of cost: `devnet-sponsored-push-v1` should either prepay the seat
+in the terminal action's own transaction or refuse in **preflight** with a
+message naming the account and the lamports. The preflight had the certificate
+address and its `null` prestate in hand and reported `planned` anyway — a
+preflight that plans an action the chain will certainly refuse is the same defect
+class as a green build with a red umbrella.
+
+### The walk, executed
+
+The seat was prepaid by hand — exactly what `relayworld::prepay_certificate`
+does — 2,786,520 lamports from the campaign payer, signature
+`2xhst2Ud2A5Ck8MowhgY7MoqvxZbzS9vDUkRLGMTyFPPqFviwuHBb33tY1NifmPKsqS9Nq4XYSrC6gLHwYcaXXQw`.
+Then the same command, unchanged, under a fresh output path:
+
+| | |
+| --- | --- |
+| signature | `37Ye9gafsCMSJEjG99bJ5kcdC4ACpQYnTfEyFAbHaxoXNQavDJUZiVuWS52mBWafu9LJPik2bnD1eGwgGW3uasac` |
+| slot | 492,139,257 |
+| compute units | **311,799** (program 311,499) |
+| fee | 75,000 lamports |
+| inner instructions | two System invokes — the allocate and assign the seat was funded for |
+
+**This is the first resolution of any kind on devnet.**
+
+Poststates, each read back from chain by address:
+
+- **Source state** `A71ZfJCq…`: phase `0 → 4` = **`FailureCommitted`**
+  (`lib.rs:3135`); `terminal_route` byte 3; **`selector = 3`**, which is exactly
+  `ResultDomainV2::failure_selector() = region_count`; `terminal_sequence = 1`;
+  `resolved_at = 1788379028` (19:57:08 UTC); `resolution_evidence_id`
+  `1cde2ee3…` = the Source material id, since a deadline failure is attributable
+  to no provider.
+- **Certificate** `7S9tCjXT…`: created, 312 bytes, Resolution-owned, magic
+  `DCSRCER2`, **kind byte 4 = `ResolutionFailure`**. `route` and
+  `provider_evidence` are **all zero** — *"this terminal is not attributable to
+  any provider, which is the whole content of the claim 'the relayer went
+  silent'"* (`funded.rs:356-361`). `funding_allocation` = the material id;
+  `receipt_account` decodes to `7S9tCjXTHMPjtAoRq3uUPGDRfy2hG4rtQtAN5Uybd8Za`,
+  its own address; generation 2; selector 3; sequence 1.
+- **Funding ledger** `CP2F4fcy…`: 2,482,539 → **2,482,538**. Exactly **one
+  lamport** left the escrow — the Failure row's bounty — and that row's status
+  word went to zero while the other two rows are untouched.
+- **Head** `FzUpoPVQ…`: still **vacant**. The walk never creates one, so the
+  head-vacancy conjunct it depends on is still true afterwards.
+- **Market** `6t3Znm…`: **unchanged**, phase byte 1 / readiness 2. Core has not
+  consumed the certificate; that is the terminal sequence's job and it is the
+  next owed step, not something the walk does.
+
+**The lamports close exactly.** Campaign payer 1,524,416,622 → 1,521,550,103, a
+delta of **2,866,519** = 2,786,520 prepay + 5,000 transfer fee + 75,000 walk fee
+**− 1 lamport of bounty paid to the walker**. The escrow debit and the payer
+credit are the same lamport, observed from both ends.
+
+### What the outcome means, said plainly
+
+Selector 3 won. The founder `FBYW95Fo…` holds 500,000,000 failure claims and is
+owed the collateral; participant-2 holds 200 claims on outcome 0 and is owed
+**nothing**; participant-1 holds nothing at all. The oracle went quiet inside a
+thirty-minute window and the pre-disclosed consequence is that the market's
+founder keeps the pot. The protocol did what it says it does. Whether a venue
+should *sell* that shape to strangers is a product question this cohort has now
+made concrete rather than hypothetical, and it belongs to whoever owns the
+failure policy — the honest reading is that a failure outcome wholly owned by the
+founder converts an oracle outage into founder revenue.
+
+### Owed after this
+
+1. **Prepay, or refuse in preflight** — the seat gap above. Cheapest real fix.
+2. **A capture conjunct** — refuse an out-of-window `publish_time` at capture,
+   closing the strand-by-grief interval.
+3. **A producer for `dclutch-sponsored-push-exterior-input-v1`.** The document
+   this lane hand-authored is checkable (every address reproduced from chain) but
+   it should not have to be hand-authored.
+4. **Terminal sequence and payout.** The Market is still Open with a committed
+   failure certificate beside it; `devnet-terminal-sequence-v1` then
+   `build_wallet_terminal_payout_v3` for the founder's 500,000,000 outcome-3
+   claims. Not run here.
+5. **Retirement is still owned-loopback only** — `AggregateRetirement`'s only
+   command is `local-private-validator-aggregate-retirement-v1`, unchanged since
+   cohort-12 named it. The market can now be resolved on devnet; it still cannot
+   be retired there.
+
+Devnet evidence. Not mainnet evidence.

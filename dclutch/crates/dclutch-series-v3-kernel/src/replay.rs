@@ -312,6 +312,38 @@ impl TicketPhaseV3 {
 }
 
 /// Minimal mutable replay state; the immutable Ticket record owns all facts.
+///
+/// # NAMED DEBT: this record has no on-chain producer
+///
+/// Nothing dispatched writes the FIRST valid `TicketStateV3`. The route that
+/// owns the coordinate is `prepare_funding_artifacts_v5`, whose
+/// `SERIES_PREPARE_TICKET_COORDINATE_V5` declares exactly
+/// `SERIES_TICKET_STATE_BYTES_V3` of `LifecycleBound` account and grants it
+/// `AccountEffectPermissionsV2::new(true, true, true)` -- lamport debit,
+/// lamport credit, and WRITE DATA. So the authority to write these bytes is
+/// declared and then never exercised: the account presents as sixty-four
+/// zeros, `decode` below requires `SERIES_TICKET_STATE_MAGIC_V3` in the first
+/// eight, and it refuses them. Every route downstream refuses with it.
+///
+/// The two places that DO write these bytes both read them first:
+/// `hot_v3.rs` decodes and re-encodes, and `series_open.rs` decodes, settles
+/// and re-encodes. Both are consumers wearing a producer's shape. The only
+/// code that calls `TicketStateV3::prepared(..).encode()` into a real account
+/// is test support -- `found_program_test.rs` and
+/// `series_premarket_expiry_chain_v1.rs` -- which is the exact signature of
+/// the producer-missing pattern: a reader, a schema and a refusal all built
+/// and exercised, with only the failure path ever reached, because the
+/// producer was never written.
+///
+/// This is a DESIGN DEBT, recorded rather than repaired. Series is
+/// loopback-only through cohort 13, so no live route needs the producer yet,
+/// and writing one now would be building a route with no caller. The owner
+/// when it is wanted is `prepare_funding_artifacts_v5`: it already declares
+/// the coordinate, the width and the write permission, and it is the only
+/// route that holds all three. What it lacks is the effect that puts a
+/// `TicketStateV3::prepared(ticket_record_id)` encoding into the account the
+/// coordinate names. Do not infer from the refusal that the state is corrupt;
+/// infer that nobody has written it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TicketStateV3 {
     phase: TicketPhaseV3,

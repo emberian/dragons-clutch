@@ -27,9 +27,7 @@ use dclutch_dealer_codec::{
     config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
     scenario::ClaimsInventoryObservation,
 };
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
-};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
@@ -62,6 +60,7 @@ use super::{
         dealer_scenario_logical_frame_v4,
     },
 };
+use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 
 /// Stable refusal at selector 9's physical accelerator boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -479,7 +478,7 @@ fn authenticate_core_market_v4(
     )
     .0;
     if derived != *core_market
-        || core.phase != CorePhase::Open
+        || !TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase)
         || core.identity.market_id.to_bytes() != expected.market
         || core.identity.generation != expected.generation
         || core.identity.realm_id.to_bytes() != expected.realm_id
@@ -1285,6 +1284,7 @@ mod tests {
     use dclutch_market_core_codec::StateBumpsV1;
 
     use super::*;
+    use dclutch_market_core_codec::Phase as CorePhase;
 
     const fn id(tag: u8) -> [u8; 32] {
         [tag; 32]

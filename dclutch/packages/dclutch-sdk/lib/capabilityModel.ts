@@ -232,7 +232,7 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
     'The browser exports unsigned bytes and asks for no key; the published campaign records devnet authorization before any child may sign.'),
   action('market.join', 'author', 'Creation', 'Admit another participant', 'market-detail', 'observed-market',
     anchors('components/JoinPanel.tsx', 'lib/userPositionAdmissionOperation.ts'),
-    NO_ROUTE,
+    ['trading/user_position_admission_v1::process_user_position_admission_v1#Admit'],
     'The compiled Rust planner derives all 27 accounts from one finalized observation; the exact packet is saved before your wallet sees it, sent once, and cleared only after the chain confirms it, so reloading resumes and never resubmits.'),
   action('source.create-fund', 'author', 'Source', 'Create the resolution fund', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceReadinessV1.ts'),
@@ -479,10 +479,13 @@ export function capabilityActContractV1(standing: CapabilityStandingV1): Capabil
  * `no-phase-gate` is the honest degradation and is reported by name rather
  * than folded into `admitted`: it means no constant was read for any route
  * this act declares, which covers an act with no established route, an
- * authoring act with no Market to consult, and a route whose guard is still
- * written inline in one of the eleven programs the census reads no constant
- * for. None of those is an admission, and a surface that renders them as one
- * is repeating the defect this field exists to close.
+ * authoring act with no Market to consult, a route whose guard is still
+ * written inline in one of the seven programs the census reads no constant
+ * for, and a route whose admissibility is over a state machine that is not
+ * the Market's -- an activation, a Dealer root, a ticket, a funding ledger --
+ * none of which the Market phase can answer for. None of those is an
+ * admission, and a surface that renders them as one is repeating the defect
+ * this field exists to close.
  */
 export type CapabilityPhaseGateV1 = Readonly<{
   /** Census route ids the act declares, whether gated or not. */
@@ -549,13 +552,19 @@ export type CapabilityMarketSnapshotV1 = Readonly<{
  * this file states a phase; it looks one up, and a name it looks up that no
  * route carries is a red test rather than a silent miss.
  *
- * WHAT IT REACHES TODAY. Eleven of 169 routes carry a named gate, all eleven
- * in Core, and eight of the twenty-seven acts below declare a route at all.
- * Four acts therefore have a phase gate: `source.create-fund`, `source.ready`,
- * `source.provider` and `source.admit-terminal`. The other twenty-three report
- * `no-phase-gate` BY NAME in the verdict, which is the whole difference from
- * the state this replaced: a reader can now tell a checked admission from an
- * unchecked one, which is the thing a partial mapping alone cannot give them.
+ * WHAT IT REACHES TODAY. Forty-eight of 169 routes carry a named gate, across
+ * five programs -- Core, Custody, Claims, Resolution and Trading, the last
+ * four having named their guards after Core did -- and nine of the
+ * twenty-seven acts below declare a route at all. FIVE acts therefore have a
+ * phase gate: `source.create-fund`, `source.ready`, `source.provider`,
+ * `source.admit-terminal`, and now `claims.redeem`, whose
+ * `claims/terminal_settlement_v3::process` admits `Terminal` and `Retiring`
+ * and refuses every other phase -- so a redemption card beside a Founding or
+ * an Open Market now says WRONG PHASE instead of READY TO PREFLIGHT. The
+ * other twenty-two report `no-phase-gate` BY NAME in the verdict, which is the
+ * whole difference from the state this replaced: a reader can now tell a
+ * checked admission from an unchecked one, which is the thing a partial
+ * mapping alone cannot give them.
  *
  * THE CARD THE UX WALK COMPLAINED ABOUT IS A DIFFERENT DEFECT, and it is
  * closed here rather than by a phase. `market.found` declares
@@ -567,9 +576,25 @@ export type CapabilityMarketSnapshotV1 = Readonly<{
  * now declared (`CapabilityMarketSubjectV1`), and an act whose subject is a
  * Market it creates refuses `ready` by name while an observation holds one.
  *
- * WHAT IT STILL DOES NOT REACH. The twenty-two acts reaching the eleven
- * non-Core programs stay ungated until those programs name their own guards
- * the way Core and Custody now have.
+ * WHAT IT STILL DOES NOT REACH, and why, because the two reasons are
+ * different and only one of them is unfinished work.
+ *
+ * Some acts declare a route the census reads no gate for because the guard is
+ * still inline -- `claims.replay` on `claims/custody_replay_v1::process`, and
+ * every act in the seven programs that have named nothing yet.
+ *
+ * The rest are not waiting on a name at all: their admissibility is over a
+ * DIFFERENT STATE MACHINE, and no Market phase can answer for it.
+ * `direct.inline` drives `trading/hot_v3::process_hot_execution_v3`, whose own
+ * discriminant guard is a Series ticket's `TicketPhaseV3` and whose Market
+ * reading comes through the activation cache; `dealer.liquidity` and
+ * `dealer.close` are over the Dealer root's own lifecycle phase;
+ * `series.prepare` and `series.close` are over a ticket's. Those need their
+ * own `*AdmissionV1` set over their own machine's tags, and a snapshot that
+ * carries that machine's state -- which this snapshot does not, so a client
+ * asked about them today has `needs-chain` and not an admission to report.
+ * Naming the Market's guards could never have reached them, and counting them
+ * as "ungated pending Core's vocabulary" would have hidden that.
  *
  * WHAT AN ADMISSION IS NOT. Every gate is a NECESSARY condition. An act whose
  * prestate is excluded cannot succeed, and that refutation is publishable. An

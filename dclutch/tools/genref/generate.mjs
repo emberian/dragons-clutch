@@ -487,15 +487,31 @@ reachable inside an entry route's request.
 function phaseGate(route) {
   const gates = route.admissible_prestates ?? [];
   if (gates.length === 0) return "no phase gate";
-  return gates
-    .map((g) => {
-      const body =
-        g.prestates && g.prestates.length > 0
-          ? g.prestates.map((s) => `${s.phase}+${s.readiness}`).join(", ")
-          : g.phases.join(", ");
-      return `\`${body}\``;
-    })
-    .join("; ");
+  const render = (g) => {
+    const body =
+      g.prestates && g.prestates.length > 0
+        ? g.prestates.map((s) => `${s.phase}+${s.readiness}`).join(", ")
+        : g.phases.join(", ");
+    return `\`${body}\``;
+  };
+  // Entries sharing an `alternative` are the branches of ONE selection, so
+  // they unite; everything else is a separate gate on the same execution, so
+  // it intersects. Printing them the same way makes a route that admits three
+  // phases read as a route that admits none.
+  const groups = new Map();
+  const conjuncts = [];
+  for (const gate of gates) {
+    if (gate.alternative === undefined || gate.alternative === null) {
+      conjuncts.push(render(gate));
+      continue;
+    }
+    if (!groups.has(gate.alternative)) groups.set(gate.alternative, []);
+    groups.get(gate.alternative).push(render(gate));
+  }
+  for (const members of groups.values()) {
+    conjuncts.push(members.length === 1 ? members[0] : members.join(" or "));
+  }
+  return conjuncts.join("; ");
 }
 
 {
@@ -595,12 +611,19 @@ condition and never a sufficient one: an act whose prestate is excluded cannot
 succeed, and an act whose prestate is admitted still has every account,
 release and request check ahead of it.
 
+Two sets joined by **or** are the two branches of ONE guard written as a
+selection -- \`if action == RedeemTerminal { .. } else { .. }\` -- so the route
+admits their UNION. Sets separated by **;** are separate guards on the same
+execution, so the route admits their INTERSECTION. A reader that treats the
+first as the second reports that a route admitting three phases admits none.
+
 **no phase gate** means no constant was read for that route -- an authoring
-route with no Market phase to consult, a guard still written inline, or a
-route the enumerator could not follow into. It does not mean the route admits
-every phase, and a consumer that treats the two alike is repeating the defect
-this column was added to close. **${gatedRoutes}** of
-**${inventoryRouteIds.size}** routes carry one today.
+route with no Market phase to consult, a guard still written inline, a guard
+reached only under a boolean branch, or a route the enumerator could not
+follow into. It does not mean the route admits every phase, and a consumer
+that treats the two alike is repeating the defect this column was added to
+close. **${gatedRoutes}** of **${inventoryRouteIds.size}** routes carry one
+today.
 
 ` +
       sections.join("\n\n") +

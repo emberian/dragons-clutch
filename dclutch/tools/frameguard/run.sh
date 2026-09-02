@@ -16,6 +16,17 @@
 # commit that landed while the four-minute double build was still running, and
 # the last would have admitted 26 changed rows of which 2 belonged to its
 # author. A capture must ride with a commit, or name one.
+#
+# CHOOSE THE CAPTURE FILENAME AS IF THE FILESYSTEM WERE CASE-INSENSITIVE,
+# BECAUSE ON macOS IT IS. Two lanes capturing into one shared scratch directory
+# picked `fg-a.json`/`fg-b.json` and `fg-A.json`/`fg-B.json` on 2026-09-02 and
+# those are the SAME TWO FILES. The colliding run was caught before it wrote,
+# and then the tidy-up -- `rm -f fg-a.json` -- destroyed the other lane's
+# completed `fg-A.json`. Nothing about a capture is protected from this: the
+# manifests are the same size, the same schema, and differ only in the commit
+# recorded inside, so an overwrite reads as a successful capture of the wrong
+# commit. Put captures in a PER-LANE SUBDIRECTORY and never let letter case be
+# the only thing separating two lanes' files.
 
 set -uo pipefail
 

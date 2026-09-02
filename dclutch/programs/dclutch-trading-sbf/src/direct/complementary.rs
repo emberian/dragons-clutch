@@ -19,7 +19,7 @@ use dclutch_direct_codec::successor::{
     DirectRegisteredIntentV2, RegisteredFillCandidateV2, RegisteredIntentSeedsV2,
     RegisteredRecordAfterFillV2,
 };
-use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
+use dclutch_market_core_codec::CoreMarketViewV1;
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,
@@ -33,6 +33,7 @@ use super::{
     },
     physical::{DirectExternalCollateralV2, DirectPhysicalError, Result},
 };
+use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 
 /// Canonical route order for every complementary participant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,7 +94,7 @@ impl DirectComplementaryPhysicalContextV2 {
                 return Err(DirectPhysicalError::ZeroIdentity);
             }
         }
-        if self.core_market.phase() != Phase::Open
+        if !TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(self.core_market.phase())
             || release_set.bindings[2].program.to_bytes() != self.trading_program
             || self.fee_destination.owner != config.fee_recipient()
             || self.fee_destination.account == self.hoard_token_account
@@ -238,7 +239,7 @@ impl DirectComplementaryClaimsContextV2 {
             || self.parent_request_digest == [0; 32]
             || self.linked_basis_record_digest == [0; 32]
             || self.fill == 0
-            || self.core_market.phase() != Phase::Open
+            || !TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(self.core_market.phase())
             || release_set.bindings[1].program.to_bytes() != self.claims_program
             || release_set.bindings[2].program.to_bytes() != self.trading_program
         {

@@ -126,6 +126,7 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
       'source.ready',
       'source.provider',
       'source.admit-terminal',
+      'claims.redeem',
     ]);
     expect(ungated).toHaveLength(CAPABILITY_ACTIONS_V1.length - gated.length);
   });
