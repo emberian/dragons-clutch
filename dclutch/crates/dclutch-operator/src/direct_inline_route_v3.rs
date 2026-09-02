@@ -1278,29 +1278,11 @@ pub const DIRECT_INLINE_DEVNET_ACCOUNT_LOCK_LIMIT_V3: usize = 64;
 
 /// The six fixed staging coordinates whose finalized observations are owned by
 /// the write-once CapabilitySeal before ordinary Direct execution.
-pub const DIRECT_INLINE_SEALED_EXECUTION_ALIASES_V3: [(usize, usize); 6] = [
-    (
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-    ),
-    (
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-    ),
-    (
-        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
-        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
-    ),
-    (
-        HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3,
-    ),
-    (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
-    (
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-        HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-    ),
-];
+///
+/// The pairs themselves are the ABI's -- they are the same six for every family
+/// that submits the shape, and this crate spelled them a second time.
+pub const DIRECT_INLINE_SEALED_EXECUTION_ALIASES_V3: [(usize, usize); 6] =
+    dclutch_capability_program_contract::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
 
 /// Project the execution-only fixed aliases after the distinct named route has
 /// authenticated every real raw/staging pair. No account may be added, removed,

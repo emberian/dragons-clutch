@@ -55,7 +55,7 @@ use dclutch_capability_program_contract::{
         HOT_STRATEGY_RAW_ACCOUNT_V3, HOT_STRATEGY_STAGING_ACCOUNT_V3,
         HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
         HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
-        hot_bump_hint_v1,
+        hot_bump_hint_v1, hot_frame_uses_sealed_execution_aliases_v3,
     },
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
@@ -3562,15 +3562,22 @@ fn authenticate_and_execute_hot_v3(
     let selected_program = selected_descriptor.program();
     let selected_action = selected_entry.selector();
 
-    // A Direct ordinary execution spends the write-once artifact verdict it
-    // authenticates below. Its six sealed staging coordinates therefore carry
-    // the matching raw account again: the seal is the durable proof that the
-    // real staging cursor was vacant when this exact raw body was admitted.
-    // Other Hot families and Direct actions keep the fully-distinct frame.
+    // A family that spends the write-once artifact verdict authenticated below
+    // carries its six sealed staging coordinates as the matching raw account
+    // again: the seal is the durable proof that the real staging cursor was
+    // vacant when this exact raw body was admitted, and Registry finalization
+    // is monotone, so that proof cannot go stale. Families that do not keep the
+    // fully-distinct frame and observe each cursor live.
+    //
+    // The table is the ABI's, not this function's --
+    // `capability_program_contract::hot_v3` -- so the executor, the bundle
+    // builders and the operators read one declaration instead of each spelling
+    // the rule again. `!=` and not `||`: the wrong shape for the family refuses
+    // in either direction, so the shape is the family's and never the
+    // submitter's choice.
     let selected_kind = context.selection().kind().to_bytes();
     if frame.uses_sealed_execution_aliases()
-        != (selected_kind == DIRECT_SUCCESSOR_KIND_ID_V3
-            && selected_action == DirectExecutionActionV3::InlineOrdinary as u32)
+        != hot_frame_uses_sealed_execution_aliases_v3(selected_kind, selected_action)
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -14977,29 +14984,12 @@ struct HotFrameV3<'accounts, 'info> {
 /// seal owns the six finalized staging observations and Hot needs only each
 /// live raw body plus that verdict. Keeping the fixed coordinate count stable
 /// avoids a second wire ABI while removing six unique transaction locks.
-const SEALED_EXECUTION_FIXED_ALIASES_V3: [(usize, usize); 6] = [
-    (
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-    ),
-    (
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-    ),
-    (
-        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
-        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
-    ),
-    (
-        HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3,
-    ),
-    (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
-    (
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-        HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-    ),
-];
+/// The shape, from the ABI that also declares which families submit it.
+///
+/// This was a private copy of the same six pairs. The executor and the
+/// producers have to agree exactly -- the gate compares with `!=` -- and two
+/// spellings of one table is how they stop agreeing.
+use dclutch_capability_program_contract::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
 
 fn is_sealed_execution_fixed_alias_v3(left: usize, right: usize) -> bool {
     SEALED_EXECUTION_FIXED_ALIASES_V3.contains(&(left, right))
@@ -15225,16 +15215,15 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
         {
             return Err(TradingSbfError::Content.into());
         }
-        for (left, account) in accounts.iter().enumerate() {
-            if accounts
-                .get(left.saturating_add(1)..)
-                .ok_or(TradingSbfError::Content)?
-                .iter()
-                .any(|other| other.key == account.key)
-            {
-                return Err(TradingSbfError::Content.into());
-            }
-        }
+        // The same sweep `parse` runs, from the same authority, rather than a
+        // second copy of it. This function used to carry its own bare
+        // pairwise-distinctness loop, which was the strictly older rule: it
+        // refused the seal-backed alias shape that
+        // `validate_hot_fixed_alias_shape_v3` exists to admit. Since every
+        // AdmittedAot family reaches its accelerator through here, that copy
+        // silently confined the alias shape to families that never take this
+        // path, and it would have done so again for the next one.
+        validate_hot_fixed_alias_shape_v3(accounts)?;
         Ok(value)
     }
 }

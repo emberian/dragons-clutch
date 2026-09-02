@@ -232,6 +232,9 @@ fn run() -> Result<()> {
         Some(command) if command == claims_custody_replay::COMMAND_V1 => {
             claims_custody_replay::run_owned_loopback_v1(arguments.collect())
         }
+        Some(command) if command == claims_custody_replay::COMMAND_DEVNET_V1 => {
+            claims_custody_replay::run_devnet_v1(arguments.collect())
+        }
         Some(command) if command == capability_seal_close::COMMAND_V1 => {
             capability_seal_close::run_owned_loopback_v1(arguments.collect())
         }
@@ -2133,6 +2136,7 @@ fn usage() {
     println!("{}", private_lifecycle::usage());
     println!("{}", private_lifecycle::direct_payout_schedule_usage());
     println!("{}", claims_custody_replay::usage());
+    println!("{}", claims_custody_replay::devnet_usage());
     println!("{}", direct_fee_settlement::usage());
     println!("{}", direct_close_maker::usage());
     println!("{}", capability_seal_close::usage());

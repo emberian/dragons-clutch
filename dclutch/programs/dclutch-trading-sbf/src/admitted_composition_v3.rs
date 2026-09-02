@@ -34,7 +34,8 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 use dclutch_capability_program_contract::{
-    hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3, v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, hot_frame_uses_sealed_execution_aliases_v3},
+    v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
@@ -802,12 +803,24 @@ fn validate_authenticated_frame<'a, 'info>(
     // Each raw record and its staging cursor are ONE Registry identity under two
     // domains, so they are checked as a pair and can no longer be given halves of
     // it. See `require_record_pair`.
+    // The descriptor is the only PER-ACTION record of these five, and the
+    // seal-backed alias shape is exactly the per-action six. Strategy,
+    // certificate, admission and artifact release are per-STRATEGY: the seal
+    // never witnessed their cursors, so they keep the distinct pair whatever
+    // the family submits. The shape is read from the one ABI declaration the
+    // executor and every builder read, over the kind the descriptor itself
+    // declares and the action the context carries.
+    let sealed_aliases = hot_frame_uses_sealed_execution_aliases_v3(
+        descriptor.kind().to_bytes(),
+        context.selected_action,
+    );
     require_record_pair(
         frame.registry.key,
         frame.capability_raw.key,
         frame.capability_staging.key,
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         authenticated.capability_program_id().to_bytes(),
+        sealed_aliases,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -815,6 +828,7 @@ fn validate_authenticated_frame<'a, 'info>(
         frame.strategy_staging.key,
         EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
         authenticated.strategy_program_id().to_bytes(),
+        false,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -822,6 +836,7 @@ fn validate_authenticated_frame<'a, 'info>(
         frame.certificate_staging.key,
         EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         context.certificate.to_bytes(),
+        false,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -829,6 +844,7 @@ fn validate_authenticated_frame<'a, 'info>(
         frame.admission_staging.key,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
         context.admission.to_bytes(),
+        false,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -836,6 +852,7 @@ fn validate_authenticated_frame<'a, 'info>(
         frame.artifact_staging.key,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         context.artifact_release.to_bytes(),
+        false,
     )?;
     Ok(())
 }
@@ -928,14 +945,31 @@ fn require_record_pair(
     staging: &Pubkey,
     schema: [u8; 32],
     digest: [u8; 32],
+    aliased: bool,
 ) -> Result<(), ProgramError> {
     let key = RecordKeyV1::new(
         SchemaReleaseId::new(schema).map_err(|_| TradingSbfError::AdmittedFrame)?,
         ContentDigest::new(digest).map_err(|_| TradingSbfError::AdmittedFrame)?,
     );
-    if raw != &record_address(registry, key.raw_record_pda_seeds())
-        || staging != &record_address(registry, key.staging_cursor_pda_seeds())
-    {
+    let raw_address = record_address(registry, key.raw_record_pda_seeds());
+    // Under the seal-backed aliased shape a per-ACTION staging coordinate
+    // repeats its own raw record instead of carrying the cursor, so the
+    // transaction locks one account per record rather than two. The address
+    // this then requires is the RAW record's, and it is required exactly as
+    // strictly: the shape changes which account the coordinate holds, never
+    // whether the coordinate is checked.
+    //
+    // `execution_strategy_v2::authenticate_common_frame_with_sealed_capability_pair`
+    // has handled both shapes since the mechanism was built (`let
+    // capability_is_aliased = raw.key == staging.key`); this validator was the
+    // one left behind, and with the family gate widened and nothing else
+    // changed the Dealer LP Open refused `0x4017 AdmittedFrame` here.
+    let expected_staging = if aliased {
+        raw_address
+    } else {
+        record_address(registry, key.staging_cursor_pda_seeds())
+    };
+    if raw != &raw_address || staging != &expected_staging {
         return Err(TradingSbfError::AdmittedFrame.into());
     }
     Ok(())
@@ -1194,8 +1228,22 @@ mod tests {
         let raw = record_address(&registry, key.raw_record_pda_seeds());
         let staging = record_address(&registry, key.staging_cursor_pda_seeds());
         assert_eq!(
-            require_record_pair(&registry, &raw, &staging, schema, digest),
+            require_record_pair(&registry, &raw, &staging, schema, digest, false),
             Ok(())
+        );
+        // The aliased shape takes the raw record at BOTH coordinates and
+        // nothing else: the cursor address it would otherwise require is now
+        // the wrong account, the distinct shape still refuses a repeated raw,
+        // and a stranger is still a stranger.
+        assert_eq!(
+            require_record_pair(&registry, &raw, &raw, schema, digest, true),
+            Ok(())
+        );
+        assert!(require_record_pair(&registry, &raw, &staging, schema, digest, true).is_err());
+        assert!(require_record_pair(&registry, &raw, &raw, schema, digest, false).is_err());
+        assert!(
+            require_record_pair(&registry, &raw, &Pubkey::new_unique(), schema, digest, true)
+                .is_err()
         );
 
         // The exact defect: a record at the Registry's three-seed address must
@@ -1204,20 +1252,21 @@ mod tests {
         let two_seed =
             Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &digest], &registry).0;
         assert_ne!(raw, two_seed);
-        assert!(require_record_pair(&registry, &two_seed, &staging, schema, digest).is_err());
+        assert!(require_record_pair(&registry, &two_seed, &staging, schema, digest, false).is_err());
 
         // Swapping schema and digest names a different record.
-        assert!(require_record_pair(&registry, &raw, &staging, digest, schema).is_err());
+        assert!(require_record_pair(&registry, &raw, &staging, digest, schema, false).is_err());
         // A raw record paired with another identity's staging cursor refuses.
         assert!(
-            require_record_pair(&registry, &raw, &Pubkey::new_unique(), schema, digest).is_err()
+            require_record_pair(&registry, &raw, &Pubkey::new_unique(), schema, digest, false)
+                .is_err()
         );
         assert!(
-            require_record_pair(&registry, &Pubkey::new_unique(), &staging, schema, digest)
+            require_record_pair(&registry, &Pubkey::new_unique(), &staging, schema, digest, false)
                 .is_err()
         );
         // A zero schema or digest is not an identity at all.
-        assert!(require_record_pair(&registry, &raw, &staging, [0; 32], digest).is_err());
-        assert!(require_record_pair(&registry, &raw, &staging, schema, [0; 32]).is_err());
+        assert!(require_record_pair(&registry, &raw, &staging, [0; 32], digest, false).is_err());
+        assert!(require_record_pair(&registry, &raw, &staging, schema, [0; 32], false).is_err());
     }
 }

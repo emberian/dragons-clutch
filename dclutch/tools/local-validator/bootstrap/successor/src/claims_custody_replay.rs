@@ -76,19 +76,41 @@ use solana_program::hash::hash;
 use crate::campaign::{
     parse_campaign_terminal_evidence_with_expected_cluster_v1, read_keypair_file,
 };
-use crate::cluster::ExpectedClusterV1;
+use crate::cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1};
 use crate::model::{SuccessorPlan, TransactionEvidence};
 use crate::plan::pubkey;
-use crate::rpc::Rpc;
+use crate::rpc::{Rpc, WritePolicyV1};
 use crate::terminal_lifecycle::routed_record;
 use crate::{Error, Result};
 
 /// The owned-loopback command name.
 pub(crate) const COMMAND_V1: &str = "local-private-validator-claims-custody-replay-v1";
+/// The public arm.
+///
+/// The route was written against a validator this runner owns, and the payout
+/// it unblocks is not: a devnet market resolved and admitted to Core still has
+/// no Claims-role replay, and terminal payout decodes one and never creates it.
+/// So the loopback-only driver was the producer gap standing between a Terminal
+/// Market and its first redemption. Nothing about the instruction differs
+/// between the two clusters -- the cluster decides which origin is admitted,
+/// which campaign report is consumable, and which label the evidence carries.
+pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-claims-custody-replay-v1";
+
+const fn command(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => COMMAND_DEVNET_V1,
+        ExpectedClusterV1::OwnedLoopback => COMMAND_V1,
+    }
+}
 
 /// The exact account count this route demands, restated from the program so a
 /// frame that drifts fails here rather than after a cluster round trip.
 const FRAME_ACCOUNTS_V1: usize = 15;
+
+pub(crate) fn devnet_usage() -> &'static str {
+    "dclutch-local-successor-bootstrap devnet-claims-custody-replay-v1 --rpc-url URL --i-mean-devnet DEVNET_GENESIS --plan ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY --fee-payer PUBKEY --output ABSOLUTE_JSON [--execute --fee-payer-keypair ABSOLUTE_JSON]\n\
+     \nThe public arm of the same first-use creation. It consumes an executed devnet campaign report, refuses every non-devnet origin, and writes its evidence under the devnet label. A Terminal Market cannot pay a wallet until this account exists."
+}
 
 pub(crate) fn usage() -> &'static str {
     "dclutch-local-successor-bootstrap local-private-validator-claims-custody-replay-v1 --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY --fee-payer PUBKEY --output ABSOLUTE_JSON [--execute --fee-payer-keypair ABSOLUTE_JSON]\n\
@@ -97,7 +119,7 @@ pub(crate) fn usage() -> &'static str {
 
 /// Parsed command line.
 struct ArgumentsV1 {
-    rpc_url: String,
+    origin: ClusterOriginV1,
     plan: PathBuf,
     evidence: PathBuf,
     market: Pubkey,
@@ -129,13 +151,29 @@ struct PlanV1 {
 }
 
 pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse(arguments)?;
-    let mut rpc = Rpc::connect(&arguments.rpc_url)?;
-    let plan = plan(&mut rpc, &arguments)?;
+    run(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+pub(crate) fn run_devnet_v1(arguments: Vec<String>) -> Result<()> {
+    run(arguments, ExpectedClusterV1::Devnet)
+}
+
+fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse(arguments, expected)?;
+    expected.authenticate(&arguments.origin)?;
+    let mut rpc = Rpc::connect_cluster(
+        &arguments.origin,
+        if arguments.execute {
+            WritePolicyV1::Writes
+        } else {
+            WritePolicyV1::ReadsOnly
+        },
+    )?;
+    let plan = plan(&mut rpc, &arguments, expected)?;
     report(&plan);
 
     if !arguments.execute {
-        write_evidence(&arguments.output, &plan, None)?;
+        write_evidence(&arguments.output, &plan, expected, None)?;
         println!("preflight only; no key was opened and nothing was sent");
         return Ok(());
     }
@@ -199,19 +237,17 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         plan.replay
     );
 
-    write_evidence(&arguments.output, &plan, Some(&evidence))?;
+    write_evidence(&arguments.output, &plan, expected, Some(&evidence))?;
     Ok(())
 }
 
 /// Build the one instruction this route will ever send.
-fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<PlanV1> {
+fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> Result<PlanV1> {
     let plan_bytes = std::fs::read(&arguments.plan)?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
     let evidence_bytes = std::fs::read(&arguments.evidence)?;
-    let evidence = parse_campaign_terminal_evidence_with_expected_cluster_v1(
-        &evidence_bytes,
-        ExpectedClusterV1::OwnedLoopback,
-    )?;
+    let evidence =
+        parse_campaign_terminal_evidence_with_expected_cluster_v1(&evidence_bytes, expected)?;
 
     let claims = pubkey(&plan.claims.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
@@ -371,14 +407,26 @@ fn report(plan: &PlanV1) {
     println!("frame accounts       {}", plan.instruction.accounts.len());
 }
 
+fn usage_for(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => devnet_usage(),
+        ExpectedClusterV1::OwnedLoopback => usage(),
+    }
+}
+
 fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn write_evidence(path: &Path, plan: &PlanV1, landed: Option<&TransactionEvidence>) -> Result<()> {
+fn write_evidence(
+    path: &Path,
+    plan: &PlanV1,
+    expected: ExpectedClusterV1,
+    landed: Option<&TransactionEvidence>,
+) -> Result<()> {
     let document = json!({
         "schema": "dclutch-claims-custody-replay-evidence-v1",
-        "cluster": "owned-loopback",
+        "cluster": expected.evidence_label(),
         "market": plan.market.to_string(),
         "claimsAggregate": plan.aggregate.to_string(),
         "custodyContext": hex_lower(&plan.custody_context),
@@ -404,8 +452,9 @@ fn write_evidence(path: &Path, plan: &PlanV1, landed: Option<&TransactionEvidenc
     Ok(())
 }
 
-fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
+fn parse(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
+    let mut acknowledgment = None;
     let mut plan = None;
     let mut evidence = None;
     let mut market = None;
@@ -422,11 +471,20 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
             execute = true;
             continue;
         }
-        let value = cursor
-            .next()
-            .ok_or_else(|| Error::new(format!("{flag} needs a value; usage: {}", usage())))?;
+        let value = cursor.next().ok_or_else(|| {
+            Error::new(format!(
+                "{flag} needs a value; usage: {}",
+                usage_for(expected)
+            ))
+        })?;
         let slot = match flag.as_str() {
             "--rpc-url" => &mut rpc_url,
+            // Accepted on the public arm only. On the loopback arm the flag
+            // falls through to the unknown-argument refusal below, which names
+            // the command that does take it.
+            DEVNET_ACKNOWLEDGMENT_FLAG if expected == ExpectedClusterV1::Devnet => {
+                &mut acknowledgment
+            }
             "--plan" => &mut plan,
             "--evidence" => &mut evidence,
             "--market" => &mut market,
@@ -435,7 +493,8 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--output" => &mut output,
             other => {
                 return Err(Error::new(format!(
-                    "unknown {COMMAND_V1} argument: {other}"
+                    "unknown {} argument: {other}",
+                    command(expected)
                 )));
             }
         };
@@ -444,10 +503,16 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
         }
     }
     let required = |value: Option<String>, name: &str| {
-        value.ok_or_else(|| Error::new(format!("{name} is required; usage: {}", usage())))
+        value.ok_or_else(|| {
+            Error::new(format!(
+                "{name} is required; usage: {}",
+                usage_for(expected)
+            ))
+        })
     };
+    let rpc_url = required(rpc_url, "--rpc-url")?;
     Ok(ArgumentsV1 {
-        rpc_url: required(rpc_url, "--rpc-url")?,
+        origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
         plan: PathBuf::from(required(plan, "--plan")?),
         evidence: PathBuf::from(required(evidence, "--evidence")?),
         market: required(market, "--market")?
@@ -460,4 +525,73 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
         output: PathBuf::from(required(output, "--output")?),
         execute,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arguments(extra: &[&str]) -> Vec<String> {
+        let mut out = vec![
+            "--rpc-url".to_owned(),
+            "http://127.0.0.1:21400".to_owned(),
+            "--plan".to_owned(),
+            "/abs/plan.json".to_owned(),
+            "--evidence".to_owned(),
+            "/abs/evidence.json".to_owned(),
+            "--market".to_owned(),
+            "11111111111111111111111111111112".to_owned(),
+            "--fee-payer".to_owned(),
+            "11111111111111111111111111111113".to_owned(),
+            "--output".to_owned(),
+            "/abs/out.json".to_owned(),
+        ];
+        out.extend(extra.iter().map(|value| (*value).to_owned()));
+        out
+    }
+
+    /// The acknowledgment flag exists on exactly one arm, and the refusal on
+    /// the other names the command that takes it rather than reporting an
+    /// anonymous unknown argument.
+    #[test]
+    fn the_devnet_acknowledgment_belongs_to_the_public_arm_alone() {
+        // `ArgumentsV1` deliberately has no `Debug` -- it holds a key path --
+        // so the refusal is taken by pattern rather than by `expect_err`.
+        let Err(refusal) = parse(
+            arguments(&[DEVNET_ACKNOWLEDGMENT_FLAG, "SomeGenesisHash"]),
+            ExpectedClusterV1::OwnedLoopback,
+        ) else {
+            panic!("the loopback arm must not take a devnet acknowledgment");
+        };
+        assert!(
+            refusal.0.contains(COMMAND_V1) && refusal.0.contains(DEVNET_ACKNOWLEDGMENT_FLAG),
+            "expected the loopback arm to name itself and the flag, got: {refusal}"
+        );
+        // And the loopback arm still parses without it, so the refusal above is
+        // about the flag and not about the rest of the command line.
+        assert!(
+            parse(arguments(&[]), ExpectedClusterV1::OwnedLoopback).is_ok(),
+            "the loopback arm must parse its own command line"
+        );
+    }
+
+    /// A loopback URL is refused by the public arm at ORIGIN PARSING, which is
+    /// earlier than the cluster check and earlier than any key or read.
+    ///
+    /// The refusal is `ClusterOriginV1::parse`'s, and it is the honest one: an
+    /// acknowledgment given for a loopback socket means one of the two is a
+    /// typo and nothing here can tell which.
+    #[test]
+    fn the_public_arm_refuses_a_loopback_origin_before_any_key_or_read() {
+        let Err(refusal) = parse(
+            arguments(&[DEVNET_ACKNOWLEDGMENT_FLAG, "SomeGenesisHash"]),
+            ExpectedClusterV1::Devnet,
+        ) else {
+            panic!("a loopback socket must not be acknowledged as devnet");
+        };
+        assert!(
+            refusal.0.contains("was given for the loopback origin"),
+            "expected the origin parser's loopback refusal, got: {refusal}"
+        );
+    }
 }

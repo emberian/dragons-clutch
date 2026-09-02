@@ -642,6 +642,117 @@ fn all_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|value| *value == 0)
 }
 
+/// The six `(raw, staging)` fixed coordinate pairs the seal-backed shape
+/// collapses.
+///
+/// These are the per-ACTION records -- descriptor, account profile, request
+/// profile, transition, effect, lifecycle -- and they are exactly the six
+/// `process_capability_seal_v1` calls `borrow_finalized_record` on to mint a
+/// seal, hence exactly the six whose staging cursors the seal durably witnessed
+/// vacant. The per-ROOT (manifest, program set, config) and per-STRATEGY
+/// (strategy, product, result domain, portfolio, linked basis) pairs are not
+/// the seal's and stay distinct.
+///
+/// This table lived TWICE -- privately in `dclutch-trading-sbf`'s executor and
+/// again in `dclutch-operator`'s Direct route projector -- and a third copy was
+/// about to be written for the Dealer producer. It belongs beside
+/// [`SEALED_EXECUTION_ALIAS_FAMILIES_V3`]: one declaration says WHICH families
+/// submit the shape, one says WHAT the shape is, and every executor, builder
+/// and operator reads both from here.
+pub const SEALED_EXECUTION_FIXED_ALIASES_V3: [(usize, usize); 6] = [
+    (
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+    ),
+    (
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+    ),
+    (
+        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+    ),
+    (
+        HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3,
+    ),
+    (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
+    (
+        HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+    ),
+];
+
+/// Which capability families submit the seal-backed ALIASED fixed frame.
+///
+/// Six of the thirty-nine fixed coordinates are per-ACTION staging cursors --
+/// descriptor, lifecycle, account profile, request profile, transition, effect
+/// -- and a family submits them one of exactly two ways. In the DISTINCT shape
+/// each staging coordinate carries the real cursor PDA, System-owned and
+/// zero-length, and the hot route observes its non-existence live. In the
+/// ALIASED shape each staging coordinate repeats its own raw record, so the
+/// transaction locks one account per record instead of two.
+///
+/// The aliased shape is sound because the fact it stops re-observing is
+/// already persisted: `hot_v3/seal.rs` mints one write-once Trading-owned seal
+/// per (descriptor, action, Trading semantic release, Registry) and can only
+/// mint it by calling `borrow_finalized_record` on exactly these six records,
+/// each of which requires the cursor vacant and each of which is recorded as a
+/// `SealedRecordRowV1`. Registry finalization is monotone -- `Begin` refuses a
+/// non-vacant raw record and `Abort` refuses a closed cursor -- so a record
+/// finalized once is finalized for the life of the chain, and the seal's seeds
+/// join the Trading semantic release, so an interpreter upgrade mints afresh
+/// rather than inheriting a stale verdict. See
+/// `docs/design/REGISTRY_FINALIZATION_OBSERVATION_2026_09_02.md`.
+///
+/// The shape is a property of the FAMILY and not of the submitter: Trading
+/// requires the frame to match this table exactly, so a client can neither opt
+/// in to save locks nor opt out to look ordinary. This table is the sole place
+/// the choice is declared, and the executor, every bundle builder, and every
+/// operator read it here rather than each spelling the rule again.
+///
+/// `None` in the second position means every action of that kind; `Some(a)`
+/// means that one action.
+///
+/// The kind identities are SHA-256 of the capability-kind labels their owning
+/// crates define, restated here because those crates depend on this one and
+/// cannot be depended on back. Each owner pins its own literal against this
+/// one in a test, so a drift is red rather than silent.
+/// ADDING A FAMILY IS ONE ROW HERE AND THREE PRODUCERS. Measured for the
+/// Dealer kind (`a768…d98a`, SHA-256 of `b"dclutch/capability/dealer-v2"`,
+/// `None` for every action) on real ELFs, 2026-09-02: LP-hot 54 -> 48 unique
+/// locks and the equity Add 70 -> 64, the campaign unchanged at 30/1. That row
+/// is NOT here, because a row without its producers is a family whose
+/// transactions the chain refuses: `apps/dclutch-web`'s `dealerEquityChain.ts`
+/// THROWS on a staging coordinate that is not the derived cursor, the operator
+/// has no projector for the shape, and the sealed-execution hostile does not
+/// cover the kind. See the appendix of
+/// `docs/design/REGISTRY_FINALIZATION_OBSERVATION_2026_09_02.md`.
+pub const SEALED_EXECUTION_ALIAS_FAMILIES_V3: [([u8; 32], Option<u32>); 1] = [
+    // SHA-256 of `b"dclutch/capability/direct-successor-v3"`, InlineOrdinary.
+    (
+        [
+            0x2f, 0x9c, 0xf5, 0x05, 0xbd, 0x6a, 0x41, 0x7e, 0x88, 0x22, 0xce, 0xe2, 0xb4, 0x27,
+            0x24, 0x6d, 0x7b, 0x2a, 0xd8, 0x25, 0x7a, 0x9a, 0xbe, 0xf5, 0xa8, 0x52, 0xc7, 0x24,
+            0x8f, 0x53, 0x31, 0x47,
+        ],
+        Some(1),
+    ),
+];
+
+/// Whether this family's fixed frame aliases its six per-action staging
+/// coordinates onto their raw records.
+///
+/// See [`SEALED_EXECUTION_ALIAS_FAMILIES_V3`]. Trading compares the answer
+/// against the frame it was handed with `!=`, not `||`: the wrong shape for
+/// the family refuses in either direction.
+#[must_use]
+pub fn hot_frame_uses_sealed_execution_aliases_v3(kind: [u8; 32], action: u32) -> bool {
+    SEALED_EXECUTION_ALIAS_FAMILIES_V3
+        .iter()
+        .any(|(family, selected)| *family == kind && selected.is_none_or(|value| value == action))
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;

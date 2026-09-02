@@ -1038,3 +1038,42 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod sealed_alias_family_pin {
+    use super::{DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3};
+    use dclutch_capability_program_contract::hot_v3::{
+        SEALED_EXECUTION_ALIAS_FAMILIES_V3, hot_frame_uses_sealed_execution_aliases_v3,
+    };
+
+    /// The ABI's alias table restates this crate's kind identity, because the
+    /// contract crate cannot depend back on this one. If either moves without
+    /// the other, the fixed frame Trading requires stops matching the frame
+    /// this family builds, and nothing else in the tree would say so.
+    #[test]
+    fn the_abi_alias_table_names_this_crate_s_kind_and_only_the_ordinary_action() {
+        assert!(hot_frame_uses_sealed_execution_aliases_v3(
+            DIRECT_SUCCESSOR_KIND_ID_V3,
+            DirectExecutionActionV3::InlineOrdinary as u32,
+        ));
+        assert!(
+            SEALED_EXECUTION_ALIAS_FAMILIES_V3
+                .iter()
+                .any(|(kind, action)| *kind == DIRECT_SUCCESSOR_KIND_ID_V3
+                    && *action == Some(DirectExecutionActionV3::InlineOrdinary as u32)),
+            "the alias table must name this kind for exactly the ordinary action"
+        );
+        for other in [
+            DirectExecutionActionV3::RegisterSell,
+            DirectExecutionActionV3::CancelRegistered,
+        ] {
+            assert!(
+                !hot_frame_uses_sealed_execution_aliases_v3(
+                    DIRECT_SUCCESSOR_KIND_ID_V3,
+                    other as u32
+                ),
+                "{other:?} keeps the fully-distinct frame"
+            );
+        }
+    }
+}

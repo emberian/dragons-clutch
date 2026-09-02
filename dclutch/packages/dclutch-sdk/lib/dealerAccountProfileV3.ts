@@ -314,7 +314,10 @@ function expectedLpProfile(route: Extract<DealerAccountProfileRouteV3, { kind: '
   return output;
 }
 
-function expectedScenarioProfile(lengths: readonly number[]): Uint8Array {
+// Exported for `dealerAccountProfileV3.vector.test.ts`, which compares every
+// byte of this mirror against a fixture the Rust encoder produces. Until that
+// test existed this function was checked only by whoever read it.
+export function expectedScenarioProfile(lengths: readonly number[]): Uint8Array {
   if (lengths.length < DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3) throw new Error('Dealer scenario common data-length vector is truncated');
   const header = DYNAMIC_FIXED_SPAN_HEADER_BYTES + DEALER_SCENARIO_PROFILE_SPANS_V4 * DYNAMIC_FIXED_SPAN_ENTRY_BYTES;
   const output = profileHeader(

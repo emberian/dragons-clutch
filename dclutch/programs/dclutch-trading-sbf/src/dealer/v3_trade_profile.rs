@@ -34,8 +34,13 @@ use dclutch_claims_svm::frame_spec_v1::SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
 use dclutch_claims_svm::frame_spec_v1::SignedDeltaFrameSpecV3;
 #[cfg(not(target_os = "solana"))]
 use dclutch_custody_contract::{CustodyFrameSpecV1, OperationV1};
+// Re-exported rather than merely imported: this width is not incidental to the
+// profile, it is a CONDITION of it -- the encoder refuses unless the config
+// account's declared length equals it. A host test that wants to build a valid
+// width vector needs to say which number that is, and the alternative is
+// retyping 128 in a test, which is how a second author starts.
 #[cfg(not(target_os = "solana"))]
-use dclutch_dealer_codec::config_v4::DEALER_CONFIG_BYTES_V4;
+pub use dclutch_dealer_codec::config_v4::DEALER_CONFIG_BYTES_V4;
 #[cfg(not(target_os = "solana"))]
 use dclutch_product_runtime_v2_svm_reader::BASIS_WIDTH_OFFSET_V3;
 
