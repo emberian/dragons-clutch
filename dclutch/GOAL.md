@@ -2765,3 +2765,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   passed a length check. Successor: that fix + honest fixtures, the other 12 convicted errors (incl. the SDK's missing
   `sendRawTransaction`), the a11y 223, then the cohort-12 resolved-market run.
 - Cuts: `8009a825c`, `d00396b4d`.
+
+### Lane map delta — 2026-09-02 05:30
+- GENERAL successor: **OpenBatch N=2 COMMITS** (`5afef490`, 862,319 CU, four real accelerator chunks) — the host mis-modelled
+  the System program observation (upgradeable-loader view vs native loader); every logical coordinate is now asserted against
+  the bank before submission. Transport binding **wired at zero frame cost** (`73f802f6`: the pair is re-derived at the join
+  instead of travelling). N=258 walls: heap aborts at **N=14** (~4.5 KB/outcome) and scalars 163+6·(N−2) vs
+  `MAX_HOT_SCALARS_V3` 512 — per-outcome cost and the ceiling's owner are the next unit. Frameguard baseline stale (2,688 vs 3,840).
+- DIRECT successor: the fee-fill CU wall premise was **FALSE** at HEAD (no two-CPI branch; fee-bearing floor 1,299,128 is 131 CU
+  below zero-fee; `81dfa412` corrects the population doc that consumed it). The real wall: **both margin-gate ratchets RED at
+  HEAD** — the Direct Hot floor rose +31,199 CU since 08-31 (worst-seed margin 70,870 of 1.4M); largest non-CPI consumer
+  `project_accounts_atomic` 144,016 CU (`2cb59a07` splits the band). Parked patch landed (`74e044cf`: the System program
+  left the static set — the pin measured a packet the protocol never emits). Closes green. `direct_fee_settlement_v1::settle`
+  is the deepest frame in Trading (4,032/4,096). Next: bisect the regression; resolution/redemption/portable-ticket; the frame.
+- EMISSION successor: **unguarded emissions 15 → 0** (`e4d950a7`, `82d07aef`, `a528ac33`, `538576c5`, `f1b3e1d0`, `f00f137a`);
+  `f49089cf` a header coordinate the codec read differently from the emitter. DEALER `074a30ed`: the equity Add's transcript
+  was 9.5 MB of ELF with a two-author tail.
+- Cuts: `307bb3526`, `eb3ee1060`, `64b9d9d73`.
