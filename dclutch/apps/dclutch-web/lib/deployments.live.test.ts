@@ -37,6 +37,43 @@ describe('live devnet deployment manifest', () => {
     }
   }, 60_000);
 
+  live('finds the ProgramData accounts that actually hold the code, not just the Program stubs naming them', async () => {
+    /**
+     * THE QUESTION THIS FILE WAS NOT ASKING, and it cost a day.
+     *
+     * `solana program close` deletes the ProgramData account and LEAVES the
+     * 36-byte Program account behind: still executable, still owned by the
+     * loader, still naming the ProgramData address it used to have. Every check
+     * above passes on a closed program. Measured on 2026-09-02 at finalized
+     * slot 491,864,298: all seven of cohort-8's ProgramData accounts were
+     * absent while all seven Program accounts answered every question this
+     * suite asked, so the shipped manifest pointed the browser at dead code for
+     * a day with a green gate.
+     *
+     * Reading 45 bytes of each header is enough: the Loader-v3 tag is at 0 and
+     * the deployment slot at 4, and neither exists at all if the account is
+     * gone. It never downloads an ELF.
+     */
+    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+    const addresses = PROTOCOL_ROLES_V1.map((role) => DEVNET_PROGRAM_EVIDENCE_V1[role].programData);
+    const observation = await client.multipleAccountDataSlices(addresses, 0, 45);
+    for (const [index, role] of PROTOCOL_ROLES_V1.entries()) {
+      const account = observation.accounts[index].account;
+      expect(account, `${role} ProgramData is absent: this program is CLOSED, and its Program account still names it`).not.toBeNull();
+      expect(account?.owner, `${role} ProgramData owner`).toBe(UPGRADEABLE_LOADER);
+      expect(account?.executable, `${role} ProgramData executable`).toBe(false);
+      const data = account?.data ?? new Uint8Array();
+      // Loader-v3 state tag 3 is ProgramData, and the 45-byte header is the
+      // slice; `space` is the whole ELF-carrying account, which must be larger.
+      expect(new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0, true), `${role} ProgramData tag`).toBe(3);
+      expect(Number(account?.space ?? 0), `${role} ProgramData carries an ELF`).toBeGreaterThan(45);
+      const slot = new DataView(data.buffer, data.byteOffset, data.byteLength).getBigUint64(4, true).toString();
+      // Never earlier than the recorded slot: the genesis hash already pinned
+      // the cluster, so an older reading is stale, not an upgrade.
+      expect(BigInt(slot) >= BigInt(DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot), `${role} deployment slot ${slot}`).toBe(true);
+    }
+  }, 60_000);
+
   live('finds the activation cache alive under the Registry program', async () => {
     const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
     const cache = DEVNET_DEPLOYMENT_V1.activationCache;

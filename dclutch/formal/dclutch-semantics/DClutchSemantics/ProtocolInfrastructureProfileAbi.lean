@@ -66,10 +66,22 @@ succession ceremony (`docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md` §5).
 One seed, so Solana's 32-byte seed bound is the constraint the theorem below
 states.  The Rust carried this string by hand while every other coordinate of
 the profile derived. -/
-def profilePdaDomainV1 : List UInt8 :=
-  "dclutch:infrastructure:v1".toUTF8.toList
+def profilePdaDomainTextV1 : String := "dclutch:infrastructure:v1"
 
-theorem pda_domain_is_one_admissible_seed : profilePdaDomainV1.length <= 32 := by
+def profilePdaDomainV1 : List UInt8 := profilePdaDomainTextV1.toUTF8.toList
+
+/-- The V2 profile's own one-seed PDA domain.
+
+V2 lives at its own domain precisely so V1 is never mutated. The string was
+hand-written in `protocol_infrastructure.rs` while its V1 sibling derived,
+which is the asymmetry this closes: both domains now have one author. -/
+def profilePdaDomainTextV2 : String := "dclutch:infrastructure:v2"
+
+def profilePdaDomainV2 : List UInt8 := profilePdaDomainTextV2.toUTF8.toList
+
+theorem pda_domains_are_admissible_single_seeds :
+    profilePdaDomainV1.length <= 32 ∧ profilePdaDomainV2.length <= 32 ∧
+      profilePdaDomainV1 ≠ profilePdaDomainV2 := by
   native_decide
 
 def profileMagicV2 : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x49, 0x4e, 0x46, 0x32]

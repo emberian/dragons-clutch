@@ -26,6 +26,32 @@ export const REGISTRY_INSTRUCTION_BYTES = 16;
 export const REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT = 10;
 export const REGISTRY_REAUTH_ACCOUNT_COUNT = 3;
 export const REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET = 48;
+/**
+ * Byte 12 is the cache's OWN PDA BUMP, and it is not a reserved byte.
+ *
+ * `dclutch-registry-contract`'s `ACTIVATION_CACHE_BUMP_OFFSET_V1` puts it here:
+ * six separate address searches per top-level Direct transaction land on this
+ * account, every one of them already holds it, so the cheapest carrier for the
+ * bump is the account itself. It took the first of what used to be four
+ * reserved bytes, leaving three at offset 13.
+ *
+ * ZERO MEANS "WRITTEN BEFORE THIS BYTE EXISTED", NOT "INVALID".
+ * `find_program_address` walks 255 down to 1 and never returns 0, so a reader
+ * must accept both a present and an absent bump — the Rust decoder says so in
+ * as many words, and that tolerance is what made the change deployable without
+ * a migration.
+ *
+ * THESE CLIENTS DID NOT MIRROR IT. Every activation-cache header check here
+ * required bytes 12..16 to be zero, which is the pre-bump layout, so every
+ * cache the current Registry signs into existence was refused — measured on
+ * devnet cohort-12, whose cache carries bump 0xfe and decoded nowhere in this
+ * repository. Nothing went red because the only cache a client had ever
+ * successfully decoded was cohort-8's, written before the byte existed.
+ */
+export const REGISTRY_ACTIVATION_CACHE_BUMP_OFFSET_V1 = 12;
+/** The three bytes that are still reserved, after the bump took the first. */
+export const REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1 = 13;
+export const REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1 = 3;
 export const REGISTRY_ACTIVATED_ROLE_BYTES = 32 + ARTIFACT_RELEASE_BYTES;
 export const REGISTRY_MAX_COMPUTE_UNITS = 1_400_000;
 export const LOADER_V3_PROGRAM_BYTES = 36;
@@ -472,8 +498,20 @@ function expectedCacheBytes(evidence: CheckedMultiprogramV1): Uint8Array {
 export function activationCacheProgressV1(observed: Uint8Array, expected: Uint8Array): ReadonlyArray<RegistryRole> {
   if (observed.length !== ACTIVATION_CACHE_BYTES || expected.length !== ACTIVATION_CACHE_BYTES) throw new Error('activation cache progress requires two exact 1,288-byte states');
   if (ascii(observed, 0, 8) !== 'DCLTACT1' || u16(observed, 8) !== 1 || u16(observed, 10) !== 1) throw new Error('activation cache has the wrong exact header');
-  requireZero(observed, 12, 4, 'activation cache header');
-  if (!same(slice(observed, 0, REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET), slice(expected, 0, REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET))) throw new Error('activation cache selects a different release set than the checked evidence');
+  requireZero(observed, REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1, REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1, 'activation cache header');
+  // THE SELECTION COMPARISON SKIPS THE BUMP. `expectedCacheBytes` projects the
+  // RELEASE SET, which has no field for a fact about an account ADDRESS and so
+  // leaves byte 12 zero; a span of 0..48 therefore compared a real bump against
+  // that zero and refused every cache the Registry has ever written. The Rust
+  // side hit exactly this and split the comparison; this is the same split.
+  const selection = (bytes: Uint8Array) => [
+    slice(bytes, 0, REGISTRY_ACTIVATION_CACHE_BUMP_OFFSET_V1),
+    slice(bytes, REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1,
+      REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET - REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1),
+  ] as const;
+  const [observedHead, observedTail] = selection(observed);
+  const [expectedHead, expectedTail] = selection(expected);
+  if (!same(observedHead, expectedHead) || !same(observedTail, expectedTail)) throw new Error('activation cache selects a different release set than the checked evidence');
   const written: RegistryRole[] = [];
   REGISTRY_ROLES.forEach((role, index) => {
     const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES;
@@ -487,7 +525,7 @@ export function activationCacheProgressV1(observed: Uint8Array, expected: Uint8A
 
 function requireActivationCacheHeader(bytes: Uint8Array): void {
   if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact header');
-  requireZero(bytes, 12, 4, 'activation cache header');
+  requireZero(bytes, REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1, REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1, 'activation cache header');
 }
 
 /**

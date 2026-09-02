@@ -41,3 +41,4 @@ def main : IO Unit := do
   for field in initializeLayout do
     IO.println s!"pub const {InitializeField.rustNameV2 field.spec.name}: usize = {field.offset};"
   emitSlice "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1" profilePdaDomainV1
+  emitSlice "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2" profilePdaDomainV2

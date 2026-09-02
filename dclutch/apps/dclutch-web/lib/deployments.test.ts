@@ -21,32 +21,47 @@ import {
  * "correction" to one table without the other is a red test, not a drift.
  */
 describe('the deployment manifest', () => {
-  it('bakes the seven permanent devnet addresses from DEPLOY_1.md §2, verbatim', () => {
+  it('bakes the seven devnet addresses of the cohort that is actually running', () => {
+    // NOT "permanent". They were called that -- DEPLOY_1.md §2 says
+    // "these are the durable protocol addresses" -- and then devnet was ruled
+    // disposable, and cohorts 9, 10, 11 and 12 each replaced the whole set and
+    // CLOSED the one before. This table shipped cohort-8's ids for a day after
+    // cohort-8 was closed, which is what a word like "permanent" buys.
     expect(DEVNET_DEPLOYMENT_V1.programs).toEqual({
-      registry: 'Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj',
-      rent: 'DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3',
-      custody: '34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH',
-      resolution: '2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd',
-      claims: '85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN',
-      trading: '5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk',
-      core: 'HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N',
+      registry: '5c4CfHXHaLoJRtVSZFURp6Qhub8P4x8Hk4yZ3KJNrK53',
+      rent: 'HD72aKvtRzBrVdmDGn8UrcocVA6g4NuG9Bt94GRLMYcW',
+      custody: '2MHNgYoCtDzqRryjgAxzFwLVPztSN6NTUr7RmjiMrcLc',
+      resolution: '9vs7atqDTAZTMo2a9iMZXD6Nf39jQZ7sZFf2X4pGDDvs',
+      claims: 'GwduZB13AgqLxsoxi8wZEQndYBsQERea35dhuYKJzCvc',
+      trading: 'Ahzug4zYhG8sc4t6tXjaSjnqbv7bTkgNYRc4kWUxYGJe',
+      core: 'G4Wz4fj4zqBPFWYFF9CeYeJtTK5UqSZUu2fyCr9ANjYG',
     });
     // Generated, not typed: `scripts/derive-activation-hint.mjs --write` moves
     // this and the manifest together. Pinned here so the value cannot change
     // without a reviewer seeing it — but it is a HINT the session follows past,
     // so a cohort making it stale costs a reader accuracy, not a session.
-    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('69d1MKP4PaPVDFankLfnzeHBugoVBjPCDm7PEHParRF6');
+    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('9H5Jy4kjXJFiLtj8uGrCwhzYVw3nYsxRMAHA7s86p8cE');
     expect(DEVNET_DEPLOYMENT_V1.genesisHash).toBe('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(DEVNET_DEPLOYMENT_V1.endpoint).toBe('https://api.devnet.solana.com');
   });
 
-  it('carries DEPLOY_1.md §2 ProgramData and deployment slots for every devnet role', () => {
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: 'ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz', deploymentSlot: '489100383' });
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: 'AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN', deploymentSlot: '489100672' });
+  it('carries the Loader-derived ProgramData and deployment slot for every devnet role', () => {
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: 'FbfJYjjyULLJYX8wzXqv5M5U2fxWLhCwwhvWaxCfWAsu', deploymentSlot: '491871867' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: '6wzSk1ip5uuiiqQoCDUuJPNjDZdHtdaJZL5DSQHG4kcy', deploymentSlot: '491872487' });
     for (const role of PROTOCOL_ROLES_V1) {
       const evidence = DEVNET_PROGRAM_EVIDENCE_V1[role];
       expect(new PublicKey(evidence.programData).toBase58()).toBe(evidence.programData);
       expect(BigInt(evidence.deploymentSlot)).toBeGreaterThan(489_100_000n);
+      // DERIVED, not transcribed. A ProgramData address is a pure function of
+      // its Program id under the upgradeable loader, so a table row that does
+      // not derive is a typo or a row belonging to another cohort -- which is
+      // exactly the shape a hand-copied evidence table fails in. This makes the
+      // whole table checkable offline against `programs` beside it.
+      const [derived] = PublicKey.findProgramAddressSync(
+        [new PublicKey(DEVNET_DEPLOYMENT_V1.programs[role]).toBytes()],
+        new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111'),
+      );
+      expect(derived.toBase58(), `${role} ProgramData`).toBe(evidence.programData);
     }
   });
 

@@ -2852,3 +2852,19 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   item tail → stride 0 makes N=258 cost what N=2 costs; OUTCOME is a second author (13 writers, always the index).
   Frameguard recaptured (`afa556f3`), gate runs again.
 - Cuts: `d504d189f`, `ea37964a3`, `7968cae29`.
+
+### Lane map delta — 2026-09-02 08:45
+- CHANNEL reading (`65c6e524`, `docs/design/ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md`): every diet refuted by arithmetic
+  (FrameReference fits only the Add; the honest minimum fits Add at exactly 880 and fails Remove/General; chunk-trust costs
+  ≥160,904 CU/chunk and rests on unpinned return-data persistence). **Recommendation: an accelerator-owned, client-provisioned
+  output page** appended to the admitted frame, ack = header only, Trading hashes the page against the digest the ack already
+  carries — one CPI, no loop. → CHANNEL build lane **`a93f86b9a8b48aebf`** (contract first, inert; dealer then general
+  accelerators; nothing switched on).
+- **RULING FOR EMBER (decision 0003):** is an admitted accelerator that owns exactly one client-provisioned, digest-bound scratch
+  page — written only inside its CPI, read only by Trading in that window, never read by any route — still the "stateless
+  accelerator" 0003 admits, or does 0003 need an amendment saying so? Nothing flips to the new profile on devnet until this is
+  answered. Recommendation: amend 0003 to say so; the invariant weakens from "owns no account" to "owns one scratch account no
+  route ever reads", and the General census gets a stronger measurement (page == digest preimage).
+- COHORT-12 in flight, progressing from its own stage logs: cohort-11 closed (+41.89 SOL), seven programs redeployed and
+  verified, ladder complete, **market founded at 50 bps**, every routing table read back frozen (authority None, 56/62
+  addresses) — the freeze's first on-chain proof; deployer 36.56 SOL; admissions and the fee-bearing trade next.

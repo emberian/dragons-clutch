@@ -49,11 +49,13 @@ pub const PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1: [u8; 32] = [
     0x45, 0x0e, 0xec, 0xe4, 0x59, 0x23, 0x30, 0x55, 0xce, 0x9a, 0xba, 0xd5, 0xbf, 0xce, 0x89, 0x83,
     0x80, 0xeb, 0xad, 0x75, 0xde, 0x0a, 0x16, 0x87, 0xbf, 0x77, 0xce, 0xd2, 0xa7, 0xae, 0xef, 0x8d,
 ];
-// The PDA seed domain now derives from
+// Both PDA seed domains now derive from
 // `EmitProtocolInfrastructureProfileAbiRust`, re-exported through `lib.rs`
 // alongside every other coordinate of this profile. Lean's
-// `pda_domain_is_one_admissible_seed` carries the 32-byte seed bound that the
-// hand-written `const _: () = assert!(..)` used to.
+// `pda_domains_are_admissible_single_seeds` carries the 32-byte seed bound
+// that the hand-written `const _: () = assert!(..)` used to, and adds what the
+// bound alone never said: that the two domains differ, which is the whole
+// reason V2 is a separate profile rather than a mutation of V1.
 
 /// Immutable per-Core selection of exact Registry and Rent artifact releases.
 ///
@@ -295,15 +297,9 @@ const fn konst_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
     true
 }
 
-/// Per-Core PDA seed domain for the succession infrastructure profile.
-///
-/// A distinct one-seed domain, not a mutation of V1's: the V1 profile is
-/// write-once and stays byte-identical forever (the CloseSeal bar, P-006).
-/// One succession per domain, ever — the ceremony's no-fork vacancy check is
-/// what a second occupation refuses against.
-pub const PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2: &[u8] = b"dclutch:infrastructure:v2";
-
-const _: () = assert!(PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2.len() <= 32);
+// The V2 seed domain is emitted alongside V1 rather than written here: it was
+// the last coordinate of this profile still stated by hand, and a domain is
+// exactly the kind of string a transcription gets subtly wrong.
 
 /// Succession selection of exact Registry and Rent artifact releases.
 ///

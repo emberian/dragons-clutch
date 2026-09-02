@@ -77,13 +77,26 @@ def aligned (placement : String × Nat × Nat) : Bool :=
 def wellFormed (fields : List Field) : Bool :=
   (place fields).all aligned && fields.all (fun field => 0 < field.bytes)
 
-/-! ## The permissionless selection cursor -/
+/-! ## The prologue every V2 record carries
 
-def selectionCursorFields : List Field := [
+Six records share the same first twelve bytes: an eight-byte ASCII magic, a
+two-byte version, a one-byte record phase, and one canonical zero. Rust had
+that prologue in one helper pair -- `header` and `write_header` -- and the
+helper spelled 8, 10 and 11 as literals, so the four records that are nothing
+BUT that helper plus their own fields had no author for their first twelve
+bytes at all. Naming the prologue as a field list and proving every record
+begins with it is what makes those three numbers derive. -/
+
+def prologueFields : List Field := [
   { name := "magic", bytes := 8 },
   { name := "version", bytes := 2 },
   { name := "phase", bytes := 1 },
-  { name := "reserved", bytes := 1 },
+  { name := "reserved", bytes := 1 }
+]
+
+/-! ## The permissionless selection cursor -/
+
+def selectionCursorFields : List Field := prologueFields ++ [
   { name := "outcome_count", bytes := 4 },
   { name := "revision", bytes := 8 },
   { name := "submitted_count", bytes := 4 },
@@ -101,11 +114,7 @@ def selectionCursorFields : List Field := [
 
 /-! ## The verified-candidate certificate -/
 
-def verifiedCandidateHeaderFields : List Field := [
-  { name := "magic", bytes := 8 },
-  { name := "version", bytes := 2 },
-  { name := "phase", bytes := 1 },
-  { name := "reserved", bytes := 1 },
+def verifiedCandidateHeaderFields : List Field := prologueFields ++ [
   { name := "outcome_count", bytes := 4 },
   { name := "page_count", bytes := 4 },
   { name := "candidate_coordinate", bytes := 4 },
@@ -129,13 +138,82 @@ def tailCount : Nat := 2
 def verifiedCandidateBytes (outcomeCount : Nat) : Nat :=
   recordBytes verifiedCandidateHeaderFields + tailCount * tailStride * outcomeCount
 
+
+/-! ## The four records the prologue helper serves
+
+`CandidateV2`, `ExecutionV2`, `PageV2` and `SettlementCursorV2` are each the
+shared prologue plus their own fields. They were the reason the prologue had no
+author: every one of them reached byte 8, 10 and 11 through a helper that spelled
+those numbers itself. -/
+
+def candidateFields : List Field := prologueFields ++ [
+  { name := "outcome_count", bytes := 4 },
+  { name := "page_count", bytes := 4 },
+  { name := "candidate_coordinate", bytes := 4 },
+  { name := "price_scale", bytes := 8 },
+  { name := "candidate_id", bytes := 32 },
+  { name := "product_id", bytes := 32 },
+  { name := "batch_id", bytes := 32 }
+]
+
+def executionFields : List Field := prologueFields ++ [
+  { name := "outcome_count", bytes := 4 },
+  { name := "page_coordinate", bytes := 4 },
+  { name := "execution_coordinate", bytes := 4 },
+  { name := "nonce", bytes := 8 },
+  { name := "order_id", bytes := 32 },
+  { name := "owner_id", bytes := 32 },
+  { name := "max_lots", bytes := 8 },
+  { name := "lots", bytes := 8 }
+]
+
+def pageFields : List Field := prologueFields ++ [
+  { name := "outcome_count", bytes := 4 },
+  { name := "page_coordinate", bytes := 4 },
+  { name := "page_count", bytes := 4 },
+  { name := "revision", bytes := 8 },
+  { name := "candidate_id", bytes := 32 }
+]
+
+def settlementCursorFields : List Field := prologueFields ++ [
+  { name := "outcome_count", bytes := 4 },
+  { name := "order_count", bytes := 4 },
+  { name := "next_order", bytes := 4 },
+  { name := "revision", bytes := 8 },
+  { name := "candidate_id", bytes := 32 },
+  { name := "quote_inventory", bytes := 8 },
+  { name := "complete_set_quantity", bytes := 8 },
+  { name := "terminal_coordinate", bytes := 8 }
+]
+
 /-! ## Record tags -/
+
+/-- `DCGCAN02`. -/
+def candidateMagic : List Nat := [0x44, 0x43, 0x47, 0x43, 0x41, 0x4e, 0x30, 0x32]
+
+/-- `DCGEXE02`. -/
+def executionMagic : List Nat := [0x44, 0x43, 0x47, 0x45, 0x58, 0x45, 0x30, 0x32]
+
+/-- `DCGPAG02`. -/
+def pageMagic : List Nat := [0x44, 0x43, 0x47, 0x50, 0x41, 0x47, 0x30, 0x32]
+
+/-- `DCGSET02`. -/
+def settlementCursorMagic : List Nat := [0x44, 0x43, 0x47, 0x53, 0x45, 0x54, 0x30, 0x32]
 
 /-- `DCGSEL02`. -/
 def selectionMagic : List Nat := [0x44, 0x43, 0x47, 0x53, 0x45, 0x4c, 0x30, 0x32]
 
 /-- `DCGVER02`. -/
 def verifiedMagic : List Nat := [0x44, 0x43, 0x47, 0x56, 0x45, 0x52, 0x30, 0x32]
+
+/-- Every record magic, in the order the records are declared above. -/
+def recordMagics : List (List Nat) :=
+  [candidateMagic, executionMagic, pageMagic, settlementCursorMagic, selectionMagic,
+    verifiedMagic]
+
+def candidatePhase : Nat := 1
+def executionPhase : Nat := 2
+def pagePhase : Nat := 3
 
 def wireVersion : Nat := 2
 def selectionPhaseOpen : Nat := 1
@@ -156,29 +234,54 @@ theorem verified_candidate_width_is_header_plus_sixteen_per_outcome
   simp [verifiedCandidateBytes, tailCount, tailStride,
     verified_candidate_header_is_one_hundred_sixty_bytes]
 
-/-- Every scalar in both records is aligned to its own width and no field is
+/-- Every record, in declaration order. -/
+def allRecords : List (List Field) :=
+  [candidateFields, executionFields, pageFields, settlementCursorFields,
+    selectionCursorFields, verifiedCandidateHeaderFields]
+
+/-- Every scalar in every record is aligned to its own width and no field is
 empty. Moving one field by anything that is not a multiple of the next
 scalar's width fails here, in Lean, before an emitter can print it. -/
-theorem both_records_are_well_formed :
-    wellFormed selectionCursorFields = true ∧
-      wellFormed verifiedCandidateHeaderFields = true := by native_decide
+theorem every_record_is_well_formed :
+    allRecords.all wellFormed = true := by native_decide
 
-/-- The two records cannot be mistaken for one another, and neither phase tag
-is the zero a blank account carries. -/
-theorem record_tags_separate_the_two_records :
-    selectionMagic ≠ verifiedMagic ∧
+/-- Every record begins with the same twelve-byte prologue. This is the fact
+`header` and `write_header` implement for all six and that nothing stated:
+their offsets 8, 10 and 11 are the prologue's placements, not three numbers
+that happen to agree six times. -/
+theorem every_record_begins_with_the_prologue :
+    allRecords.all (fun fields => fields.take prologueFields.length == prologueFields) = true := by
+  native_decide
+
+/-- The four records the prologue helper serves are exactly as wide as the
+Rust constants they replace. -/
+theorem the_four_helper_records_have_their_declared_widths :
+    recordBytes candidateFields = 128 ∧ recordBytes executionFields = 112 ∧
+      recordBytes pageFields = 64 ∧ recordBytes settlementCursorFields = 88 := by
+  native_decide
+
+/-- No record can be mistaken for another: all six magics are pairwise
+distinct. The phase byte is deliberately NOT globally distinct -- a Candidate's
+phase 1 and an open selection cursor's phase 1 are different alphabets -- which
+is exactly why the magic, and not the phase, is what identifies a record. -/
+theorem record_magics_are_pairwise_distinct :
+    recordMagics.eraseDups.length = recordMagics.length := by native_decide
+
+/-- Within each record its phase tags are nonzero and distinct, so a blank
+account reads as no phase at all. -/
+theorem phase_tags_are_nonzero_and_distinct_within_a_record :
+    candidatePhase ≠ 0 ∧ executionPhase ≠ 0 ∧ pagePhase ≠ 0 ∧ verifiedPhase ≠ 0 ∧
       selectionPhaseOpen ≠ selectionPhaseFrozen ∧
-      selectionPhaseOpen ≠ 0 ∧ selectionPhaseFrozen ≠ 0 ∧
-      verifiedPhase ≠ selectionPhaseOpen ∧ verifiedPhase ≠ selectionPhaseFrozen := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
+      selectionPhaseOpen ≠ 0 ∧ selectionPhaseFrozen ≠ 0 := by
+  refine ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide⟩
 
 /-- Both magics are eight printable ASCII bytes, which is what makes a hostile
 account dump readable and what the decoder's fixed eight-byte compare
 assumes. -/
 theorem magics_are_eight_printable_bytes :
-    selectionMagic.length = 8 ∧ verifiedMagic.length = 8 ∧
-      selectionMagic.all (fun byte => decide (0x20 ≤ byte && byte ≤ 0x7e)) = true ∧
-      verifiedMagic.all (fun byte => decide (0x20 ≤ byte && byte ≤ 0x7e)) = true := by
+    recordMagics.all (fun magic =>
+      (magic.length == 8) &&
+        magic.all (fun byte => decide (0x20 ≤ byte && byte ≤ 0x7e))) = true := by
   native_decide
 
 /-- The exact placement of both records, pinned in order. This is the table the

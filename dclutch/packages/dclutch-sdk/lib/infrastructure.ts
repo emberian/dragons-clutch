@@ -14,6 +14,9 @@ import {
   decodeArtifactReleaseV1,
   decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
+  REGISTRY_ACTIVATION_CACHE_BUMP_OFFSET_V1,
+  REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1,
+  REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1,
   REGISTRY_ACTIVATION_PDA_SEED_V1,
   requireSlotPinnedReleaseV1,
   type ArtifactReleaseV1,
@@ -293,14 +296,24 @@ export async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram
   if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('activation cache has the wrong exact width, magic, schema, or profile');
   }
-  requireZero(bytes, 12, 4, 'activation cache header');
+  requireZero(bytes, REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1, REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1, 'activation cache header');
   const releaseSetIdentity = slice(bytes, 16, 32);
   requireNonzero(releaseSetIdentity, 'activation release-set identity');
-  const expected = PublicKey.findProgramAddressSync(
+  const [derived, derivedBump] = PublicKey.findProgramAddressSync(
     [REGISTRY_ACTIVATION_PDA_SEED_V1, releaseSetIdentity],
     publicKey(registryProgram, 'Registry program'),
-  )[0].toBase58();
-  if (expected !== address) throw new Error('activation cache is not the release-derived Registry PDA');
+  );
+  if (derived.toBase58() !== address) throw new Error('activation cache is not the release-derived Registry PDA');
+  // The bump the account carries about ITSELF, checked rather than ignored.
+  // Zero is an older cache body -- `find_program_address` never returns 0, so a
+  // zero means the byte did not exist when this cache was written, and the
+  // search above is the answer for it. A nonzero one is a claim, and a claim
+  // that disagrees with the search is a cache describing a different address
+  // than the one it is sitting at.
+  const carriedBump = bytes[REGISTRY_ACTIVATION_CACHE_BUMP_OFFSET_V1];
+  if (carriedBump !== 0 && carriedBump !== derivedBump) {
+    throw new Error('activation cache carries a bump that does not derive its own address');
+  }
   const artifacts: ArtifactReleaseV1[] = [];
   const artifactIds: string[] = [];
   for (let index = 0; index < REGISTRY_ROLES.length; index += 1) {

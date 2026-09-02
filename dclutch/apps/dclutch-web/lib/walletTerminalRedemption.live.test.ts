@@ -42,17 +42,23 @@ const owner = process.env.DCLUTCH_RESOLVED_OWNER;
 const ready = process.env.DCLUTCH_LIVE_DEVNET === '1' && market !== undefined && owner !== undefined;
 const live = ready ? it : it.skip;
 
-const DEVNET_COHORT_11 = Object.freeze({
-  registry: 'ADB72ar6ZSstXEg76Q1bPb5UY2EGmH6mrVfwr8K2fzom',
-  core: 'FinXxc9drpmCYA7Cy4aGWSa1jYY87K6pNPfY9qFWzJCF',
-  claims: 'HQYqqdzn5s6tEM6ywgeCr7Bd56tEuhpoop3ruvHRfAq6',
-  custody: 'Cdh8Vv7DRyk7rhLcee574potYfaiVEsYR5HUPCrNPzCB',
-  resolution: '3WqTxq6uKMK2d9f6uRujh8hCZvVB78KjGo9AYxvPQNVM',
+/**
+ * Cohort-12, deployed 2026-09-02. Cohort-11's five ids were here and are now
+ * CLOSED -- devnet is disposable by ruling, so a default written down here has
+ * a shelf life of one cohort. `DCLUTCH_RESOLVED_PROGRAMS` still overrides, and
+ * remains the way to point this at a cohort younger than this file.
+ */
+const DEVNET_COHORT_12 = Object.freeze({
+  registry: '5c4CfHXHaLoJRtVSZFURp6Qhub8P4x8Hk4yZ3KJNrK53',
+  core: 'G4Wz4fj4zqBPFWYFF9CeYeJtTK5UqSZUu2fyCr9ANjYG',
+  claims: 'GwduZB13AgqLxsoxi8wZEQndYBsQERea35dhuYKJzCvc',
+  custody: '2MHNgYoCtDzqRryjgAxzFwLVPztSN6NTUr7RmjiMrcLc',
+  resolution: '9vs7atqDTAZTMo2a9iMZXD6Nf39jQZ7sZFf2X4pGDDvs',
 });
 
 function programs(): Readonly<Record<'registry' | 'core' | 'claims' | 'custody' | 'resolution', string>> {
   const named = process.env.DCLUTCH_RESOLVED_PROGRAMS;
-  if (named === undefined) return DEVNET_COHORT_11;
+  if (named === undefined) return DEVNET_COHORT_12;
   // A later cohort deploys new ids; naming them beats editing this file.
   const parsed: unknown = JSON.parse(named);
   const record = parsed as Record<string, unknown>;

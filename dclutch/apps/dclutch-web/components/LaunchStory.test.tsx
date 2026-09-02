@@ -16,6 +16,7 @@ vi.mock('@/lib/publicCutStaging', async () => {
   return { ...actual, PUBLIC_DEVNET_CUT_V1: cut };
 });
 
+const { DEVNET_DEPLOYMENT_V1 } = await import('@/lib/deployments');
 const { default: LaunchStory } = await import('./LaunchStory');
 
 describe('launch story', () => {
@@ -34,7 +35,12 @@ describe('launch story', () => {
     expect(html).not.toContain('0.50%');
     expect(html).toContain('href="/campaign"');
     expect(html).toContain('href="/population"');
-    expect(html).toContain('Hies3…MD4Qj');
+    // DERIVED FROM THE RECORD, not restated. This pinned cohort-8's shortened
+    // registry id as a literal, so the assertion aged out the moment devnet
+    // redeployed and told a reader the page was broken when only the test was.
+    // The claim worth making is that the page shows THE SHIPPED registry.
+    const registry = DEVNET_DEPLOYMENT_V1.programs.registry;
+    expect(html).toContain(`${registry.slice(0, 5)}…${registry.slice(-5)}`);
     expect(html).toContain('Test assets have no monetary value.');
   });
 

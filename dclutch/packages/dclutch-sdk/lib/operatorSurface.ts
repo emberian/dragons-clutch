@@ -244,7 +244,10 @@ async function exactActivationCache(
   if (ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('release activation cache has the wrong exact magic, schema, or profile');
   }
-  requireZero(bytes, 12, 4, 'release activation cache header');
+  // Byte 12 is the cache's own PDA bump (`ACTIVATION_CACHE_BUMP_OFFSET_V1`),
+  // not a reserved byte, and zero there means an older body rather than an
+  // invalid one. Three reserved bytes remain, at 13.
+  requireZero(bytes, 13, 3, 'release activation cache header');
   const releaseIdentity = slice(bytes, 16, 32);
   requireNonzero(releaseIdentity, 'release activation identity');
   const expectedCache = PublicKey.findProgramAddressSync(

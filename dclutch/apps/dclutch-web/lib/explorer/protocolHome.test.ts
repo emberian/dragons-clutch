@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1, PROTOCOL_ROLES_V1 } from '../deployments';
+import { DEVNET_PROGRAM_EVIDENCE_V1, DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1, PROTOCOL_ROLES_V1 } from '../deployments';
 import { type MultipleAccountObservation, type RpcAccount, type SignatureRecordObservation } from '../rpc';
 import { classifySearchV1, inspectProtocolHomeV1 } from './protocolHome';
 
@@ -67,8 +67,12 @@ describe('the explorer protocol home', () => {
     expect(home.clusterName).toBe('devnet');
     expect(home.clusterCheck).toBe('match');
     expect(home.observedSlot).toBe('489200000');
-    // Devnet cards carry DEPLOY-1's recorded deployment slots.
-    expect(home.cards.find((card) => card.role === 'core')?.deploymentSlot).toBe('489100672');
+    // Devnet cards carry the SHIPPED evidence table's recorded slots. Read from
+    // the record rather than restated: a literal here pinned cohort-8's slot and
+    // aged out the day devnet redeployed, and the claim worth making is that the
+    // card reports the manifest's slot, not that the manifest holds one number.
+    expect(home.cards.find((card) => card.role === 'core')?.deploymentSlot)
+      .toBe(DEVNET_PROGRAM_EVIDENCE_V1.core.deploymentSlot);
   });
 
   it('reports an absent program as absent, never as an empty success', async () => {

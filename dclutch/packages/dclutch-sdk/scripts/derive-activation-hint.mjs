@@ -42,9 +42,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const sdkRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
-/** Both manifest twins. `scripts/sync-from-web.mjs` keeps them byte-identical. */
+/**
+ * The manifest. ONE FILE, since `7170fd97` made deployment truth an SDK
+ * semantic owner and reduced `apps/dclutch-web/lib/deployments.ts` to a two-line
+ * `export * from '@dclutch/sdk/deployments'`.
+ *
+ * This was a two-entry twin list, and the shim carries none of the literals
+ * `readManifest` looks for -- so the script threw
+ * "does not carry the expected devnet registry, endpoint and activationCache
+ * literals" before reaching the network, and the one tool that could notice a
+ * stale hint had itself been stale since that commit. A generator that cannot
+ * run is a generator whose output is hand-maintained by default.
+ */
 const MANIFEST_TWINS = Object.freeze([
-  join(repoRoot, 'apps', 'dclutch-web', 'lib', 'deployments.ts'),
   join(sdkRoot, 'lib', 'deployments.ts'),
 ]);
 

@@ -391,11 +391,30 @@ describe('wallet terminal payout v3', () => {
  * They read only: five bounded requests to acquire the operator surface, one
  * fifteen-account read, and no transaction is built, signed or sent. Gated on
  * `DCLUTCH_LIVE_DEVNET=1`; `DCLUTCH_LIVE_ENDPOINT` supplies an endpoint so a
- * paid key stays in the environment. `DCLUTCH_OPEN_MARKET` overrides the market
- * when cohort-11's is gone.
+ * paid key stays in the environment.
+ *
+ * PROVEN, not merely written. Both cases ran green on 2026-09-02 against
+ * cohort-12's OPEN market `EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1` --
+ * phase read off chain as `Open`, `Consumed`, generation 2, because a founding
+ * leaves TWO Core-owned DCLTCOR3 accounts and the other one was still
+ * `Founding`. The second case is the one that could not have passed before:
+ * handed the release set the chain itself reports, the walk reached the Market
+ * decode and ended on `payout plan differs from the current terminal Market
+ * authority`, which is the right answer for an open market. With the comparison
+ * reading `undefined` it ended at the release check for every input.
  */
-const livePayout = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
-const OPEN_MARKET_V11 = process.env.DCLUTCH_OPEN_MARKET ?? '3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6';
+/**
+ * `DCLUTCH_OPEN_MARKET` IS REQUIRED, not defaulted.
+ *
+ * There was a cohort-11 address here. Devnet is disposable by ruling: every
+ * cohort is a full redeploy and the previous one is closed, so a market address
+ * written into a test file is dead within the day and the test then fails for
+ * the wrong reason -- account-not-found rather than the refusal it exists to
+ * observe. The deployment RECORD follows the live cohort because a generator
+ * moves it; a market does not, so this asks for one.
+ */
+const OPEN_MARKET = process.env.DCLUTCH_OPEN_MARKET;
+const livePayout = process.env.DCLUTCH_LIVE_DEVNET === '1' && OPEN_MARKET !== undefined ? it : it.skip;
 
 /**
  * The fixture plan, re-coordinated onto the live deployment.
@@ -450,7 +469,7 @@ describe('the checked live-devnet payout admission reads the deployment it names
     expect(onChain).not.toBe(id(11));
     await expect(authenticateCheckedLiveDevnetPayoutPlanV3(
       client,
-      liveRoutedManifestV3(manifest, OPEN_MARKET_V11, id(11)),
+      liveRoutedManifestV3(manifest, OPEN_MARKET!, id(11)),
       manifest.request.owner,
     )).rejects.toThrow('payout plan release set differs from the checked activation cache');
   }, 120_000);
@@ -470,16 +489,16 @@ describe('the checked live-devnet payout admission reads the deployment it names
     const manifest = importRustWalletTerminalPayoutArtifactV3(await manifestText());
     await expect(authenticateCheckedLiveDevnetPayoutPlanV3(
       client,
-      liveRoutedManifestV3(manifest, OPEN_MARKET_V11, onChain),
+      liveRoutedManifestV3(manifest, OPEN_MARKET!, onChain),
       manifest.request.owner,
     )).rejects.toThrow('payout plan differs from the current terminal Market authority');
   }, 120_000);
 
-  it('says what it is waiting for while no live endpoint is named', () => {
+  it('says what it is waiting for while no open market is named', () => {
     // A skipped pair that states its gate is a queue entry; one that says
     // nothing is a hole.
     expect(
-      'set DCLUTCH_LIVE_DEVNET=1 (and optionally DCLUTCH_LIVE_ENDPOINT) to prove the payout admission against devnet',
-    ).toContain('DCLUTCH_LIVE_DEVNET');
+      'set DCLUTCH_LIVE_DEVNET=1 and DCLUTCH_OPEN_MARKET=<an open Market on the shipped cohort> (DCLUTCH_LIVE_ENDPOINT optional) to prove the payout admission against devnet',
+    ).toContain('DCLUTCH_OPEN_MARKET');
   });
 });

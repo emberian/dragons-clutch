@@ -66,5 +66,23 @@ fn checked_in_general_selection_corpus_is_exact_lean_output() {
     let checked_in =
         std::fs::read(manifest.join("tests/generated/selection_decision_corpus_v1.rs"))
             .unwrap_or_else(|error| panic!("read checked-in generated Rust: {error}"));
+    if formatted != checked_in {
+        // Printed before the assertion, because `assert_eq!` over two `Vec<u8>`
+        // dumps both files as byte vectors and this is the line a reader wants.
+        // The assertion itself stays `assert_eq!`: the emission census
+        // recognises a Rust guard by `fs::read` plus `assert_eq!`, so replacing
+        // it with a `panic!` removes the guard from the census while leaving the
+        // test green -- which is exactly what happened in 5fa46416.
+        let offset = formatted
+            .iter()
+            .zip(checked_in.iter())
+            .position(|(left, right)| left != right);
+        eprintln!(
+            "first difference at byte {offset:?}: emitted {} bytes, committed {} bytes. \
+             Regenerate it.",
+            formatted.len(),
+            checked_in.len()
+        );
+    }
     assert_eq!(formatted, checked_in);
 }

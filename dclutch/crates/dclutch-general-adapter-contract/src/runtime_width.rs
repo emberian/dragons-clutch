@@ -26,13 +26,25 @@ use crate::generated_runtime_wire_v2 as wire;
 /// every record below carries it.
 pub const RUNTIME_WIDTH_VERSION_V2: u16 = wire::RUNTIME_WIRE_VERSION_V2;
 /// Exact fixed bytes before the Candidate simplex tail.
-pub const CANDIDATE_HEADER_BYTES_V2: usize = 128;
+///
+/// Lean-derived: `GeneralRuntimeWireV2` walks this record's field sequence
+/// and this is where the walk ends.
+pub const CANDIDATE_HEADER_BYTES_V2: usize = wire::CANDIDATE_HEADER_BYTES_V2;
 /// Exact fixed bytes before the Execution receive and deliver tails.
-pub const EXECUTION_HEADER_BYTES_V2: usize = 112;
+///
+/// Lean-derived: `GeneralRuntimeWireV2` walks this record's field sequence
+/// and this is where the walk ends.
+pub const EXECUTION_HEADER_BYTES_V2: usize = wire::EXECUTION_HEADER_BYTES_V2;
 /// Exact fixed bytes before the Page execution rows.
-pub const PAGE_HEADER_BYTES_V2: usize = 64;
+///
+/// Lean-derived: `GeneralRuntimeWireV2` walks this record's field sequence
+/// and this is where the walk ends.
+pub const PAGE_HEADER_BYTES_V2: usize = wire::PAGE_HEADER_BYTES_V2;
 /// Exact fixed bytes before the Settlement Cursor inventory tail.
-pub const SETTLEMENT_CURSOR_HEADER_BYTES_V2: usize = 88;
+///
+/// Lean-derived: `GeneralRuntimeWireV2` walks this record's field sequence
+/// and this is where the walk ends.
+pub const SETTLEMENT_CURSOR_HEADER_BYTES_V2: usize = wire::SETTLEMENT_CURSOR_HEADER_BYTES_V2;
 /// Exact fixed bytes before the Verified Candidate input and output tails.
 ///
 /// Lean-derived: `GeneralRuntimeWireV2` walks the field sequence and this is
@@ -40,15 +52,15 @@ pub const SETTLEMENT_CURSOR_HEADER_BYTES_V2: usize = 88;
 /// not.
 pub const VERIFIED_CANDIDATE_HEADER_BYTES_V2: usize = wire::VERIFIED_CANDIDATE_HEADER_BYTES_V2;
 
-const CANDIDATE_MAGIC: [u8; 8] = *b"DCGCAN02";
-const EXECUTION_MAGIC: [u8; 8] = *b"DCGEXE02";
-const PAGE_MAGIC: [u8; 8] = *b"DCGPAG02";
-const SETTLEMENT_CURSOR_MAGIC: [u8; 8] = *b"DCGSET02";
+const CANDIDATE_MAGIC: [u8; 8] = wire::CANDIDATE_MAGIC_V2;
+const EXECUTION_MAGIC: [u8; 8] = wire::EXECUTION_MAGIC_V2;
+const PAGE_MAGIC: [u8; 8] = wire::PAGE_MAGIC_V2;
+const SETTLEMENT_CURSOR_MAGIC: [u8; 8] = wire::SETTLEMENT_CURSOR_MAGIC_V2;
 const VERIFIED_CANDIDATE_MAGIC: [u8; 8] = wire::VERIFIED_CANDIDATE_MAGIC_V2;
 
-const CANDIDATE_PHASE: u8 = 1;
-const EXECUTION_PHASE: u8 = 2;
-const PAGE_PHASE: u8 = 3;
+const CANDIDATE_PHASE: u8 = wire::CANDIDATE_PHASE_V2;
+const EXECUTION_PHASE: u8 = wire::EXECUTION_PHASE_V2;
+const PAGE_PHASE: u8 = wire::PAGE_PHASE_V2;
 const VERIFIED_PHASE: u8 = wire::VERIFIED_CANDIDATE_PHASE_V2;
 
 /// Typed canonical Settlement Cursor coordinates for generic Effect writes.
@@ -230,19 +242,19 @@ pub struct CandidateLayoutV2;
 
 impl CandidateLayoutV2 {
     /// Outcome-count field offset.
-    pub const OUTCOME_COUNT: usize = 12;
+    pub const OUTCOME_COUNT: usize = wire::CANDIDATE_OUTCOME_COUNT_OFFSET_V2 as usize;
     /// Page-count field offset.
-    pub const PAGE_COUNT: usize = 16;
+    pub const PAGE_COUNT: usize = wire::CANDIDATE_PAGE_COUNT_OFFSET_V2 as usize;
     /// Candidate-coordinate field offset.
-    pub const CANDIDATE_COORDINATE: usize = 20;
+    pub const CANDIDATE_COORDINATE: usize = wire::CANDIDATE_CANDIDATE_COORDINATE_OFFSET_V2 as usize;
     /// Exact price-scale field offset.
-    pub const PRICE_SCALE: usize = 24;
+    pub const PRICE_SCALE: usize = wire::CANDIDATE_PRICE_SCALE_OFFSET_V2 as usize;
     /// Candidate-identity field offset.
-    pub const CANDIDATE_ID: usize = 32;
+    pub const CANDIDATE_ID: usize = wire::CANDIDATE_CANDIDATE_ID_OFFSET_V2 as usize;
     /// Product-identity field offset.
-    pub const PRODUCT_ID: usize = 64;
+    pub const PRODUCT_ID: usize = wire::CANDIDATE_PRODUCT_ID_OFFSET_V2 as usize;
     /// Batch-identity field offset.
-    pub const BATCH_ID: usize = 96;
+    pub const BATCH_ID: usize = wire::CANDIDATE_BATCH_ID_OFFSET_V2 as usize;
 }
 
 /// Borrowed Candidate record with an exact `u64` simplex tail.
@@ -411,14 +423,17 @@ impl<'a> ExecutionV2<'a> {
             EXECUTION_PHASE,
         )?;
         let header = ExecutionHeaderV2 {
-            outcome_count: u32_at(bytes, 12)?,
-            page_coordinate: u32_at(bytes, 16)?,
-            execution_coordinate: u32_at(bytes, 20)?,
-            nonce: u64_at(bytes, 24)?,
-            order_id: array32_at(bytes, 32)?,
-            owner_id: array32_at(bytes, 64)?,
-            max_lots: u64_at(bytes, 96)?,
-            lots: u64_at(bytes, 104)?,
+            outcome_count: u32_at(bytes, wire::EXECUTION_OUTCOME_COUNT_OFFSET_V2 as usize)?,
+            page_coordinate: u32_at(bytes, wire::EXECUTION_PAGE_COORDINATE_OFFSET_V2 as usize)?,
+            execution_coordinate: u32_at(
+                bytes,
+                wire::EXECUTION_EXECUTION_COORDINATE_OFFSET_V2 as usize,
+            )?,
+            nonce: u64_at(bytes, wire::EXECUTION_NONCE_OFFSET_V2 as usize)?,
+            order_id: array32_at(bytes, wire::EXECUTION_ORDER_ID_OFFSET_V2 as usize)?,
+            owner_id: array32_at(bytes, wire::EXECUTION_OWNER_ID_OFFSET_V2 as usize)?,
+            max_lots: u64_at(bytes, wire::EXECUTION_MAX_LOTS_OFFSET_V2 as usize)?,
+            lots: u64_at(bytes, wire::EXECUTION_LOTS_OFFSET_V2 as usize)?,
         };
         exact_width(bytes, execution_len(header.outcome_count)?)?;
         validate_execution_header(header)?;
@@ -440,14 +455,46 @@ impl<'a> ExecutionV2<'a> {
         exact_width(output, execution_len(header_value.outcome_count)?)?;
         output.fill(0);
         write_header(output, &EXECUTION_MAGIC, EXECUTION_PHASE)?;
-        put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.page_coordinate)?;
-        put_u32(output, 20, header_value.execution_coordinate)?;
-        put_u64(output, 24, header_value.nonce)?;
-        put(output, 32, &header_value.order_id)?;
-        put(output, 64, &header_value.owner_id)?;
-        put_u64(output, 96, header_value.max_lots)?;
-        put_u64(output, 104, header_value.lots)?;
+        put_u32(
+            output,
+            wire::EXECUTION_OUTCOME_COUNT_OFFSET_V2 as usize,
+            header_value.outcome_count,
+        )?;
+        put_u32(
+            output,
+            wire::EXECUTION_PAGE_COORDINATE_OFFSET_V2 as usize,
+            header_value.page_coordinate,
+        )?;
+        put_u32(
+            output,
+            wire::EXECUTION_EXECUTION_COORDINATE_OFFSET_V2 as usize,
+            header_value.execution_coordinate,
+        )?;
+        put_u64(
+            output,
+            wire::EXECUTION_NONCE_OFFSET_V2 as usize,
+            header_value.nonce,
+        )?;
+        put(
+            output,
+            wire::EXECUTION_ORDER_ID_OFFSET_V2 as usize,
+            &header_value.order_id,
+        )?;
+        put(
+            output,
+            wire::EXECUTION_OWNER_ID_OFFSET_V2 as usize,
+            &header_value.owner_id,
+        )?;
+        put_u64(
+            output,
+            wire::EXECUTION_MAX_LOTS_OFFSET_V2 as usize,
+            header_value.max_lots,
+        )?;
+        put_u64(
+            output,
+            wire::EXECUTION_LOTS_OFFSET_V2 as usize,
+            header_value.lots,
+        )?;
         let deliver_offset = execution_deliver_offset(header_value.outcome_count)?;
         for (index, value) in receive_per_lot.iter().enumerate() {
             put_u64(
@@ -523,11 +570,11 @@ impl<'a> PageV2<'a> {
     pub fn decode(bytes: &'a [u8]) -> RuntimeWidthResultV2<Self> {
         header(bytes, PAGE_HEADER_BYTES_V2, &PAGE_MAGIC, PAGE_PHASE)?;
         let header = PageHeaderV2 {
-            outcome_count: u32_at(bytes, 12)?,
-            page_coordinate: u32_at(bytes, 16)?,
-            page_count: u32_at(bytes, 20)?,
-            revision: u64_at(bytes, 24)?,
-            candidate_id: array32_at(bytes, 32)?,
+            outcome_count: u32_at(bytes, wire::PAGE_OUTCOME_COUNT_OFFSET_V2 as usize)?,
+            page_coordinate: u32_at(bytes, wire::PAGE_PAGE_COORDINATE_OFFSET_V2 as usize)?,
+            page_count: u32_at(bytes, wire::PAGE_PAGE_COUNT_OFFSET_V2 as usize)?,
+            revision: u64_at(bytes, wire::PAGE_REVISION_OFFSET_V2 as usize)?,
+            candidate_id: array32_at(bytes, wire::PAGE_CANDIDATE_ID_OFFSET_V2 as usize)?,
         };
         validate_page_header(header)?;
         let execution_width = execution_len(header.outcome_count)?;
@@ -582,11 +629,31 @@ impl<'a> PageV2<'a> {
         let width = execution_len(header_value.outcome_count)?;
         output.fill(0);
         write_header(output, &PAGE_MAGIC, PAGE_PHASE)?;
-        put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.page_coordinate)?;
-        put_u32(output, 20, header_value.page_count)?;
-        put_u64(output, 24, header_value.revision)?;
-        put(output, 32, &header_value.candidate_id)?;
+        put_u32(
+            output,
+            wire::PAGE_OUTCOME_COUNT_OFFSET_V2 as usize,
+            header_value.outcome_count,
+        )?;
+        put_u32(
+            output,
+            wire::PAGE_PAGE_COORDINATE_OFFSET_V2 as usize,
+            header_value.page_coordinate,
+        )?;
+        put_u32(
+            output,
+            wire::PAGE_PAGE_COUNT_OFFSET_V2 as usize,
+            header_value.page_count,
+        )?;
+        put_u64(
+            output,
+            wire::PAGE_REVISION_OFFSET_V2 as usize,
+            header_value.revision,
+        )?;
+        put(
+            output,
+            wire::PAGE_CANDIDATE_ID_OFFSET_V2 as usize,
+            &header_value.candidate_id,
+        )?;
         for (index, row) in rows.iter().enumerate() {
             let execution = ExecutionV2::decode(row)?;
             if execution.header.outcome_count != header_value.outcome_count
@@ -676,14 +743,32 @@ impl<'a> SettlementCursorV2<'a> {
         require_version(bytes)?;
         require_zero(bytes, 11, 1)?;
         let header = SettlementCursorHeaderV2 {
-            outcome_count: u32_at(bytes, 12)?,
-            order_count: u32_at(bytes, 16)?,
-            next_order: u32_at(bytes, 20)?,
-            revision: u64_at(bytes, 24)?,
-            candidate_id: array32_at(bytes, 32)?,
-            quote_inventory: u64_at(bytes, 64)?,
-            complete_set_quantity: u64_at(bytes, 72)?,
-            terminal_coordinate: u64_at(bytes, 80)?,
+            outcome_count: u32_at(
+                bytes,
+                wire::SETTLEMENT_CURSOR_OUTCOME_COUNT_OFFSET_V2 as usize,
+            )?,
+            order_count: u32_at(
+                bytes,
+                wire::SETTLEMENT_CURSOR_ORDER_COUNT_OFFSET_V2 as usize,
+            )?,
+            next_order: u32_at(bytes, wire::SETTLEMENT_CURSOR_NEXT_ORDER_OFFSET_V2 as usize)?,
+            revision: u64_at(bytes, wire::SETTLEMENT_CURSOR_REVISION_OFFSET_V2 as usize)?,
+            candidate_id: array32_at(
+                bytes,
+                wire::SETTLEMENT_CURSOR_CANDIDATE_ID_OFFSET_V2 as usize,
+            )?,
+            quote_inventory: u64_at(
+                bytes,
+                wire::SETTLEMENT_CURSOR_QUOTE_INVENTORY_OFFSET_V2 as usize,
+            )?,
+            complete_set_quantity: u64_at(
+                bytes,
+                wire::SETTLEMENT_CURSOR_COMPLETE_SET_QUANTITY_OFFSET_V2 as usize,
+            )?,
+            terminal_coordinate: u64_at(
+                bytes,
+                wire::SETTLEMENT_CURSOR_TERMINAL_COORDINATE_OFFSET_V2 as usize,
+            )?,
             phase: SettlementPhaseV2::decode(byte_at(bytes, 10)?)?,
         };
         exact_width(bytes, settlement_cursor_len(header.outcome_count)?)?;
@@ -1365,20 +1450,33 @@ fn tail_offset(header: usize, index: usize, width: usize) -> RuntimeWidthResultV
         .ok_or(RuntimeWidthErrorV2::ArithmeticOverflow)
 }
 
+/// Check the twelve-byte prologue every V2 record begins with.
+///
+/// `GeneralRuntimeWireV2` proves in `every_record_begins_with_the_prologue`
+/// that all six records do, so these are the prologue's own placements rather
+/// than three numbers that happen to agree six times.
 fn header(bytes: &[u8], width: usize, magic: &[u8; 8], phase: u8) -> RuntimeWidthResultV2<()> {
     exact_width_at_least(bytes, width)?;
     require_magic(bytes, magic)?;
     require_version(bytes)?;
-    if byte_at(bytes, 10)? != phase {
+    if byte_at(bytes, wire::RUNTIME_WIRE_PHASE_OFFSET_V2 as usize)? != phase {
         return Err(RuntimeWidthErrorV2::InvalidPhase);
     }
-    require_zero(bytes, 11, 1)
+    require_zero(
+        bytes,
+        wire::RUNTIME_WIRE_RESERVED_OFFSET_V2 as usize,
+        wire::RUNTIME_WIRE_RESERVED_BYTES_V2,
+    )
 }
 
 fn write_header(output: &mut [u8], magic: &[u8; 8], phase: u8) -> RuntimeWidthResultV2<()> {
-    put(output, 0, magic)?;
-    put_u16(output, 8, RUNTIME_WIDTH_VERSION_V2)?;
-    put_byte(output, 10, phase)
+    put(output, wire::RUNTIME_WIRE_MAGIC_OFFSET_V2 as usize, magic)?;
+    put_u16(
+        output,
+        wire::RUNTIME_WIRE_VERSION_OFFSET_V2 as usize,
+        RUNTIME_WIDTH_VERSION_V2,
+    )?;
+    put_byte(output, wire::RUNTIME_WIRE_PHASE_OFFSET_V2 as usize, phase)
 }
 
 fn exact_width_at_least(bytes: &[u8], minimum: usize) -> RuntimeWidthResultV2<()> {
@@ -1398,7 +1496,7 @@ fn exact_width(bytes: &[u8], expected: usize) -> RuntimeWidthResultV2<()> {
 }
 
 fn require_magic(bytes: &[u8], magic: &[u8; 8]) -> RuntimeWidthResultV2<()> {
-    if bytes.get(..8) == Some(magic.as_slice()) {
+    if bytes.get(..wire::RUNTIME_WIRE_MAGIC_BYTES_V2) == Some(magic.as_slice()) {
         Ok(())
     } else {
         Err(RuntimeWidthErrorV2::InvalidMagic)
@@ -1406,7 +1504,7 @@ fn require_magic(bytes: &[u8], magic: &[u8; 8]) -> RuntimeWidthResultV2<()> {
 }
 
 fn require_version(bytes: &[u8]) -> RuntimeWidthResultV2<()> {
-    if u16_at(bytes, 8)? == RUNTIME_WIDTH_VERSION_V2 {
+    if u16_at(bytes, wire::RUNTIME_WIRE_VERSION_OFFSET_V2 as usize)? == RUNTIME_WIDTH_VERSION_V2 {
         Ok(())
     } else {
         Err(RuntimeWidthErrorV2::InvalidVersion)

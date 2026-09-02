@@ -77,7 +77,15 @@ describe('immutable localhost successor checkpoint', () => {
   });
 
   it('refuses reserved bytes, invalid certificate kinds, and substituted hostile output', () => {
-    expect(() => parseSuccessorAccount('registry.activation', mutate(fixture('registry.activation'), 12, 1))).toThrow('reserved');
+    // Offset 13, not 12. Byte 12 is the activation cache's own PDA bump
+    // (`ACTIVATION_CACHE_BUMP_OFFSET_V1`), which took the first of what used to
+    // be four reserved bytes; three remain, at 13. Mutating 12 tested a rule
+    // the Registry itself now breaks on every cache it writes.
+    expect(() => parseSuccessorAccount('registry.activation', mutate(fixture('registry.activation'), 13, 1))).toThrow('reserved');
+    // And the tolerance the Rust owner requires, in the same breath: a cache
+    // carrying a bump is an ordinary cache, and a reader that refuses one
+    // refuses every cache the current Registry signs into existence.
+    expect(() => parseSuccessorAccount('registry.activation', mutate(fixture('registry.activation'), 12, 254))).not.toThrow();
     expect(() => parseSuccessorAccount('primary.certificate.success', mutate(fixture('primary.certificate.success'), 10, 0))).toThrow('certificate');
     expect(() => parseSuccessorAccount('rollback.certificate.failure.occupied', mutate(fixture('rollback.certificate.failure.occupied'), 311, 0))).toThrow('occupied pattern');
   });

@@ -2,6 +2,25 @@
 /// Version tag carried by every General V2 runtime wire record.
 pub const RUNTIME_WIRE_VERSION_V2: u16 = 2;
 
+/// Exact bytes of the prologue every V2 record begins with.
+pub const RUNTIME_WIRE_PROLOGUE_BYTES_V2: usize = 12;
+/// Byte offset of the `magic` field.
+pub const RUNTIME_WIRE_MAGIC_OFFSET_V2: u32 = 0;
+/// Exact byte width of the `magic` field.
+pub const RUNTIME_WIRE_MAGIC_BYTES_V2: usize = 8;
+/// Byte offset of the `version` field.
+pub const RUNTIME_WIRE_VERSION_OFFSET_V2: u32 = 8;
+/// Exact byte width of the `version` field.
+pub const RUNTIME_WIRE_VERSION_BYTES_V2: usize = 2;
+/// Byte offset of the `phase` field.
+pub const RUNTIME_WIRE_PHASE_OFFSET_V2: u32 = 10;
+/// Exact byte width of the `phase` field.
+pub const RUNTIME_WIRE_PHASE_BYTES_V2: usize = 1;
+/// Byte offset of the `reserved` field.
+pub const RUNTIME_WIRE_RESERVED_OFFSET_V2: u32 = 11;
+/// Exact byte width of the `reserved` field.
+pub const RUNTIME_WIRE_RESERVED_BYTES_V2: usize = 1;
+
 /// Exact byte width of one canonical General selection cursor.
 pub const RUNTIME_SELECTION_CURSOR_BYTES_V2: usize = 224;
 /// Canonical selection-cursor magic.
@@ -151,3 +170,205 @@ pub const VERIFIED_CANDIDATE_QUOTE_CREDIT_BYTES_V2: usize = 8;
 pub const VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2: u32 = 152;
 /// Exact byte width of the `price_scale` field.
 pub const VERIFIED_CANDIDATE_PRICE_SCALE_BYTES_V2: usize = 8;
+
+/// Exact fixed bytes before the Candidate simplex tail.
+pub const CANDIDATE_HEADER_BYTES_V2: usize = 128;
+/// Canonical Candidate magic.
+pub const CANDIDATE_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x43, 0x41, 0x4e, 0x30, 0x32];
+/// Phase tag of a Candidate record.
+pub const CANDIDATE_PHASE_V2: u8 = 1;
+/// Byte offset of the `magic` field.
+pub const CANDIDATE_MAGIC_OFFSET_V2: u32 = 0;
+/// Exact byte width of the `magic` field.
+pub const CANDIDATE_MAGIC_BYTES_V2: usize = 8;
+/// Byte offset of the `version` field.
+pub const CANDIDATE_VERSION_OFFSET_V2: u32 = 8;
+/// Exact byte width of the `version` field.
+pub const CANDIDATE_VERSION_BYTES_V2: usize = 2;
+/// Byte offset of the `phase` field.
+pub const CANDIDATE_PHASE_OFFSET_V2: u32 = 10;
+/// Exact byte width of the `phase` field.
+pub const CANDIDATE_PHASE_BYTES_V2: usize = 1;
+/// Byte offset of the `reserved` field.
+pub const CANDIDATE_RESERVED_OFFSET_V2: u32 = 11;
+/// Exact byte width of the `reserved` field.
+pub const CANDIDATE_RESERVED_BYTES_V2: usize = 1;
+/// Byte offset of the `outcome_count` field.
+pub const CANDIDATE_OUTCOME_COUNT_OFFSET_V2: u32 = 12;
+/// Exact byte width of the `outcome_count` field.
+pub const CANDIDATE_OUTCOME_COUNT_BYTES_V2: usize = 4;
+/// Byte offset of the `page_count` field.
+pub const CANDIDATE_PAGE_COUNT_OFFSET_V2: u32 = 16;
+/// Exact byte width of the `page_count` field.
+pub const CANDIDATE_PAGE_COUNT_BYTES_V2: usize = 4;
+/// Byte offset of the `candidate_coordinate` field.
+pub const CANDIDATE_CANDIDATE_COORDINATE_OFFSET_V2: u32 = 20;
+/// Exact byte width of the `candidate_coordinate` field.
+pub const CANDIDATE_CANDIDATE_COORDINATE_BYTES_V2: usize = 4;
+/// Byte offset of the `price_scale` field.
+pub const CANDIDATE_PRICE_SCALE_OFFSET_V2: u32 = 24;
+/// Exact byte width of the `price_scale` field.
+pub const CANDIDATE_PRICE_SCALE_BYTES_V2: usize = 8;
+/// Byte offset of the `candidate_id` field.
+pub const CANDIDATE_CANDIDATE_ID_OFFSET_V2: u32 = 32;
+/// Exact byte width of the `candidate_id` field.
+pub const CANDIDATE_CANDIDATE_ID_BYTES_V2: usize = 32;
+/// Byte offset of the `product_id` field.
+pub const CANDIDATE_PRODUCT_ID_OFFSET_V2: u32 = 64;
+/// Exact byte width of the `product_id` field.
+pub const CANDIDATE_PRODUCT_ID_BYTES_V2: usize = 32;
+/// Byte offset of the `batch_id` field.
+pub const CANDIDATE_BATCH_ID_OFFSET_V2: u32 = 96;
+/// Exact byte width of the `batch_id` field.
+pub const CANDIDATE_BATCH_ID_BYTES_V2: usize = 32;
+
+/// Exact fixed bytes before the Execution receive and deliver tails.
+pub const EXECUTION_HEADER_BYTES_V2: usize = 112;
+/// Canonical Execution magic.
+pub const EXECUTION_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x45, 0x58, 0x45, 0x30, 0x32];
+/// Phase tag of an Execution record.
+pub const EXECUTION_PHASE_V2: u8 = 2;
+/// Byte offset of the `magic` field.
+pub const EXECUTION_MAGIC_OFFSET_V2: u32 = 0;
+/// Exact byte width of the `magic` field.
+pub const EXECUTION_MAGIC_BYTES_V2: usize = 8;
+/// Byte offset of the `version` field.
+pub const EXECUTION_VERSION_OFFSET_V2: u32 = 8;
+/// Exact byte width of the `version` field.
+pub const EXECUTION_VERSION_BYTES_V2: usize = 2;
+/// Byte offset of the `phase` field.
+pub const EXECUTION_PHASE_OFFSET_V2: u32 = 10;
+/// Exact byte width of the `phase` field.
+pub const EXECUTION_PHASE_BYTES_V2: usize = 1;
+/// Byte offset of the `reserved` field.
+pub const EXECUTION_RESERVED_OFFSET_V2: u32 = 11;
+/// Exact byte width of the `reserved` field.
+pub const EXECUTION_RESERVED_BYTES_V2: usize = 1;
+/// Byte offset of the `outcome_count` field.
+pub const EXECUTION_OUTCOME_COUNT_OFFSET_V2: u32 = 12;
+/// Exact byte width of the `outcome_count` field.
+pub const EXECUTION_OUTCOME_COUNT_BYTES_V2: usize = 4;
+/// Byte offset of the `page_coordinate` field.
+pub const EXECUTION_PAGE_COORDINATE_OFFSET_V2: u32 = 16;
+/// Exact byte width of the `page_coordinate` field.
+pub const EXECUTION_PAGE_COORDINATE_BYTES_V2: usize = 4;
+/// Byte offset of the `execution_coordinate` field.
+pub const EXECUTION_EXECUTION_COORDINATE_OFFSET_V2: u32 = 20;
+/// Exact byte width of the `execution_coordinate` field.
+pub const EXECUTION_EXECUTION_COORDINATE_BYTES_V2: usize = 4;
+/// Byte offset of the `nonce` field.
+pub const EXECUTION_NONCE_OFFSET_V2: u32 = 24;
+/// Exact byte width of the `nonce` field.
+pub const EXECUTION_NONCE_BYTES_V2: usize = 8;
+/// Byte offset of the `order_id` field.
+pub const EXECUTION_ORDER_ID_OFFSET_V2: u32 = 32;
+/// Exact byte width of the `order_id` field.
+pub const EXECUTION_ORDER_ID_BYTES_V2: usize = 32;
+/// Byte offset of the `owner_id` field.
+pub const EXECUTION_OWNER_ID_OFFSET_V2: u32 = 64;
+/// Exact byte width of the `owner_id` field.
+pub const EXECUTION_OWNER_ID_BYTES_V2: usize = 32;
+/// Byte offset of the `max_lots` field.
+pub const EXECUTION_MAX_LOTS_OFFSET_V2: u32 = 96;
+/// Exact byte width of the `max_lots` field.
+pub const EXECUTION_MAX_LOTS_BYTES_V2: usize = 8;
+/// Byte offset of the `lots` field.
+pub const EXECUTION_LOTS_OFFSET_V2: u32 = 104;
+/// Exact byte width of the `lots` field.
+pub const EXECUTION_LOTS_BYTES_V2: usize = 8;
+
+/// Exact fixed bytes before the Page execution rows.
+pub const PAGE_HEADER_BYTES_V2: usize = 64;
+/// Canonical Page magic.
+pub const PAGE_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x50, 0x41, 0x47, 0x30, 0x32];
+/// Phase tag of a Page record.
+pub const PAGE_PHASE_V2: u8 = 3;
+/// Byte offset of the `magic` field.
+pub const PAGE_MAGIC_OFFSET_V2: u32 = 0;
+/// Exact byte width of the `magic` field.
+pub const PAGE_MAGIC_BYTES_V2: usize = 8;
+/// Byte offset of the `version` field.
+pub const PAGE_VERSION_OFFSET_V2: u32 = 8;
+/// Exact byte width of the `version` field.
+pub const PAGE_VERSION_BYTES_V2: usize = 2;
+/// Byte offset of the `phase` field.
+pub const PAGE_PHASE_OFFSET_V2: u32 = 10;
+/// Exact byte width of the `phase` field.
+pub const PAGE_PHASE_BYTES_V2: usize = 1;
+/// Byte offset of the `reserved` field.
+pub const PAGE_RESERVED_OFFSET_V2: u32 = 11;
+/// Exact byte width of the `reserved` field.
+pub const PAGE_RESERVED_BYTES_V2: usize = 1;
+/// Byte offset of the `outcome_count` field.
+pub const PAGE_OUTCOME_COUNT_OFFSET_V2: u32 = 12;
+/// Exact byte width of the `outcome_count` field.
+pub const PAGE_OUTCOME_COUNT_BYTES_V2: usize = 4;
+/// Byte offset of the `page_coordinate` field.
+pub const PAGE_PAGE_COORDINATE_OFFSET_V2: u32 = 16;
+/// Exact byte width of the `page_coordinate` field.
+pub const PAGE_PAGE_COORDINATE_BYTES_V2: usize = 4;
+/// Byte offset of the `page_count` field.
+pub const PAGE_PAGE_COUNT_OFFSET_V2: u32 = 20;
+/// Exact byte width of the `page_count` field.
+pub const PAGE_PAGE_COUNT_BYTES_V2: usize = 4;
+/// Byte offset of the `revision` field.
+pub const PAGE_REVISION_OFFSET_V2: u32 = 24;
+/// Exact byte width of the `revision` field.
+pub const PAGE_REVISION_BYTES_V2: usize = 8;
+/// Byte offset of the `candidate_id` field.
+pub const PAGE_CANDIDATE_ID_OFFSET_V2: u32 = 32;
+/// Exact byte width of the `candidate_id` field.
+pub const PAGE_CANDIDATE_ID_BYTES_V2: usize = 32;
+
+/// Exact fixed bytes before the Settlement Cursor inventory tail.
+pub const SETTLEMENT_CURSOR_HEADER_BYTES_V2: usize = 88;
+/// Canonical Settlement Cursor magic.
+pub const SETTLEMENT_CURSOR_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x53, 0x45, 0x54, 0x30, 0x32];
+/// Byte offset of the `magic` field.
+pub const SETTLEMENT_CURSOR_MAGIC_OFFSET_V2: u32 = 0;
+/// Exact byte width of the `magic` field.
+pub const SETTLEMENT_CURSOR_MAGIC_BYTES_V2: usize = 8;
+/// Byte offset of the `version` field.
+pub const SETTLEMENT_CURSOR_VERSION_OFFSET_V2: u32 = 8;
+/// Exact byte width of the `version` field.
+pub const SETTLEMENT_CURSOR_VERSION_BYTES_V2: usize = 2;
+/// Byte offset of the `phase` field.
+pub const SETTLEMENT_CURSOR_PHASE_OFFSET_V2: u32 = 10;
+/// Exact byte width of the `phase` field.
+pub const SETTLEMENT_CURSOR_PHASE_BYTES_V2: usize = 1;
+/// Byte offset of the `reserved` field.
+pub const SETTLEMENT_CURSOR_RESERVED_OFFSET_V2: u32 = 11;
+/// Exact byte width of the `reserved` field.
+pub const SETTLEMENT_CURSOR_RESERVED_BYTES_V2: usize = 1;
+/// Byte offset of the `outcome_count` field.
+pub const SETTLEMENT_CURSOR_OUTCOME_COUNT_OFFSET_V2: u32 = 12;
+/// Exact byte width of the `outcome_count` field.
+pub const SETTLEMENT_CURSOR_OUTCOME_COUNT_BYTES_V2: usize = 4;
+/// Byte offset of the `order_count` field.
+pub const SETTLEMENT_CURSOR_ORDER_COUNT_OFFSET_V2: u32 = 16;
+/// Exact byte width of the `order_count` field.
+pub const SETTLEMENT_CURSOR_ORDER_COUNT_BYTES_V2: usize = 4;
+/// Byte offset of the `next_order` field.
+pub const SETTLEMENT_CURSOR_NEXT_ORDER_OFFSET_V2: u32 = 20;
+/// Exact byte width of the `next_order` field.
+pub const SETTLEMENT_CURSOR_NEXT_ORDER_BYTES_V2: usize = 4;
+/// Byte offset of the `revision` field.
+pub const SETTLEMENT_CURSOR_REVISION_OFFSET_V2: u32 = 24;
+/// Exact byte width of the `revision` field.
+pub const SETTLEMENT_CURSOR_REVISION_BYTES_V2: usize = 8;
+/// Byte offset of the `candidate_id` field.
+pub const SETTLEMENT_CURSOR_CANDIDATE_ID_OFFSET_V2: u32 = 32;
+/// Exact byte width of the `candidate_id` field.
+pub const SETTLEMENT_CURSOR_CANDIDATE_ID_BYTES_V2: usize = 32;
+/// Byte offset of the `quote_inventory` field.
+pub const SETTLEMENT_CURSOR_QUOTE_INVENTORY_OFFSET_V2: u32 = 64;
+/// Exact byte width of the `quote_inventory` field.
+pub const SETTLEMENT_CURSOR_QUOTE_INVENTORY_BYTES_V2: usize = 8;
+/// Byte offset of the `complete_set_quantity` field.
+pub const SETTLEMENT_CURSOR_COMPLETE_SET_QUANTITY_OFFSET_V2: u32 = 72;
+/// Exact byte width of the `complete_set_quantity` field.
+pub const SETTLEMENT_CURSOR_COMPLETE_SET_QUANTITY_BYTES_V2: usize = 8;
+/// Byte offset of the `terminal_coordinate` field.
+pub const SETTLEMENT_CURSOR_TERMINAL_COORDINATE_OFFSET_V2: u32 = 80;
+/// Exact byte width of the `terminal_coordinate` field.
+pub const SETTLEMENT_CURSOR_TERMINAL_COORDINATE_BYTES_V2: usize = 8;
