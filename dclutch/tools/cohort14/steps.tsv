@@ -1,0 +1,25 @@
+# The cohort-14 runbook, as rows a checker can read.
+#
+# id	stage	command	verifier	cost_sol	blocks
+# `cost_sol` is priced from cohort-13's own ledger; `-` means it moves no
+# lamports. `blocks` names what cannot start until this row is green.
+# Tabs separate the fields. `check-steps.py` gates this file against README.md.
+00	close-cohort-13	solana program close, one role at a time, ids derived from cohort-13's keypair files	deployer balance rises by the table total less seven 5,000-lamport fees, and each Program account still names its ProgramData at offset 4	+42.12	01
+01	deploy	checked-release-candidate.sh --genesis-cohort at the deploy commit, then seven solana program deploy	CANDIDATE_EXIT=0, sbf_build_diagnostics_total=0, a second detached worktree reproduces all seven ELFs byte-identically, and each live image is dumped back and compared BEFORE the next deploy starts	-42.26	02
+02	ladder	campaign --through activation, campaign payer funded with 2 SOL first	a second preflight that READS THE CLUSTER reports substrate, publication, initialize, succession and activation all complete; zero transaction errors	-2.04	03
+03	accelerator-release	prepare --general-accelerator-program-id 8pgnyNvgdue7Jc8aw75BGWoghsKGevWJvFom8omUWvQY ...	the plan carries general_accelerator and a general_accelerator_artifact_release record; the Registry FINALIZES it, which is the deployment observation	-0.01	04
+04	seal	checked-release seal, key-free and read-only, BEFORE any founding	all five owned roles preflight equal:true against a fresh finalized observation; final_set_sha256 matches prepare --deployment-set-journal	0.00	05
+05	found-direct	campaign --founding-only from plan-seal.json, --direct-fee-basis-points 50	the Open Market's selected_release_set at offset 208 equals the SEALED plan's release set, read off chain and never pasted from prepare	-0.34	07
+06	found-general	devnet-general-market then the ordinary founding campaign with market.json	accelerator-observation.txt reports deployment_slot 491959038; the founding validator admits the General manifest	-0.34	08
+07	activate-direct	devnet-direct-capability-activation-v1 --execute	the report's verdict string is ACTIVATED, and the activation root derived in advance goes from AccountNotFound to a 256-byte DCLTCRT1 record	-0.01	09
+08	activate-general	devnet-general-capability-activation-v1 --execute	the report carries schema dclutch-devnet-general-capability-activation-report-v1 and the root it named in advance is occupied	-0.01	14
+09	arm-relay	devnet-sponsored-push-input-v1 twice (terminalSequence 0 and 1), then --action prepay-certificate --prepay-for settle	the settle seat holds rent.minimum_balance(312) exactly, read back from chain	-0.01	12
+10	admissions	fund two participants, then two user-position admissions and one collateral delegation	the buyer's delegated account holds exactly required_buyer_collateral atoms	-0.11	11
+11	fill	the Direct session, nine transactions, gross 200 at 50 bps per side	the Hot transaction commits under 1,400,000 CU and the measured figure is recorded beside cohort-13's 1,286,187	-0.03	12
+12	fee-settlement	devnet-direct-fee-settlement-v1, permissionless	fee_owed reads 0 off chain after the transaction, which is the only thing that distinguishes a settled fee from a sent one	-0.00	13
+13	census	ledger-census with the four declared flags and --declared-fees-lamports	L1 through L8 each reported BY NAME; an INAPPLICABLE is not a pass	0.00	15
+14	openbatch	OpenBatch N=2 against the activated General root	the batch executes on chain; this needs cohort-14 specifically, because a517d27c's inline input transport is in Trading	-0.02	-
+15	relay-capture	devnet-sponsored-relay-schedule-v1 --wait capture, then --action capture	the capture commits and the candidate's snapshot_unix_seconds is inside [start, end], read off the candidate account	-0.00	16
+16	relay-settle	the same schedule --wait settle, then --action settle	Source state reaches Resolved rather than FailureCommitted, and the certificate kind is 1 and not 4	-0.00	17
+17	admit-terminal	devnet-sponsored-push-v1 --action admit-terminal	the Market's phase byte goes 1 to 2 and terminal_receipt carries the certificate's own address	-0.00	18
+18	payout	wallet-terminal-payout-input then the payout, into the owner's own ATA	the destination is 170 bytes before AND after, its ImmutableOwner suffix byte-identical, and the Hoard falls by exactly the atoms paid	-0.02	-

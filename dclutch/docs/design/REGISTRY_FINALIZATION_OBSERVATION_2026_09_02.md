@@ -302,3 +302,73 @@ and `unsplit_topology_derives_spans_and_proves_devnet_refusal` are RED at
 `3e7f06cc`, before any of this. They are `efca6966`'s cross-frame alias
 partition re-measured -- 107 against a pinned 117, 117 against a pinned 122 --
 whose profile pins were re-pinned from runs and whose operator pins were not.
+
+## The row's price, re-surveyed: five copies were seven, and the Remove is no longer lock-bound
+
+*Appended by the Dealer lane, 2026-09-02, at `9c133b27c`. The row is STILL not
+landed, and this section is why the next lane's series is shorter than the one
+above described.*
+
+### Two more copies of the six pairs existed, and they are gone
+
+`aa72e3a09` said three authorities became one. There were five. The two it did
+not reach are both in `programs/dclutch-trading-sbf/program-test/direct-hot`,
+and neither spells the constant's name, which is why a grep for it found
+neither:
+
+* `fixture.rs::alias_sealed_execution_metas` -- the pass that BUILDS the
+  aliased frame every Direct-hot test submits;
+* `waist.rs::has_canonical_sealed_execution_aliases` -- the predicate that
+  CHECKS one.
+
+Both now read `SEALED_EXECUTION_FIXED_ALIASES_V3`, retired at `9c133b27c` at
+zero behaviour change. **`fixture.rs::alias_sealed_execution_metas` is also the
+exact model for the Dealer producer the row needs**: it takes the built metas,
+copies each raw meta over its staging coordinate, and refuses if either is a
+signer or writable. The Dealer campaign's builder needs the same pass, keyed on
+`hot_frame_uses_sealed_execution_aliases_v3(kind, action)` rather than applied
+unconditionally.
+
+### The browser's refusal, named at its conjunct
+
+`apps/dclutch-web/lib/dealerEquityChain.ts:145` is
+`derived.staging !== stagingAddress`, inside the per-record finalized-content
+check. Under the alias shape the staging COORDINATE carries the raw record's
+address, so the derived-PDA equality is the wrong question for an aliased
+family and the vacancy check on the line below it has no account to make. The
+repair is not to delete either: it is to ask
+`hot_frame_uses_sealed_execution_aliases_v3` first and require the coordinate
+to equal `rawAddress` exactly when it says so -- which is a STRICTER check than
+the one it replaces, and the same `!=`-shaped agreement the executor makes.
+`packages/dclutch-sdk/lib/dealerEquityV3.ts` is the twin.
+
+### The operator's gap, named at its conjunct
+
+`crates/dclutch-operator/src/dealer_equity_hot_v3.rs::validate_fixed_frame`
+walks all thirty-nine fixed accounts requiring `!is_signer` and
+`is_writable == (index == HOT_ROOT_ACCOUNT_V3)`. It never asks whether two
+coordinates hold one key, so it neither requires the alias nor forbids it: it
+signs whichever frame it was handed. `direct_inline_route_v3.rs`'s
+`project_direct_inline_sealed_execution_physical_v3` is the shape to mirror,
+and its `has_duplicate` guard on the pre-projection frame is the half that
+makes the projection safe.
+
+### The Remove is no longer lock-bound, which changes what the row buys
+
+`c3e14e096` closed the borrowed-witness wall, and the post-trade partial equity
+Remove now runs to its Claims child and exhausts the **1,400,000-CU transaction
+ceiling** -- see `docs/design/BORROWED_WITNESS_TWO_SPELLINGS_2026_09_02.md` for
+the per-phase decomposition. Its 71 locks were never the binding constraint on
+that action and 65 will not be either.
+
+So the row's measured value is now:
+
+| route | locks today | with the row | binds on |
+| --- | ---: | ---: | --- |
+| LP-hot | 54 | 48 | nothing; comfortable |
+| equity Add | 70 | **64** | exactly `SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1` |
+| partial Remove | 71 | 65 | COMPUTE, at 1.4M, long before 64 |
+
+The Add is the case the row is for: it reaches the devnet limit with zero
+headroom, and it is an action that completes. The Remove's sixty-fifth lock is
+a question for after its compute wall, not before it.

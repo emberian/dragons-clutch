@@ -34,6 +34,7 @@ use dclutch_capability_program_contract::{
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
         HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+        SEALED_EXECUTION_FIXED_ALIASES_V3,
     },
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
@@ -890,32 +891,17 @@ fn merge_registered_install_account_v4(
     Ok(())
 }
 
+/// Apply the seal-backed alias shape to a built fixed frame.
+///
+/// The six pairs are the ABI's, read from
+/// [`SEALED_EXECUTION_FIXED_ALIASES_V3`] rather than restated. This was the
+/// FOURTH hand-written copy of that table -- `aa72e3a09` retired the executor's
+/// and the operator's and said three authorities had become one, and two more
+/// were in this crate, out of the reach of that commit's grep.
 fn alias_sealed_execution_metas(
     metas: &mut [AccountMeta],
 ) -> Result<(), DirectHotChainFixtureErrorV5> {
-    for (raw, staging) in [
-        (
-            HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-            HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        ),
-        (
-            HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-            HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        ),
-        (
-            HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
-            HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
-        ),
-        (
-            HOT_TRANSITION_RAW_ACCOUNT_V3,
-            HOT_TRANSITION_STAGING_ACCOUNT_V3,
-        ),
-        (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
-        (
-            HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-            HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        ),
-    ] {
+    for (raw, staging) in SEALED_EXECUTION_FIXED_ALIASES_V3 {
         let raw = metas
             .get(raw)
             .ok_or(DirectHotChainFixtureErrorV5::Profile)?

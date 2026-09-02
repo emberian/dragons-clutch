@@ -25,12 +25,7 @@ use crate::{
     },
 };
 use dclutch_capability_program_contract::hot_v3::{
-    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-    HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-    HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3,
-    HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-    HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
-    HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3,
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_FIXED_ACCOUNT_COUNT_V3, SEALED_EXECUTION_FIXED_ALIASES_V3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_codec::native_evidence_v3::{
@@ -1492,29 +1487,9 @@ pub async fn submit_v0_observed(
 
 fn has_canonical_sealed_execution_aliases(instruction: &Instruction) -> bool {
     const REGISTRY_HOT_CHILD_START: usize = 6;
-    const SEALED_ALIASES: [(usize, usize); 6] = [
-        (
-            HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-            HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        ),
-        (
-            HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-            HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        ),
-        (
-            HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
-            HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
-        ),
-        (
-            HOT_TRANSITION_RAW_ACCOUNT_V3,
-            HOT_TRANSITION_STAGING_ACCOUNT_V3,
-        ),
-        (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
-        (
-            HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-            HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        ),
-    ];
+    // The FIFTH copy of the ABI's six pairs, and the second in this crate. Read
+    // from the one declaration instead; see `alias_sealed_execution_metas`.
+    const SEALED_ALIASES: [(usize, usize); 6] = SEALED_EXECUTION_FIXED_ALIASES_V3;
     let fixed = instruction
         .accounts
         .get(REGISTRY_HOT_CHILD_START..REGISTRY_HOT_CHILD_START + HOT_FIXED_ACCOUNT_COUNT_V3);

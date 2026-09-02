@@ -3631,3 +3631,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   script byte-identical three levels down, both abi-coverage censuses naming the module, red-proven by one byte).
   → CLIPPY-2 **`(spawned)`**: the 22 and the 37. Also: a test function nothing runs in compact_artifacts_v4.rs.
 - Cuts: `422cb9136`.
+
+### Lane map delta — 2026-09-02 22:00 EDT
+- DEALER closed (`c3e14e096`, rows `d4fb2380d`; `9c133b27c`, `4113be161`): **the borrowed-witness ruling** — the design note
+  had named the wrong second author; v3_artifacts.rs:502 validates a legacy V3 twin that never reaches the chain, the
+  shipped base (v3_hot_artifact.rs:532) already declares V4 the owner, and kernel v4.rs:803 REFUSES a V4 program whose base
+  route carries the bit — so the other spelling was never satisfiable; four readers of one fact became one (three were
+  V3-only, each a wall behind the last). **The partial Remove executes its first Custody leg and reaches its Claims child;
+  the next wall is compute: ~1.9 M needed against the 1.4 M ceiling** (Trading 1,399,692; the child entered with 94,426 and
+  needs ~180 k; two Custody legs and the commit unreached). Five copies of the six alias pairs became one table; the Remove is
+  no longer lock-bound. Found with controls: **`trading-outer` is RED at HEAD** (a helper's cfg omits `outer-only`), so the
+  programs tier cannot be green; two dead bindings in the Claims preflight. → DEALER **`(spawned)`**: the gate, the dead
+  bindings, the Remove's compute wall PRICED (route weight / two-transaction Remove / hoisted child) for a ruling, the alias row.
+- Cuts: `f2fc96870`.
