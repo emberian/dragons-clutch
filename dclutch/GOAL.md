@@ -3415,3 +3415,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   RefusalBandsV1 into the lib root; the reference's stale provenance lines; the Series ticket-state producer gap named as
   design debt) and PHASE-CENSUS **`a5b016449be284441`** (the 22 ungated acts across 11 programs: admissibility guards over
   every persisted state machine become per-route constants; the census reads them; the SDK table grows).
+- WEB reported (`0cae44b5`, `1463a678`, `b2a7a83a`, `026fb8ac`, `4cb950d1`): **the market page shows the first crossing,
+  derived** — signatures for the Market, each transaction's bytes decoded at directInlineV3's coordinates (both signed compact
+  intents ride in the Hot instruction; no per-fill account), priced by the same preview the stepper uses; positions from the
+  Position accounts; fee standing from the maker replays (both "settled"); leaderboard live; the single crossing drawn as
+  one point. Instrument defect caught: a 429-emptied fill list read exactly like a never-traded market — refused reads are
+  now counted before "no crossing yet" is accepted. /pulse re-ingested from cohort-13's census (two producer defects: cycle
+  parsed from the stage name; `stage` had a reader and no producer). Front door's phase read off the Core account.
+  Captures: market 1,319 words / 23 $ / 3 hex at 1280; 1,240 at 390. Owed (lane resumed): sbomVerify red for hours;
+  three census fields dropped by simulator-series.mjs; the SDK absorption of two web-only modules. Note: a stale vite dep
+  cache served cohort-12's Core for an hour — `rm -rf apps/dclutch-web/node_modules/.vite` after any deployments change.

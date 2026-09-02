@@ -321,12 +321,29 @@ function main() {
     }
   }
 
+  /**
+   * `--check` COULD NOT PASS, and had not been able to since it was written.
+   *
+   * The series document stamps `captured_at` with the instant it was built, so
+   * a byte comparison against a committed artifact compares "now" with "then"
+   * and reports a difference on every run. A verify that can only ever be red
+   * has exactly as much authority as one that can only ever be green: nobody
+   * can act on it, and a REAL divergence -- the work directory having moved on
+   * -- is indistinguishable from the clock having ticked.
+   *
+   * So the capture instant is normalised out of both sides, and the check says
+   * that it did. Everything else, including every quantity and every boundary
+   * name, is still compared byte for byte.
+   */
+  const CAPTURED_AT = /^(\s*"captured_at":\s*)"[^"]*"/m;
+  const comparable = (text) => text.replace(CAPTURED_AT, '$1"<capture instant, excluded from --check>"');
+
   let stale = 0;
   for (const { file, body } of outputs) {
     const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
     if (check) {
-      if (before !== body) {
-        console.error(`simulator-series: ${path.relative(APP, file)} differs from the work directory`);
+      if (before === null || comparable(before) !== comparable(body)) {
+        console.error(`simulator-series: ${path.relative(APP, file)} differs from the work directory (the capture instant is not compared)`);
         stale += 1;
       }
       continue;
