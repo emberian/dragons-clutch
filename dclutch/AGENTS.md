@@ -141,6 +141,11 @@ band 0 is never allocated, so a code below `0x1000` is not ours.
   program's band is withdrawn, never reused.
 - `dclutch-route-census inventory --check-unique` is the gate, and it runs in
   `tools/gauntlet/run.sh`.
+- **`tools/genref/generate.sh` refuses a dirty tree (exit 3).** It reads the working
+  tree, and in a shared checkout that emits reference docs for code not in HEAD —
+  measured 2026-09-01, it silently deleted another lane's landed refusal rows.
+  Regenerate from a detached worktree at HEAD; `--allow-dirty` only when you have
+  read the diff and mean it. The convergence owner runs it; lanes do not.
 
 ## A `map_err` that discards its cause converts a located defect into a search
 
