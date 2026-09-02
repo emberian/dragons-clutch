@@ -1497,3 +1497,112 @@ founder converts an oracle outage into founder revenue.
    be retired there.
 
 Devnet evidence. Not mainnet evidence.
+
+### After the walk: two more walls, one of them fixed here
+
+The certificate exists and the Source is `FailureCommitted`, but the **Market is
+still Open**. Core has not been told. Two things stand between the two, and they
+were found in order.
+
+**Wall 1 — the terminal sequence cannot see the activation, and the refresh that
+would show it refused a resolved world.** `devnet-terminal-sequence-v1` refuses
+the founding evidence outright:
+
+```
+terminal sequence is blocked: the Direct first-use accounts are created together
+by the first trade, so campaign evidence must carry all of them or none. It
+carries direct_trading_funding_ledger and omits direct_capability_root.
+```
+
+That is correct and expected — the campaign report was written before activation,
+and `docs/design/EVIDENCE_REFRESH_V1.md` §3 exists precisely because
+`direct_capability_root` names two different addresses and only a refresh emits
+the execution one. So: produce a refresh. It refused too:
+
+```
+REFUSED evidence refresh [refresh/immutable-moved]: immutable founding record
+resolution_funding_ledger differs on chain from the founding campaign's sealed
+row; this world is not that world
+```
+
+**It differs because the walk debited it, by design.** One lamport of bounty.
+`evidence_refresh.rs` classified `resolution_funding_ledger` in
+`IMMUTABLE_FOUNDING_RECORD_LABELS_V1` — the list whose contract is *"a refresh
+MUST carry each of these byte-identical to its founding row"* — while
+`ADVANCEABLE_FOUNDING_LABELS_V1`, whose own doc comment says it is *"deliberately
+about a CLASS, not about one cause … every one of these is an account the
+protocol is designed to advance between founding and resolution"*, listed
+`direct_trading_funding_ledger` and not this one.
+
+That is a **deadlock, not an ordering mistake**. Producing the refresh earlier
+would not have helped: the same comment says being advanceable *"never buys
+permission to differ from the chain: each row is still pinned byte-exact against
+the live finalized account by the consumer that reads it"* — so a pre-walk
+refresh would carry a pre-walk ledger row and fail the same equality against a
+post-walk chain. Every terminal action writes this ledger; the deadline walk
+debits the Failure row and settlement debits its own. A resolved market could
+produce no refresh, and without a refresh no terminal sequence.
+
+Fixed at its owner in `68f0b3da`: the label moved from immutable to advanceable,
+with the cause written beside it, plus two tests —
+`resolution_funding_ledger_is_advanceable_and_not_immutable` (whose first
+assertion is exactly what was false before) and
+`the_two_founding_label_classes_are_disjoint`, because the two lists are read as
+a partition and an overlap would silently grant an immutable record permission to
+move. **All 19 `evidence_refresh` tests pass**, including the three pre-existing
+generic ones over both lists — none had hardcoded a count, which is why a
+one-label move stayed a one-label move.
+
+With the fix the refresh produces: 16 rows, `direct_capability_root` →
+`4GzDzNxj248uBkNLxKN2ffVzZ6cFZy158mVCeLec6ufz`, the same execution root three
+authors named before activation existed.
+
+**Wall 2 — nothing on devnet projects a sponsored-push certificate to Core.**
+With the refresh accepted, `devnet-terminal-sequence-v1` moves to its next
+refusal:
+
+```
+REFUSED terminal sequence: terminal ALT projection requires the exact
+terminal/retiring founding Market generation
+```
+
+The terminal sequence is the **post**-terminal ladder — it wants a Market already
+Terminal or Retiring, and `terminal_sequence.rs` never mentions `AdmitTerminal`.
+The step that would move it is `ResolutionCoreActionV1::AdmitTerminal`, *"project
+an authenticated terminal Resolution certificate to Core"*. On devnet that call
+is built in exactly one place — `flagship_resolution.rs:5166`,
+`core_terminal_accept_report`, the `accept` stage of **`flagship-resolution-v1`**,
+whose `PlanInputV1` demands `postUpdateBodyBase64`, `encodedVaa` and
+`updateAccount`: the relayed-VAA provider coordinates, produced by
+`--produce-input` from `--pyth-facts`. A market resolved through the
+sponsored-push snapshot route has none of those and never will.
+
+The capability is not missing — `tools/gauntlet/relayed-vertical/src/vertical.rs:1366`
+does exactly this and its own assertion text reads *"AdmitTerminal, chain-derived
+from the FailureCommitted Source, executed against the live validator. The Market
+is Terminal, committed to the failure certificate's own …"*. It is the **devnet
+arm** that is missing, and it is missing in the same shape as the other two gaps
+this lane found: the reader exists, the semantics exist, the local path exercises
+them, and no devnet producer reaches them.
+
+Stated at its true strength: I did not attempt to coax `flagship-resolution-v1
+--through accept` with a hand-built input that leaves the VAA fields unused, so
+"impossible" is not proven — "there is no route that does not go through the
+relayed-VAA producer" is. Whether `accept` is separable from its ladder is the
+first thing the next owner should test, and it is cheap.
+
+### Where cohort-13 now stands
+
+| | |
+| --- | --- |
+| Source `A71ZfJCq…` | **FailureCommitted**, selector 3, sequence 1 |
+| Failure certificate `7S9tCjXT…` | **written**, `DCSRCER2` kind 4, 312 bytes |
+| Market `6t3Znm…` | **still Open** — Core has not admitted the certificate |
+| Payout | not reachable until the Market is Terminal |
+| Retirement | still owned-loopback only |
+
+Total spent by this lane: **2,866,519 lamports** (0.00287 SOL) — the certificate
+seat, one transfer fee, one walk fee, less one lamport of bounty received.
+Campaign payer 1.524416622 → **1.521550103**. The deployer was never touched.
+
+Devnet evidence. Not mainnet evidence.

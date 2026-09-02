@@ -49,6 +49,7 @@ use solana_program::{
 };
 use solana_sdk_ids::system_program;
 
+use crate::market_admission_v1::RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1;
 use crate::{
     ResolutionError, authenticate_clock, authenticate_rent,
     provider_instruction_v3::{authenticate_provider_program, authenticate_record},
@@ -117,7 +118,7 @@ fn process_capture(
     )?;
     authenticate_source_state_account(program_id, source_state_account, market_account)?;
     let source_state = boxed_source_state(source_state_account)?;
-    if source_state.phase() != SourceResolutionPhaseV1::Primary {
+    if !RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(source_state.phase()) {
         return Err(ResolutionError::Transition.into());
     }
     let records = boxed_source_records(accounts, &market, &rent, &source_state, 7)?;
@@ -866,7 +867,7 @@ fn process_settle(
     )?;
     authenticate_source_state_account(program_id, source_state_account, market_account)?;
     let source_state = boxed_source_state(source_state_account)?;
-    if source_state.phase() != SourceResolutionPhaseV1::Primary {
+    if !RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(source_state.phase()) {
         return Err(ResolutionError::Transition.into());
     }
     let records = boxed_source_records(accounts, &market, &rent, &source_state, 9)?;
@@ -1563,7 +1564,7 @@ fn process_commit_failure(
     let source_state_account = account(accounts, 4)?;
     authenticate_source_state_account(program_id, source_state_account, market_account)?;
     let source_state = boxed_source_state(source_state_account)?;
-    if source_state.phase() != SourceResolutionPhaseV1::Primary
+    if !RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(source_state.phase())
         || source_state.generation() != request.generation
     {
         return Err(ResolutionError::Transition.into());

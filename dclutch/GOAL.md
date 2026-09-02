@@ -3452,3 +3452,19 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `333043db` the Series ticket-state producer gap named beside the refusing decode — the write authority is granted and
   never exercised). Incident owned: `rm -f fg-a.json` deleted another lane's `fg-A.json` (macOS case-insensitivity) — the
   warning is in run.sh's header; per-lane capture subdirectories now. Lane resumed: the one owed capture, then WindowSpec.
+
+### 2026-09-02 17:15 EDT — THE FIRST DEVNET RESOLUTION (by the failure walk)
+- RESOLUTION closed (`d1ab23b2`, `68f0b3da`, `6ab7d66f`): the window (13:22:39–13:52:39 EDT, tolerance 0) had closed
+  before the lane started — my "15:00–16:00" was inferred, not read — and the pinned Pyth account had moved past it, so an
+  honest observation was unreachable by construction. **The failure walk landed** (37Ye9gaf…, 311,799 CU): Primary →
+  FailureCommitted, selector 3, certificate 7S9tCjXT…, escrow debited exactly 1 lamport — after the certificate seat was
+  prepaid by hand (a caller obligation the sponsored-push command never had). **Two protocol findings:** (1) a late capture
+  (legal until end+max_age, no window conjunct) occupies the head and strands the market forever — Settle, CommitFailure and
+  CloseHead all refuse after it; (2) under the failure selector an oracle outage converts into founder revenue (the founder
+  holds all 500,000,000 failure claims; participant-2's 200 pay zero). The Market is still OPEN: terminal admission on devnet
+  exists only inside flagship-resolution-v1's `accept`, whose input demands relayed-VAA coordinates a sponsored-push market
+  never has. `dclutch-sponsored-push-exterior-input-v1` has no producer. Spend 2,866,519 lamports, payer only.
+  → RESOLUTION-2 **`(spawned)`**: terminal admission for a sponsored-push market, the founder's payout through the operator,
+  the browser's redemption test, the two producer gaps, the griefing-window design note (+ Lean-first repair if small).
+- DEALER (`1f41f40a`): **the selector-9 trade DELIVERS** — the delivery's reservation is Custody's own.
+- Cuts: `58c0d6594`, `c92480583`.

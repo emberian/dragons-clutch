@@ -99,6 +99,15 @@ pub struct Route {
 pub struct PhaseAdmission {
     /// The constant's bare name, e.g. `OPEN_MARKET_ADMISSIBLE_PRESTATES_V1`.
     pub constant: String,
+    /// WHICH PERSISTED STATE MACHINE this set is over -- `market`, `source`.
+    ///
+    /// The whole content of a declaration is which discriminant it constrains.
+    /// A Market is `Open` for the entire span in which its Source moves
+    /// `Primary` to `Resolved`, so a consumer that dropped this field would
+    /// check a Source set against a Market phase and publish an admission
+    /// nobody declared. A consumer that cannot observe a machine must say so
+    /// rather than fall back to one it can.
+    pub machine: String,
     /// How the constant was written.
     pub kind: AdmissionKind,
     /// Phase variants the constant admits, in declaration order. This is the

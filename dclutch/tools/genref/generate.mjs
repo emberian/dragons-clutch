@@ -487,12 +487,17 @@ reachable inside an entry route's request.
 function phaseGate(route) {
   const gates = route.admissible_prestates ?? [];
   if (gates.length === 0) return "no phase gate";
+  // Every set NAMES ITS MACHINE. The whole content of a declaration is which
+  // discriminant it constrains, and a Market is `Open` for the entire span in
+  // which its Source moves `Primary` to `Resolved` -- so a cell that dropped
+  // the machine would invite a reader to check a Source set against a Market
+  // phase and publish an admission nobody declared.
   const render = (g) => {
     const body =
       g.prestates && g.prestates.length > 0
         ? g.prestates.map((s) => `${s.phase}+${s.readiness}`).join(", ")
         : g.phases.join(", ");
-    return `\`${body}\``;
+    return `\`${g.machine ?? "market"}: ${body}\``;
   };
   // Entries sharing an `alternative` are the branches of ONE selection, so
   // they unite; everything else is a separate gate on the same execution, so
@@ -603,13 +608,21 @@ Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}**
 routes are in that last group.
 
 The **phase** column is the route's own guard, not a summary of one. It is
-the named \`MarketAdmissionV1\` constant the guard checks against, read out
-of the Rust that enforces it, so a reader is reading the conjunct the program
-executes. \`Founding+Ready\` is an exact prestate; a bare \`Retiring\` is a
+the named admission constant the guard checks against -- a
+\`MarketAdmissionV1\` or a \`SourceAdmissionV1\` -- read out of the Rust that
+enforces it, so a reader is reading the conjunct the program executes.
+\`market: Founding+Ready\` is an exact prestate; a bare \`market: Retiring\` is a
 guard that names no readiness and so admits every one. It is a NECESSARY
 condition and never a sufficient one: an act whose prestate is excluded cannot
 succeed, and an act whose prestate is admitted still has every account,
 release and request check ahead of it.
+
+Each set names the STATE MACHINE it is over -- \`market: Open\` is the Core
+Market's phase, \`source: Primary\` is the Source resolution state -- because a
+Market is \`Open\` for the whole span in which its Source moves \`Primary\` to
+\`Resolved\`, and a set checked against the wrong discriminant is an admission
+nobody declared. A route may carry gates over more than one machine, and then
+it passes all of them.
 
 Two sets joined by **or** are the two branches of ONE guard written as a
 selection -- \`if action == RedeemTerminal { .. } else { .. }\` -- so the route

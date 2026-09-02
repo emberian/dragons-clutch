@@ -39,6 +39,7 @@ mod generated_source_resolution_state_v2;
 mod principal_capacity_v1;
 mod provider_join_v2;
 mod scheduled_median_v1;
+mod source_admission_v1;
 mod source_material_v2;
 mod source_material_v3;
 mod source_recovery_policy_v2;
@@ -69,6 +70,7 @@ pub use scheduled_median_v1::{
     WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1, WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_BYTES_V1,
     WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_OFFSET_V1,
 };
+pub use source_admission_v1::SourceAdmissionV1;
 
 pub use generated_source_material_v2::{
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_FAILURE_POLICY_RELEASE_PREIMAGE_V2,

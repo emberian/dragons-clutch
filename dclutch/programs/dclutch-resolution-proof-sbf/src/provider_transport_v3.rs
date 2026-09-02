@@ -47,6 +47,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::market_admission_v1::RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1;
+use crate::market_admission_v1::RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1;
 use crate::{
     ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
@@ -492,7 +493,7 @@ fn source_can_no_longer_consume(
     if state.market() != lifecycle.market || state.generation() != lifecycle.generation {
         return Err(ResolutionError::OutputState.into());
     }
-    Ok(state.phase() != SourceResolutionPhaseV1::Primary)
+    Ok(RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state.phase()))
 }
 
 #[derive(Clone, Copy)]

@@ -26,6 +26,7 @@
 // `CorePhase`/`CoreReadiness` -- is unreadable to a scan that cannot resolve
 // types, so it reports the constant as unclassified rather than guessing.
 use dclutch_market_core_codec::{MarketAdmissionV1, Phase, Readiness};
+use dclutch_source_contract::{SourceAdmissionV1, SourceResolutionPhaseV1};
 
 /// A Market that has opened and consumed its founding readiness.
 ///
@@ -57,6 +58,42 @@ pub(crate) const RESOLUTION_FUND_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
 /// A Market whose retirement has begun: the fund close.
 pub(crate) const RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
     MarketAdmissionV1::prestates(&[(Phase::Retiring, Readiness::Consumed)]);
+
+// --------------------------------------------------------- the Source machine
+
+/// The Source resolution states in which a sponsored push may be attempted.
+///
+/// A SECOND state machine, and its own type on purpose. The Market's phase
+/// cannot answer this question: a Market is `Open` for the whole span in which
+/// its Source moves `Primary` -> `Recovery` -> `Resolved`, so a client reading
+/// only the Market gate would report a sponsored capture as admissible on a
+/// Source that has already resolved. Every sponsored route -- capture, settle
+/// and the commit-failure walk -- admits `Primary` and nothing else.
+pub(crate) const RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1: SourceAdmissionV1 =
+    SourceAdmissionV1::states(&[SourceResolutionPhaseV1::Primary]);
+
+/// The Source resolution states in which a provider submission may be
+/// RECLAIMED, which is the complement of the one above.
+///
+/// Written out rather than derived from a `not`, because these constants are
+/// read by a census that evaluates no operators -- but pinned against the
+/// other by `the_reclaim_set_is_exactly_the_complement_of_the_capture_set`, so
+/// the two cannot drift into overlapping or into leaving a state unclaimed.
+///
+/// The distinction is load-bearing and was nearly published backwards. The
+/// guard here is `source_can_no_longer_consume`, whose sense is INVERTED
+/// against every other Source guard in this program: reclaim requires that the
+/// Source can no longer consume, so declaring the capture set at this site
+/// would have told a client the reclaim route admits exactly the one state it
+/// refuses.
+pub(crate) const RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1: SourceAdmissionV1 =
+    SourceAdmissionV1::states(&[
+        SourceResolutionPhaseV1::Recovery,
+        SourceResolutionPhaseV1::Resolved,
+        SourceResolutionPhaseV1::Exhausted,
+        SourceResolutionPhaseV1::FailureCommitted,
+        SourceResolutionPhaseV1::Retired,
+    ]);
 
 #[cfg(test)]
 mod tests {
@@ -123,6 +160,59 @@ mod tests {
             RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1,
             |phase, readiness| phase == Phase::Retiring && readiness == Readiness::Consumed,
         );
+    }
+
+    /// The Source set agrees with the guards it replaced, over all six states.
+    #[test]
+    fn admissible_source_states() {
+        for state in [
+            SourceResolutionPhaseV1::Primary,
+            SourceResolutionPhaseV1::Recovery,
+            SourceResolutionPhaseV1::Resolved,
+            SourceResolutionPhaseV1::Exhausted,
+            SourceResolutionPhaseV1::FailureCommitted,
+            SourceResolutionPhaseV1::Retired,
+        ] {
+            // sponsored_push_v1 process_capture, process_settle and
+            // process_commit_failure: `phase() != SourceResolutionPhaseV1::Primary`.
+            assert_eq!(
+                RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
+                state == SourceResolutionPhaseV1::Primary,
+                "the Source set disagrees with the guard it replaced at {state:?}"
+            );
+            // provider_transport_v3 source_can_no_longer_consume, whose sense
+            // is the inverse: `state.phase() != SourceResolutionPhaseV1::Primary`
+            // returned as the RECLAIM condition rather than checked as a refusal.
+            assert_eq!(
+                RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
+                state != SourceResolutionPhaseV1::Primary,
+                "the reclaim set disagrees with the guard it replaced at {state:?}"
+            );
+        }
+    }
+
+    /// The two Source sets partition the machine, and that is checked.
+    ///
+    /// One is written as a list and the other as the complement of the same
+    /// list, so nothing but this makes them stay opposite. An overlap would
+    /// publish a state as both capturable and reclaimable; a gap would leave a
+    /// state no route claims, and the census would report both as ordinary.
+    #[test]
+    fn the_reclaim_set_is_exactly_the_complement_of_the_capture_set() {
+        for state in [
+            SourceResolutionPhaseV1::Primary,
+            SourceResolutionPhaseV1::Recovery,
+            SourceResolutionPhaseV1::Resolved,
+            SourceResolutionPhaseV1::Exhausted,
+            SourceResolutionPhaseV1::FailureCommitted,
+            SourceResolutionPhaseV1::Retired,
+        ] {
+            assert_ne!(
+                RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
+                RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
+                "{state:?} is in both Source sets or in neither"
+            );
+        }
     }
 
     /// Every one of these sets is exact in the readiness axis.

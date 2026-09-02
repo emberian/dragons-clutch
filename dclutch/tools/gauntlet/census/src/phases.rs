@@ -26,8 +26,60 @@ use crate::{
     model::{AdmissionKind, PhaseAdmission, Prestate, Provenance, Route, Unclassified},
 };
 
-/// The type whose constants declare a route's admissible Market prestates.
-const ADMISSION_TYPE: &str = "MarketAdmissionV1";
+/// One persisted state machine whose admissible states a guard may declare.
+///
+/// A machine is named here, never inferred, because the whole content of a
+/// declaration is WHICH DISCRIMINANT it is a set over. The Market's phase
+/// cannot answer whether a Source may still be captured -- a Market is `Open`
+/// for the whole span in which its Source moves `Primary` to `Resolved` -- so
+/// a reader that lost the machine would check one set against another
+/// machine's state and report an admission nobody declared.
+///
+/// Every machine's declaration type is deliberately the same shape: a
+/// const-constructed bitset indexed by the machine's own Lean-emitted wire
+/// tags. That is what lets this be ONE enumerator with a machine parameter
+/// rather than one parser per state machine.
+struct Machine {
+    /// The declaration type this enumerator reads constants of.
+    admission_type: &'static str,
+    /// What routes.md and every consumer downstream calls this machine.
+    label: &'static str,
+    /// The enum a primary-axis variant must name.
+    primary: &'static str,
+    /// The constructor naming primary states alone.
+    primary_constructor: &'static str,
+    /// The second axis, for a machine that has one: its enum and the
+    /// constructor that names exact pairs.
+    secondary: Option<(&'static str, &'static str)>,
+}
+
+/// Every machine the census reads a guard's declaration for.
+///
+/// Adding one is a visible decision and costs a type beside its own
+/// discriminant, not a case in a parser here.
+const MACHINES: &[Machine] = &[
+    Machine {
+        admission_type: "MarketAdmissionV1",
+        label: "market",
+        primary: "Phase",
+        primary_constructor: "phases",
+        secondary: Some(("Readiness", "prestates")),
+    },
+    Machine {
+        admission_type: "SourceAdmissionV1",
+        label: "source",
+        primary: "SourceResolutionPhaseV1",
+        primary_constructor: "states",
+        secondary: None,
+    },
+];
+
+/// The machine one declaration type belongs to.
+fn machine(admission_type: &str) -> Option<&'static Machine> {
+    MACHINES
+        .iter()
+        .find(|machine| machine.admission_type == admission_type)
+}
 
 /// How many function bodies deep the scan follows a route's own calls.
 ///
@@ -40,6 +92,7 @@ const MAX_GUARD_DEPTH: usize = 3;
 /// One constant's declared set, with where it was written.
 #[derive(Clone, Debug)]
 pub struct AdmissionFact {
+    pub machine: &'static str,
     pub kind: AdmissionKind,
     pub phases: Vec<String>,
     pub prestates: Vec<Prestate>,
@@ -159,17 +212,19 @@ fn index_constant(constant: &ItemConst, relative: &str, index: &mut AdmissionInd
     let syn::Type::Path(path) = constant.ty.as_ref() else {
         return;
     };
-    if path.path.segments.last().map(|last| last.ident.to_string())
-        != Some(ADMISSION_TYPE.to_string())
-    {
+    let Some(declared) = path.path.segments.last().map(|last| last.ident.to_string()) else {
         return;
-    }
+    };
+    let Some(machine) = machine(&declared) else {
+        return;
+    };
     let name = constant.ident.to_string();
     let provenance = at(relative, constant.ident.span());
-    match read_initialiser(&constant.expr) {
+    match read_initialiser(machine, &constant.expr) {
         Ok(fact) => index.insert(
             name,
             AdmissionFact {
+                machine: machine.label,
                 kind: fact.0,
                 phases: fact.1,
                 prestates: fact.2,
@@ -177,7 +232,7 @@ fn index_constant(constant: &ItemConst, relative: &str, index: &mut AdmissionInd
             },
         ),
         Err(reason) => index.unreadable.push(Unclassified {
-            context: format!("admissible prestates {name}"),
+            context: format!("admissible {} states {name}", machine.label),
             expression: render_path(&constant.expr),
             provenance,
             reason,
@@ -187,10 +242,13 @@ fn index_constant(constant: &ItemConst, relative: &str, index: &mut AdmissionInd
 
 type ReadSet = (AdmissionKind, Vec<String>, Vec<Prestate>);
 
-/// Read a `MarketAdmissionV1` initializer structurally.
-fn read_initialiser(expr: &Expr) -> Result<ReadSet, String> {
+/// Read one machine's admission initializer structurally.
+fn read_initialiser(machine: &Machine, expr: &Expr) -> Result<ReadSet, String> {
     let Expr::Call(call) = strip(expr) else {
-        return Err("initializer is not a MarketAdmissionV1 constructor call".into());
+        return Err(format!(
+            "initializer is not a {} constructor call",
+            machine.admission_type
+        ));
     };
     let Expr::Path(function) = call.func.as_ref() else {
         return Err("constructor is not a named path".into());
@@ -206,43 +264,46 @@ fn read_initialiser(expr: &Expr) -> Result<ReadSet, String> {
     };
     let elements = array_elements(argument)
         .ok_or_else(|| format!("{constructor}'s argument is not a literal slice"))?;
-    match constructor.as_str() {
-        "prestates" => {
-            let mut prestates = Vec::new();
-            let mut phases = Vec::new();
-            for element in elements {
-                let Expr::Tuple(tuple) = strip(element) else {
-                    return Err("a prestate element is not a (Phase, Readiness) pair".into());
-                };
-                let mut parts = tuple.elems.iter();
-                let (Some(phase), Some(readiness), None) =
-                    (parts.next(), parts.next(), parts.next())
-                else {
-                    return Err("a prestate element is not a two-element tuple".into());
-                };
-                let phase = variant(phase, "Phase")?;
-                let readiness = variant(readiness, "Readiness")?;
-                if !phases.contains(&phase) {
-                    phases.push(phase.clone());
-                }
-                prestates.push(Prestate { phase, readiness });
+    if constructor == machine.primary_constructor {
+        let mut states = Vec::new();
+        for element in elements {
+            let state = variant(element, machine.primary)?;
+            if !states.contains(&state) {
+                states.push(state);
             }
-            Ok((AdmissionKind::Prestates, phases, prestates))
         }
-        "phases" => {
-            let mut phases = Vec::new();
-            for element in elements {
-                let phase = variant(element, "Phase")?;
-                if !phases.contains(&phase) {
-                    phases.push(phase);
-                }
-            }
-            Ok((AdmissionKind::Phases, phases, Vec::new()))
-        }
-        other => Err(format!(
-            "unrecognised MarketAdmissionV1 constructor {other}"
-        )),
+        return Ok((AdmissionKind::Phases, states, Vec::new()));
     }
+    if let Some((secondary, constructor_name)) = machine.secondary
+        && constructor == constructor_name
+    {
+        let mut prestates = Vec::new();
+        let mut phases = Vec::new();
+        for element in elements {
+            let Expr::Tuple(tuple) = strip(element) else {
+                return Err(format!(
+                    "a prestate element is not a ({}, {secondary}) pair",
+                    machine.primary
+                ));
+            };
+            let mut parts = tuple.elems.iter();
+            let (Some(phase), Some(readiness), None) = (parts.next(), parts.next(), parts.next())
+            else {
+                return Err("a prestate element is not a two-element tuple".into());
+            };
+            let phase = variant(phase, machine.primary)?;
+            let readiness = variant(readiness, secondary)?;
+            if !phases.contains(&phase) {
+                phases.push(phase.clone());
+            }
+            prestates.push(Prestate { phase, readiness });
+        }
+        return Ok((AdmissionKind::Prestates, phases, prestates));
+    }
+    Err(format!(
+        "unrecognised {} constructor {constructor}",
+        machine.admission_type
+    ))
 }
 
 fn strip(expr: &Expr) -> &Expr {
@@ -765,6 +826,7 @@ impl<'a> GuardMap<'a> {
             if let Some(fact) = index.resolve(&name) {
                 admissions.push(PhaseAdmission {
                     constant: name,
+                    machine: fact.machine.to_string(),
                     kind: fact.kind,
                     phases: fact.phases.clone(),
                     prestates: fact.prestates.clone(),
@@ -783,7 +845,11 @@ impl<'a> GuardMap<'a> {
             }
         }
         admissions.sort_by(|left, right| {
-            (left.alternative, &left.constant).cmp(&(right.alternative, &right.constant))
+            (left.alternative, &left.machine, &left.constant).cmp(&(
+                right.alternative,
+                &right.machine,
+                &right.constant,
+            ))
         });
         admissions
     }
@@ -817,11 +883,19 @@ mod tests {
     use super::*;
 
     fn constant(source: &str) -> Result<ReadSet, String> {
+        machine_constant("MarketAdmissionV1", source)
+    }
+
+    /// Read one constant as the named machine's declaration type.
+    fn machine_constant(admission_type: &str, source: &str) -> Result<ReadSet, String> {
         let file = syn::parse_file(source).expect("parses");
         let Item::Const(item) = &file.items[0] else {
             panic!("not a const")
         };
-        read_initialiser(&item.expr)
+        read_initialiser(
+            machine(admission_type).expect("a known machine"),
+            &item.expr,
+        )
     }
 
     #[test]
@@ -849,6 +923,43 @@ mod tests {
         assert_eq!(kind, AdmissionKind::Phases);
         assert_eq!(phases, ["Retiring"]);
         assert!(prestates.is_empty());
+    }
+
+    /// A second machine is read by the same enumerator, against its own enum.
+    ///
+    /// The check that the machine table is a parameter and not a second parser:
+    /// `SourceAdmissionV1::states(&[SourceResolutionPhaseV1::Primary])` reads,
+    /// and the SAME text as a `MarketAdmissionV1` does not, because a `Phase`
+    /// is what that machine's variants must name.
+    #[test]
+    fn each_machine_is_read_against_its_own_discriminant() {
+        let (kind, states, prestates) = machine_constant(
+            "SourceAdmissionV1",
+            "const A: SourceAdmissionV1 = \
+             SourceAdmissionV1::states(&[SourceResolutionPhaseV1::Primary]);",
+        )
+        .expect("readable");
+        assert_eq!(kind, AdmissionKind::Phases);
+        assert_eq!(states, ["Primary"]);
+        assert!(prestates.is_empty());
+
+        assert!(
+            machine_constant(
+                "MarketAdmissionV1",
+                "const A: MarketAdmissionV1 = \
+                 MarketAdmissionV1::phases(&[SourceResolutionPhaseV1::Primary]);",
+            )
+            .is_err(),
+            "a Source state passed as a Market phase must refuse"
+        );
+        assert!(
+            machine_constant(
+                "SourceAdmissionV1",
+                "const A: SourceAdmissionV1 = SourceAdmissionV1::prestates(&[(A::B, C::D)]);",
+            )
+            .is_err(),
+            "a one-axis machine has no pair constructor"
+        );
     }
 
     /// The whole point of reading the constant structurally: a shape this
@@ -879,6 +990,7 @@ mod tests {
     #[test]
     fn a_colliding_name_is_refused_and_said_out_loud() {
         let fact = |where_: &str| AdmissionFact {
+            machine: "market",
             kind: AdmissionKind::Phases,
             phases: vec!["Retiring".into()],
             prestates: Vec::new(),
@@ -931,6 +1043,7 @@ mod tests {
             index.insert(
                 (*name).to_string(),
                 AdmissionFact {
+                    machine: "market",
                     kind: AdmissionKind::Phases,
                     phases: vec!["Open".into()],
                     prestates: Vec::new(),
