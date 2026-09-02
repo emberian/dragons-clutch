@@ -1028,4 +1028,120 @@ neither filled nor resolved on this plan.
   market. Trading and Resolution already show the alternative — a fixed, code-owned
   release id.
 
+## Addendum, 2026-09-02: the identity is fixed at its cause, and cohort-12 is still the market it stranded
+
+The previous addendum named the defect. It is now repaired, and the repair was
+re-run against cohort-12 key-free — **the deployer has still not moved:
+36.327394469 SOL, and the campaign payer 1.554337728.**
+
+### What changed (`0785bd52`, `2da012cd`)
+
+`checked_semantic_release_id` no longer takes a git revision. A role with a
+code-owned semantic constant uses it (Trading's `COMPILED_DIRECT_RELEASE_ID_V1`,
+Resolution's `RESOLUTION_CONTROLLER_RELEASE_ID_V7`); a role without one uses the
+ordinary shipped-ELF digest the candidate already computes, under a
+role-labelled domain. Two commits whose program sources are byte-identical now
+mint one id, and a commit that really does change a program's bytes still mints a
+new one — the property the revision hash was reaching for and missing. The
+loopback path stops keeping its own parallel copy of the rule, and
+`SEMANTIC_DERIVATION_V1` moves with the derivation, so a pin minted under the old
+one is refused by name by the four consumers that already compare that field.
+
+Three siblings landed with it. The carry-forward snapshot now **carries the Rent
+rate its own finalized context quoted** (schema v2) and the offline
+re-validation judges against that rather than `Rent::default()` — the sibling
+named as owed two addenda ago, closable only by the snapshot, because the
+re-validator has no cluster in reach. `tools/release/devnet_upgrade_dryplan` is
+deleted with its CI row: its `ROLES`, its `DEPLOY1_FACTS` and its parked-lamport
+pin were a frozen rehearsal of the cohort-7/8 substrate, every account of which
+is closed on chain. And `prepare` now emits the public cut's `checkedReleases`
+row verbatim beside the plan, keyed and shaped exactly as `publicCutStaging.ts`
+admits it, so the browser never computes and nobody types a release identity.
+
+The fourth is what makes cohort-13 work rather than hopefully work: a genesis
+cohort supplies its five artifact-derived semantic ids on the command line, and
+`validate_prepare` now derives each from the role's own artifact and refuses a
+mismatch by name. While those two could disagree, an operator copying last
+cohort's `semantic-release-ids.txt` founds under one release set and seals under
+another — which is exactly the accident, one layer up from the one that already
+happened.
+
+### Re-run against cohort-12, key-free
+
+Branch `seal/cohort-12` re-cut to `ccc004f1`; its diff from `e39efbb0` still
+touches **zero** `programs/` or `crates/` paths, so Trading is still `b0cff55a…`.
+A fresh carry-forward capture (schema v2, slot 491,938,160) records the live rate
+`lamports_per_byte_year 6333, exemption_threshold 1.0, burn_percent 50` and
+passes rent exemption **without any top-up**, which is the same fact the
+0.2373 SOL of over-funding was bought to paper over. The seven-role journal
+audits `completed_role_count 7 / next_role null`, final set
+`c4e9acf6ca02d6dab8dbec8ea73b5a4f0a18ce861dfdf59c2c6af19da26cef14`, and prepare
+seals.
+
+| plan | derivation | release_set_id |
+| --- | --- | --- |
+| founded, `e39efbb0` | revision-hashed | `797e83ac0522787898b24a963182b846f61f96c6968e4bfdbfbb8dc5bcf7e9a1` |
+| first seal, `96a3b04e` | revision-hashed | `6dcda3224f0d1a251d2a91bb64ae25b10967e6133b40e0a0a008ae3057a75c90` |
+| second seal, `ccc004f1` | **artifact-derived** | `b9eea7fe68ffde7fb3bbb627748d6156174cd0c77ab5e9d961f539f2205ebc71` |
+
+**So the answer to "do the founded plan and the sealed set now agree" is NO, and
+the reason is the honest one: the founded plan's id is fixed at the old
+derivation.** `797e83ac…` embeds Custody, Claims and Core semantic ids that are
+hashes of `e39efbb0`, and nothing can re-mint them into a market already founded.
+The repair is forward-only by construction. **Cohort-13 is the path**, deployed
+from a commit at or after `0785bd52`.
+
+The new ids were reproduced independently, outside the tool, from
+`(role label, shipped ELF digest)` alone:
+
+| role | shipped ELF | semantic id | reproduced offline |
+| --- | --- | --- | --- |
+| custody | `2823c823…` | `14c06925…` | yes |
+| claims | `268d527e…` | `4435fc6c…` | yes |
+| core | `9ef7df55…` | `a4a5b3d8…` | yes |
+| trading | — | `79fad2f0…` | code-owned constant, artifact-independent |
+| resolution | — | `6e4b9a54…` | code-owned constant, artifact-independent |
+| registry | `ed70f8bd…` | `74ea1b5d…` | **no, and correctly so** |
+| rent | `d46e5f0a…` | `847238e9…` | **no, and correctly so** |
+
+Registry and Rent are **CarryForward** rows: their `ArtifactRelease` records are
+reproduced byte-for-byte from the chain, not re-minted, so they keep the ids the
+cluster already holds — including, for this cohort, ids minted under the old
+derivation. That is the carry-forward doing its job, and it is why the table is
+worth printing rather than summarising: an unexplained "reproduced=false" is how
+a reader concludes a fix did not land.
+
+The commit is therefore not an input to any id a cohort mints from here on. It is
+a function of the seven artifacts and two code constants, and for a carried role,
+of what the chain already says.
+
+### The cut fragment, emitted rather than typed
+
+```json
+{
+  "checkedReleases": {
+    "b9eea7fe68ffde7fb3bbb627748d6156174cd0c77ab5e9d961f539f2205ebc71": {
+      "gateDigest": "82298c60da8b9fc249b9fa673f5337a95ee42606ff44237e20b927e65448bb72",
+      "sealedSet": "c4e9acf6ca02d6dab8dbec8ea73b5a4f0a18ce861dfdf59c2c6af19da26cef14"
+    }
+  },
+  "schema": "dclutch-public-cut-checked-releases-fragment-v1"
+}
+```
+
+This row is for a release set no market selects, so publishing it would turn the
+browser's `release` wall off for nothing. It is recorded here as the shape
+cohort-13's runbook hands the cut, not as a row to ship.
+
+### What cohort-13 owes
+
+Deployed from a commit at or after `0785bd52`: found, then seal against its own
+gate, and the two identities agree by construction rather than by luck —
+`validate_prepare` will not let them diverge, and the fragment the cut needs
+falls out of `prepare`. Everything cohort-12 proved about the populated market
+holds and is reusable: the 50-bps founding, the exactly-delegated 201 atoms, both
+Direct token PDAs derived and vacant, the census bindings, and the six frozen
+routing tables. **`49c8fa92` / `be67416e` remain unjudged by a real fill**, and
+that is now a cohort lane's to close rather than a repair's.
+
 Devnet evidence. Not mainnet evidence.

@@ -3150,3 +3150,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   message); tightest frame now `authenticate_accelerator_invocation_v4` at 3,904 → DEALER told. Successor: the root founded
   through ActivateCapability + `ProviderCallerV3::Trading` on real ELFs (never run); the forwarding wall for the other 46 cases.
 - Cuts: `cec798cbb`.
+
+### Lane map delta — 2026-09-02 22:45
+- SEAL (`0785bd52`, `2da012cd`, `9576aa48`): **the semantic release id derives from what it identifies** — the shipped ELF
+  digest under a role-labelled domain for five roles, code-owned constants for Trading and Resolution; same bytes → one id;
+  a 40-hex revision refuses by shape. The carry-forward carries its context's rent rate (the 0.2373 SOL top-up was never
+  needed); `devnet_upgrade_dryplan` deleted with its CI row; `prepare` emits the cut's `checkedReleases` row verbatim;
+  `validate_prepare` refuses a copied semantic-ids file. **Cohort-12 cannot be repaired backward** (its founded plan embeds
+  the revision-hashed ids) → **COHORT-13 `ac90a2f483782f05d`**: close, redeploy from HEAD (or after the Dealer lane's
+  Registry change if it lands within the hour), ladder, found at 50 bps with a ≥6 h window, activate, **seal in place**, two
+  admissions, the fee-bearing trade and settlement, ledger-census across the fill.
+- Cuts: `2ecb7d1eb`.
