@@ -3013,3 +3013,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Active: SEAL `a4794424565254512`, WEB `abcbd5c6f9e5eace9`, DIRECT `a2b6881d3727766fd`, GENERAL `aefe5eec9ac4b7175`, CLAIMS
   `a372d0ae55f06b58a`, EMISSION `a33e56a925eb6b78b`, STRUCTURED-landing `adfb985d94c714707`, DEALER `a5b1310baba889f9b`.
 - Cuts: `5b4674565`.
+
+### Lane map delta — 2026-09-02 16:00
+- CLAIMS closed (`bb05b497`: the attempts model has one author in `program-test-evidence::pda_search`, pinned over the whole
+  256-value bump domain; the claims-extended subtraction itself owed a census of every PDA search on the payout route). Two
+  instrument findings: **the census reads only `*b"…"` magics — 51 Lean-emitted hex-array magics are invisible and a real
+  collision hides there: `DCLTLBV2` claimed by RAMP_MAGIC_V2 and SPLINE_MAGIC_V2 in the shipping payoff codec** (genref blocked
+  at HEAD by two adjudications that lost claimants the same way) → EMISSION, ahead of its unit; and **an exact frame ratchet
+  cannot be recaptured by a bystander in a tree taking a program commit every ~4 minutes** (three correct recaptures, each
+  invalidated) → FRAMEGUARD **`(new lane)`**: capture at a named commit, a `--since` mode naming who owes rows, recapture once
+  with attribution.
+- Cuts: `e045ae796`.
