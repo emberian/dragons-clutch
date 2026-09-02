@@ -55,7 +55,10 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
-use crate::{TradingSbfError, execution_strategy_v2::authenticate_activated_current_deployment};
+use crate::{
+    TradingSbfError, child_refused_v1,
+    execution_strategy_v2::authenticate_activated_current_deployment,
+};
 
 const MARKET: usize = 0;
 const CORE_PROGRAM: usize = 1;
@@ -687,13 +690,13 @@ fn normalize_and_initialize_token(
             &[resource.clone(), refund.clone(), system.clone()],
             &[&signer_seeds],
         )
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(child_refused_v1)?;
     } else if normalization.payer_top_up != 0 {
         invoke(
             &transfer(payer.key, resource.key, normalization.payer_top_up),
             &[payer.clone(), resource.clone(), system.clone()],
         )
-        .map_err(|_| TradingSbfError::Transition)?;
+        .map_err(child_refused_v1)?;
     }
     for instruction in [
         allocate(
@@ -833,6 +836,8 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_direct_codec::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1;
+
     use dclutch_claims_svm::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
@@ -888,8 +893,7 @@ mod tests {
                 // would look for it. The protocol bound is
                 // `DIRECT_MAX_FEE_BASIS_POINTS_V1`, enforced once, by
                 // `DirectExecutionConfigV1::new`.
-                || self.fee_basis_points
-                    > dclutch_direct_codec::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1
+                || self.fee_basis_points > DIRECT_MAX_FEE_BASIS_POINTS_V1
                 || self.generation == u64::MAX
             {
                 Err(TradingSbfError::Content)
@@ -989,12 +993,52 @@ mod tests {
                 expected_fee_token: base.seller_token,
                 ..base
             },
+            // OUT OF BAND, not "not fifty". `e7cbedee` gave the venue fee rate
+            // one author -- the config record -- and moved this mirror's
+            // conjunct from `== 50` to the protocol band, but left this hostile
+            // behind at 49, where it asserted a law the route no longer has and
+            // had been red on main ever since. The conjunct that exists is the
+            // band, so this is the value that exercises it.
             SemanticFixtureV1 {
-                fee_basis_points: 49,
+                fee_basis_points: DIRECT_MAX_FEE_BASIS_POINTS_V1
+                    .checked_add(1)
+                    .expect("one basis point past the band"),
                 ..base
             },
         ] {
             assert_eq!(hostile.validate(), Err(TradingSbfError::Content));
+        }
+    }
+
+    /// The other half of the same move, and the half a hostile cannot state:
+    /// every rate inside the band is admitted, INCLUDING the ones a route that
+    /// pinned fifty refused.
+    ///
+    /// Without this the mirror says only "501 is refused", and a future edit
+    /// that quietly restored the point would still pass every case above. The
+    /// rates are the ones `e7cbedee` proved on the route itself -- 0, 25, 49,
+    /// 50 and 500 -- so the mirror and the route agree on the same list rather
+    /// than on a bound each interprets alone.
+    #[test]
+    fn every_rate_the_band_admits_joins_including_the_ones_fifty_refused() {
+        let base = semantic_fixture();
+        for fee_basis_points in [
+            0,
+            25,
+            49,
+            DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1,
+            DIRECT_MAX_FEE_BASIS_POINTS_V1,
+        ] {
+            assert!(fee_basis_points <= DIRECT_MAX_FEE_BASIS_POINTS_V1);
+            assert_eq!(
+                SemanticFixtureV1 {
+                    fee_basis_points,
+                    ..base
+                }
+                .validate(),
+                Ok(()),
+                "the config is the sole author of the rate, at {fee_basis_points} basis points",
+            );
         }
     }
 

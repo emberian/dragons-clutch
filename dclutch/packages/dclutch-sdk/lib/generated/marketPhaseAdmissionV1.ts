@@ -34,6 +34,7 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "core/retire_v1::process_checkpoint_suffix", phases: ["Retiring"], prestates: [] },
   { route: "core/retirement_replay_handoff_v1::process", phases: ["Retiring"], prestates: [] },
   { route: "core/series_open::process", phases: ["Founding"], prestates: [["Founding", "Prepaid"]] },
+  { route: "custody/retirement_replay_handoff_v1::process", phases: ["Retiring"], prestates: [] },
 ];
 
 /** The gate for one route, or `null` when the census read none for it. */

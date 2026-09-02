@@ -3225,3 +3225,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   entry identities). → GENERAL-DEVNET **`ae460c657082f0c97`**: deploy the General accelerator on devnet (not a sealed role),
   the devnet General market compiler reading those facts from the deployment, activation's devnet arm; OpenBatch on chain is
   cohort-14's (Trading with a517d27c). Cohort-13's founding continues (60 of ~186 tx).
+
+### Lane map delta — 2026-09-03 02:45
+- COHORT-13 pre-empted an overclaim: `ledger-census` hard-codes the class claim INAPPLICABLE for an external observer
+  (`main.rs:1008-1017`), so L7/L8 cannot be judged by it whatever the chain does; the fill's census newly judges L2/L5/L6
+  across a real crossing (chained through --prior) plus L1/L3/L4 — six laws over a real fill — with L7/L8 stated as
+  inapplicable-by-construction. → CLASS-DELTA **`a0ad298ac91622479`**: `--declared-class-delta LABEL=I128` in the census,
+  the simulator declaring the deltas it caused from the producer's manifest. Founding at 77 of ~186 tx (the frozen-table
+  barriers cost the time, as expected).
