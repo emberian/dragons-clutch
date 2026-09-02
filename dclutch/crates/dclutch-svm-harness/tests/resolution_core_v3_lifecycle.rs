@@ -332,6 +332,31 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     )
 }
 
+/// The activated five-role release set, satisfied by THREE ELFs wearing five hats.
+///
+/// `binding(core)` stands in the Claims slot and `binding(custody)` in the
+/// Trading slot, and the role loop below activates the same two substitutes.
+/// That is sound for what this campaign does -- it resolves a Core Market and
+/// invokes neither role -- and it is load-bearing to say so, because it is
+/// exactly what stops this campaign from resolving a market that carries a
+/// DIRECT capability root, whose address is a PDA of the Trading role.
+///
+/// **Measured 2026-09-02, so the cost of the substitution is a number and not a
+/// worry.** Giving Claims and Trading their own real ELFs and their own releases
+/// -- six programs in the bank, five real roles in the set -- takes this file
+/// from 5 of 5 green to 3 of 5. Both failures are `Custom(32773)`,
+/// `ResolutionSbfError::ResolutionRelease` (0x8005): the terminal-certificate
+/// case refuses outright, and `current_resolution_creates_and_activates_exact_funding`
+/// stops reaching its own subject -- it asks for a `FinalizedRecord` refusal and
+/// gets the release one instead, which is the universal-donor shape `AGENTS.md`
+/// warns about.
+///
+/// 0x8005 is raised at **92 sites across seven files** in
+/// `dclutch-resolution-proof-sbf`, so it names the accusation and not the
+/// conjunct; localizing it is the first real step of C-04's resolution clause
+/// and wants the surfacing treatment, not another guess. The working change that
+/// produces the 3-of-5 is parked rather than landed, because a campaign that
+/// goes red teaches nobody anything it does not already say here.
 fn activation(
     core: ArtifactReleaseV1,
     resolution: ArtifactReleaseV1,
