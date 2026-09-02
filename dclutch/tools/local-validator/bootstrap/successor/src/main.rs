@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
+use std::{collections::BTreeMap, env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use solana_sdk::pubkey::Pubkey;
@@ -31,6 +31,7 @@ mod flagship_resolution;
 mod fractional_market;
 mod funding_readiness;
 mod general_capability_activation;
+mod general_devnet_market;
 mod general_market;
 mod general_settlement_fixture;
 mod general_successor_plan;
@@ -138,6 +139,7 @@ fn run() -> Result<()> {
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("devnet-market") => run_devnet_market(arguments.collect()),
         Some("devnet-sponsored-market") => run_devnet_sponsored_market(arguments.collect()),
+        Some("devnet-general-market") => run_devnet_general_market(arguments.collect()),
         Some("graduation-market") => run_graduation_market(arguments.collect()),
         Some("ledger-census") => run_ledger_census(arguments.collect()),
         Some("wallet-terminal-payout-input") => {
@@ -679,6 +681,142 @@ impl DirectCompilerArgumentsV1 {
     }
 }
 
+/// Everything `devnet-general-market` takes that `devnet-sponsored-market`
+/// does not, plus the three flags both need.
+///
+/// It is a sibling of `DirectCompilerArgumentsV1` rather than an extension of
+/// it, because the two families do not share one fact: a General market has no
+/// Direct fee policy, and a Direct market has no accelerator. Sharing the
+/// struct would make each family's flags silently admissible on the other.
+#[derive(Default)]
+struct GeneralCompilerArgumentsV1 {
+    plan: Option<String>,
+    rpc_url: Option<String>,
+    acknowledgment: Option<String>,
+    accelerator_program: Option<String>,
+    accelerator_elf: Option<String>,
+    accelerator_semantic_release_id: Option<String>,
+    accelerator_upgrade_authority: Option<String>,
+    policy: Option<String>,
+    compiler_release: Option<String>,
+    toolchain: Option<String>,
+    translation_validation: Option<String>,
+    selection_policy: Option<String>,
+    quote_surplus_beneficiary: Option<String>,
+}
+
+impl GeneralCompilerArgumentsV1 {
+    fn slot(&mut self, argument: &str) -> Option<&mut Option<String>> {
+        match argument {
+            "--plan" => Some(&mut self.plan),
+            "--rpc-url" => Some(&mut self.rpc_url),
+            campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME => Some(&mut self.acknowledgment),
+            "--general-accelerator-program-id" => Some(&mut self.accelerator_program),
+            "--general-accelerator-elf" => Some(&mut self.accelerator_elf),
+            "--general-accelerator-semantic-release-id" => {
+                Some(&mut self.accelerator_semantic_release_id)
+            }
+            "--general-accelerator-upgrade-authority" => {
+                Some(&mut self.accelerator_upgrade_authority)
+            }
+            "--general-policy" => Some(&mut self.policy),
+            "--general-compiler-release" => Some(&mut self.compiler_release),
+            "--general-toolchain" => Some(&mut self.toolchain),
+            "--general-translation-validation" => Some(&mut self.translation_validation),
+            "--general-selection-policy" => Some(&mut self.selection_policy),
+            "--general-quote-surplus-beneficiary" => Some(&mut self.quote_surplus_beneficiary),
+            _ => None,
+        }
+    }
+
+    /// The accelerator's upgrade authority is REQUIRED, and the reason is that
+    /// its absence is a claim.
+    ///
+    /// `plan::release_facts` derives `Immutable` from an absent authority, so
+    /// a caller who simply forgot the flag would mint a release asserting the
+    /// accelerator can never be redeployed — and the market's certificates
+    /// would then pin an artifact whose supersession nothing watches for. The
+    /// operator states `immutable` in words or names the key.
+    fn expected_upgrade_authority(&self) -> Result<Option<Pubkey>> {
+        match self.accelerator_upgrade_authority.as_deref() {
+            None => Err(Error::new(
+                "--general-accelerator-upgrade-authority is required: pass the key the deployment \
+                 must be upgradeable under, or the literal `immutable` to assert it carries none. \
+                 An omitted flag would mint an Immutable release for a mutable program",
+            )),
+            Some("immutable") => Ok(None),
+            Some(value) => Ok(Some(plan::pubkey(value)?)),
+        }
+    }
+
+    fn load(
+        self,
+    ) -> Result<(
+        PathBuf,
+        String,
+        Option<String>,
+        general_devnet_market::GeneralDevnetCompilerArgumentsV1,
+    )> {
+        let expected_upgrade_authority = self.expected_upgrade_authority()?;
+        let plan = absolute(self.plan, "--plan")?;
+        let rpc_url = required(self.rpc_url, "--rpc-url")?;
+        let acknowledgment = self.acknowledgment;
+        let arguments = general_devnet_market::GeneralDevnetCompilerArgumentsV1 {
+            accelerator: general_devnet_market::GeneralDevnetAcceleratorArgumentsV1 {
+                program: parse_pubkey(
+                    self.accelerator_program,
+                    "--general-accelerator-program-id",
+                )?,
+                built_elf: absolute(self.accelerator_elf, "--general-accelerator-elf")?,
+                semantic_release_id: hex32(
+                    self.accelerator_semantic_release_id,
+                    "--general-accelerator-semantic-release-id",
+                )?,
+                expected_upgrade_authority,
+            },
+            evidence: general_devnet_market::GeneralDevnetEvidenceArgumentsV1 {
+                compiler_release: absolute(self.compiler_release, "--general-compiler-release")?,
+                toolchain: absolute(self.toolchain, "--general-toolchain")?,
+                translation_validation: absolute(
+                    self.translation_validation,
+                    "--general-translation-validation",
+                )?,
+                selection_policy: absolute(self.selection_policy, "--general-selection-policy")?,
+            },
+            policy: absolute(self.policy, "--general-policy")?,
+            quote_surplus_beneficiary: parse_pubkey(
+                self.quote_surplus_beneficiary,
+                "--general-quote-surplus-beneficiary",
+            )?,
+        };
+        Ok((plan, rpc_url, acknowledgment, arguments))
+    }
+}
+
+/// Which family a devnet Pyth range-protection market selects.
+///
+/// The graph is identical in all three; the only difference is which closure
+/// the selection seam attaches to it.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DevnetMarketFamilyV1 {
+    /// Pull-oracle Pyth, Direct-selected.
+    Direct,
+    /// Sponsored-push Pyth, Direct-selected.
+    SponsoredDirect,
+    /// Sponsored-push Pyth, General-selected.
+    SponsoredGeneral,
+}
+
+impl DevnetMarketFamilyV1 {
+    const fn command(self) -> &'static str {
+        match self {
+            Self::Direct => "devnet-market",
+            Self::SponsoredDirect => "devnet-sponsored-market",
+            Self::SponsoredGeneral => "devnet-general-market",
+        }
+    }
+}
+
 const DEMO_MARKET_REFUSAL_V1: &str = "demo-market is a retired local-only fixture: it cannot \
 authenticate the permanent devnet Direct deployment and refuses to invent Direct authority; use \
 devnet-market or graduation-market with the acknowledged devnet planner";
@@ -694,6 +832,18 @@ fn direct_market_usage_v1() -> String {
          dclutch-local-successor-bootstrap devnet-sponsored-market --registry-program-id PUBKEY \
          --plan ABSOLUTE_JSON --rpc-url URL {ack} GENESIS_HASH \
          --direct-fee-basis-points U16 --direct-fee-recipient PUBKEY \
+         --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
+         [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
+         [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
+         dclutch-local-successor-bootstrap devnet-general-market --registry-program-id PUBKEY \
+         --plan ABSOLUTE_JSON --rpc-url URL {ack} GENESIS_HASH \
+         --general-accelerator-program-id PUBKEY --general-accelerator-elf ABSOLUTE_FILE \
+         --general-accelerator-semantic-release-id HEX64 \
+         --general-accelerator-upgrade-authority PUBKEY|immutable \
+         --general-policy ABSOLUTE_JSON --general-selection-policy ABSOLUTE_FILE \
+         --general-compiler-release ABSOLUTE_FILE --general-toolchain ABSOLUTE_FILE \
+         --general-translation-validation ABSOLUTE_FILE \
+         --general-quote-surplus-beneficiary PUBKEY \
          --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
          [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
          [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
@@ -720,14 +870,24 @@ fn run_demo_market(_arguments: Vec<String>) -> Result<()> {
 /// refused below the measured cadence floor rather than founded into a market
 /// that fails for provider reasons.
 fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
-    run_devnet_pyth_market(arguments, false)
+    run_devnet_pyth_market(arguments, DevnetMarketFamilyV1::Direct)
 }
 
 fn run_devnet_sponsored_market(arguments: Vec<String>) -> Result<()> {
-    run_devnet_pyth_market(arguments, true)
+    run_devnet_pyth_market(arguments, DevnetMarketFamilyV1::SponsoredDirect)
 }
 
-fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()> {
+/// The devnet flagship's market graph with GENERAL selected instead of Direct.
+///
+/// The same document `devnet-sponsored-market` emits, compiled through the
+/// same capability-neutral seam, differing in exactly one thing: the closure
+/// attached to it is General's, and its four deployment identities are read
+/// off a real accelerator deployment rather than projected off the plan.
+fn run_devnet_general_market(arguments: Vec<String>) -> Result<()> {
+    run_devnet_pyth_market(arguments, DevnetMarketFamilyV1::SponsoredGeneral)
+}
+
+fn run_devnet_pyth_market(arguments: Vec<String>, family: DevnetMarketFamilyV1) -> Result<()> {
     let mut registry = None;
     let mut price_update = None;
     let mut window_start = None;
@@ -746,6 +906,7 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
     let mut feed_label = None;
     let mut generation = None;
     let mut direct = DirectCompilerArgumentsV1::default();
+    let mut general = GeneralCompilerArgumentsV1::default();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -769,16 +930,18 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
             "--coordinate-domain" => Some(&mut coordinate_domain_name),
             "--feed" => Some(&mut feed_label),
             "--generation" => Some(&mut generation),
-            _ => direct.slot(&argument),
+            // A family's flags are admissible only on that family. A General
+            // market has no Direct fee policy and a Direct market has no
+            // accelerator; letting either through would accept a stated belief
+            // and then compile something that never read it.
+            _ => match family {
+                DevnetMarketFamilyV1::SponsoredGeneral => general.slot(&argument),
+                DevnetMarketFamilyV1::Direct | DevnetMarketFamilyV1::SponsoredDirect => {
+                    direct.slot(&argument)
+                }
+            },
         }
-        .ok_or_else(|| {
-            let command = if sponsored {
-                "devnet-sponsored-market"
-            } else {
-                "devnet-market"
-            };
-            Error::new(format!("unknown {command} argument: {argument}"))
-        })?;
+        .ok_or_else(|| Error::new(format!("unknown {} argument: {argument}", family.command())))?;
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
@@ -868,11 +1031,26 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
             Some(value) => decimal::<u64>(Some(value), "--generation")?,
         },
     };
-    let direct = direct.load(registry)?;
-    let input = if sponsored {
-        market::devnet_sponsored_market_input(spec, direct.compiler())?
-    } else {
-        market::devnet_market_input(spec, direct.compiler())?
+    let input = match family {
+        DevnetMarketFamilyV1::SponsoredGeneral => {
+            let (plan, rpc_url, acknowledgment, general) = general.load()?;
+            general_devnet_market::devnet_general_market_input(
+                &plan,
+                &rpc_url,
+                acknowledgment.as_deref(),
+                registry,
+                spec,
+                &general,
+            )?
+        }
+        DevnetMarketFamilyV1::SponsoredDirect => {
+            let direct = direct.load(registry)?;
+            market::devnet_sponsored_market_input(spec, direct.compiler())?
+        }
+        DevnetMarketFamilyV1::Direct => {
+            let direct = direct.load(registry)?;
+            market::devnet_market_input(spec, direct.compiler())?
+        }
     };
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
@@ -893,6 +1071,90 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
 /// boundaries and refuses to guess their fees.
 ///
 /// Exit is nonzero if ANY law is violated at the new boundary.
+/// `LABEL=I128`, for `--declared-class-delta`.
+fn labeled_class_delta_v1(value: &str) -> Result<(String, i128)> {
+    let (label, delta) = value.split_once('=').ok_or_else(|| {
+        Error::new(format!(
+            "--declared-class-delta takes LABEL=I128, got {value:?}"
+        ))
+    })?;
+    let atoms = delta.parse::<i128>().map_err(|_| {
+        Error::new(format!(
+            "--declared-class-delta {label} must be a decimal i128, got {delta:?}"
+        ))
+    })?;
+    Ok((label.to_owned(), atoms))
+}
+
+/// What this census claims each compartment class moved since `--prior`.
+///
+/// With no `--declared-class-delta` the claim stays INAPPLICABLE and says why.
+/// `unchanged()` there would be a claim -- that not one atom changed class --
+/// and a census run by an observer who did not drive the transfers has no
+/// standing to make it on that caller's behalf.
+///
+/// A caller that DID drive them has standing, and naming one class is how it
+/// says so: from that point every class it does not name is a claim of zero,
+/// which is the strong statement L8 exists to check. So the flag both supplies
+/// the numbers and transfers the standing, and neither can arrive without the
+/// other.
+fn census_class_claim_v1(deltas: BTreeMap<String, i128>) -> Result<ledger::ClassClaimV1> {
+    if deltas.is_empty() {
+        return Ok(ledger::ClassClaimV1::inapplicable(
+            "external census: the transactions between boundaries were not driven by this \
+             ledger, and it refuses to guess which compartments they crossed. A caller that \
+             drove them states them with --declared-class-delta LABEL=ATOMS, after which every \
+             unnamed class is a declaration of zero.",
+        ));
+    }
+    ledger::ClassClaimV1::declaring(deltas)
+}
+
+/// What this census claims about the lamports its caller's transactions moved.
+///
+/// `--declared-fees-lamports` is what makes L7 applicable at all: it is the
+/// term the law cannot derive, and a caller that can state it is a caller that
+/// drove the transactions. The unwatched pair only refines a claim that already
+/// exists, so either of them alone refuses rather than defaulting the fee to
+/// zero -- a fee of zero is a statement about the chain, not a missing value.
+fn census_lamport_claim_v1(
+    fees: Option<String>,
+    unwatched: Option<String>,
+    note: Option<String>,
+) -> Result<ledger::LamportClaimV1> {
+    let Some(fees) = fees else {
+        if unwatched.is_some() || note.is_some() {
+            return Err(Error::new(
+                "--declared-unwatched-lamports and --declared-unwatched-note refine a lamport \
+                 claim this census was not given; pass --declared-fees-lamports, which is what \
+                 makes L7 applicable",
+            ));
+        }
+        return Ok(ledger::LamportClaimV1::inapplicable(
+            "external census: the transactions between boundaries were not driven by this \
+             ledger, and it refuses to guess their fees. A caller that drove them states them \
+             with --declared-fees-lamports.",
+        ));
+    };
+    let fees = fees
+        .parse::<u64>()
+        .map_err(|_| Error::new("--declared-fees-lamports must be a decimal u64"))?;
+    let claim = ledger::LamportClaimV1::fees(fees);
+    let Some(unwatched) = unwatched else {
+        if note.is_some() {
+            return Err(Error::new(
+                "--declared-unwatched-note describes lamports this census did not declare; pass \
+                 --declared-unwatched-lamports with it",
+            ));
+        }
+        return Ok(claim);
+    };
+    let unwatched = unwatched
+        .parse::<u64>()
+        .map_err(|_| Error::new("--declared-unwatched-lamports must be a decimal u64"))?;
+    Ok(claim.with_unwatched(unwatched, note.unwrap_or_default()))
+}
+
 fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
@@ -904,6 +1166,10 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
     let mut stage = None;
     let mut declared_collateral = None;
     let mut declared_hoard = None;
+    let mut declared_fees = None;
+    let mut declared_unwatched = None;
+    let mut declared_unwatched_note = None;
+    let mut declared_classes: BTreeMap<String, i128> = BTreeMap::new();
     let mut prior = None;
     let mut output = None;
     let mut tokens: Vec<(String, Pubkey)> = Vec::new();
@@ -933,6 +1199,15 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
                 watches.push(labeled(&value, "--watch")?);
                 continue;
             }
+            "--declared-class-delta" => {
+                let (label, delta) = labeled_class_delta_v1(&value)?;
+                if declared_classes.insert(label.clone(), delta).is_some() {
+                    return Err(Error::new(format!(
+                        "--declared-class-delta {label} may be supplied only once"
+                    )));
+                }
+                continue;
+            }
             _ => {}
         }
         let slot = match argument.as_str() {
@@ -946,6 +1221,9 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
             "--stage" => &mut stage,
             "--declared-collateral-delta" => &mut declared_collateral,
             "--declared-hoard-delta" => &mut declared_hoard,
+            "--declared-fees-lamports" => &mut declared_fees,
+            "--declared-unwatched-lamports" => &mut declared_unwatched,
+            "--declared-unwatched-note" => &mut declared_unwatched_note,
             "--prior" => &mut prior,
             "--output" => &mut output,
             _ => {
@@ -1001,19 +1279,8 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
         &required(stage, "--stage")?,
         parse_delta(declared_collateral, "--declared-collateral-delta")?,
         parse_delta(declared_hoard, "--declared-hoard-delta")?,
-        ledger::LamportClaimV1::inapplicable(
-            "external census: the transactions between boundaries were not driven by this \
-             ledger, and it refuses to guess their fees",
-        ),
-        // Same reason, same boundary: an external census did not drive the
-        // transfers between its two observations, so it cannot say which
-        // compartments they crossed. `unchanged()` would be a CLAIM -- that
-        // not one atom changed class -- and this command has no standing to
-        // make it.
-        ledger::ClassClaimV1::inapplicable(
-            "external census: the transactions between boundaries were not driven by this \
-             ledger, and it refuses to guess which compartments they crossed",
-        ),
+        census_lamport_claim_v1(declared_fees, declared_unwatched, declared_unwatched_note)?,
+        census_class_claim_v1(declared_classes)?,
     )?;
     let observations = census.observations();
     std::fs::write(
@@ -1092,20 +1359,6 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
         required(value, label)?
             .parse::<T>()
             .map_err(|_| Error::new(format!("{label} must be a decimal number")))
-    }
-    fn hex32(value: Option<String>, label: &str) -> Result<[u8; 32]> {
-        let text = required(value, label)?;
-        let bytes = (0..64)
-            .step_by(2)
-            .map(|index| u8::from_str_radix(text.get(index..index + 2).unwrap_or("zz"), 16))
-            .collect::<core::result::Result<Vec<_>, _>>()
-            .map_err(|_| Error::new(format!("{label} must be 64 hex digits")))?;
-        if text.len() != 64 {
-            return Err(Error::new(format!("{label} must be 64 hex digits")));
-        }
-        let mut output = [0_u8; 32];
-        output.copy_from_slice(&bytes);
-        Ok(output)
     }
     let registry = parse_pubkey(registry, "--registry-program-id")?;
     // Meteora DBC's real mainnet addresses, as `twin.rs` and the relay dossier
@@ -1756,6 +2009,27 @@ fn absolute(value: Option<String>, label: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// One 64-hex-digit identity from the command line.
+///
+/// Was nested inside `run_graduation_market`; `devnet-general-market` needs
+/// the identical parse for the accelerator's semantic release id, and two
+/// spellings of "64 hex digits" is one more than the number of ways this can
+/// be got wrong.
+fn hex32(value: Option<String>, label: &str) -> Result<[u8; 32]> {
+    let text = required(value, label)?;
+    let bytes = (0..64)
+        .step_by(2)
+        .map(|index| u8::from_str_radix(text.get(index..index + 2).unwrap_or("zz"), 16))
+        .collect::<core::result::Result<Vec<_>, _>>()
+        .map_err(|_| Error::new(format!("{label} must be 64 hex digits")))?;
+    if text.len() != 64 {
+        return Err(Error::new(format!("{label} must be 64 hex digits")));
+    }
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(&bytes);
+    Ok(output)
+}
+
 fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
     plan::pubkey(&required(value, label)?)
 }
@@ -1871,7 +2145,9 @@ fn usage() {
          --rpc-url URL [{ack} GENESIS_HASH] --mint PUBKEY --payer PUBKEY --hoard PUBKEY \
          --aggregate PUBKEY --claim-unit-atoms U64 --stage NAME --output ABSOLUTE_JSON \
          [--token LABEL=PUBKEY]... [--position LABEL=PUBKEY]... [--watch LABEL=PUBKEY]... \
-         [--prior ABSOLUTE_JSON] [--declared-collateral-delta I128] [--declared-hoard-delta I128]\n\
+         [--prior ABSOLUTE_JSON] [--declared-collateral-delta I128] [--declared-hoard-delta I128] \
+         [--declared-class-delta LABEL=I128]... [--declared-fees-lamports U64] \
+         [--declared-unwatched-lamports U64 --declared-unwatched-note TEXT]\n\
          \nThe market producers authenticate the permanent devnet deployment and take one bounded, \
          read-only finalized snapshot before printing a MarketRunInput document for the \
          campaign's --market flag. Both Direct fee flags are required and have no default: \
@@ -1882,7 +2158,11 @@ fn usage() {
          ledger-census takes one \
          conservation-ledger census against a live cluster (reads only, enforced) and exits \
          nonzero on any violated law; --prior reloads a previous census so the delta laws \
-         evaluate across invocations.",
+         evaluate across invocations. L7 and L8 are inapplicable to a bare invocation, which \
+         is an external observer that did not drive the transfers between its two boundaries: \
+         a caller that DID drive them states them with --declared-fees-lamports and \
+         --declared-class-delta, and from the first declared class every unnamed one is a \
+         declaration of zero. Declared class labels are the census's own compartment names.",
         ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
         direct_market_usage = direct_market_usage_v1(),
     );
@@ -2352,5 +2632,163 @@ mod tests {
         .err()
         .expect("malformed fee must refuse before evidence or RPC");
         assert_eq!(refusal.0, "--direct-fee-basis-points must be a decimal u16");
+    }
+
+    // ---------- what `ledger-census` declares, and to whom ----------
+
+    /// One census of a market whose collateral sits in Custody compartments.
+    ///
+    /// Deliberately thin: no Hoard admitted, no aggregate, no positions, so
+    /// L2/L3/L4 record themselves inapplicable and the only law with anything
+    /// to say about a class is L8. `tracked_collateral` equals `mint_supply`
+    /// and both are the class table's own sum, so a movement BETWEEN classes
+    /// leaves L1 and L5 green — which is precisely the blindness L8 exists for.
+    fn census_observation_v1(
+        stage: &str,
+        class_atoms: BTreeMap<String, u64>,
+        classes: ledger::ClassClaimV1,
+    ) -> ledger::ObservationV1 {
+        let tracked: u64 = class_atoms.values().sum();
+        ledger::ObservationV1 {
+            stage: stage.to_owned(),
+            slot: 1,
+            declared_collateral_delta: 0,
+            declared_hoard_delta: 0,
+            lamports: ledger::LamportClaimV1::inapplicable("this census states no lamport claim"),
+            payer_lamports: 1_000_000,
+            mint_supply: tracked,
+            token_atoms: BTreeMap::new(),
+            class_atoms,
+            declared_class_deltas: classes,
+            tracked_collateral: tracked,
+            hoard_atoms: 0,
+            outcome_count: 0,
+            aggregate_supply: Vec::new(),
+            position_balances: BTreeMap::new(),
+            position_totals: Vec::new(),
+            accounts: BTreeMap::new(),
+            verdicts: Vec::new(),
+        }
+    }
+
+    /// A bare census stays INAPPLICABLE for L8; a declared one makes a real
+    /// claim; a label the census does not report refuses by name.
+    #[test]
+    fn declared_class_deltas_make_a_real_claim_and_an_unknown_label_refuses() {
+        let bare = census_class_claim_v1(BTreeMap::new()).expect("a census that declares nothing");
+        assert!(bare.deltas.is_empty());
+        assert!(
+            bare.inapplicable
+                .as_deref()
+                .is_some_and(|reason| reason.contains("--declared-class-delta")),
+            "{:?}",
+            bare.inapplicable
+        );
+
+        let declared = census_class_claim_v1(BTreeMap::from([
+            ("FeeVault".to_owned(), 250_i128),
+            ("unclassified".to_owned(), -250_i128),
+        ]))
+        .expect("the census's own compartment labels");
+        assert_eq!(declared.inapplicable, None);
+        assert_eq!(declared.deltas.get("FeeVault"), Some(&250));
+        assert_eq!(declared.deltas.get("unclassified"), Some(&-250));
+
+        // A near miss is the dangerous one: it would leave the compartment the
+        // caller MEANT declared at zero.
+        let refusal = census_class_claim_v1(BTreeMap::from([("feevault".to_owned(), 250_i128)]))
+            .err()
+            .expect("a class this census does not report must refuse");
+        assert!(refusal.0.contains("feevault"), "{}", refusal.0);
+        assert!(refusal.0.contains("FeeVault"), "{}", refusal.0);
+        assert!(refusal.0.contains("unclassified"), "{}", refusal.0);
+
+        assert_eq!(
+            labeled_class_delta_v1("HoardPrincipal=-7").expect("LABEL=I128"),
+            ("HoardPrincipal".to_owned(), -7)
+        );
+        assert!(labeled_class_delta_v1("HoardPrincipal").is_err());
+        assert!(labeled_class_delta_v1("HoardPrincipal=seven").is_err());
+    }
+
+    /// The lamport declarations reach L7 the same way, and neither half of the
+    /// unwatched pair can arrive without the fee that makes the law applicable.
+    #[test]
+    fn declared_lamports_make_a_real_claim_and_a_bare_unwatched_term_refuses() {
+        let bare = census_lamport_claim_v1(None, None, None).expect("a census that declares none");
+        assert!(
+            bare.inapplicable
+                .as_deref()
+                .is_some_and(|reason| reason.contains("--declared-fees-lamports")),
+            "{:?}",
+            bare.inapplicable
+        );
+
+        let declared = census_lamport_claim_v1(
+            Some("15000".to_owned()),
+            Some("2039280".to_owned()),
+            Some("the cycle's own address lookup table".to_owned()),
+        )
+        .expect("fees plus a described unwatched term");
+        assert_eq!(declared.inapplicable, None);
+        assert_eq!(declared.fees_lamports, 15_000);
+        assert_eq!(declared.unwatched_lamports, 2_039_280);
+        assert!(declared.unwatched_note.contains("lookup table"));
+
+        assert!(census_lamport_claim_v1(None, Some("1".to_owned()), None).is_err());
+        assert!(census_lamport_claim_v1(Some("1".to_owned()), None, Some("x".to_owned())).is_err());
+        assert!(census_lamport_claim_v1(Some("negative-one".to_owned()), None, None).is_err());
+    }
+
+    /// THE NEGATIVE CONTROL, through this command's own path.
+    ///
+    /// The journey proved L8 can fire. This proves the flag that feeds it can
+    /// REACH it from `ledger-census`, where the law was unconditionally
+    /// inapplicable until now: a caller declares the compartment it knows it
+    /// debited, 250 atoms arrive in a compartment it did not name — which the
+    /// claim states moved zero — and L8 goes red naming `FeeVault`. L1 and L5
+    /// stay green beside it, because the total never moved.
+    #[test]
+    fn a_class_declared_unchanged_that_moved_reds_l8_through_the_census_flags() {
+        let mut census = ledger::ConservationLedgerV1::new(
+            Pubkey::new_from_array([0xc1; 32]),
+            Pubkey::new_from_array([0xd1; 32]),
+        );
+        census.restore_observations(vec![census_observation_v1(
+            "before",
+            BTreeMap::from([
+                ("HoardPrincipal".to_owned(), 10_000),
+                ("FeeVault".to_owned(), 0),
+            ]),
+            ledger::ClassClaimV1::inapplicable("the first census has no predecessor"),
+        )]);
+        let declared =
+            census_class_claim_v1(BTreeMap::from([("HoardPrincipal".to_owned(), -250_i128)]))
+                .expect("--declared-class-delta HoardPrincipal=-250");
+        let verdicts = census.evaluate(&census_observation_v1(
+            "after",
+            BTreeMap::from([
+                ("HoardPrincipal".to_owned(), 9_750),
+                ("FeeVault".to_owned(), 250),
+            ]),
+            declared,
+        ));
+        let named = |law: &str| {
+            verdicts
+                .iter()
+                .find(|verdict| verdict.law == law)
+                .unwrap_or_else(|| panic!("{law} must be evaluated"))
+                .clone()
+        };
+        let l8 = named("L8");
+        assert_eq!(l8.status, "violated", "{}", l8.detail);
+        assert!(
+            l8.detail.contains("FeeVault moved +250 atoms"),
+            "{}",
+            l8.detail
+        );
+        assert!(!l8.detail.contains("HoardPrincipal moved"), "{}", l8.detail);
+        assert_eq!(named("L1").status, "holds");
+        assert_eq!(named("L5").status, "holds");
     }
 }

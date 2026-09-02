@@ -15,7 +15,7 @@ key bytes itself.
 | Direct session production | `...-direct-trade-produce-v1` (loopback) / `devnet-direct-trade-produce-v1` (sha-pinned inputs) |
 | Direct session execution | `...-direct-trade-v1 --session S --execute` — one invocation per durable mutation (replay-setup, token-setup, lookup-*, capability-seal, hot), pulsed until `direct-trade-finalized.json` exists |
 | wallet minting + funding | `tools/release/devnet-activity.sh` (the activity harness's keygen + exact-target envelope funding + signature markers; devnet only; NEVER the deployer as a participant) |
-| reconciliation | `dclutch-local-successor-bootstrap ledger-census` — read-only, evaluates the conservation-ledger laws, exits nonzero on any violation; `--prior` chains the delta laws across cycles |
+| reconciliation | `dclutch-local-successor-bootstrap ledger-census` — read-only, evaluates the conservation-ledger laws, exits nonzero on any violation; `--prior` chains the delta laws across cycles. A cycle that drove a fill passes `--declared-collateral-delta`, `--declared-hoard-delta` and one `--declared-class-delta LABEL=ATOMS` per compartment it can speak to, all computed from that session's own finalized evidence — without them L8 is inapplicable, because a census that did not drive the transfers has no standing to say which compartments they crossed |
 
 ## Files
 

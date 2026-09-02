@@ -148,6 +148,37 @@ impl ClassClaimV1 {
         }
     }
 
+    /// [`Self::moves`] over labels that came from outside this ledger — a
+    /// command line, a config, another process.
+    ///
+    /// A declaration is a claim about a class this census can OBSERVE, and a
+    /// label outside [`class_labels`] names nothing observable: it would sit in
+    /// the map as a row L8 compares against an absent census entry, so it would
+    /// hold at zero and fail at anything else, which is a law testing a typo
+    /// rather than a chain. A misspelled compartment would additionally leave
+    /// the compartment it MEANT claimed at zero, so a real movement there would
+    /// red L8 in a place the declarer never named. It refuses by name instead.
+    #[allow(dead_code)]
+    pub(crate) fn declaring(deltas: BTreeMap<String, i128>) -> Result<Self> {
+        let known = class_labels();
+        let unknown: Vec<&str> = deltas
+            .keys()
+            .map(String::as_str)
+            .filter(|label| !known.contains(label))
+            .collect();
+        if !unknown.is_empty() {
+            return Err(Error::new(format!(
+                "declared class delta names {} class(es) this census does not report ({}); it \
+                 reports exactly {}",
+                unknown.len(),
+                unknown.join(", "),
+                known.join(", ")
+            )));
+        }
+        Ok(Self::moves(deltas))
+    }
+
+
     /// A stage whose per-class movement this ledger does not account for, and
     /// why.
     pub(crate) fn inapplicable(reason: impl Into<String>) -> Self {
@@ -255,6 +286,23 @@ const COMPARTMENTS: [(CompartmentV1, &str); 9] = [
 /// It is a CLASS, not a bucket to hide in: L8 holds it to a declared delta like
 /// every other, so atoms moving into or out of it must still be stated.
 const UNCLASSIFIED: &str = "unclassified";
+
+/// Every class label a census can report: one per physical compartment, plus
+/// [`UNCLASSIFIED`].
+///
+/// This is the vocabulary a per-class declaration has to spell, and it is
+/// derived from [`COMPARTMENTS`] rather than written a second time, so a
+/// compartment renamed there is renamed here. [`ClassClaimV1::declaring`]
+/// checks declared labels against it; nothing else may respell them.
+#[allow(dead_code)]
+pub(crate) fn class_labels() -> Vec<&'static str> {
+    COMPARTMENTS
+        .iter()
+        .map(|(_, label)| *label)
+        .chain(std::iter::once(UNCLASSIFIED))
+        .collect()
+}
+
 
 /// The exact state of one account the ledger tracks.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -640,7 +688,11 @@ impl ConservationLedgerV1 {
         Ok(())
     }
 
-    fn evaluate(&self, now: &ObservationV1) -> Vec<VerdictV1> {
+    /// Every law over one census. Visible to the whole binary because the
+    /// `ledger-census` command is a second caller of these laws and has to be
+    /// able to prove one of them RED over a census it constructs, without a
+    /// cluster.
+    pub(crate) fn evaluate(&self, now: &ObservationV1) -> Vec<VerdictV1> {
         let mut verdicts = Vec::new();
 
         // L1 collateral closure.

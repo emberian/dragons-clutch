@@ -12605,10 +12605,29 @@ pub(crate) fn devnet_sponsored_market_input(
     spec: DevnetPythMarketSpecV1<'_>,
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<MarketRunInput> {
+    let mut input = devnet_sponsored_market_input_base(spec, direct.resolution_release)?;
+    attach_direct_market_capability_v1(&mut input, direct)?;
+    validate_market_input(&input)?;
+    Ok(input)
+}
+
+/// The devnet sponsored market's capability-free graph.
+///
+/// The same split `demo_market_input_base_shaped` makes for the lab, made for
+/// the flagship: everything a devnet sponsored market is, up to and including
+/// its Resolution manifest base, with no trade capability attached. Direct's
+/// caller above attaches Direct; a family-neutral caller attaches its own
+/// closure through the selection seam instead. Without this the only way to
+/// reach the devnet Pyth graph was through a Direct compiler, which is why
+/// the second family could be founded on a local validator and nowhere else.
+pub(crate) fn devnet_sponsored_market_input_base(
+    spec: DevnetPythMarketSpecV1<'_>,
+    resolution_release: [u8; 32],
+) -> Result<MarketRunInput> {
     let window_end = devnet_window_end_v1(&spec)?;
     let release = dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
         .map_err(|error| Error::new(format!("devnet sponsored Pyth release row: {error:?}")))?;
-    pyth_market_input(
+    pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: spec.founding_band.clone(),
             registry: spec.registry,
@@ -12631,7 +12650,7 @@ pub(crate) fn devnet_sponsored_market_input(
             initial_collateral_atoms: 1_000_000_000,
             local_participant_fixture_liquidity_atoms: 0,
         },
-        direct,
+        resolution_release,
     )
 }
 

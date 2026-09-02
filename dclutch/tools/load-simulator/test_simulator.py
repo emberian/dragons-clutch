@@ -35,7 +35,7 @@ FAKE_BOOT = r"""#!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 cmd="${1:-}"; shift || true
-outdir=""; session=""; output=""; prior=""; stage=""; tokens=""
+outdir=""; session=""; output=""; prior=""; stage=""; tokens=""; declared=""
 while [ "$#" -gt 0 ]; do case "$1" in
   --output-dir) outdir="$2"; shift 2 ;;
   --session) session="$2"; shift 2 ;;
@@ -43,6 +43,9 @@ while [ "$#" -gt 0 ]; do case "$1" in
   --prior) prior="$2"; shift 2 ;;
   --stage) stage="$2"; shift 2 ;;
   --token) tokens="$tokens $2"; shift 2 ;;
+  --declared-collateral-delta) declared="$declared collateral=$2"; shift 2 ;;
+  --declared-hoard-delta) declared="$declared hoard=$2"; shift 2 ;;
+  --declared-class-delta) declared="$declared class=$2"; shift 2 ;;
   *) shift ;;
 esac; done
 case "$cmd" in
@@ -67,13 +70,21 @@ MANIFEST
     fi
     threshold=$(cat "$here/steps-needed" 2>/dev/null || echo 3)
     if [ "$count" -ge "$threshold" ]; then
-      printf '{"schema":"dclutch-devnet-direct-trade-finalized-v1","market":"Mkt","signature":"sig-final-%s","mutations":[{"kind":"hot","signature":"sig-hot-%s"}]}\n' "$count" "$count" > "$sdir/direct-trade-completion.json"
+      # The real finalized evidence states the terms the fill settled on --
+      # the fill, the price, the scale and the per-side fee -- and the three
+      # collateral accounts it moved. The declarations the census receives are
+      # computed from exactly these, so the fake has to carry them.
+      printf '{"schema":"dclutch-devnet-direct-trade-finalized-v1","market":"Mkt","signature":"sig-final-%s","outcomeIndex":1,"fillAtoms":"1000000","executionPrice":"500000","priceScale":"1000000","feeBasisPointsPerSide":50,"sellerCollateralDestination":"SellerDirectTokenPda","buyerCollateralSource":"BuyerCollateralSource","feeTokenAccount":"VenueFeeTokenPda","mutations":[{"kind":"hot","signature":"sig-hot-%s"}]}\n' "$count" "$count" > "$sdir/direct-trade-completion.json"
     fi
     ;;
   ledger-census)
     # Every --token this census was given, one per line, newest run last.
     for entry in $tokens; do echo "$entry" >> "$here/census-tokens.log"; done
     echo "--- $stage" >> "$here/census-tokens.log"
+    # And every declaration, the same way: what a law was compared against is
+    # as much a fact about the run as the verdict.
+    for entry in $declared; do echo "$entry" >> "$here/census-declarations.log"; done
+    echo "--- $stage" >> "$here/census-declarations.log"
     if [ -f "$here/census-violation" ]; then
       echo "conservation law violated: hoard delta -3" >&2; exit 4
     fi
@@ -247,6 +258,146 @@ class DirectTokenCensusBindingTest(SimulatorHarness):
         self.assertEqual(sim.direct_token_bindings, {})
         sim.adopt_direct_token_bindings(self.root / "does-not-exist")
         self.assertEqual(sim.direct_token_bindings, {})
+
+
+class DirectFillDeclarationTest(SimulatorHarness):
+    """What a filling cycle DECLARES to the census.
+
+    `ledger-census` is an external observer: it did not drive the transactions
+    between its two boundaries, so it states L7 and L8 inapplicable and refuses
+    to guess. The simulator is not an external observer -- it runs the producer
+    and the session, and the fill's own finalized evidence states the terms it
+    settled on -- so it can state what it moved, and from 2026-09-02 it does.
+
+    The arithmetic is the settlement's own: an exact quote, a per-side fee
+    floored to atoms, `gross - fee` to the seller, `2 * fee` to the venue,
+    `gross + fee` off the buyer.
+    """
+
+    COMPLETION = {
+        "schema": "dclutch-devnet-direct-trade-finalized-v1",
+        "outcomeIndex": 1,
+        "fillAtoms": "1000000",
+        "executionPrice": "500000",
+        "priceScale": "1000000",
+        "feeBasisPointsPerSide": 50,
+        "sellerCollateralDestination": "SellerDirectTokenPda",
+        "buyerCollateralSource": "BuyerCollateralSource",
+        "feeTokenAccount": "VenueFeeTokenPda",
+        "mutations": [{"kind": "hot", "signature": "sig"}],
+    }
+    TRACKED = {
+        "direct_seller_token": "SellerDirectTokenPda",
+        "direct_venue_fee_token": "VenueFeeTokenPda",
+        "buyer_token": "BuyerCollateralSource",
+    }
+
+    def declarations(self) -> list:
+        log = self.root / "census-declarations.log"
+        return log.read_text().splitlines() if log.is_file() else []
+
+    def test_the_three_declarations_come_out_of_the_settlement_arithmetic(self) -> None:
+        declared = simulator.direct_fill_declarations_v1(self.COMPLETION, self.TRACKED)
+        self.assertEqual(declared["terms"]["gross_atoms"], 500_000)
+        self.assertEqual(declared["terms"]["fee_atoms_per_side"], 2_500)
+        self.assertEqual(declared["accounts"], {
+            "direct_seller_token": 497_500,
+            "direct_venue_fee_token": 5_000,
+            "buyer_token": -502_500,
+        })
+        # A fill moves collateral only between accounts the census names, and
+        # never touches the Hoard, so both totals are ZERO -- and zero here is
+        # the strong claim, derived from three nonzero numbers that had to
+        # cancel, not a constant this module chose.
+        self.assertEqual(declared["collateral_delta"], 0)
+        self.assertEqual(declared["hoard_delta"], 0)
+        self.assertEqual(declared["class_deltas"], {
+            simulator.DIRECT_FILL_CLASS_V1: 0,
+            simulator.HOARD_CLASS_V1: 0,
+        })
+
+    def test_a_fill_on_other_terms_declares_other_numbers(self) -> None:
+        """The control for `derived, not typed`: move the price, and every
+        number in the declaration moves with it."""
+        halved = dict(self.COMPLETION, executionPrice="250000")
+        declared = simulator.direct_fill_declarations_v1(halved, self.TRACKED)
+        self.assertEqual(declared["terms"]["gross_atoms"], 250_000)
+        self.assertEqual(declared["terms"]["fee_atoms_per_side"], 1_250)
+        self.assertEqual(declared["accounts"]["direct_seller_token"], 248_750)
+        self.assertEqual(declared["accounts"]["buyer_token"], -251_250)
+
+    def test_an_account_the_census_does_not_name_is_reported_not_folded_in(self) -> None:
+        """L5 measures the set the census NAMES, so the declaration does too.
+
+        A buyer whose collateral source is unbound makes the tracked set GROW
+        by the atoms that left it, and saying zero there would red L5 against
+        a claim that was never true."""
+        declared = simulator.direct_fill_declarations_v1(self.COMPLETION, {
+            "direct_seller_token": "SellerDirectTokenPda",
+            "direct_venue_fee_token": "VenueFeeTokenPda",
+        })
+        self.assertEqual(declared["collateral_delta"], 502_500)
+        self.assertEqual(declared["class_deltas"][simulator.DIRECT_FILL_CLASS_V1], 502_500)
+        self.assertEqual(
+            declared["accounts_the_census_does_not_name"], ["BuyerCollateralSource"]
+        )
+
+    def test_a_cycle_that_drove_nothing_declares_nothing(self) -> None:
+        """Silence is the honest output for a cycle with no fill: it has no
+        standing to say which compartments were crossed, so L8 stays
+        inapplicable rather than collecting a green it did not earn."""
+        sim = simulator.Simulator(self.config(), execute=False, sustain=False, cycles=1)
+        self.assertIsNone(sim.fill_declarations(None))
+        self.assertIsNone(sim.fill_declarations({"preflight": True}))
+
+    def test_evidence_the_route_could_not_have_produced_refuses(self) -> None:
+        for broken, why in (
+            ({"fillAtoms": "0"}, "a fill of nothing"),
+            ({"priceScale": "0"}, "a scale of zero"),
+            ({"fillAtoms": "3", "executionPrice": "333333"}, "a non-integral quote"),
+            ({"feeBasisPointsPerSide": None}, "no fee policy"),
+            ({"sellerCollateralDestination": ""}, "no seller destination"),
+        ):
+            with self.assertRaises(simulator.Refusal, msg=why):
+                simulator.direct_fill_declarations_v1(
+                    dict(self.COMPLETION, **broken), self.TRACKED
+                )
+
+    def test_a_filling_cycle_states_all_three_declarations_to_the_census(self) -> None:
+        """END TO END: the flags reach the census's command line, and the
+        journal records what was claimed beside the verdict it earned."""
+        (self.root / "steps-needed").write_text("1")
+        body = self.config()
+        body["census"]["tokens"] = {"buyer_token": "BuyerCollateralSource"}
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = self.declarations()
+        self.assertIn("collateral=0", rows)
+        self.assertIn("hoard=0", rows)
+        self.assertIn(f"class={simulator.DIRECT_FILL_CLASS_V1}=0", rows)
+        self.assertIn(f"class={simulator.HOARD_CLASS_V1}=0", rows)
+
+        journal = json.loads(
+            (self.work / "journal" / "cycle-000001" / "cycle.json").read_text()
+        )
+        self.assertEqual(journal["declarations"]["terms"]["gross_atoms"], 500_000)
+        self.assertEqual(journal["declarations"]["terms"]["fee_atoms_per_side"], 2_500)
+        self.assertEqual(journal["declarations"]["accounts"]["direct_seller_token"], 497_500)
+        self.assertEqual(
+            journal["reconciliation"]["declared"], journal["declarations"]
+        )
+
+    def test_a_census_only_cycle_declares_nothing_on_the_command_line(self) -> None:
+        """The other half of the same law: no fill, no claim, no flags."""
+        body = self.config()
+        body["trade"] = {"mode": "none"}
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [row for row in self.declarations() if not row.startswith("--- ")], []
+        )
 
 
 class SimulatorLoopTest(SimulatorHarness):

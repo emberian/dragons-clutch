@@ -661,9 +661,9 @@ impl RecordPublicationV1 {
 }
 
 #[derive(Clone, Copy)]
-struct ReleaseFacts {
-    release: ArtifactReleaseV1,
-    id: ArtifactReleaseIdV1,
+pub(crate) struct ReleaseFacts {
+    pub(crate) release: ArtifactReleaseV1,
+    pub(crate) id: ArtifactReleaseIdV1,
 }
 
 fn checked_set_role<'a>(
@@ -1559,7 +1559,7 @@ fn pin(
 /// `Upgrade` must publish releases that say so, and the slot pin (not the
 /// revocation) is what keeps them sound. A revoked loader still mints
 /// `Immutable` with no authority, byte-for-byte as before.
-fn release_facts(
+pub(crate) fn release_facts(
     program: Pubkey,
     semantic_release: [u8; 32],
     elf_sha256: [u8; 32],
@@ -1887,6 +1887,42 @@ fn load_elf(label: &str, path: &Path, expected: &str) -> Result<Vec<u8>> {
 
 fn programdata(program: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+/// Mint one chain-derived `DeploymentObservationV1` beside `release_facts`.
+///
+/// It lives here, next to the release minter, because the two are one
+/// argument: a release is a claim about a deployment and an observation is
+/// what the claim is checked against, and `ArtifactReleaseV1::authenticate_deployment`
+/// is only as sound as their sharing a single spelling of the same eleven
+/// facts.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn deployment_observation_v1(
+    program: Pubkey,
+    program_owner: Pubkey,
+    program_executable: bool,
+    programdata_key: Pubkey,
+    programdata_owner: Pubkey,
+    programdata_executable: bool,
+    programdata_link: [u8; 32],
+    deployment_slot: u64,
+    elf_digest: [u8; 32],
+    upgrade_authority: Option<[u8; 32]>,
+) -> Result<dclutch_registry_contract::DeploymentObservationV1> {
+    dclutch_registry_contract::DeploymentObservationV1::new(
+        program.to_bytes(),
+        program_owner.to_bytes(),
+        program_executable,
+        programdata_key.to_bytes(),
+        programdata_owner.to_bytes(),
+        programdata_executable,
+        programdata_link,
+        bpf_loader_upgradeable::ID.to_bytes(),
+        deployment_slot,
+        elf_digest,
+        upgrade_authority,
+    )
+    .map_err(debug_error("deployment observation"))
 }
 
 fn program_identity(program: Pubkey) -> Result<ProgramIdentityV1> {

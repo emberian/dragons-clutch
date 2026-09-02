@@ -26,7 +26,6 @@ use crate::{Error, Result};
 
 /// One record the Registry must finalize for a selected General release,
 /// owned so a driver can stage it beside the market's other publications.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GeneralSelectedRecordV1 {
     /// Operator-facing name of the record's role.
     pub(crate) label: &'static str,
@@ -39,7 +38,6 @@ pub(crate) struct GeneralSelectedRecordV1 {
 
 /// One compiled General closure in the byte shape the neutral seam and the
 /// record publisher consume.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GeneralSelectedClosureBytesV1 {
     /// Exact eight-entry `CapabilityProgramSetV2` bytes: the seven settlement
     /// actions and the activation coordinate that lets the Market create the
@@ -63,7 +61,6 @@ pub(crate) struct GeneralSelectedClosureBytesV1 {
 /// Everything is derived by the family's own release compiler (which runs
 /// `authenticate_general_release_v3` before returning) and re-shaped here
 /// without restatement.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn general_selected_closure_v1(
     input: GeneralSelectedReleaseInputV1,
 ) -> Result<GeneralSelectedClosureBytesV1> {
@@ -130,29 +127,14 @@ pub(crate) fn demo_general_market_input(
     let mut input =
         crate::market::demo_market_input_base_shaped(registry, resolution_release, shape)?;
 
-    let capacity_profile: [u8; 32] = Sha256::digest(crate::runtime::decode_hex(
-        &input.source_capacity_profile_hex,
-    )?)
-    .into();
-    let claim_basis = crate::market::semantic_basis_identity_v3(&crate::runtime::decode_hex(
-        &input.linked_basis_hex,
-    )?)?;
-    let outcome_count = input
-        .cuts
-        .len()
-        .checked_add(2)
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| Error::new("General market outcome width overflow"))?;
-    let price_scale = 10_u64
-        .checked_pow(u32::from(input.collateral_display_decimals))
-        .ok_or_else(|| Error::new("Market collateral decimals overflow General price scale"))?;
-    // The generic founding commits the Open Market at generation + 1, and the
-    // config binds the Market it is selected by, so the selection names the
-    // Open Market's generation, not the Found37 staging generation.
-    let generation = input
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| Error::new("General market generation overflow"))?;
+    let derived = general_market_derivation_v1(&input)?;
+    let GeneralMarketDerivationV1 {
+        capacity_profile,
+        claim_basis,
+        outcome_count,
+        price_scale,
+        generation,
+    } = derived;
     let lab = |label: &str| -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"dclutch:lab:general-selection:v1");
@@ -217,8 +199,54 @@ pub(crate) fn demo_general_market_input(
     Ok(input)
 }
 
+/// The facts a General closure derives from the market graph it will bind.
+///
+/// One author, shared by the lab compiler above and the devnet compiler in
+/// `general_devnet_market`, because the two are the same derivation over the
+/// same document: a second copy would be a second opinion about what "this
+/// market's capacity profile" is, and the manifest entry it determines is the
+/// Market PDA's own seed. Nothing here is a free parameter — every field is
+/// read out of the already-compiled market body.
+pub(crate) struct GeneralMarketDerivationV1 {
+    pub(crate) capacity_profile: [u8; 32],
+    pub(crate) claim_basis: [u8; 32],
+    pub(crate) outcome_count: u32,
+    pub(crate) price_scale: u64,
+    pub(crate) generation: u64,
+}
+
+pub(crate) fn general_market_derivation_v1(
+    input: &crate::model::MarketRunInput,
+) -> Result<GeneralMarketDerivationV1> {
+    Ok(GeneralMarketDerivationV1 {
+        capacity_profile: Sha256::digest(crate::runtime::decode_hex(
+            &input.source_capacity_profile_hex,
+        )?)
+        .into(),
+        claim_basis: crate::market::semantic_basis_identity_v3(&crate::runtime::decode_hex(
+            &input.linked_basis_hex,
+        )?)?,
+        outcome_count: input
+            .cuts
+            .len()
+            .checked_add(2)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| Error::new("General market outcome width overflow"))?,
+        price_scale: 10_u64
+            .checked_pow(u32::from(input.collateral_display_decimals))
+            .ok_or_else(|| Error::new("Market collateral decimals overflow General price scale"))?,
+        // The generic founding commits the Open Market at generation + 1, and
+        // the config binds the Market it is selected by, so the selection names
+        // the Open Market's generation, not the Found37 staging generation.
+        generation: input
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::new("General market generation overflow"))?,
+    })
+}
+
 /// The complete capability-root width the closure's own descriptor names.
-fn general_root_bytes_v1(closure: &GeneralSelectedClosureBytesV1) -> Result<usize> {
+pub(crate) fn general_root_bytes_v1(closure: &GeneralSelectedClosureBytesV1) -> Result<usize> {
     let descriptor = dclutch_capability_program_contract::v4::CapabilityProgramV4::decode(
         &closure.selected_descriptor,
     )
@@ -234,7 +262,7 @@ fn general_root_bytes_v1(closure: &GeneralSelectedClosureBytesV1) -> Result<usiz
 /// Serialize one General closure into the family-neutral payload the driver
 /// consumes — the single author for the label scheme and byte fields, shared
 /// by the compiler and its tests.
-fn general_selected_payload_v1(
+pub(crate) fn general_selected_payload_v1(
     closure: &GeneralSelectedClosureBytesV1,
     activation_deadline_slot: u64,
     root_rent_minimum_lamports: u64,

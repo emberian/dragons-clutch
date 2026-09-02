@@ -219,7 +219,7 @@ where
     Ok(parsed)
 }
 
-fn read_exact_json_v1<T>(path: &Path, label: &str) -> Result<T>
+pub(crate) fn read_exact_json_v1<T>(path: &Path, label: &str) -> Result<T>
 where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
@@ -706,6 +706,50 @@ impl DirectDevnetPolicyObservationV1 {
     }
 }
 
+/// The one author for "this URL is the acknowledged devnet and nothing else".
+///
+/// Two callers now: Direct's production planner and the family-neutral devnet
+/// observation below. A second spelling of this refusal would be a second
+/// place for loopback to become admissible by accident.
+fn require_acknowledged_devnet_origin_v1(
+    rpc_url: &str,
+    devnet_acknowledgment: Option<&str>,
+) -> Result<ClusterOriginV1> {
+    let origin = ClusterOriginV1::parse(rpc_url, devnet_acknowledgment)?;
+    if !matches!(origin, ClusterOriginV1::AcknowledgedDevnet { .. }) {
+        return Err(Error::new(
+            "the production Direct planner is devnet-only and refuses loopback; use the lab fixture compiler for a local validator",
+        ));
+    }
+    Ok(origin)
+}
+
+/// Read-only DEVNET observation for ANY capability compiler: the authenticated
+/// devnet plan, one open read-only connection, and one finalized policy
+/// snapshot.
+///
+/// The exact counterpart of [`observe_local_market_policy_v1`], and the reason
+/// it exists is the same: a family compiler that opened its own connection
+/// would authenticate its own genesis hash, pick its own slot floor, and
+/// quote Rent from its own snapshot — three chances to disagree with the
+/// market graph it is compiling a capability for. The connection is handed
+/// back still open so a family that must observe something FURTHER (General
+/// observes its accelerator) does it against the same finalized origin rather
+/// than a second one.
+pub(crate) fn observe_devnet_market_policy_v1(
+    plan_path: &Path,
+    rpc_url: &str,
+    devnet_acknowledgment: Option<&str>,
+    registry: Pubkey,
+) -> Result<(SuccessorPlan, Rpc, DirectDevnetPolicyObservationV1)> {
+    let origin = require_acknowledged_devnet_origin_v1(rpc_url, devnet_acknowledgment)?;
+    let plan = read_exact_json_v1::<SuccessorPlan>(plan_path, "successor plan")?;
+    authenticate_devnet_plan_v1(&plan, registry, &ProductionDirectPlanEvidenceV1)?;
+    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let observation = observe_devnet_policy_v1(&mut rpc, &plan)?;
+    Ok((plan, rpc, observation))
+}
+
 /// Read-only loopback observation for ANY capability compiler: the
 /// authenticated local plan plus one finalized policy snapshot. Direct's
 /// `load_local` and every family-neutral market compiler share this single
@@ -886,12 +930,7 @@ impl DirectMarketCompilerOwnedV1 {
         R: DirectFinalizedSnapshotV1,
         C: FnOnce(&ClusterOriginV1) -> Result<R>,
     {
-        let origin = ClusterOriginV1::parse(rpc_url, devnet_acknowledgment)?;
-        if !matches!(origin, ClusterOriginV1::AcknowledgedDevnet { .. }) {
-            return Err(Error::new(
-                "the production Direct planner is devnet-only and refuses loopback; use the lab fixture compiler for a local validator",
-            ));
-        }
+        let origin = require_acknowledged_devnet_origin_v1(rpc_url, devnet_acknowledgment)?;
         let plan = read_exact_json_v1::<SuccessorPlan>(plan_path, "successor plan")?;
         authenticate_devnet_plan_v1(&plan, registry, evidence_authenticator)?;
         let fee = DirectFeeSelectionV1::explicit(fee_basis_points, fee_recipient)?;

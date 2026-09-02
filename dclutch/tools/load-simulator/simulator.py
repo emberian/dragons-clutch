@@ -15,7 +15,11 @@ existing accepted driver that owns its own signed journal:
                         signature markers; never the deployer as participant)
   * reconciliation   -> dclutch-local-successor-bootstrap ledger-census
                         (read-only, exits nonzero on any violated conservation
-                        law; --prior chains delta laws across cycles)
+                        law; --prior chains delta laws across cycles).  A cycle
+                        that drove a fill also DECLARES what it moved -- the
+                        collateral, the Hoard and the per-compartment split --
+                        computed from that session's own finalized evidence, so
+                        L2, L5 and L8 judge a claim instead of sitting out.
 
 The simulator adds: the sustain loop, cadence with jitter, backpressure
 backoff, the per-cycle write-ahead journal (resume-never-resend), the halt
@@ -45,6 +49,105 @@ import simcore  # noqa: E402
 DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 SCHEMA_CONFIG = "dclutch-load-simulator-config-v1"
 CHILD_TIMEOUT_SECONDS = 600
+
+# The two class labels `ledger-census` reports that a Direct fill has anything
+# to say about.  Spelled here because the declaration crosses a process
+# boundary as text -- and safe to spell because the census REFUSES a label it
+# does not report, by name, so a rename on its side stops this run loudly
+# instead of quietly declaring zero about a class that no longer exists.
+#
+# A fill's three collateral accounts are the buyer's own token account and the
+# two Direct token PDAs the Trading program derives.  None is a Custody vault,
+# so the census classifies all three `unclassified`; the Hoard is not a party
+# to the Direct path at all, which is why its zero is stated rather than left
+# absent.
+DIRECT_FILL_CLASS_V1 = "unclassified"
+HOARD_CLASS_V1 = "HoardPrincipal"
+DIRECT_FEE_DENOMINATOR_V1 = 10_000
+
+
+def direct_fill_declarations_v1(completion: dict, tracked: dict) -> dict:
+    """The three conservation declarations one Direct fill owes the census.
+
+    Every term is read off the session's OWN finalized evidence -- the document
+    the driver signs after the Hot transaction lands, which states the fill, the
+    execution price, the price scale and the per-side fee basis points -- and
+    then run through the settlement's own arithmetic: an exact quote, a floored
+    fee charged to each side, `gross - fee` to the seller's Direct token PDA,
+    `2 * fee` to the venue's, `gross + fee` off the buyer's collateral source.
+    Nothing here is a number typed by this module, so a fill on other terms
+    declares other numbers.
+
+    `tracked` is the label -> address map the census will receive as `--token`.
+    The collateral declaration is the sum over the fill's accounts THIS CENSUS
+    NAMES, because that is the set L5 measures; an account the census does not
+    name is reported rather than silently folded in.
+    """
+    def whole(field: str) -> int:
+        value = completion.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise Refusal(f"Direct finalized evidence has no whole {field}")
+        try:
+            return int(value)
+        except ValueError as error:
+            raise Refusal(f"Direct finalized evidence {field} is not a whole number") from error
+
+    def address(field: str) -> str:
+        value = completion.get(field)
+        if not isinstance(value, str) or not value:
+            raise Refusal(f"Direct finalized evidence has no {field}")
+        return value
+
+    fill = whole("fillAtoms")
+    price = whole("executionPrice")
+    scale = whole("priceScale")
+    basis_points = whole("feeBasisPointsPerSide")
+    if fill <= 0 or price < 0 or scale <= 0 or basis_points < 0:
+        raise Refusal("Direct finalized evidence states a fill no settlement could have made")
+    product = fill * price
+    if product % scale:
+        # The route refuses a non-integral quote, so evidence carrying one is
+        # evidence of something other than the fill it claims to describe.
+        raise Refusal("Direct finalized evidence states a non-integral quote")
+    gross = product // scale
+    fee = gross * basis_points // DIRECT_FEE_DENOMINATOR_V1
+
+    moved: dict[str, int] = {}
+    for field, delta in (
+        ("sellerCollateralDestination", gross - fee),
+        ("feeTokenAccount", 2 * fee),
+        ("buyerCollateralSource", -(gross + fee)),
+    ):
+        moved[address(field)] = moved.get(address(field), 0) + delta
+
+    by_address = {str(value): label for label, value in tracked.items()}
+    counted = {
+        by_address[account]: delta for account, delta in moved.items() if account in by_address
+    }
+    unnamed = sorted(account for account in moved if account not in by_address)
+    collateral_delta = sum(counted.values())
+    return {
+        "collateral_delta": collateral_delta,
+        "hoard_delta": 0,
+        # Every class the census reports and this map does not name is a
+        # declaration of ZERO, which is the strong statement. The two named
+        # here are the only ones a Direct fill can speak to.
+        "class_deltas": {
+            DIRECT_FILL_CLASS_V1: collateral_delta,
+            HOARD_CLASS_V1: 0,
+        },
+        "terms": {
+            "outcome_index": whole("outcomeIndex"),
+            "fill_atoms": fill,
+            "execution_price": price,
+            "price_scale": scale,
+            "fee_basis_points_per_side": basis_points,
+            "gross_atoms": gross,
+            "fee_atoms_per_side": fee,
+        },
+        "accounts": counted,
+        "accounts_the_census_does_not_name": unnamed,
+    }
 
 
 class Refusal(RuntimeError):
@@ -451,7 +554,30 @@ class Simulator:
 
     # ---------- reconciliation ----------
 
-    def run_census(self, cycle: int) -> dict:
+    def census_tokens(self) -> dict:
+        """label -> address, exactly the set the census receives as `--token`.
+
+        The configured token accounts, plus the two a fill created. A configured
+        label wins: an operator who names an address explicitly is not
+        overridden by a manifest.
+        """
+        tokens = dict(self.direct_token_bindings)
+        tokens.update((self.config.get("census") or {}).get("tokens", {}))
+        return tokens
+
+    def fill_declarations(self, completion: Optional[dict]) -> Optional[dict]:
+        """What this cycle declares to the census, if it drove a fill.
+
+        `None` for a cycle that drove nothing -- census-only, or a preflight
+        that signed nothing. Such a cycle has no standing to state which
+        compartments were crossed between the two boundaries, so it states
+        nothing and L8 stays inapplicable rather than green.
+        """
+        if not completion or completion.get("preflight"):
+            return None
+        return direct_fill_declarations_v1(completion, self.census_tokens())
+
+    def run_census(self, cycle: int, declared: Optional[dict] = None) -> dict:
         census_cfg = self.config.get("census")
         if not census_cfg:
             return {"ok": True, "skipped": "no census configured", "checked_at": simcore.utc_now_iso()}
@@ -470,12 +596,17 @@ class Simulator:
             "--stage", f"load-sim-cycle-{cycle:06d}",
             "--output", str(out),
         ]
-        # The configured token accounts, plus the two a fill created. A
-        # configured label wins: an operator who names an address explicitly is
-        # not overridden by a manifest.
-        tokens = dict(self.direct_token_bindings)
-        tokens.update(census_cfg.get("tokens", {}))
-        for label, pubkey in tokens.items():
+        # A cycle that drove a fill says what it moved: the collateral and the
+        # Hoard for L2 and L5, and the per-compartment split for L8, which is
+        # inapplicable to every invocation that declares nothing.
+        if declared is not None:
+            argv += [
+                "--declared-collateral-delta", str(declared["collateral_delta"]),
+                "--declared-hoard-delta", str(declared["hoard_delta"]),
+            ]
+            for label, atoms in sorted(declared["class_deltas"].items()):
+                argv += ["--declared-class-delta", f"{label}={atoms}"]
+        for label, pubkey in self.census_tokens().items():
             argv += ["--token", f"{label}={pubkey}"]
         for label, pubkey in census_cfg.get("positions", {}).items():
             argv += ["--position", f"{label}={pubkey}"]
@@ -523,7 +654,15 @@ class Simulator:
         # newest file stays the whole series a reader needs while the
         # directory stops growing as the sum of its own history.
         self.retention_report = self.retention.apply(out.parent)
-        return {"ok": True, "checked_at": simcore.utc_now_iso(), "output": str(out)}
+        verdict = {"ok": True, "checked_at": simcore.utc_now_iso(), "output": str(out)}
+        if declared is not None:
+            # The declarations, in the evidence, beside the verdict they were
+            # judged against. A law is only as good as the claim it compared
+            # the chain to, and a reader who cannot see the claim cannot check
+            # the law -- so what was declared is recorded whether or not the
+            # census liked it.
+            verdict["declared"] = declared
+        return verdict
 
     # ---------- wallets for status ----------
 
@@ -693,6 +832,7 @@ class Simulator:
             try:
                 journal.record(simcore.PHASE_EXECUTING, plan)
                 sigs = []
+                declared = None
                 if self.census_only:
                     # No trade is attempted, so none is reported. The cycle is
                     # still a real cycle: it reads the market off the cluster
@@ -701,6 +841,7 @@ class Simulator:
                 else:
                     out = self.produce_session(cycle)
                     completion = self.pulse_session(cycle, out)
+                    declared = self.fill_declarations(completion)
                     for mutation in completion.get("mutations", []) or []:
                         sig = mutation.get("signature")
                         if sig:
@@ -710,12 +851,13 @@ class Simulator:
                     if self.execute and not completion.get("preflight"):
                         self.trades_landed += 1
                     self.signatures.extend(s for s in sigs if s not in self.signatures)
-                recon = self.run_census(cycle)
+                recon = self.run_census(cycle, declared)
                 journal.record(
                     simcore.PHASE_FINALIZED, plan,
                     signatures=sigs,
                     trades_landed_total=self.trades_landed,
                     reconciliation=recon,
+                    declarations=declared,
                 )
                 cycles_run = cycle
                 self.write_status(cycles_run, recon, stopping=self.stop.requested)
