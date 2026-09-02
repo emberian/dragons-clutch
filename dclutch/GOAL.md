@@ -3186,3 +3186,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   provider route stops asking for records nobody can make); `8fc0f73b`/`72c488f7` (WEB: the cut goes pending before cohort-12
   closes; three test files had never been running).
 - Cuts: `edaf8e7b8`, `ccff22cd3`, `632d972f8`, `e22b153a0`, `9aefc4c78`.
+
+### Lane map delta — 2026-09-03 00:45
+- DEALER reported (`90a8563f`, `271ce0ed`, `ada7aa54`): Registry `Finalize` for an ArtifactRelease observes the Program and
+  ProgramData it names before the cursor closes (three named refusals 0x1013–0x1015; Lean `ReleaseObservation` with four
+  theorems and a twelve-case corpus decided before Rust ran it); the operator's publication step derives the observation so
+  every publisher supplies it; `CompleteElf` → `SlotPinnedRelease` at all three hot call sites:
+  `authenticate_strategy_from_sealed_boxed_v3` 419,775 → **48,792 CU**; **the honest equity Add EXECUTES and COMMITS at
+  1,158,123 CU, 241,577 spare**, post-state assertions holding; Trading's frames byte-identical across 887 rows. Owed: the
+  `DeploymentSlotMismatch` discriminant (blocked on Structured's uncommitted 0x401F/0x4020); a newly reachable stage — a
+  second LP Open after the Add refuses at OP_IDENTITY_EQ a=18 b=5 (`accepted.rs:8655`) → next.

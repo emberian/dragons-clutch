@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "271ce0edb87255b1d13de016bdc4e7e53e48bf01",
+  "commit": "5ace0cc8f6fc9d9b066a32558a3f4e36d42e667d",
   "link_count": 12,
   "links": [
     {
@@ -4932,7 +4932,7 @@
       "package": "dclutch-rent-sbf"
     },
     {
-      "frame_count": 170,
+      "frame_count": 172,
       "functions": [
         {
           "frames_bytes": [
@@ -5796,6 +5796,12 @@
         },
         {
           "frames_bytes": [
+            640
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v327boxed_capability_program_v417h<hash>E"
+        },
+        {
+          "frames_bytes": [
             192
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v329authenticate_provider_program17h<hash>E"
@@ -5814,7 +5820,7 @@
         },
         {
           "frames_bytes": [
-            2176
+            2112
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v334authenticate_activation_and_caller17h<hash>E"
         },
@@ -5823,6 +5829,12 @@
             1600
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v338authenticate_market_and_infrastructure17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v339authenticate_trading_capability_records17h<hash>E"
         },
         {
           "frames_bytes": [
