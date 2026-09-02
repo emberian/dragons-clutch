@@ -13,9 +13,14 @@ release activation, founding, and activity.
 
 ## Permanent set
 
-The operational identity owner is
-`PERMANENT_DEVNET_UPGRADE_TARGETS_V1` in `successor/src/upgrade.rs`. This tool
-independently refuses any planning input that does not match it exactly:
+This tool carries its OWN copy of the cohort-7/8 set and independently refuses
+any planning input that does not match it exactly. Note as of 2026-09-02: the
+successor's `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` is RETIRED (decision 0012's
+amendment) — its target set is now authenticated from the deployment-set journal
+that names it, because a fixed table made every full-redeploy cohort unsealable.
+This tool has not followed, and its table below is therefore a statement about
+one historical substrate that is now closed on chain, not about what the
+successor will admit:
 
 | order | role | disposition | Program | ProgramData |
 |---:|---|---|---|---|

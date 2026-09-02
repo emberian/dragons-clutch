@@ -1,5 +1,6 @@
 {
   "bound_bytes": 4096,
+  "commit": "11932b7424090ad16f2c34c8aa5544508399bfcc",
   "link_count": 12,
   "links": [
     {
@@ -310,12 +311,6 @@
             128
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v323authenticate_privileges17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            768
-          ],
-          "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v328authenticate_parent_releases17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -709,7 +704,7 @@
         },
         {
           "frames_bytes": [
-            2176
+            2112
           ],
           "symbol": "_ZN18dclutch_claims_sbf20rational_terminal_v328execute_rational_terminal_v317h<hash>E"
         },
@@ -937,7 +932,7 @@
         },
         {
           "frames_bytes": [
-            2496
+            2432
           ],
           "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v37execute17h<hash>E"
         },
@@ -1297,7 +1292,7 @@
         },
         {
           "frames_bytes": [
-            3072
+            3200
           ],
           "symbol": "_ZN18dclutch_claims_sbf26rational_representation_v216execute_prepared17h<hash>E"
         },
@@ -1321,13 +1316,13 @@
         },
         {
           "frames_bytes": [
-            2624
+            3456
           ],
           "symbol": "_ZN18dclutch_claims_sbf26rational_representation_v219prepare_and_execute17h<hash>E"
         },
         {
           "frames_bytes": [
-            896
+            1024
           ],
           "symbol": "_ZN18dclutch_claims_sbf26rational_representation_v219token_effect_digest17h<hash>E"
         },
@@ -1345,7 +1340,7 @@
         },
         {
           "frames_bytes": [
-            3264
+            2880
           ],
           "symbol": "_ZN18dclutch_claims_sbf26rational_representation_v221execute_token_effects17h<hash>E"
         },
@@ -1369,7 +1364,7 @@
         },
         {
           "frames_bytes": [
-            1536
+            1216
           ],
           "symbol": "_ZN18dclutch_claims_sbf26rational_representation_v223post_token_observations17h<hash>E"
         },
@@ -1381,7 +1376,7 @@
         },
         {
           "frames_bytes": [
-            896
+            960
           ],
           "symbol": "_ZN18dclutch_claims_sbf26rational_representation_v225expected_post_mint_supply17h<hash>E"
         },
@@ -1545,6 +1540,7 @@
         },
         {
           "frames_bytes": [
+            128,
             128,
             64,
             64
@@ -4080,16 +4076,15 @@
         },
         {
           "frames_bytes": [
-            1152
+            960
           ],
           "symbol": "_ZN30dclutch_dealer_accelerator_sbf19process_instruction17h<hash>E"
         },
         {
           "frames_bytes": [
-            0,
-            0
+            384
           ],
-          "symbol": "_ZN30dclutch_dealer_accelerator_sbf20accepted_or_named_v417h<hash>E"
+          "symbol": "_ZN30dclutch_dealer_accelerator_sbf27evaluate_selected_family_v417h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4102,6 +4097,12 @@
             0
           ],
           "symbol": "_ZN63_$LT$u8$u20$as$u20$alloc..vec..spec_from_elem..SpecFromElem$GT$9from_elem17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN91_$LT$core..slice..iter..Iter$LT$T$GT$$u20$as$u20$core..iter..traits..iterator..Iterator$GT$4fold17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4185,7 +4186,7 @@
       "package": "dclutch-direct-aot-sbf"
     },
     {
-      "frame_count": 24,
+      "frame_count": 27,
       "functions": [
         {
           "frames_bytes": [
@@ -4255,6 +4256,12 @@
         },
         {
           "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN31dclutch_general_accelerator_sbf20admit_output_page_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
             768
           ],
           "symbol": "_ZN31dclutch_general_accelerator_sbf20evaluate_close_batch17h<hash>E"
@@ -4276,6 +4283,12 @@
             768
           ],
           "symbol": "_ZN31dclutch_general_accelerator_sbf22evaluate_release_order17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            640
+          ],
+          "symbol": "_ZN31dclutch_general_accelerator_sbf24assemble_input_bank_into17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4318,6 +4331,12 @@
             0
           ],
           "symbol": "_ZN63_$LT$u8$u20$as$u20$alloc..vec..spec_from_elem..SpecFromElem$GT$9from_elem17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN91_$LT$core..slice..iter..Iter$LT$T$GT$$u20$as$u20$core..iter..traits..iterator..Iterator$GT$4fold17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -6057,7 +6076,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 942,
+      "frame_count": 950,
       "functions": [
         {
           "frames_bytes": [
@@ -6286,6 +6305,7 @@
         },
         {
           "frames_bytes": [
+            0,
             0,
             0,
             0
@@ -6924,37 +6944,37 @@
         },
         {
           "frames_bytes": [
-            192
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v320decode_register_bank17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            704
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v321invoke_admitted_chunk17h<hash>E"
-        },
-        {
-          "frames_bytes": [
             320
           ],
-          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v322AdmittedChunkBuffersV43new17h<hash>E"
+          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v320AdmittedCpiBuffersV43new17h<hash>E"
         },
         {
           "frames_bytes": [
-            1664
+            1984
           ],
           "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v323execute_admitted_aot_v317h<hash>E"
         },
         {
           "frames_bytes": [
-            640
+            704
           ],
           "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v328validate_input_scratch_pages17h<hash>E"
         },
         {
           "frames_bytes": [
-            64
+            768
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v330invoke_admitted_accelerator_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v331resolve_and_decode_candidate_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
           ],
           "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v334admitted_caller_authority_count_v317h<hash>E"
         },
@@ -8874,6 +8894,12 @@
         },
         {
           "frames_bytes": [
+            512
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer26v4_lp_accelerator_accounts20authenticate_context17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             384
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer26v4_lp_accelerator_accounts21authenticate_position17h<hash>E"
@@ -8892,7 +8918,7 @@
         },
         {
           "frames_bytes": [
-            896
+            640
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer26v4_lp_accelerator_accounts35evaluate_authenticated_dealer_lp_v417h<hash>E"
         },
@@ -9543,6 +9569,12 @@
         },
         {
           "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v320RequestProfileKindV315writes_register17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             64
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v320RequestProfileKindV319writes_any_register17h<hash>E"
@@ -9720,6 +9752,12 @@
         },
         {
           "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v324effect_span_extension_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
             320
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v324invoke_funding_signed_v517h<hash>E"
@@ -9834,6 +9872,13 @@
         },
         {
           "frames_bytes": [
+            0,
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v326scratch_bank_from_slice_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
             384
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v327child_receipt_provenance_v417h<hash>E"
@@ -9855,6 +9900,12 @@
             2496
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v328authenticate_market_boxed_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v328carve_strategy_frame_span_v317h<hash>E"
         },
         {
           "frames_bytes": [
@@ -10038,7 +10089,7 @@
         },
         {
           "frames_bytes": [
-            2240
+            2432
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v335authenticate_accelerator_context_v417h<hash>E"
         },
@@ -10158,7 +10209,7 @@
         },
         {
           "frames_bytes": [
-            704
+            896
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v338authenticate_accelerator_input_bank_v417h<hash>E"
         },
@@ -10176,7 +10227,7 @@
         },
         {
           "frames_bytes": [
-            64
+            0
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v338hot_admitted_runtime_accounts_start_v317h<hash>E"
         },
@@ -11211,7 +11262,7 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN4core3ptr89drop_in_place$LT$dclutch_trading_sbf..admitted_composition_v3..AdmittedChunkBuffersV4$GT$17h<hash>E"
+          "symbol": "_ZN4core3ptr87drop_in_place$LT$dclutch_trading_sbf..admitted_composition_v3..AdmittedCpiBuffersV4$GT$17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -11221,6 +11272,7 @@
         },
         {
           "frames_bytes": [
+            64,
             64,
             64,
             64,

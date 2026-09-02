@@ -3058,3 +3058,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Trading uses it for the INPUT transport; every bank fits inline in one CPI (≤ 8,192 vs 10,240) → **delete the requirement**;
   inline input is being landed (four-artifact join, Lean-first). End state: inline input + the output page (ember's 0003).
 - Cuts: `08dfa60f9`.
+
+### Lane map delta — 2026-09-02 18:00
+- WEB successor (`1f6d668f`, `95adbc7d`, `147afeb4`, `39205fba`, `6c67a2bc`): **the market page is a derivation** — question,
+  cuts, outcomes, denominator and window read from the Product record's children through the founding's own decoders
+  (the registry keeps only the coordinate name); re-capture 1,173 → **866 words, 0 → 16 "$", 23 → 0 hex ids**, "SOL/USD —
+  which side of $98 and $102"; step ① renders outside the gate (live: tradable, no walls, root exists); the window offsets
+  named in dclutch-source-contract (were bare 48/56) and emitted; /create's band fills from the last opened market's own
+  record; every stale string; 390 px overflow. **Fact: EQnY…'s window closed 2026-09-02 08:18 UTC, nothing has resolved it**
+  → SEAL: trade disposition, then resolve on devnet (sponsored push + flagship resolution), hand the resolved market to WEB
+  and DIRECT. Owed: a `release` wall derived from the public cut; /workbench's 27 acts need phase declarations from the
+  census; the list's per-card derivation; the wasm digests on clean codecs.
+- Cuts: `3ca11322e`.

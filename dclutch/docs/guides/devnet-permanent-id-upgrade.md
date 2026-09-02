@@ -41,13 +41,16 @@ Zeroes typed into a JSON file are not build or frame evidence.
 First capture the complete permanent substrate with
 [`devnet-permanent-substrate-capture-v1`](devnet-release-capture.md). Run it at
 an immediate finalized floor before the first Upgrade. Its single account
-context must authenticate all seven fixed Program/ProgramData pairs, the
+context must authenticate all seven declared Program/ProgramData pairs, the
 retained authority, the Program residue and parked ProgramData lamport totals,
 and the exact fee-payer balance.
 This closes the gap that five separate role baselines cannot close: none of
 those per-role reads alone proves that the other six permanent deployments and
-the payer were one coherent pre-write state. The capture is key-free and has no
-caller-supplied Program surface.
+the payer were one coherent pre-write state. The capture is key-free and read-only. Since decision
+0012's 2026-09-02 amendment it takes the seven roles as
+`--expected-<role>-program` flags and derives every ProgramData coordinate rather
+than accepting it; a fixed table is what made every full-redeploy cohort
+unsealable.
 
 Use `devnet-upgrade-baseline-v1` with the candidate raw ELF byte length and a recent
 finalized context-slot floor. This command is key-free and read-only. After the

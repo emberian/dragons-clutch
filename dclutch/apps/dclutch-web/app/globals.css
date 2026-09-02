@@ -182,7 +182,12 @@ p { text-wrap: pretty; }
 .direct-card button { justify-self: start; width: auto; min-height: 42px; margin: 0; padding: 0 16px; }
 /* Status and refusal lines are SENTENCES, so they are set as sentences: the
    sans face at reading size. Only the values inside them stay mono. */
-.direct-status, .direct-refusal { margin: 0; color: #94a197; font-size: var(--fs-base); line-height: var(--lh-body); }
+/* Every status line on this site quotes an address or a digest in prose, and
+   a 44-character base58 word has no break opportunity in it. Left alone it is
+   the widest thing on a phone: with the market hero's address wrapped, section
+   00's "Market EQnY... decoded at finalized floor N" was still pushing the
+   market page to 432px against a 390 viewport. */
+.direct-status, .direct-refusal { margin: 0; color: #94a197; font-size: var(--fs-base); line-height: var(--lh-body); overflow-wrap: anywhere; }
 .direct-status code, .direct-refusal code { font-family: var(--font-geist-mono); font-size: .92em; }
 .direct-refusal { padding: var(--sp-3) var(--sp-4); border: 1px solid rgba(239,215,132,.18); border-radius: var(--r-sm); background: rgba(239,215,132,.045); color: #d5c985; }
 /* The group a panel's actions sit in. It had no layout at all, so on any

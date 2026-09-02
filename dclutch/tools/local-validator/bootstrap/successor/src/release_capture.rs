@@ -30,13 +30,13 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use solana_program::rent::Rent;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 use crate::{
     Error, Result,
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
     rpc::{Rpc, RpcAccount, WritePolicyV1},
-    upgrade::{CHECKED_ROLE_ORDER_V1, PERMANENT_DEVNET_UPGRADE_TARGETS_V1},
+    upgrade::{CHECKED_ROLE_ORDER_V1, DevnetUpgradeTargetsV1},
 };
 
 const PUBLIC_DEVNET_ENDPOINT: &str = "https://api.devnet.solana.com";
@@ -84,6 +84,12 @@ struct PrepareCaptureArgsV1 {
 #[derive(Clone, Debug)]
 struct PermanentSubstrateArgsV1 {
     origin: ClusterOriginV1,
+    /// Decision 0012, amended 2026-09-02: the seven roles are a caller-declared
+    /// AUTHENTICATED input, not a fixed table. Every ProgramData coordinate is
+    /// Loader-derived from its Program and every account is then read back from
+    /// a finalized cluster context, which is where the identity claim is
+    /// actually settled.
+    targets: DevnetUpgradeTargetsV1,
     expected_upgrade_authority: Pubkey,
     fee_payer: Pubkey,
     minimum_context_slot: u64,
@@ -228,15 +234,23 @@ pub(crate) fn run_carry_forward(arguments: Vec<String>) -> Result<()> {
         profile_address,
     ];
     let mut rpc = Rpc::connect_cluster(&args.origin, WritePolicyV1::ReadsOnly)?;
-    let (discovery_slot, discovery_accounts) =
-        rpc.finalized_accounts(&discovery_addresses, args.minimum_context_slot)?;
-    let coordinates =
-        discover_infrastructure_coordinates(&args, &discovery_addresses, &discovery_accounts)?;
+    // The Rent sysvar rides in the SAME finalized context as the balances it
+    // will judge, and is sliced off before the nine-account closure is built --
+    // so the snapshot schema is unchanged and the rate is not read at some other
+    // slot than the accounts.
+    let (discovery_slot, discovery_accounts, discovery_rent) =
+        finalized_accounts_with_rent(&mut rpc, &discovery_addresses, args.minimum_context_slot)?;
+    let coordinates = discover_infrastructure_coordinates(
+        &args,
+        &discovery_addresses,
+        &discovery_accounts,
+        &discovery_rent,
+    )?;
     let minimum_final_slot = discovery_slot.max(args.minimum_context_slot);
-    let (context_slot, accounts) =
-        rpc.finalized_accounts(&coordinates.addresses, minimum_final_slot)?;
+    let (context_slot, accounts, rent) =
+        finalized_accounts_with_rent(&mut rpc, &coordinates.addresses, minimum_final_slot)?;
     let snapshot =
-        authenticate_carry_forward_snapshot(&args, context_slot, accounts, &coordinates)?;
+        authenticate_carry_forward_snapshot(&args, context_slot, accounts, &coordinates, &rent)?;
     write_json_atomic_new(&args.output_path, &snapshot)?;
 
     let mut stdout = std::io::stdout().lock();
@@ -257,9 +271,10 @@ pub(crate) fn run_prepare_programdata(arguments: Vec<String>) -> Result<()> {
         addresses.push(programdata(program));
     }
     let mut rpc = Rpc::connect_cluster(&args.origin, WritePolicyV1::ReadsOnly)?;
-    let (context_slot, accounts) = rpc.finalized_accounts(&addresses, args.minimum_context_slot)?;
+    let (context_slot, accounts, rent) =
+        finalized_accounts_with_rent(&mut rpc, &addresses, args.minimum_context_slot)?;
     let (manifest, bodies) =
-        authenticate_prepare_programdata(&args, context_slot, &addresses, accounts)?;
+        authenticate_prepare_programdata(&args, context_slot, &addresses, accounts, &rent)?;
     write_prepare_bundle_atomic(&args.output_dir, &manifest, &bodies)?;
 
     let mut stdout = std::io::stdout().lock();
@@ -268,25 +283,32 @@ pub(crate) fn run_prepare_programdata(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Capture all seven permanent Loader pairs and the explicit fee payer in one
-/// finalized `getMultipleAccounts` context. The command is key-free and has no
-/// caller-supplied Program identities: decision 0012's permanent table is the
-/// only admitted set.
+/// Capture all seven declared Loader pairs and the explicit fee payer in one
+/// finalized `getMultipleAccounts` context. The command is key-free and
+/// read-only; the seven roles are declared by the caller and authenticated
+/// before a single account is read.
 pub(crate) fn run_permanent_substrate(arguments: Vec<String>) -> Result<()> {
     let args = parse_permanent_substrate_args(arguments)?;
     require_public_devnet(&args.origin)?;
     require_new_file_path(&args.output_path, "permanent substrate output")?;
 
-    let programs = permanent_programs()?;
+    let programs = target_programs(&args.targets);
     let mut addresses = Vec::with_capacity(programs.len() * 2 + 1);
     for (_, program, programdata) in &programs {
         addresses.extend([*program, *programdata]);
     }
     addresses.push(args.fee_payer);
     let mut rpc = Rpc::connect_cluster(&args.origin, WritePolicyV1::ReadsOnly)?;
-    let (context_slot, accounts) = rpc.finalized_accounts(&addresses, args.minimum_context_slot)?;
-    let snapshot =
-        authenticate_permanent_substrate(&args, context_slot, &addresses, accounts, &programs)?;
+    let (context_slot, accounts, rent) =
+        finalized_accounts_with_rent(&mut rpc, &addresses, args.minimum_context_slot)?;
+    let snapshot = authenticate_permanent_substrate(
+        &args,
+        context_slot,
+        &addresses,
+        accounts,
+        &programs,
+        &rent,
+    )?;
     write_json_atomic_new(&args.output_path, &snapshot)?;
 
     let mut stdout = std::io::stdout().lock();
@@ -319,13 +341,18 @@ pub(crate) fn usage() -> &'static str {
         "  dclutch-local-successor-bootstrap devnet-permanent-substrate-capture-v1 \\\n",
         "    --rpc-url https://api.devnet.solana.com \\\n",
         "    --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\\n",
+        "    --expected-registry-program PUBKEY --expected-rent-program PUBKEY \\\n",
+        "    --expected-custody-program PUBKEY --expected-resolution-program PUBKEY \\\n",
+        "    --expected-claims-program PUBKEY --expected-trading-program PUBKEY \\\n",
+        "    --expected-core-program PUBKEY \\\n",
         "    --expected-upgrade-authority PUBKEY --fee-payer PUBKEY \\\n",
         "    --minimum-context-slot U64 --output ABSOLUTE_NEW_JSON\n",
-        "    Captures all seven fixed decision-0012 Program/ProgramData pairs and the ",
-        "explicit fee payer in one finalized account context. It authenticates every ",
-        "Loader link, authority, owner, privilege, slot, account digest, payload digest, ",
-        "parked-rent total, and payer balance. It is read-only, key-free, and accepts no ",
-        "caller-supplied Program set.",
+        "    Captures the seven declared Program/ProgramData pairs and the explicit fee ",
+        "payer in one finalized account context. It authenticates every Loader link, ",
+        "authority, owner, privilege, slot, account digest, payload digest, parked-rent ",
+        "total, and payer balance. It is read-only and key-free; decision 0012's target ",
+        "set is a caller-declared authenticated input, and every ProgramData coordinate ",
+        "is Loader-derived rather than accepted.",
     )
 }
 
@@ -439,17 +466,18 @@ fn parse_prepare_capture_args(arguments: Vec<String>) -> Result<PrepareCaptureAr
 }
 
 fn parse_permanent_substrate_args(arguments: Vec<String>) -> Result<PermanentSubstrateArgsV1> {
-    let mut fields = parse_pairs(
-        arguments,
-        &[
-            "--rpc-url",
-            DEVNET_ACKNOWLEDGMENT_FLAG,
-            "--expected-upgrade-authority",
-            "--fee-payer",
-            "--minimum-context-slot",
-            "--output",
-        ],
-    )?;
+    let role_flags = CHECKED_ROLE_ORDER_V1.map(|role| format!("--expected-{role}-program"));
+    let mut allowed = vec![
+        "--rpc-url".to_owned(),
+        DEVNET_ACKNOWLEDGMENT_FLAG.to_owned(),
+        "--expected-upgrade-authority".to_owned(),
+        "--fee-payer".to_owned(),
+        "--minimum-context-slot".to_owned(),
+        "--output".to_owned(),
+    ];
+    allowed.extend(role_flags.iter().cloned());
+    let allowed_refs = allowed.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut fields = parse_pairs(arguments, &allowed_refs)?;
     let rpc_url = take(&mut fields, "--rpc-url")?;
     let acknowledgment = take(&mut fields, DEVNET_ACKNOWLEDGMENT_FLAG)?;
     let expected_upgrade_authority = parse_pubkey(
@@ -457,14 +485,25 @@ fn parse_permanent_substrate_args(arguments: Vec<String>) -> Result<PermanentSub
         "expected retained upgrade authority",
     )?;
     let fee_payer = parse_pubkey(&take(&mut fields, "--fee-payer")?, "fee payer")?;
-    let programs = permanent_programs()?
-        .into_iter()
-        .map(|(_, program, _)| program)
-        .collect::<Vec<_>>();
+    let mut declared = Vec::with_capacity(CHECKED_ROLE_ORDER_V1.len());
+    for (role, flag) in CHECKED_ROLE_ORDER_V1.iter().zip(role_flags.iter()) {
+        let program = parse_pubkey(&take(&mut fields, flag)?, "declared Program")?;
+        declared.push((*role, program.to_string(), programdata(program).to_string()));
+    }
+    let targets = DevnetUpgradeTargetsV1::authenticate(
+        declared
+            .iter()
+            .map(|(role, program, programdata)| (*role, program.as_str(), programdata.as_str())),
+    )?;
+    let programs = declared
+        .iter()
+        .map(|(_, program, _)| parse_pubkey(program, "declared Program"))
+        .collect::<Result<Vec<_>>>()?;
     require_signing_authority(expected_upgrade_authority, &programs)?;
     require_signing_authority(fee_payer, &programs)?;
     Ok(PermanentSubstrateArgsV1 {
         origin: ClusterOriginV1::parse(&rpc_url, Some(&acknowledgment))?,
+        targets,
         expected_upgrade_authority,
         fee_payer,
         minimum_context_slot: parse_nonzero_u64(
@@ -507,6 +546,7 @@ fn discover_infrastructure_coordinates(
     args: &CarryForwardArgsV1,
     addresses: &[Pubkey; 5],
     accounts: &[Option<RpcAccount>],
+    rent: &Rent,
 ) -> Result<InfrastructureCoordinatesV1> {
     if accounts.len() != addresses.len() {
         return Err(Error::new(
@@ -527,6 +567,7 @@ fn discover_infrastructure_coordinates(
         args.expected_upgrade_authority,
         registry_program,
         registry_pd,
+        rent,
     )?;
     let _ = authenticate_loader_pair(
         "Rent",
@@ -535,6 +576,7 @@ fn discover_infrastructure_coordinates(
         args.expected_upgrade_authority,
         rent_program,
         rent_pd,
+        rent,
     )?;
     require_account_shape(
         "infrastructure profile",
@@ -543,7 +585,7 @@ fn discover_infrastructure_coordinates(
         false,
         Some(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
     )?;
-    require_rent_exempt("infrastructure profile", profile_account)?;
+    require_rent_exempt("infrastructure profile", profile_account, rent)?;
     let profile = ProtocolInfrastructureProfileV1::decode(&profile_account.data)
         .map_err(|error| Error::new(format!("infrastructure profile decode: {error:?}")))?;
     if profile.registry().program().to_bytes() != args.registry_program.to_bytes()
@@ -584,6 +626,7 @@ fn authenticate_carry_forward_snapshot(
     context_slot: u64,
     accounts: Vec<Option<RpcAccount>>,
     coordinates: &InfrastructureCoordinatesV1,
+    rent: &Rent,
 ) -> Result<CarryForwardSnapshotV1> {
     if context_slot < args.minimum_context_slot || accounts.len() != coordinates.addresses.len() {
         return Err(Error::new(
@@ -614,6 +657,7 @@ fn authenticate_carry_forward_snapshot(
         args.expected_upgrade_authority,
         required(&accounts, 0, "Registry Program")?,
         required(&accounts, 1, "Registry ProgramData")?,
+        rent,
     )?;
     let rent_facts = authenticate_loader_pair(
         "Rent",
@@ -622,6 +666,7 @@ fn authenticate_carry_forward_snapshot(
         args.expected_upgrade_authority,
         required(&accounts, 2, "Rent Program")?,
         required(&accounts, 3, "Rent ProgramData")?,
+        rent,
     )?;
     let profile_account = required(&accounts, 8, "infrastructure profile")?;
     require_account_shape(
@@ -631,7 +676,7 @@ fn authenticate_carry_forward_snapshot(
         false,
         Some(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
     )?;
-    require_rent_exempt("infrastructure profile", profile_account)?;
+    require_rent_exempt("infrastructure profile", profile_account, rent)?;
     if profile_account.data != coordinates.discovery_profile_body {
         return Err(Error::new(
             "infrastructure profile moved between discovery and the final one-context observation",
@@ -659,6 +704,7 @@ fn authenticate_carry_forward_snapshot(
         required(&accounts, 0, "Registry Program")?,
         required(&accounts, 1, "Registry ProgramData")?,
         &registry_facts,
+        rent,
     )?;
     authenticate_artifact_release(
         "Rent",
@@ -671,6 +717,7 @@ fn authenticate_carry_forward_snapshot(
         required(&accounts, 2, "Rent Program")?,
         required(&accounts, 3, "Rent ProgramData")?,
         &rent_facts,
+        rent,
     )?;
 
     let rows = coordinates
@@ -700,6 +747,7 @@ fn authenticate_prepare_programdata(
     context_slot: u64,
     addresses: &[Pubkey],
     accounts: Vec<Option<RpcAccount>>,
+    rent: &Rent,
 ) -> Result<(PrepareProgramdataManifestV1, Vec<Vec<u8>>)> {
     if context_slot < args.minimum_context_slot || addresses.len() != 10 || accounts.len() != 10 {
         return Err(Error::new(
@@ -736,6 +784,7 @@ fn authenticate_prepare_programdata(
             args.expected_upgrade_authority,
             program_account,
             programdata_account,
+            rent,
         )?;
         let ordinal_u8 = u8::try_from(ordinal)
             .map_err(|_| Error::new("prepare ProgramData role ordinal overflow"))?;
@@ -771,30 +820,13 @@ fn authenticate_prepare_programdata(
     Ok((manifest, bodies))
 }
 
-fn permanent_programs() -> Result<Vec<(&'static str, Pubkey, Pubkey)>> {
-    if PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len() != CHECKED_ROLE_ORDER_V1.len() {
-        return Err(Error::new(
-            "permanent target table and canonical role order have different widths",
-        ));
-    }
-    PERMANENT_DEVNET_UPGRADE_TARGETS_V1
+/// The ordered rows an authenticated target set names. `DevnetUpgradeTargetsV1`
+/// has already checked the canonical role order, the Loader-derived ProgramData
+/// coordinate of every Program, and fourteen distinct non-native accounts.
+fn target_programs(targets: &DevnetUpgradeTargetsV1) -> Vec<(&'static str, Pubkey, Pubkey)> {
+    targets
         .iter()
-        .zip(CHECKED_ROLE_ORDER_V1)
-        .map(|((role, program, programdata), ordered_role)| {
-            if *role != ordered_role {
-                return Err(Error::new(
-                    "permanent target table and canonical role order diverged",
-                ));
-            }
-            let program = parse_pubkey(program, "permanent Program")?;
-            let programdata = parse_pubkey(programdata, "permanent ProgramData")?;
-            if self::programdata(program) != programdata {
-                return Err(Error::new(format!(
-                    "permanent {role} ProgramData is not the Loader-derived coordinate"
-                )));
-            }
-            Ok((*role, program, programdata))
-        })
+        .map(|target| (target.role, target.program, target.programdata))
         .collect()
 }
 
@@ -804,6 +836,7 @@ fn authenticate_permanent_substrate(
     addresses: &[Pubkey],
     accounts: Vec<Option<RpcAccount>>,
     programs: &[(&'static str, Pubkey, Pubkey)],
+    rent: &Rent,
 ) -> Result<PermanentSubstrateSnapshotV1> {
     let expected_width = programs
         .len()
@@ -852,6 +885,7 @@ fn authenticate_permanent_substrate(
             args.expected_upgrade_authority,
             program_account,
             programdata_account,
+            rent,
         )?;
         program_lamports_total = program_lamports_total
             .checked_add(program_account.lamports)
@@ -881,7 +915,7 @@ fn authenticate_permanent_substrate(
         .and_then(Option::as_ref)
         .ok_or_else(|| Error::new("explicit permanent-substrate fee payer is absent"))?;
     require_account_shape("fee payer", payer, system_program::ID, false, Some(0))?;
-    require_rent_exempt("fee payer", payer)?;
+    require_rent_exempt("fee payer", payer, rent)?;
 
     let mut snapshot = PermanentSubstrateSnapshotV1 {
         schema: PERMANENT_SUBSTRATE_SCHEMA.into(),
@@ -927,6 +961,7 @@ fn authenticate_artifact_release(
     program_account: &RpcAccount,
     programdata_account: &RpcAccount,
     facts: &LoaderFactsV1,
+    rent: &Rent,
 ) -> Result<()> {
     require_account_shape(
         &format!("{label} artifact raw"),
@@ -941,7 +976,7 @@ fn authenticate_artifact_release(
             "{label} artifact body does not match the profile-selected content ID"
         )));
     }
-    require_rent_exempt(&format!("{label} artifact raw"), raw_account)?;
+    require_rent_exempt(&format!("{label} artifact raw"), raw_account, rent)?;
     let release = ArtifactReleaseV1::decode(&raw_account.data)
         .map_err(|error| Error::new(format!("{label} artifact release decode: {error:?}")))?;
     require_slot_pinned_release_v1(release)
@@ -974,6 +1009,7 @@ fn authenticate_loader_pair(
     expected_authority: Pubkey,
     program_account: &RpcAccount,
     programdata_account: &RpcAccount,
+    rent: &Rent,
 ) -> Result<LoaderFactsV1> {
     if programdata(program) != expected_programdata {
         return Err(Error::new(format!(
@@ -994,8 +1030,8 @@ fn authenticate_loader_pair(
         false,
         None,
     )?;
-    require_rent_exempt(&format!("{label} Program"), program_account)?;
-    require_rent_exempt(&format!("{label} ProgramData"), programdata_account)?;
+    require_rent_exempt(&format!("{label} Program"), program_account, rent)?;
+    require_rent_exempt(&format!("{label} ProgramData"), programdata_account, rent)?;
     let program_view = ProgramV3View::parse(&program_account.data)
         .map_err(|error| Error::new(format!("{label} Program decode: {error:?}")))?;
     let programdata_view = ProgramDataV3View::parse(&programdata_account.data)
@@ -1040,9 +1076,74 @@ fn require_account_shape(
     Ok(())
 }
 
-fn require_rent_exempt(label: &str, account: &RpcAccount) -> Result<()> {
-    if account.lamports < Rent::default().minimum_balance(account.data.len()) {
-        return Err(Error::new(format!("{label} account is not rent exempt")));
+/// Read one finalized account context WITH the Rent sysvar appended, then hand
+/// back the caller's accounts and the live rate that context quoted. The sysvar
+/// is sliced off, so no snapshot width or schema changes.
+fn finalized_accounts_with_rent(
+    rpc: &mut Rpc,
+    addresses: &[Pubkey],
+    minimum_context_slot: u64,
+) -> Result<(u64, Vec<Option<RpcAccount>>, Rent)> {
+    let mut query = addresses.to_vec();
+    query.push(sysvar::rent::ID);
+    let (context_slot, mut accounts) = rpc.finalized_accounts(&query, minimum_context_slot)?;
+    if accounts.len() != query.len() {
+        return Err(Error::new(
+            "finalized observation returned the wrong account count",
+        ));
+    }
+    let rent_account = accounts
+        .pop()
+        .flatten()
+        .ok_or_else(|| Error::new("the finalized Rent sysvar account is absent"))?;
+    Ok((context_slot, accounts, live_rent(&rent_account)?))
+}
+
+/// Decode the Rent sysvar account read in this observation's own finalized
+/// context, and refuse anything but its exact canonical body.
+fn live_rent(account: &RpcAccount) -> Result<Rent> {
+    if account.owner != sysvar::ID || account.executable {
+        return Err(Error::new(
+            "the Rent sysvar account is not an owned non-executable sysvar",
+        ));
+    }
+    let rent: Rent = bincode::deserialize(&account.data)
+        .map_err(|error| Error::new(format!("finalized Rent sysvar: {error}")))?;
+    if bincode::serialize(&rent)
+        .map_err(|error| Error::new(format!("re-encode finalized Rent sysvar: {error}")))?
+        != account.data
+    {
+        return Err(Error::new(
+            "finalized Rent sysvar was not its exact canonical body",
+        ));
+    }
+    if rent.lamports_per_byte_year == 0 || rent.exemption_threshold <= 0.0 {
+        return Err(Error::new(
+            "finalized Rent sysvar quotes a zero rate or a non-positive exemption threshold",
+        ));
+    }
+    Ok(rent)
+}
+
+/// Rent exemption judged against the LIVE Rent sysvar, not `Rent::default()`.
+///
+/// `Rent::default()` is the genesis constant, and a cluster's live rate is a
+/// changeable chain fact. Measured 2026-09-02 on devnet: the live rate is LOWER
+/// than the default, so every 36-byte Program account `solana program deploy`
+/// funds today holds 1,038,612 lamports against a default-derived demand of
+/// 1,141,440 -- and the whole cohort-12 closure was judged not rent exempt by a
+/// check reading a number the cluster does not use. The seven accounts were
+/// topped up operationally that day; this is the actual repair. The error names
+/// both numbers, because a threshold refusal that does not say what it wanted is
+/// a search rather than a finding.
+fn require_rent_exempt(label: &str, account: &RpcAccount, rent: &Rent) -> Result<()> {
+    let minimum = rent.minimum_balance(account.data.len());
+    if account.lamports < minimum {
+        return Err(Error::new(format!(
+            "{label} account holds {} lamports over {} bytes; the live Rent sysvar requires {minimum}",
+            account.lamports,
+            account.data.len()
+        )));
     }
     Ok(())
 }
@@ -1383,7 +1484,163 @@ fn hex32(value: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tests judge rent against the genesis-default rate, which is what
+    /// their synthetic balances were minted at. Production never uses it: the
+    /// live Rent sysvar of the observation's own finalized context does.
+    fn fixture_rent() -> Rent {
+        Rent::default()
+    }
+
+    /// Decision 0012's rent repair, and the hostile that makes it a repair
+    /// rather than a relaxation.
+    ///
+    /// `Rent::default()` is the genesis constant. A cluster's rate is a live
+    /// chain fact, and reading the wrong one is wrong in BOTH directions: too
+    /// strict refuses accounts that are exempt, too lax admits accounts that are
+    /// not. The first cost cohort-12 a night and 0.2373 SOL of unnecessary
+    /// top-ups; the second is what this test forbids.
+    #[test]
+    fn rent_exemption_is_judged_against_the_live_sysvar_not_the_genesis_default() {
+        let account = |bytes: usize, lamports: u64| RpcAccount {
+            lamports,
+            owner: bpf_loader_upgradeable::ID,
+            executable: true,
+            rent_epoch: 0,
+            data: vec![0; bytes],
+        };
+        // Read off devnet 2026-09-02 at finalized slot 491,925,181. The default
+        // is 3,480 lamports per byte-year over a 2.0-year threshold.
+        let live_devnet = Rent {
+            lamports_per_byte_year: 6_333,
+            exemption_threshold: 1.0,
+            burn_percent: 50,
+        };
+        assert_eq!(Rent::default().minimum_balance(36), 1_141_440);
+        assert_eq!(live_devnet.minimum_balance(36), 1_038_612);
+
+        // The regression, reproduced exactly: every 36-byte Program account
+        // `solana program deploy` funds on devnet today holds 1,038,612 lamports,
+        // and the default-derived check called all seven of them not exempt.
+        let deployed = account(36, 1_038_612);
+        let stale = require_rent_exempt("Registry Program", &deployed, &Rent::default())
+            .expect_err("the genesis default refuses a genuinely exempt devnet account")
+            .to_string();
+        assert!(
+            stale.contains("1038612") && stale.contains("1141440"),
+            "a threshold refusal must state both numbers: {stale}"
+        );
+        require_rent_exempt("Registry Program", &deployed, &live_devnet)
+            .expect("the live sysvar admits the account the cluster itself funded");
+
+        // THE HOSTILE, and the direction that matters for safety: a cluster
+        // whose rate is HIGHER than the default. An account funded to exactly
+        // the default minimum is then NOT exempt, and only the sysvar says so.
+        let costly = Rent {
+            lamports_per_byte_year: 13_920,
+            exemption_threshold: 2.0,
+            burn_percent: 50,
+        };
+        let funded_to_default = account(36, 1_141_440);
+        require_rent_exempt("Rent ProgramData", &funded_to_default, &Rent::default())
+            .expect("passes under the genesis default, which is exactly the trap");
+        let error = require_rent_exempt("Rent ProgramData", &funded_to_default, &costly)
+            .expect_err("a live rate above the default must refuse by name")
+            .to_string();
+        assert!(
+            error.contains("Rent ProgramData")
+                && error.contains("1141440")
+                && error.contains(&costly.minimum_balance(36).to_string()),
+            "the refusal must name the account, what it holds, and what the live rate wants: {error}"
+        );
+
+        // The sysvar body itself is authenticated, not trusted.
+        let canonical = bincode::serialize(&live_devnet).expect("Rent body");
+        let sysvar_account = |owner: Pubkey, executable: bool, data: Vec<u8>| RpcAccount {
+            lamports: 1,
+            owner,
+            executable,
+            rent_epoch: 0,
+            data,
+        };
+        assert_eq!(
+            live_rent(&sysvar_account(sysvar::ID, false, canonical.clone())).expect("live rent"),
+            live_devnet
+        );
+        assert!(
+            live_rent(&sysvar_account(
+                system_program::ID,
+                false,
+                canonical.clone()
+            ))
+            .expect_err("a foreign owner")
+            .to_string()
+            .contains("not an owned non-executable sysvar")
+        );
+        let mut trailing = canonical.clone();
+        trailing.push(0);
+        assert!(
+            live_rent(&sysvar_account(sysvar::ID, false, trailing))
+                .expect_err("a padded body")
+                .to_string()
+                .contains("exact canonical body")
+        );
+        let zero_rate = bincode::serialize(&Rent {
+            lamports_per_byte_year: 0,
+            exemption_threshold: 1.0,
+            burn_percent: 50,
+        })
+        .expect("zero-rate body");
+        assert!(
+            live_rent(&sysvar_account(sysvar::ID, false, zero_rate))
+                .expect_err("a zero rate would make everything exempt")
+                .to_string()
+                .contains("zero rate or a non-positive exemption threshold")
+        );
+    }
     use crate::{cluster::DEVNET_GENESIS_HASH, rpc::parse_json_without_duplicate_keys_v1};
+
+    /// One real seven-role Loader set, used ONLY as a fixture. See the identical
+    /// note in `upgrade::tests`: decision 0012's amendment retired the
+    /// production constant, and these ids survive because their ProgramData
+    /// coordinates really are Loader-derived.
+    const FIXTURE_TARGETS_V1: &[(&str, &str, &str)] = &[
+        (
+            "registry",
+            "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",
+            "ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz",
+        ),
+        (
+            "rent",
+            "DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3",
+            "78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy",
+        ),
+        (
+            "custody",
+            "34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH",
+            "EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf",
+        ),
+        (
+            "resolution",
+            "2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd",
+            "2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f",
+        ),
+        (
+            "claims",
+            "85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN",
+            "4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j",
+        ),
+        (
+            "trading",
+            "5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk",
+            "AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn",
+        ),
+        (
+            "core",
+            "HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N",
+            "AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN",
+        ),
+    ];
     use dclutch_core_contract::ContentId;
     use dclutch_registry_contract::ArtifactUpgradePolicyV1;
     use dclutch_release_set_contract::{
@@ -1529,10 +1786,17 @@ mod tests {
         Vec<Option<RpcAccount>>,
         Vec<(&'static str, Pubkey, Pubkey)>,
     ) {
-        let programs = permanent_programs().expect("permanent table");
+        let targets = DevnetUpgradeTargetsV1::authenticate(
+            FIXTURE_TARGETS_V1
+                .iter()
+                .map(|(role, program, programdata)| (*role, *program, *programdata)),
+        )
+        .expect("fixture targets");
+        let programs = target_programs(&targets);
         let authority = Pubkey::new_unique();
         let payer = Pubkey::new_unique();
         let args = PermanentSubstrateArgsV1 {
+            targets: targets.clone(),
             origin: devnet_origin(),
             expected_upgrade_authority: authority,
             fee_payer: payer,
@@ -1646,9 +1910,13 @@ mod tests {
             minimum_context_slot: 1,
             output_path: std::env::temp_dir().join("unused-carry-forward-fixture.json"),
         };
-        let coordinates =
-            discover_infrastructure_coordinates(&args, &discovery_addresses, &discovery_accounts)
-                .expect("authenticated infrastructure discovery");
+        let coordinates = discover_infrastructure_coordinates(
+            &args,
+            &discovery_addresses,
+            &discovery_accounts,
+            &fixture_rent(),
+        )
+        .expect("authenticated infrastructure discovery");
         let final_accounts = vec![
             Some(registry_program),
             Some(registry_programdata),
@@ -1754,8 +2022,9 @@ mod tests {
                     .clone()
             })
             .collect();
-        let (manifest, bodies) = authenticate_prepare_programdata(&args, 777, &addresses, accounts)
-            .expect("authenticated capture");
+        let (manifest, bodies) =
+            authenticate_prepare_programdata(&args, 777, &addresses, accounts, &fixture_rent())
+                .expect("authenticated capture");
         assert_eq!(manifest.context_slot, 777);
         assert_eq!(manifest.roles.len(), PREPARE_ROLES.len());
         assert_eq!(bodies, expected_bodies);
@@ -1780,7 +2049,10 @@ mod tests {
 
         let mut missing = accounts.clone();
         *missing.get_mut(3).expect("second ProgramData") = None;
-        assert!(authenticate_prepare_programdata(&args, 1, &addresses, missing).is_err());
+        assert!(
+            authenticate_prepare_programdata(&args, 1, &addresses, missing, &fixture_rent())
+                .is_err()
+        );
 
         let mut wrong_authority = accounts.clone();
         *wrong_authority
@@ -1788,7 +2060,16 @@ mod tests {
             .and_then(Option::as_mut)
             .and_then(|account| account.data.get_mut(13))
             .expect("first ProgramData authority") ^= 1;
-        assert!(authenticate_prepare_programdata(&args, 1, &addresses, wrong_authority).is_err());
+        assert!(
+            authenticate_prepare_programdata(
+                &args,
+                1,
+                &addresses,
+                wrong_authority,
+                &fixture_rent()
+            )
+            .is_err()
+        );
 
         let mut wrong_owner = accounts.clone();
         wrong_owner
@@ -1796,7 +2077,10 @@ mod tests {
             .and_then(Option::as_mut)
             .expect("third Program")
             .owner = Pubkey::new_unique();
-        assert!(authenticate_prepare_programdata(&args, 1, &addresses, wrong_owner).is_err());
+        assert!(
+            authenticate_prepare_programdata(&args, 1, &addresses, wrong_owner, &fixture_rent())
+                .is_err()
+        );
 
         let mut wrong_link = accounts.clone();
         wrong_link
@@ -1807,11 +2091,17 @@ mod tests {
             .get_mut(4..)
             .expect("ProgramData link")
             .copy_from_slice(Pubkey::new_unique().as_ref());
-        assert!(authenticate_prepare_programdata(&args, 1, &addresses, wrong_link).is_err());
+        assert!(
+            authenticate_prepare_programdata(&args, 1, &addresses, wrong_link, &fixture_rent())
+                .is_err()
+        );
 
         let mut reordered = addresses.clone();
         reordered.swap(0, 2);
-        assert!(authenticate_prepare_programdata(&args, 1, &reordered, accounts).is_err());
+        assert!(
+            authenticate_prepare_programdata(&args, 1, &reordered, accounts, &fixture_rent())
+                .is_err()
+        );
     }
 
     #[test]
@@ -1830,9 +2120,15 @@ mod tests {
             .step_by(2)
             .map(|account| account.as_ref().expect("ProgramData").lamports)
             .sum::<u64>();
-        let snapshot =
-            authenticate_permanent_substrate(&args, 1_001, &addresses, accounts, &programs)
-                .expect("authenticated permanent snapshot");
+        let snapshot = authenticate_permanent_substrate(
+            &args,
+            1_001,
+            &addresses,
+            accounts,
+            &programs,
+            &fixture_rent(),
+        )
+        .expect("authenticated permanent snapshot");
         assert_eq!(snapshot.schema, PERMANENT_SUBSTRATE_SCHEMA);
         assert_eq!(snapshot.context_slot, 1_001);
         assert_eq!(snapshot.roles.len(), CHECKED_ROLE_ORDER_V1.len());
@@ -1865,8 +2161,15 @@ mod tests {
         let mut reordered = addresses.clone();
         reordered.swap(0, 2);
         assert!(
-            authenticate_permanent_substrate(&args, 10, &reordered, accounts.clone(), &programs,)
-                .is_err()
+            authenticate_permanent_substrate(
+                &args,
+                10,
+                &reordered,
+                accounts.clone(),
+                &programs,
+                &fixture_rent()
+            )
+            .is_err()
         );
 
         let mut wrong_authority = accounts.clone();
@@ -1876,8 +2179,15 @@ mod tests {
             .and_then(|account| account.data.get_mut(13))
             .expect("second ProgramData authority") ^= 1;
         assert!(
-            authenticate_permanent_substrate(&args, 10, &addresses, wrong_authority, &programs,)
-                .is_err()
+            authenticate_permanent_substrate(
+                &args,
+                10,
+                &addresses,
+                wrong_authority,
+                &programs,
+                &fixture_rent()
+            )
+            .is_err()
         );
 
         let mut wrong_program_owner = accounts.clone();
@@ -1893,6 +2203,7 @@ mod tests {
                 &addresses,
                 wrong_program_owner,
                 &programs,
+                &fixture_rent()
             )
             .is_err()
         );
@@ -1900,8 +2211,15 @@ mod tests {
         let mut absent_payer = accounts.clone();
         *absent_payer.last_mut().expect("payer row") = None;
         assert!(
-            authenticate_permanent_substrate(&args, 10, &addresses, absent_payer, &programs,)
-                .is_err()
+            authenticate_permanent_substrate(
+                &args,
+                10,
+                &addresses,
+                absent_payer,
+                &programs,
+                &fixture_rent()
+            )
+            .is_err()
         );
 
         let mut executable_payer = accounts;
@@ -1911,49 +2229,112 @@ mod tests {
             .expect("payer")
             .executable = true;
         assert!(
-            authenticate_permanent_substrate(&args, 10, &addresses, executable_payer, &programs,)
-                .is_err()
+            authenticate_permanent_substrate(
+                &args,
+                10,
+                &addresses,
+                executable_payer,
+                &programs,
+                &fixture_rent()
+            )
+            .is_err()
         );
     }
 
+    /// Decision 0012's amendment at the CLI: the capture stays key-free, and the
+    /// seven roles become a REQUIRED, authenticated, caller-declared input. The
+    /// test this replaces asserted the opposite -- that a `--expected-core-program`
+    /// flag must be rejected -- which is precisely the property that made the
+    /// whole checked-upgrade lineage reachable by one closed substrate.
     #[test]
-    fn permanent_capture_cli_has_no_program_or_keypair_surface() {
+    fn permanent_capture_cli_requires_and_authenticates_a_declared_seven_role_set() {
         let temp = TempDir::new("permanent-cli");
         let authority = Pubkey::new_unique();
-        let args = vec![
-            "--rpc-url".into(),
-            PUBLIC_DEVNET_ENDPOINT.into(),
-            DEVNET_ACKNOWLEDGMENT_FLAG.into(),
-            DEVNET_GENESIS_HASH.into(),
-            "--expected-upgrade-authority".into(),
-            authority.to_string(),
-            "--fee-payer".into(),
-            authority.to_string(),
-            "--minimum-context-slot".into(),
-            "1".into(),
-            "--output".into(),
-            temp.0.join("snapshot.json").display().to_string(),
-        ];
-        let parsed = parse_permanent_substrate_args(args.clone()).expect("exact key-free CLI");
+        let base = |programs: &[(&str, String)]| {
+            let mut args = vec![
+                "--rpc-url".to_owned(),
+                PUBLIC_DEVNET_ENDPOINT.to_owned(),
+                DEVNET_ACKNOWLEDGMENT_FLAG.to_owned(),
+                DEVNET_GENESIS_HASH.to_owned(),
+                "--expected-upgrade-authority".to_owned(),
+                authority.to_string(),
+                "--fee-payer".to_owned(),
+                authority.to_string(),
+                "--minimum-context-slot".to_owned(),
+                "1".to_owned(),
+                "--output".to_owned(),
+                temp.0.join("snapshot.json").display().to_string(),
+            ];
+            for (role, program) in programs {
+                args.push(format!("--expected-{role}-program"));
+                args.push(program.clone());
+            }
+            args
+        };
+        let declared = CHECKED_ROLE_ORDER_V1
+            .iter()
+            .map(|role| (*role, Pubkey::new_unique().to_string()))
+            .collect::<Vec<_>>();
+
+        let parsed =
+            parse_permanent_substrate_args(base(&declared)).expect("declared seven-role set");
         assert_eq!(parsed.expected_upgrade_authority, authority);
         assert_eq!(parsed.fee_payer, authority);
+        assert_eq!(parsed.targets.len(), CHECKED_ROLE_ORDER_V1.len());
+        for (index, target) in parsed.targets.iter().enumerate() {
+            assert_eq!(target.role, CHECKED_ROLE_ORDER_V1[index]);
+            assert_eq!(target.program.to_string(), declared[index].1);
+            // Never accepted from the caller: derived.
+            assert_eq!(target.programdata, programdata(target.program));
+        }
 
-        let mut unknown = args;
-        unknown.extend([
-            "--expected-core-program".into(),
-            Pubkey::new_unique().to_string(),
-        ]);
+        // A missing role is a missing set, not a defaulted one.
+        let short = base(&declared[..6]);
         assert!(
-            parse_permanent_substrate_args(unknown).is_err(),
-            "caller-supplied Program identities must not enter the fixed-set capture"
+            parse_permanent_substrate_args(short)
+                .expect_err("six roles")
+                .to_string()
+                .contains("--expected-core-program"),
+            "the refusal must name the role flag that was absent"
+        );
+
+        // Two roles may not name one Program.
+        let mut aliased = declared.clone();
+        aliased[5].1 = aliased[4].1.clone();
+        assert!(
+            parse_permanent_substrate_args(base(&aliased))
+                .expect_err("an aliased Program")
+                .to_string()
+                .contains("repeats an earlier target account")
+        );
+
+        // A signing identity may not also be an observed Program.
+        let mut payer_is_a_program = declared.clone();
+        payer_is_a_program[3].1 = authority.to_string();
+        assert!(parse_permanent_substrate_args(base(&payer_is_a_program)).is_err());
+
+        // Still key-free: no keypair flag exists on this command at all.
+        let mut keypair = base(&declared);
+        keypair.extend(["--authority-keypair".to_owned(), "/dev/null".to_owned()]);
+        assert!(
+            parse_permanent_substrate_args(keypair)
+                .expect_err("a keypair flag")
+                .to_string()
+                .contains("--authority-keypair")
         );
     }
 
     #[test]
     fn carry_capture_discovers_profile_coordinates_then_authenticates_exact_final_context() {
         let (args, _, _, coordinates, accounts) = carry_fixture();
-        let snapshot = authenticate_carry_forward_snapshot(&args, 900, accounts, &coordinates)
-            .expect("authenticated final context");
+        let snapshot = authenticate_carry_forward_snapshot(
+            &args,
+            900,
+            accounts,
+            &coordinates,
+            &fixture_rent(),
+        )
+        .expect("authenticated final context");
         assert_eq!(snapshot.context_slot, 900);
         assert_eq!(snapshot.accounts.len(), INFRASTRUCTURE_LABELS.len());
         for ((row, label), address) in snapshot
@@ -1994,13 +2375,29 @@ mod tests {
             .and_then(|account| account.data.last_mut())
             .expect("profile tail") ^= 1;
         assert!(
-            authenticate_carry_forward_snapshot(&args, 1, moved_profile, &coordinates).is_err()
+            authenticate_carry_forward_snapshot(
+                &args,
+                1,
+                moved_profile,
+                &coordinates,
+                &fixture_rent()
+            )
+            .is_err()
         );
 
         let mut live_staging = accounts.clone();
         *live_staging.get_mut(5).expect("Registry staging") =
             Some(rpc_account(args.registry_program, false, vec![1]));
-        assert!(authenticate_carry_forward_snapshot(&args, 1, live_staging, &coordinates).is_err());
+        assert!(
+            authenticate_carry_forward_snapshot(
+                &args,
+                1,
+                live_staging,
+                &coordinates,
+                &fixture_rent()
+            )
+            .is_err()
+        );
 
         let mut substituted_release = accounts;
         *substituted_release
@@ -2009,8 +2406,14 @@ mod tests {
             .and_then(|account| account.data.last_mut())
             .expect("Registry release tail") ^= 1;
         assert!(
-            authenticate_carry_forward_snapshot(&args, 1, substituted_release, &coordinates)
-                .is_err()
+            authenticate_carry_forward_snapshot(
+                &args,
+                1,
+                substituted_release,
+                &coordinates,
+                &fixture_rent()
+            )
+            .is_err()
         );
     }
 

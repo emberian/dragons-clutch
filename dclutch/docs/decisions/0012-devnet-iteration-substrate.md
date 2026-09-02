@@ -121,6 +121,59 @@ leftovers are closed and two of them were worse than recorded.
   `0x4007`, but on this route the Registry authenticates the role deployments
   before it forwards, so `0x4007` is unreachable behind `0x100D`.
 
+**Amendment, 2026-09-02: the permanent-set constant was a cohort-8-era
+artifact, and the target set is now an authenticated input.** From the DEPLOY-1
+era until today `PERMANENT_DEVNET_UPGRADE_TARGETS_V1`
+(`tools/local-validator/bootstrap/successor/src/upgrade.rs`) hardcoded seven
+program/ProgramData id pairs, and the capture family accepted no caller-supplied
+Program set — so the whole checked-upgrade lineage, and therefore every plan's
+`checked_upgrade_set`, was scoped to exactly one substrate. Condition (a) of the
+standing devnet grant requires FRESH IDENTITIES on every redeploy. The two are
+mutually exclusive by construction: from cohort-9 onward no cohort's journal
+could match the table, so no cohort could be sealed, so no checked execution
+release could be built, so **no devnet Direct fill has ever executed** — and the
+pinned substrate itself (`Hies39GB…`) was closed by the same redeploy discipline,
+so the constant could not even seal itself. That, not the `hot-cu-profile` flag
+and not the missing `AlreadyCurrent` writer, was the root blocker; both of those
+were real and are fixed at `28ff0823`, and this was standing behind them. The
+constant is retired. The seven ids now come from the deployment-set journal that
+names them, authenticated as a set by `DevnetUpgradeTargetsV1::authenticate`:
+exact width, canonical role order, `programdata(program)` — the Loader-derived
+ProgramData coordinate, which is the check the retired table was itself validated
+against and which now applies to every set rather than to one — and fourteen
+distinct non-native accounts. **The safety was never the constant.** It is that
+every row is re-read against the cluster, under the journal's own
+`retained_upgrade_authority`, before any of it is believed; a constant adds
+nothing a fresh observation does not. Two things are given up and both are named
+here rather than left for a reader to find: `is_permanent_devnet_program_set` and
+the `validate_prepare` refusal that used it are RETIRED, because a prepare with no
+`--deployment-set-journal` has no authenticated set to compare against and the
+general rule it was a special case of survives in
+`campaign::require_checked_mutable_binding`; and `devnet-permanent-substrate-capture-v1`
+now takes seven `--expected-<role>-program` flags, so it is a declared-set capture
+rather than a fixed-set one — still key-free, still read-only, and now deriving
+every ProgramData coordinate instead of accepting it. Where the plan's declared
+set and the chain's observed set disagree, the refusal names the role and BOTH
+ids; the refusal it replaces named one id and a constant, and cost a lane a night.
+
+**Amendment, 2026-09-02: rent exemption is a live chain fact.**
+`release_capture::require_rent_exempt` compared balances against
+`Rent::default()`, the genesis constant. Devnet's live rate is
+`lamports_per_byte_year 6333, exemption_threshold 1.0` against the default's
+`3480 / 2.0`, so a 36-byte Program account is exempt at 1,038,612 lamports and the
+check demanded 1,141,440 — it called every account `solana program deploy` funds
+on devnet not rent exempt, and cohort-12's closure was topped up 0.2373 SOL to get
+past it. The check now reads the Rent sysvar out of the same finalized
+`getMultipleAccounts` context as the balances it judges (sliced off before any
+snapshot is built, so no schema moves), refuses a non-canonical or zero-rate body,
+and states both numbers when it refuses. The hostile that makes this a repair
+rather than a relaxation is in the test: a cluster whose rate is ABOVE the default
+must refuse an account funded to exactly the default minimum, by name. One sibling
+is owed and not done — `upgrade.rs`'s carry-forward snapshot re-validation still
+uses `Rent::default()`, because it re-judges a captured snapshot with no cluster in
+reach; being stricter there is fail-closed but still wrong, and the honest fix is
+for the snapshot to carry the rate its context quoted.
+
 A sharpening found in the tree itself while implementing: the contract
 already anticipated this design. `ArtifactReleaseV1::slot_mismatch_refusal`
 (`crates/dclutch-registry-contract/src/artifact.rs`) names a strictly-later

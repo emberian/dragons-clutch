@@ -52,7 +52,7 @@ use solana_sdk::{
     signature::{Keypair, Signature, Signer as _, read_keypair_file},
     transaction::Transaction,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::SystemInstruction;
 
 use crate::{
@@ -123,55 +123,136 @@ pub(crate) const CHECKED_ROLE_ORDER_V1: [&str; 7] = [
     "trading",
     "core",
 ];
-/// Decision-0012's permanent devnet Loader pairs. This is the operational
-/// identity owner for the seven-role set auditor; a journal can pin evidence
-/// for these accounts, never nominate a replacement set.
-pub(crate) const PERMANENT_DEVNET_UPGRADE_TARGETS_V1: &[(&str, &str, &str)] = &[
-    (
-        "registry",
-        "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",
-        "ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz",
-    ),
-    (
-        "rent",
-        "DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3",
-        "78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy",
-    ),
-    (
-        "custody",
-        "34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH",
-        "EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf",
-    ),
-    (
-        "resolution",
-        "2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd",
-        "2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f",
-    ),
-    (
-        "claims",
-        "85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN",
-        "4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j",
-    ),
-    (
-        "trading",
-        "5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk",
-        "AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn",
-    ),
-    (
-        "core",
-        "HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N",
-        "AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN",
-    ),
-];
+/// One role's Loader V3 pair inside a deployment set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DevnetUpgradeTargetV1 {
+    pub(crate) role: &'static str,
+    pub(crate) program: Pubkey,
+    pub(crate) programdata: Pubkey,
+}
 
-pub(crate) fn is_permanent_devnet_program_set(programs: &[Pubkey; 7]) -> bool {
-    programs
-        .iter()
-        .zip(PERMANENT_DEVNET_UPGRADE_TARGETS_V1)
-        .all(|(observed, (_, expected_program, _))| {
-            parse_pubkey(expected_program, "permanent set Program")
-                .is_ok_and(|expected| *observed == expected)
-        })
+/// The seven ordered Loader pairs one deployment set operates on.
+///
+/// **Decision 0012, amended 2026-09-02: this is an AUTHENTICATED INPUT, not a
+/// constant.** `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` used to hardcode
+/// cohort-7/8's seven ids in this file, which scoped the entire checked-upgrade
+/// lineage to one fixed substrate. The standing devnet grant's condition (a)
+/// requires fresh identities on every redeploy, so from cohort-9 onward no
+/// cohort's journal could match the table and none could ever seal -- and the
+/// pinned substrate itself was closed by the same redeploy discipline. The
+/// identities now come from the journal that names them, and the safety is what
+/// it always actually was: every row is re-read against the cluster, under the
+/// journal's own retained upgrade authority, before any of it is believed. A
+/// constant adds no safety a fresh observation does not.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DevnetUpgradeTargetsV1 {
+    rows: Vec<DevnetUpgradeTargetV1>,
+}
+
+impl DevnetUpgradeTargetsV1 {
+    /// Authenticate a caller-declared seven-role target set.
+    ///
+    /// What the constant's removal does NOT relax, and why each survives it:
+    ///
+    /// - the exact width and the canonical role order, because the
+    ///   two-carry-forward / five-owned split this journal enforces is
+    ///   positional;
+    /// - `programdata(program)`, the Loader-derived coordinate: a row may not
+    ///   name a ProgramData that is not the one Loader V3 derives for its own
+    ///   Program. This is the check the retired table was itself validated
+    ///   against in `release_capture::permanent_programs`, and it is now applied
+    ///   to every set rather than to one;
+    /// - fourteen distinct accounts, none of them a native id or the default.
+    ///
+    /// What does not survive is the claim that one fixed substrate is the only
+    /// admissible one.
+    pub(crate) fn authenticate<'a>(
+        declared: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+    ) -> Result<Self> {
+        let mut rows = Vec::with_capacity(CHECKED_ROLE_ORDER_V1.len());
+        let mut identities = BTreeSet::new();
+        for (index, (role, program_text, programdata_text)) in declared.into_iter().enumerate() {
+            let expected_role = CHECKED_ROLE_ORDER_V1.get(index).ok_or_else(|| {
+                Error::new(format!(
+                    "deployment-set target list carries more than {} ordered roles",
+                    CHECKED_ROLE_ORDER_V1.len()
+                ))
+            })?;
+            if role != *expected_role || role_ordinal(role)? != index as u8 {
+                return Err(Error::new(format!(
+                    "deployment-set target at index {index} is {role:?}; the canonical role order names {expected_role:?}"
+                )));
+            }
+            let program = parse_pubkey(program_text, "deployment-set target Program")?;
+            let programdata = parse_pubkey(programdata_text, "deployment-set target ProgramData")?;
+            for (label, identity) in [("Program", program), ("ProgramData", programdata)] {
+                if identity == Pubkey::default()
+                    || identity == system_program::ID
+                    || identity == bpf_loader_upgradeable::ID
+                {
+                    return Err(Error::new(format!(
+                        "deployment-set {expected_role} {label} is a native or default id"
+                    )));
+                }
+                if !identities.insert(identity) {
+                    return Err(Error::new(format!(
+                        "deployment-set {expected_role} {label} {identity} repeats an earlier target account"
+                    )));
+                }
+            }
+            let derived = target_programdata(program);
+            if derived != programdata {
+                return Err(Error::new(format!(
+                    "deployment-set {expected_role} ProgramData {programdata} is not the \
+                     Loader-derived coordinate {derived} of Program {program}"
+                )));
+            }
+            rows.push(DevnetUpgradeTargetV1 {
+                role: expected_role,
+                program,
+                programdata,
+            });
+        }
+        if rows.len() != CHECKED_ROLE_ORDER_V1.len() {
+            return Err(Error::new(format!(
+                "deployment-set target list must carry exactly {} ordered roles, not {}",
+                CHECKED_ROLE_ORDER_V1.len(),
+                rows.len()
+            )));
+        }
+        Ok(Self { rows })
+    }
+
+    pub(crate) fn row(&self, index: usize) -> Result<&DevnetUpgradeTargetV1> {
+        self.rows
+            .get(index)
+            .ok_or_else(|| Error::new(format!("deployment-set target row {index} is absent")))
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, DevnetUpgradeTargetV1> {
+        self.rows.iter()
+    }
+}
+
+/// The Loader V3 coordinate of a Program's ProgramData account.
+pub(crate) fn target_programdata(program: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+/// The one place a deployment set's target identities are read from: the
+/// journal's own ordered rows.
+pub(crate) fn journal_targets(journal: &UpgradeSetJournalV1) -> Result<DevnetUpgradeTargetsV1> {
+    DevnetUpgradeTargetsV1::authenticate(journal.roles.iter().map(|role| {
+        (
+            role.role.as_str(),
+            role.program_id.as_str(),
+            role.programdata_id.as_str(),
+        )
+    }))
 }
 const SHIPPED_LINKS: &[(&str, &str, bool)] = &[
     ("claims", "dclutch-claims-sbf", true),
@@ -2621,32 +2702,20 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
         "set retained authority",
     )?;
     let _ = parse_pubkey(&journal.fee_payer, "set fee payer")?;
-    if journal.roles.len() != PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len() {
+    if journal.roles.len() != CHECKED_ROLE_ORDER_V1.len() {
         return Err(Error::new(format!(
             "set journal must carry exactly {} ordered roles",
-            PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len()
+            CHECKED_ROLE_ORDER_V1.len()
         )));
     }
     let _ = unique_deployment_set_paths(&journal, &journal_path)?;
-    let mut identities = BTreeSet::new();
-    for (index, (role, (expected_role, expected_program, expected_programdata))) in journal
-        .roles
-        .iter()
-        .zip(PERMANENT_DEVNET_UPGRADE_TARGETS_V1)
-        .enumerate()
-    {
-        let program = parse_pubkey(&role.program_id, "set Program")?;
-        let programdata = parse_pubkey(&role.programdata_id, "set ProgramData")?;
-        if role.role != *expected_role
-            || role_ordinal(&role.role)? != index as u8
-            || program != parse_pubkey(expected_program, "permanent set Program")?
-            || programdata != parse_pubkey(expected_programdata, "permanent set ProgramData")?
-        {
-            return Err(Error::new(format!(
-                "set journal target at index {index} is not exact permanent devnet \
-                {expected_role}:{expected_program}:{expected_programdata}"
-            )));
-        }
+    // The journal's own seven rows ARE the target set, authenticated here for
+    // order, Loader derivation and distinctness. Nothing downstream reads a
+    // target from anywhere else, and every row is re-read against the cluster
+    // under `journal.retained_upgrade_authority` before it is believed.
+    let targets = journal_targets(&journal)?;
+    for (index, (role, target)) in journal.roles.iter().zip(targets.iter()).enumerate() {
+        let expected_role = target.role;
         // Rows 0 and 1 are the carry-forward whitelist and nothing else may join
         // it: they are Registry and Rent, whose bytes move only by the
         // infrastructure-profile succession ceremony and never by this journal
@@ -2704,14 +2773,9 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
             }
             (_, None) => {}
         }
-        if !identities.insert(program) || !identities.insert(programdata) {
-            return Err(Error::new(
-                "set journal Program/ProgramData identities are not fourteen unique accounts",
-            ));
-        }
     }
     // No referenced evidence is opened until all fourteen account identities
-    // have matched the permanent table above.
+    // have been authenticated above.
     read_pinned_reference(&journal.checked_release_gate, "set checked-release gate")?;
     read_pinned_reference(
         &journal.infrastructure_carry_forward,
@@ -2912,19 +2976,21 @@ fn require_mutation_permit(
         || journal.solana_cli_version.trim().is_empty()
         || journal.retained_upgrade_authority != args.expected_upgrade_authority.to_string()
         || journal.fee_payer != args.fee_payer.to_string()
-        || journal.roles.len() != PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len()
+        || journal.roles.len() != CHECKED_ROLE_ORDER_V1.len()
     {
         return Err(Error::new(
             "deployment-set mutation journal differs from the exact devnet source, gate, authority, payer, or seven-role closure",
         ));
     }
+    let mutation_targets = journal_targets(&journal)?;
     let mut first_incomplete = None;
-    for (index, (role, (expected_role, expected_program, expected_programdata))) in journal
+    for (index, (role, target)) in journal
         .roles
         .iter()
-        .zip(PERMANENT_DEVNET_UPGRADE_TARGETS_V1)
+        .zip(mutation_targets.iter())
         .enumerate()
     {
+        let expected_role = target.role;
         // The MUTATION TARGET must still be an Upgrade -- an AlreadyCurrent row
         // has nothing to mutate and that is enforced below. This is only the
         // scan that walks past the rows it is not mutating, so it admits the
@@ -2938,13 +3004,9 @@ fn require_mutation_permit(
             CheckedDeploymentDispositionV1::Upgrade
         }
         .admits(role.disposition);
-        if role.role != *expected_role
-            || role.program_id != *expected_program
-            || role.programdata_id != *expected_programdata
-            || !disposition_admitted
-        {
+        if role.role != *expected_role || !disposition_admitted {
             return Err(Error::new(format!(
-                "deployment-set mutation row {index} is not exact permanent {expected_role} with its canonical disposition"
+                "deployment-set mutation row {index} is not {expected_role} with its canonical disposition"
             )));
         }
         if index < 2 {
@@ -3234,6 +3296,7 @@ fn authenticate_carry_forward(
                 "infrastructure carry-forward snapshot is not canonical v1 JSON: {error}"
             ))
         })?;
+    let targets = journal_targets(journal)?;
     if snapshot.schema != CARRY_FORWARD_SNAPSHOT_SCHEMA
         || snapshot.endpoint != "https://api.devnet.solana.com"
         || snapshot.commitment != "finalized"
@@ -3286,26 +3349,27 @@ fn authenticate_carry_forward(
             .as_ref()
             .ok_or_else(|| Error::new(format!("carry-forward snapshot omitted {label}")))
     };
-    let registry_program = parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[0].1, "Registry")?;
-    let registry_programdata = parse_pubkey(
-        PERMANENT_DEVNET_UPGRADE_TARGETS_V1[0].2,
-        "Registry ProgramData",
-    )?;
-    let rent_program = parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[1].1, "Rent")?;
-    let rent_programdata =
-        parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[1].2, "Rent ProgramData")?;
-    let core_program = parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[6].1, "Core")?;
-    if addresses[..4]
-        != [
-            registry_program,
-            registry_programdata,
-            rent_program,
-            rent_programdata,
-        ]
-    {
-        return Err(Error::new(
-            "carry-forward snapshot substituted a permanent Program or ProgramData",
-        ));
+    let registry_program = targets.row(0)?.program;
+    let registry_programdata = targets.row(0)?.programdata;
+    let rent_program = targets.row(1)?.program;
+    let rent_programdata = targets.row(1)?.programdata;
+    let core_program = targets.row(6)?.program;
+    // The refusal names BOTH ids, because the whole failure this replaces --
+    // "set journal target at index 0 is not exact permanent devnet
+    // registry:Hies39GB..." -- cost a lane a night to trace to a constant. A
+    // reader must be able to see the declared identity and the observed one side
+    // by side without re-running anything.
+    for (label, declared, observed) in [
+        ("Registry Program", registry_program, addresses[0]),
+        ("Registry ProgramData", registry_programdata, addresses[1]),
+        ("Rent Program", rent_program, addresses[2]),
+        ("Rent ProgramData", rent_programdata, addresses[3]),
+    ] {
+        if declared != observed {
+            return Err(Error::new(format!(
+                "carry-forward snapshot {label} is {observed}; the deployment set declares {declared}"
+            )));
+        }
     }
     let profile_address = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
@@ -9764,6 +9828,53 @@ mod tests {
 
     use super::*;
 
+    /// One real seven-role Loader set, used ONLY as a fixture.
+    ///
+    /// These were `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` until decision 0012's
+    /// 2026-09-02 amendment retired the constant from production; cohort-7/8
+    /// deployed them and the redeploy discipline has since closed them. They
+    /// survive here because the tests need a set whose ProgramData coordinates
+    /// really are Loader-derived from their Programs, and a fabricated one would
+    /// have to be mined. Nothing outside this module may read them, and no
+    /// production path has a fixed set any more.
+    const PERMANENT_DEVNET_UPGRADE_TARGETS_V1: &[(&str, &str, &str)] = &[
+        (
+            "registry",
+            "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",
+            "ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz",
+        ),
+        (
+            "rent",
+            "DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3",
+            "78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy",
+        ),
+        (
+            "custody",
+            "34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH",
+            "EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf",
+        ),
+        (
+            "resolution",
+            "2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd",
+            "2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f",
+        ),
+        (
+            "claims",
+            "85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN",
+            "4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j",
+        ),
+        (
+            "trading",
+            "5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk",
+            "AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn",
+        ),
+        (
+            "core",
+            "HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N",
+            "AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN",
+        ),
+    ];
+
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     struct TestDirectory(PathBuf);
@@ -11688,6 +11799,179 @@ mod tests {
         }
     }
 
+    /// Decision 0012's amendment: the seven-role target set is an authenticated
+    /// INPUT. The hostile half of that sentence is everything `authenticate`
+    /// still refuses, and the positive half is a full-redeploy cohort's own
+    /// fresh identities -- which the retired constant could not admit, which is
+    /// why no cohort since cohort-9 could ever be sealed.
+    #[test]
+    fn declared_deployment_set_targets_are_authenticated_rather_than_hardcoded() {
+        // Cohort-12's real seven, deployed 2026-09-02 with fresh identities under
+        // the standing grant's condition (a). The ProgramData column is NOT
+        // copied from the deploy: it is what Loader V3 derives, and the equality
+        // below is therefore a check that the derivation reproduces the
+        // addresses the cohort-12 evidence read off chain.
+        const COHORT12: [(&str, &str, &str); 7] = [
+            (
+                "registry",
+                "5c4CfHXHaLoJRtVSZFURp6Qhub8P4x8Hk4yZ3KJNrK53",
+                "FbfJYjjyULLJYX8wzXqv5M5U2fxWLhCwwhvWaxCfWAsu",
+            ),
+            (
+                "rent",
+                "HD72aKvtRzBrVdmDGn8UrcocVA6g4NuG9Bt94GRLMYcW",
+                "7kuFuNDjMGTeYqodG3Aq8ynSBLdN6rLQsSWDyF5mvMGp",
+            ),
+            (
+                "custody",
+                "2MHNgYoCtDzqRryjgAxzFwLVPztSN6NTUr7RmjiMrcLc",
+                "HCiJ7DfkqLagqQPfGQ5sXUXPyMuttds8EvtSQGEaVH4f",
+            ),
+            (
+                "resolution",
+                "9vs7atqDTAZTMo2a9iMZXD6Nf39jQZ7sZFf2X4pGDDvs",
+                "2XiYgQfRAKivMxWaTZLpRZbXtvN14WUKGv7acriTWhcW",
+            ),
+            (
+                "claims",
+                "GwduZB13AgqLxsoxi8wZEQndYBsQERea35dhuYKJzCvc",
+                "9gA7cT9mhFwDLjFzWYprzE44Vzu8U9e8tgArrSAL3uJL",
+            ),
+            (
+                "trading",
+                "Ahzug4zYhG8sc4t6tXjaSjnqbv7bTkgNYRc4kWUxYGJe",
+                "Gx2b9xPmUcyLN79DHy9ExncTnAmedXX3pVmRpG2zVqqA",
+            ),
+            (
+                "core",
+                "G4Wz4fj4zqBPFWYFF9CeYeJtTK5UqSZUu2fyCr9ANjYG",
+                "6wzSk1ip5uuiiqQoCDUuJPNjDZdHtdaJZL5DSQHG4kcy",
+            ),
+        ];
+        fn rows<'a>(
+            table: &'a [(&'static str, String, String); 7],
+        ) -> Vec<(&'a str, &'a str, &'a str)> {
+            table
+                .iter()
+                .map(|(role, program, programdata)| (*role, program.as_str(), programdata.as_str()))
+                .collect()
+        }
+        let owned = |table: &[(&'static str, &str, &str); 7]| {
+            table.clone().map(|(role, program, programdata)| {
+                (role, program.to_owned(), programdata.to_owned())
+            })
+        };
+
+        let cohort12 = owned(&COHORT12);
+        let admitted = DevnetUpgradeTargetsV1::authenticate(rows(&cohort12))
+            .expect("a full-redeploy cohort's own seven must be admissible");
+        assert_eq!(admitted.len(), CHECKED_ROLE_ORDER_V1.len());
+        for (index, target) in admitted.iter().enumerate() {
+            assert_eq!(target.role, CHECKED_ROLE_ORDER_V1[index]);
+            assert_eq!(target.programdata, target_programdata(target.program));
+        }
+
+        // The retired constant's own set still authenticates: the amendment
+        // widened the admissible sets, it did not swap one fixed set for another.
+        let legacy = PERMANENT_DEVNET_UPGRADE_TARGETS_V1
+            .iter()
+            .map(|(role, program, programdata)| (*role, *program, *programdata))
+            .collect::<Vec<_>>();
+        DevnetUpgradeTargetsV1::authenticate(legacy).expect("the retired set is still a valid set");
+
+        // Hostile: a ProgramData that is not the Loader-derived coordinate of its
+        // Program. This is the check that survives the constant and does the work
+        // the constant used to be credited with.
+        let mut forged = owned(&COHORT12);
+        forged[3].2 = COHORT12[4].2.to_owned();
+        let error = DevnetUpgradeTargetsV1::authenticate(rows(&forged))
+            .expect_err("a substituted ProgramData must refuse")
+            .to_string();
+        assert!(
+            error.contains("is not the Loader-derived coordinate")
+                && error.contains(COHORT12[4].2)
+                && error.contains(COHORT12[3].1),
+            "the refusal must name the substituted ProgramData and its Program: {error}"
+        );
+
+        // Hostile: role order.
+        let mut swapped = owned(&COHORT12);
+        swapped.swap(0, 1);
+        let error = DevnetUpgradeTargetsV1::authenticate(rows(&swapped))
+            .expect_err("a reordered set must refuse")
+            .to_string();
+        assert!(
+            error.contains("the canonical role order names") && error.contains("registry"),
+            "{error}"
+        );
+
+        // Hostile: one Program repeated across two roles. Fourteen distinct
+        // accounts was previously a consequence of the table being distinct; it
+        // is now stated.
+        let mut aliased = owned(&COHORT12);
+        aliased[5].1 = COHORT12[4].1.to_owned();
+        aliased[5].2 =
+            target_programdata(parse_pubkey(COHORT12[4].1, "aliased Program").expect("pubkey"))
+                .to_string();
+        let error = DevnetUpgradeTargetsV1::authenticate(rows(&aliased))
+            .expect_err("an aliased Program must refuse")
+            .to_string();
+        assert!(
+            error.contains("repeats an earlier target account"),
+            "{error}"
+        );
+
+        // Hostile: a native id.
+        let mut native = owned(&COHORT12);
+        native[2].1 = system_program::ID.to_string();
+        native[2].2 = target_programdata(system_program::ID).to_string();
+        let error = DevnetUpgradeTargetsV1::authenticate(rows(&native))
+            .expect_err("a native Program must refuse")
+            .to_string();
+        assert!(error.contains("native or default id"), "{error}");
+
+        // Hostile: a short set, and a long one.
+        let short = rows(&cohort12)[..6].to_vec();
+        assert!(
+            DevnetUpgradeTargetsV1::authenticate(short)
+                .expect_err("six roles")
+                .to_string()
+                .contains("must carry exactly 7 ordered roles, not 6")
+        );
+        let mut long = rows(&cohort12);
+        long.push(("core", COHORT12[6].1, COHORT12[6].2));
+        assert!(
+            DevnetUpgradeTargetsV1::authenticate(long)
+                .expect_err("eight roles")
+                .to_string()
+                .contains("more than 7 ordered roles")
+        );
+    }
+
+    /// The refusal the amendment owes a reader: when the set the journal declares
+    /// and the set the chain was observed at disagree, say so BY NAME, with both
+    /// ids. The refusal this replaces named one id and a constant, and it cost a
+    /// lane a night to trace.
+    #[test]
+    fn carry_forward_snapshot_disagreeing_with_the_declared_set_refuses_naming_both_ids() {
+        let mut substituted = MixedSetFixture::new(0);
+        let declared = substituted.journal.roles[0].program_id.clone();
+        let observed = "So11111111111111111111111111111111111111112";
+        assert_ne!(declared, observed);
+        substituted.snapshot.accounts[0].address = observed.to_owned();
+        substituted.rewrite_snapshot();
+        let error = load_set_journal_path(&substituted.args.journal_path)
+            .and_then(|(journal, _)| authenticate_carry_forward(&journal))
+            .expect_err("a substituted Registry Program must refuse")
+            .to_string();
+        assert!(
+            error.contains("Registry Program")
+                && error.contains(observed)
+                && error.contains(&declared),
+            "the refusal must name both the observed and the declared id: {error}"
+        );
+    }
+
     #[test]
     fn mixed_deployment_set_reports_only_the_next_execution_upgrade() {
         let mut fixture = MixedSetFixture::new(2);
@@ -11856,11 +12140,14 @@ mod tests {
         let mut reordered = MixedSetFixture::new(0);
         reordered.journal.roles.swap(0, 1);
         reordered.rewrite_journal();
+        // The words changed with decision 0012's amendment and the refusal did
+        // not: the canonical role order is positional and still binding when the
+        // identities themselves are a caller-declared input.
         assert!(
             load_set_journal_path(&reordered.args.journal_path)
                 .expect_err("reordered roles")
                 .to_string()
-                .contains("exact permanent")
+                .contains("the canonical role order names")
         );
         let mut missing = MixedSetFixture::new(0);
         missing.journal.roles.pop();

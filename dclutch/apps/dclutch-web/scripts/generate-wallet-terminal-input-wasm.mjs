@@ -35,7 +35,13 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 const app = resolve(here, '..');
 const root = resolve(app, '../..');
 const wasmOwner = join(root, 'crates/dclutch-wallet-terminal-input-wasm/src/lib.rs');
-const claims = join(root, 'crates/dclutch-claims-svm/src/liability_basis_state_v2.rs');
+// The two Claims header widths moved to their Lean-emitted owner in
+// `b209be56` and this scraper kept reading the module that now only USES
+// them, so `abi:wallet-terminal-input:verify` had been failing with
+// "Claims does not expose a usize LIABILITY_BASIS_MARKET_HEADER_BYTES_V2"
+// ever since -- a browser surface with no authority behind it, reported as a
+// scraper crash rather than as a drift. Read the generated owner.
+const claims = join(root, 'crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs');
 const core = join(root, 'crates/dclutch-market-core-codec/src/generated.rs');
 const crate = 'dclutch-wallet-terminal-input-wasm';
 const output = join(app, 'lib/generated/walletTerminalInputWasm');

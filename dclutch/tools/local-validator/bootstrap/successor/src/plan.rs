@@ -1597,21 +1597,15 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
         args.custody_program,
         args.rent_credit_program,
     ])?;
-    if args.checked_upgrade_set.is_none()
-        && crate::upgrade::is_permanent_devnet_program_set(&[
-            args.registry_program,
-            args.rent_credit_program,
-            args.custody_program,
-            args.resolution_program,
-            args.claims_program,
-            args.trading_program,
-            args.core_program,
-        ])
-    {
-        return Err(Error::new(
-            "the permanent devnet program set requires --upgrade-set-journal; raw release facts cannot authorize activation",
-        ));
-    }
+    // RETIRED 2026-09-02 with `PERMANENT_DEVNET_UPGRADE_TARGETS_V1` (decision
+    // 0012's amendment): this refused raw release facts for exactly one
+    // hardcoded seven-program set. It had no referent left -- that substrate was
+    // closed by the redeploy discipline the standing grant mandates -- and it
+    // could not be re-pointed, because a prepare with no `--deployment-set-journal`
+    // has no authenticated set to compare against. The rule it was a special case
+    // of survives and is general: `campaign::require_checked_mutable_binding`
+    // refuses a mutable saved plan that is bound neither to checked deployment-set
+    // evidence nor to a fully observed cohort.
     if args.core_bootstrap_upgrade_authority == Pubkey::default()
         || args.core_bootstrap_upgrade_authority == system_program::ID
         || args.core_bootstrap_upgrade_authority == bpf_loader_upgradeable::ID
