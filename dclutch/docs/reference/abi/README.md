@@ -25,7 +25,9 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [directInlineV3](directInlineV3.md) | from canonical Rust/Lean-emitted Direct Hot V3 / Capability V4 ABIs; do not edit. | npm run abi:direct-v3 |
 | [generalSuccessorV5](generalSuccessorV5.md) | from canonical Rust General V5 successor ABIs; do not edit. | node scripts/generate-general-successor-v5.mjs |
 | [genericFoundingV1](genericFoundingV1.md) | by scripts/generate-generic-founding.mjs; do not edit. | npm run abi:generic-founding |
+| [partitionQualityWasmV1](partitionQualityWasmV1.md) | from the authoritative Rust partition-quality gate and WASM artifact; do not edit. | npm run abi:partition-quality-wasm |
 | [principalCapacityV1](principalCapacityV1.md) | by scripts/generate-principal-capacity.mjs; do not edit. | npm run abi:principal-capacity |
+| [productPayoffV2WasmV1](productPayoffV2WasmV1.md) | from the authoritative Rust Product V2 payoff evaluator and WASM artifact; do not edit. | npm run abi:product-payoff-v2-wasm |
 | [productRuntimeV2Admission](productRuntimeV2Admission.md) | from the live Rust Product Runtime V2 admission ABI; do not edit. | npm run abi:product-runtime-v2-admission |
 | [productV2Payoff](productV2Payoff.md) | from the canonical Rust Product V2 payoff ABI; do not edit. | npm run abi:product-v2-payoff |
 | [protocolInfrastructure](protocolInfrastructure.md) | from the Lean-emitted ProtocolInfrastructureProfile Rust ABI; do not edit. | npm run abi:infrastructure |
@@ -34,7 +36,9 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [refusalRegistryV1](refusalRegistryV1.md) | from crates/dclutch-refusal-registry/src/lib.rs and docs/reference/refusals.md; do not edit. | npm run abi:refusal-registry |
 | [registeredDirect](registeredDirect.md) | from dclutch-direct-codec Lean-emitted Rust ABI; do not edit. | npm run abi:registered |
 | [routeCensus](routeCensus.md) | by scripts/generate-route-census.mjs from `dclutch-route-census inventory`; do not edit. | npm run abi:route-census |
+| [sbfRuntimeV1](sbfRuntimeV1.md) | from the pinned solana-sbpf, solana-syscalls and solana-program-entrypoint | npm run abi:sbf-runtime |
 | [sourceProviderWasmV1](sourceProviderWasmV1.md) | from the authoritative Rust Source-provider owner and WASM artifact; do not edit. |  |
 | [sourceReadinessWasmV1](sourceReadinessWasmV1.md) | from the authoritative Rust Source-readiness owner and WASM artifact; do not edit. |  |
 | [userPositionAdmissionWasmV1](userPositionAdmissionWasmV1.md) | from the authoritative Rust admission planner and WASM artifact; do not edit. | npm run abi:user-position-admission |
 | [walletTerminalPayoutV3](walletTerminalPayoutV3.md) | by scripts/generate-wallet-terminal-payout-v3.mjs; do not edit. |  |
+| [walletTerminalPayoutWasmV1](walletTerminalPayoutWasmV1.md) | from the authoritative Rust payout derivation and WASM artifact; do not edit. | npm run abi:wallet-terminal-payout |

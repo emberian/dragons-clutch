@@ -22,8 +22,34 @@ use super::{
 /// Safe, allocation-free typed StateLifecyclePolicy V3 artifact encoder.
 pub mod encode;
 
+/// Lean-owned fixed coordinates for this artifact family.
+///
+/// `DClutchSemantics.StateLifecyclePolicyV5Abi` is the author of the shared
+/// header layout as well as the V5 quote row, because the V5 profile is a
+/// profile *value* inside the one header every generation writes.
+#[allow(dead_code, missing_docs)]
+mod generated_v5;
+
+use generated_v5::{
+    STATE_LIFECYCLE_V5_ARTIFACT_PROFILE_OFFSET as ARTIFACT_PROFILE_OFFSET,
+    STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_ACTION_OFFSET as QUOTE_ACTION_OFFSET,
+    STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_ACTION_SCOPE_OFFSET as QUOTE_SCOPE_OFFSET,
+    STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_COUNT_OFFSET as CURRENT_RENT_QUOTE_COUNT_OFFSET,
+    STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_EXACT_DATA_LEN_OFFSET as QUOTE_EXACT_DATA_LEN_OFFSET,
+    STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_RESERVED_OFFSET as QUOTE_RESERVED_OFFSET,
+    STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_SCALAR_DESTINATION_OFFSET as QUOTE_SCALAR_DESTINATION_OFFSET,
+    STATE_LIFECYCLE_V5_IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET as IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET,
+    STATE_LIFECYCLE_V5_MAGIC_OFFSET as MAGIC_OFFSET,
+    STATE_LIFECYCLE_V5_PLAN_COUNT_OFFSET as PLAN_COUNT_OFFSET,
+    STATE_LIFECYCLE_V5_PROTECTED_OUTPUT_COUNT_OFFSET as PROTECTED_OUTPUT_COUNT_OFFSET,
+    STATE_LIFECYCLE_V5_RECIPE_COUNT_OFFSET as RECIPE_COUNT_OFFSET,
+    STATE_LIFECYCLE_V5_RESERVED_OFFSET as RESERVED_HEADER_OFFSET,
+    STATE_LIFECYCLE_V5_SCHEMA_VERSION_OFFSET as SCHEMA_VERSION_OFFSET,
+    STATE_LIFECYCLE_V5_SEED_COUNT_OFFSET as SEED_COUNT_OFFSET,
+};
+
 /// Canonical V3 lifecycle-policy magic.
-pub const MAGIC: [u8; 8] = *b"DCLTDP03";
+pub const MAGIC: [u8; 8] = generated_v5::STATE_LIFECYCLE_V5_MAGIC;
 /// Finalized-record schema label for lifecycle policies.
 pub const SCHEMA_RELEASE_PREIMAGE: &[u8] = b"dclutch/schema/state-lifecycle-policy-v3";
 /// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE`].
@@ -40,14 +66,12 @@ pub const SUCCESSOR_SCHEMA_RELEASE_ID: [u8; 32] = [
 ];
 /// V5 schema label with adapter-authenticated current-Rent quote projection.
 pub const CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5: &[u8] =
-    b"dclutch/schema/state-lifecycle-policy-v5-current-rent-quotes-v1";
+    generated_v5::STATE_LIFECYCLE_V5_SCHEMA_RELEASE_PREIMAGE;
 /// SHA-256 of [`CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5`].
-pub const CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5: [u8; 32] = [
-    0x10, 0xfb, 0xed, 0x6c, 0x13, 0x26, 0x12, 0x7c, 0xf7, 0xe5, 0x47, 0x83, 0xb1, 0xa5, 0x97, 0xd7,
-    0x7c, 0xa3, 0xe7, 0x6b, 0x53, 0xde, 0x97, 0xc0, 0x8f, 0x27, 0x3f, 0x5e, 0x67, 0xe3, 0x98, 0x3b,
-];
+pub const CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5: [u8; 32] =
+    generated_v5::STATE_LIFECYCLE_V5_SCHEMA_RELEASE_ID;
 /// Canonical schema version.
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = generated_v5::STATE_LIFECYCLE_V5_SCHEMA_VERSION;
 /// Canonical physical artifact profile.
 pub const ARTIFACT_PROFILE: u16 = 1;
 /// Successor artifact profile with lifecycle-owned protected outputs.
@@ -55,9 +79,10 @@ pub const PROTECTED_OUTPUT_ARTIFACT_PROFILE: u16 = 2;
 /// Successor artifact profile with immutable identity-field bindings.
 pub const SUCCESSOR_ARTIFACT_PROFILE: u16 = 3;
 /// V5 artifact profile with bounded protected current-Rent quote declarations.
-pub const CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5: u16 = 4;
+pub const CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5: u16 =
+    generated_v5::STATE_LIFECYCLE_V5_ARTIFACT_PROFILE;
 /// Exact header width.
-pub const HEADER_BYTES: usize = 40;
+pub const HEADER_BYTES: usize = generated_v5::STATE_LIFECYCLE_V5_HEADER_BYTES;
 /// Exact derivation-recipe width.
 pub const RECIPE_BYTES: usize = 16;
 /// Exact seed-operation width.
@@ -69,9 +94,11 @@ pub const PROTECTED_OUTPUT_BYTES: usize = 16;
 /// Exact immutable identity-binding width for the successor profile.
 pub const IMMUTABLE_IDENTITY_BINDING_BYTES: usize = 16;
 /// Exact width of one V5 `(exact_data_len, scalar_destination)` declaration.
-pub const CURRENT_RENT_QUOTE_BYTES_V5: usize = 16;
+pub const CURRENT_RENT_QUOTE_BYTES_V5: usize =
+    generated_v5::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_BYTES;
 /// Maximum quote declarations in this executable lifecycle capacity profile.
-pub const MAX_CURRENT_RENT_QUOTES_V5: u16 = 16;
+pub const MAX_CURRENT_RENT_QUOTES_V5: u16 =
+    generated_v5::STATE_LIFECYCLE_V5_MAX_CURRENT_RENT_QUOTES;
 /// Solana's chain-derived maximum number of seeds per PDA.
 pub const MAX_SEEDS: u8 = 16;
 /// Solana's chain-derived maximum width of one seed.
@@ -1217,44 +1244,44 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
-        if bytes.get(..8) != Some(MAGIC.as_slice()) {
+        if bytes.get(MAGIC_OFFSET..MAGIC_OFFSET + MAGIC.len()) != Some(MAGIC.as_slice()) {
             return Err(Error::InvalidMagic);
         }
-        if read_u16(bytes, 8)? != VERSION {
+        if read_u16(bytes, SCHEMA_VERSION_OFFSET)? != VERSION {
             return Err(Error::UnsupportedProfile);
         }
-        let artifact_profile = read_u16(bytes, 10)?;
+        let artifact_profile = read_u16(bytes, ARTIFACT_PROFILE_OFFSET)?;
         let (protected_outputs, immutable_identity_bindings, current_rent_quotes) =
             match artifact_profile {
                 ARTIFACT_PROFILE => {
-                    require_zero(bytes, 18, 22)?;
+                    require_tail_zero(bytes, PROTECTED_OUTPUT_COUNT_OFFSET)?;
                     (0, 0, 0)
                 }
                 PROTECTED_OUTPUT_ARTIFACT_PROFILE => {
-                    let count = read_u16(bytes, 18)?;
-                    require_zero(bytes, 20, 20)?;
+                    let count = read_u16(bytes, PROTECTED_OUTPUT_COUNT_OFFSET)?;
+                    require_tail_zero(bytes, IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET)?;
                     (count, 0, 0)
                 }
                 SUCCESSOR_ARTIFACT_PROFILE => {
-                    let protected = read_u16(bytes, 18)?;
-                    let bindings = read_u16(bytes, 20)?;
-                    require_zero(bytes, 22, 18)?;
+                    let protected = read_u16(bytes, PROTECTED_OUTPUT_COUNT_OFFSET)?;
+                    let bindings = read_u16(bytes, IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET)?;
+                    require_tail_zero(bytes, CURRENT_RENT_QUOTE_COUNT_OFFSET)?;
                     (protected, bindings, 0)
                 }
                 CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 => {
-                    let protected = read_u16(bytes, 18)?;
-                    let bindings = read_u16(bytes, 20)?;
-                    let quotes = read_u16(bytes, 22)?;
-                    require_zero(bytes, 24, 16)?;
+                    let protected = read_u16(bytes, PROTECTED_OUTPUT_COUNT_OFFSET)?;
+                    let bindings = read_u16(bytes, IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET)?;
+                    let quotes = read_u16(bytes, CURRENT_RENT_QUOTE_COUNT_OFFSET)?;
+                    require_tail_zero(bytes, RESERVED_HEADER_OFFSET)?;
                     (protected, bindings, quotes)
                 }
                 _ => return Err(Error::UnsupportedProfile),
             };
         let value = Self {
             artifact_profile,
-            recipes: read_u16(bytes, 12)?,
-            seeds: read_u16(bytes, 14)?,
-            plans: read_u16(bytes, 16)?,
+            recipes: read_u16(bytes, RECIPE_COUNT_OFFSET)?,
+            seeds: read_u16(bytes, SEED_COUNT_OFFSET)?,
+            plans: read_u16(bytes, PLAN_COUNT_OFFSET)?,
             protected_outputs,
             immutable_identity_bindings,
             current_rent_quotes,
@@ -2319,15 +2346,22 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             })
             .ok_or(Error::InvalidLength)?;
         let declaration = LifecycleCurrentRentQuoteV5 {
-            exact_data_len: read_u32(self.bytes, offset)?,
-            scalar_destination: read_u16(self.bytes, offset + 4)?,
-            scope: read_byte(self.bytes, offset + 6)?,
-            action: read_u32(self.bytes, offset + 7)?,
+            exact_data_len: read_u32(self.bytes, offset + QUOTE_EXACT_DATA_LEN_OFFSET)?,
+            scalar_destination: read_u16(self.bytes, offset + QUOTE_SCALAR_DESTINATION_OFFSET)?,
+            scope: read_byte(self.bytes, offset + QUOTE_SCOPE_OFFSET)?,
+            action: read_u32(self.bytes, offset + QUOTE_ACTION_OFFSET)?,
         };
         // Five reserved bytes, not ten: the action tag was taken out of the
         // front of that run, which is why an unscoped quote is byte-identical to
-        // the same quote before the tag existed.
-        require_zero(self.bytes, offset + 11, 5)?;
+        // the same quote before the tag existed. The width is now Lean's
+        // arithmetic rather than that sentence's.
+        require_zero(
+            self.bytes,
+            offset + QUOTE_RESERVED_OFFSET,
+            CURRENT_RENT_QUOTE_BYTES_V5
+                .checked_sub(QUOTE_RESERVED_OFFSET)
+                .ok_or(Error::InvalidLength)?,
+        )?;
         if declaration.exact_data_len == 0 {
             return Err(Error::InvalidRentQuote);
         }
@@ -3998,6 +4032,19 @@ fn require_zero(bytes: &[u8], offset: usize, width: usize) -> Result<()> {
     } else {
         Err(Error::NonCanonicalReserved)
     }
+}
+
+/// Require every header byte from `offset` to the end of the header to be zero.
+///
+/// The width is derived rather than written: each artifact profile reads a
+/// prefix of the one Lean-owned header layout and every later field is reserved
+/// to it, so the four spans this replaces were four hand-copies of
+/// `HEADER_BYTES` minus a Lean-owned offset.
+fn require_tail_zero(bytes: &[u8], offset: usize) -> Result<()> {
+    let width = HEADER_BYTES
+        .checked_sub(offset)
+        .ok_or(Error::InvalidLength)?;
+    require_zero(bytes, offset, width)
 }
 
 #[cfg(test)]

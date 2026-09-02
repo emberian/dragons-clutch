@@ -104,6 +104,57 @@ pub enum Error {
     Arithmetic,
 }
 
+/// The addresses of a route that a lookup table is allowed to carry.
+///
+/// A table cannot be listed by hand: the route's own account metas are the
+/// authenticated coordinates, and a hand-written list is a second author for
+/// them. It also cannot be "every address", because two classes are
+/// structurally ineligible. An instruction's program id must be resolvable
+/// before the message's tables load, and a signer is authenticated by its
+/// position in the static header, so the runtime keeps both inline whatever a
+/// table says. Handing those to `extend_lookup_table` buys no bytes and pays
+/// permanent rent for them.
+///
+/// So the eligible set is derived: every account key the route names, minus the
+/// payer, minus every instruction's program id, minus every key any meta marks
+/// as a signer -- sorted by bytes and duplicate-free, which is what makes the
+/// compiled index assignment, and therefore the pinned extent, reproducible.
+///
+/// This is the packet arithmetic and nothing else. The table it describes is
+/// transaction-routing data, exactly as this module's header says; a caller
+/// that needs the table to be frozen, precommitted or observed at a finalized
+/// slot enforces that where it builds the table, not here.
+///
+/// # Errors
+///
+/// [`Error::EmptyAddresses`] when the route offers nothing a table could carry,
+/// and [`Error::TooManyAddresses`] beyond the chain's 256-address limit.
+pub fn canonical_route_lookup_addresses_v1(
+    payer: Pubkey,
+    instructions: &[Instruction],
+) -> Result<Vec<Pubkey>, Error> {
+    let mut inline = vec![payer];
+    for instruction in instructions {
+        if !inline.contains(&instruction.program_id) {
+            inline.push(instruction.program_id);
+        }
+        for account in &instruction.accounts {
+            if account.is_signer && !inline.contains(&account.pubkey) {
+                inline.push(account.pubkey);
+            }
+        }
+    }
+    let mut eligible = Vec::new();
+    for instruction in instructions {
+        for account in &instruction.accounts {
+            if !inline.contains(&account.pubkey) && !eligible.contains(&account.pubkey) {
+                eligible.push(account.pubkey);
+            }
+        }
+    }
+    canonical_addresses(&eligible)
+}
+
 /// Build official create and bounded extension instructions.
 ///
 /// The output is deterministic for an address set: addresses are sorted by
@@ -573,5 +624,133 @@ mod tests {
             ),
             Err(Error::DuplicateTable)
         );
+    }
+
+    /// The derivation drops exactly the two structurally ineligible classes,
+    /// and the compiled message is the check: whatever the table offered, the
+    /// runtime kept the payer, the program id and the co-signer static.
+    #[test]
+    fn route_lookup_addresses_exclude_signers_and_program_ids() {
+        let payer = key(1);
+        let program_id = key(2);
+        let cosigner = key(3);
+        let writable = key(4);
+        let readonly = key(5);
+        // The program id of the SECOND instruction also appears as an account
+        // meta of the first, which is the case a filter written per-instruction
+        // gets wrong: it is inline for the message however it was named.
+        let second_program = key(6);
+        let instructions = vec![
+            Instruction {
+                program_id,
+                accounts: vec![
+                    AccountMeta::new(payer, true),
+                    AccountMeta::new(cosigner, true),
+                    AccountMeta::new(writable, false),
+                    AccountMeta::new_readonly(readonly, false),
+                    AccountMeta::new_readonly(second_program, false),
+                    // A repeated meta is one address, not two.
+                    AccountMeta::new_readonly(writable, false),
+                ],
+                data: vec![9; 16],
+            },
+            Instruction {
+                program_id: second_program,
+                accounts: vec![AccountMeta::new(writable, false)],
+                data: vec![9; 16],
+            },
+        ];
+        let mut expected = vec![writable, readonly];
+        expected.sort_unstable_by_key(Pubkey::to_bytes);
+        assert_eq!(
+            canonical_route_lookup_addresses_v1(payer, &instructions),
+            Ok(expected.clone())
+        );
+
+        let observed = observation(90);
+        let table = observed_table(observed, key(8), key(9), 89, u64::MAX, expected);
+        let plan = compile_v0_message(
+            payer,
+            &instructions,
+            Hash::new_from_array([7; 32]),
+            observed,
+            std::slice::from_ref(&table),
+        )
+        .expect("packet-safe v0 over the derived table");
+        assert_eq!(plan.loaded_addresses, 2);
+        let VersionedMessage::V0(message) = &plan.message else {
+            panic!("compile_v0_message must emit v0");
+        };
+        assert_eq!(
+            message.account_keys,
+            vec![payer, cosigner, program_id, second_program]
+        );
+    }
+
+    /// A route with nothing a table could carry says so, rather than building a
+    /// table that would buy no bytes and pay rent forever.
+    #[test]
+    fn a_route_of_signers_and_programs_alone_offers_no_lookup_addresses() {
+        let payer = key(1);
+        let program_id = key(2);
+        let cosigner = key(3);
+        assert_eq!(
+            canonical_route_lookup_addresses_v1(
+                payer,
+                &[Instruction {
+                    program_id,
+                    accounts: vec![
+                        AccountMeta::new(payer, true),
+                        AccountMeta::new(cosigner, true),
+                        AccountMeta::new_readonly(program_id, false),
+                    ],
+                    data: vec![1; 8],
+                }],
+            ),
+            Err(Error::EmptyAddresses)
+        );
+    }
+
+    /// The packet arithmetic, in miniature and with the numbers stated: a
+    /// forty-account route is 1,762 bytes as a legacy message and 558 as v0
+    /// over the table its own metas derive. The 1,204 bytes are 40 x 31 -- a
+    /// 32-byte address becomes a one-byte index -- less the 36 the lookup entry
+    /// itself costs (its table key and two short-vector prefixes).
+    #[test]
+    fn the_derived_table_is_what_carries_a_wide_route_under_the_packet_maximum() {
+        let payer = key(1);
+        let program_id = key(2);
+        let accounts = (10..50_u8)
+            .map(|byte| AccountMeta::new(key(byte), false))
+            .collect::<Vec<_>>();
+        assert_eq!(accounts.len(), 40);
+        let instruction = Instruction {
+            program_id,
+            accounts,
+            data: vec![7; 272],
+        };
+        let legacy =
+            legacy::Message::new(std::slice::from_ref(&instruction), Some(&payer)).serialize();
+        let legacy_wire = 1 + 64 + legacy.len();
+        assert_eq!(legacy_wire, 1_762);
+        assert!(legacy_wire > PACKET_DATA_BYTES);
+
+        let addresses =
+            canonical_route_lookup_addresses_v1(payer, std::slice::from_ref(&instruction))
+                .expect("forty eligible addresses");
+        assert_eq!(addresses.len(), 40);
+        let observed = observation(90);
+        let table = observed_table(observed, key(8), key(9), 89, u64::MAX, addresses);
+        let plan = compile_v0_message(
+            payer,
+            std::slice::from_ref(&instruction),
+            Hash::new_from_array([7; 32]),
+            observed,
+            std::slice::from_ref(&table),
+        )
+        .expect("the same route, packet-safe as v0");
+        assert_eq!(plan.loaded_addresses, 40);
+        assert_eq!(plan.required_signatures, 1);
+        assert_eq!(plan.wire_bytes, 558);
     }
 }

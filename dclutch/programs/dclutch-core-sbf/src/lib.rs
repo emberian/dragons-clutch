@@ -22,13 +22,13 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{
     AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action,
-    CAPABILITY_FUNDING_HEADER_BYTES_V2, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1,
-    CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2, CoreEffectEnvelopeV1,
-    GENERIC_FOUNDING_REQUEST_BYTES_V1, GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1,
-    PROJECT_FOUND_REQUEST_BYTES_V2, PROJECT_FOUND_REQUEST_MAGIC_V2, ProjectFoundRequestV2,
-    REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
-    SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1,
-    SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
+    CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2,
+    CoreEffectEnvelopeV1, GENERIC_FOUNDING_REQUEST_BYTES_V1, GENERIC_FOUNDING_REQUEST_MAGIC_V1,
+    GenericFoundingRequestV1, PROJECT_FOUND_REQUEST_BYTES_V2, PROJECT_FOUND_REQUEST_MAGIC_V2,
+    ProjectFoundRequestV2, REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1, Request,
+    SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
+    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
+    SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1,
     SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
 };
@@ -84,13 +84,8 @@ pub use series_open::SERIES_OPEN_ACCOUNT_COUNT_V1;
 pub use series_permit_expiry::SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1;
 pub use series_permit_expiry_precommit_v1::SERIES_PERMIT_EXPIRY_PRECOMMIT_ACCOUNT_COUNT_V1;
 
-/// Exact instruction prefix shared by all Core actions.
-pub const CORE_REQUEST_PREFIX_BYTES_V1: usize = REQUEST_BYTES;
 /// Exact prefix for a generic capability action before child-owned bytes.
 pub const CAPABILITY_PREFIX_BYTES_V1: usize = REQUEST_BYTES + CORE_EFFECT_ENVELOPE_BYTES_V1;
-/// Exact generic capability semantic prefix before family-owned request bytes.
-pub const CAPABILITY_ROLE_PREFIX_BYTES_V1: usize =
-    CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1;
 /// Exact generic capability semantic prefix for subset-ledger V2 routes.
 pub const CAPABILITY_ROLE_PREFIX_BYTES_V2: usize =
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_HEADER_BYTES_V2;
@@ -154,8 +149,10 @@ pub enum CoreSbfError {
     ///
     /// `CreateFund` is therefore refused for a recovery-policy material. This
     /// is a weld, not a design: it refuses to *create* the un-terminalizable
-    /// resolution state. `VerifyFundReady` and `CloseFund` are deliberately
-    /// untouched, so any state that already exists keeps every route it has.
+    /// resolution state. `VerifyFundReady` is deliberately untouched, so any
+    /// state that already exists keeps every route it has. (`CloseFund` was
+    /// named here too until V7 moved the close out of Core entirely; it now
+    /// earns [`CoreSbfError::UnsupportedAction`] at decode, weld or no weld.)
     /// The weld lifts when the ladder gets a live route.
     RecoveryWalkUnavailable = 0x3011,
     /// A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate
@@ -220,6 +217,22 @@ pub enum CoreSbfError {
     /// per domain, ever. A second ceremony is a fork attempt and refuses
     /// by name (ruling §5 conjunct 6).
     InfrastructureAlreadySucceeded = 0x301B,
+    /// A wire action this program decodes and no longer composes.
+    ///
+    /// The action is well-formed and its discriminant is still live on the
+    /// wire — another program dispatches it — so `Instruction` would be the
+    /// wrong accusation: nothing about the caller's bytes is malformed. What
+    /// is true is narrower and is what a reader needs: *Core is not the owner
+    /// of this route any more*.
+    ///
+    /// Today exactly one action earns it. `ResolutionCoreActionV1::CloseFund`
+    /// used to close the Source subtree through a Core-composed child
+    /// invocation; V7 moved that to `process_direct_funding_close_v1` in the
+    /// Resolution program because the composed route authenticated the same
+    /// plan on both sides of the CPI and exceeded the transaction compute
+    /// ceiling. Core refuses it at decode, before any authentication work is
+    /// spent on an instruction that cannot succeed.
+    UnsupportedAction = 0x301C,
 }
 
 impl CoreSbfError {
@@ -229,7 +242,7 @@ impl CoreSbfError {
     /// [`CoreSbfError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Instruction,
         Self::AccountFrame,
         Self::FinalizedRecord,
@@ -258,12 +271,13 @@ impl CoreSbfError {
         Self::InfrastructureNotForward,
         Self::InfrastructureConsentMissing,
         Self::InfrastructureAlreadySucceeded,
+        Self::UnsupportedAction,
     ];
 
     /// This refusal's position in [`CoreSbfError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a twenty-ninth variant is a COMPILE ERROR here rather than a discriminant no
+    /// a thirtieth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -295,6 +309,7 @@ impl CoreSbfError {
             Self::InfrastructureNotForward => 25,
             Self::InfrastructureConsentMissing => 26,
             Self::InfrastructureAlreadySucceeded => 27,
+            Self::UnsupportedAction => 28,
         }
     }
 }

@@ -1,0 +1,56 @@
+# tools/ci/fmt-baseline.txt -- the files `cargo fmt --all --check` still finds,
+# and who owes each one. Read by tools/ci/run.sh's `fmt` tier.
+#
+# THIS LIST ONLY SHRINKS. A file here is one somebody must reformat; a file NOT
+# here that rustfmt disagrees with fails the gate. Both directions fail, which
+# is the same ratchet COVERAGE.md runs for generated files: the count moves when
+# a person looks at it and decides, never on its own.
+#
+# Why it is not empty, since a fmt baseline is a strange thing to need. Until
+# 6e50a185 this tree had no rustfmt.toml, so `cargo fmt` and `tools/lane.sh fmt`
+# formatted the same file differently and neither answer was wrong -- there was
+# no answer. 50 files had drifted by the time one was written. 874e6c34
+# canonicalised the 31 that no live lane was holding. These 19 are the rest, and
+# every one is either dirty in the shared tree right now or inside a lane's
+# declared territory: reformatting a file somebody is mid-edit in destroys their
+# work, which is a worse defect than the one being fixed.
+#
+# TO CLEAR YOUR LINE: `tools/lane.sh fmt <file>` (or --allow-root for a lib.rs,
+# and then check what else it reflowed -- rustfmt follows `mod`), delete the
+# line, commit both together. The gate fails on a line that is no longer true,
+# so a stale entry cannot sit here looking like work.
+#
+# Nothing may be added here to make a red gate green. A NEW unformatted file
+# means run rustfmt, not edit this file. The only admissible reason for a new
+# line is the one every line below carries: another lane owns that file right
+# now and this is a handoff, not an exemption.
+
+# --- Structured lane -------------------------------------------------------
+crates/dclutch-bearer-v2-operator/src/open_lifecycle_policy_v5.rs
+crates/dclutch-bearer-v2-operator/src/open_release_v1.rs
+crates/dclutch-product-payoff-v2-codec/tests/basis_corpus_v3.rs
+crates/dclutch-rational-lifecycle-hot-v3/src/compact_artifacts_v4.rs
+crates/dclutch-rational-lifecycle-hot-v3/src/compact_operator_v4.rs
+crates/dclutch-rational-lifecycle-hot-v3/src/lifecycle_policy_v5.rs
+crates/dclutch-rational-lifecycle-hot-v3/src/release_v1.rs
+crates/dclutch-rational-lifecycle-hot-v3/src/selected_set_v6.rs
+crates/dclutch-rational-open-wasm/src/wire.rs
+crates/dclutch-structured-v2-operator/tests/artifacts.rs
+
+# --- Dealer lane -----------------------------------------------------------
+# dclutch-dealer-codec is the ONE package that declares edition 2021, so these
+# are the files the two formatters disagreed about most sharply. They are now
+# 2024-style everywhere; these four just have not been run through it yet.
+crates/dclutch-dealer-codec/src/root_tail.rs
+crates/dclutch-dealer-codec/src/scenario.rs
+crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs
+crates/dclutch-dealer-codec/src/trading_request.rs
+
+# --- Direct lane -----------------------------------------------------------
+crates/dclutch-operator/src/direct_close_maker_v1.rs
+programs/dclutch-trading-sbf/program-test/direct-hot/src/fixture.rs
+programs/dclutch-trading-sbf/src/hot_v3.rs
+
+# --- Redemption lane -------------------------------------------------------
+crates/dclutch-wallet-terminal-payout-operator/src/wire.rs
+crates/dclutch-wallet-terminal-payout-wasm/src/lib.rs

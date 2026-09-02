@@ -40,21 +40,43 @@ tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.s
 - **Frame diagnostics.** The runner counts SBF stack-frame-overwrite diagnostics
   per artifact and refuses to run at all if the count is nonzero.
 
-## !! THE INITIALIZER OVERRUNS A LEGACY PACKET BY 565 BYTES !!
+## The initializer overran a legacy packet by 565 bytes, and now rides v0
 
-Measured 2026-09-01, first measurement of this family. Legacy maximum 1,232
-bytes (`PACKET_DATA_BYTES`).
+Measured 2026-09-01, first measurement of this family; converted 2026-09-02.
+Packet maximum 1,232 bytes (`PACKET_DATA_BYTES`).
 
-| transaction | bytes | over |
-|---|---:|---:|
-| initialize the Pending ledger | 1,797 | **+565** |
-| the two initializer hostiles | 1,765 | **+533** |
-| abort (both) | 1,002 | fits, by 230 |
+| transaction | legacy | v0 over the frozen table | over, legacy |
+|---|---:|---:|---:|
+| initialize the Pending ledger | 1,797 | **562** | +565 |
+| the two initializer hostiles | 1,765 | **561** | +533 |
+| abort (both) | 1,002 | stays legacy | fits, by 230 |
 
-This is not the marginal Found31 overrun. **The pre-Market initializer cannot be
-submitted on a legacy message at all** and needs a v0 message over an Address
-Lookup Table. The asymmetry is worth stating plainly: *unwinding* a pre-Market
-funding is submittable by anyone on a plain legacy packet; *creating* one is not.
+This was not the marginal Found31 overrun. **The pre-Market initializer could not
+be submitted on a legacy message at all**, and ProgramTest submits no packet, so
+nothing here would ever have said so — the campaign had to measure.
+
+It now executes as a v0 message over a lookup table that is created, extended
+and **frozen** inside the campaign. The table's 41 addresses are not written
+down: `route_lookup_addresses` offers the message compiler every address the
+instruction names and keeps the ones the compiler resolved through a table, so
+the table cannot name a coordinate the route does not, and the two classes that
+can never be looked up — an instruction's program id, which must resolve before
+the tables load, and a signer, which is authenticated by its header position —
+are excluded by the runtime's own rule rather than by a filter written here.
+Only the payer and the invoked caller program stay inline. Freezing is doctrine,
+not tidiness: a mutable table is a second authority over which addresses a
+submitted message resolves to.
+
+The instruction did not move. Same data, same 43 metas, same privileges, same
+program; no ABI, Lean artifact or refusal code changed, which is what makes this
+a client change. The control is in the campaign already: both hostiles still
+refuse with the same three codes in the same two programs
+(`pre-market-hostiles-refuse-in-two-different-programs`), and a hostile that
+could not be submitted was refusing nothing.
+
+The asymmetry is still worth stating plainly: *unwinding* a pre-Market funding is
+submittable by anyone on a plain legacy packet and deliberately stays that way;
+*creating* one is not.
 
 ## Three hostiles that had no word for what they found
 

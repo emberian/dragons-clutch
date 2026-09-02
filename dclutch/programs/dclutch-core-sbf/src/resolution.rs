@@ -17,9 +17,7 @@ use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2, RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2,
     ResolutionCertificateKindV2, ResolutionCertificateV2, ResolutionCoreActionV1,
-    ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2,
-    SourceClosureReceiptV3, funding_lifecycle_account_digest_v1,
+    ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2, funding_lifecycle_account_digest_v1,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -60,11 +58,12 @@ pub const RESOLUTION_CORE_INSTRUCTION_BYTES_V1: usize = dclutch_market_core_code
 pub const RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1: usize = 18;
 /// Exact outer account count for Source/Funding readiness.
 pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 20;
-/// Exact child and outer account count for terminal admission, including the
-/// three Product Runtime V2 finalized record pairs reauthenticated by both
-/// Resolution and Core.
-pub const RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1: usize = 22;
-/// Exact outer account count for terminal admission.
+/// Exact outer account count for terminal admission, including the three
+/// Product Runtime V2 finalized record pairs reauthenticated by both Resolution
+/// and Core.
+///
+/// There is no matching child count: `AdmitTerminal` makes no child invocation.
+/// Core authenticates the Resolution-owned certificate itself.
 pub const RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1: usize = 22;
 /// Exact outer and child account count for Source/Funding close.
 pub const RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1: usize = 22;
@@ -134,11 +133,20 @@ pub(crate) fn process(
             .ok_or(CoreSbfError::Instruction)?,
     )
     .map_err(|_| CoreSbfError::Instruction)?;
-    if resolution_request.action == ResolutionCoreActionV1::CloseFund {
-        // V7 closes directly in Resolution. Retaining the composed Core CPI
-        // would preserve the exact duplicate-authentication route that exceeds
-        // the transaction compute ceiling.
-        return Err(CoreSbfError::Instruction.into());
+    match resolution_request.action {
+        // V7 closes directly in Resolution (`process_direct_funding_close_v1`).
+        // Retaining the composed Core CPI would preserve the exact
+        // duplicate-authentication route that exceeds the transaction compute
+        // ceiling, so Core is not this route's owner any more. Refused here, at
+        // decode, before a single account is parsed or a signature checked: the
+        // instruction cannot succeed, and spending the authentication on it
+        // first would only make the refusal expensive.
+        ResolutionCoreActionV1::CloseFund => {
+            return Err(CoreSbfError::UnsupportedAction.into());
+        }
+        // Every action Core still composes continues into the shared
+        // authentication below and is dispatched after it.
+        _ => {}
     }
     if funding_header.selected_mask()
         != resolution_request
@@ -167,109 +175,115 @@ pub(crate) fn process(
             resolution_request.action,
         )?;
     }
-    if resolution_request.action == ResolutionCoreActionV1::VerifyFundReady {
-        authenticate_activation_accept(
-            &frame,
-            accounts,
-            *authenticated.state,
-            resolution_request,
-            *authenticated.target_admission,
-        )?;
-        require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
-        if authenticated.state.phase == Phase::Founding
-            && authenticated.state.readiness == Readiness::Prepaid
-        {
+    match resolution_request.action {
+        ResolutionCoreActionV1::VerifyFundReady => {
+            authenticate_activation_accept(
+                &frame,
+                accounts,
+                *authenticated.state,
+                resolution_request,
+                *authenticated.target_admission,
+            )?;
+            require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
+            commit_verified_readiness(
+                &frame,
+                request,
+                *authenticated.state,
+                *authenticated.core_admission,
+            )?;
+            Ok(())
+        }
+        ResolutionCoreActionV1::AdmitTerminal => {
+            // The provider transaction already persisted a Resolution-owned
+            // ResolutionCertificateV2. Core independently authenticates that
+            // durable poststate above/below and accepts it without asking
+            // Resolution to repeat the same release, product, Source, ledger,
+            // and certificate work in a child invocation.
+            let projection = authenticate_admit_projection(
+                &frame,
+                accounts,
+                *authenticated.state,
+                resolution_request,
+            )?;
+            require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
+            if let Some(existing) = authenticated.state.terminal_receipt {
+                if existing != projection.receipt.receipt_id {
+                    return Err(CoreSbfError::Transition.into());
+                }
+                return Ok(());
+            }
             let mut candidate = *authenticated.state;
-            verify_readiness(
+            admit_terminal(
                 request,
                 &mut candidate,
-                *authenticated.core_admission,
+                *authenticated.target_admission,
+                projection.product,
                 true,
-                complete_child_effect(),
+                projection.receipt,
             )
             .map_err(|_| CoreSbfError::Transition)?;
             persist_state(frame.market(), candidate)?;
+            Ok(())
         }
-        return Ok(());
-    }
-    if resolution_request.action == ResolutionCoreActionV1::AdmitTerminal {
-        // The provider transaction already persisted a Resolution-owned
-        // ResolutionCertificateV2. Core independently authenticates that
-        // durable poststate above/below and accepts it without asking
-        // Resolution to repeat the same release, product, Source, ledger, and
-        // certificate work in a child invocation.
-        let projection = authenticate_admit_projection(
-            &frame,
-            accounts,
-            *authenticated.state,
-            resolution_request,
-        )?;
-        require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
-        if let Some(existing) = authenticated.state.terminal_receipt {
-            if existing != projection.receipt.receipt_id {
-                return Err(CoreSbfError::Transition.into());
-            }
-            return Ok(());
+        ResolutionCoreActionV1::CreateFund => {
+            invoke_fixed_role(
+                program_id,
+                &frame,
+                envelope,
+                envelope_bytes,
+                role_request,
+                // The child frame is the outer frame, whichever of its two
+                // admissible widths `validate_outer_frame` accepted.
+                accounts.len(),
+            )?;
+            let acknowledgement =
+                authenticate_fixed_role_ack(&frame, envelope, envelope_bytes, role_request)?;
+            require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
+            authenticate_poststate(
+                &frame,
+                accounts,
+                *authenticated.state,
+                resolution_request,
+                acknowledgement,
+            )?;
+            Ok(())
         }
-        let mut candidate = *authenticated.state;
-        admit_terminal(
-            request,
-            &mut candidate,
-            *authenticated.target_admission,
-            projection.product,
-            true,
-            projection.receipt,
-        )
-        .map_err(|_| CoreSbfError::Transition)?;
-        persist_state(frame.market(), candidate)?;
-        return Ok(());
+        // Refused at decode, above. A `match` on a wire enum has to be total,
+        // and the arm repeats that one refusal rather than inventing a second
+        // accusation for a caller who cannot arrive here.
+        ResolutionCoreActionV1::CloseFund => Err(CoreSbfError::UnsupportedAction.into()),
     }
-    let close_projection = if resolution_request.action == ResolutionCoreActionV1::CloseFund {
-        Some(authenticate_close_prestate(
-            &frame,
-            accounts,
-            *authenticated.state,
-            resolution_request,
-        )?)
-    } else {
-        None
-    };
-    let child_account_count = match resolution_request.action {
-        ResolutionCoreActionV1::AdmitTerminal => RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1,
-        // The fund actions' child frame is the outer frame, whichever of its
-        // two admissible widths `validate_outer_frame` accepted.
-        _ => accounts.len(),
-    };
-    invoke_fixed_role(
-        program_id,
-        &frame,
-        envelope,
-        envelope_bytes,
-        role_request,
-        child_account_count,
-    )?;
-    let acknowledgement =
-        authenticate_fixed_role_ack(&frame, envelope, envelope_bytes, role_request)?;
-    require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
-    authenticate_poststate(
-        &frame,
-        accounts,
-        *authenticated.state,
-        resolution_request,
-        acknowledgement,
-        close_projection,
-    )?;
+}
 
-    match resolution_request.action {
-        ResolutionCoreActionV1::CreateFund => {}
-        ResolutionCoreActionV1::VerifyFundReady => return Err(CoreSbfError::Instruction.into()),
-        ResolutionCoreActionV1::AdmitTerminal => return Err(CoreSbfError::Instruction.into()),
-        ResolutionCoreActionV1::CloseFund => {
-            // CloseFund is one authenticated component of eventual Retire.
-            // Claims and Custody closure are still required before Core may
-            // transition Retiring -> Retired.
-        }
+/// Commit the readiness transition `VerifyFundReady` just authenticated, if the
+/// Market still has one to make.
+///
+/// This guard is what makes the action idempotent, and it is a guard rather
+/// than a refusal on purpose. `authenticate_request_coordinates` admits three
+/// prestates for `VerifyFundReady`, and only `Founding + Prepaid` has a
+/// transition left: the other two describe a Market whose activation was
+/// already accepted once. Re-presenting the same authenticated activation is
+/// not an error, so it commits nothing and returns.
+#[inline(never)]
+fn commit_verified_readiness(
+    frame: &FixedRoleAccountsV1<'_, '_>,
+    request: Request,
+    state: CoreState,
+    core_admission: dclutch_market_core_codec::Admission,
+) -> Result<(), ProgramError> {
+    if state.phase != Phase::Founding || state.readiness != Readiness::Prepaid {
+        return Ok(());
     }
+    let mut candidate = state;
+    verify_readiness(
+        request,
+        &mut candidate,
+        core_admission,
+        true,
+        complete_child_effect(),
+    )
+    .map_err(|_| CoreSbfError::Transition)?;
+    persist_state(frame.market(), candidate)?;
     Ok(())
 }
 
@@ -442,7 +456,6 @@ fn authenticate_activation_accept(
         request,
         ResolutionCoreActionV1::VerifyFundReady,
         &rent,
-        false,
     )?;
     let receipt_account = account(accounts, VERIFY_ACTIVATION_RECEIPT)?;
     let generation_seed = state.identity.generation.to_le_bytes();
@@ -872,9 +885,11 @@ fn authenticate_no_recovery_entries(
 /// `CreateFund` is what mints the `SourceResolutionStateV2` — the object with
 /// no exit — so refusing there is refusing to bring the unresolvable thing into
 /// existence, before any position can be sold against it.
-/// `VerifyFundReady` and `CloseFund` stay admissible on purpose: welding those
-/// would take routes *away* from a state that already exists, which is the
-/// opposite of the census's charter. A weld may not strand what it finds.
+/// `VerifyFundReady` stays admissible on purpose: welding it would take a route
+/// *away* from a state that already exists, which is the opposite of the
+/// census's charter. A weld may not strand what it finds. (`CloseFund` is
+/// listed below for totality only — Core refuses that action at decode, so the
+/// weld could not reach it either way.)
 ///
 /// This returns `true` again the moment the ladder gets a live route (Q2's
 /// build half: resurrect `funded::process_funded_transition` and give
@@ -922,107 +937,6 @@ fn require_readonly_pair(
 struct AdmitProjection {
     product: Product,
     receipt: TerminalReceipt,
-}
-
-#[derive(Clone, Copy)]
-struct CloseProjection {
-    source_state_digest: [u8; 32],
-    terminal_certificate_digest: [u8; 32],
-    funding_set_digest: [u8; 32],
-    source_refund_lamports: u64,
-    ledger_remaining_native_principal: u64,
-    ledger_rent_lamports: u64,
-    ledger_lamport_surplus: u64,
-}
-
-#[inline(never)]
-fn authenticate_close_prestate(
-    frame: &FixedRoleAccountsV1<'_, '_>,
-    accounts: &[AccountInfo<'_>],
-    state: CoreState,
-    request: ResolutionRoleRequestV2,
-) -> Result<CloseProjection, CoreSbfError> {
-    let rent = read_rent(account(accounts, CLOSE_RENT)?)?;
-    authenticate_live_poststate(
-        frame,
-        accounts,
-        state,
-        request,
-        ResolutionCoreActionV1::AdmitTerminal,
-        &rent,
-        true,
-    )?;
-    let source = account(accounts, SOURCE_STATE)?
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Reference)?;
-    let certificate_account = account(accounts, CLOSE_CERTIFICATE)?;
-    let certificate = certificate_account
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Reference)?;
-    if certificate_account.owner != frame.target_program().key
-        || certificate_account.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || certificate_account.key.to_bytes()
-            != state
-                .terminal_receipt
-                .ok_or(CoreSbfError::Transition)?
-                .to_bytes()
-        || !rent.is_exempt(
-            certificate_account.lamports(),
-            RESOLUTION_CERTIFICATE_BYTES_V2,
-        )
-    {
-        return Err(CoreSbfError::Reference);
-    }
-    let decoded =
-        ResolutionCertificateV2::decode(&certificate).map_err(|_| CoreSbfError::Reference)?;
-    if !matches!(
-        decoded.kind,
-        ResolutionCertificateKindV2::ResolutionSuccess
-            | ResolutionCertificateKindV2::ResolutionFailure
-    ) || decoded.market != frame.market().key.to_bytes()
-        || decoded.source_material != state.identity.resolution_policy.to_bytes()
-        || decoded.product_record_digest != state.identity.product_record.to_bytes()
-        || decoded.receipt_account != certificate_account.key.to_bytes()
-        || decoded.generation != state.identity.generation
-        || decoded.selector != state.terminal_winner
-    {
-        return Err(CoreSbfError::Reference);
-    }
-    let funding_ledger = account(accounts, FUNDING_LEDGER)?
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Reference)?;
-    let manifest_data = account(accounts, CAPABILITY_MANIFEST)?
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Reference)?;
-    let manifest =
-        CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
-    let manifest_id =
-        CapabilityContentId::new(request.capability_manifest).map_err(|_| CoreSbfError::Funding)?;
-    let authenticated = FundingLedgerV2::decode(&funding_ledger)
-        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
-        .map_err(|_| CoreSbfError::Funding)?;
-    let ledger_remaining_native_principal = authenticated
-        .remaining_native_lamports_total()
-        .map_err(|_| CoreSbfError::Funding)?;
-    let ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES);
-    let ledger_lamport_surplus = account(accounts, FUNDING_LEDGER)?
-        .lamports()
-        .checked_sub(
-            ledger_rent_lamports
-                .checked_add(ledger_remaining_native_principal)
-                .ok_or(CoreSbfError::Arithmetic)?,
-        )
-        .ok_or(CoreSbfError::Funding)?;
-    Ok(CloseProjection {
-        source_state_digest: solana_program::hash::hash(&source).to_bytes(),
-        terminal_certificate_digest: solana_program::hash::hash(&certificate).to_bytes(),
-        funding_set_digest: hashv(&[SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2, &funding_ledger])
-            .to_bytes(),
-        source_refund_lamports: account(accounts, SOURCE_STATE)?.lamports(),
-        ledger_remaining_native_principal,
-        ledger_rent_lamports,
-        ledger_lamport_surplus,
-    })
 }
 
 #[inline(never)]
@@ -1211,26 +1125,13 @@ fn authenticate_poststate(
     state: CoreState,
     request: ResolutionRoleRequestV2,
     acknowledgement: CoreEffectAckV1,
-    close_projection: Option<CloseProjection>,
 ) -> Result<(), CoreSbfError> {
     let rent = read_rent(account(accounts, rent_index(request.action))?)?;
     let observed_digest = match request.action {
-        ResolutionCoreActionV1::CloseFund => {
-            authenticate_close_poststate(
-                frame,
-                accounts,
-                state,
-                request,
-                close_projection.ok_or(CoreSbfError::ChildAck)?,
-                &rent,
-            )?;
-            let closure = account(accounts, CLOSE_CLOSURE)?
-                .try_borrow_data()
-                .map_err(|_| CoreSbfError::ChildAck)?;
-            resolution_poststate_digest(request.action, &closure, &[], None)?
-        }
+        // Refused at decode in `process`; totality only.
+        ResolutionCoreActionV1::CloseFund => return Err(CoreSbfError::UnsupportedAction),
         action => {
-            authenticate_live_poststate(frame, accounts, state, request, action, &rent, false)?;
+            authenticate_live_poststate(frame, accounts, state, request, action, &rent)?;
             let source = account(accounts, SOURCE_STATE)?
                 .try_borrow_data()
                 .map_err(|_| CoreSbfError::ChildAck)?;
@@ -1269,7 +1170,6 @@ fn authenticate_live_poststate(
     request: ResolutionRoleRequestV2,
     action: ResolutionCoreActionV1,
     rent: &Rent,
-    admit_donations: bool,
 ) -> Result<(), CoreSbfError> {
     let source_account = account(accounts, SOURCE_STATE)?;
     if source_account.owner != frame.target_program().key
@@ -1361,7 +1261,7 @@ fn authenticate_live_poststate(
         .validate_native_custody(
             funding_account.lamports(),
             rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES),
-            admit_donations,
+            false,
         )
         .map_err(|_| CoreSbfError::Funding)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
@@ -1376,83 +1276,6 @@ fn authenticate_live_poststate(
         != *funding_account.key
     {
         return Err(CoreSbfError::Funding);
-    }
-    Ok(())
-}
-
-fn authenticate_close_poststate(
-    frame: &FixedRoleAccountsV1<'_, '_>,
-    accounts: &[AccountInfo<'_>],
-    state: CoreState,
-    request: ResolutionRoleRequestV2,
-    prestate: CloseProjection,
-    rent: &Rent,
-) -> Result<(), CoreSbfError> {
-    for index in [SOURCE_STATE, FUNDING_LEDGER] {
-        let value = account(accounts, index)?;
-        let data = value
-            .try_borrow_data()
-            .map_err(|_| CoreSbfError::ChildAck)?;
-        if value.owner != frame.target_program().key
-            || value.lamports() != 0
-            || data.iter().any(|byte| *byte != 0)
-        {
-            return Err(CoreSbfError::ChildAck);
-        }
-    }
-    let closure_account = account(accounts, CLOSE_CLOSURE)?;
-    let closure_data = closure_account
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    if closure_account.owner != frame.target_program().key
-        || closure_account.key.to_bytes() != request.receipt
-        || closure_account.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES_V3
-        || !rent.is_exempt(closure_account.lamports(), SOURCE_CLOSURE_RECEIPT_BYTES_V3)
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let closure =
-        SourceClosureReceiptV3::decode(&closure_data).map_err(|_| CoreSbfError::ChildAck)?;
-    let terminal_receipt = state
-        .terminal_receipt
-        .ok_or(CoreSbfError::Transition)?
-        .to_bytes();
-    if closure.market != frame.market().key.to_bytes()
-        || closure.source_state != account(accounts, SOURCE_STATE)?.key.to_bytes()
-        || closure.source_material != request.source_material
-        || closure.capability_manifest != request.capability_manifest
-        || closure.terminal_certificate != terminal_receipt
-        || closure.receipt_account != closure_account.key.to_bytes()
-        || closure.beneficiary != request.beneficiary
-        || closure.generation != state.identity.generation
-        || closure
-            .terminal_sequence
-            .checked_add(1)
-            .ok_or(CoreSbfError::Arithmetic)?
-            != request.receipt_sequence
-        || closure.selector != state.terminal_winner
-        || closure.source_state_digest != prestate.source_state_digest
-        || closure.terminal_certificate_digest != prestate.terminal_certificate_digest
-        || closure.funding_set_digest != prestate.funding_set_digest
-        || closure.source_refund_lamports != prestate.source_refund_lamports
-        || closure.ledger_remaining_native_principal != prestate.ledger_remaining_native_principal
-        || closure.ledger_rent_lamports != prestate.ledger_rent_lamports
-        || closure.ledger_lamport_surplus != prestate.ledger_lamport_surplus
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let sequence = request.receipt_sequence.to_le_bytes();
-    if Pubkey::find_program_address(
-        &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
-            account(accounts, SOURCE_STATE)?.key.as_ref(),
-            &sequence,
-        ],
-        frame.target_program().key,
-    )
-    .0 != *closure_account.key
-    {
-        return Err(CoreSbfError::ChildAck);
     }
     Ok(())
 }
@@ -1589,3 +1412,131 @@ fn account<'accounts, 'info>(
 }
 
 const _: usize = SOURCE_MATERIAL_V3_BYTES;
+
+#[cfg(test)]
+mod tests {
+    use dclutch_market_core_codec::Identity;
+
+    use super::*;
+
+    fn identity(value: u8) -> Identity {
+        Identity::new([value; 32]).expect("nonzero identity")
+    }
+
+    /// One well-formed role request for `action`, in that action's exact shape.
+    ///
+    /// Well-formed is the whole point: the refusal under test must be earned by
+    /// the action itself and not by a malformed request that any action would
+    /// have failed on.
+    fn role_request(action: ResolutionCoreActionV1) -> [u8; RESOLUTION_ROLE_REQUEST_BYTES_V1] {
+        let (receipt_kind, receipt, beneficiary, receipt_sequence) = match action {
+            ResolutionCoreActionV1::CreateFund | ResolutionCoreActionV1::VerifyFundReady => {
+                (ResolutionCoreReceiptKindV1::None, [0; 32], [6; 32], 0)
+            }
+            ResolutionCoreActionV1::AdmitTerminal => (
+                ResolutionCoreReceiptKindV1::TerminalSuccess,
+                [5; 32],
+                [0; 32],
+                1,
+            ),
+            ResolutionCoreActionV1::CloseFund => {
+                (ResolutionCoreReceiptKindV1::Closure, [5; 32], [6; 32], 2)
+            }
+        };
+        let role = ResolutionRoleRequestV2 {
+            action,
+            receipt_kind,
+            source_state: [1; 32],
+            source_material: [2; 32],
+            capability_manifest: [3; 32],
+            funding_ledger: [4; 32],
+            receipt,
+            beneficiary,
+            recovery_entry_index: 0,
+            exhaustion_entry_index: 1,
+            failure_entry_index: 2,
+            receipt_sequence,
+        };
+        let body = role.to_bytes().expect("the role request encodes");
+        let header = CapabilityFundingHeaderV2::new(
+            1,
+            3,
+            role.funding_entry_mask().expect("three distinct entries"),
+        )
+        .expect("the funding header encodes")
+        .encode();
+        let mut bytes = [0_u8; RESOLUTION_ROLE_REQUEST_BYTES_V1];
+        bytes[..CAPABILITY_FUNDING_HEADER_BYTES_V2].copy_from_slice(&header);
+        bytes[CAPABILITY_FUNDING_HEADER_BYTES_V2..].copy_from_slice(&body);
+        bytes
+    }
+
+    /// Drive `process` with an empty account frame and return what it refuses.
+    ///
+    /// Empty is deliberate and is what makes the assertion below meaningful:
+    /// every conjunct that reads an account refuses on the frame, so a run that
+    /// reports something else reached its subject before touching one.
+    fn refusal(action: ResolutionCoreActionV1) -> ProgramError {
+        let envelope = CoreEffectEnvelopeV1::new(
+            CoreEffectActionV1::CloseFund,
+            Role::Resolution,
+            identity(7),
+            identity(8),
+            identity(9),
+            identity(10),
+            identity(11),
+            identity(12),
+            identity(13),
+            1,
+            1,
+            1,
+            u32::try_from(RESOLUTION_ROLE_REQUEST_BYTES_V1).expect("the width fits"),
+        )
+        .expect("the envelope encodes");
+        process(
+            &Pubkey::new_unique(),
+            &[],
+            Request::administrative(Action::Retire, 1, identity(10)),
+            envelope,
+            &[],
+            &role_request(action),
+        )
+        .expect_err("no action can succeed against an empty account frame")
+    }
+
+    /// V7 moved the Source close out of Core, and the refusal says so by name.
+    ///
+    /// `CloseFund` decodes cleanly and is still live on the wire — Resolution
+    /// dispatches it — so `Instruction`, which accuses the caller's bytes of
+    /// being malformed, was the wrong accusation for four months. The code a
+    /// reader needs is the one that says Core is not this route's owner.
+    #[test]
+    fn close_fund_earns_the_unsupported_action_code() {
+        assert_eq!(
+            refusal(ResolutionCoreActionV1::CloseFund),
+            ProgramError::Custom(CoreSbfError::UnsupportedAction as u32)
+        );
+    }
+
+    /// The positive control for the refusal above.
+    ///
+    /// Without it `close_fund_earns_the_unsupported_action_code` could pass on
+    /// a program that refused every action that way. Each composed action is
+    /// driven through the same entry, with the same empty frame, and must reach
+    /// the account frame instead — proving the new code is action-specific and
+    /// that the CloseFund run really did stop at the decode-time guard.
+    #[test]
+    fn every_composed_action_outlives_the_decode_time_guard() {
+        for action in [
+            ResolutionCoreActionV1::CreateFund,
+            ResolutionCoreActionV1::VerifyFundReady,
+            ResolutionCoreActionV1::AdmitTerminal,
+        ] {
+            assert_ne!(
+                refusal(action),
+                ProgramError::Custom(CoreSbfError::UnsupportedAction as u32),
+                "a composed action was refused as unsupported"
+            );
+        }
+    }
+}

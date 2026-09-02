@@ -16,11 +16,11 @@
       "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This campaign measured nothing before 2026-09-01."
     },
     {
-      "id": "pre-market-initializer-overruns-the-packet-limit-by-565-bytes",
+      "id": "pre-market-initializer-rides-a-v0-lookup-table",
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.label | test(\"initialize|ProjectFound36\")) | .wire_bytes] | max | tostring",
-      "expect": "1797",
-      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it -- Found31 was ten bytes over and survived every fixture test in the tree until 4e1c4db put it on a v0 ALT. The pre-market initializer is 1,797 bytes, 565 OVER, and the two hostiles that share its frame are 1,765. This route cannot be submitted on a legacy message at all: it needs a v0 message over an Address Lookup Table, and unlike Found31 the overrun is not marginal."
+      "expect": "562",
+      "provenance": "The same instruction was 1,797 bytes as a legacy message -- 565 over Solana's 1,232-byte PACKET_DATA_BYTES -- so this route had never been submittable anywhere; ProgramTest submits no packet, which is exactly why it survived. It now executes as a v0 message over a frozen Address Lookup Table whose 41 addresses are derived from the instruction's own account metas, leaving only the transaction payer and the invoked caller program inline. 41 x 31 bytes saved, less the 36 the lookup entry costs, is the 1,235 between the two figures. Nothing about the instruction moved: same data, same 43 metas, same privileges, same program, and no ABI, Lean artifact or refusal code changed. The two hostiles share the frame and measure 561, one address lower because each aliases a coordinate onto another already in the set."
     },
     {
       "id": "pre-market-abort-fits-with-room",
@@ -35,6 +35,13 @@
       "query": "[.transactions[] | select(.error != null) | [.logs[] | select(test(\"failed: custom program error\"))] | first | capture(\"0x(?<c>[0-9a-f]+)\").c] | unique | sort | join(\",\")",
       "expect": "3001,8000,800e",
       "provenance": "Read off the FIRST `failed:` line of each refusal, which is the frame that originated the code -- a propagated refusal is re-reported by every frame it unwinds through. 0x3001 is core/CoreSbfError::AccountFrame, 0x8000 is resolution/ResolutionError::AccountFrame and 0x800e is resolution/ResolutionError::Funding, in the registered bands 3 and 8 (crates/dclutch-refusal-registry). Two programs, three codes. All three of these hostiles asserted only is_err() before this tier existed, and the two AccountFrame refusals were indistinguishable under that assertion despite coming from different programs at different CPI depths."
+    },
+    {
+      "id": "pre-market-no-transaction-exceeds-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes != null and .wire_bytes > 1232)] | length | tostring",
+      "expect": "0",
+      "provenance": "Against Solana's 1,232-byte PACKET_DATA_BYTES. The previous witness pinned one route's figure; this one is the campaign-wide claim, and it is the one that would catch a new row added over the limit rather than an existing row changing. It excludes nulls on purpose: an unmeasured transaction is not a transaction that fits, and `pre-market-measured-every-transaction` is what holds that count at zero."
     }
   ]
 }

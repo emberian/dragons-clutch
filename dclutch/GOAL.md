@@ -2582,3 +2582,34 @@ worktrees (diffs captured to scratchpad `orphan-worktrees/` first). NOT mine and
 for ember: `.claude/worktrees/` **122 GiB** (19 worktrees, 14 `target/` dirs; branches survive
 `git worktree remove`; opforms/genseven2/cohort10 hold 1/1/2 dirty files), `~/jobs/dclutch-fill2`
 **130 GiB**, `~/dev/dclutch/target` 64 GiB.
+
+### Lane map delta — 2026-09-02 00:45
+
+Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a373` at HEAD `4b7b2a0b`.
+
+- COHORT `a88faeac520a279ee` — **closed.** Cohort-11 live from `8ae2c9c9`, genesis born at V2, **SOL/USD market OPEN at
+  `ARuPAuyJbJoLdMWGDzSqvcV9py25EkmMj8ABnfKP56s`**, founder key held (`docs/evidence/COHORT11_GENESIS_FOUNDED_2026_09_01.md`).
+  Population life NOT demonstrated: simulator stops at `BlockhashNotFound` after prefund; `frozen_routing_table_for` scans the
+  whole ALT program. → POPULATION `ad6d48cc39f881e8e` (both defects + the demonstration, ≤2 SOL per step). Genesis release
+  candidate re-run was killed mid-compile at load 118; queued in `05b0bc47`.
+- CORE `a1d142591d150d69b` — **closed** at `60420ba6`: none of the four arms was reachable; `CloseFund` refuses AT DECODE with
+  `0x301C UnsupportedAction` (wire variant kept: Resolution owns it, `core_effect.rs:1487`); `retire_v1` is live and binds
+  every position by irrefutable slice pattern, so its 36 constants were vocabulary nothing read — deleted, 8 collided by name
+  with different values in `claims/market_closure_v1`. **Root cause to carry: nothing depends on `dclutch-core-sbf` as a
+  library, so `pub` exempts every dead item from every warning.** Owed: 12 `CloseFund` arms held by Rust totality across 9
+  helpers (~400-line type-narrowing refactor, separate lane); cohort-12 redeploy after population life lands on cohort-11.
+- GENERAL — heap wall closed `397ef013` (per-chunk 8,432 → 3,288; peak 51,912 → 41,624); OpenBatch N=2 now reaches
+  **`0x4005 Commit` at 816,888 CU**; convicting.
+- WITNESS `a42033e11f655c7c5` — C-10 13/13, L8 claim is a required argument (`061eaa39`). **Reopened**: journey's `#CloseFund`
+  binding has been false since `a34ff595` (builds `build_resolution_close_fund_v3` against Core); `#AdmitTerminal` binding
+  line owed by resolution-core-v3; stale `blocked.json` entry. Also found: `run-claims-extended.sh` cannot pass at HEAD (143
+  binding problems, → Structured after redeem→retire); `tools/gauntlet/relayed-vertical` did not compile at HEAD (→ V0 lane
+  fixes the manifest, hygiene adds the CI gate).
+- PACKET `ae46f8fc098a84c4b` — **closed** `5a3e29da`. Two fix classes: v0 over a frozen ALT (client change) for everything;
+  Structured full width needs K=5 ABI. Width-2 vs partition gate → **ember ruling, options A/B/C §7 (recommend A)**.
+  `compile_direct_hot_v0` is a superseded v0 island → Direct deletes; registered family has no operator-side v0 builder.
+- V0 `a7d3265e9f331e145`, EMISSION-WIRING `ab353370915da897e` (3 Lean-emitted files no crate compiles), DEALER reopened
+  (the C-06 tier drives unshipped `dealer-sbf`; repoint, then delete 5,234 lines), RIP `a4208061e68425b0d` in flight.
+- Disk: 30 → **304 GiB free**. Removed under authorization: `.claude/worktrees` (19, branches kept, 4 dirty files captured),
+  cohort-8/fill2 source worktrees (5 unmerged commits preserved on `preserve/cohort8-src-20260831` — **unread; someone should
+  read them**), fill2 probe ledger (128 GiB; RESULT/SUMMARY kept), smoke0 harness build. Kept: `~/dev/dclutch/target` (warm).

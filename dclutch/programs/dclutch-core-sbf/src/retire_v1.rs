@@ -88,78 +88,15 @@ pub const RETIREMENT_CHECKPOINT_CUSTODY_SUFFIX_BYTES_V1: usize =
 pub const RETIREMENT_CHECKPOINT_FINISH_BYTES_V1: usize =
     AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1 + REQUEST_BYTES + RETIREMENT_BUNDLE_BYTES_V1;
 
-/// Writable Core Market.
-pub const MARKET_ACCOUNT_V1: usize = 0;
-/// Writable immutable RentCredit.
-pub const RENT_CREDIT_ACCOUNT_V1: usize = 1;
-/// Registry activation cache.
-pub const ACTIVATION_CACHE_ACCOUNT_V1: usize = 2;
-/// Immutable Registry program.
-pub const REGISTRY_PROGRAM_ACCOUNT_V1: usize = 3;
-/// Current Core program.
-pub const CORE_PROGRAM_ACCOUNT_V1: usize = 4;
-/// Current Core ProgramData.
-pub const CORE_PROGRAMDATA_ACCOUNT_V1: usize = 5;
-/// Current Claims program.
-pub const CLAIMS_PROGRAM_ACCOUNT_V1: usize = 6;
-/// Current Claims ProgramData.
-pub const CLAIMS_PROGRAMDATA_ACCOUNT_V1: usize = 7;
-/// Current Resolution program.
-pub const RESOLUTION_PROGRAM_ACCOUNT_V1: usize = 8;
-/// Current Resolution ProgramData.
-pub const RESOLUTION_PROGRAMDATA_ACCOUNT_V1: usize = 9;
-/// Current Custody program.
-pub const CUSTODY_PROGRAM_ACCOUNT_V1: usize = 10;
-/// Current Custody ProgramData.
-pub const CUSTODY_PROGRAMDATA_ACCOUNT_V1: usize = 11;
-/// Immutable infrastructure-selected Rent program.
-pub const RENT_PROGRAM_ACCOUNT_V1: usize = 12;
-/// Persisted Resolution closure receipt.
-pub const SOURCE_RECEIPT_ACCOUNT_V1: usize = 13;
-/// Writable Claims aggregate.
-pub const CLAIMS_AGGREGATE_ACCOUNT_V1: usize = 14;
-/// Writable normal Custody replay.
-pub const CUSTODY_REPLAY_ACCOUNT_V1: usize = 15;
-/// Writable canonical HoardPrincipal vault.
-pub const HOARD_VAULT_ACCOUNT_V1: usize = 16;
-/// Custody token authority PDA.
-pub const CUSTODY_AUTHORITY_ACCOUNT_V1: usize = 17;
-/// Realm-selected collateral Mint.
-pub const COLLATERAL_MINT_ACCOUNT_V1: usize = 18;
-/// Realm-selected collateral token program.
-pub const COLLATERAL_TOKEN_PROGRAM_ACCOUNT_V1: usize = 19;
-/// Finalized Realm raw record.
-pub const REALM_RAW_ACCOUNT_V1: usize = 20;
-/// Vacant finalized Realm staging cursor.
-pub const REALM_STAGING_ACCOUNT_V1: usize = 21;
-/// Core caller PDA for Claims closure.
-pub const CLAIMS_CALLER_AUTHORITY_ACCOUNT_V1: usize = 22;
-/// Core caller PDA for Custody CloseVault.
-pub const CUSTODY_CLOSE_VAULT_AUTHORITY_ACCOUNT_V1: usize = 23;
-/// Core caller PDA for Custody CloseReplay.
-pub const CUSTODY_CLOSE_REPLAY_AUTHORITY_ACCOUNT_V1: usize = 24;
-/// Immutable Core infrastructure profile.
-pub const INFRASTRUCTURE_PROFILE_ACCOUNT_V1: usize = 25;
-/// Finalized Registry ArtifactRelease raw record.
-pub const REGISTRY_ARTIFACT_RAW_ACCOUNT_V1: usize = 26;
-/// Vacant Registry ArtifactRelease staging cursor.
-pub const REGISTRY_ARTIFACT_STAGING_ACCOUNT_V1: usize = 27;
-/// Current Registry ProgramData.
-pub const REGISTRY_PROGRAMDATA_ACCOUNT_V1: usize = 28;
-/// Finalized Rent ArtifactRelease raw record.
-pub const RENT_ARTIFACT_RAW_ACCOUNT_V1: usize = 29;
-/// Vacant Rent ArtifactRelease staging cursor.
-pub const RENT_ARTIFACT_STAGING_ACCOUNT_V1: usize = 30;
-/// Current Rent ProgramData.
-pub const RENT_PROGRAMDATA_ACCOUNT_V1: usize = 31;
-/// Rent sysvar.
-pub const RENT_SYSVAR_ACCOUNT_V1: usize = 32;
-/// Writable immutable lifecycle refund wallet.
-pub const RENT_REFUND_WALLET_ACCOUNT_V1: usize = 33;
-/// Core-derived caller authority for RentCredit closure.
-pub const RENT_CLOSE_AUTHORITY_ACCOUNT_V1: usize = 34;
-/// Invocation-scoped Registry continuation signer.
-pub const REGISTRY_CONTINUATION_ADMISSION_ACCOUNT_V1: usize = 35;
+// The retirement frame's order is carried by the irrefutable slice patterns in
+// `RetirementAccounts::parse` and `parse_direct`, which bind all thirty-six
+// positions by name and are checked for arity by the compiler. The parallel
+// vocabulary of thirty-six `*_ACCOUNT_V1` index constants that used to sit here
+// was what the patterns replaced: none of them was named anywhere in the tree
+// except at its own definition, and eight of them collided by name with
+// unrelated constants of DIFFERENT value in `claims/market_closure_v1`, so a
+// reader who grepped one got two answers and neither was used by anything.
+
 /// Exact joined retirement account count.
 pub const RETIREMENT_ACCOUNT_COUNT_V1: usize = 36;
 

@@ -1,14 +1,19 @@
-//! Translation agreement between Lean-owned V5 coordinates and the safe Rust kernel.
+//! Lean-owned V5 coordinates, pinned, and their agreement with the safe kernel.
+//!
+//! `lifecycle_v3` now *derives* its V5 constants from `generated_v5.rs`, so
+//! asserting the two against each other would compare a name with itself. What
+//! is left to check is the part derivation cannot give away: that Lean's
+//! coordinates are still the numbers this protocol committed to, that the safe
+//! encoder reproduces Lean's witness bytes, and that Lean's hostile corpus is
+//! refused with the exact code each row earns.
 
 #[allow(missing_docs)]
 #[path = "../src/lifecycle_v3/generated_v5.rs"]
 mod generated;
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5, CURRENT_RENT_QUOTE_BYTES_V5,
-    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5,
-    HEADER_BYTES, MAGIC, MAX_CURRENT_RENT_QUOTES_V5, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES,
-    SEED_BYTES, StateLifecyclePolicyV5, VERSION,
+    ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, Error, HEADER_BYTES, PROTECTED_OUTPUT_BYTES,
+    RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV5,
     encode::{
         LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
         LifecycleOperationInputV3, LifecyclePlanInputV3, LifecycleRecipeInputV3,
@@ -69,30 +74,29 @@ fn policy_with_quote() -> Vec<u8> {
 }
 
 #[test]
-fn generated_constants_equal_the_live_safe_kernel() {
-    assert_eq!(generated::STATE_LIFECYCLE_V5_HEADER_BYTES, HEADER_BYTES);
-    assert_eq!(
-        generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_BYTES,
-        CURRENT_RENT_QUOTE_BYTES_V5
-    );
-    assert_eq!(
-        generated::STATE_LIFECYCLE_V5_MAX_CURRENT_RENT_QUOTES,
-        MAX_CURRENT_RENT_QUOTES_V5
-    );
-    assert_eq!(generated::STATE_LIFECYCLE_V5_SCHEMA_VERSION, VERSION);
-    assert_eq!(
-        generated::STATE_LIFECYCLE_V5_ARTIFACT_PROFILE,
-        CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
-    );
+fn generated_constants_are_the_pinned_lean_coordinates() {
+    assert_eq!(generated::STATE_LIFECYCLE_V5_HEADER_BYTES, 40);
+    assert_eq!(generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_BYTES, 16);
+    assert_eq!(generated::STATE_LIFECYCLE_V5_MAX_CURRENT_RENT_QUOTES, 16);
+    assert_eq!(generated::STATE_LIFECYCLE_V5_SCHEMA_VERSION, 3);
+    assert_eq!(generated::STATE_LIFECYCLE_V5_ARTIFACT_PROFILE, 4);
     assert_eq!(
         generated::STATE_LIFECYCLE_V5_SCHEMA_RELEASE_PREIMAGE,
-        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5
+        b"dclutch/schema/state-lifecycle-policy-v5-current-rent-quotes-v1"
     );
+    // The digest is proven to be this preimage's SHA-256 by
+    // `lifecycle_v5_generator_fresh::lifecycle_v5_schema_id_is_the_preimage_sha256`.
+    // Pinned here as well because a finalized-record identity changing is a
+    // release event, not a refactor.
     assert_eq!(
         generated::STATE_LIFECYCLE_V5_SCHEMA_RELEASE_ID,
-        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5
+        [
+            0x10, 0xfb, 0xed, 0x6c, 0x13, 0x26, 0x12, 0x7c, 0xf7, 0xe5, 0x47, 0x83, 0xb1, 0xa5,
+            0x97, 0xd7, 0x7c, 0xa3, 0xe7, 0x6b, 0x53, 0xde, 0x97, 0xc0, 0x8f, 0x27, 0x3f, 0x5e,
+            0x67, 0xe3, 0x98, 0x3b,
+        ]
     );
-    assert_eq!(generated::STATE_LIFECYCLE_V5_MAGIC, MAGIC);
+    assert_eq!(generated::STATE_LIFECYCLE_V5_MAGIC, *b"DCLTDP03");
     assert_eq!(
         [
             generated::STATE_LIFECYCLE_V5_MAGIC_OFFSET,
@@ -123,7 +127,6 @@ fn generated_constants_equal_the_live_safe_kernel() {
         // the authority for this row.
         [0, 4, 6, 7, 11]
     );
-    assert_eq!(generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_BYTES, 16);
 }
 
 #[test]
@@ -154,9 +157,37 @@ fn generated_empty_and_quote_bytes_round_trip_through_rust() {
         Ok((512, 39))
     );
 
-    for hostile_quote in generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_REFUSAL_CORPUS {
+    // A bare `is_err()` here would accept whatever the artifact refuses first,
+    // which for the truncated row is a length check reached before any quote is
+    // read. Each row is named by the accusation it earns.
+    let expected = [
+        // Fifteen bytes: the artifact is one byte short of its declared shape.
+        Error::InvalidLength,
+        // Zero `exact_data_len`.
+        Error::InvalidRentQuote,
+        // Nonzero byte inside the five reserved bytes after the action.
+        Error::NonCanonicalReserved,
+        // Scope tag `2`, which this build does not understand.
+        Error::InvalidRentQuote,
+        // Unscoped quote carrying a nonzero action, a second encoding of
+        // "every action".
+        Error::InvalidRentQuote,
+    ];
+    assert_eq!(
+        generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_REFUSAL_CORPUS.len(),
+        expected.len(),
+        "every Lean corpus row must name its refusal"
+    );
+    for (row, expected) in generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_REFUSAL_CORPUS
+        .into_iter()
+        .zip(expected)
+    {
         let mut hostile = policy.get(..quote_offset).expect("quote prefix").to_vec();
-        hostile.extend_from_slice(hostile_quote);
-        assert!(StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &hostile).is_err());
+        hostile.extend_from_slice(row);
+        assert_eq!(
+            StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &hostile).err(),
+            Some(expected),
+            "hostile row {row:02x?}"
+        );
     }
 }

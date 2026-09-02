@@ -6,13 +6,17 @@
 //! success.
 
 use super::{
-    ACTION_PLAN_BYTES, ARTIFACT_PROFILE, CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5,
-    CURRENT_RENT_QUOTE_BYTES_V5, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES,
-    IMMUTABLE_IDENTITY_BINDING_BYTES, MAGIC, MAX_SEED_BYTES, PLAN_AUTHENTICATE,
-    PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_CREATE, PROTECTED_OUTPUT_ARTIFACT_PROFILE,
-    PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE, PROTECTED_OUTPUT_BYTES, QUOTE_SCOPE_EVERY_ACTION_V5,
-    QUOTE_SCOPE_ONE_ACTION_V5, RECIPE_BYTES, SCOPE_FIXED, SCOPE_ITEM, SEED_BYTES,
-    SEED_CANONICAL_BUMP, SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE, SEED_ITEM_IDENTITY,
+    ACTION_PLAN_BYTES, ARTIFACT_PROFILE, ARTIFACT_PROFILE_OFFSET,
+    CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5, CURRENT_RENT_QUOTE_BYTES_V5,
+    CURRENT_RENT_QUOTE_COUNT_OFFSET, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES,
+    IMMUTABLE_IDENTITY_BINDING_BYTES, IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET, MAGIC, MAGIC_OFFSET,
+    MAX_SEED_BYTES, PLAN_AUTHENTICATE, PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_COUNT_OFFSET,
+    PLAN_CREATE, PROTECTED_OUTPUT_ARTIFACT_PROFILE, PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE,
+    PROTECTED_OUTPUT_BYTES, PROTECTED_OUTPUT_COUNT_OFFSET, QUOTE_ACTION_OFFSET,
+    QUOTE_EXACT_DATA_LEN_OFFSET, QUOTE_SCALAR_DESTINATION_OFFSET, QUOTE_SCOPE_EVERY_ACTION_V5,
+    QUOTE_SCOPE_OFFSET, QUOTE_SCOPE_ONE_ACTION_V5, RECIPE_BYTES, RECIPE_COUNT_OFFSET,
+    SCHEMA_VERSION_OFFSET, SCOPE_FIXED, SCOPE_ITEM, SEED_BYTES, SEED_CANONICAL_BUMP,
+    SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE, SEED_COUNT_OFFSET, SEED_ITEM_IDENTITY,
     SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL, SUCCESSOR_ARTIFACT_PROFILE,
     StateLifecyclePolicyV3, VERSION,
 };
@@ -389,10 +393,18 @@ fn encode_lifecycle_policy_inner_v3_atomic(
         return Err(Error::InvalidLength);
     }
     scratch.fill(0);
-    write(scratch, 0, &MAGIC)?;
-    write(scratch, 8, &VERSION.to_le_bytes())?;
-    write(scratch, 10, &artifact_profile.to_le_bytes())?;
-    for (offset, value) in [(12, recipe_count), (14, seed_count), (16, plan_count)] {
+    write(scratch, MAGIC_OFFSET, &MAGIC)?;
+    write(scratch, SCHEMA_VERSION_OFFSET, &VERSION.to_le_bytes())?;
+    write(
+        scratch,
+        ARTIFACT_PROFILE_OFFSET,
+        &artifact_profile.to_le_bytes(),
+    )?;
+    for (offset, value) in [
+        (RECIPE_COUNT_OFFSET, recipe_count),
+        (SEED_COUNT_OFFSET, seed_count),
+        (PLAN_COUNT_OFFSET, plan_count),
+    ] {
         write(scratch, offset, &value.to_le_bytes())?;
     }
     if matches!(
@@ -401,7 +413,11 @@ fn encode_lifecycle_policy_inner_v3_atomic(
             | SUCCESSOR_ARTIFACT_PROFILE
             | CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
     ) {
-        write(scratch, 18, &plan_count.to_le_bytes())?;
+        write(
+            scratch,
+            PROTECTED_OUTPUT_COUNT_OFFSET,
+            &plan_count.to_le_bytes(),
+        )?;
     }
     if matches!(
         artifact_profile,
@@ -409,12 +425,20 @@ fn encode_lifecycle_policy_inner_v3_atomic(
     ) {
         let binding_count =
             u16::try_from(immutable_identity_bindings.len()).map_err(|_| Error::InvalidLength)?;
-        write(scratch, 20, &binding_count.to_le_bytes())?;
+        write(
+            scratch,
+            IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET,
+            &binding_count.to_le_bytes(),
+        )?;
     }
     if artifact_profile == CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 {
         let quote_count =
             u16::try_from(current_rent_quotes.len()).map_err(|_| Error::InvalidLength)?;
-        write(scratch, 22, &quote_count.to_le_bytes())?;
+        write(
+            scratch,
+            CURRENT_RENT_QUOTE_COUNT_OFFSET,
+            &quote_count.to_le_bytes(),
+        )?;
     }
     let mut cursor = HEADER_BYTES;
     for recipe in recipes {
@@ -454,18 +478,26 @@ fn encode_current_rent_quote(
     output: &mut [u8],
     offset: usize,
 ) -> Result<(), Error> {
-    write(output, offset, &quote.exact_data_len.to_le_bytes())?;
     write(
         output,
-        add(offset, 4)?,
+        add(offset, QUOTE_EXACT_DATA_LEN_OFFSET)?,
+        &quote.exact_data_len.to_le_bytes(),
+    )?;
+    write(
+        output,
+        add(offset, QUOTE_SCALAR_DESTINATION_OFFSET)?,
         &quote.scalar_destination.to_le_bytes(),
     )?;
     let (scope, action) = match quote.action {
         Some(action) => (QUOTE_SCOPE_ONE_ACTION_V5, action),
         None => (QUOTE_SCOPE_EVERY_ACTION_V5, 0),
     };
-    write_byte(output, add(offset, 6)?, scope)?;
-    write(output, add(offset, 7)?, &action.to_le_bytes())
+    write_byte(output, add(offset, QUOTE_SCOPE_OFFSET)?, scope)?;
+    write(
+        output,
+        add(offset, QUOTE_ACTION_OFFSET)?,
+        &action.to_le_bytes(),
+    )
 }
 
 fn encode_immutable_identity_binding(

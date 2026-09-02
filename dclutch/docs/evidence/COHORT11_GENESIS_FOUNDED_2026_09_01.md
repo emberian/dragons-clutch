@@ -127,6 +127,19 @@ bytes cohort-11 runs; the candidate is a source→artifact provenance artifact
 with synthetic program ids, so that is legitimate, but it means this control is
 **queued, not closed**.
 
+Re-run at `659d6f26`, a commit that does carry the lock, it died again — and
+this time not on anything in the tree. The registry SBF link stopped mid
+`Compiling dclutch-registry-sbf` with no diagnostic, which is a kill, on a
+machine sitting at load average 127 across 12 CPUs with the data volume 98%
+full. Nine lanes were building concurrently. Recorded as an environment wall
+rather than retried a third time, because a third hour-long thirteen-link build
+on that machine is a cost the other lanes pay.
+
+(This lane's own share of that pressure has been returned: three dead candidate
+work directories and its abandoned cohort-10 build worktrees removed, ~12 GB,
+keeping only the two worktrees at `8ae2c9c9` that are cohort-11's named
+provenance.)
+
 What it would add is end-to-end confirmation in the real pipeline. The substance
 it checks is already proven by unit test: schema 4 carries both profiles and
 neither can be substituted (`a_genesis_manifest_carries_both_profiles_and_neither_can_be_substituted`,

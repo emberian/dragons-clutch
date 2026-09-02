@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **311** codes, with meanings taken
+The tables below carry all **315** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -288,19 +288,20 @@ from the source code's own documentation.
 | `0xC003` | `GeneralAcceleratorSbfErrorV3::InvalidScratchBank` | The request's declared scratch-bank geometry could not be used. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:114` |
 | `0xC004` | `GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement` | The exact acknowledgement could not be encoded. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:116` |
 | `0xC005` | `GeneralAcceleratorSbfErrorV3::ForeignInstructionBeforeTrading` | An instruction ahead of this one did not belong to ComputeBudget. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:118` |
-| `0xC006` | `GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted` | No exact heap-frame grant preceded the current instruction. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:120` |
-| `0xC007` | `GeneralAcceleratorSbfErrorV3::TopLevelProgramNotTrading` | The current top-level instruction was not the admitted Trading program's. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:122` |
-| `0xC008` | `GeneralAcceleratorSbfErrorV3::InvalidHotEnvelope` | The top-level data was not a canonical Hot execution envelope. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:124` |
-| `0xC009` | `GeneralAcceleratorSbfErrorV3::InvalidFamilyRequest` | The carried family request was not the exact width, or did not decode. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:126` |
-| `0xC00A` | `GeneralAcceleratorSbfErrorV3::InstructionsSysvarAccount` | The supplied account was not the readonly instructions sysvar. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:128` |
-| `0xC00B` | `GeneralAcceleratorSbfErrorV3::CurrentInstructionIndexUnreadable` | The runtime could not report which top-level instruction is executing. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:130` |
-| `0xC00C` | `GeneralAcceleratorSbfErrorV3::PrecedingInstructionUnreadable` | An instruction ahead of the current one could not be read. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:132` |
-| `0xC00D` | `GeneralAcceleratorSbfErrorV3::ScratchPagePrivileges` | A scratch page was not a Trading-owned readonly unsigned data account. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:134` |
-| `0xC00E` | `GeneralAcceleratorSbfErrorV3::ScratchPageDecode` | A scratch page's bytes were not a canonical authenticated page. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:136` |
-| `0xC00F` | `GeneralAcceleratorSbfErrorV3::ScratchPageRequestBinding` | A scratch page did not belong to this caller and this request. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:138` |
-| `0xC010` | `GeneralAcceleratorSbfErrorV3::ScratchPageOrder` | A scratch page arrived out of its streamed chunk index or offset. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:140` |
-| `0xC011` | `GeneralAcceleratorSbfErrorV3::ScratchBankDigest` | The reassembled bank's bytes differed from the digest declared. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:142` |
-| `0xC012` | `GeneralAcceleratorSbfErrorV3::ScratchBankLength` | The pages did not sum to the bank length the request declared. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:149` |
+| `0xC006` | `GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested` | No exact `RequestHeapFrame` preceded the current instruction. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:134` |
+| `0xC007` | `GeneralAcceleratorSbfErrorV3::TopLevelProgramNotTrading` | The current top-level instruction was not the admitted Trading program's. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:136` |
+| `0xC008` | `GeneralAcceleratorSbfErrorV3::InvalidHotEnvelope` | The top-level data was not a canonical Hot execution envelope. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:138` |
+| `0xC009` | `GeneralAcceleratorSbfErrorV3::InvalidFamilyRequest` | The carried family request was not the exact width, or did not decode. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:140` |
+| `0xC00A` | `GeneralAcceleratorSbfErrorV3::InstructionsSysvarAccount` | The supplied account was not the readonly instructions sysvar. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:142` |
+| `0xC00B` | `GeneralAcceleratorSbfErrorV3::CurrentInstructionIndexUnreadable` | The runtime could not report which top-level instruction is executing. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:144` |
+| `0xC00C` | `GeneralAcceleratorSbfErrorV3::PrecedingInstructionUnreadable` | An instruction ahead of the current one could not be read. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:146` |
+| `0xC00D` | `GeneralAcceleratorSbfErrorV3::ScratchPagePrivileges` | A scratch page was not a Trading-owned readonly unsigned data account. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:148` |
+| `0xC00E` | `GeneralAcceleratorSbfErrorV3::ScratchPageDecode` | A scratch page's bytes were not a canonical authenticated page. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:150` |
+| `0xC00F` | `GeneralAcceleratorSbfErrorV3::ScratchPageRequestBinding` | A scratch page did not belong to this caller and this request. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:152` |
+| `0xC010` | `GeneralAcceleratorSbfErrorV3::ScratchPageOrder` | A scratch page arrived out of its streamed chunk index or offset. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:154` |
+| `0xC011` | `GeneralAcceleratorSbfErrorV3::ScratchBankDigest` | The reassembled bank's bytes differed from the digest declared. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:156` |
+| `0xC012` | `GeneralAcceleratorSbfErrorV3::ScratchBankLength` | The pages did not sum to the bank length the request declared. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:163` |
+| `0xC013` | `GeneralAcceleratorSbfErrorV3::HeapCeilingNotLifted` | The declared heap frame could not be installed as this program's ceiling. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:174` |
 
 ## product-runtime-v2
 
@@ -423,6 +424,9 @@ from the source code's own documentation.
 | `0x4014` | `TradingSbfError::DescriptorKind` | The descriptor does not bind the kind the persisted selection names. | `programs/dclutch-trading-sbf/src/lib.rs:335` |
 | `0x4015` | `TradingSbfError::DescriptorManifestEntry` | The descriptor disagrees with its manifest entry's profile. | `programs/dclutch-trading-sbf/src/lib.rs:342` |
 | `0x4016` | `TradingSbfError::DescriptorRootWidth` | The descriptor's root width is not the width this root was created with. | `programs/dclutch-trading-sbf/src/lib.rs:348` |
+| `0x4017` | `TradingSbfError::AdmittedFrame` | The authenticated admitted-AOT frame or one of its Registry records. | `programs/dclutch-trading-sbf/src/lib.rs:358` |
+| `0x4018` | `TradingSbfError::AdmittedTransport` | The admitted-AOT register-bank transport: encoding, chunking, caller authority width, or the authenticated input scratch pages. | `programs/dclutch-trading-sbf/src/lib.rs:363` |
+| `0x4019` | `TradingSbfError::AdmittedContext` | The admitted-AOT invocation context: an identity that is not a valid `ContentId`, or a strategy that names no certificate, admission, or artifact release. | `programs/dclutch-trading-sbf/src/lib.rs:369` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |

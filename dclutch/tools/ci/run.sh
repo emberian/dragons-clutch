@@ -154,6 +154,114 @@ tier_census() {
 }
 
 # ---------------------------------------------------------------------------
+# fmt -- seconds, and the gate that could not exist until 6e50a185.
+#
+# Not "is the tree formatted" but "does rustfmt still disagree with exactly the
+# files we already know it disagrees with", read from tools/ci/fmt-baseline.txt.
+# Both directions fail: an unformatted file NOT in the baseline, and a baseline
+# line that is no longer true. That is COVERAGE.md's ratchet applied to
+# formatting -- the list moves when a person looks at it and decides.
+#
+# WHY A BASELINE AT ALL, since "run rustfmt" is a complete fix and a strange
+# thing to defer. Until rustfmt.toml existed this tree had TWO formatters that
+# disagreed -- `cargo fmt` passes each crate's declared edition, `lane.sh fmt`
+# hardcodes --edition 2024, and dclutch-dealer-codec declares 2021 -- so the
+# same file was reformatted back and forth by lanes who were each running the
+# tool correctly. 50 files had drifted. 874e6c34 canonicalised the 31 nobody
+# was holding; the other 19 are live-lane files, and reformatting a file
+# somebody is mid-edit in destroys their work, which is worse than the drift.
+# So the baseline is a HANDOFF LIST with an owner per block, not an exemption,
+# and it only shrinks.
+#
+# WHAT THIS DOES NOT COVER, stated because the tier name promises more than it
+# delivers: `cargo fmt --all` reads the ROOT workspace, and this tree has 57
+# tracked Cargo workspaces. The nested program-test and tool workspaces are
+# formatted by nothing here. Running rustfmt over all 1,147 tracked .rs files
+# instead was measured and abandoned -- rustfmt follows `mod` from every file
+# it is handed, so passing all of them re-formats the same trees repeatedly and
+# did not finish in two minutes, which is not a cheap-tier cost. Closing it
+# wants one rustfmt invocation per workspace root, and it is owed.
+# ---------------------------------------------------------------------------
+tier_fmt() {
+  say "fmt -- rustfmt against the committed baseline"
+  local baseline="$repo_root/tools/ci/fmt-baseline.txt"
+  if [ ! -f "$baseline" ]; then
+    note "tools/ci/fmt-baseline.txt is not in this tree, and without it this"
+    note "gate has nothing to compare against -- it would report every drifted"
+    note "file as new. That is a missing prerequisite, not a clean tree."
+    record fmt $EXIT_PREREQ_MISSING "the fmt baseline is absent"
+    return
+  fi
+  if [ ! -f "$repo_root/rustfmt.toml" ]; then
+    note "rustfmt.toml is not in this tree. It is what makes \`cargo fmt\`,"
+    note "\`tools/lane.sh fmt\` and a bare \`rustfmt\` agree; without it"
+    note "\"formatted\" has no single answer and this gate would enforce"
+    note "whichever one cargo happened to pick. Nothing is claimed."
+    record fmt $EXIT_PREREQ_MISSING "rustfmt.toml absent -- 'formatted' is undefined"
+    return
+  fi
+  if ! have cargo; then
+    record fmt $EXIT_PREREQ_MISSING "cargo not on PATH"
+    return
+  fi
+  if ! (cd "$repo_root" && cargo fmt --version) >/dev/null 2>&1; then
+    note "cargo is present but the rustfmt component is not. Install it with:"
+    note "    rustup component add rustfmt"
+    record fmt $EXIT_PREREQ_MISSING "the rustfmt component is not installed"
+    return
+  fi
+
+  # This reads the WORKING TREE, like every other cheap tier -- `--commit` does
+  # not reach here. On a shared checkout that matters more for this gate than
+  # most: an unformatted file a neighbouring lane is mid-edit in is
+  # indistinguishable from drift somebody landed, and reformatting theirs to
+  # clear it is the one repair that is never yours to make.
+  local dirty
+  dirty="$(cd "$repo_root" && git status --porcelain -- '*.rs' 2>/dev/null |
+    wc -l | tr -d ' ')"
+  if [ "${dirty:-0}" != 0 ]; then
+    note "the working tree has $dirty uncommitted .rs files; a finding below"
+    note "may be a neighbouring lane's, and is theirs to format, not yours"
+  fi
+
+  local found expected new gone
+  found="$(cd "$repo_root" && cargo fmt --all --check 2>/dev/null |
+    sed -n 's|^Diff in ||p' | sed 's|:[0-9]*:$||' |
+    sed "s|^$repo_root/||" | sort -u | grep -v '^$')"
+  expected="$(grep -v '^[[:space:]]*#' "$baseline" | grep -v '^[[:space:]]*$' |
+    sort -u)"
+
+  new="$(comm -23 <(printf '%s\n' "$found" | grep -v '^$') \
+    <(printf '%s\n' "$expected" | grep -v '^$'))"
+  gone="$(comm -13 <(printf '%s\n' "$found" | grep -v '^$') \
+    <(printf '%s\n' "$expected" | grep -v '^$'))"
+
+  if [ -n "$new" ]; then
+    note "rustfmt disagrees with files that are NOT in the baseline:"
+    printf '      %s\n' $new
+    note "The fix is the FILE, never this list: \`tools/lane.sh fmt <file>\`"
+    note "(--allow-root for a lib.rs/main.rs/mod.rs, and then look at what"
+    note "else it reflowed -- rustfmt follows \`mod\` out of the file you"
+    note "named). A line may be added to the baseline only for the reason"
+    note "every line there already carries: another lane owns that file now."
+    record fmt $EXIT_GATE_FAILED "$(printf '%s\n' $new | wc -l | tr -d ' ') unformatted file(s) outside the baseline"
+    return
+  fi
+  if [ -n "$gone" ]; then
+    note "These baseline lines are no longer true -- rustfmt is happy with"
+    note "them now, so the list is claiming work that is already done:"
+    printf '      %s\n' $gone
+    note "Delete those lines from tools/ci/fmt-baseline.txt and commit it with"
+    note "whatever formatted them. The gate fails in this direction on purpose:"
+    note "a ratchet nobody has to unwind is a ratchet that never reaches zero."
+    record fmt $EXIT_GATE_FAILED "$(printf '%s\n' $gone | wc -l | tr -d ' ') stale baseline line(s)"
+    return
+  fi
+  note "$(printf '%s\n' "$expected" | grep -c '^..*$') file(s) still owed, each named in the baseline with its lane"
+  record fmt $EXIT_PASS
+}
+
+# ---------------------------------------------------------------------------
 # runbooks -- seconds. Every command a runbook publishes, replayed as `--help`.
 #
 # The complement of the release tier's `usage_parity.py`, one layer out. That
@@ -676,7 +784,7 @@ tier_programs() {
 # REVISION. A red that belongs to a colleague's half-written file is worse than
 # no gate, because it is a gate that cries wolf at whoever runs it next.
 tier_journey() {
-  say "journey -- the journey campaign compiles and its host tests pass"
+  say "journey -- the journey campaign, and every other tool workspace, compiles"
   if ! have cargo; then
     record journey $EXIT_PREREQ_MISSING "cargo not on PATH"
     return
@@ -714,10 +822,7 @@ tier_journey() {
   local code=0
   (cd "$root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
     cargo test --manifest-path "$manifest" --bins) || code=$?
-  [ -n "$archive_root" ] && rm -rf -- "$archive_root"
-  if [ "$code" = 0 ]; then
-    record journey $EXIT_PASS
-  else
+  if [ "$code" != 0 ]; then
     note "The journey campaign does not compile, or one of its host tests"
     note "failed. If it is a compile error, most often this is the"
     note "\`#[path]\` tripwire doing its job: a module under"
@@ -725,7 +830,81 @@ tier_journey() {
     note "shape, and the journey links those files verbatim rather than"
     note "copying them. Fix the journey to match its upstream -- do NOT fork"
     note "the module, which is the exact mirror this arrangement prevents."
+  fi
+
+  # THE OTHER TOOL WORKSPACES, for the reason the journey itself is here.
+  #
+  # The journey is not the only campaign that links successor modules by
+  # `#[path]`, but it was the only one any tier compiled -- so the tripwire
+  # protected exactly one of its dependants. tools/gauntlet/relayed-vertical
+  # links the same bootstrap modules and rotted unnoticed: its Cargo.toml never
+  # caught up with the dependencies 8a64178a added, and by 2026-09-02 it did not
+  # build at all. Nothing was red, because nothing built it.
+  #
+  # DISCOVERED, NEVER LISTED. `find` locates every Cargo.toml under
+  # tools/gauntlet and tools/local-validator that carries its own `[workspace]`
+  # table, minus the journey checked above. A workspace added tomorrow is
+  # checked tomorrow; a hardcoded row here would be this file's signature
+  # defect, a value duplicated instead of read.
+  #
+  # `cargo check`, not `cargo test`: this is the compiles-at-all gate the
+  # journey row already is, extended to its siblings. What each campaign
+  # ASSERTS is its own runner's business and mostly needs a validator.
+  local -a rotted=() declined=()
+  local tool_manifest tool_code tool_log
+  tool_log="$(mktemp "${TMPDIR:-/tmp}/dclutch-ci-toolws.XXXXXX")"
+  while IFS= read -r tool_manifest; do
+    [ -n "$tool_manifest" ] || continue
+    [ "$tool_manifest" = "tools/gauntlet/journey/Cargo.toml" ] && continue
+    tool_code=0
+    (cd "$root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+      cargo check --manifest-path "$tool_manifest" 2>&1 | tee "$tool_log") ||
+      tool_code=${PIPESTATUS[0]}
+    if [ "$tool_code" != 0 ]; then
+      # A crate that fails through its OWN `compile_error!` is not rotted; it
+      # is refusing a question this gate asked badly. tools/gauntlet/aot-cu
+      # carries three mutually exclusive evaluator features and says "select
+      # exactly one", so a featureless check cannot succeed and never could.
+      # Guessing a feature here would make this file the author of a choice the
+      # crate owns. So it is reported as NOT CHECKED, which is a 2 and becomes
+      # a failure under --require -- the distinction this whole script exists
+      # to keep: "could not be measured" is not "measured and fine".
+      if grep -q 'compile_error!' "$tool_log"; then
+        declined+=("$tool_manifest")
+      else
+        rotted+=("$tool_manifest")
+        code=1
+      fi
+    fi
+  done < <(cd "$root" && find tools/gauntlet tools/local-validator \
+    -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort |
+    while IFS= read -r candidate; do
+      grep -q '^\[workspace\]' "$candidate" && printf '%s\n' "$candidate"
+    done)
+
+  rm -f -- "$tool_log"
+  [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+
+  if [ "${#rotted[@]}" -gt 0 ]; then
+    note "These tool workspaces do not compile:"
+    printf '      %s\n' "${rotted[@]}"
+    note "A campaign nothing builds is a campaign that has already stopped"
+    note "being true; that is why they are checked here rather than trusted."
+  fi
+  if [ "${#declined[@]}" -gt 0 ]; then
+    note "NOT CHECKED -- these decline a featureless \`cargo check\` through"
+    note "their own \`compile_error!\`, which is a crate demanding a choice,"
+    note "not a broken one. Nothing is claimed about them either way:"
+    printf '      %s\n' "${declined[@]}"
+  fi
+
+  if [ "$code" != 0 ]; then
     record journey $EXIT_GATE_FAILED
+  elif [ "${#declined[@]}" -gt 0 ]; then
+    record journey $EXIT_PREREQ_MISSING \
+      "${#declined[@]} tool workspace(s) declined a featureless check"
+  else
+    record journey $EXIT_PASS
   fi
 }
 
@@ -1403,6 +1582,11 @@ tier      cost         prerequisite       what it gates
 
 census    milliseconds python3            a generated file arriving with no
                                           re-emit guard, or losing one
+fmt       ~10s         cargo, rustfmt     rustfmt disagreeing with a file that
+                                          is not in tools/ci/fmt-baseline.txt,
+                                          or a baseline line that is no longer
+                                          true. Root workspace only; the 56
+                                          nested ones are owed
 seam      ~20s         ast-grep           six structural seam defect classes,
                                           new findings against a triaged baseline
 runbooks  seconds      python3            every command README.md, docs/guides
@@ -1436,13 +1620,22 @@ emission  minutes      lake (Lean)        every generated file still byte-
 frameguard minutes     cargo-build-sbf    every function in the exact thirteen
                                           SBF links retains its admitted frame;
                                           catches growth below the 4,096 wall
-journey   ~2 min       cargo              the journey campaign still COMPILES.
-                                          Not that it passes -- a real campaign
-                                          needs a validator and is tens of
-                                          minutes, so it belongs to the cut.
-                                          This catches the class that hid a
-                                          two-day breakage: a `#[path]` module
-                                          upstream moving out from under it
+journey   minutes      cargo              the journey campaign still COMPILES,
+                                          and so does every other workspace
+                                          under tools/gauntlet and
+                                          tools/local-validator. Not that they
+                                          pass -- a real campaign needs a
+                                          validator and is tens of minutes, so
+                                          that belongs to the cut. This catches
+                                          the class that hid a two-day
+                                          breakage: a `#[path]` module upstream
+                                          moving out from under it -- exactly
+                                          how relayed-vertical rotted, unbuilt
+                                          by any tier and so never red. It was
+                                          ~2 min when it built one workspace;
+                                          each of the others has its own target
+                                          directory and one exceeded 15 minutes
+                                          cold on a loaded machine
 programs  minutes      cargo-build-sbf    the programs build with no SBF stack-
                                           frame diagnostic, and the public
                                           Direct route holds its compute margin
@@ -1460,9 +1653,9 @@ workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           fresh target dir per workspace, so it
                                           is not in `all`
 
-aliases:  cheap = census seam runbooks release
-          all   = census seam runbooks release sbom sbfcontracts web emission frameguard journey
-                  programs suites
+aliases:  cheap = census fmt seam runbooks release
+          all   = census fmt seam runbooks release sbom sbfcontracts web emission frameguard
+                  journey programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
 environment:
@@ -1508,9 +1701,9 @@ main() {
       list_tiers
       exit 0
       ;;
-    cheap) tiers+=(census seam runbooks release) ;;
-    all) tiers+=(census seam runbooks release sbom sbfcontracts web emission frameguard journey programs suites) ;;
-    census | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
+    cheap) tiers+=(census fmt seam runbooks release) ;;
+    all) tiers+=(census fmt seam runbooks release sbom sbfcontracts web emission frameguard journey programs suites) ;;
+    census | fmt | seam | runbooks | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

@@ -138,18 +138,8 @@
     },
     {
       "route": "core/resolution::process#CloseFund",
-      "reason": "DEAD ARM: unreachable code, not missing coverage. The previous reason (\"Resolution Fund lifecycle; needs the Source/provider tier and an open Market\") is now provably wrong and was replaced rather than left standing: the Source/provider evidence it asked for now exists (tools/gauntlet/resolution-core-v3) and this arm still cannot run. `resolution::process` refuses CloseFund at its TOP -- programs/dclutch-core-sbf/src/resolution.rs:136, `V7 closes directly in Resolution` because retaining the composed Core CPI preserved the exact duplicate-authentication route that exceeded the transaction compute ceiling -- so control never reaches the trailing `match resolution_request.action` at line 263 and this arm (line 267) can never be selected. The live successor is `resolution/core_effect::process_direct_funding_close_v1`, which is EXECUTED (resolution-core-v3-programtest, 261,641 CU): the close did not go missing, it moved. Same deletion as `core/resolution::process#AdmitTerminal` and `#VerifyFundReady`; AGENTS.md forbids preserving a superseded authority path beside its successor.",
-      "owner": "Core owner -- the fix is a deletion in programs/dclutch-core-sbf/src/resolution.rs:263-272, which C-09's charter forbids it from making. Found and convicted by C-09 (WITNESS) 2026-09-01."
-    },
-    {
-      "route": "core/persist_state#VerifyFundReady",
-      "reason": "Resolution Fund readiness; needs the Source/provider tier.",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
-    },
-    {
-      "route": "core/persist_state#AdmitTerminal",
-      "reason": "Terminal admission; needs the Source/provider tier and a resolved Market.",
-      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+      "reason": "NOT a dead arm any more, and no longer a coverage gap of the kind this file usually records. The trailing enumerator match was deleted and this route now names Core's decode-time refusal of the action, which is reachable, cheap, and refuses by name with `CoreSbfError::UnsupportedAction` (0x301C) before any authentication work is spent. It used to refuse `CoreSbfError::Instruction`, which accused the caller's bytes of being malformed when nothing about them was: the action decodes cleanly and Resolution still dispatches it. The live successor is `resolution/core_effect::process_direct_funding_close_v1`, EXECUTED at 261,641 CU -- the close did not go missing, it moved out of Core in V7 because the composed route authenticated the same plan on both sides of a CPI and exceeded the transaction compute ceiling. WHAT IS OWED IS NOT A CORE CHANGE AND IS A REAL DEFECT: `tools/gauntlet/journey/src/resolution.rs` still builds this instruction with `build_resolution_close_fund_v3` (whose `instruction.program_id` is the CORE program) and SUBMITS it, and `tools/gauntlet/journey/bindings.json` claims `outcome: executed` for it. That claim cannot be true on any tree since `a34ff595` welded the action shut, and it is why the register credited this route as executed. The journey campaign owes a move to `build_resolution_direct_close_fund_v1` and a corrected binding; until then this route has no honest observation.",
+      "owner": "journey campaign owner (the false `executed` binding and the superseded builder call); arm deleted and the refusal named by the Core dispatch lane 2026-09-02. Convicted by C-09 (WITNESS) 2026-09-01."
     },
     {
       "route": "core/begin_retiring::process#BeginRetiring",
@@ -223,13 +213,8 @@
     },
     {
       "route": "core/resolution::process#AdmitTerminal",
-      "reason": "DEAD ARM: unreachable code, not missing coverage. `resolution::process` handles AdmitTerminal in a block beginning at programs/dclutch-core-sbf/src/resolution.rs:195 that returns on EVERY path -- `return Err(CoreSbfError::Transition)` on a receipt-id mismatch, `return Ok(())` on an idempotent re-admission, and `return Ok(())` after `admit_terminal` + `persist_state`. Control therefore cannot reach the trailing `match resolution_request.action` at line 263, and this arm (line 266) can never be selected. MEASURED, not only read: the transaction bound as `core-v3: Core admits the terminal state without a child invocation` (tools/gauntlet/resolution-core-v3) submits exactly this action against the real ELFs and it EXECUTES at 87,806 CU with Core alone in the frame, leaving the Market Terminal with its certificate receipt persisted. Had line 266 been live the same transaction would have refused `CoreSbfError::Instruction`. The only input that could select the arm provably takes the earlier return instead. Two dead arms sit beside it in the same match -- `core/resolution::process#VerifyFundReady` (line 265) and `#CloseFund` (line 267) -- and all three should go in one commit.",
-      "owner": "Core owner -- the fix is a deletion in programs/dclutch-core-sbf/src/resolution.rs:263-272, which C-09's charter forbids it from making. Found and convicted by C-09 (WITNESS) 2026-09-01."
-    },
-    {
-      "route": "core/resolution::process#VerifyFundReady",
-      "reason": "DEAD ARM, the same defect as `core/resolution::process#AdmitTerminal` one line below it. `resolution::process` handles VerifyFundReady in a block that ends `return Ok(())` at programs/dclutch-core-sbf/src/resolution.rs:193, so control cannot reach the trailing match at line 263 and this arm (line 265) can never be selected. ADOPTED into blocked.json by C-09 (WITNESS) 2026-09-01 while convicting its neighbour: it is not in C-09's row and was carrying NO STATED REASON AT ALL, which reads as unstarted work rather than as unreachable code. Same fix, same commit. Do not confuse it with the DISTINCT and live route `resolution/process_verify#VerifyFundReady`, which is Resolution's own child handler and is separately blocked in this file on evidence wiring: the two share a name and nothing else.",
-      "owner": "Core owner -- the fix is a deletion in programs/dclutch-core-sbf/src/resolution.rs:263-272, which C-09's charter forbids it from making. Found and convicted by C-09 (WITNESS) 2026-09-01."
+      "reason": "NOT a dead arm any more: the trailing enumerator match was deleted and this route now names the real dispatch site (`programs/dclutch-core-sbf/src/resolution.rs`, the `AdmitTerminal` arm of the action dispatch in `resolution::process`), which is reachable and is the block Core actually executes. What is left is a BINDING gap, not a coverage gap, and it is defect A from `docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md`: the `tools/gauntlet/resolution-core-v3` campaign submits exactly this action against the real ELFs and it executes at 87,806 CU with Core alone in the frame, but that campaign's binding deliberately claimed only two routes because this id pointed at a dead arm at the time it was written. The id now points at live code, so the binding is true and owed. Owed work is one line in `tools/gauntlet/resolution-core-v3/bindings.json` plus the note correction, by whoever can re-run that campaign and see the route in its observation ledger -- not a Core change.",
+      "owner": "resolution-core-v3 campaign owner. Arm deleted by the Core dispatch lane 2026-09-02; convicted by C-09 (WITNESS) 2026-09-01."
     }
   ]
 }

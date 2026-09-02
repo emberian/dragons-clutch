@@ -37,6 +37,7 @@ use dclutch_product_runtime_v2::{
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
@@ -74,6 +75,7 @@ use dclutch_resolution_core_v3_operator::{
     },
     validate_resolution_create_fund_report_v3,
 };
+use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, RECOVERY_POLICY_SCHEMA_ID_V2,
     RecoveryAttemptV2, RecoveryPolicyV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
@@ -82,9 +84,11 @@ use dclutch_source_contract::{
     SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2,
     SourceSpecV1,
 };
-use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_resolution_proof_sbf::ResolutionError;
 use solana_account::{Account, AccountSharedData};
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table, freeze_lookup_table,
+};
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
     clock::Clock,
     hash::{hash, hashv},
@@ -93,10 +97,13 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{ProgramTest, ProgramTestContext};
+use solana_sdk::hash::Hash;
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::transfer;
-use solana_transaction::{InstructionError, Transaction, TransactionError};
+use solana_transaction::{
+    InstructionError, Transaction, TransactionError, versioned::VersionedTransaction,
+};
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x31; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x32; 32]);
@@ -889,6 +896,255 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
     1 + signatures * 64 + message.len()
 }
 
+/// What one route costs on the wire, measured both ways.
+///
+/// A conversion that reports only the number it arrived at is not a
+/// measurement, it is an assertion: the reader cannot tell whether the route
+/// moved or the instrument did. Both extents are built from the SAME
+/// instruction bytes and the SAME account set, so the only difference between
+/// them is the envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PacketExtentV1 {
+    /// The signed legacy message: every address inline. This is the number the
+    /// route could not be submitted at.
+    legacy_bytes: usize,
+    /// The signed v0 message over the route's own derived table.
+    v0_bytes: usize,
+    /// Addresses the v0 message still carries inline -- payer, program ids and
+    /// signers, which no table can move.
+    static_keys: usize,
+    /// Addresses the table resolved.
+    loaded_addresses: usize,
+}
+
+/// Solana's serialized transaction packet maximum.
+///
+/// Restated here because this harness resolves independently of the protocol
+/// workspace and cannot link `dclutch_versioned_message_operator`, which owns
+/// the constant: that crate pins `solana-hash =4.6.0` and
+/// `solana-address-lookup-table-interface =3.2.0` against this harness's
+/// `solana-message =4.4.1` and `=3.1.0`, and the two pin sets have no common
+/// solution. Named, not typed at a call site, so there is one copy to retire
+/// when the workspaces converge.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// Addresses per table-extension transaction, bounded so the extension itself
+/// stays a packet.
+const EXTEND_ADDRESSES_PER_TRANSACTION_V1: usize = 20;
+
+/// The addresses this route's table must carry, decided by the message compiler
+/// rather than by a filter written here.
+///
+/// Two classes of address can never be looked up -- an instruction's program id
+/// has to resolve before the tables load, and a signer is authenticated by its
+/// position in the static header -- and a campaign that states that rule in its
+/// own words acquires a second author for it. So this states nothing: it offers
+/// the compiler every address the route names and keeps the ones the compiler
+/// resolved through a table. A table entry the runtime declines to use is
+/// ignored in silence and costs permanent rent, which is exactly the failure a
+/// hand-written filter produces and nothing catches.
+///
+/// `dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1` is
+/// the same probe for the protocol workspace. This harness cannot link it (see
+/// `PACKET_DATA_BYTES` above), and the two agree by construction rather than by
+/// discipline: neither states the rule, both ask the compiler for it.
+fn route_lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
+    let mut candidates: Vec<Pubkey> = Vec::new();
+    for instruction in instructions {
+        for account in &instruction.accounts {
+            if !candidates.contains(&account.pubkey) {
+                candidates.push(account.pubkey);
+            }
+        }
+    }
+    let probe_key = Pubkey::new_from_array([0xff; 32]);
+    assert!(
+        !candidates.contains(&probe_key) && payer != probe_key,
+        "the probe table's key must not be one of the route's own coordinates"
+    );
+    let probe = v0::Message::try_compile(
+        &payer,
+        instructions,
+        &[AddressLookupTableAccount {
+            key: probe_key,
+            addresses: candidates.clone(),
+        }],
+        Hash::default(),
+    )
+    .expect("the route compiles as a message");
+    let mut eligible = Vec::new();
+    for lookup in &probe.address_table_lookups {
+        for index in lookup
+            .writable_indexes
+            .iter()
+            .chain(lookup.readonly_indexes.iter())
+        {
+            eligible.push(candidates[usize::from(*index)]);
+        }
+    }
+    eligible.sort_unstable_by_key(Pubkey::to_bytes);
+    eligible.dedup();
+    assert!(
+        !eligible.is_empty(),
+        "a route with nothing a table can carry does not need one"
+    );
+    eligible
+}
+
+/// Create, extend and FREEZE this route's own lookup table, then wait out the
+/// slot its addresses need to become resolvable.
+///
+/// The address list is derived, never written here:
+/// `canonical_route_lookup_addresses_v1` reads the route's own account metas,
+/// so the table cannot name a coordinate the instruction does not, and a
+/// campaign that mis-states the frame gets a compile failure rather than a
+/// quietly different transaction.
+///
+/// Freezing is not tidiness. A mutable table is a second authority over which
+/// addresses a submitted message actually resolves to, which is the substitution
+/// the Pyth caller refuses by name; freezing makes the routing data as fixed as
+/// the instruction bytes it routes. The rent is permanent and intended.
+async fn frozen_route_lookup_table(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+) -> (Pubkey, Vec<Pubkey>) {
+    let payer = context.payer.pubkey();
+    let addresses = route_lookup_addresses(payer, instructions);
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("pre-derivation Clock");
+    context
+        .warp_to_slot(clock.slot + 1)
+        .expect("the derivation slot must be strictly recent");
+    let (create, table) = create_lookup_table(payer, payer, clock.slot);
+    submit(context, &[create], &[]).await;
+    for chunk in addresses.chunks(EXTEND_ADDRESSES_PER_TRANSACTION_V1) {
+        submit(
+            context,
+            &[extend_lookup_table(
+                table,
+                payer,
+                Some(payer),
+                chunk.to_vec(),
+            )],
+            &[],
+        )
+        .await;
+    }
+    submit(context, &[freeze_lookup_table(table, payer)], &[]).await;
+    let extended = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-extension Clock");
+    context
+        .warp_to_slot(extended.slot + 1)
+        .expect("appended addresses resolve only after the slot they landed in");
+    (table, addresses)
+}
+
+/// Submit one labelled step as a v0 message over a frozen table, and record
+/// both extents.
+///
+/// The legacy extent is computed from the identical instructions and thrown
+/// away unsubmitted -- it is the control, and it is what this route used to be.
+async fn process_recorded_v0(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    table: Pubkey,
+    addresses: &[Pubkey],
+    label: &str,
+) -> (
+    Result<(), TransactionError>,
+    Option<(Pubkey, Vec<u8>)>,
+    PacketExtentV1,
+) {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let payer = context.payer.pubkey();
+    let legacy = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&payer),
+        &[&context.payer],
+        blockhash,
+    );
+    let legacy_bytes = wire_extent(legacy.signatures.len(), &legacy.message.serialize());
+    let compiled = v0::Message::try_compile(
+        &payer,
+        instructions,
+        &[AddressLookupTableAccount {
+            key: table,
+            addresses: addresses.to_vec(),
+        }],
+        blockhash,
+    )
+    .expect("the route compiles as v0 over its own frozen table");
+    let static_keys = compiled.account_keys.len();
+    let loaded_addresses: usize = compiled
+        .address_table_lookups
+        .iter()
+        .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+        .sum();
+    let message = VersionedMessage::V0(compiled);
+    let payer_signer = context.payer.insecure_clone();
+    let transaction =
+        VersionedTransaction::try_new(message, &[&payer_signer]).expect("signed v0 transaction");
+    let v0_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    let extent = PacketExtentV1 {
+        legacy_bytes,
+        v0_bytes,
+        static_keys,
+        loaded_addresses,
+    };
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    let outcome = processed.result.clone();
+    let failure = outcome.clone().err().map(|error| format!("{error:?}"));
+    let metadata = processed.metadata;
+    let logs = metadata
+        .as_ref()
+        .map(|value| value.log_messages.clone())
+        .unwrap_or_default();
+    let units = metadata
+        .as_ref()
+        .map_or(0, |value| value.compute_units_consumed);
+    let returned = metadata
+        .and_then(|value| value.return_data)
+        .map(|value| (value.program_id, value.data));
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(v0_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    (outcome, returned, extent)
+}
+
 /// Submit one labelled step, record what the chain did, and return the result
 /// together with the program-return data the caller inspects.
 ///
@@ -1064,6 +1320,27 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
     }
     assert_ne!(fixture.ledger, fixture.source);
     assert_eq!(initializer.selected_mask, 0b111);
+    // The initializer and both hostiles are 43-meta frames over the SAME
+    // address set -- each hostile aliases one coordinate onto another already in
+    // it, which is what makes them hostile -- so one table derived from the
+    // initializer's own metas routes all three, and a hostile cannot quietly
+    // acquire an address the honest route does not name.
+    let honest_initializer = Instruction {
+        program_id: TRADING_CALLER_PROGRAM_ID,
+        accounts: {
+            let mut accounts = initializer.instruction.accounts.clone();
+            accounts[0].is_signer = false;
+            accounts
+        },
+        data: initializer.instruction.data.clone(),
+    };
+    let (route_table, route_addresses) =
+        frozen_route_lookup_table(&mut context, std::slice::from_ref(&honest_initializer)).await;
+    assert_eq!(
+        route_addresses.len(),
+        41,
+        "43 metas less the transaction payer and the invoked caller program"
+    );
     assert_eq!(
         initializer.expected_receipt.ledger,
         fixture.ledger.to_bytes()
@@ -1084,12 +1361,19 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         accounts: source_aliased_accounts,
         data: initializer.instruction.data.clone(),
     };
-    let (source_aliased, _) = process_recorded(
+    let (source_aliased, _, source_aliased_extent) = process_recorded_v0(
         &mut context,
         &[source_aliased_instruction],
+        route_table,
+        &route_addresses,
         "pre-market funding: refuses a funding source aliased into ProjectFound36",
     )
     .await;
+    assert!(
+        source_aliased_extent.legacy_bytes > PACKET_DATA_BYTES
+            && source_aliased_extent.v0_bytes <= PACKET_DATA_BYTES,
+        "a hostile nobody could submit refuses nothing: {source_aliased_extent:?}"
+    );
     assert!(
         matches!(
             source_aliased,
@@ -1115,12 +1399,19 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         accounts: aliased_accounts,
         data: initializer.instruction.data.clone(),
     };
-    let (aliased, _) = process_recorded(
+    let (aliased, _, aliased_extent) = process_recorded_v0(
         &mut context,
         &[aliased_instruction],
+        route_table,
+        &route_addresses,
         "pre-market funding: refuses an internal ProjectFound36 alias",
     )
     .await;
+    assert!(
+        aliased_extent.legacy_bytes > PACKET_DATA_BYTES
+            && aliased_extent.v0_bytes <= PACKET_DATA_BYTES,
+        "a hostile nobody could submit refuses nothing: {aliased_extent:?}"
+    );
     // Core, not Resolution, catches this one: the alias is internal to the
     // ProjectFound36 frame Core authenticates, and the observed refusal is
     // `core/CoreSbfError::AccountFrame` raised at depth three and re-reported
@@ -1148,20 +1439,37 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         "the refused projection leaves the Resolution ledger vacant"
     );
 
-    let mut caller_accounts = initializer.instruction.accounts.clone();
-    caller_accounts[0].is_signer = false;
-    let caller_instruction = Instruction {
-        program_id: TRADING_CALLER_PROGRAM_ID,
-        accounts: caller_accounts,
-        data: initializer.instruction.data.clone(),
-    };
-    let (outcome, returned) = process_recorded(
+    let (outcome, returned, extent) = process_recorded_v0(
         &mut context,
-        &[caller_instruction],
+        std::slice::from_ref(&honest_initializer),
+        route_table,
+        &route_addresses,
         "pre-market funding: initialize the Resolution-owned Pending ledger",
     )
     .await;
     assert!(outcome.is_ok(), "initializer transaction commits");
+    // The whole point of this route, as a number. 1,797 is what a legacy message
+    // costs and it is 565 over Solana's maximum, so the initializer had never
+    // been submittable anywhere -- ProgramTest submits no packet, which is
+    // exactly why it survived. Forty-one of its forty-three coordinates are
+    // ordinary accounts and each becomes a one-byte index: 41 x 31 = 1,271, less
+    // the 36 the lookup entry itself costs (the table key, its two short-vector
+    // prefixes, the lookups short-vector and the version byte), which is the
+    // 1,235 bytes between the two figures. Only two addresses stay inline, and
+    // neither could have moved: the transaction payer and the invoked caller
+    // program. Nothing about the instruction changed -- same data, same account
+    // set, same privileges, same program, same 43 metas. Only the envelope.
+    assert_eq!(
+        extent,
+        PacketExtentV1 {
+            legacy_bytes: 1_797,
+            v0_bytes: 562,
+            static_keys: 2,
+            loaded_addresses: 41,
+        }
+    );
+    assert!(extent.legacy_bytes > PACKET_DATA_BYTES);
+    assert!(extent.v0_bytes <= PACKET_DATA_BYTES);
     let returned = returned.expect("initializer receipt");
     assert_eq!(returned.0, TRADING_CALLER_PROGRAM_ID);
     assert_eq!(returned.1.len(), PRE_MARKET_FUNDING_RECEIPT_BYTES_V2);
