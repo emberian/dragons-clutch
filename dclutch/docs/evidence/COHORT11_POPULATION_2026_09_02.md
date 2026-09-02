@@ -278,9 +278,10 @@ The simulator config still carries all four as `<placeholder>` strings, and its
 and attempted no trade. The residue is three artifacts and their commands, all
 first-party, none blocked.
 
-## The genesis release candidate: still queued, and now for a third reason
+## The genesis release candidate: it finally ran, and it refuses
 
-Reported as it stands, not re-litigated. Three attempts, three different endings:
+Five attempts. The first three ended for reasons that were not the candidate's;
+the last two produced verdicts:
 
 1. At `8ae2c9c9` (the previous lane): thirteen SBF links, freshness gate, all
    thirteen frame reports and provenance descriptors — then died on the stale
@@ -319,25 +320,39 @@ every candidate at HEAD after building all twelve links cleanly. Fixed in
 lives in two places, and the honest repair is for the successor binary to print
 its shipped set so this script can compare content rather than count.
 
-**`hot_v3::execute_authenticated_hot_v3` grew past its SBF stack frame** in the
-window `ae1c2bd4..803ee31c`. The comparison is exact, from two candidate runs
-that archived their own sources: trading emitted **0** frame-overwrite reports
-at `ae1c2bd4` and **3** at `803ee31c`, all three naming that one symbol. The
-two commits in that window touching `hot_v3.rs` are `bfc8383f` ("the tail-count
-agreement was unsatisfiable for every fixed-topology profile") and `0ba29756`;
-this lane did not bisect between them and does not claim which. A frame
+**`hot_v3::execute_authenticated_hot_v3` grew past its SBF stack frame at
+`bfc8383f`** — "hot: the tail-count agreement was unsatisfiable for every
+fixed-topology profile". Bisected to that single commit with two SBF builds of
+`dclutch-trading-sbf` from detached worktrees:
+
+| commit | frame-overwrite reports |
+| --- | ---: |
+| `bfc8383f^` (`723eed12`) | **0** |
+| `bfc8383f` | **3** |
+
+All three name the one symbol
+`_ZN19dclutch_trading_sbf6hot_v328execute_authenticated_hot_v3…E`. A frame
 overwrite is undefined behaviour at execution, not a warning, so the candidate
-is right to withhold the artifact.
+is right to withhold the artifact — and this is the hottest route the protocol
+has.
 
 **The control is closed as a refusal, not as a pass.** That is worth more than
 another queueing: for two days it could not say anything, and now it names two
 things nothing else was watching. Neither blocks cohort-11, which runs bytes
 built at `8ae2c9c9`, where trading was clean and dealer-sbf still shipped.
 
-With the link gate repaired, a fifth run was launched at `0f0ec379`. **The
-trading stack-frame regression is the open residue** and it is not this lane's
-to fix: it is undefined behaviour at execution in the hottest route the protocol
-has, it appeared inside an hour, and the two commits in its window are named
-above.
+With the link gate repaired at `0f0ec379`, the fifth run got past it and
+refused on the substance instead, which is the whole point of repairing it:
+
+```
+BUILD DIAGNOSTIC: trading emitted 3 SBF stack-frame overwrite reports
+SBF build freshness PASS links=12
+refusing: 3 SBF build diagnostics; fix them at their owner, or re-run with
+          --allow-build-diagnostics to record them explicitly
+```
+
+The link-count refusal had been *masking* this one. **The trading stack-frame
+regression at `bfc8383f` is the open residue**, left to its owner with an exact
+commit rather than a window.
 
 Devnet evidence. Not mainnet evidence.

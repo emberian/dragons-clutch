@@ -23,6 +23,13 @@ tools/genref/generate.sh --check    # byte-compare, write nothing, exit 1 on dri
 
 ## Discipline
 
+- **This generator runs BEFORE the `abi:*` TypeScript ones, not after.**
+  `apps/dclutch-web/scripts/generate-refusal-registry.mjs` reads its band table
+  from the registry crate and its codes from `refusals.md`, so a band removed
+  from the crate while this page still lists its codes makes that script throw
+  "sits in no registered band" (found deleting band 0x7 on 2026-09-02); and
+  because `abi/*.md` here mirrors those emitted `.ts` modules, correcting one of
+  them takes two genref passes with a commit between.
 - The generator owns the whole directory: `--check` fails on stale, missing,
   **or stray** files; regeneration removes strays. The directory cannot drift
   or grow by hand.

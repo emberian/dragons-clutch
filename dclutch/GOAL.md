@@ -2644,3 +2644,39 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Hazards named by lanes: shared scratchpad filenames collide (use lane-unique); bare `rustfmt` on a crate root reformats
   the module tree and moves wasm digests through panic line numbers; a dirty index makes `git diff` lie about hunk maps.
 - Cuts: `e9c99f00d`, `e1f04652f`, and this one.
+
+### Lane map delta — 2026-09-02 02:00
+
+- RIP unit 2 (`cbdecdb3`, `fc9ba16e`, `ac00e939`): projected Hot V4 deleted (4,132 lines; its outer imported a module that
+  does not exist); 20 Series items; six shadow constants **wired** (the shadow accelerator auth read slots 0–5 as bare
+  integers beside the named block — one frame, two authors); 5 contract constants deleted; ~40 unwired pins reported →
+  unit 3. **ELF control refined:** raw digest moves through `.strtab` CGU names; the invariant is identical size and zero
+  differing bytes outside `.strtab`, with a comment-only edit as the positive control. 11/13 ELFs byte-identical.
+- **RULING FOR EMBER — the Series family.** `crate::series` in Trading (28 files) has no non-test consumer, no dispatch in
+  `lib.rs`, no route; it is a compiled island inside the default feature set (not linked into the shipped ELF, so it costs
+  nothing at runtime). Its accelerator `series-shadow-sbf` is shipped and carries a compiler release-id preimage nothing
+  hashes (a certificate field compared by no validator). Options: (A) Series is on the roadmap → a lane finishes the
+  dispatch and the shadow derivation, C-row added; (B) not on the roadmap → cut the island, the shadow program, and its
+  Lean/registers (~30 files + 3,508 lines of program). No engineering action is forced today; the ruling decides which
+  lane exists. Recommendation: A if recurring markets are a launch feature, B otherwise — the island has been unreachable
+  since it was written.
+- DEALER — `dealer-sbf` deleted (`e6b7bf1a`; programs 13→12, routes 161→160, refusals 316→305, band 0x7 tombstoned in
+  0007); **`tools/lane.sh commit-patch`** (`4bb59211`) is the protocol answer for shared files (HEAD + own hunk into the
+  index; refuses a non-empty index or a foreign path set). Tests it broke fixed `aa7f8892`. Found: `generate-refusal-registry.mjs`
+  must run AFTER genref (refuses a code in a retired band). Next: the Position-identity join into Trading's pre-CPI
+  authentication — the hostile spends 1.04M CU before the accelerator's guard can name it.
+- V0 (`659d6f26` … `58ab1dcd`, 9 commits): 21 transactions across 5 campaigns to v0, all six C-09 routes fit; relay append and
+  the retirement chain are **data-bound** (36 B headroom at 1,196; requests 744–864 B) — the lever there is the relay's CDI
+  seam, not a table. Synthetic `packet_census` replaced by real submissions + `unique_account_locks` (36/64). Next: the
+  founding chain, and one author for lookup addresses (two hand filters push the program id into the table — rent leak;
+  `versioned-message-operator` pins conflict with the harnesses').
+- WITNESS: five cohort-8 preserved commits all on main by patch-id (branch deleted); the admission rule was still written
+  four times → `CheckedDeploymentDispositionV1::admits`, total match, truth-table tests (`40032bdf`). Now: Core's 12
+  totality-held `CloseFund` arms → three-variant `ComposedResolutionActionV1`.
+- EMISSION: red lifecycle test convicted by bisect (`e56aac73`, fixture predates `73ffb010`'s permission rule; the crate has
+  no red for the first time since 09-01); **V2 vocabulary is Lean-owned** (`38b8429c`: 106 constants, 68 twinned, zero
+  mismatches; 32/36/40/48 are four prefixes of one schema; a theorem exposes V1's 1–7 vs V2's 0–6 opcode tags). Next: three
+  decoders derive; the profile×prestate admissibility table.
+- GENERAL: convicting 3 stack-frame diagnostics on `execute_authenticated_hot_v3` (frameguard refuses to baseline) before
+  the System coordinate lands.
+- Cuts: `7365f1503`, `93aaeaf20`. Dirty paths 65 → 40. Disk 293 GiB free.
