@@ -6195,3 +6195,53 @@ load-bearing claim is unchanged and cleaner — *none of them computes a digest*
 and the free opcode was stated correctly as 20. Same arithmetic-slip class this
 session found in four other lanes and in the scholar's own headline, **committed
 by the lane that had been naming it.**
+
+## 2026-09-01 — built, measured, and discarded: the control convicted the repair
+
+The cleanups lane's sixth unit was the `BumpHeapV1` extraction so the General
+accelerator could reach the 65,536 it is granted. **Built, both ELF sets
+preserved, and not landed — the negative result is the deliverable.**
+
+**The premise was refuted first.** With the real frame, **six of the seven
+width-258 rows pass in BASE.** One dies, not three, with a clean, named `memory
+allocation failed, out of memory` — the allocator refusing inside its own bound.
+
+**Then the control.** In WORK, with the ceiling lifted to the proven request, the
+seventh row dies **worse**: `Access violation writing 10608 bytes at 0x300005f60`
+— offset 24,416, the write ending at 35,024, and the runtime mapped **32,768**.
+
+> **The request is present and the grant is not** — precisely the divergence the
+> renamed check's own doc says a program cannot observe, caught live. The lifted
+> ceiling handed out a block the runtime never mapped. **A clean named OOM became
+> an unnamed access violation. That is a weakened refusal, so it does not land.**
+
+The extraction exists only to serve it, so it does not land either — and it is not
+free (`.text` −3,120 bytes; 1,316,326 → 1,307,305 CU, cheaper but not neutral).
+The open question routed to the row's owner: **is the accelerator's program-test
+forcing the compute budget** — the same harness setting that produced this exact
+divergence for Structured this morning — and does the grant arrive on a non-forced
+budget? If yes, the extraction lands; if no, the repair is a planning-time refusal
+by name before allocating.
+
+**`DCLTHOT3`'s true peak on Trading: 32,652 at `child-invoked`, 116 bytes clear
+of 32,768** — measured on the canonical Direct route from a clean git-archive. It
+fits the default by 0.35%. *Not a licence to cap the scratch: 116 bytes is not
+headroom anyone can spend.* Ceiling untouched.
+
+### The other five
+
+Both `dclutch` binaries: the false npm comments repaired first, the TypeScript bin
+renamed `dclutch-terminal`, each binary's cross-reference refusal naming the
+*other's* correct new name (`a36f401e`). **Materialize cut as the N-11 reject**:
+route `−560 bytes` (≈37 per removed arm across fifteen), codec deletion **hash
+unchanged** — the deletion touched nothing that ships (`a46b4e03`, `47860c00`).
+Two places the evidence disagreed with the specification, both named: the
+economic-kernel `State` fields and Lean vectors are **left as named debt** (cutting
+them rewrites all sixteen vector rows for a crate with zero dependents); and one of
+the three "live consumers" the retention comment named no longer exists. **The 9000
+ceiling** landed inside another lane's commit via the shared index — proved red
+first: a stated 9001 was admitted, and a stated 10,000 admitted a 95% foregone
+proposition. **The heap checks renamed** to say *requested*, not *granted*. **The
+exposure self-comparison** was already fixed by another lane with a better answer
+than either branch offered — the obvious repair was tried and **measured false
+against four fixtures**.
