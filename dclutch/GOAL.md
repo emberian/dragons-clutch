@@ -3607,3 +3607,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   V1 family is producer-missing, not dead (V4 is a separate compiler) → FRACTIONAL-V1 **`(spawned)`**: superseded or
   coexisting, decided by reading as the Direct layer was.
 - Cuts: `0caa83e17`.
+- TIDY closed (`1bdf5572f` a const match instead of an allow, plus the test the rewrite lacked — three existing tests were
+  satisfied by a walk that stopped after its first entry; `84e37949f` the window note's §4 was false at its own read commit;
+  `2fe2b9f84` both routeCensus.ts copies were stale AND disagreed on 36 rows — twins 167/167; `b0d3978c4` genref 334 → 341;
+  `c036b627b` refusal-registry verifies green in both trees; `fbed0d888` rows). **Two structural gaps: no CI tier runs
+  clippy at all** (Cargo.toml's deny table is enforced by a human), and **the SDK has no route-census generator or verify**.
+  → CI-LINT **`(spawned)`**.
+- Cuts: `647b856c0`.

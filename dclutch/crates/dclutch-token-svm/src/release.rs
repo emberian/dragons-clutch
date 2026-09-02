@@ -1,4 +1,4 @@
-//! Canonical immutable identities for the two implemented token profiles.
+//! Canonical immutable identities for the implemented token profiles.
 //!
 //! These records commit SDK-free ABI interpretation and its official interface
 //! provenance. They do not pin, inspect, or make a claim about any deployed
@@ -70,6 +70,15 @@ pub enum ProfileKind {
     LegacyExactTransfer = 0,
     /// Token-2022 with exact base widths and no extension storage.
     Token2022ZeroExtensionExactTransfer = 1,
+    /// Token-2022 admitting the ATA program's `ImmutableOwner` on participants.
+    ///
+    /// The Associated Token Account program writes `ImmutableOwner` into every
+    /// account it creates under Token-2022 and no caller chooses otherwise, so
+    /// a wallet's own associated account is 170 bytes and the zero-extension
+    /// profile above refuses it. This kind admits exactly that account as a
+    /// transfer participant and nothing else; protocol custody keeps the base
+    /// width under every kind.
+    Token2022ImmutableOwnerExactTransfer = 2,
 }
 
 /// Accepted state-extension storage policy.
@@ -78,6 +87,14 @@ pub enum ProfileKind {
 pub enum ExtensionStoragePolicy {
     /// Mint and Account data must end at their exact base widths.
     ExactBaseWidthsOnly = 0,
+    /// Mints end at their base width; participant Accounts may carry exactly
+    /// the ATA program's empty `ImmutableOwner` entry and no other extension.
+    ///
+    /// APPEND-ONLY, for the same reason a refusal band is: this byte sits at
+    /// offset 11 of the release preimage whose SHA-256 a realm record pins on
+    /// chain as `collateral_adapter_release_id`, so a value that changes
+    /// meaning makes the tree and the chain disagree about one identity.
+    BaseWidthsOrImmutableOwnerAccounts = 1,
 }
 
 /// One complete immutable adapter-release preimage.
@@ -119,7 +136,29 @@ impl CollateralAdapterReleaseV1 {
         }
     }
 
-    /// Decode only one of the two exact production preimages.
+    /// Return exact Token-2022 `ImmutableOwner`-participant V1 semantics.
+    ///
+    /// The SAME Token-2022 interface provenance as
+    /// [`Self::token_2022_zero_extension_exact_transfer`] -- the same archive,
+    /// lib, state and instruction digests, the same interface release id and
+    /// the same base widths. It differs from it in exactly two bytes of the
+    /// preimage: the profile kind at offset 10 and the extension-storage
+    /// policy at offset 11. Both existing entries are untouched, so a realm
+    /// founded under either keeps matching the release it was founded under
+    /// and keeps its own reading of what that identity means.
+    pub const fn token_2022_immutable_owner_exact_transfer() -> Self {
+        Self {
+            profile_kind: ProfileKind::Token2022ImmutableOwnerExactTransfer,
+            token_program: TOKEN_2022_PROGRAM_ID,
+            interface_release_id: TOKEN_2022_INTERFACE_RELEASE_ID,
+            archive_sha256: TOKEN_2022_ARCHIVE_SHA256,
+            lib_sha256: TOKEN_2022_LIB_SHA256,
+            state_sha256: TOKEN_2022_STATE_SHA256,
+            instruction_sha256: TOKEN_2022_INSTRUCTION_SHA256,
+        }
+    }
+
+    /// Decode only one of the exact production preimages.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != ADAPTER_RELEASE_BYTES {
             return Err(Error::InvalidLength);
@@ -142,11 +181,7 @@ impl CollateralAdapterReleaseV1 {
             &ADAPTER_RELEASE_SCHEMA_VERSION.to_le_bytes(),
         );
         put(&mut output, 10, &[self.profile_kind.byte()]);
-        put(
-            &mut output,
-            11,
-            &[ExtensionStoragePolicy::ExactBaseWidthsOnly.byte()],
-        );
+        put(&mut output, 11, &[self.extension_storage_policy().byte()]);
         put(&mut output, 16, &self.token_program);
         put(&mut output, 48, &MINT_WIDTH_LE);
         put(&mut output, 50, &ACCOUNT_WIDTH_LE);
@@ -174,6 +209,26 @@ impl CollateralAdapterReleaseV1 {
             ProfileKind::Token2022ZeroExtensionExactTransfer => {
                 ExactTransferProfileV1::Token2022ZeroExtensionExactTransferV1
             }
+            ProfileKind::Token2022ImmutableOwnerExactTransfer => {
+                ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1
+            }
+        }
+    }
+
+    /// Return the extension-storage policy this release's kind commits.
+    ///
+    /// Derived rather than stored: the wire carries the kind at offset 10 and
+    /// the policy at offset 11, and a struct holding both could contradict
+    /// itself in a way no decode would catch, because `decode` matches whole
+    /// preimages from the catalog.
+    pub const fn extension_storage_policy(self) -> ExtensionStoragePolicy {
+        match self.profile_kind {
+            ProfileKind::LegacyExactTransfer | ProfileKind::Token2022ZeroExtensionExactTransfer => {
+                ExtensionStoragePolicy::ExactBaseWidthsOnly
+            }
+            ProfileKind::Token2022ImmutableOwnerExactTransfer => {
+                ExtensionStoragePolicy::BaseWidthsOrImmutableOwnerAccounts
+            }
         }
     }
 
@@ -188,6 +243,7 @@ impl ProfileKind {
         match self {
             Self::LegacyExactTransfer => 0,
             Self::Token2022ZeroExtensionExactTransfer => 1,
+            Self::Token2022ImmutableOwnerExactTransfer => 2,
         }
     }
 }
@@ -196,14 +252,16 @@ impl ExtensionStoragePolicy {
     const fn byte(self) -> u8 {
         match self {
             Self::ExactBaseWidthsOnly => 0,
+            Self::BaseWidthsOrImmutableOwnerAccounts => 1,
         }
     }
 }
 
 /// Complete production release catalog for the implemented SDK-free profiles.
-pub const PRODUCTION_ADAPTER_RELEASES: [CollateralAdapterReleaseV1; 2] = [
+pub const PRODUCTION_ADAPTER_RELEASES: [CollateralAdapterReleaseV1; 3] = [
     CollateralAdapterReleaseV1::legacy_exact_transfer(),
     CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer(),
+    CollateralAdapterReleaseV1::token_2022_immutable_owner_exact_transfer(),
 ];
 
 fn put(output: &mut [u8], offset: usize, input: &[u8]) {
@@ -218,7 +276,7 @@ mod tests {
 
     use super::*;
 
-    const EXPECTED_CONTENT_IDS: [[u8; 32]; 2] = [
+    const EXPECTED_CONTENT_IDS: [[u8; 32]; 3] = [
         [
             149, 99, 149, 173, 113, 204, 32, 48, 181, 140, 253, 121, 0, 35, 60, 137, 174, 150, 255,
             4, 159, 35, 215, 219, 236, 195, 174, 143, 142, 13, 109, 63,
@@ -226,6 +284,12 @@ mod tests {
         [
             34, 140, 20, 249, 229, 1, 248, 97, 56, 211, 241, 158, 94, 168, 21, 175, 98, 140, 10,
             223, 73, 157, 198, 169, 61, 216, 203, 24, 92, 135, 14, 41,
+        ],
+        // `430369ce72f5e1dcfa19dcee63d5e15f9fbf2d6c9950c5caab53d5c028ae0a2d`
+        // -- the third release, which cohort-14 founds its realm under.
+        [
+            67, 3, 105, 206, 114, 245, 225, 220, 250, 25, 220, 238, 99, 213, 225, 95, 159, 191, 45,
+            108, 153, 80, 197, 202, 171, 83, 213, 192, 40, 174, 10, 45,
         ],
     ];
 
@@ -279,11 +343,15 @@ mod tests {
         let legacy = PRODUCTION_ADAPTER_RELEASES
             .first()
             .copied()
-            .expect("two releases");
+            .expect("three releases");
         let token_2022 = PRODUCTION_ADAPTER_RELEASES
             .get(1)
             .copied()
-            .expect("two releases");
+            .expect("three releases");
+        let immutable_owner = PRODUCTION_ADAPTER_RELEASES
+            .get(2)
+            .copied()
+            .expect("three releases");
         assert_eq!(legacy.token_program(), LEGACY_TOKEN_PROGRAM_ID);
         assert_eq!(
             legacy.profile(),
@@ -294,5 +362,85 @@ mod tests {
             token_2022.profile(),
             ExactTransferProfileV1::Token2022ZeroExtensionExactTransferV1
         );
+        assert_eq!(immutable_owner.token_program(), TOKEN_2022_PROGRAM_ID);
+        assert_eq!(
+            immutable_owner.profile(),
+            ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1
+        );
+    }
+
+    /// THE TWO BYTES, AND ONLY THE TWO BYTES.
+    ///
+    /// The third release is not a new adapter. It is the same Token-2022
+    /// interface provenance under a different storage policy, and the whole
+    /// content of "this is not an edit of the second release" is that both
+    /// preimages exist, differ in exactly the kind byte and the policy byte,
+    /// and hash to different identities. If this test ever finds a third
+    /// differing offset, some field drifted between the two constructors and
+    /// the claim in the design note is false.
+    #[test]
+    fn the_third_release_differs_from_the_second_in_exactly_the_kind_and_policy_bytes() {
+        let second = CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer();
+        let third = CollateralAdapterReleaseV1::token_2022_immutable_owner_exact_transfer();
+        let (left, right) = (second.to_bytes(), third.to_bytes());
+        let differing: std::vec::Vec<usize> = (0..ADAPTER_RELEASE_BYTES)
+            .filter(|offset| left.get(*offset) != right.get(*offset))
+            .collect();
+        assert_eq!(differing, std::vec![10, 11]);
+        assert_eq!(
+            left.get(10),
+            Some(&ProfileKind::Token2022ZeroExtensionExactTransfer.byte())
+        );
+        assert_eq!(
+            right.get(10),
+            Some(&ProfileKind::Token2022ImmutableOwnerExactTransfer.byte())
+        );
+        assert_eq!(
+            left.get(11),
+            Some(&ExtensionStoragePolicy::ExactBaseWidthsOnly.byte())
+        );
+        assert_eq!(
+            right.get(11),
+            Some(&ExtensionStoragePolicy::BaseWidthsOrImmutableOwnerAccounts.byte())
+        );
+        assert_eq!(
+            second.extension_storage_policy(),
+            ExtensionStoragePolicy::ExactBaseWidthsOnly
+        );
+        assert_eq!(
+            third.extension_storage_policy(),
+            ExtensionStoragePolicy::BaseWidthsOrImmutableOwnerAccounts
+        );
+        assert_ne!(second, third);
+        assert_eq!(second.token_program(), third.token_program());
+    }
+
+    /// THE TWO EXISTING IDENTITIES DID NOT MOVE.
+    ///
+    /// Cohort-13's realm stores `228c14f9...` on chain and its deployed Custody
+    /// selects a profile by matching it. This asserts the first two catalog
+    /// entries against digests written before the third release existed, so a
+    /// later edit to either preimage -- which would strand every market founded
+    /// under it -- fails here by name rather than on devnet.
+    #[test]
+    fn appending_a_release_moved_neither_released_identity() {
+        const RELEASED_BEFORE_COHORT_14: [[u8; 32]; 2] = [
+            [
+                149, 99, 149, 173, 113, 204, 32, 48, 181, 140, 253, 121, 0, 35, 60, 137, 174, 150,
+                255, 4, 159, 35, 215, 219, 236, 195, 174, 143, 142, 13, 109, 63,
+            ],
+            [
+                34, 140, 20, 249, 229, 1, 248, 97, 56, 211, 241, 158, 94, 168, 21, 175, 98, 140,
+                10, 223, 73, 157, 198, 169, 61, 216, 203, 24, 92, 135, 14, 41,
+            ],
+        ];
+        for (index, expected) in RELEASED_BEFORE_COHORT_14.into_iter().enumerate() {
+            let release = PRODUCTION_ADAPTER_RELEASES
+                .get(index)
+                .copied()
+                .expect("a released catalog entry keeps its index");
+            let actual: [u8; 32] = Sha256::digest(release.to_bytes()).into();
+            assert_eq!(actual, expected, "released adapter identity {index} moved");
+        }
     }
 }

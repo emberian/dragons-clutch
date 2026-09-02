@@ -12,6 +12,18 @@ pub enum ExactTransferProfileV1 {
     LegacyExactTransferV1,
     /// Token-2022 with exact base widths and therefore no extension storage.
     Token2022ZeroExtensionExactTransferV1,
+    /// Token-2022 admitting the ATA program's `ImmutableOwner` on participants.
+    ///
+    /// TRANSFER PARTICIPANTS ONLY. The Associated Token Account program writes
+    /// `ImmutableOwner` into every account it creates under Token-2022, so the
+    /// destination a wallet actually owns is 170 bytes and the zero-extension
+    /// profile refuses it -- measured on cohort-13, on chain, where the
+    /// founder's ATA had to be replaced with a 165-byte account created by
+    /// hand. This profile admits exactly that one extension at exactly that
+    /// one width, and [`Self::check_custody_account`] keeps the base width
+    /// under every profile because a protocol vault is created by this
+    /// protocol and never by the ATA program.
+    Token2022ImmutableOwnerTransferV1,
 }
 
 impl ExactTransferProfileV1 {
@@ -19,7 +31,24 @@ impl ExactTransferProfileV1 {
     pub const fn program_id(self) -> Address {
         match self {
             Self::LegacyExactTransferV1 => LEGACY_TOKEN_PROGRAM_ID,
-            Self::Token2022ZeroExtensionExactTransferV1 => TOKEN_2022_PROGRAM_ID,
+            Self::Token2022ZeroExtensionExactTransferV1
+            | Self::Token2022ImmutableOwnerTransferV1 => TOKEN_2022_PROGRAM_ID,
+        }
+    }
+
+    /// Parse one transfer participant at every width this profile admits.
+    ///
+    /// The whole difference between the second and third adapter releases is
+    /// which parser this returns, so it is one function and not a condition
+    /// spelled at each call site.
+    fn parse_participant(self, account_data: &[u8]) -> Result<TokenAccount> {
+        match self {
+            Self::LegacyExactTransferV1 | Self::Token2022ZeroExtensionExactTransferV1 => {
+                TokenAccount::parse(account_data)
+            }
+            Self::Token2022ImmutableOwnerTransferV1 => {
+                TokenAccount::parse_base_or_immutable_owner(account_data)
+            }
         }
     }
 
@@ -58,18 +87,22 @@ impl ExactTransferProfileV1 {
         account_data: &[u8],
     ) -> Result<TokenAccount> {
         self.check_program(program_id)?;
-        let account = TokenAccount::parse(account_data)?;
-        check_active(account)?;
-        if !account.native_reserve.is_none() {
-            return Err(Error::NativeAccount);
-        }
-        Ok(account)
+        check_transferable(self.parse_participant(account_data)?)
     }
 
     /// Require the stronger account policy for program custody.
     ///
     /// A custody account must use the expected Mint and owner and retain no
     /// native reserve, delegate allowance, or separate close authority.
+    ///
+    /// AND IT IS EXACTLY THE BASE WIDTH UNDER EVERY PROFILE, including the one
+    /// that admits `ImmutableOwner` on transfer participants. A protocol vault
+    /// is allocated by this protocol at [`crate::ACCOUNT_BYTES`] and
+    /// initialized with `InitializeAccount3`; it is never produced by the
+    /// Associated Token Account program, so nothing that needed the third
+    /// adapter release reaches here. Widening this too would have bought
+    /// nothing and would have admitted an extension suffix on an account whose
+    /// rent, poststate projection and closure this protocol owns.
     pub fn check_custody_account(
         self,
         program_id: Address,
@@ -77,7 +110,8 @@ impl ExactTransferProfileV1 {
         expected_mint: Address,
         expected_owner: Address,
     ) -> Result<TokenAccount> {
-        let account = self.check_transfer_account(program_id, account_data)?;
+        self.check_program(program_id)?;
+        let account = check_transferable(TokenAccount::parse(account_data)?)?;
         if account.mint != expected_mint {
             return Err(Error::MintMismatch);
         }
@@ -199,12 +233,16 @@ impl ExactTransferFacts {
     }
 }
 
-fn check_active(account: TokenAccount) -> Result<()> {
+fn check_transferable(account: TokenAccount) -> Result<TokenAccount> {
     match account.state {
-        AccountState::Uninitialized => Err(Error::AccountUninitialized),
-        AccountState::Initialized => Ok(()),
-        AccountState::Frozen => Err(Error::AccountFrozen),
+        AccountState::Uninitialized => return Err(Error::AccountUninitialized),
+        AccountState::Initialized => {}
+        AccountState::Frozen => return Err(Error::AccountFrozen),
     }
+    if !account.native_reserve.is_none() {
+        return Err(Error::NativeAccount);
+    }
+    Ok(account)
 }
 
 #[cfg(test)]
@@ -280,6 +318,149 @@ mod tests {
             ExactTransferProfileV1::LegacyExactTransferV1.check_program([44; 32]),
             Err(Error::UnsupportedProgram)
         );
+    }
+
+    /// THE THIRD RELEASE'S WHOLE BEHAVIOURAL DIFFERENCE, at the profile layer.
+    ///
+    /// Same bytes, same call, two profiles: the released one refuses the
+    /// account every wallet actually has, and the one cohort-14 founds under
+    /// admits it. Both refusals and both admissions are asserted here so the
+    /// difference is a measurement rather than a description.
+    #[test]
+    fn only_the_immutable_owner_profile_admits_the_ata_shape() {
+        let mut ata = account(OWNER_KEY, 20).to_vec();
+        ata.extend_from_slice(&crate::IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+        assert_eq!(ata.len(), crate::IMMUTABLE_OWNER_ACCOUNT_BYTES);
+
+        assert_eq!(
+            ExactTransferProfileV1::Token2022ZeroExtensionExactTransferV1
+                .check_transfer_account(TOKEN_2022_PROGRAM_ID, &ata),
+            Err(Error::InvalidLength),
+            "the released profile refuses it, which is why cohort-13 could not be paid into one",
+        );
+        assert_eq!(
+            ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1
+                .check_transfer_account(TOKEN_2022_PROGRAM_ID, &ata)
+                .expect("the ATA shape is admitted")
+                .amount,
+            20,
+        );
+        // The base account is admitted by BOTH, so founding cohort-14 under the
+        // third release takes nothing away from an ordinary 165-byte account.
+        let base = account(OWNER_KEY, 20);
+        for profile in [
+            ExactTransferProfileV1::Token2022ZeroExtensionExactTransferV1,
+            ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1,
+        ] {
+            assert!(
+                profile
+                    .check_transfer_account(TOKEN_2022_PROGRAM_ID, &base)
+                    .is_ok()
+            );
+        }
+        // And it is still Token-2022 only.
+        assert_eq!(
+            ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1
+                .check_program(LEGACY_TOKEN_PROGRAM_ID),
+            Err(Error::ProfileProgramMismatch)
+        );
+    }
+
+    /// ONE EXTENSION, NOT A CLASS OF THEM.
+    ///
+    /// Six other extension types staged at the identical 170-byte width, where
+    /// only the type discriminant can tell them apart. Each changes what a
+    /// transfer MEANS; `ImmutableOwner` is the only one that strengthens the
+    /// owner check the payout already makes, so it is the only one admitted.
+    #[test]
+    fn the_immutable_owner_profile_refuses_six_other_extensions_at_the_same_width() {
+        let profile = ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1;
+        for extension_type in [
+            1_u16, // TransferFeeConfig
+            5,     // NonTransferable
+            6,     // ImmutableOwner is 7; 6 is its neighbour and is not it
+            8,     // MemoTransfer
+            11,    // CpiGuard
+            14,    // TransferHookAccount
+        ] {
+            let mut hostile = account(OWNER_KEY, 20).to_vec();
+            hostile.push(2);
+            hostile.extend_from_slice(&extension_type.to_le_bytes());
+            hostile.extend_from_slice(&0_u16.to_le_bytes());
+            assert_eq!(hostile.len(), crate::IMMUTABLE_OWNER_ACCOUNT_BYTES);
+            assert_eq!(
+                profile.check_transfer_account(TOKEN_2022_PROGRAM_ID, &hostile),
+                Err(Error::InvalidExtensionLayout),
+                "extension {extension_type} must not be admitted by the third release",
+            );
+        }
+    }
+
+    /// PROTOCOL CUSTODY IS BASE WIDTH UNDER EVERY PROFILE.
+    ///
+    /// The third release widens transfer PARTICIPANTS. A Hoard vault, a Direct
+    /// token PDA and every other account this protocol allocates is created at
+    /// `ACCOUNT_BYTES` by this protocol, so admitting a suffix there would buy
+    /// nothing and would let an account whose rent and poststate this protocol
+    /// projects carry storage it did not write.
+    #[test]
+    fn protocol_custody_refuses_the_suffix_under_every_profile() {
+        let mut ata = account(OWNER_KEY, 20).to_vec();
+        ata.extend_from_slice(&crate::IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+        for profile in [
+            ExactTransferProfileV1::Token2022ZeroExtensionExactTransferV1,
+            ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1,
+        ] {
+            assert_eq!(
+                profile.check_custody_account(TOKEN_2022_PROGRAM_ID, &ata, MINT_KEY, OWNER_KEY),
+                Err(Error::InvalidLength),
+                "a protocol vault is never an associated token account",
+            );
+            // The control: the same account at the base width commits.
+            assert!(
+                profile
+                    .check_custody_account(
+                        TOKEN_2022_PROGRAM_ID,
+                        &account(OWNER_KEY, 20),
+                        MINT_KEY,
+                        OWNER_KEY,
+                    )
+                    .is_ok()
+            );
+        }
+    }
+
+    /// THE PAYOUT ITSELF: a Hoard vault paying an ATA-shaped destination.
+    ///
+    /// This is the shape `build_wallet_terminal_payout_v3` builds -- a
+    /// 165-byte protocol source and a 170-byte wallet destination -- checked
+    /// through the one function Custody calls. Under the released profile it
+    /// refuses; under the third release it produces facts.
+    #[test]
+    fn the_terminal_payout_shape_checks_only_under_the_third_release() {
+        let mint_data = mint();
+        let source = account(OWNER_KEY, 500_000_000);
+        let mut destination = account(DESTINATION_OWNER_KEY, 0).to_vec();
+        destination.extend_from_slice(&crate::IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+        let input = |profile: ExactTransferProfileV1| {
+            profile.check_transfer(transfer_input(
+                TOKEN_2022_PROGRAM_ID,
+                &mint_data,
+                &source,
+                &destination,
+                OWNER_KEY,
+                500_000_000,
+            ))
+        };
+        assert_eq!(
+            input(ExactTransferProfileV1::Token2022ZeroExtensionExactTransferV1),
+            Err(Error::InvalidLength),
+        );
+        let facts = input(ExactTransferProfileV1::Token2022ImmutableOwnerTransferV1)
+            .expect("the conventional destination checks under the third release");
+        assert_eq!(facts.authority_role(), AuthorityRole::Owner);
+        assert_eq!(facts.destination().owner, DESTINATION_OWNER_KEY);
+        assert_eq!(facts.source().amount, 500_000_000);
     }
 
     #[test]
