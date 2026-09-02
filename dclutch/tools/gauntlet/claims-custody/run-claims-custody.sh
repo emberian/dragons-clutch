@@ -53,6 +53,49 @@ build() {
     fi
 }
 
+# Both families run against the real Token-2022, and `protocol-position` reads
+# `spl_token_2022.so` out of SBF_OUT_DIR with no digest check of its own. A
+# locally built substitute from a non-Linux-x86_64 host is a DIFFERENT artifact
+# with the same name, and what it produces is not a campaign failure -- it is
+# seven tests failing on content that never had the program the fixture pins.
+# Measured 2026-09-02: 0 of 7 on Darwin with the audit build, 7 of 7 with the
+# canonical one. So refuse BY NAME, and exit 2, which is this suite's
+# missing-prerequisite convention: on such a host this tier has proven nothing,
+# which is a different verdict from a gate failing.
+provenance="$repo_root/programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance"
+canonical_digest="$(sed -n 's/^canonical_elf_sha256=//p' "$provenance")"
+audit_digest="$(sed -n 's/^macos_arm64_audit_elf_sha256=//p' "$provenance")"
+if [ -z "$canonical_digest" ] || [ -z "$audit_digest" ]; then
+    echo "claims-custody DID NOT RUN: $provenance carries no digest pair to check against." >&2
+    exit 2
+fi
+if [ ! -f "$sbf_out/spl_token_2022.so" ] && [ -n "${TOKEN_2022_V11_ELF:-}" ]; then
+    cp -- "$TOKEN_2022_V11_ELF" "$sbf_out/spl_token_2022.so"
+fi
+if [ ! -f "$sbf_out/spl_token_2022.so" ]; then
+    echo "claims-custody DID NOT RUN: no spl_token_2022.so in $sbf_out." >&2
+    echo "  Set TOKEN_2022_V11_ELF to the canonical artifact ($canonical_digest)," >&2
+    echo "  or run programs/dclutch-claims-sbf/fixtures/prepare-token-2022-v11.sh on a" >&2
+    echo "  Linux-x86_64 host; see that script's own host-provenance requirement." >&2
+    exit 2
+fi
+observed_token_digest="$(shasum -a 256 "$sbf_out/spl_token_2022.so" | cut -d" " -f1)"
+if [ "$observed_token_digest" != "$canonical_digest" ]; then
+    if [ "$observed_token_digest" = "$audit_digest" ]; then
+        echo "claims-custody DID NOT RUN: $sbf_out/spl_token_2022.so is the macOS arm64 AUDIT" >&2
+        echo "  build ($audit_digest), not the canonical" >&2
+        echo "  cross-host-reproducible artifact ($canonical_digest)." >&2
+        echo "  The audit build is for reading, not for running a campaign: protocol-position" >&2
+        echo "  fails 0 of 7 on content against it. Supply the canonical artifact through" >&2
+        echo "  TOKEN_2022_V11_ELF, or build it on a Linux-x86_64 host." >&2
+    else
+        echo "claims-custody DID NOT RUN: $sbf_out/spl_token_2022.so is neither the canonical" >&2
+        echo "  artifact ($canonical_digest) nor the known macOS arm64 audit build; it hashes" >&2
+        echo "  to $observed_token_digest and this tier will not guess what it is." >&2
+    fi
+    exit 2
+fi
+
 # `cargo build-sbf` exits zero even when the SBF backend reports that a call
 # overwrites its own stack frame and "may cause undefined behavior during
 # execution". An artifact the toolchain calls potentially-undefined has no

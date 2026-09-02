@@ -16,7 +16,7 @@ const sources = Object.freeze({
   releaseSet: readFileSync(new URL('crates/dclutch-release-set-contract/src/lib.rs', root), 'utf8'),
   registry: readFileSync(new URL('crates/dclutch-registry-contract/src/artifact.rs', root), 'utf8'),
   rent: readFileSync(new URL('crates/dclutch-rent-contract/src/lib.rs', root), 'utf8'),
-  lifecycleRent: readFileSync(new URL('crates/dclutch-rent-contract/src/lifecycle_v2.rs', root), 'utf8'),
+  lifecycleRent: readFileSync(new URL('crates/dclutch-rent-contract/src/generated_lifecycle_v2.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-product-runtime-v2-operator/src/found.rs', root), 'utf8'),
   splineAuthoring: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/spline_product.rs', root), 'utf8'),
   claimsState: readFileSync(new URL('crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs', root), 'utf8'),
@@ -51,22 +51,6 @@ function stringConstant(source, name) {
   const match = sources[source].match(new RegExp(`(?:pub\\([^)]*\\) )?const ${name}: &str = "([^"]+)";`));
   if (!match) throw new Error(`missing Rust string ${source}.${name}`);
   return match[1];
-}
-
-/** Read the offset the state encoder writes a magic at. */
-function lifecycleRentMagicOffset(name) {
-  const match = sources.lifecycleRent.match(new RegExp(`put\\(&mut output, ([0-9]+), &${name}\\)`));
-  if (!match) throw new Error(`missing Rust magic write for ${name}`);
-  return Number(match[1]);
-}
-
-/** Read one `LifecycleRentActionV2` discriminant, which the wire carries as u8. */
-function lifecycleRentAction(variant) {
-  const enumeration = sources.lifecycleRent.match(/pub enum LifecycleRentActionV2 \{([\s\S]*?)\n\}/);
-  if (!enumeration) throw new Error('missing Rust LifecycleRentActionV2 enumeration');
-  const match = enumeration[1].match(new RegExp(`\\n\\s*${variant} = ([0-9]+),`));
-  if (!match) throw new Error(`missing Rust LifecycleRentActionV2::${variant} discriminant`);
-  return Number(match[1]);
 }
 
 function array(name, values) {
@@ -194,11 +178,10 @@ output += `export const SOURCE_MATERIAL_PRODUCT_RECORD_DIGEST_OFFSET_V3 = ${scal
 output += `export const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 = new TextEncoder().encode('${byteString('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2')}');\n`;
 output += array('LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2'));
 output += array('LIFECYCLE_RENT_CREDIT_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_MAGIC_V2'));
-// Read where the state encoder actually writes its magic rather than assuming
-// the front. Zero is the obvious answer, which is exactly why it should come
-// from the authority: a decoder that hard-codes a coordinate the encoder owns
-// is the drift `abi-coverage` exists to refuse.
-output += `export const LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2 = ${lifecycleRentMagicOffset('LIFECYCLE_RENT_CREDIT_MAGIC_V2')} as const;\n`;
+// This used to be recovered from the ENCODER'S CALL -- a regular expression
+// over `put(&mut output, 0, &LIFECYCLE_RENT_CREDIT_MAGIC_V2)` -- because the
+// coordinate had no constant to read. It is a placement now.
+output += `export const LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2 = ${scalar('lifecycleRent', 'STATE_MAGIC_OFFSET')} as const;\n`;
 // The action byte and the offset it sits at. Both were literals in
 // `lib/coreFound.ts`, and the action literal was WRONG -- it said 0 where
 // `LifecycleRentActionV2::Create` is 1, so every lifecycle RentCredit the
@@ -206,7 +189,7 @@ output += `export const LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2 = ${lifecycleRentM
 // `/found` only ever downloaded the packet. Emitting the discriminant is the
 // fix; a second hand-written copy of a wire constant is the defect.
 output += `export const LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2 = ${scalar('lifecycleRent', 'INSTRUCTION_ACTION_OFFSET')} as const;\n`;
-output += `export const LIFECYCLE_RENT_ACTION_CREATE_V2 = ${lifecycleRentAction('Create')} as const;\n`;
+output += `export const LIFECYCLE_RENT_ACTION_CREATE_V2 = ${scalar('lifecycleRent', 'LIFECYCLE_RENT_ACTION_CREATE_V2')} as const;\n`;
 
 // ------------------------------------------------ the LIVE Core Market state
 // `crates/dclutch-market-core-codec/src/generated.rs` is itself emitted by

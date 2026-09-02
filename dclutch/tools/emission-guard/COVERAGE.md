@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**89 generated files from 83 emitters. 89 guarded (83 emitters), 0 unguarded (0 emitters).**
+**90 generated files from 84 emitters. 90 guarded (84 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -67,6 +67,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-refusal-registry/check-generated.sh` | shell | `EmitRefusalBandsV1Rust.lean` |
 | `crates/dclutch-relay-contract/check-generated.sh` | shell | `EmitRelayedMainnetStateV1AbiRust.lean`, `EmitRelayedVenueDecodingRulesV1Rust.lean` |
 | `crates/dclutch-release-set-contract/check-generated.sh` | shell | `EmitCapabilityExecutionAbiRust.lean`, `EmitProtocolInfrastructureProfileAbiRust.lean` |
+| `crates/dclutch-rent-contract/check-generated.sh` | shell | `EmitLifecycleRentV2Rust.lean` |
 | `crates/dclutch-representation-composition-v3-kernel/tests/lean_exposure_fresh.rs` | cargo-test | `EmitProductRepresentationExposureV3AbiRust.lean` |
 | `crates/dclutch-representation-composition-v3-kernel/tests/lean_generator_fresh.rs` | cargo-test | `EmitRepresentationCompositionV3AbiRust.lean` |
 | `crates/dclutch-request-profile-contract/check-generated.sh` | shell | `EmitRequestProfileAbiRust.lean`, `EmitRequestProfileV4AbiRust.lean` |
@@ -157,6 +158,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-relay-contract/src/generated_venue_rules.rs` | `EmitRelayedVenueDecodingRulesV1Rust.lean` |
 | `crates/dclutch-release-set-contract/src/generated_capability_execution.rs` | `EmitCapabilityExecutionAbiRust.lean` |
 | `crates/dclutch-release-set-contract/src/generated_protocol_infrastructure.rs` | `EmitProtocolInfrastructureProfileAbiRust.lean` |
+| `crates/dclutch-rent-contract/src/generated_lifecycle_v2.rs` | `EmitLifecycleRentV2Rust.lean` |
 | `crates/dclutch-representation-composition-v3-kernel/src/generated_abi.rs` | `EmitRepresentationCompositionV3AbiRust.lean` |
 | `crates/dclutch-representation-composition-v3-kernel/src/generated_exposure_abi.rs` | `EmitProductRepresentationExposureV3AbiRust.lean` |
 | `crates/dclutch-request-profile-contract/src/generated.rs` | `EmitRequestProfileAbiRust.lean` |

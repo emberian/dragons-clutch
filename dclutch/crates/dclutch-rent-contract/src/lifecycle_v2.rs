@@ -12,61 +12,15 @@ use dclutch_market_core_codec::RetirementReceiptV1;
 
 use crate::{PUBKEY_BYTES, RENT_SYSVAR_ID, RefundAuthority, SYSTEM_PROGRAM_ID};
 
-/// Exact width of a persistent lifecycle-scoped credit.
-pub const LIFECYCLE_RENT_CREDIT_BYTES_V2: usize = 128;
-/// Exact width of a V2 instruction header.
-pub const LIFECYCLE_RENT_INSTRUCTION_HEADER_BYTES_V2: usize = 16;
-/// Exact width of a Create request.
-pub const CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2: usize = 128;
-/// Exact width of a Sweep request.
-pub const SWEEP_LIFECYCLE_RENT_CREDIT_BYTES_V2: usize = 24;
-/// Exact width of a Close request carrying one canonical Core receipt.
-pub const CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2: usize = 528;
-/// Exact width of the immediate Rent close receipt.
-pub const LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2: usize = 192;
-
-/// PDA domain for one lifecycle-scoped credit per Market generation.
-pub const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2: &[u8] = b"dclutch/rent-market/v2";
-/// Current Core caller-authority domain for an atomic retirement close.
-pub const LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2: &[u8] = b"dclutch/rent-core-close/v2";
-/// Canonical persistent-account magic.
-pub const LIFECYCLE_RENT_CREDIT_MAGIC_V2: [u8; 8] = *b"DCLRNTL2";
-/// Canonical V2 instruction magic.
-pub const LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2: [u8; 8] = *b"DCLRNCI2";
-/// Canonical immediate close-receipt magic.
-pub const LIFECYCLE_RENT_CLOSE_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLRNCR2";
-/// Implemented V2 schema version.
-pub const LIFECYCLE_RENT_SCHEMA_VERSION_V2: u16 = 2;
-
-const STATE_VERSION_OFFSET: usize = 8;
-const STATE_BUMP_OFFSET: usize = 10;
-const STATE_RESERVED_HEADER_OFFSET: usize = 11;
-const STATE_REFUND_WALLET_OFFSET: usize = 16;
-const STATE_MARKET_OFFSET: usize = 48;
-const STATE_RELEASE_SET_OFFSET: usize = 80;
-const STATE_GENERATION_OFFSET: usize = 112;
-const STATE_RESERVED_BODY_OFFSET: usize = 120;
-
-const INSTRUCTION_VERSION_OFFSET: usize = 8;
-const INSTRUCTION_ACTION_OFFSET: usize = 10;
-const INSTRUCTION_RESERVED_OFFSET: usize = 11;
-const CREATE_REFUND_WALLET_OFFSET: usize = 16;
-const CREATE_MARKET_OFFSET: usize = 48;
-const CREATE_RELEASE_SET_OFFSET: usize = 80;
-const CREATE_GENERATION_OFFSET: usize = 112;
-const CREATE_BUMP_OFFSET: usize = 120;
-const CREATE_RESERVED_OFFSET: usize = 121;
-const SWEEP_AMOUNT_OFFSET: usize = 16;
-const CLOSE_RECEIPT_OFFSET: usize = 16;
-const RECEIPT_KIND_OFFSET: usize = 10;
-const RECEIPT_RESERVED_HEADER_OFFSET: usize = 11;
-const RECEIPT_CREDIT_OFFSET: usize = 16;
-const RECEIPT_REFUND_WALLET_OFFSET: usize = 48;
-const RECEIPT_MARKET_OFFSET: usize = 80;
-const RECEIPT_RELEASE_SET_OFFSET: usize = 112;
-const RECEIPT_POST_RESOURCE_DIGEST_OFFSET: usize = 144;
-const RECEIPT_GENERATION_OFFSET: usize = 176;
-const RECEIPT_CLOSED_LAMPORTS_OFFSET: usize = 184;
+// Every width, coordinate, magic, seed domain and action tag below comes from
+// `formal/dclutch-semantics/DClutchSemantics/LifecycleRentV2Abi.lean` through
+// `EmitLifecycleRentV2Rust.lean`, and `check-generated.sh` byte-compares it.
+// The three instructions share the sixteen-byte prologue this file used to
+// implement by writing 0, 8, 10 and 11 into three encoders, and the Close
+// request's payload is a whole Core retirement receipt, so its 528 is the
+// prologue plus `MarketRetirementV1Abi.coreReceiptBytes` rather than a number
+// of its own.
+include!("generated_lifecycle_v2.rs");
 
 /// Stable hostile-decode, binding, or exact-balance refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -204,10 +158,15 @@ impl LifecycleRentCreditV2 {
             input,
             &LIFECYCLE_RENT_CREDIT_MAGIC_V2,
             LIFECYCLE_RENT_CREDIT_BYTES_V2,
+            STATE_MAGIC_OFFSET,
             STATE_VERSION_OFFSET,
         )?;
-        require_zero(input, STATE_RESERVED_HEADER_OFFSET, 5)?;
-        require_zero(input, STATE_RESERVED_BODY_OFFSET, 8)?;
+        require_zero(
+            input,
+            STATE_RESERVED_HEADER_OFFSET,
+            STATE_RESERVED_HEADER_BYTES,
+        )?;
+        require_zero(input, STATE_RESERVED_BODY_OFFSET, STATE_RESERVED_BODY_BYTES)?;
         Self::new(
             RefundAuthority::new(array(input, STATE_REFUND_WALLET_OFFSET)?)
                 .map_err(|_| LifecycleRentErrorV2::ZeroIdentity)?,
@@ -221,7 +180,11 @@ impl LifecycleRentCreditV2 {
     /// Encode canonical persistent bytes.
     pub fn to_bytes(self) -> [u8; LIFECYCLE_RENT_CREDIT_BYTES_V2] {
         let mut output = [0; LIFECYCLE_RENT_CREDIT_BYTES_V2];
-        put(&mut output, 0, &LIFECYCLE_RENT_CREDIT_MAGIC_V2);
+        put(
+            &mut output,
+            STATE_MAGIC_OFFSET,
+            &LIFECYCLE_RENT_CREDIT_MAGIC_V2,
+        );
         put_u16(
             &mut output,
             STATE_VERSION_OFFSET,
@@ -351,19 +314,19 @@ impl LifecycleRentCreditPdaSeedsV2 {
 #[repr(u8)]
 pub enum LifecycleRentActionV2 {
     /// Create one Market-scoped credit.
-    Create = 1,
+    Create = LIFECYCLE_RENT_ACTION_CREATE_V2,
     /// Sweep surplus to the immutable wallet while preserving Rent.
-    Sweep = 2,
+    Sweep = LIFECYCLE_RENT_ACTION_SWEEP_V2,
     /// Close after complete producer-subtree retirement.
-    Close = 3,
+    Close = LIFECYCLE_RENT_ACTION_CLOSE_V2,
 }
 
 impl LifecycleRentActionV2 {
     fn decode(value: u8) -> LifecycleRentResultV2<Self> {
         match value {
-            1 => Ok(Self::Create),
-            2 => Ok(Self::Sweep),
-            3 => Ok(Self::Close),
+            LIFECYCLE_RENT_ACTION_CREATE_V2 => Ok(Self::Create),
+            LIFECYCLE_RENT_ACTION_SWEEP_V2 => Ok(Self::Sweep),
+            LIFECYCLE_RENT_ACTION_CLOSE_V2 => Ok(Self::Close),
             _ => Err(LifecycleRentErrorV2::UnknownAction),
         }
     }
@@ -386,7 +349,7 @@ impl CreateLifecycleRentCreditV2 {
             LifecycleRentActionV2::Create,
             CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
         )?;
-        require_zero(input, CREATE_RESERVED_OFFSET, 7)?;
+        require_zero(input, CREATE_RESERVED_OFFSET, CREATE_RESERVED_BYTES)?;
         Ok(Self(LifecycleRentCreditV2::new(
             RefundAuthority::new(array(input, CREATE_REFUND_WALLET_OFFSET)?)
                 .map_err(|_| LifecycleRentErrorV2::ZeroIdentity)?,
@@ -811,12 +774,17 @@ impl LifecycleRentCloseReceiptV2 {
             input,
             &LIFECYCLE_RENT_CLOSE_RECEIPT_MAGIC_V2,
             LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2,
-            INSTRUCTION_VERSION_OFFSET,
+            RECEIPT_MAGIC_OFFSET,
+            RECEIPT_VERSION_OFFSET,
         )?;
         if byte(input, RECEIPT_KIND_OFFSET)? != LifecycleRentActionV2::Close as u8 {
             return Err(LifecycleRentErrorV2::UnknownAction);
         }
-        require_zero(input, RECEIPT_RESERVED_HEADER_OFFSET, 5)?;
+        require_zero(
+            input,
+            RECEIPT_RESERVED_HEADER_OFFSET,
+            RECEIPT_RESERVED_HEADER_BYTES,
+        )?;
         Self::new(LifecycleRentCloseReceiptInputV2 {
             credit: LifecycleAccountIdV2::new(array(input, RECEIPT_CREDIT_OFFSET)?)?,
             refund_wallet: RefundAuthority::new(array(input, RECEIPT_REFUND_WALLET_OFFSET)?)
@@ -832,7 +800,11 @@ impl LifecycleRentCloseReceiptV2 {
     /// Encode canonical immediate receipt bytes.
     pub fn to_bytes(self) -> [u8; LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2] {
         let mut output = [0; LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2];
-        put(&mut output, 0, &LIFECYCLE_RENT_CLOSE_RECEIPT_MAGIC_V2);
+        put(
+            &mut output,
+            RECEIPT_MAGIC_OFFSET,
+            &LIFECYCLE_RENT_CLOSE_RECEIPT_MAGIC_V2,
+        );
         put_u16(
             &mut output,
             INSTRUCTION_VERSION_OFFSET,
@@ -1020,21 +992,29 @@ fn require_instruction(
         input,
         &LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2,
         width,
+        INSTRUCTION_MAGIC_OFFSET,
         INSTRUCTION_VERSION_OFFSET,
     )?;
     if byte(input, INSTRUCTION_ACTION_OFFSET)? != action as u8 {
         return Err(LifecycleRentErrorV2::UnknownAction);
     }
-    require_zero(input, INSTRUCTION_RESERVED_OFFSET, 5)
+    require_zero(
+        input,
+        INSTRUCTION_RESERVED_OFFSET,
+        INSTRUCTION_RESERVED_BYTES,
+    )
 }
 
 fn require_header(
     input: &[u8],
     magic: &[u8; 8],
     width: usize,
+    magic_offset: usize,
     version_offset: usize,
 ) -> LifecycleRentResultV2<()> {
-    if input.len() != width || input.get(..8) != Some(magic.as_slice()) {
+    if input.len() != width
+        || input.get(magic_offset..magic_offset + magic.len()) != Some(magic.as_slice())
+    {
         return Err(LifecycleRentErrorV2::InvalidLength);
     }
     if u16_at(input, version_offset)? != LIFECYCLE_RENT_SCHEMA_VERSION_V2 {
@@ -1052,7 +1032,11 @@ fn instruction_header(
 }
 
 fn put_instruction_header(output: &mut [u8], action: LifecycleRentActionV2) {
-    put(output, 0, &LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2);
+    put(
+        output,
+        INSTRUCTION_MAGIC_OFFSET,
+        &LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2,
+    );
     put_u16(
         output,
         INSTRUCTION_VERSION_OFFSET,

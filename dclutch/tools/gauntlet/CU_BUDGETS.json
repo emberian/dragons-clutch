@@ -411,7 +411,7 @@
       "tolerance": 15000,
       "budget": 576881,
       "enforced": true,
-      "provenance": "The heaviest transaction in either family campaign and the one the composed Claims chain exists for: Admit -> SparseNativeTransfer -> Close, three Claims stages inside one rollback domain, driven by a real test caller through CPI. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [561881, 561881], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "The heaviest transaction in either family campaign and the one the composed Claims chain exists for: Admit -> SparseNativeTransfer -> Close, three Claims stages inside one rollback domain, driven by a real test caller through CPI. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [561881, 561881], band 0. Band 0, so the tolerance is the 15,000 floor. NOT MOVED at 2026-09-02, and it was red by +45,580 for four days. The cause was not this route: sparse_native_transfer_v1 authenticates three roles out of ONE immutable activation cache and paid a full hostile decode of it -- the five-role projection and all ten aliasing pairs -- for each, and it CPIs Custody, which decoded the same account three more times. 5767be46 and a216bbfc removed the repetition; the draw at 0f69918c is 511,538 against this 576,881, so the pin was right and nothing here moved. The 50,343 gap to the pinned 561,881 is recovered headroom, not drift, and it is recorded here rather than ratcheted away because this campaign's draw rides the same 1,500 CU search-depth grid the claims-wallet-position-payout row documents."
     },
     {
       "id": "claims-sparse-stage-1-admit",
@@ -470,7 +470,7 @@
       "tolerance": 15000,
       "budget": 251191,
       "enforced": true,
-      "provenance": "The protocol Position lifecycle's single-stage admission, which is the Claims code DCLTGMF1's stage 4 (Claims FoundingV5) shares. A Claims regression shows up here in seconds instead of after a six-minute validator campaign. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [236191, 236191], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "The protocol Position lifecycle's single-stage admission, which is the Claims code DCLTGMF1's stage 4 (Claims FoundingV5) shares. A Claims regression shows up here in seconds instead of after a six-minute validator campaign. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [236191, 236191], band 0. Band 0, so the tolerance is the 15,000 floor. NOT MOVED at 2026-09-02: red by the same +45,580 class and green at 222,293 against this 251,191 once 5767be46 and a216bbfc removed the repeated activation-cache decode from Claims, Custody and Core. Its Custody leg is where its share of that was."
     },
     {
       "id": "claims-sparse-substituted-admission-receipt-refusal",

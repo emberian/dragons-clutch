@@ -700,7 +700,28 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// That is why the fix is to the STATISTIC and not to the route. There is no
 /// code in `5de38ef2` to make robust: 948 symbols and 941 frames say so. What
 /// needs repair is a residual that still contains a search nobody subtracts.
-const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_268_059;
+/// # 2026-09-02: PINNED AGAIN, and measured by THIS file's own sweep
+///
+/// `d43cc47c` subtracts the Claims caller authority, the last search left in the
+/// residual, and this statistic becomes a constant. Measured here on `lot-X` --
+/// the null pair's canonical set, two builds differing by forty comment lines
+/// and nothing else, which now report the same floor -- this file's own
+/// thirty-two-seed sweep reads **1,297,923**, and the fee gate's zero-fee arm
+/// reads 1,297,923 on the same ELFs. The two instruments agree to the unit, as
+/// they did at `5b6a5849`, which is the check that says the arm is a stand-in
+/// for this sweep rather than a second opinion about a different route.
+///
+/// The gate keeps its one-search-attempt slack, so the pin is measured floor
+/// 1,297,923 + 1,500. The residual noise is +/-124 per seed and is NOT on the
+/// 1,500 grid -- data-dependent instruction count, which a minimum over
+/// thirty-two seeds absorbs and no bump census can subtract. Do not chase a
+/// hundred compute units here.
+///
+/// Verified green after the pin, on `lot-X`: this file 2 passed 0 failed,
+/// `direct_hot_fee_bearing_margin_gate` 1 passed 0 failed. `d580f4f7` landed
+/// while this sweep was still running and said so rather than claiming it; it
+/// finished green, and the sentence is closed here rather than left open.
+const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_299_423;
 
 /// The protocol maximum a transaction may consume.
 const PROTOCOL_CEILING: u64 = 1_400_000;

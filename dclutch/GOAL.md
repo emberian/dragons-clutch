@@ -2946,3 +2946,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Disk: 132 → 202 GiB free after removing closed lanes' worktrees and targets under /private/tmp (dealer, core, old
   Structured, the heap probe, cohort-11's builds). Still held for live lanes: general-lane 26G, target-structured 13G, pop, s7-cu-target.
 - Cuts: `43d7b2e30`.
+
+### Lane map delta — 2026-09-02 13:00
+- UX READING (`1d6af33a`, `docs/evidence/UX_WALK_COHORT12_2026_09_02.md`, 44 Chromium captures): **the cohort-12 market's
+  Direct trading is founded but NOT activated; capability entry 0 must be activated by slot 492,091,890 (~9 h from ~05:00
+  system) or the market can never trade** — the sealing work has a clock; COHORT-12 told. Top three → WEB: the site's
+  editorial names six markets on a closed cohort and not the live one (front door, /live, /activity all refuse); trade step ①
+  hidden behind the activation gate so a stranger cannot connect or join though the chain admits; the market's question,
+  cuts and window not derived from the records (1,173 words, zero "$").
+- DIRECT `d43cc47c`: the margin statistic is a constant (residual 2 CU across 32 draws; null pair zero; every floor fell by
+  exactly 1,500 — the last unmodelled search was the Claims caller authority the fixture derived and discarded); pinned.
+  `f3d555a6`: the C-09 harness activates Core in the Claims role and Custody in the Trading role — 3 of 5 with real roles,
+  `0x8005` at 92 sites. Lane `a8931c4eecc29c8fb` closed near ceiling → **`a2b6881d3727766fd`** (0x8005 surfacing, five real
+  roles, resolve a Direct market, redemption through real Trading, the ticket path).
+- CLAIMS `0f69918c`: wallet-payout budgets green at their 08-27 pins; the raise reverted.
+- Cuts: `79ca99b41`, `af50627a5`.

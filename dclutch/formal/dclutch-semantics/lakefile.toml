@@ -167,6 +167,10 @@ name = "emit-general-transition-v3-rust"
 root = "EmitGeneralTransitionV3Rust"
 
 [[lean_exe]]
+name = "emit-lifecycle-rent-v2-rust"
+root = "EmitLifecycleRentV2Rust"
+
+[[lean_exe]]
 name = "emit-liability-basis-v2-rust"
 root = "EmitLiabilityBasisV2Rust"
 

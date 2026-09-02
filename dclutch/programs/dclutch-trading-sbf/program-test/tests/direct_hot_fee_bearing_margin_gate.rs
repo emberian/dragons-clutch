@@ -955,4 +955,35 @@ const FEE_BEARING_FLOOR_CU_V1: u64 = FEE_BEARING_MEASURED_FLOOR_CU_V1 + ATTEMPT_
 /// `direct_hot_top_level_margin_gate.rs` on `TOP_LEVEL_KEY_INDEPENDENT_CU_V1`,
 /// which carries the bisected commit, the per-phase attribution and the reason
 /// neither constant moves. Both arms still executed 32/32.
-const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_266_429;
+/// # 2026-09-02: PINNED AGAIN, on a statistic that is finally a constant
+///
+/// The four entries above record this number moving and refusing to be pinned,
+/// three times, because a minimum over a lottery is not a constant. It is one
+/// now: `d43cc47c` subtracts the Claims caller authority, the last search left
+/// in the residual, and the residual stops wandering.
+///
+/// ```text
+///                       floor before -> after        residual spread before -> after
+///   fee-pair-elves       1,299,128 -> 1,297,628            4,502 -> 142
+///   settle-elves         1,299,145 -> 1,297,645            9,000 ->  91
+///   lot-X                1,299,292 -> 1,297,792           10,502 ->   2
+///   lot-Y                1,299,292 -> 1,297,792            7,502 ->   2
+/// ```
+///
+/// Every floor falls by EXACTLY 1,500 -- the luckiest of thirty-two draws was
+/// one attempt on all four sets, which the old comment assumed and could not
+/// guarantee -- and the residual becomes two compute units across thirty-two key
+/// draws where it used to span ten thousand.
+///
+/// **The null pair reads zero.** `lot-X` and `lot-Y` differ by forty comment
+/// lines prepended to one module and nothing else, and they now report the SAME
+/// floor on both arms. They are the canonical set this constant is taken from,
+/// for exactly that reason.
+///
+/// **The residual noise is +/-124 and it is not a search.** The real-change pair
+/// (`fee-pair-elves` to `settle-elves`, a code change confined to `DCLTDFS1`)
+/// reads +17 with per-seed deltas from -124 to +106. Those are NOT on the 1,500
+/// grid, so no bump census can subtract them: they are data-dependent
+/// instruction count, and a floor over thirty-two seeds already absorbs them.
+/// Read this constant with that width in mind and do not chase a hundred CU.
+const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_297_792;
