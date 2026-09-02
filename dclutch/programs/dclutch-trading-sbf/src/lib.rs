@@ -455,6 +455,40 @@ pub enum TradingSbfError {
     /// not have to reconstruct it from a runtime line that exists only for
     /// `Custom`.
     ChildRefused = 0x4023,
+    /// The effect's successor ranges do not cover the family request it was given.
+    ///
+    /// Split out of [`TradingSbfError::Content`].
+    /// `SuccessorProgramV4::validate_request_coverage` already computes WHICH
+    /// range failed and at what width; `map_err(|_| Content)` at the one call
+    /// site threw that away and published one of two thousand sites. The
+    /// accusation is narrow and structural -- the successor table and the
+    /// request length disagree -- and it is reached before any route is read,
+    /// so a reader who sees it need look no further than the two widths.
+    SuccessorCoverage = 0x4024,
+    /// The effect's witness-borrowing route is not the one the request profile admits.
+    ///
+    /// Split out of [`TradingSbfError::Content`], which
+    /// `require_borrowed_witness_coverage_v3` published from THIRTEEN sites --
+    /// so an honest route whose effect declares two borrowers and a hostile
+    /// one that mistyped a role arrived identically, among 2,124 other
+    /// `Content` sites. This is the SHAPE half: a borrower whose role is not
+    /// the policy's consumer role, whose kind is not `Once`, which declares
+    /// request bytes where the policy allows none, whose invocation count is
+    /// not one, which carries no borrowed witness at all, or an effect whose
+    /// borrower count is anything but exactly one.
+    BorrowedWitnessRoute = 0x4025,
+    /// The witness the borrowing route would pass is not the one the request declared.
+    ///
+    /// Split out of [`TradingSbfError::Content`] beside
+    /// [`Self::BorrowedWitnessRoute`], and deliberately a SECOND code rather
+    /// than the same one: the shape code says the effect's table is wrong,
+    /// this one says the two authorities that both name a witness -- the
+    /// request profile's split and the effect's resolved invocation -- name
+    /// different bytes. Different reader, different remedy. It covers a
+    /// request the profile could not split, an invocation that carries a
+    /// request body where the witness is borrowed, and a sliced witness that
+    /// is not the declared one.
+    BorrowedWitnessBytes = 0x4026,
 }
 
 impl TradingSbfError {
@@ -464,7 +498,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 39] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -501,6 +535,9 @@ impl TradingSbfError {
         Self::Width,
         Self::DeploymentSlotMismatch,
         Self::ChildRefused,
+        Self::SuccessorCoverage,
+        Self::BorrowedWitnessRoute,
+        Self::BorrowedWitnessBytes,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -546,6 +583,9 @@ impl TradingSbfError {
             Self::Width => 33,
             Self::DeploymentSlotMismatch => 34,
             Self::ChildRefused => 35,
+            Self::SuccessorCoverage => 36,
+            Self::BorrowedWitnessRoute => 37,
+            Self::BorrowedWitnessBytes => 38,
         }
     }
 }

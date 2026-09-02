@@ -125,11 +125,13 @@ use dclutch_effect_kernel::{
 use dclutch_execution_strategy_contract::{
     admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
     shadow_digest_v3::{
-        ShadowEffectProjectionV3, ShadowInvocationContextV3, ShadowReceiptDependencyV3,
-        ShadowResolvedRouteV3, ShadowRouteKindV3, ShadowRouteRoleV3, ShadowRuntimeObservationV3,
+        BorrowedRuntimeObservationV3, ShadowEffectProjectionV3, ShadowInvocationContextV3,
+        ShadowReceiptDependencyV3, ShadowResolvedRouteV3, ShadowRouteKindV3, ShadowRouteRoleV3,
+        ShadowRuntimeObservationV3, borrowed_runtime_observations_digest_in_v3,
         candidate_digest_v3, effect_digest_v3, family_request_digest_v3,
         invocation_context_digest_v3, receipt_dependencies_digest_v4,
-        runtime_observations_digest_v3,
+        runtime_observations_digest_v3, runtime_observations_scratch_bytes_v3,
+        runtime_observations_scratch_slices_v3,
     },
     shadow_v3::{
         ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
@@ -6789,31 +6791,53 @@ fn runtime_transcript_digest_v3(
     runtime_accounts: &[&AccountInfo<'_>],
     canonical_scratch_pages: &[&AccountInfo<'_>],
 ) -> Result<ContentId, ProgramError> {
-    let runtime_transcript = observations
-        .iter()
-        .zip(runtime_accounts)
-        .map(|(observation, account)| {
-            let canonical_scratch = canonical_scratch_pages
-                .iter()
-                .any(|page| page.key == account.key);
-            ShadowRuntimeObservationV3 {
-                key: observation.key(),
-                owner: observation.owner(),
-                lamports: observation.lamports(),
-                data: if canonical_scratch
-                    || transcript_omits_loader_bytes_v3(account.owner, account.executable)
-                {
-                    &[]
-                } else {
-                    observation.data()
-                },
-                signer: false,
-                writable: false,
-                executable: account.executable,
-            }
-        })
-        .collect::<Vec<_>>();
-    runtime_observations_digest_v3(&runtime_transcript).map_err(|_| TradingSbfError::Content.into())
+    // NO BANK OF OBSERVATIONS. `ShadowRuntimeObservationV3` owns its key and
+    // owner, so collecting one per coordinate copies sixty-four bytes that are
+    // already addressable in the account frame -- and the copy is charged for
+    // the rest of the invocation, because the upward end never frees. Measured
+    // 2026-09-02 on the Dealer post-trade partial equity Remove: seventy-four
+    // coordinates, 7,104 bytes, on a route whose peak stood 136 bytes over its
+    // 65,536-byte grant. The two remaining buffers are exactly the widths the
+    // digest declares, allocated FALLIBLY: the convenience form's `vec!` aborts
+    // the invocation on an exhausted heap, which is fail-closed at the
+    // transaction and is not a refusal any caller can read.
+    let empty: &[u8] = &[];
+    let mut scratch = try_projection_bank_v3(
+        &0_u8,
+        runtime_observations_scratch_bytes_v3(observations.len()),
+    )?;
+    let mut slices = try_projection_bank_v3(
+        &empty,
+        runtime_observations_scratch_slices_v3(observations.len()),
+    )?;
+    borrowed_runtime_observations_digest_in_v3(
+        observations
+            .iter()
+            .zip(runtime_accounts)
+            .map(|(observation, account)| {
+                let canonical_scratch = canonical_scratch_pages
+                    .iter()
+                    .any(|page| page.key == account.key);
+                BorrowedRuntimeObservationV3 {
+                    key: observation.key_bytes(),
+                    owner: observation.owner_bytes(),
+                    lamports: observation.lamports(),
+                    data: if canonical_scratch
+                        || transcript_omits_loader_bytes_v3(account.owner, account.executable)
+                    {
+                        &[]
+                    } else {
+                        observation.data()
+                    },
+                    signer: false,
+                    writable: false,
+                    executable: account.executable,
+                }
+            }),
+        &mut scratch,
+        &mut slices,
+    )
+    .map_err(|_| TradingSbfError::Content.into())
 }
 
 fn try_projection_bank_v3<T: Clone>(value: &T, len: usize) -> Result<Vec<T>, ProgramError> {
@@ -13686,59 +13710,101 @@ fn require_borrowed_witness_coverage_v3<'a>(
         effect
             .successor
             .validate_request_coverage(family_request.len(), tail_count, scalars, identities)
-            .map_err(|_| ProgramError::from(TradingSbfError::Content))?;
+            .map_err(|_| ProgramError::from(TradingSbfError::SuccessorCoverage))?;
     }
     let RequestProfileKindV3::Borrowed(profile) = request_profile else {
         return Ok(());
     };
     let (_, declared_witness) = profile
         .split_request(tail_count, family_request)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::BorrowedWitnessBytes)?;
     let policy = profile.witness_policy();
     let expected_role = borrowed_witness_role_v3(policy.consumer_role);
     let mut borrower_count = 0_u16;
     let mut route_index = 0_u16;
     while route_index < effect.route_count() {
+        // The effect artifact's own table failing to decode stays `Content`:
+        // that IS bytes being wrong, and it is not this function's accusation.
+        // Everything below it is, and each half now says which.
         let route = effect
             .route(route_index)
             .map_err(|_| TradingSbfError::Content)?;
         if route.borrows_witness() {
             borrower_count = borrower_count
                 .checked_add(1)
-                .ok_or(TradingSbfError::Content)?;
-            if route.role() != expected_role
-                || route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
-                || route.fixed_request_bytes() != 0
-                || route.item_request_bytes() != 0
-                || effect
-                    .invocation_count(route_index, tail_count, scalars, identities)
-                    .map_err(|_| TradingSbfError::Content)?
-                    != 1
-            {
-                return Err(TradingSbfError::Content.into());
+                .ok_or(TradingSbfError::Width)?;
+            let invocations = effect
+                .invocation_count(route_index, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Content)?;
+            let shape = u64::from(route.role() != expected_role)
+                | (u64::from(route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once) << 1)
+                | (u64::from(route.fixed_request_bytes() != 0) << 2)
+                | (u64::from(route.item_request_bytes() != 0) << 3)
+                | (u64::from(invocations != 1) << 4);
+            if shape != 0 {
+                log_borrowed_witness_refusal_v3(
+                    1,
+                    u64::from(route_index),
+                    shape,
+                    u64::from(invocations),
+                    0,
+                );
+                return Err(TradingSbfError::BorrowedWitnessRoute.into());
             }
             let invocation = effect
                 .resolved_invocation(route_index, 0, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
-            let witness = invocation
-                .borrowed_witness
-                .ok_or(TradingSbfError::Content)?;
+            let Some(witness) = invocation.borrowed_witness else {
+                log_borrowed_witness_refusal_v3(2, u64::from(route_index), 0, 0, 0);
+                return Err(TradingSbfError::BorrowedWitnessRoute.into());
+            };
             if invocation.request_len != 0
                 || witness
                     .slice(family_request)
-                    .map_err(|_| TradingSbfError::Content)?
+                    .map_err(|_| TradingSbfError::BorrowedWitnessBytes)?
                     != declared_witness
             {
-                return Err(TradingSbfError::Content.into());
+                return Err(TradingSbfError::BorrowedWitnessBytes.into());
             }
         }
-        route_index = route_index.checked_add(1).ok_or(TradingSbfError::Content)?;
+        route_index = route_index.checked_add(1).ok_or(TradingSbfError::Width)?;
     }
     if borrower_count != 1 {
-        Err(TradingSbfError::Content.into())
+        log_borrowed_witness_refusal_v3(
+            3,
+            u64::from(borrower_count),
+            u64::from(effect.route_count()),
+            u64::from(effect.successor.range_count()),
+            u64::from(tail_count),
+        );
+        Err(TradingSbfError::BorrowedWitnessRoute.into())
     } else {
         Ok(())
     }
+}
+
+/// Print which witness-coverage conjunct refused, on the refusing path only.
+///
+/// [`TradingSbfError::BorrowedWitnessRoute`] is one accusation over three
+/// sites and five conjuncts, and a u32 cannot carry which. A validator log is
+/// where a reader looks first, so the fact the program already computed is
+/// written there rather than left to be bisected -- the recovery this tree
+/// pays for by hand every time a `map_err` discards a cause.
+///
+/// The five words are `site`, then the site's own operands:
+///
+/// * `site 1` -- the borrower's SHAPE: `route_index`, a conjunct mask
+///   (bit 0 role, bit 1 kind, bit 2 fixed request bytes, bit 3 item request
+///   bytes, bit 4 invocation count), and the invocation count itself.
+/// * `site 2` -- the borrower resolved to an invocation carrying no borrowed
+///   witness: `route_index`.
+/// * `site 3` -- the effect's borrower COUNT is not one: the count, the
+///   effect's route count, its successor range count, and the tail count.
+#[cold]
+#[inline(never)]
+fn log_borrowed_witness_refusal_v3(site: u64, first: u64, second: u64, third: u64, fourth: u64) {
+    solana_program::log::sol_log("dclutch-hot:borrowed-witness");
+    solana_program::log::sol_log_64(site, first, second, third, fourth);
 }
 
 const fn borrowed_witness_role_v3(role: BorrowedWitnessRoleV3) -> FixedRole {

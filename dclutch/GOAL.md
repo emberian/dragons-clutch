@@ -3530,3 +3530,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   zero production callers; one stale test (`root_lifecycle_projection_v3`, General's frame after a517d27c).
   → QUARANTINE **`(spawned)`**.
 - Cuts: `a9fb87828`.
+
+### Lane map delta — 2026-09-02 19:30 EDT
+- PHASE-CENSUS (3rd) closed (`dcfb7debb`, `c5485bf21`, `8bf97477f`, `9ca2cba65`, baselines `93d0134a4`/`b8938f4d3`): **49 → 65
+  of 169 routes gated**; three machines named (Dealer checkpoint, Dealer reservation, projected Custody — 25 guard sites);
+  a guard index over each program's first-party closure; gates inside `for` bodies were a live over-claim (a zero-effect
+  scenario commits with the loop never entered); inherent-method indexing silently stopped eight Custody routes resolving
+  (found by the third machine); Registry's eleven routes carry `no state machine` as a column value with two staleness
+  checks. **LIVE: cohort-13 reads Terminal + Consumed and the evaluator flips four verdicts** (claims.redeem admitted;
+  source.provider/ready/create-fund excluded) with nothing in the commits encoding it. **The handoff's "six Trading routes
+  behind method calls" was wrong:** fourteen `pub fn`s in direct/{buy_escrow,sell_escrow,complementary,inline}.rs are
+  linked into the Trading ELF and reached by no route — only unit tests call them → DIRECT-LAYER **`(spawned)`**: superseded
+  plan layer to delete, or a family without dispatch to name. Owed: three machines (DirectRoot, Ticket, FundingLedger);
+  two-arm `match` as a selection; derive where the surface decodes the machine; `source.close-fund` NO_ROUTE.
+  Declined → SOURCE-TOLERANCE **`(spawned)`**: cadence_tolerance_seconds inert on the single-snapshot Pyth routes.
+- Cuts: `d3caa5cf1`, `368da2065`.

@@ -62,6 +62,39 @@ pub struct ShadowRuntimeObservationV3<'a> {
     pub executable: bool,
 }
 
+/// One exact read-only runtime observation whose two identities are BORROWED
+/// where they already sit.
+///
+/// [`ShadowRuntimeObservationV3`] OWNS its key and owner, which is right for a
+/// host emitter decoding a wire and wrong for an on-chain caller: both
+/// identities are already addressable in the account frame for the whole
+/// invocation, so a bank of the owning form is ninety-six bytes per coordinate
+/// of pure copy on an allocator that never frees.
+/// `AccountObservationV1::key_bytes` borrows for exactly this reason and says
+/// so.
+///
+/// Measured 2026-09-02 on the Dealer post-trade partial equity Remove
+/// (`accepted.rs`, seventy-four runtime coordinates): the owning bank was
+/// **7,104 bytes**, dead the instant the digest returned, on a route whose peak
+/// stood **136 bytes** over its 65,536-byte grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BorrowedRuntimeObservationV3<'a> {
+    /// Account public key, borrowed where the caller already holds it.
+    pub key: &'a [u8; 32],
+    /// Account owner program, borrowed where the caller already holds it.
+    pub owner: &'a [u8; 32],
+    /// Observed lamports.
+    pub lamports: u64,
+    /// Exact observed account bytes.
+    pub data: &'a [u8],
+    /// Must be false: the accelerator receives no signer privilege for runtime state.
+    pub signer: bool,
+    /// Must be false: the accelerator receives runtime state read-only.
+    pub writable: bool,
+    /// Whether the top-level account is executable.
+    pub executable: bool,
+}
+
 /// Canonical child role tag in the Shadow effect transcript.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -373,10 +406,48 @@ pub fn runtime_observations_digest_in_v3<'p>(
     scratch: &'p mut [u8],
     slices: &mut [&'p [u8]],
 ) -> Result<ContentId> {
+    borrowed_runtime_observations_digest_in_v3(
+        observations
+            .iter()
+            .map(|observation| BorrowedRuntimeObservationV3 {
+                key: &observation.key,
+                owner: &observation.owner,
+                lamports: observation.lamports,
+                data: observation.data,
+                signer: observation.signer,
+                writable: observation.writable,
+                executable: observation.executable,
+            }),
+        scratch,
+        slices,
+    )
+}
+
+/// Digest exact runtime observations without materialising a bank of them.
+///
+/// The same preimage as [`runtime_observations_digest_in_v3`], byte for byte,
+/// over observations produced one at a time. The iterator is walked TWICE --
+/// once to absorb each observation's scalar run into `scratch`, once to push
+/// the slice list -- so it is `Clone` rather than consumed, which a
+/// `zip`/`map` over the caller's own slices satisfies for free and no
+/// allocation satisfies at all.
+///
+/// `scratch` and `slices` must be at least
+/// [`runtime_observations_scratch_bytes_v3`] and
+/// [`runtime_observations_scratch_slices_v3`] of the observation count.
+#[inline(never)]
+pub fn borrowed_runtime_observations_digest_in_v3<'p, I>(
+    observations: I,
+    scratch: &'p mut [u8],
+    slices: &mut [&'p [u8]],
+) -> Result<ContentId>
+where
+    I: ExactSizeIterator<Item = BorrowedRuntimeObservationV3<'p>> + Clone,
+{
     let mut at = absorb(scratch, 0, &[0_u8])?;
     at = absorb(scratch, at, &count_bytes(observations.len())?)?;
     let header_len = at;
-    for observation in observations {
+    for observation in observations.clone() {
         if observation.signer || observation.writable {
             return Err(ShadowDigestErrorV3::PrivilegedRuntimeObservation);
         }
@@ -554,17 +625,26 @@ pub fn effect_digest_in_v3<'p>(
 /// for callers with no scratch discipline of their own -- host emitters, the
 /// accelerator boundaries, and the Series shadow evaluator.
 ///
-/// **`trading-sbf` still takes this form, and that is debt with a name, not a
-/// design.** An on-chain caller counting heap should size the two buffers from
-/// counts it already holds and take them out of the scratch region it already
-/// opens for the phase. `hot_v3` has five call sites across these three
-/// digests (`runtime_transcript_digest_v3`, `execute_admitted_candidate_v3`,
-/// `execute_shadow_candidate_v3`, and the accelerator caller-authority
-/// transcript) and none is migrated yet. All five are gated on a shadow or
-/// admitted caller authority, so none executes on the canonical Interpreted
-/// Direct bundle -- which is exactly why moving them buys no measured heap
-/// today, and why they were not moved in the commit that took the software
-/// SHA-256 out.
+/// **`trading-sbf` still takes this form at four of its five call sites, and
+/// that is debt with a name, not a design.** An on-chain caller counting heap
+/// should size the two buffers from counts it already holds. The fifth,
+/// `hot_v3::runtime_transcript_digest_v3`, was migrated on 2026-09-02 to
+/// [`borrowed_runtime_observations_digest_in_v3`] because the Dealer
+/// post-trade partial equity Remove reached it 136 bytes over a 65,536-byte
+/// grant -- so the earlier reading that "moving them buys no measured heap
+/// today" was true only of the canonical Interpreted Direct bundle, which
+/// takes none of these paths at all.
+///
+/// What that migration did NOT do is take the two buffers off the upward end.
+/// It removed the bank of OWNED observations (7,104 bytes on that route); the
+/// scratch run and the slice list are still `Vec`s, still dead the instant the
+/// digest returns, and still charged for the rest of the invocation --
+/// 5,960 bytes on the same route, named here as what is left. They cannot go
+/// in the phase's scratch region as this doc once suggested: on that route the
+/// region is already open and holds the observation bank, so moving bytes from
+/// one end of one heap to the other moves the peak nowhere. Releasing them
+/// needs a scratch end that can nest, which `HeapScratchRegionV1` refuses on
+/// purpose.
 #[cfg(feature = "alloc")]
 #[inline(never)]
 pub fn runtime_observations_digest_v3(
