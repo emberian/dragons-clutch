@@ -260,23 +260,149 @@ participant's own accounts.
 
 ## What is still not demonstrated: the Direct trade
 
-Population life here is *admission* life. No trade executed, and the reason is
-named rather than attempted: `devnet-direct-trade-produce-v1` exists and
-dispatches, but its inputs do not.
+Population life here is *admission* life. No trade executed, and preparing one
+found a wall bigger than the missing artifacts.
 
-- `--buyer-participant` — **now available.** `participant-2.json` is a finalized
-  admission report of exactly the shape it wants. This lane produced it.
-- `--checked-execution-release` — producible by
-  `direct_hot_route_manifest::run_checked_execution_release`, not yet produced.
-- `--seller-ticket` / `--buyer-ticket` — two portable signed Direct intent
-  tickets, authored by the shared `direct_ticket` author command; the seller is
-  the founder (whose key is held) and the buyer is participant-2 (whose key is
-  held).
+### Cohort-11's market cannot be filled, and no artifact repairs it
 
-The simulator config still carries all four as `<placeholder>` strings, and its
-`trade.mode` is set to `none` for this run, so the loop ran admissions and census
-and attempted no trade. The residue is three artifacts and their commands, all
-first-party, none blocked.
+**The market was founded at 30 basis points.** Read off chain, not off the
+staging file: the finalized `direct_execution_config_record`
+`62kFf7i2vRkGEGCwdvK5AKfk18Jt56UjihoaVEqUjHNQ` (64 bytes, owner
+`ADB72ar6…` = Registry) decodes `DCLTDEC1`, `price_scale 1000000`,
+**`fee_basis_points 30`**, `fee_recipient EP4CMPQKidMRzA4bsbpVRx6eBgpQRpiMvU7p6uJzsYpx`.
+
+`programs/dclutch-trading-sbf/src/direct_token_setup_v1.rs:477` refuses
+`TradingSbfError::Content` unless the Market's finalized Direct config reads
+**exactly** `DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1`, which is `50`
+(`crates/dclutch-direct-codec/src/token_setup_v1.rs:25`). `direct_token_setup_v1`
+is the sole creator of the seller's and the venue's Direct token accounts, and
+it precedes every fill. So those accounts can never be created for this market,
+and **this market can never take a fill** — not when the checked execution
+release ships, not ever. A Direct config is a finalized Registry record; it is
+immutable by construction.
+
+This is a founding parameter, not a defect in the code that refuses it. The
+stager says so in capitals already:
+
+> `--direct-fee-basis-points` has no default and must be stated. The rate is
+> sealed into the Market at founding and cannot be changed afterwards.
+> **PASS 50. Not 0.** … Devnet market19 `6WZXJ7jB` was founded at 0 on
+> 2026-08-30 and is permanently unfillable for that reason alone.
+
+Three markets were already known to be unfillable this way. Cohort-11's is a
+**fourth**, founded on 2026-09-01 — the day after that warning was written —
+at a rate that is neither 0 nor 50. The genesis evidence file records the band,
+the cuts, the coefficients and the denominator, and does not record the fee
+rate; nothing read it back, and the founding succeeded, because every stage
+before the fill is indifferent to it.
+
+### And the fill has a size ceiling, which decides the ticket terms
+
+From the same stager passage, and it constrains any trade this substrate can
+demonstrate: `fee = mul_div_floor(gross, policy_fee_bps, 10_000)`, so at 50 bps
+every trade whose **gross collateral is 1..=199 atoms has fee 0**, takes the
+one-CPI branch, and is measured at 1,329,618..1,349,118 CU against the
+1,400,000 ceiling. Any larger trade floors to a nonzero fee, takes the two-CPI
+branch at 1,515,003 CU, and is **over the ceiling until the second-transaction
+fee leg ships**.
+
+The producer's own loopback defaults (`FILL_ATOMS_V1 = 100_000_000`,
+`EXECUTION_PRICE_V1 = 500_000`, `direct_trade_producer.rs:103`) give
+gross = 50,000,000 atoms and a fee of 250,000 — the blocked branch. A devnet
+demonstration must therefore be small.
+
+### The prepared terms
+
+`gross = fill × price ÷ price_scale` and must divide exactly
+(`exact_quote_v1`, `direct_trade_producer.rs:3396`):
+
+| field | value | why |
+| --- | ---: | --- |
+| `--maximum-fill` | `100` | atoms of claim on one outcome |
+| `--limit-price` | `1000000` | equals `price_scale`, so gross = fill |
+| gross | `100` | ≤ 199, so the fee floors to 0 |
+| fee | `0` | the one-CPI branch, inside the CU ceiling |
+| `required_buyer_collateral` | `100` | `gross + fee` |
+| `--fee-basis-points` | the market's own config | `terms.fee_basis_points != config.fee_basis_points()` refuses (`:2296`) |
+| `--outcome` | `0` | must be `< claim_count` (4) and within the seller's balance |
+| `--generation` | `1` | the Open Market identity generation |
+| `--lifecycle` | `fok` | both sides; the pair gate demands lifecycle 0 |
+| `--side` | `sell` / `buy` | seller side 0, buyer side 1, distinct makers |
+
+**`--market` is the `founding_market`, not the Core Market.** The producer takes
+it from `campaign_address_v1(campaign, "founding_market")`
+(`direct_trade_producer.rs:2061`) — `3rBfDBpaXjKSbUU5HRaRTr6yhDQq4S1oKp2mQRsdoyb6`,
+not `ARuPAuyJ…`. This is the same trap the routing table set, and it is worth
+saying twice: on this cohort, "the market" is two different addresses depending
+on which authority is asking.
+
+The makers are fixed by the chain, not chosen: the seller is
+`founder_position`'s owner `BmDp2LRfAUxPw6qhQr9ceGMoitMtkQf3H547iTS631rv` (key
+held), and the buyer is the admitted participant's owner
+`BffsiBzZYExGVFhMEQgZZjAgujEm5x55wxVUeDtHAHkC` (key held). The ticket author
+never takes a key path as an argument — `--keypair-env` names an environment
+variable holding it.
+
+### The one preparable thing this lane did not do, and why
+
+The buyer's ticket must name a `--collateral-account`, and the producer requires
+that account to hold at least `required_buyer_collateral` atoms **and to carry a
+delegated allowance exactly equal to it** — an equality, not a floor, because
+"the allowance authorizes one trade and is spent to zero, so more is as refused
+as less" (`refusing_buyer_collateral_clauses_v1`, `:745`). Participant-2 was
+admitted with `collateral: null`, so it has neither. The admission driver's
+`--collateral-source-owner/-account/--collateral-quantity-atoms` leg creates and
+delegates it, and re-running the *same finalized journal* with those flags adds
+it (`resume_admission_and_collateral` runs the collateral leg on a `Finalized`
+report).
+
+That leg was not run, deliberately: it moves real collateral out of the founder's
+wallet into a delegated account bound to **this market's** trade, and this market
+cannot trade. Doing it would spend atoms to produce an artifact that can never
+be used.
+
+### The exact command, and what it is waiting on
+
+```
+dclutch-local-successor-bootstrap devnet-direct-trade-produce-v1   --rpc-url <devnet https> --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG   --plan          <job>/plan.json                  --expected-plan-sha256 <hex64>   --market-input  <job>/market/market.json         --expected-market-input-sha256 <hex64>   --campaign-report <job>/market/campaign-open.json --expected-campaign-report-sha256 <hex64>   --buyer-participant <job>/sim/admissions/participant-2.json       --expected-buyer-participant-sha256 <hex64>   --checked-execution-release <release.json>       --expected-checked-execution-release-sha256 <hex64>   --seller-ticket <seller.json> --expected-seller-ticket-sha256 <hex64>   --buyer-ticket  <buyer.json>  --expected-buyer-ticket-sha256 <hex64>   --payer 3CZxcpGpWthrdcx55AciJUEPyjZzqHK7UuF7p77yPLyG   --payer-keypair <job>/keys/campaign-payer.json   --output-dir <ABSOLUTE EXISTING EMPTY DIR>
+```
+
+`--buyer-participant` is **satisfied**: `participant-2.json` is a finalized
+admission report of exactly the shape it wants, and this lane produced it.
+
+What the command is waiting on, by commit:
+
+1. **A market founded at 50 bps.** Nothing in the tree fixes cohort-11's 30; the
+   unblock is a founding, with
+   `stage-devnet-sponsored-market-open.sh --direct-fee-basis-points 50`, cuts
+   centred on spot. Not a release, not a rebuild.
+2. **`--checked-execution-release`**, from
+   `direct_hot_route_manifest::run_checked_execution_release`, which the checked
+   release candidate gates — and the candidate refuses at
+   **`bfc8383f`** (the trading stack-frame regression bisected below).
+3. **The buyer's delegated collateral leg**, one re-run of the admission driver
+   against a fillable market's participant.
+
+### What must then be observed
+
+Against the terms above, with the founder selling 100 atoms of outcome 0:
+
+| observation | before | after |
+| --- | --- | --- |
+| seller Position claim vector | `[500000000, 500000000, 500000000, 500000000]` | `[499999900, …]` |
+| buyer Position claim vector | `[0, 0, 0, 0]` | `[100, 0, 0, 0]` |
+| aggregate supply vector (L3) | `[500000000 × 4]` | **unchanged** — a trade moves claims between Positions, it does not mint them |
+| buyer delegated allowance | `100` | `0` — spent to zero by the one trade it authorized |
+| venue fee token account | `0` | `0` at this size — the fee floors to zero, which is why this size is fillable |
+
+Both Position vectors above are read off chain today, not asserted. The
+conservation laws must then say: **L1 unchanged** (no atoms enter or leave the
+tracked set, they move between named token accounts), **L3 still holds** with the
+buyer Position now nonzero, **L4 still holds** (the Hoard is untouched by a claim
+transfer between Positions), and **L2/L5 report the collateral that moved
+between the buyer's and seller's Direct token accounts against a declared delta
+rather than against zero**. Any of those failing is the finding, not the
+formatting.
 
 ## The genesis release candidate: it finally ran, and it refuses
 

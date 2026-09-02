@@ -40,10 +40,19 @@ use super::{
     TrustedEnvironmentV2, TrustedIdentityEnvironmentV2, VERSION,
 };
 use super::{
-    ARTIFACT_PROFILE_OFFSET, COMMON_IDENTITIES_OFFSET, COMMON_SCALARS_OFFSET,
-    FIXED_ACCOUNTS_OFFSET, FIXED_OPERATIONS_OFFSET, ITEM_ACCOUNT_STRIDE_OFFSET,
-    ITEM_IDENTITY_STRIDE_OFFSET, ITEM_OPERATIONS_OFFSET, ITEM_SCALAR_STRIDE_OFFSET, MAGIC_OFFSET,
-    VERSION_OFFSET,
+    ALIAS_FIXED, ALIAS_SAME_ITEM, ALIAS_SELF_COORDINATE, ARTIFACT_PROFILE_OFFSET,
+    COMMON_IDENTITIES_OFFSET, COMMON_SCALARS_OFFSET, FIXED_ACCOUNTS_OFFSET,
+    FIXED_OPERATIONS_OFFSET, ITEM_ACCOUNT_STRIDE_OFFSET, ITEM_IDENTITY_STRIDE_OFFSET,
+    ITEM_OPERATIONS_OFFSET, ITEM_SCALAR_STRIDE_OFFSET, MAGIC_OFFSET, OPERATION_ACCOUNT_OFFSET,
+    OPERATION_ACCOUNT_SPACE_OFFSET, OPERATION_DATA_OFFSET_OFFSET, OPERATION_DATA_STRIDE_OFFSET,
+    OPERATION_OPCODE_OFFSET, OPERATION_REGISTER_OFFSET, OPERATION_REGISTER_SPACE_OFFSET,
+    PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA,
+    PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS,
+    PRESTATE_AUTHENTICATED_OPAQUE_READONLY_DATA, PRESTATE_AUTHENTICATED_ROUTE_ALIAS,
+    PRESTATE_EXACT, PRESTATE_LIFECYCLE_BOUND, REGISTER_SPACE_COMMON, REGISTER_SPACE_ITEM,
+    RULE_ALIAS_INDEX_OFFSET, RULE_ALIAS_KIND_OFFSET, RULE_DATA_ITEM_STRIDE_OFFSET,
+    RULE_DATA_LENGTH_OFFSET, RULE_EFFECT_PERMISSIONS_OFFSET, RULE_PRESTATE_OFFSET,
+    RULE_PRIVILEGES_OFFSET, VERSION_OFFSET,
 };
 use crate::{
     EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
@@ -1525,31 +1534,53 @@ fn encode_rule(
     output: &mut [u8],
     offset: usize,
 ) -> Result<(), Error> {
-    write_byte(output, offset, rule.privileges.bits())?;
-    write_byte(output, add(offset, 1)?, rule.effect_permissions.bits())?;
-    let (alias_kind, alias_index) = match rule.alias {
-        AccountAliasInputV2::SelfCoordinate => (0, 0),
-        AccountAliasInputV2::Fixed(index) => (1, index),
-        AccountAliasInputV2::SameItem(index) => (2, index),
-    };
-    write_byte(output, add(offset, 2)?, alias_kind)?;
     write_byte(
         output,
-        add(offset, 3)?,
+        add(offset, RULE_PRIVILEGES_OFFSET)?,
+        rule.privileges.bits(),
+    )?;
+    write_byte(
+        output,
+        add(offset, RULE_EFFECT_PERMISSIONS_OFFSET)?,
+        rule.effect_permissions.bits(),
+    )?;
+    let (alias_kind, alias_index) = match rule.alias {
+        AccountAliasInputV2::SelfCoordinate => (ALIAS_SELF_COORDINATE, 0),
+        AccountAliasInputV2::Fixed(index) => (ALIAS_FIXED, index),
+        AccountAliasInputV2::SameItem(index) => (ALIAS_SAME_ITEM, index),
+    };
+    write_byte(output, add(offset, RULE_ALIAS_KIND_OFFSET)?, alias_kind)?;
+    write_byte(
+        output,
+        add(offset, RULE_PRESTATE_OFFSET)?,
         match prestate {
-            AccountPrestateV2::Exact => 0,
-            AccountPrestateV2::LifecycleBound => 1,
-            AccountPrestateV2::AdapterAuthenticatedVariableData => 2,
-            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias => 3,
-            AccountPrestateV2::AuthenticatedRouteAlias => 4,
-            AccountPrestateV2::AuthenticatedOpaqueReadonlyData => 5,
+            AccountPrestateV2::Exact => PRESTATE_EXACT,
+            AccountPrestateV2::LifecycleBound => PRESTATE_LIFECYCLE_BOUND,
+            AccountPrestateV2::AdapterAuthenticatedVariableData => {
+                PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA
+            }
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias => {
+                PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS
+            }
+            AccountPrestateV2::AuthenticatedRouteAlias => PRESTATE_AUTHENTICATED_ROUTE_ALIAS,
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData => {
+                PRESTATE_AUTHENTICATED_OPAQUE_READONLY_DATA
+            }
         },
     )?;
-    write(output, add(offset, 4)?, &alias_index.to_le_bytes())?;
-    write(output, add(offset, 8)?, &rule.data_length.to_le_bytes())?;
     write(
         output,
-        add(offset, 12)?,
+        add(offset, RULE_ALIAS_INDEX_OFFSET)?,
+        &alias_index.to_le_bytes(),
+    )?;
+    write(
+        output,
+        add(offset, RULE_DATA_LENGTH_OFFSET)?,
+        &rule.data_length.to_le_bytes(),
+    )?;
+    write(
+        output,
+        add(offset, RULE_DATA_ITEM_STRIDE_OFFSET)?,
         &rule.data_item_stride.to_le_bytes(),
     )
 }
@@ -1564,19 +1595,55 @@ struct EncodedOperationV2 {
     data_stride: u32,
 }
 
+/// Coordinate-space tag for one operand.
+///
+/// `u8::from(bool)` produces the same two bytes, but by assuming Lean numbers
+/// the common space zero rather than by reading that it does.
+const fn space_tag(item: bool) -> u8 {
+    if item {
+        REGISTER_SPACE_ITEM
+    } else {
+        REGISTER_SPACE_COMMON
+    }
+}
+
 fn encode_operation(
     operation: AccountOperationInputV2,
     output: &mut [u8],
     offset: usize,
 ) -> Result<(), Error> {
     let value = operation.encode();
-    write_byte(output, offset, value.opcode)?;
-    write_byte(output, add(offset, 1)?, u8::from(value.account.item))?;
-    write(output, add(offset, 2)?, &value.account.index.to_le_bytes())?;
-    write_byte(output, add(offset, 4)?, u8::from(value.register_item))?;
-    write(output, add(offset, 6)?, &value.register.to_le_bytes())?;
-    write(output, add(offset, 8)?, &value.data_offset.to_le_bytes())?;
-    write(output, add(offset, 12)?, &value.data_stride.to_le_bytes())
+    write_byte(output, add(offset, OPERATION_OPCODE_OFFSET)?, value.opcode)?;
+    write_byte(
+        output,
+        add(offset, OPERATION_ACCOUNT_SPACE_OFFSET)?,
+        space_tag(value.account.item),
+    )?;
+    write(
+        output,
+        add(offset, OPERATION_ACCOUNT_OFFSET)?,
+        &value.account.index.to_le_bytes(),
+    )?;
+    write_byte(
+        output,
+        add(offset, OPERATION_REGISTER_SPACE_OFFSET)?,
+        space_tag(value.register_item),
+    )?;
+    write(
+        output,
+        add(offset, OPERATION_REGISTER_OFFSET)?,
+        &value.register.to_le_bytes(),
+    )?;
+    write(
+        output,
+        add(offset, OPERATION_DATA_OFFSET_OFFSET)?,
+        &value.data_offset.to_le_bytes(),
+    )?;
+    write(
+        output,
+        add(offset, OPERATION_DATA_STRIDE_OFFSET)?,
+        &value.data_stride.to_le_bytes(),
+    )
 }
 
 impl AccountOperationInputV2 {

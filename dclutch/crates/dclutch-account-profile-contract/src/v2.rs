@@ -37,6 +37,14 @@ mod generated_abi;
 mod generated_profile14;
 
 use generated_abi::{
+    ACCOUNT_OPERATION_V2_ACCOUNT_OFFSET as OPERATION_ACCOUNT_OFFSET,
+    ACCOUNT_OPERATION_V2_ACCOUNT_SPACE_OFFSET as OPERATION_ACCOUNT_SPACE_OFFSET,
+    ACCOUNT_OPERATION_V2_DATA_OFFSET_OFFSET as OPERATION_DATA_OFFSET_OFFSET,
+    ACCOUNT_OPERATION_V2_DATA_STRIDE_OFFSET as OPERATION_DATA_STRIDE_OFFSET,
+    ACCOUNT_OPERATION_V2_OPCODE_OFFSET as OPERATION_OPCODE_OFFSET,
+    ACCOUNT_OPERATION_V2_REGISTER_OFFSET as OPERATION_REGISTER_OFFSET,
+    ACCOUNT_OPERATION_V2_REGISTER_SPACE_OFFSET as OPERATION_REGISTER_SPACE_OFFSET,
+    ACCOUNT_OPERATION_V2_RESERVED_OFFSET as OPERATION_RESERVED_OFFSET,
     ACCOUNT_PROFILE_V2_ARTIFACT_PROFILE_OFFSET as ARTIFACT_PROFILE_OFFSET,
     ACCOUNT_PROFILE_V2_COMMON_IDENTITIES_OFFSET as COMMON_IDENTITIES_OFFSET,
     ACCOUNT_PROFILE_V2_COMMON_SCALARS_OFFSET as COMMON_SCALARS_OFFSET,
@@ -48,6 +56,14 @@ use generated_abi::{
     ACCOUNT_PROFILE_V2_ITEM_SCALAR_STRIDE_OFFSET as ITEM_SCALAR_STRIDE_OFFSET,
     ACCOUNT_PROFILE_V2_MAGIC_OFFSET as MAGIC_OFFSET,
     ACCOUNT_PROFILE_V2_VERSION_OFFSET as VERSION_OFFSET,
+    ACCOUNT_RULE_V2_ALIAS_INDEX_OFFSET as RULE_ALIAS_INDEX_OFFSET,
+    ACCOUNT_RULE_V2_ALIAS_KIND_OFFSET as RULE_ALIAS_KIND_OFFSET,
+    ACCOUNT_RULE_V2_DATA_ITEM_STRIDE_OFFSET as RULE_DATA_ITEM_STRIDE_OFFSET,
+    ACCOUNT_RULE_V2_DATA_LENGTH_OFFSET as RULE_DATA_LENGTH_OFFSET,
+    ACCOUNT_RULE_V2_EFFECT_PERMISSIONS_OFFSET as RULE_EFFECT_PERMISSIONS_OFFSET,
+    ACCOUNT_RULE_V2_PRESTATE_OFFSET as RULE_PRESTATE_OFFSET,
+    ACCOUNT_RULE_V2_PRIVILEGES_OFFSET as RULE_PRIVILEGES_OFFSET,
+    ACCOUNT_RULE_V2_RESERVED_OFFSET as RULE_RESERVED_OFFSET,
 };
 
 pub use generated_profile14::{
@@ -179,6 +195,22 @@ pub const DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET: usize =
 /// Positive congruence step for admitted counts.
 pub const DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET: usize =
     generated_abi::DYNAMIC_FIXED_SPAN_V2_ENTRY_STEP_OFFSET;
+
+const ALIAS_SELF_COORDINATE: u8 = generated_abi::ACCOUNT_ALIAS_V2_SELF_COORDINATE;
+const ALIAS_FIXED: u8 = generated_abi::ACCOUNT_ALIAS_V2_FIXED;
+const ALIAS_SAME_ITEM: u8 = generated_abi::ACCOUNT_ALIAS_V2_SAME_ITEM;
+const REGISTER_SPACE_COMMON: u8 = generated_abi::ACCOUNT_REGISTER_SPACE_V2_COMMON;
+const REGISTER_SPACE_ITEM: u8 = generated_abi::ACCOUNT_REGISTER_SPACE_V2_ITEM;
+const PRESTATE_EXACT: u8 = generated_abi::ACCOUNT_PRESTATE_V2_EXACT;
+const PRESTATE_LIFECYCLE_BOUND: u8 = generated_abi::ACCOUNT_PRESTATE_V2_LIFECYCLE_BOUND;
+const PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA: u8 =
+    generated_abi::ACCOUNT_PRESTATE_V2_ADAPTER_AUTHENTICATED_VARIABLE_DATA;
+const PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS: u8 =
+    generated_abi::ACCOUNT_PRESTATE_V2_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS;
+const PRESTATE_AUTHENTICATED_ROUTE_ALIAS: u8 =
+    generated_abi::ACCOUNT_PRESTATE_V2_AUTHENTICATED_ROUTE_ALIAS;
+const PRESTATE_AUTHENTICATED_OPAQUE_READONLY_DATA: u8 =
+    generated_abi::ACCOUNT_PRESTATE_V2_AUTHENTICATED_OPAQUE_READONLY_DATA;
 
 const TRUSTED_ENVIRONMENT_NONE: u8 = generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_NONE;
 const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 =
@@ -2849,19 +2881,22 @@ struct Operation {
 
 impl Operation {
     fn decode(bytes: &[u8], offset: usize) -> Result<Self> {
-        let account_space = byte(bytes, add(offset, 1)?)?;
-        let register_space = byte(bytes, add(offset, 4)?)?;
-        if account_space > 1 || register_space > 1 || byte(bytes, add(offset, 5)?)? != 0 {
+        let account_space = byte(bytes, add(offset, OPERATION_ACCOUNT_SPACE_OFFSET)?)?;
+        let register_space = byte(bytes, add(offset, OPERATION_REGISTER_SPACE_OFFSET)?)?;
+        if account_space > REGISTER_SPACE_ITEM
+            || register_space > REGISTER_SPACE_ITEM
+            || byte(bytes, add(offset, OPERATION_RESERVED_OFFSET)?)? != 0
+        {
             return Err(Error::NonCanonicalOperation);
         }
         Ok(Self {
-            opcode: byte(bytes, offset)?,
-            account_item: account_space == 1,
-            account: read_u16(bytes, add(offset, 2)?)?,
-            register_item: register_space == 1,
-            register: read_u16(bytes, add(offset, 6)?)?,
-            data_offset: read_u32(bytes, add(offset, 8)?)?,
-            data_stride: read_u32(bytes, add(offset, 12)?)?,
+            opcode: byte(bytes, add(offset, OPERATION_OPCODE_OFFSET)?)?,
+            account_item: account_space == REGISTER_SPACE_ITEM,
+            account: read_u16(bytes, add(offset, OPERATION_ACCOUNT_OFFSET)?)?,
+            register_item: register_space == REGISTER_SPACE_ITEM,
+            register: read_u16(bytes, add(offset, OPERATION_REGISTER_OFFSET)?)?,
+            data_offset: read_u32(bytes, add(offset, OPERATION_DATA_OFFSET_OFFSET)?)?,
+            data_stride: read_u32(bytes, add(offset, OPERATION_DATA_STRIDE_OFFSET)?)?,
         })
     }
 
@@ -3665,13 +3700,13 @@ fn validate_rule(
 }
 
 fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<AccountRuleV2> {
-    let alias_kind = match byte(bytes, add(offset, 2)?)? {
-        0 => AliasKindV2::SelfCoordinate,
-        1 => AliasKindV2::Fixed,
-        2 => AliasKindV2::SameItem,
+    let alias_kind = match byte(bytes, add(offset, RULE_ALIAS_KIND_OFFSET)?)? {
+        ALIAS_SELF_COORDINATE => AliasKindV2::SelfCoordinate,
+        ALIAS_FIXED => AliasKindV2::Fixed,
+        ALIAS_SAME_ITEM => AliasKindV2::SameItem,
         _ => return Err(Error::InvalidAlias),
     };
-    let prestate_tag = byte(bytes, add(offset, 3)?)?;
+    let prestate_tag = byte(bytes, add(offset, RULE_PRESTATE_OFFSET)?)?;
     let prestate = if artifact_profile == LIFECYCLE_PRESTATE_ARTIFACT_PROFILE {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
@@ -3726,17 +3761,17 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
     } else {
         return Err(Error::NonCanonicalReserved);
     };
-    if read_u16(bytes, add(offset, 6)?)? != 0 {
+    if read_u16(bytes, add(offset, RULE_RESERVED_OFFSET)?)? != 0 {
         return Err(Error::NonCanonicalReserved);
     }
     Ok(AccountRuleV2 {
-        privileges: byte(bytes, offset)?,
-        effect_permissions: byte(bytes, add(offset, 1)?)?,
+        privileges: byte(bytes, add(offset, RULE_PRIVILEGES_OFFSET)?)?,
+        effect_permissions: byte(bytes, add(offset, RULE_EFFECT_PERMISSIONS_OFFSET)?)?,
         alias_kind,
         prestate,
-        alias_index: read_u16(bytes, add(offset, 4)?)?,
-        data_length: read_u32(bytes, add(offset, 8)?)?,
-        data_item_stride: read_u32(bytes, add(offset, 12)?)?,
+        alias_index: read_u16(bytes, add(offset, RULE_ALIAS_INDEX_OFFSET)?)?,
+        data_length: read_u32(bytes, add(offset, RULE_DATA_LENGTH_OFFSET)?)?,
+        data_item_stride: read_u32(bytes, add(offset, RULE_DATA_ITEM_STRIDE_OFFSET)?)?,
     })
 }
 
