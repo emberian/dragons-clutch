@@ -400,7 +400,7 @@ mod admissible_prestates {
         retire_v1::{
             RETIRE_ADMISSIBLE_PRESTATES_V1, RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1,
         },
-        retirement_replay_handoff_v1::RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1,
+        retirement_replay_handoff_v1::CORE_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1,
         series_open::SERIES_OPEN_ADMISSIBLE_PRESTATES_V1,
     };
 
@@ -415,11 +415,7 @@ mod admissible_prestates {
         [Readiness::Prepaid, Readiness::Ready, Readiness::Consumed];
 
     /// Assert `declared` admits exactly the prestates `inline` accepts.
-    fn agrees(
-        name: &str,
-        declared: MarketAdmissionV1,
-        inline: impl Fn(Phase, Readiness) -> bool,
-    ) {
+    fn agrees(name: &str, declared: MarketAdmissionV1, inline: impl Fn(Phase, Readiness) -> bool) {
         let mut admitted = 0;
         for phase in ALL_PHASES {
             for readiness in ALL_READINESS {
@@ -522,8 +518,8 @@ mod admissible_prestates {
                 RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1,
             ),
             (
-                "RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1",
-                RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1,
+                "CORE_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1",
+                CORE_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1,
             ),
         ] {
             agrees(name, declared, |phase, _readiness| {

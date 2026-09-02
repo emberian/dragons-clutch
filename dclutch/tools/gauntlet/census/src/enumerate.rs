@@ -1328,6 +1328,7 @@ pub fn enumerate(
     source_revision: Option<String>,
 ) -> Result<Inventory, String> {
     let mut programs = Vec::new();
+    let collisions = admissions.collisions();
     for target in targets {
         let crate_src = root.join("programs").join(&target.package).join("src");
         let lib = crate_src.join("lib.rs");
@@ -1452,6 +1453,7 @@ pub fn enumerate(
             admissions
                 .unreadable
                 .iter()
+                .chain(collisions.iter())
                 .filter(|entry| entry.provenance.starts_with(&package_prefix))
                 .cloned(),
         );

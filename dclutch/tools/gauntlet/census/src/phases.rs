@@ -48,10 +48,17 @@ pub struct AdmissionFact {
 
 /// Workspace-wide index of admissible-prestate constants, keyed by bare name.
 ///
-/// Bare names are enough for the same reason the constant index uses them: the
-/// declarations are globally unique by construction. A genuine collision is
-/// refused rather than guessed at, so a route gated by a colliding name shows
-/// as ungated -- visibly wrong -- instead of silently taking the wrong set.
+/// Bare names are enough for the same reason the constant index and the magic
+/// sweep use them: these declarations are globally unique by construction. A
+/// genuine collision is refused rather than guessed at.
+///
+/// REFUSING IS NOT ENOUGH ON ITS OWN, and this lane paid for the difference.
+/// Naming Custody's handoff guard the same as Core's silently un-gated CORE's
+/// route -- the count went from eleven to ten and nothing said why; it was
+/// found by diffing two inventories by hand. A refusal that produces the same
+/// output as an absence is not a refusal a reader can act on, so a collision
+/// now emits an `Unclassified` at every colliding site, which is what the
+/// report and `routes.md` show.
 #[derive(Default)]
 pub struct AdmissionIndex {
     facts: BTreeMap<String, Vec<AdmissionFact>>,
@@ -60,6 +67,30 @@ pub struct AdmissionIndex {
 }
 
 impl AdmissionIndex {
+    /// Every name declared more than once, with each site, as unclassified.
+    pub fn collisions(&self) -> Vec<Unclassified> {
+        let mut reported = Vec::new();
+        for (name, facts) in &self.facts {
+            if facts.len() < 2 {
+                continue;
+            }
+            let sites: Vec<&str> = facts.iter().map(|fact| fact.provenance.as_str()).collect();
+            for fact in facts {
+                reported.push(Unclassified {
+                    context: format!("admissible prestates {name}"),
+                    expression: sites.join(", "),
+                    provenance: fact.provenance.clone(),
+                    reason: format!(
+                        "{name} is declared {} times; a colliding name is not guessed at, so \
+                         EVERY route gated by it reads as ungated until one of them is renamed",
+                        facts.len()
+                    ),
+                });
+            }
+        }
+        reported
+    }
+
     pub fn resolve(&self, name: &str) -> Option<&AdmissionFact> {
         let facts = self.facts.get(name)?;
         if facts.len() == 1 {
@@ -518,6 +549,60 @@ mod tests {
         );
         assert!(
             constant("const A: MarketAdmissionV1 = MarketAdmissionV1::everything(&[]);").is_err()
+        );
+    }
+
+    /// A collision must be REPORTED, not merely refused.
+    ///
+    /// The two are easy to conflate and the difference cost this lane real
+    /// time: refusing a colliding name produces exactly the output an absent
+    /// name produces, so naming Custody's handoff guard the same as Core's
+    /// un-gated Core's route and the only symptom was a count.
+    #[test]
+    fn a_colliding_name_is_refused_and_said_out_loud() {
+        let fact = |where_: &str| AdmissionFact {
+            kind: AdmissionKind::Phases,
+            phases: vec!["Retiring".into()],
+            prestates: Vec::new(),
+            provenance: where_.into(),
+        };
+        let mut index = AdmissionIndex::default();
+        index.insert("ALONE_V1".into(), fact("programs/a/src/one.rs:1"));
+        assert!(index.resolve("ALONE_V1").is_some());
+        assert!(index.collisions().is_empty());
+        assert_eq!(index.len(), 1);
+
+        index.insert("SHARED_V1".into(), fact("programs/a/src/two.rs:2"));
+        index.insert("SHARED_V1".into(), fact("programs/b/src/two.rs:3"));
+        assert!(
+            index.resolve("SHARED_V1").is_none(),
+            "a collision is not guessed at"
+        );
+        assert_eq!(
+            index.len(),
+            1,
+            "a colliding name counts as no readable constant"
+        );
+        let collisions = index.collisions();
+        assert_eq!(
+            collisions.len(),
+            2,
+            "every colliding site is reported, not just one"
+        );
+        for entry in &collisions {
+            assert!(entry.reason.contains("declared 2 times"));
+            assert!(entry.expression.contains("programs/a/src/two.rs:2"));
+            assert!(entry.expression.contains("programs/b/src/two.rs:3"));
+        }
+        assert!(
+            collisions
+                .iter()
+                .any(|e| e.provenance.starts_with("programs/a/"))
+        );
+        assert!(
+            collisions
+                .iter()
+                .any(|e| e.provenance.starts_with("programs/b/"))
         );
     }
 

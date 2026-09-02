@@ -5,8 +5,9 @@ use std::{env, fs, path::PathBuf, vec, vec::Vec};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
-    FundingAmountsV1, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+    FundingAmountsV1, FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1,
+    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, capability_dependency_closure_mask_v1,
+    funding_ledger_bytes_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1,
@@ -17,6 +18,11 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
 };
 use dclutch_direct_codec::{
+    activation_bundle_v1::{
+        DIRECT_ACTIVATION_SELECTOR_V1, direct_activation_account_profile_schema_v1,
+        direct_activation_descriptor_schema_v1, direct_activation_effect_schema_v1,
+        direct_activation_request_v1,
+    },
     begin_retiring_bundle_v1::{
         direct_begin_retiring_account_profile_schema_v1, direct_begin_retiring_effect_schema_v1,
     },
@@ -115,6 +121,17 @@ const CORE_RELEASE: u32 = 0x3004;
 const CORE_FUNDING: u32 = 0x3008;
 /// `TradingSbfError::Root`.
 const TRADING_ROOT: u32 = 0x4002;
+/// What a replayed founding refuses with, derived from the enum rather than
+/// typed:  pins the Market prestate digest, and the
+/// founding it authorized moved that state.
+///
+/// The code is coarse and this file cannot make it finer:
+/// publishes  for a seven-way disjunction whose
+/// last term is the prestate digest. Six of the seven are fixed by the
+/// instruction bytes, which the replay reuses verbatim, so the digest is the
+/// only term that can have moved -- but that is the test's reasoning, not the
+/// program's word, and a split discriminant is what would make it the latter.
+const REPLAY_REFUSAL: u32 = dclutch_core_sbf::CoreSbfError::Instruction as u32;
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc2; 32]);
@@ -1463,4 +1480,495 @@ async fn begin_direct_retiring_m61_twenty_seed_real_sbf_campaign() {
         .await
         .expect("Retiring root after replay");
     assert_eq!(after, before);
+}
+
+/// The exact activation frame Core parses, and the frame the successor
+/// bootstrap's `devnet-direct-capability-activation-v1` driver builds
+/// (`tools/local-validator/bootstrap/successor/src/direct_capability_activation.rs`):
+/// five record and Market accounts, an `F=1` physical funding slice, eleven
+/// Core-owned fixed accounts, and an eighteen-account Direct child tail.
+///
+/// It is one account narrower on both ends than the close frame: activation
+/// carries only the Trading ledger it is about, and its child tail has no
+/// Rent program and no rent credit, because a root being CREATED has no rent
+/// to refund.
+fn activation_layout() -> CapabilityRouteLayoutV1 {
+    CapabilityRouteLayoutV1::new(1, 18).expect("activation route layout")
+}
+
+struct ActivationFixture {
+    instruction: Instruction,
+    market: Pubkey,
+    root: Pubkey,
+    funding: Pubkey,
+    root_lamports: u64,
+    funding_lamports: u64,
+    expected_root: Vec<u8>,
+    manifest: Vec<u8>,
+    manifest_id: ContentId,
+}
+
+/// The founding of a Direct capability root, on real Core and Trading ELFs.
+///
+/// The close fixture above PLANTS the root it closes, which is the only reason
+/// it can start. This one starts where a real market starts: the root
+/// coordinate is vacant, its rent is parked in a Pending Trading funding
+/// ledger, and the only thing that can create it is Core's `ActivateCapability`
+/// CPI into Trading's `process_activation`.
+///
+/// Every coordinate is derived the way the devnet driver derives it, so the two
+/// cannot drift: the selection from the manifest entry, the root from the
+/// selection's own header seeds, the closure mask from the manifest, and the
+/// role request as selection bytes, `CapabilityFundingHeaderV2::new(1, 1, mask)`
+/// and `direct_activation_request_v1()` concatenated.
+fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
+    let artifacts = artifacts();
+    let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
+    test.set_compute_max_units(1_400_000);
+    for (name, program, elf) in [
+        (
+            "dclutch_core_sbf",
+            CORE_PROGRAM_ID,
+            artifacts.core.as_slice(),
+        ),
+        (
+            "dclutch_trading_sbf",
+            TRADING_PROGRAM_ID,
+            artifacts.trading.as_slice(),
+        ),
+        (
+            "dclutch_core_sbf",
+            RESOLUTION_PROGRAM_ID,
+            artifacts.core.as_slice(),
+        ),
+        (
+            "dclutch_registry_sbf",
+            REGISTRY_PROGRAM_ID,
+            artifacts.registry.as_slice(),
+        ),
+    ] {
+        add_upgradeable_program(&mut test, name, program, elf);
+    }
+
+    let (release_set, cache_data) = activation(&artifacts);
+    let cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    add_account(&mut test, cache, REGISTRY_PROGRAM_ID, cache_data);
+
+    let ordinary =
+        build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
+            account_profile: DirectInlineOrdinaryAccountProfileInputV3 {
+                logical_data_lengths: &ordinary_lengths(),
+            },
+            capacity_profile: CAPACITY_PROFILE,
+        })
+        .expect("canonical ordinary bundle");
+    let release = build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, CAPACITY_PROFILE)
+        .expect("canonical ordinary/lifecycle release");
+    // The activation request selects its own entry out of that set, and the
+    // selector is read from the request rather than typed here.
+    assert_eq!(
+        u32::from_le_bytes(
+            direct_activation_request_v1()[12..16]
+                .try_into()
+                .expect("selector")
+        ),
+        DIRECT_ACTIVATION_SELECTOR_V1
+    );
+    let ordinary_descriptor =
+        CapabilityProgramV4::decode(&release.ordinary.descriptor).expect("ordinary descriptor");
+    let config = DirectExecutionConfigV1::new(100, 0, [0x55; 32])
+        .expect("Direct config")
+        .encode();
+    let config_digest = hash(&config).to_bytes();
+
+    let root_space = CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1;
+    let root_lamports = Rent::default().minimum_balance(root_space);
+    // Exactly the rent of the account this row owns, which is how
+    // `selected_manifest_entry_v1` quotes it in production. A quote below the
+    // root's own exemption cannot found it at all.
+    let amounts = FundingAmountsV1::new(
+        CompartmentFundingV1::native_lamports(root_lamports).expect("native rent quote"),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+    )
+    .expect("funding amounts");
+    let direct_entry = CapabilityEntryV1::new(
+        content(ordinary_descriptor.kind().to_bytes()),
+        content(release.program_set_id),
+        content(config_digest),
+        content(ordinary_descriptor.capacity_profile().to_bytes()),
+        content(ordinary_descriptor.root_schema().to_bytes()),
+        content(ordinary_descriptor.derivation_policy().to_bytes()),
+        ActivationPolicy::PrepaidLazy,
+        u64::MAX,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        FundingQuoteV1::new(amounts, None).expect("funding quote"),
+    )
+    .expect("Direct manifest entry");
+    let entries = [direct_entry];
+    let mut manifest = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&entries, &mut manifest).expect("manifest");
+    let manifest_digest = hash(&manifest).to_bytes();
+    let manifest_id = content(manifest_digest);
+    let decoded_manifest = CapabilityManifestV1::decode(&manifest).expect("decoded manifest");
+    // Discovered, not chosen: this driver carries exactly the one selected
+    // Trading ledger, and it may do so only when the entry closes over itself.
+    let closure_mask =
+        capability_dependency_closure_mask_v1(decoded_manifest, 0).expect("dependency closure");
+    assert_eq!(closure_mask, 0b0001);
+
+    let adapter = PRODUCTION_ADAPTER_RELEASES[0];
+    let realm_data = RealmV1::new(RealmV1Input {
+        token_program: LEGACY_TOKEN_PROGRAM_ID,
+        collateral_mint: [0x61; 32],
+        collateral_adapter_release_id: hash(&adapter.to_bytes()).to_bytes(),
+        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+    })
+    .expect("Realm")
+    .to_bytes()
+    .to_vec();
+    let realm_digest = hash(&realm_data).to_bytes();
+    let (realm_raw, realm_staging, _, _) =
+        add_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, realm_data);
+    let (manifest_raw, manifest_staging, manifest_raw_bump, manifest_staging_bump) = add_record(
+        &mut test,
+        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest.clone(),
+    );
+    let (program_set_raw, program_set_staging, release_raw_bump, release_staging_bump) = add_record(
+        &mut test,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        release.program_set.clone(),
+    );
+    let (config_raw, config_staging, config_raw_bump, config_staging_bump) = add_record(
+        &mut test,
+        ordinary_descriptor.config_schema().to_bytes(),
+        config.to_vec(),
+    );
+    let (profile_raw, profile_staging, _, _) = add_record(
+        &mut test,
+        direct_activation_account_profile_schema_v1(),
+        release.activation.account_profile.clone(),
+    );
+    let (effect_raw, effect_staging, _, _) = add_record(
+        &mut test,
+        direct_activation_effect_schema_v1(),
+        release.activation.effect.clone(),
+    );
+    let (descriptor_raw, descriptor_staging, _, _) = add_record(
+        &mut test,
+        direct_activation_descriptor_schema_v1(),
+        release.activation.descriptor.clone(),
+    );
+
+    let wire_selection = CapabilityExecutionSelectionV1::new(
+        0,
+        manifest_id,
+        content(ordinary_descriptor.kind().to_bytes()),
+        content(release.program_set_id),
+        content(config_digest),
+    )
+    .expect("selection");
+    let persisted_selection =
+        wire_selection.with_capability_release_record_bumps(release_raw_bump, release_staging_bump);
+
+    let mut state = CoreState {
+        phase: Phase::Open,
+        readiness: Readiness::Consumed,
+        terminal_winner: 0,
+        identity: MarketIdentity {
+            market_id: identity([0x71; 32]),
+            realm_id: identity(realm_digest),
+            product_record: identity([0x72; 32]),
+            product_id: identity([0x73; 32]),
+            resolution_policy: identity([0x74; 32]),
+            capability_manifest: identity(manifest_digest),
+            selected_release_set: identity(release_set),
+            registry_program: identity(REGISTRY_PROGRAM_ID.to_bytes()),
+            generation: GENERATION,
+        },
+        outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
+        rent_beneficiary: identity([0x75; 32]),
+        terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
+    };
+    let market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
+        &CORE_PROGRAM_ID,
+    )
+    .0;
+    state.identity.market_id = identity(market.to_bytes());
+    let state_bytes = state.encode().expect("Core state");
+    add_account(&mut test, market, CORE_PROGRAM_ID, state_bytes.to_vec());
+
+    // The root coordinate, derived exactly as `direct_execution_root_v1`
+    // derives it. NOT added to the bank: this is what the route creates.
+    let root_header = CapabilityRootHeaderV1::new(
+        content(release_set),
+        market.to_bytes(),
+        GENERATION,
+        persisted_selection,
+        SelectedRecordBumpsV1::new(
+            manifest_raw_bump,
+            manifest_staging_bump,
+            config_raw_bump,
+            config_staging_bump,
+        ),
+    )
+    .expect("root header");
+    let root =
+        Pubkey::find_program_address(&root_header.seeds().as_slices(), &TRADING_PROGRAM_ID).0;
+    let mut expected_root = root_header.to_bytes().to_vec();
+    expected_root.extend_from_slice(&DirectRootStateV1::new().encode());
+
+    // Pending, and holding the root's rent as well as its own: the founding
+    // moves the parked quote into the account it creates.
+    let mut funding_data = vec![0; funding_ledger_bytes_v2(1).expect("funding width")];
+    FundingLedgerV2::initialize(&mut funding_data, manifest_id, decoded_manifest, 0b0001)
+        .expect("funding initialize");
+    let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
+        TRADING_PROGRAM_ID.to_bytes(),
+        market.to_bytes(),
+        GENERATION,
+        manifest_id,
+        FundingLedgerV2::decode(&funding_data).expect("funding ledger"),
+    )
+    .expect("funding derivation");
+    let funding =
+        Pubkey::find_program_address(&funding_derivation.seed_components(), &TRADING_PROGRAM_ID).0;
+    let funding_lamports = Rent::default().minimum_balance(funding_data.len());
+    add_account_with_lamports(
+        &mut test,
+        funding,
+        TRADING_PROGRAM_ID,
+        funding_data,
+        funding_lamports + root_lamports,
+    );
+
+    let family_request = direct_activation_request_v1();
+    let funding_header =
+        CapabilityFundingHeaderV2::new(1, 1, closure_mask).expect("funding header");
+    let mut role_request = wire_selection.to_bytes().to_vec();
+    role_request.extend_from_slice(&funding_header.encode());
+    role_request.extend_from_slice(&family_request);
+    let role_digest = hash(&role_request).to_bytes();
+    let context = [0x82; 32];
+    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
+        release_set,
+        market.to_bytes(),
+        ExecutionRoleV1::Core,
+        context,
+        role_digest,
+    )
+    .expect("caller seeds");
+    let caller = Pubkey::find_program_address(&caller_seeds.as_slices(), &CORE_PROGRAM_ID).0;
+    add_account(&mut test, caller, system_program::ID, Vec::new());
+    let envelope = CoreEffectEnvelopeV1::new(
+        CoreEffectActionV1::ActivateCapability,
+        Role::Trading,
+        identity(CORE_PROGRAM_ID.to_bytes()),
+        identity(caller.to_bytes()),
+        identity(release_set),
+        identity(market.to_bytes()),
+        identity(context),
+        identity(hash(&state_bytes).to_bytes()),
+        identity(role_digest),
+        GENERATION,
+        0,
+        0,
+        u32::try_from(role_request.len()).expect("role request width"),
+    )
+    .expect("Core envelope");
+    let request = Request::administrative(
+        Action::ActivateCapability,
+        GENERATION,
+        identity(market.to_bytes()),
+    );
+    let mut data = request.encode().expect("Core request").to_vec();
+    data.extend_from_slice(&envelope.encode().expect("Core envelope bytes"));
+    data.extend_from_slice(&role_request);
+
+    let accounts = vec![
+        AccountMeta::new(market, false),
+        AccountMeta::new_readonly(realm_raw, false),
+        AccountMeta::new_readonly(realm_staging, false),
+        AccountMeta::new_readonly(manifest_raw, false),
+        AccountMeta::new_readonly(manifest_staging, false),
+        AccountMeta::new(funding, false),
+        AccountMeta::new(root, false),
+        AccountMeta::new_readonly(cache, false),
+        AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(CORE_PROGRAM_ID), false),
+        AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(TRADING_PROGRAM_ID), false),
+        AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(RESOLUTION_PROGRAM_ID), false),
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(caller, false),
+        AccountMeta::new_readonly(program_set_raw, false),
+        AccountMeta::new_readonly(program_set_staging, false),
+        AccountMeta::new_readonly(config_raw, false),
+        AccountMeta::new_readonly(config_staging, false),
+        AccountMeta::new_readonly(profile_raw, false),
+        AccountMeta::new_readonly(profile_staging, false),
+        AccountMeta::new_readonly(effect_raw, false),
+        AccountMeta::new_readonly(effect_staging, false),
+        AccountMeta::new_readonly(cache, false),
+        AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(CORE_PROGRAM_ID), false),
+        AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(TRADING_PROGRAM_ID), false),
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(descriptor_raw, false),
+        AccountMeta::new_readonly(descriptor_staging, false),
+    ];
+    assert_eq!(accounts.len(), activation_layout().account_count());
+    (
+        test,
+        ActivationFixture {
+            instruction: Instruction {
+                program_id: CORE_PROGRAM_ID,
+                accounts,
+                data,
+            },
+            market,
+            root,
+            funding,
+            root_lamports,
+            funding_lamports,
+            expected_root,
+            manifest,
+            manifest_id,
+        },
+    )
+}
+
+/// C-04's founding clause: the Direct capability root is CREATED by Trading
+/// under its own authority, through Core's `ActivateCapability`, on real ELFs.
+///
+/// Until this test, nothing offline created one. The devnet/loopback driver
+/// (`direct_capability_activation.rs`) is the only other frame that reaches
+/// `process_activation`, and it needs a cluster; the Trading program-test that
+/// exercises the outer drives it from `dclutch_trading_core_caller_test_program`
+/// with a Registry stub, so neither Core's capability route nor the real
+/// Registry activation was ever in front of it.
+#[tokio::test]
+async fn canonical_activation_creates_the_direct_root_through_real_core_and_trading() {
+    let (test, fixture) = build_activation_fixture();
+    let mut context = test.start_with_context().await;
+    assert!(
+        account(&mut context, fixture.root).await.is_none(),
+        "the root coordinate must be vacant before the founding",
+    );
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            fixture.instruction.clone(),
+        ],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    assert!(
+        processed.result.is_ok(),
+        "the founding refused: {:?}",
+        processed.result
+    );
+    let units = processed
+        .metadata
+        .expect("transaction metadata")
+        .compute_units_consumed;
+    println!("direct capability activation: {units} CU top level");
+
+    let root = account(&mut context, fixture.root)
+        .await
+        .expect("the founding created the root");
+    assert_eq!(root.owner, TRADING_PROGRAM_ID);
+    assert_eq!(root.data, fixture.expected_root);
+    assert_eq!(root.lamports, fixture.root_lamports);
+
+    let funding = account(&mut context, fixture.funding)
+        .await
+        .expect("the ledger survives its own spend");
+    assert_eq!(funding.lamports, fixture.funding_lamports);
+    let manifest = CapabilityManifestV1::decode(&fixture.manifest).expect("manifest");
+    let authenticated = FundingLedgerV2::decode(&funding.data)
+        .expect("funding poststate")
+        .authenticate(fixture.manifest_id, manifest)
+        .expect("authenticated funding poststate");
+    let slot = authenticated.slot(0).expect("selected slot");
+    assert_eq!(slot.status(), FundingLedgerStatusV2::Active);
+    assert!(slot.activation_slot() > 0);
+    assert_eq!(slot.remaining().rent().amount(), 0);
+
+    let market = account(&mut context, fixture.market)
+        .await
+        .expect("Market state");
+    assert_eq!(
+        CoreState::decode(&market.data)
+            .expect("Core poststate")
+            .outstanding_capabilities,
+        1,
+    );
+
+    // A founding is once. The same exact instruction replayed must refuse
+    // without moving one byte or lamport of the root it already created --
+    // and it must refuse at TRADING, about the root, rather than anywhere
+    // upstream: a Core-frame refusal would mean the replay never reached the
+    // statement this case is about.
+    context.warp_to_slot(64).expect("replay slot");
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("replay blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            fixture.instruction.clone(),
+        ],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let replayed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("replay Banks RPC");
+    assert_eq!(
+        transaction_refusal(replayed.result),
+        Some(REPLAY_REFUSAL),
+        "the replayed founding must refuse at its own conjunct",
+    );
+    let after = account(&mut context, fixture.root)
+        .await
+        .expect("the root after the replay");
+    assert_eq!(after.data, fixture.expected_root);
+    assert_eq!(after.lamports, fixture.root_lamports);
 }

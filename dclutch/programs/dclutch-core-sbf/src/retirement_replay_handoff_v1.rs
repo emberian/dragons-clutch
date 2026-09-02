@@ -42,7 +42,12 @@ use crate::{
 /// The written guard names no readiness, and that is accurate rather than
 /// lax: readiness is spent long before a Market reaches `Retiring`, so it
 /// carries no further authority here.
-pub const RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+///
+/// Program-prefixed because Custody authenticates the same Market for the same
+/// handoff and declares its own. The census keys these by bare name, so two
+/// programs sharing one would un-gate BOTH routes -- measured on this lane,
+/// with the count silently dropping from eleven to ten.
+pub const CORE_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
     MarketAdmissionV1::phases(&[Phase::Retiring]);
 
 /// Execute and verify one atomic retirement replay handoff.
@@ -123,7 +128,7 @@ fn authenticate_market(
         || state.identity.market_id.to_bytes() != request.market()
         || state.identity.registry_program.to_bytes() != accounts[REGISTRY].key.to_bytes()
         || state.identity.generation != request.generation()
-        || !RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
+        || !CORE_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
     {
         return Err(CoreSbfError::Market.into());
     }

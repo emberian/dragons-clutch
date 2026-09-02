@@ -3216,3 +3216,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Frameguard green; `prepare_and_execute`'s 3,456 is the v3 design and the eighth-largest frame, not the binding one.
   Two trading lib tests red on main → DIRECT (`semantic_join…`) and DEALER (`current_loader_slot…`).
 - Cuts: `0e730bf8c`, `d8adf018c`, `7aaa6c36d`.
+
+### Lane map delta — 2026-09-03 02:15
+- COHORT-13 read before spending: **there is no devnet General path** — the General market compiler is loopback-only
+  (`local_mutable.rs:1527` its only caller; the devnet commands attach only Direct), its docstring names the four lab facts a
+  devnet General market replaces (accelerator artifact release, compiler, toolchain, translation validation), and activation
+  refuses every external origin twice (`general_capability_activation.rs:296`). General is foundable in principle (acyclic
+  entry identities). → GENERAL-DEVNET **`ae460c657082f0c97`**: deploy the General accelerator on devnet (not a sealed role),
+  the devnet General market compiler reading those facts from the deployment, activation's devnet arm; OpenBatch on chain is
+  cohort-14's (Trading with a517d27c). Cohort-13's founding continues (60 of ~186 tx).

@@ -12,7 +12,7 @@ use dclutch_custody_contract::{
     RetirementReplayHandoffObservationV1, RetirementReplayHandoffPlanV1,
     RetirementReplayHandoffRequestV1, retirement_replay_handoff_accounts_v1::*,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase};
+use dclutch_market_core_codec::{CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
@@ -36,6 +36,23 @@ use solana_system_interface::instruction::create_account;
 use super::{CustodySbfError, collateral_profile, read_custody_account, registry_role};
 
 /// Execute the one retirement-specific cross-role replay handoff.
+/// Market phases in which Custody accepts a retirement replay handoff.
+///
+/// The Core half of this same handoff declares the same phase in its own
+/// program (`core::retirement_replay_handoff_v1`). Two programs authenticate
+/// one Market between them, so each names the prestate it enforces rather than
+/// one deferring to the other's; a constant that drifted from Core's would show
+/// as two different admissions on one act in `docs/reference/routes.md`, which
+/// is where a reader would see it. The written guard names no readiness,
+/// because readiness carries no authority by the time a Market is Retiring.
+///
+/// The program prefix is load-bearing, not decoration: the census keys these
+/// constants by bare name and refuses a colliding one, so the first draft of
+/// this file -- which shared Core's name exactly -- un-gated Core's route as
+/// well as leaving this one ungated.
+pub const CUSTODY_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
+    MarketAdmissionV1::phases(&[Phase::Retiring]);
+
 #[inline(never)]
 pub(crate) fn process(
     program_id: &Pubkey,
@@ -193,7 +210,7 @@ fn authenticate_market(
         || state.identity.market_id.to_bytes() != request.market()
         || state.identity.registry_program.to_bytes() != accounts[REGISTRY].key.to_bytes()
         || state.identity.generation != request.generation()
-        || state.phase != Phase::Retiring
+        || !CUSTODY_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1.admits_phase(state.phase)
     {
         return Err(CustodySbfError::Release.into());
     }
@@ -607,4 +624,42 @@ fn verify_poststate(
         return Err(CustodySbfError::Postcondition.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod admissible_prestates {
+    use dclutch_market_core_codec::{Phase, Readiness};
+
+    use super::CUSTODY_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1;
+
+    /// The constant against the exact inline condition it replaced.
+    ///
+    /// `state.phase != Phase::Retiring` named no readiness, so every readiness
+    /// in `Retiring` was admitted and the declaration says so. A rename that
+    /// narrowed it to one readiness would compile, pass the program test whose
+    /// fixture only ever reaches that readiness, and fail here.
+    #[test]
+    fn the_constant_admits_what_the_inline_guard_admitted() {
+        for phase in [
+            Phase::Founding,
+            Phase::Open,
+            Phase::Terminal,
+            Phase::Retiring,
+            Phase::Retired,
+        ] {
+            assert_eq!(
+                CUSTODY_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1.admits_phase(phase),
+                !(phase != Phase::Retiring),
+                "custody handoff admission disagrees at {phase:?}"
+            );
+            for readiness in [Readiness::Prepaid, Readiness::Ready, Readiness::Consumed] {
+                assert_eq!(
+                    CUSTODY_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1
+                        .admits(phase, readiness),
+                    phase == Phase::Retiring,
+                    "custody handoff admission disagrees at {phase:?}/{readiness:?}"
+                );
+            }
+        }
+    }
 }
