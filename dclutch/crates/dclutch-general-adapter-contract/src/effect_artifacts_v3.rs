@@ -294,7 +294,10 @@ pub fn general_effect_route_frame_v3(
         .account_start
         .checked_add(selected.frame.account_count()?)
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)?;
-    if end > general_effect_account_count_v3(action)? {
+    // Route ranges live below the System program, which is appended past every
+    // one of them; bounding them by the count that INCLUDES it would admit a
+    // frame that overlapped it.
+    if end > general_effect_account_count_before_system_v3(action) {
         return Err(GeneralEffectArtifactErrorV3::Geometry);
     }
     Ok(selected)
@@ -561,15 +564,34 @@ pub fn general_custody_callee_coordinate_v3(action: Action) -> Result<Option<u16
     if general_custody_callee_account_count_v3(action) == 0 {
         return Ok(None);
     }
-    general_effect_account_count_v3(action)?
+    // "The last account" means the last of the ROUTE accounts. The System
+    // program is appended past all of them, so this must not use the count that
+    // includes it -- the doc line above ("appended past every route range, so
+    // adding it renumbered no frame") is exactly the property a second appended
+    // account breaks, and it broke it on the first run.
+    general_effect_account_count_before_system_v3(action)
         .checked_sub(1)
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)
         .map(Some)
 }
 
 /// Return the exact logical account width selected by one action AccountProfile.
+/// The account count, including the System program where the action declares one.
+///
+/// The profile's fixed count IS this number -- one author for both -- so the
+/// System program being an account rather than only an identity shows up here.
 pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
-    require_authored_action_v3(action)?;
+    let base = general_effect_account_count_before_system_v3(action);
+    if crate::state_artifacts_v3::general_declares_system_program_v3(action) {
+        base.checked_add(1)
+            .ok_or(GeneralEffectArtifactErrorV3::Geometry)
+    } else {
+        Ok(base)
+    }
+}
+
+/// The account count the effect's own routes and suffixes reach.
+pub const fn general_effect_account_count_before_system_v3(action: Action) -> u16 {
     let suffix = match action {
         Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate => 0,
         Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => 0,
@@ -604,9 +626,8 @@ pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
         }
     };
     general_child_account_start_v3(action)
-        .checked_add(suffix)
-        .and_then(|value| value.checked_add(general_custody_callee_account_count_v3(action)))
-        .ok_or(GeneralEffectArtifactErrorV3::Geometry)
+        + suffix
+        + general_custody_callee_account_count_v3(action)
 }
 
 /// Generate one complete action-selected General EffectProgram atomically.
@@ -3497,7 +3518,9 @@ mod tests {
         let bytes = artifact(Action::SubmitCandidate);
         let program = ProgramV3::decode(&bytes).expect("SubmitCandidate effect");
         assert_eq!(program.route_count(), 0);
-        assert_eq!(program.fixed_account_count(), 11);
+        // 11 until the System program became an account; the effect's account
+        // count is the profile's fixed count and moves with it.
+        assert_eq!(program.fixed_account_count(), 12);
         for count in [1_u32, 258] {
             let mut scalars = vec![
                 0_u64;
@@ -3554,7 +3577,8 @@ mod tests {
         let bytes = artifact(Action::VerifyCandidateRow);
         let program = ProgramV3::decode(&bytes).expect("VerifyCandidateRow effect");
         assert_eq!(program.route_count(), 0);
-        assert_eq!(program.fixed_account_count(), 15);
+        // 15 until the System program became an account; see SubmitCandidate.
+        assert_eq!(program.fixed_account_count(), 16);
         assert_eq!(program.fixed_operation_count(), 53);
         assert_eq!(program.item_operation_count(), 7);
 

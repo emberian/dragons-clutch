@@ -163,7 +163,15 @@ pub type Result<T> = core::result::Result<T, GeneralAccountRuleErrorV3>;
 /// This is the fixed count minus the trailing Custody callee, and it is what
 /// every child-frame walk must bound itself by: the callee belongs to no frame.
 fn general_child_frame_end_v3(action: Action) -> Result<u16> {
-    general_account_profile_fixed_count_v3(action)?
+    // The PRE-System count, not the profile's fixed count. Two accounts are now
+    // appended past every child frame -- the Custody callee, which this already
+    // stepped back over, and the System program behind it -- and a walk bounded
+    // by the count that includes them asks `child_coordinate` to place an
+    // account belonging to no frame, which returns `Geometry` and takes every
+    // privilege union in the action down with it. That is exactly how the
+    // System append first surfaced: as coordinate 2 of Consider losing its
+    // rule, four coordinates away from anything that moved.
+    crate::effect_artifacts_v3::general_effect_account_count_before_system_v3(action)
         .checked_sub(general_custody_callee_account_count_v3(action))
         .ok_or(GeneralAccountRuleErrorV3::Geometry)
 }
@@ -224,21 +232,21 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     // existing index moved. See the arm that emits it for why the register
     // needed a source at all.
     match action {
-        Action::SubmitCandidate => 36,
-        Action::VerifyCandidateRow => 15,
+        Action::SubmitCandidate => 37,
+        Action::VerifyCandidateRow => 16,
         Action::CloseCandidate => 23,
-        Action::OpenBatch => 23,
-        Action::CloseBatch => 20,
-        Action::PlaceOrder => 34,
-        Action::CancelOrder => 32,
-        Action::ReleaseOrder => 20,
-        Action::Close => 13,
+        Action::OpenBatch => 24,
+        Action::CloseBatch => 21,
+        Action::PlaceOrder => 35,
+        Action::CancelOrder => 33,
+        Action::ReleaseOrder => 21,
+        Action::Close => 14,
         Action::Consider
         | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
-        | Action::Distribute => 9,
+        | Action::Distribute => 10,
     }
 }
 
@@ -305,6 +313,19 @@ const fn general_account_profile_fixed_operation_count_v3(action: Action) -> u16
 /// anywhere near a span whose start can move stops being reached without
 /// anything going red, and surfaces as `Geometry` on `Consider` -- the cheapest
 /// action, and so the first to run out of arms.
+/// Index of the operation binding the System-program coordinate to its identity.
+///
+/// Derived, in front of the product digest, for the reason the two behind it
+/// are: a literal near a span whose start can move stops being reached with
+/// nothing going red.
+const fn general_system_program_operation_index_v3(action: Action) -> Option<u16> {
+    if crate::state_artifacts_v3::general_declares_system_program_v3(action) {
+        Some(general_product_digest_operation_index_v3(action).saturating_sub(1))
+    } else {
+        None
+    }
+}
+
 const fn general_product_digest_operation_index_v3(action: Action) -> u16 {
     general_semantic_basis_operation_index_v3(action).saturating_sub(1)
 }
@@ -1189,6 +1210,23 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::beneficiary(),
         }),
+        // THE SYSTEM PROGRAM, BOUND TO THE IDENTITY THE PROFILE ALREADY TRUSTED.
+        //
+        // `TrustedBuiltinIdentityV2::SystemProgram` writes the program's key
+        // into `RESULT_OWNER` and has done since this profile was written. What
+        // was missing was an account to compare it against, so this operation
+        // is the other half: the coordinate declared in `state_artifacts_v3`
+        // must BE the program the trusted environment named, which is what
+        // stops a caller supplying some other executable there.
+        system if Some(system) == general_system_program_operation_index_v3(action) => {
+            Ok(AccountOperationInputV2::RequireKey {
+                account: AccountCoordinateV2::fixed(
+                    crate::state_artifacts_v3::general_system_program_account_v3(action)
+                        .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
+                ),
+                expected: common_identity(identity::RESULT_OWNER)?,
+            })
+        }
         // THE PRODUCT RECORD DIGEST, WHICH NO RULE COULD EXPRESS UNTIL NOW.
         //
         // `authenticated_general_domain`'s fourth conjunct recomputes
@@ -1388,7 +1426,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 36;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 37;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -1502,6 +1540,24 @@ pub fn general_account_profile_rule_v3(
     }
     if coordinate < 5 {
         return common_rule(action, coordinate, widths);
+    }
+    // The System program: executable, never a signer, never writable, no data
+    // this profile reads. Uniform across every action and checked BEFORE the
+    // per-action state branches, because the commit needs it for any action
+    // whose lifecycle creates a state and it costs nothing for the rest.
+    // `AuthenticatedOpaqueReadonlyData` is the prestate Direct's ordinary
+    // profile already uses for exactly this account.
+    if crate::state_artifacts_v3::general_system_program_account_v3(action) == Some(coordinate) {
+        return Ok(AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, false, true),
+                effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        });
     }
     if action == Action::VerifyCandidateRow {
         match coordinate {
@@ -2566,8 +2622,12 @@ mod tests {
             }
         }
         assert_eq!(
-            guards, 19,
-            "General declares nineteen account guards across its fifteen actions",
+            guards, 33,
+            "General declares thirty-three account guards: nineteen, plus the \
+             System-program RequireKey on each of the fourteen actions that \
+             declare a System identity -- CloseCandidate declares none and \
+             therefore has no such guard, which is the conjunct this very test \
+             refused when the account was first added to all fifteen",
         );
         assert_eq!(
             unsatisfiable,
@@ -2636,10 +2696,13 @@ mod tests {
     #[test]
     fn submit_candidate_profile_owns_one_fixed_candidate_and_three_exact_evidence_records() {
         let action = Action::SubmitCandidate;
-        assert_eq!(general_account_profile_fixed_count_v3(action), Ok(11));
+        // 11 until the System program became a runtime coordinate rather than
+        // only a trusted identity; every action that declares one gained
+        // exactly that account.
+        assert_eq!(general_account_profile_fixed_count_v3(action), Ok(12));
         // 34 until the semantic-basis projection landed; every action's count
         // gained exactly one.
-        assert_eq!(general_account_profile_operation_count_v3(action), 36);
+        assert_eq!(general_account_profile_operation_count_v3(action), 37);
 
         let candidate =
             general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)
@@ -2711,7 +2774,8 @@ mod tests {
         for count in [1_u32, 258] {
             assert_eq!(
                 profile.logical_account_count_with_dynamic_spans(1, &[count]),
-                Ok(usize::from(11_u16) + usize::try_from(count).expect("tail")),
+                // 11 fixed accounts until the System program became one.
+                Ok(usize::from(12_u16) + usize::try_from(count).expect("tail")),
             );
         }
     }
@@ -2813,9 +2877,19 @@ mod tests {
 
             // The callee sits past every route range, so adding it renumbered
             // no frame, and it is absent exactly when no route needs it.
+            //
+            // It used to be the LAST account outright. The System program is
+            // appended behind it now, so the invariant is stated against the
+            // pre-System count -- which is what "past every route range" always
+            // meant, and is true whether or not a second account follows.
             match custody_callee {
                 Some(coordinate) => {
-                    assert_eq!(coordinate + 1, count);
+                    assert_eq!(
+                        coordinate + 1,
+                        crate::effect_artifacts_v3::general_effect_account_count_before_system_v3(
+                            action
+                        )
+                    );
                     assert!(coordinate >= general_child_frame_end_v3(action).expect("child end"));
                     assert!(effect.route_count() > 0);
                 }
@@ -3090,4 +3164,5 @@ mod tests {
         );
         assert!(short.iter().all(|byte| *byte == 0x55));
     }
+
 }

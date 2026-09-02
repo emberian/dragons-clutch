@@ -443,12 +443,22 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             ),
         ));
     }
-    if profile != GeneralReleaseProfileV1::SettlementWithActivation {
-        return Err(refusal(
-            "activation/unexpected-profile",
-            format!("the published General release is {profile:?}, not SettlementWithActivation"),
-        ));
-    }
+    // THE EXACT PROFILE IS NOT THIS SEAM'S BUSINESS, and asserting it made this
+    // driver stale the moment the catalogue grew. It refused anything but
+    // `SettlementWithActivation` until 2026-09-02; `5ef3d0a3` published the
+    // complete selected-action catalogue, which is sixteen entries rather than
+    // eight, so the published set now classifies `CompleteV2WithActivation` and
+    // this driver refused a release the project had deliberately moved to.
+    //
+    // Deleted rather than re-pinned, and that is the point: re-pinning would go
+    // stale again at the next catalogue change, and the equality protected
+    // nothing. Every address this seam borrows is SELECTED -- the manifest entry
+    // by kind, the ProgramSet by that entry's `release_id`, the activation
+    // descriptor by `general_activation_request_v1`, the profile and effect
+    // records by the identities that descriptor carries -- and not one of them
+    // is indexed by catalogue position. The property the seam actually needs is
+    // `has_activation_entry`, which the branch immediately above already
+    // refuses by name.
     let activation_reference = set
         .select_descriptor(
             &general_activation_request_v1()
@@ -974,7 +984,9 @@ mod tests {
             profile.has_activation_entry(),
             "a published General release must carry the activation coordinate"
         );
-        assert_eq!(profile, GeneralReleaseProfileV1::SettlementWithActivation);
+        // The catalogue size is deliberately NOT asserted; see the seam's own
+        // comment. What the driver needs is the activation coordinate.
+        assert!(profile.has_activation_entry());
 
         let reference = set
             .select_descriptor(&general_activation_request_v1().expect("activation request"))

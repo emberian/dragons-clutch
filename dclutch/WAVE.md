@@ -7024,3 +7024,89 @@ reached. With the donor removed the hostile no longer refuses where it claims to
 it now exhausts the compute budget (1,399,692 of 1,399,700). Ledger `M-38` in its
 sharpest form — the assertion named a code, not a cause, and the code had 2,126
 sites.
+
+## 2026-09-02 - the System program becomes an account, and the ripple was not where it looked
+
+**`e3298c9a`.** `0x4005 Commit` on every General action that creates state was
+`apply_lifecycle_creates_v3` refusing at its first conjunct: the System program
+was not among the runtime accounts. The profile declared
+`TrustedBuiltinIdentityV2::SystemProgram` — an **identity**, into `RESULT_OWNER`
+— and named no System **account** anywhere.
+
+> **The release handed the transition something to compare against and never
+> handed the commit something to invoke.** Direct's ordinary profile has carried
+> both halves since it was written.
+
+### Appended, not inserted, and that was the whole cost
+
+The first attempt put the coordinate at the end of the state prefix — where it
+belongs semantically, and which moves every evidence and child coordinate by one.
+Five harness failures, every one about a coordinate rather than about the System
+program. **Appending moves nothing**: existing coordinates keep their indices and
+only counts change. The accelerator program-test needed **no edit** and is
+**26 passed / 0 failed**.
+
+`CloseCandidate` is the exception at both ends: it alone declares
+`TrustedBuiltinIdentityV2::None`, so a `RequireKey` against `RESULT_OWNER` there
+is a guard nothing can satisfy —
+`every_account_guard_names_a_register_the_input_bank_carries` refused exactly
+that on the first run. **The account follows the identity.**
+
+### The ripple was not where it looked
+
+Appending a second account past every route range broke the **first** one.
+`general_custody_callee_coordinate_v3` documents itself as *"appended past every
+route range, so adding it renumbered no frame"* and computes its position as
+`count - 1` — which my account had just taken. It surfaced as **coordinate 2 of
+Consider losing its rule**, four coordinates from anything that moved, because
+the child-frame walk was bounded by a count that now included an account
+belonging to no frame.
+
+> **A function whose doc says it is "the last one" acquires a second author the
+> moment anything else is appended, and the symptom appears nowhere near it.**
+
+### The census-side control
+
+Emitted profile bytes, diffed before and after on the real encoder:
+
+| | delta |
+|---|---|
+| every action | **+32 bytes** = one 16-byte rule + one 16-byte operation |
+| CloseCandidate | **+0 bytes** |
+
+The added rule is the opaque-executable System rule; the added operation is the
+`RequireKey` binding it to the register the trusted environment already
+populated. **Fourteen of fifteen actions captured** — Consider's line was
+swallowed by the test runner's prefix, and I am not claiming the fifteenth.
+
+### The wall moved, with a qualification
+
+OpenBatch at N=2: logical accounts **12 → 13**, instruction accounts 58 → 59, and
+the refusal is no longer `0x4005 Commit` — it is **`Custom(16408)` = `0x4018
+AdmittedTransport`**, earlier in the route, in the register-bank encoding and
+chunk geometry, which is where a changed runtime account count lands.
+
+**The Trading ELF this ran on emits three stack-frame diagnostics** on
+`execute_authenticated_hot_v3`. They are not mine — an independent three-commit
+bisect put them at Direct's `Option<u32>` change with my arena commit at zero —
+and the toolchain calls that artifact potentially-undefined. **So this reading is
+a located refusal, not evidence about the route**, until that count is zero.
+
+## 2026-09-02 - a driver that pinned a catalogue size it never read
+
+**`d307bed1`.** `general_capability_activation` refused anything but
+`SettlementWithActivation`; `5ef3d0a3` published the complete catalogue, so the
+set classifies `CompleteV2WithActivation` and the driver refused a release the
+project had deliberately moved to.
+
+**Deleted rather than re-pinned.** Re-pinning goes stale at the next catalogue
+change, and the equality protected nothing: **every address the seam borrows is
+selected, not indexed** — the manifest entry by kind, the ProgramSet by its
+`release_id`, the descriptor by `general_activation_request_v1`, the records by
+the identities that descriptor carries. The property it needs is
+`has_activation_entry`, which the branch immediately above already refuses by
+name.
+
+> **Removing a check that is redundant against the one beside it is not weakening
+> a refusal. Keeping a size assertion no address derivation reads is ceremony
+> that breaks on schedule.**

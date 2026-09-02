@@ -279,6 +279,66 @@ pub fn general_readonly_evidence_v3(
 /// First readonly evidence coordinate after local lifecycle accounts.
 #[must_use]
 pub const fn general_readonly_evidence_start_v3(action: Action) -> u16 {
+    general_system_program_base_v3(action)
+}
+
+/// Whether this action's profile carries the System program at all.
+///
+/// `CloseCandidate` alone declares `TrustedBuiltinIdentityV2::None`, so its
+/// `RESULT_OWNER` register is never populated and a `RequireKey` against it
+/// would be a guard nothing can satisfy -- which is what
+/// `every_account_guard_names_a_register_the_input_bank_carries` refuses, and
+/// it refused this on the first run. The account FOLLOWS the identity: the one
+/// action with no System identity gets no System account, and the two halves
+/// stay consistent rather than one of them being written for the other's sake.
+pub const fn general_declares_system_program_v3(action: Action) -> bool {
+    !matches!(action, Action::CloseCandidate)
+}
+
+/// The System-program coordinate: the LAST runtime account, or none.
+///
+/// APPENDED, not inserted. The first attempt put it at the end of the state
+/// prefix, which is a perfectly good place for it semantically and moved every
+/// evidence and child coordinate by one -- and the cost of that showed up
+/// immediately as five harness failures whose assertions were about
+/// coordinates, not about the System program at all. Appending moves NOTHING:
+/// every existing coordinate keeps its index, and the only figures that change
+/// are counts, which is the smallest true statement of what this adds.
+pub const fn general_system_program_account_v3(action: Action) -> Option<u16> {
+    if general_declares_system_program_v3(action) {
+        Some(crate::effect_artifacts_v3::general_effect_account_count_before_system_v3(action))
+    } else {
+        None
+    }
+}
+
+/// The System program, as an ACCOUNT rather than only as an identity.
+///
+/// WHY THIS COORDINATE EXISTS. `apply_lifecycle_creates_v3` invokes System to
+/// allocate and assign every state a lifecycle plan creates, and it looks for
+/// the program among the profile-declared RUNTIME accounts -- executable,
+/// non-signer, non-writable. This profile declared
+/// `TrustedBuiltinIdentityV2::SystemProgram`, which populates an identity
+/// REGISTER, and named no account anywhere: a grep for `system` in
+/// `account_rules_v3.rs` returned zero rules. So the release handed the
+/// transition a System identity to compare against and never handed the commit
+/// a System account to invoke, and every General action that creates state
+/// refused `0x4005 Commit` at the first conjunct of that function. Measured
+/// 2026-09-02 on OpenBatch at N=2: `system_present = 0` against twelve runtime
+/// accounts.
+///
+/// Direct's ordinary profile has carried both halves since it was written --
+/// `SYSTEM_PROGRAM_ACCOUNT` with an opaque executable rule and a `RequireKey`
+/// against its trusted System identity -- and this is that pattern, not a new
+/// convention.
+///
+/// PLACED LAST IN THE STATE PREFIX, immediately before the readonly evidence,
+/// because that is the only position where no existing coordinate moves: the
+/// named state constants above keep their values, and everything after it --
+/// evidence, children, the effect account count, the profile's fixed count and
+/// the scratch-page insertion point -- is DERIVED from this function and moves
+/// with it.
+const fn general_system_program_base_v3(action: Action) -> u16 {
     match action {
         Action::SubmitCandidate => 8,
         Action::VerifyCandidateRow => 10,
@@ -1558,6 +1618,8 @@ mod tests {
 
     #[test]
     fn all_actions_select_exact_readonly_evidence_before_child_routes() {
+        // Unchanged by the System program, deliberately: it is APPENDED as the
+        // last runtime account, so no evidence or child coordinate moves.
         let expected = [
             (Action::SubmitCandidate, 8, 3, 11),
             (Action::VerifyCandidateRow, 10, 5, 15),

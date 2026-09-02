@@ -19,7 +19,10 @@ use dclutch_chain_bundle_builder::{
     admitted::AdmittedAotInputV1,
     artifacts::{ArtifactSetV1, DerivedRecordV1, derive_record, digest},
     bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
-    frame::{BuiltAccountV1, data_account, external_with_view, program_with_view, vacant},
+    frame::{
+        BuiltAccountV1, data_account, external_with_view, program_with_deployed_view,
+        program_with_view, vacant,
+    },
     general::{
         GeneralOpenBatchRequestInputV1, build_general_open_batch_bundle_v1,
         derive_general_open_batch_request_v1,
@@ -33,7 +36,7 @@ use dclutch_general_adapter_contract::{
     local_state_v3::GeneralLocalStateV3,
     state_artifacts_v3::{
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, general_system_program_account_v3,
     },
 };
 use dclutch_general_codec::Action;
@@ -533,6 +536,19 @@ fn build_host_case(
         (
             usize::from(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3),
             state.rent_credit.clone(),
+        ),
+        // The System program itself, not an account owned by it. The commit
+        // phase invokes System to allocate and assign the Batch state, and it
+        // looks for the program among the profile-declared runtime accounts;
+        // without this the route refuses `0x4005 Commit` at the first conjunct
+        // of `apply_lifecycle_creates_v3`, which is what it did until
+        // 2026-09-02.
+        (
+            usize::from(
+                general_system_program_account_v3(Action::OpenBatch)
+                    .expect("OpenBatch declares a System coordinate"),
+            ),
+            program_with_deployed_view(system_program::ID),
         ),
     ];
     let set = ArtifactSetV1 {

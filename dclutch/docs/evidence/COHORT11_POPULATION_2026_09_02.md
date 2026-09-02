@@ -428,21 +428,32 @@ Hoard is not a party at all — the Direct path never touches it. L1, L2, L3, L4
 L5 and L6 must all read `holds`; L7 and L8 are unconditionally inapplicable
 under `ledger-census`.
 
-**Two census bindings must be added before the fill or two laws will correctly
-report a shortfall**, and neither is added by anything today:
+**Two census bindings must be added before the fill or two laws correctly
+report a shortfall.** Both are now closed, and the laws that catch them are
+tested:
 
 - the **seller Direct token PDA** and the **venue fee token PDA** must join
   `census.tokens`, or L1 reports `tracked != Mint supply` by the transferred
-  atoms — the destination is a new account nothing names;
+  atoms — the destination is a new account nothing named. `simulator.py` now
+  reads both out of the producer's own public manifest (`tokenSetup.sellerToken`,
+  `tokenSetup.feeToken`) rather than re-deriving a protocol PDA in Python, keeps
+  them across a restart, and refuses one label naming two addresses;
 - the **buyer Position** must be in `census.positions`, or L3 falls short by
-  `fill` at the traded outcome. This lane already added it.
+  `fill` at the traded outcome. This lane added it before the admissions.
 
-That L1/L3 statement is a derivation from the binding code, flagged as such:
-`ledger-census` has never been run across a Direct fill boundary. The one fill
-that has ever landed (`FIRST_LOCAL_DIRECT_FILL_2026_08_31.md`) was read back by
-a hand-written `conservation.py`, not by the census. So the first fill this
-substrate takes is also the first test of these two laws against a fill, and
-either of them refusing is the finding rather than the formatting.
+And the laws themselves had never judged a fill. Every boundary this ledger has
+ever evaluated was a founding, an admission or a vault transfer; the single
+Direct fill this substrate has taken (`FIRST_LOCAL_DIRECT_FILL_2026_08_31.md`)
+was read back by a hand-written script, not by the census. So the first real
+fill would also have been the first test of the laws judging it.
+`tools/gauntlet/journey/src/ledger.rs` now fakes one: a two-outcome market where
+the seller sells 100 claims for 100 atoms at a fee that floors to zero, with
+L1–L6 and L8 asserted by name across the boundary, and three red proofs — the
+unnamed token destination (L1 short by exactly the traded atoms, L3 green
+beside it), the untracked buyer Position (L3 short, L1 green beside it), and a
+fill that declares a Hoard delta it did not move (L2). `aggregate_supply` is
+passed rather than summed from the Positions, so L3 holds only because the fill
+conserved the vector rather than by construction.
 
 ## The genesis release candidate: it finally ran, and it refuses
 
@@ -502,10 +513,13 @@ overwrite is undefined behaviour at execution, not a warning, so the candidate
 is right to withhold the artifact — and this is the hottest route the protocol
 has.
 
-**Still 3 at `5de38ef2`**, re-measured with a targeted `dclutch-trading-sbf`
-build rather than a whole candidate run. The one `hot_v3.rs` commit that has
-landed since is a profiling checkpoint, not the repair, so the release remains
-ungated on this and the trade command below remains blocked at step 2.
+**Still 3 at `5de38ef2`, and still 3 at `be67416e`**, each re-measured with a
+targeted `dclutch-trading-sbf` build rather than a whole candidate run — the
+narrowest thing that could refute "still regressed". The only `hot_v3.rs` commit
+since `bfc8383f` is a profiling checkpoint, not the repair, so the release
+remains ungated on this and the trade command below remains blocked at step 2.
+Measured rather than inferred from the commit log, twice, because a dependency
+change can move a stack frame without touching the file.
 
 **The control is closed as a refusal, not as a pass.** That is worth more than
 another queueing: for two days it could not say anything, and now it names two
