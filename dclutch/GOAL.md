@@ -2464,3 +2464,8 @@ in the tree executes — is hand-written in `v2.rs` with no formal model. Twenty
 operations, none modelled; a twenty-first (`ProjectDataDigest`, proposed at
 `docs/design/PROJECT_DATA_DIGEST_V2.md`) would join them. Not a condition on the
 digest; its own unit, for a lane with `formal/` authority and budget.
+
+### Lane map delta — 20:45
+
+- `af0d560c200fa8218` GENERAL — **closed, row exhausted pending others.** C-05 executes at both widths; every refusal names its conjunct; OpenBatch at `ProductIdentity`, blocked on the digest primitive (proposal handed to Direct) and the width-258 rows on the `BumpHeapV1` extraction (cleanups).
+- `a42033e11f655c7c5` C-10 WITNESS — thirteen unwitnessed retirement-chain routes; get the journey a market so L8 stops reporting `inapplicable`; bindings from observation only; undrivable → `blocked.json` with reason and owner.

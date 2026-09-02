@@ -4052,6 +4052,8 @@ fn execute_authenticated_hot_v3(
             tail_count,
             scalars: &replan_output_scalars,
             identities: &replan_output_identities,
+            frame_scalar_count: provisional_scalar_count,
+            frame_identity_count: provisional_identity_count,
         })?
     } else {
         // The fold's OUTPUT pair is the one register bank of this execution
@@ -5259,6 +5261,21 @@ struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     tail_count: u32,
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
+    /// The bank widths the ACCOUNT FRAME was carved from, not the bank's own.
+    ///
+    /// `admitted_caller_authority_count_v3` decides how many caller-authority
+    /// accounts sit between the strategy extras and the runtime slice, and it
+    /// decides it from the EFFECT's declared bank widths, before any bank
+    /// exists. The transport then chunks the bank it is handed. Two authors,
+    /// and until these fields existed nothing compared them: the only guard on
+    /// the path, `execute_admitted_aot_v3`'s
+    /// `scalar_count != context.scalar_count`, compares `view.scalars.len()`
+    /// against `admitted_context.scalar_count` -- which is ASSIGNED from
+    /// `view.scalars.len()` twenty lines earlier. A guard whose two sides move
+    /// together is not a guard, and this one had the shape of the transport
+    /// check the path most needed.
+    frame_scalar_count: usize,
+    frame_identity_count: usize,
 }
 
 struct CandidateExecutionV3 {
@@ -6259,9 +6276,40 @@ fn funding_allows_created_state_write_v5(funding: EffectProgramV5<'_>, coordinat
 }
 
 #[inline(never)]
+/// Refuse a bank whose width is not the width the account frame was carved for.
+///
+/// The admitted path derives two things from the register-bank geometry and
+/// derives them in different places from different sources. The FRAME carving
+/// (`hot_v3::execute_authenticated_hot_v3`) asks
+/// `admitted_caller_authority_count_v3` for a caller-authority count using the
+/// EFFECT's declared widths, because it runs before any bank exists and has to
+/// know where the runtime slice starts. The TRANSPORT
+/// (`admitted_composition_v3::execute_admitted_aot_v3`) asks
+/// `classify_bank_transport_v2` for a chunk count using the bank it is handed.
+///
+/// One caller-authority account per chunk is the whole contract between them,
+/// and if the two counts ever disagree the accelerator is invoked with a
+/// caller-authority span carved for a different number of pages than the
+/// transport writes. Nothing said so. Stated here, and separated from the walk
+/// so both disagreements can be driven directly.
+fn require_admitted_bank_matches_frame_v3(
+    bank: (usize, usize),
+    frame: (usize, usize),
+) -> Result<(), ProgramError> {
+    if bank == frame {
+        Ok(())
+    } else {
+        Err(TradingSbfError::AdmittedTransport.into())
+    }
+}
+
 fn execute_admitted_candidate_v3(
     view: AdmittedCandidateViewV3<'_, '_, '_, '_>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
+    require_admitted_bank_matches_frame_v3(
+        (view.scalars.len(), view.identities.len()),
+        (view.frame_scalar_count, view.frame_identity_count),
+    )?;
     let accelerator_program = view
         .strategy_extras
         .get(6)
@@ -16676,6 +16724,39 @@ mod tests {
             Box::leak(Box::new(Pubkey::new_unique())),
             false,
         )
+    }
+
+    /// The frame's carving and the transport's chunking are TWO authors.
+    ///
+    /// Until `require_admitted_bank_matches_frame_v3` the only guard on this
+    /// path was `execute_admitted_aot_v3`'s `scalar_count !=
+    /// context.scalar_count`, and both sides of it are `view.scalars.len()` --
+    /// the context field is assigned from it twenty lines before the comparison.
+    /// It could not fail for any input, which is exactly why it read as the
+    /// transport check the path did not have.
+    #[test]
+    fn an_admitted_bank_must_be_the_width_its_account_frame_was_carved_for() {
+        let transport = || ProgramError::from(TradingSbfError::AdmittedTransport);
+        require_admitted_bank_matches_frame_v3((12, 5), (12, 5)).expect("exact agreement");
+        // Zero-width banks agree with a zero-width carving and nothing else.
+        require_admitted_bank_matches_frame_v3((0, 0), (0, 0)).expect("empty agreement");
+        for (bank, frame, why) in [
+            ((13, 5), (12, 5), "a scalar bank wider than its carving"),
+            ((11, 5), (12, 5), "a scalar bank narrower than its carving"),
+            ((12, 6), (12, 5), "an identity bank wider than its carving"),
+            ((12, 4), (12, 5), "an identity bank narrower than its carving"),
+            ((0, 0), (12, 5), "an empty bank against a carved frame"),
+            ((12, 5), (0, 0), "a carved bank against an empty frame"),
+            // The transposition, which a comparison of TOTALS would admit and
+            // which carves a different number of caller authorities.
+            ((5, 12), (12, 5), "a transposed pair"),
+        ] {
+            assert_eq!(
+                require_admitted_bank_matches_frame_v3(bank, frame),
+                Err(transport()),
+                "{why} must refuse",
+            );
+        }
     }
 
     /// The four arms of the commit's lamport authority, driven directly.
