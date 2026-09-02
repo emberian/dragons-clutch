@@ -3375,3 +3375,7 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   redemption test; the site shows the fill; then close 13 and deploy cohort-14 (Trading ≥ a517d27c, Registry ≥ 90a8563f,
   the accelerator's release in `prepare`) for OpenBatch on chain.
 - Cuts: `f0d03ccc2`.
+- Started on the fill: RESOLUTION **`a48d6f19b063d2ccc`** (the window read from chain — six hours after staging, 1,800 s wide;
+  relay with devnet-sponsored-push-v1, flagship-resolution-v1's phases, the winning position paid through
+  `build_wallet_terminal_payout_v3`, the browser's gated redemption test) and WEB **`ac4d471f005f017db`** (the fill on the
+  market page derived from the chain's records; cohort-13's simulator artifact ingested; a derived leaderboard).
