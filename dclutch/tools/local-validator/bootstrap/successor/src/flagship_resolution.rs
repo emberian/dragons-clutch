@@ -3305,17 +3305,7 @@ fn authenticate_checked_upgrade_plan(plan: &SuccessorPlan) -> Result<()> {
         // The table says which KIND of row this is. Carry-forward is exact; a
         // role the cut owns may be satisfied by an Upgrade receipt or by proven
         // equality with the checked candidate, and both are admitted here.
-        let disposition_matches = match expected_disposition {
-            CheckedDeploymentDispositionV1::CarryForward => {
-                observed.disposition == CheckedDeploymentDispositionV1::CarryForward
-            }
-            CheckedDeploymentDispositionV1::Upgrade
-            | CheckedDeploymentDispositionV1::AlreadyCurrent => matches!(
-                observed.disposition,
-                CheckedDeploymentDispositionV1::Upgrade
-                    | CheckedDeploymentDispositionV1::AlreadyCurrent
-            ),
-        };
+        let disposition_matches = expected_disposition.admits(observed.disposition);
         if observed.role != expected_role
             || !disposition_matches
             || !tagged_fields_are_closed

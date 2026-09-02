@@ -2342,15 +2342,15 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
         // Rows 2..7 are the cut's own roles: each is either a receipt-backed
         // Upgrade or -- when this cut did not change that role's bytes at all --
         // an AlreadyCurrent row whose equality is re-read from the cluster below.
+        // Rows 0 and 1 are the carry-forward whitelist and everything from two
+        // upward is a role this cut owns; `admits` is the shared statement of
+        // what may satisfy each.
         let disposition_admitted = if index < 2 {
-            role.disposition == CheckedDeploymentDispositionV1::CarryForward
+            CheckedDeploymentDispositionV1::CarryForward
         } else {
-            matches!(
-                role.disposition,
-                CheckedDeploymentDispositionV1::Upgrade
-                    | CheckedDeploymentDispositionV1::AlreadyCurrent
-            )
-        };
+            CheckedDeploymentDispositionV1::Upgrade
+        }
+        .admits(role.disposition);
         if !disposition_admitted {
             return Err(Error::new(format!(
                 "set journal {expected_role} disposition is not the canonical mixed deployment-set choice"
@@ -2617,15 +2617,15 @@ fn require_mutation_permit(
         // has nothing to mutate and that is enforced below. This is only the
         // scan that walks past the rows it is not mutating, so it admits the
         // same three dispositions the journal itself admits.
+        // Rows 0 and 1 are the carry-forward whitelist and everything from two
+        // upward is a role this cut owns; `admits` is the shared statement of
+        // what may satisfy each.
         let disposition_admitted = if index < 2 {
-            role.disposition == CheckedDeploymentDispositionV1::CarryForward
+            CheckedDeploymentDispositionV1::CarryForward
         } else {
-            matches!(
-                role.disposition,
-                CheckedDeploymentDispositionV1::Upgrade
-                    | CheckedDeploymentDispositionV1::AlreadyCurrent
-            )
-        };
+            CheckedDeploymentDispositionV1::Upgrade
+        }
+        .admits(role.disposition);
         if role.role != *expected_role
             || role.program_id != *expected_program
             || role.programdata_id != *expected_programdata

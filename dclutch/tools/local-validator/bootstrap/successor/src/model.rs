@@ -534,6 +534,45 @@ pub(crate) enum CheckedDeploymentDispositionV1 {
     AlreadyCurrent,
 }
 
+impl CheckedDeploymentDispositionV1 {
+    /// Whether an OBSERVED row's disposition satisfies this EXPECTED one.
+    ///
+    /// The second rule the AlreadyCurrent variant had to be taught, and the one
+    /// that was still written four times after the first was centralised.
+    /// `43699d0f` collapsed the FIELD CLOSURE -- what an AlreadyCurrent row may
+    /// carry -- into `AlreadyCurrentClosureV1` at four sites. It did not touch
+    /// this, the ADMISSION rule, and it never opened `direct_market.rs` at all,
+    /// which is where one of the copies lived.
+    ///
+    /// The four were two identical pairs, character for character inside the
+    /// pair and differing only in local variable names and error strings:
+    /// `direct_market.rs` and `flagship_resolution.rs` took the expected side
+    /// from a role table, and the two walks in `upgrade.rs` took it from the row
+    /// index. Both sourcings mean the same thing and are preserved exactly --
+    /// what changes is that the sentence is written once.
+    ///
+    /// The asymmetry is the whole content and it is deliberate. A role the cut
+    /// OWNS may be satisfied two ways: an `Upgrade` backed by a receipt, or an
+    /// `AlreadyCurrent` backed by proven byte equality. A `CarryForward` row may
+    /// be satisfied ONE way, exactly itself -- carry-forward asserts nothing
+    /// about bytes, so admitting an equality claim there would silently widen a
+    /// whitelist into a proof it never made.
+    ///
+    /// A table storing `Upgrade` means "a role this cut owns", which is how
+    /// `checked_plan_roles_v1` and its flagship twin already spell it.
+    ///
+    /// The `match` is TOTAL on purpose: a lane adding a fourth disposition gets
+    /// a compile error here, once, instead of four silent admissions.
+    pub(crate) fn admits(self, observed: Self) -> bool {
+        match self {
+            Self::CarryForward => observed == Self::CarryForward,
+            Self::Upgrade | Self::AlreadyCurrent => {
+                matches!(observed, Self::Upgrade | Self::AlreadyCurrent)
+            }
+        }
+    }
+}
+
 /// The one statement of what an `AlreadyCurrent` row may and may not carry.
 ///
 /// Two facts, and they are the two that EVERY projection of a deployment-set
@@ -1013,6 +1052,70 @@ mod refusal_pin_tests {
             assert!(failed.refusing(0x3001).is_err(), "{other}");
         }
         assert_eq!(evidence(None).refusal_code(), None);
+    }
+}
+
+#[cfg(test)]
+mod disposition_admission_tests {
+    use super::CheckedDeploymentDispositionV1 as D;
+
+    /// EXHAUSTIVE over all nine ordered pairs, which is the point.
+    ///
+    /// This rule was written four times at HEAD -- twice from a role table
+    /// (`direct_market.rs`, `flagship_resolution.rs`) and twice from a row index
+    /// (the two walks in `upgrade.rs`) -- character for character inside each
+    /// pair, and it had never been tested anywhere. A table over every pair is
+    /// the only form that cannot be satisfied by restating the implementation:
+    /// it is the truth table, written out.
+    #[test]
+    fn every_expected_observed_pair_is_decided_and_carry_forward_is_exact() {
+        let all = [D::Upgrade, D::CarryForward, D::AlreadyCurrent];
+        let admitted = |expected: D, observed: D| -> bool {
+            matches!(
+                (expected, observed),
+                (D::CarryForward, D::CarryForward)
+                    | (
+                        D::Upgrade | D::AlreadyCurrent,
+                        D::Upgrade | D::AlreadyCurrent
+                    )
+            )
+        };
+        for expected in all {
+            for observed in all {
+                assert_eq!(
+                    expected.admits(observed),
+                    admitted(expected, observed),
+                    "{expected:?} admitting {observed:?}"
+                );
+            }
+        }
+    }
+
+    /// The asymmetry, stated on its own so it cannot be lost in a loop.
+    ///
+    /// Carry-forward is a WHITELIST: it asserts that two named roles were not
+    /// part of this cut and says nothing about their bytes. AlreadyCurrent
+    /// asserts byte EQUALITY. Admitting the second where the first is expected
+    /// would widen a whitelist into a proof it never made, so the carry-forward
+    /// arm is an exact match and stays one.
+    #[test]
+    fn a_carry_forward_row_is_never_satisfied_by_an_equality_claim() {
+        assert!(!D::CarryForward.admits(D::AlreadyCurrent));
+        assert!(!D::CarryForward.admits(D::Upgrade));
+        assert!(D::CarryForward.admits(D::CarryForward));
+    }
+
+    /// And the converse: a role the cut OWNS is satisfied either way, which is
+    /// the whole reason the third disposition exists. A cut that changed a
+    /// role's bytes proves it with a receipt; a cut that did not proves it by
+    /// reading the bytes back. Neither may be a carry-forward row.
+    #[test]
+    fn a_role_the_cut_owns_is_satisfied_by_a_receipt_or_by_proven_equality() {
+        for expected in [D::Upgrade, D::AlreadyCurrent] {
+            assert!(expected.admits(D::Upgrade), "{expected:?}");
+            assert!(expected.admits(D::AlreadyCurrent), "{expected:?}");
+            assert!(!expected.admits(D::CarryForward), "{expected:?}");
+        }
     }
 }
 
