@@ -3598,3 +3598,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   feature. → DEALER **`(spawned)`**: the ownership ruling, the Remove committing, the alias row as one series.
   TIDY: genref for the seven new codes.
 - Cuts: `998e451ca`, `18bdd7853`.
+- QUARANTINE closed (`3308d380a`, `60e9b860a`): the Fractional grants derive from `plan_effect_permissions`, the ONE place
+  the Close/Create masks are written (const-folded — zero frame rows); the grant alone did not build — `require_owner_anchor`
+  refused an Exact coordinate with debit-or-write authority and no RequireOwner, found by probe because a second coarse
+  discard hid it; two `is_err()` hostiles had passed for four days against a builder that refused everything. The General
+  fixture had three stale things, one the span — `required_observations` now walks the action's own operations and
+  `bank_width` reads the profile's stride. **root-targets tier PASS, 80 targets, zero quarantined.** Verdict: the Fractional
+  V1 family is producer-missing, not dead (V4 is a separate compiler) → FRACTIONAL-V1 **`(spawned)`**: superseded or
+  coexisting, decided by reading as the Direct layer was.
+- Cuts: `0caa83e17`.
