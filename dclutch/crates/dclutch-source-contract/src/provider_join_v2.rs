@@ -200,16 +200,27 @@ impl PythProviderAdapterObligationV2 {
     /// current Clock. Both time bounds are enforced here so no caller may
     /// supply an already-normalized observation as authority.
     ///
-    /// The two bounds answer different questions and carry different refusals,
-    /// matching `NormalizedProviderEvidenceV1::validate`. `[window.start,
-    /// window.end]` says whether this publication is *about the period the
-    /// market sold*, and failing it is `InvalidObservationSchedule`. The
+    /// The two bounds answer different questions and carry different refusals.
+    /// The schedule bound says whether this publication is *about the period
+    /// the market sold*, and failing it is `InvalidObservationSchedule`. The
     /// `max_age`/`max_future_skew` band around this cluster's clock says
     /// whether the publication is one this cluster will still act on, and
     /// failing that is `InvalidPublicationTime`. A fresh publication about the
     /// wrong period and a stale publication about the right one must both
     /// refuse, and an operator reading the log should be able to tell which
     /// happened.
+    ///
+    /// The schedule bound is [`WindowSpecV1::contains_observation`] — the same
+    /// call [`NormalizedProviderEvidenceV1::validate`] makes, so the window
+    /// admission has one author and no route carries its own copy. On this
+    /// obligation that predicate is exactly the closed `[window.start,
+    /// window.end]`, and cannot be anything else: the join above refuses a
+    /// window whose kind is not [`WindowKind::Terminal`], and
+    /// [`WindowSpecV1::tolerating_cadence`] — the sole mutator of
+    /// `cadence_tolerance_seconds`, which every constructor and
+    /// [`WindowSpecV1::decode`] pass through — refuses a nonzero tolerance on a
+    /// terminal window. The single-snapshot Pyth routes therefore read the
+    /// widened predicate at a tolerance that is structurally zero.
     ///
     /// A publication after `window.end` is the *late* case a real provider
     /// cadence produces when nobody submitted in time. It refuses here rather
@@ -230,9 +241,7 @@ impl PythProviderAdapterObligationV2 {
         if current_unix_seconds <= 0 {
             return Err(Error::InvalidPublicationTime);
         }
-        if publication_unix_seconds < self.window.start_unix_seconds()
-            || publication_unix_seconds > self.window.end_unix_seconds()
-        {
+        if !self.window.contains_observation(publication_unix_seconds)? {
             return Err(Error::InvalidObservationSchedule);
         }
         let oldest = current_unix_seconds
@@ -286,7 +295,7 @@ mod tests {
     use super::*;
     use crate::{
         CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-        SourceCapacityProfileV1, StatisticKind,
+        SourceCapacityProfileV1, StatisticKind, WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1,
     };
 
     fn id(tag: u8) -> ContentId {
@@ -661,5 +670,144 @@ mod tests {
             ),
             Err(Error::InvalidPublicationTime)
         );
+    }
+
+    /// The window admission has one author, and the tolerance cannot reach it.
+    ///
+    /// `normalize_authenticated_update` reads
+    /// [`WindowSpecV1::contains_observation`] rather than re-spelling the
+    /// closed interval, so `cadence_tolerance_seconds` is stated once and read
+    /// everywhere. On the two single-snapshot Pyth routes that widening is the
+    /// identity, and this pins the three independent gates that make it so.
+    /// "The two spellings agree" is a fact about the records founded so far;
+    /// "the tolerance cannot be raised here" is a fact about the type, and it
+    /// is the one worth holding, because the first stops being true the day
+    /// someone founds a different window.
+    #[test]
+    fn a_terminal_window_cannot_reach_the_single_snapshot_route_with_a_tolerance() {
+        let terminal = fixture();
+
+        // Gate one: the sole mutator of the tolerance refuses to put one on a
+        // terminal window, so no terminal `WindowSpecV1` in memory carries one.
+        assert_eq!(terminal.window.kind(), WindowKind::Terminal);
+        assert_eq!(terminal.window.cadence_tolerance_seconds(), 0);
+        assert_eq!(
+            terminal.window.tolerating_cadence(120),
+            Err(Error::InvalidWindow)
+        );
+
+        // Gate two: `decode` routes through that mutator, so no finalized
+        // window record can carry one either -- and `decode` is the exact call
+        // the relayed and sponsored routes make on the account bytes.
+        let mut hostile = terminal.window.to_bytes();
+        crate::put(
+            &mut hostile,
+            WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1,
+            &120_u32.to_le_bytes(),
+        );
+        assert_eq!(WindowSpecV1::decode(&hostile), Err(Error::InvalidWindow));
+
+        // Gate three: the windows that CAN carry a tolerance are the scheduled
+        // ones, and neither single-snapshot join will hold one.
+        let scheduled = WindowSpecV1::new(
+            terminal.source_id,
+            WindowKind::ScheduledInterval,
+            100,
+            400,
+            10,
+            2,
+            id(14),
+        )
+        .expect("scheduled window")
+        .tolerating_cadence(120)
+        .expect("a scheduled window may tolerate a cadence");
+        let mut widened = fixture();
+        widened.window = scheduled;
+        assert_eq!(obligation(&widened), Err(Error::LinkageMismatch));
+        assert_eq!(sponsored_obligation(&widened), Err(Error::LinkageMismatch));
+
+        // And the widening is real wherever it is reachable: the band admits
+        // `end + tolerance` and refuses one second past it. So the predicate
+        // the single-snapshot routes now call is genuinely wider than the
+        // interval they used to spell, and it is held at the identity by the
+        // three gates above rather than by the predicate.
+        assert_eq!(scheduled.contains_observation(400 + 120), Ok(true));
+        assert_eq!(scheduled.contains_observation(400 + 121), Ok(false));
+        assert_eq!(scheduled.contains_observation(100 - 120), Ok(true));
+        assert_eq!(scheduled.contains_observation(100 - 121), Ok(false));
+    }
+
+    /// Cohort-13's own window, admitted and refused exactly as before.
+    ///
+    /// Read off `window_spec_record` `4CM5e6Eq…`: terminal,
+    /// `[1788369759, 1788371559]`, `max_age` 7,200, skew 1, tolerance 0. At
+    /// that tolerance the widened predicate and the closed interval are the
+    /// same set, and this is the control for the change: both edges admit, one
+    /// second outside either edge is `InvalidObservationSchedule`, and the
+    /// publication the market actually had -- 1788372175, 616 seconds past the
+    /// close -- refuses on the schedule bound and not on the freshness one.
+    #[test]
+    fn the_cohort_thirteen_window_admits_and_refuses_exactly_its_closed_interval() {
+        const START: i64 = 1_788_369_759;
+        const END: i64 = 1_788_371_559;
+        const OBSERVED: i64 = 1_788_372_175;
+
+        let base = fixture();
+        let window = WindowSpecV1::new(
+            base.source_id,
+            WindowKind::Terminal,
+            START,
+            END,
+            7_200,
+            1,
+            id(14),
+        )
+        .expect("cohort-13 terminal window");
+        assert_eq!(window.cadence_tolerance_seconds(), 0);
+
+        let mut relayed = fixture();
+        relayed.window = window;
+        let mut sponsored = with_profile(&base, SourceAccessProfile::PythSponsoredPushSnapshot);
+        sponsored.window = window;
+
+        // Both single-snapshot routes, because the widening was inert on both.
+        for obligation in [
+            obligation(&relayed).expect("relayed records"),
+            sponsored_obligation(&sponsored).expect("sponsored records"),
+        ] {
+            let normalize = |publication: i64, clock: i64| {
+                obligation.normalize_authenticated_update(
+                    id(30),
+                    [42; 32],
+                    1_000_000,
+                    5_000,
+                    -8,
+                    publication,
+                    clock,
+                )
+            };
+
+            for publication in [START, START + 1, END - 1, END] {
+                assert!(
+                    normalize(publication, END + 1).is_ok(),
+                    "the market sold [{START}, {END}] and {publication} is in it"
+                );
+            }
+            assert_eq!(
+                normalize(START - 1, END + 1),
+                Err(Error::InvalidObservationSchedule)
+            );
+            assert_eq!(
+                normalize(END + 1, END + 2),
+                Err(Error::InvalidObservationSchedule)
+            );
+            // The real one. Fresh by every clock this cluster runs, and about
+            // the wrong period, which is the distinction the two refusals
+            // carry.
+            assert_eq!(
+                normalize(OBSERVED, OBSERVED),
+                Err(Error::InvalidObservationSchedule)
+            );
+        }
     }
 }

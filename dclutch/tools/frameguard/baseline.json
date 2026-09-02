@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "8bf97477fa7e640668f28dec4bab6173535742f4",
+  "commit": "43106855a82d4b4e7963384e1b88e954755ff5d2",
   "link_count": 12,
   "links": [
     {
@@ -6100,7 +6100,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 952,
+      "frame_count": 955,
       "functions": [
         {
           "frames_bytes": [
@@ -6137,6 +6137,12 @@
             0
           ],
           "symbol": "_ZN101_$LT$dclutch_release_set_contract..CapabilityExecutionSelectionV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN102_$LT$core..iter..adapters..map..Map$LT$I$C$F$GT$$u20$as$u20$core..iter..traits..iterator..Iterator$GT$4next17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -9963,7 +9969,7 @@
         },
         {
           "frames_bytes": [
-            256
+            192
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v328runtime_transcript_digest_v317h<hash>E"
         },
@@ -10038,6 +10044,12 @@
             3904
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v331authenticate_and_execute_hot_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v331log_borrowed_witness_refusal_v317h<hash>E"
         },
         {
           "frames_bytes": [
@@ -10185,7 +10197,7 @@
         },
         {
           "frames_bytes": [
-            384
+            448
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v336require_borrowed_witness_coverage_v317h<hash>E"
         },
@@ -11244,6 +11256,12 @@
             64
           ],
           "symbol": "_ZN35dclutch_capability_program_contract22CapabilityRootHeaderV13new17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN35dclutch_execution_strategy_contract16shadow_digest_v342borrowed_runtime_observations_digest_in_v317h<hash>E"
         },
         {
           "frames_bytes": [

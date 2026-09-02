@@ -911,8 +911,8 @@ mod tests {
             },
         )
         .expect("topology");
-        assert_eq!(topology.effect_accounts.len(), 117);
-        assert_eq!(topology.unique_account_lock_count, 119);
+        assert_eq!(topology.effect_accounts.len(), 107);
+        assert_eq!(topology.unique_account_lock_count, 109);
         assert!(!topology.fits_devnet_lock_limit);
     }
 
@@ -1202,9 +1202,9 @@ mod tests {
         .expect("unsplit topology");
         assert_eq!(built.report.dynamic_span_counts, spans);
         assert_eq!(built.report.caller_authority_count, 6);
-        assert_eq!(built.account_meta_count, 122);
-        assert_eq!(built.instruction.accounts.len(), 122);
-        assert_eq!(built.unique_account_lock_count, 121);
+        assert_eq!(built.account_meta_count, 117);
+        assert_eq!(built.instruction.accounts.len(), 117);
+        assert_eq!(built.unique_account_lock_count, 116);
         let final_topology =
             crate::dealer_scenario_checkpoint_v1::project_dealer_scenario_final_commit_topology_v1(
                 DealerScenarioHotMetaStateV4 {
@@ -1228,8 +1228,8 @@ mod tests {
                 },
             )
             .expect("final topology");
-        assert_eq!(final_topology.effect_accounts.len(), 75);
-        assert_eq!(final_topology.unique_account_lock_count, 77);
+        assert_eq!(final_topology.effect_accounts.len(), 70);
+        assert_eq!(final_topology.unique_account_lock_count, 72);
         assert!(!final_topology.fits_devnet_lock_limit);
         let checkpoint = Pubkey::new_from_array([249; 32]);
         let request_digest = hash(&request).to_bytes();
@@ -1249,10 +1249,10 @@ mod tests {
             .flatten()
             .copied()
             .collect::<Vec<_>>();
-        assert_eq!(canonical.manifest.total_account_count, 121);
+        assert_eq!(canonical.manifest.total_account_count, 116);
         assert_eq!(
             canonical.manifest.page_account_counts,
-            [21, 20, 20, 20, 20, 20]
+            [20, 20, 19, 19, 19, 19]
         );
         assert_eq!(
             usize::from(canonical.manifest.total_account_count),
@@ -1308,7 +1308,7 @@ mod tests {
             Pubkey::new_from_array([250; 32]),
             core::slice::from_ref(&built.instruction),
         );
-        assert_eq!(transaction_census.unique_account_lock_count, 122);
+        assert_eq!(transaction_census.unique_account_lock_count, 117);
         assert_eq!(
             require_dealer_scenario_devnet_lock_limit_v1(
                 Pubkey::new_from_array([250; 32]),

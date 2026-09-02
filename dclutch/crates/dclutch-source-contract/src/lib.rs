@@ -1207,8 +1207,15 @@ impl WindowSpecV1 {
     ///
     /// The tolerance widens the window symmetrically: a sample admitted at the
     /// first or last scheduled position may land up to the tolerance outside
-    /// `[start, end]`, and this is the one place that widening is stated. At a
-    /// zero tolerance it is exactly the closed interval.
+    /// `[start, end]`. This is the one place that widening is stated and the
+    /// one place any admission reads it — the multi-observation statistics
+    /// through [`NormalizedProviderEvidenceV1::validate`], the single-snapshot
+    /// Pyth routes through
+    /// [`PythProviderAdapterObligationV2::normalize_authenticated_update`]. At
+    /// a zero tolerance it is exactly the closed interval, which is what a
+    /// terminal window always is: [`WindowSpecV1::tolerating_cadence`] refuses
+    /// to give one a nonzero tolerance, so the single-snapshot routes read this
+    /// predicate at a tolerance they cannot raise.
     pub fn contains_observation(self, unix_seconds: i64) -> Result<bool> {
         let tolerance = i64::from(self.cadence_tolerance_seconds);
         let earliest = self
