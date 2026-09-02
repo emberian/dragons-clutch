@@ -141,7 +141,32 @@ pub struct AuthenticatedExecutionStrategyV2 {
 
 #[derive(Clone, Copy)]
 enum CurrentDeploymentAuthenticationV2 {
-    CompleteElf,
+    /// Authenticate the accelerator's deployment by its slot pin.
+    ///
+    /// This was `CompleteElf`, and it hashed the complete observed ELF on every
+    /// admitted-AOT and shadow-AOT action. Measured on real ELFs 2026-09-02:
+    /// **370,983 CU of a 1,399,700 budget** to hash the 744,840-byte Dealer
+    /// accelerator, inside a 419,775-CU strategy authentication that was 30% of
+    /// the whole transaction.
+    ///
+    /// It hashed because of a precondition that no longer holds. The doc it
+    /// replaced said "a finalized `ArtifactRelease` record proves only its own
+    /// content identity; nothing has bound its `elf_digest` to the account
+    /// being observed" -- true while release finalization observed nothing.
+    /// Registry finalization now performs the deployment observation itself and
+    /// refuses a release whose program is not deployed or whose ELF differs, so
+    /// the bound digest is a chain-observed fact about this exact address
+    /// before any hot route reads it. Decision 0012's argument then applies
+    /// unchanged, and it is the argument, not this variant, that owns the
+    /// soundness: `slot_pinned_release_elf_digest_v1` proves observed-slot
+    /// equality means the admitted digest is the exact current digest.
+    ///
+    /// A hot route therefore never hashes an ELF. An accelerator upgraded in
+    /// place moves its slot and refuses `ReleaseSuperseded` until it is
+    /// re-released, which is exactly the pin's own guarantee and is asserted by
+    /// name in `slot_pin_supersession.rs`.
+    SlotPinnedRelease,
+    /// The same pin, plus the caller attestation Trading already authenticated.
     AttestedAccelerator(AuthenticatedAcceleratorCallerV4),
 }
 
@@ -242,7 +267,7 @@ pub fn authenticate_execution_strategy_v2(
         registry_program.key,
         &rent,
         accounts,
-        CurrentDeploymentAuthenticationV2::CompleteElf,
+        CurrentDeploymentAuthenticationV2::SlotPinnedRelease,
     )
 }
 
@@ -278,7 +303,7 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
         registry_program.key,
         &rent,
         accounts,
-        CurrentDeploymentAuthenticationV2::CompleteElf,
+        CurrentDeploymentAuthenticationV2::SlotPinnedRelease,
     )
 }
 
@@ -449,7 +474,7 @@ fn authenticate_shadow_aot(
         binding,
         account(accounts, SHADOW_ACCELERATOR_PROGRAM)?,
         account(accounts, SHADOW_ACCELERATOR_PROGRAMDATA)?,
-        CurrentDeploymentAuthenticationV2::CompleteElf,
+        CurrentDeploymentAuthenticationV2::SlotPinnedRelease,
     )?;
     if let CertificateArtifactBindingV2::Release(_) = binding {
         certificate
@@ -729,8 +754,12 @@ fn authenticate_pinned_artifact(
         ArtifactReleaseIdV1::decode(&digest).map_err(|_| TradingSbfError::Content)?;
     drop(data);
     match deployment_authentication {
-        CurrentDeploymentAuthenticationV2::CompleteElf => {
-            authenticate_current_deployment(release, accelerator_program, accelerator_programdata)?;
+        CurrentDeploymentAuthenticationV2::SlotPinnedRelease => {
+            authenticate_slot_pinned_deployment(
+                release,
+                accelerator_program,
+                accelerator_programdata,
+            )?;
         }
         CurrentDeploymentAuthenticationV2::AttestedAccelerator(caller) => {
             if !caller.binds_immutable_deployment(
@@ -766,23 +795,24 @@ fn certificate_semantic_join(
     }
 }
 
-/// Reauthenticate one current Loader V3 deployment by hashing its exact ELF.
+/// Reauthenticate one accelerator's current deployment by its slot pin.
 ///
-/// A finalized `ArtifactRelease` record proves only its own content identity.
-/// Nothing has bound its `elf_digest` to the account being observed, so this
-/// path always hashes the complete observed ELF.  Use
-/// `authenticate_activated_current_deployment` only where the Registry
-/// activation cache already carries that binding.
+/// The same function `authenticate_activated_current_deployment` calls, under
+/// the name that says what the release must be rather than where it came from.
+/// An accelerator's `ArtifactRelease` is certificate-pinned, not activated, and
+/// the two now share one precondition: the Registry observed the deployment
+/// once, against the live ProgramData, before the record was finalized.
 ///
-/// The implementation lives in `dclutch-shadow-accelerator-auth-v4` because an
-/// external Shadow accelerator needs exactly this check and nothing else in
-/// this crate; Trading calls the same code rather than keeping a second copy.
-pub(crate) fn authenticate_current_deployment(
+/// Trading no longer hashes an ELF on any route. `deployment::authenticate_current_deployment`
+/// -- the hashing form -- survives for its one honest caller, the Registry's
+/// `ArtifactRelease` finalize route, where it is paid once per release instead
+/// of once per action.
+pub(crate) fn authenticate_slot_pinned_deployment(
     release: ArtifactReleaseV1,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), TradingSbfError> {
-    deployment::authenticate_current_deployment(release, program, programdata)
+    deployment::authenticate_activated_current_deployment(release, program, programdata)
         .map_err(TradingSbfError::from)
 }
 

@@ -25,6 +25,10 @@ use dclutch_record_contract::{
     STAGING_CURSOR_PDA_SEED_V1, StagingCursorV1, StagingLivenessPolicyV1, prepare_abort_v1,
     prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1,
 };
+use dclutch_registry_contract::{
+    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
+};
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -35,7 +39,7 @@ use solana_program::{
     rent::Rent,
     sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{native_loader, system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
 use crate::RegistryError;
@@ -43,6 +47,8 @@ use crate::RegistryError;
 pub(crate) const BEGIN_ACCOUNT_COUNT_V1: usize = 6;
 pub(crate) const APPEND_ACCOUNT_COUNT_V1: usize = 3;
 pub(crate) const FINALIZE_ACCOUNT_COUNT_V1: usize = 3;
+/// Finalizing an `ArtifactRelease` also carries its Program and ProgramData.
+pub(crate) const FINALIZE_DEPLOYMENT_ACCOUNT_COUNT_V1: usize = FINALIZE_ACCOUNT_COUNT_V1 + 2;
 pub(crate) const ABORT_ACCOUNT_COUNT_V1: usize = 5;
 
 const _: () = assert!(RAW_RECORD_PDA_SEED_V1.len() <= 32);
@@ -146,17 +152,37 @@ struct FinalizeFrame<'accounts, 'info> {
     raw: &'accounts AccountInfo<'info>,
     cursor: &'accounts AccountInfo<'info>,
     refund_wallet: &'accounts AccountInfo<'info>,
+    /// The live deployment an `ArtifactRelease` finalization observes.
+    ///
+    /// Present exactly when the record being finalized is an `ArtifactRelease`,
+    /// which `process_finalize` decides from the cursor's own schema rather
+    /// than from the frame's width -- so a caller cannot buy the cheap shape by
+    /// omitting accounts, and cannot attach a deployment to a record that has
+    /// no address to observe.
+    deployment: Option<(&'accounts AccountInfo<'info>, &'accounts AccountInfo<'info>)>,
 }
 
 impl<'accounts, 'info> FinalizeFrame<'accounts, 'info> {
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != FINALIZE_ACCOUNT_COUNT_V1 {
-            return Err(record_error());
-        }
+        let deployment = match accounts.len() {
+            FINALIZE_ACCOUNT_COUNT_V1 => None,
+            FINALIZE_DEPLOYMENT_ACCOUNT_COUNT_V1 => {
+                let program = account(accounts, 3)?;
+                let programdata = account(accounts, 4)?;
+                // Read-only and non-signing, like every other observation in
+                // this program: finalization looks at a deployment, it never
+                // acts on one.
+                require_privilege(program, false, false, true)?;
+                require_privilege(programdata, false, false, false)?;
+                Some((program, programdata))
+            }
+            _ => return Err(record_error()),
+        };
         let frame = Self {
             raw: account(accounts, 0)?,
             cursor: account(accounts, 1)?,
             refund_wallet: account(accounts, 2)?,
+            deployment,
         };
         require_privilege(frame.raw, false, false, false)?;
         require_privilege(frame.cursor, false, true, false)?;
@@ -471,6 +497,12 @@ fn process_finalize(
     {
         return Err(record_error());
     }
+    // DECISION 0012'S PRECONDITION IS ESTABLISHED HERE, AND ONLY HERE.
+    //
+    // Before the cursor is closed, because a release whose deployment does not
+    // check must stay unfinalized: a finalized record is permanent, and this is
+    // the one moment the protocol can still say no.
+    observe_artifact_release_deployment_v1(cursor, &frame)?;
     let cursor_balance = frame.cursor.lamports();
     let wallet_before = frame.refund_wallet.lamports();
     let close = {
@@ -1034,6 +1066,130 @@ fn account<'accounts, 'info>(
 
 fn account_id(key: &Pubkey) -> Result<AccountId, ProgramError> {
     AccountId::new(key.to_bytes()).map_err(map_record_error)
+}
+
+/// Observe the live deployment an `ArtifactRelease` record claims, once.
+///
+/// # Why the Registry pays for this and no hot route does
+///
+/// `ArtifactReleaseV1` carries an `elf_digest`, a `deployment_slot` and an
+/// upgrade authority for a Program it names. Until this route existed, nothing
+/// ever compared those three against the accounts they describe: a finalized
+/// record proved `hash(bytes) == digest` about ITSELF, which says nothing about
+/// the address inside it. So every reader that needed the artifact to be the
+/// admitted one hashed the complete observed ELF, and
+/// `dclutch-shadow-accelerator-auth-v4`'s own doc said exactly why -- *"nothing
+/// has bound its `elf_digest` to the account being observed."*
+///
+/// Measured on real ELFs 2026-09-02: that hash cost the Dealer equity Add
+/// **370,983 CU** of a 1,399,700 budget, on 744,840 bytes, inside a strategy
+/// authentication that was 30% of the whole transaction -- and it was paid
+/// again on every action, forever, to learn a fact that never changes.
+///
+/// Decision 0012 already owns the argument that makes it unnecessary
+/// (`slot_pinned_release_elf_digest_v1`): a Loader V3 deployment cannot move
+/// while its ProgramData still carries the slot the release bound. That
+/// argument was sound and unusable, because it starts from a bound digest
+/// somebody checked. Role ACTIVATION checked one; a certificate-pinned artifact
+/// had no such moment. This is that moment, moved to where it costs once per
+/// release instead of once per action.
+///
+/// The comparison is `ArtifactReleaseV1::authenticate_deployment`, which owns
+/// all seven conjuncts and is decided by the Lean corpus in
+/// `ProtocolInfrastructure.lean`; this function only supplies it with facts
+/// read out of the live accounts in this very invocation.
+fn observe_artifact_release_deployment_v1(
+    cursor: StagingCursorV1,
+    frame: &FinalizeFrame<'_, '_>,
+) -> Result<(), ProgramError> {
+    let is_release = cursor.key().schema_release_id().to_bytes() == ARTIFACT_RELEASE_SCHEMA_ID_V1;
+    let (program, programdata) = match (is_release, frame.deployment) {
+        (false, None) => return Ok(()),
+        (true, Some(pair)) => pair,
+        // A release without its deployment, or a deployment attached to a
+        // record that names no address. Both are frame errors and neither is a
+        // statement about the bytes, so they are one code and not the other.
+        _ => return Err(deployment_frame_error()),
+    };
+    let data = frame
+        .raw
+        .try_borrow_data()
+        .map_err(|_| not_deployed_error())?;
+    let release = ArtifactReleaseV1::decode(&data).map_err(|_| not_deployed_error())?;
+    drop(data);
+    if program.key.to_bytes() != release.program().to_bytes()
+        || programdata.key.to_bytes() != release.programdata()
+        || program.owner != &bpf_loader_upgradeable::ID
+        || programdata.owner != &bpf_loader_upgradeable::ID
+    {
+        return Err(not_deployed_error());
+    }
+    let program_bytes = program
+        .try_borrow_data()
+        .map_err(|_| not_deployed_error())?;
+    let program_view = ProgramV3View::parse(&program_bytes).map_err(|_| not_deployed_error())?;
+    let programdata_link = program_view.programdata();
+    drop(program_bytes);
+    let programdata_bytes = programdata
+        .try_borrow_data()
+        .map_err(|_| not_deployed_error())?;
+    let programdata_view =
+        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| not_deployed_error())?;
+    // THE ONE ELF HASH IN THE PROTOCOL'S STEADY STATE. Everything downstream of
+    // a finalized release spends a `u64` slot compare instead of this.
+    let observation = DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        programdata_link,
+        bpf_loader_upgradeable::ID.to_bytes(),
+        programdata_view.deployment_slot(),
+        hash(programdata_view.elf()).to_bytes(),
+        programdata_view.upgrade_authority(),
+    )
+    .map_err(|_| not_deployed_error())?;
+    release
+        .authenticate_deployment(observation)
+        .map_err(release_deployment_refusal_v1)
+}
+
+/// Name what a finalization observation disagreed about.
+///
+/// A DISCARDED CAUSE IS A SEARCH, and `authenticate_deployment` has already
+/// decided which of its eight conjuncts failed. Three accusations, not one:
+/// the deployment is not there, the substrate moved under its own authority,
+/// or the bytes at that address are not these bytes. `ReleaseSuperseded` is the
+/// Registry's existing name for the middle one and keeps it here, so an
+/// operator reads the same word at finalization that a hot route will read
+/// later if the substrate moves again.
+///
+/// `ProtocolInfrastructure.lean`'s `ReleaseObservation.outcome` is the author
+/// of this partition; `generated_release_finalization_corpus.rs` replays every
+/// case through this function.
+const fn release_deployment_refusal_v1(error: dclutch_registry_contract::Error) -> ProgramError {
+    use dclutch_registry_contract::Error as ReleaseError;
+    match error {
+        ReleaseError::DeploymentIdentityMismatch
+        | ReleaseError::ProgramDataLinkMismatch
+        | ReleaseError::LoaderOwnerMismatch
+        | ReleaseError::ProgramNotExecutable
+        | ReleaseError::ProgramDataExecutable => not_deployed_error(),
+        ReleaseError::ReleaseSupersededByUpgrade => {
+            ProgramError::Custom(RegistryError::ReleaseSuperseded as u32)
+        }
+        _ => ProgramError::Custom(RegistryError::ArtifactReleaseElfMismatch as u32),
+    }
+}
+
+const fn deployment_frame_error() -> ProgramError {
+    ProgramError::Custom(RegistryError::ArtifactReleaseDeploymentFrame as u32)
+}
+
+const fn not_deployed_error() -> ProgramError {
+    ProgramError::Custom(RegistryError::ArtifactReleaseNotDeployed as u32)
 }
 
 fn map_record_error(_: dclutch_record_contract::Error) -> ProgramError {
@@ -1774,5 +1930,140 @@ mod tests {
             Some(record_error()),
             "a Registry-owned empty raw record admitted Begin"
         );
+    }
+}
+
+#[cfg(test)]
+mod release_finalization_corpus {
+    extern crate std;
+
+    use dclutch_core_contract::ContentId;
+    use dclutch_registry_contract::{
+        ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    };
+    use dclutch_release_set_contract::ProgramIdentityV1;
+    use solana_program::program_error::ProgramError;
+    use solana_sdk_ids::bpf_loader_upgradeable;
+
+    use crate::RegistryError;
+    use crate::generated_release_finalization_corpus::{
+        RELEASE_FINALIZATION_OUTCOME_ADMIT, RELEASE_FINALIZATION_OUTCOME_ELF_MISMATCH,
+        RELEASE_FINALIZATION_OUTCOME_NOT_DEPLOYED, RELEASE_FINALIZATION_OUTCOME_SUPERSEDED,
+        RELEASE_FINALIZATION_VECTORS_V1, ReleaseFinalizationVectorV1,
+    };
+
+    fn fill(value: u8) -> [u8; 32] {
+        [value; 32]
+    }
+
+    /// The exact outcome this program publishes for one Lean-decided case.
+    ///
+    /// Drives the REAL adapter: the release constructor, the observation
+    /// constructor, `authenticate_deployment`'s eight conjuncts in their own
+    /// order, and `release_deployment_refusal_v1`'s partition. Nothing about
+    /// the rule is restated here -- only the vector is turned into accounts.
+    fn observed_outcome(vector: ReleaseFinalizationVectorV1) -> u8 {
+        let program = ProgramIdentityV1::new(fill(0x11)).expect("program identity");
+        let loader =
+            ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity");
+        let programdata = fill(0x22);
+        let release = ArtifactReleaseV1::new(
+            program,
+            loader,
+            programdata,
+            ContentId::new(fill(0x33)).expect("semantic release"),
+            fill(vector.bound_elf_digest),
+            vector.bound_slot,
+            if vector.bound_policy_immutable {
+                ArtifactUpgradePolicyV1::Immutable
+            } else {
+                ArtifactUpgradePolicyV1::ExactAuthority
+            },
+            vector.bound_authority.map(fill),
+        )
+        .expect("canonical release");
+        // A substituted identity is the adapter's own parse boundary, so the
+        // vector's boolean becomes a different observed program id rather than
+        // a second copy of the equality.
+        let observed_program = if vector.observed_identity_matches {
+            program.to_bytes()
+        } else {
+            fill(0xee)
+        };
+        let observed_link = if vector.observed_programdata_link_matches {
+            programdata
+        } else {
+            fill(0xef)
+        };
+        let observed_owner = if vector.observed_loader_owns_both {
+            loader.to_bytes()
+        } else {
+            fill(0xf0)
+        };
+        let observation = DeploymentObservationV1::new(
+            observed_program,
+            observed_owner,
+            vector.observed_program_executable,
+            programdata,
+            observed_owner,
+            vector.observed_programdata_executable,
+            observed_link,
+            loader.to_bytes(),
+            vector.observed_slot,
+            fill(vector.observed_elf_digest),
+            vector.observed_authority.map(fill),
+        )
+        .expect("canonical observation");
+        match release.authenticate_deployment(observation) {
+            Ok(()) => RELEASE_FINALIZATION_OUTCOME_ADMIT,
+            Err(error) => match super::release_deployment_refusal_v1(error) {
+                ProgramError::Custom(code)
+                    if code == RegistryError::ArtifactReleaseNotDeployed as u32 =>
+                {
+                    RELEASE_FINALIZATION_OUTCOME_NOT_DEPLOYED
+                }
+                ProgramError::Custom(code) if code == RegistryError::ReleaseSuperseded as u32 => {
+                    RELEASE_FINALIZATION_OUTCOME_SUPERSEDED
+                }
+                ProgramError::Custom(code)
+                    if code == RegistryError::ArtifactReleaseElfMismatch as u32 =>
+                {
+                    RELEASE_FINALIZATION_OUTCOME_ELF_MISMATCH
+                }
+                other => panic!("unpartitioned finalization refusal {other:?}"),
+            },
+        }
+    }
+
+    #[test]
+    fn every_lean_decided_finalization_case_replays_through_this_program() {
+        for vector in RELEASE_FINALIZATION_VECTORS_V1 {
+            assert_eq!(
+                observed_outcome(vector),
+                vector.outcome,
+                "{} disagreed with ProtocolInfrastructure.lean",
+                vector.name
+            );
+        }
+    }
+
+    /// A corpus that answered one way throughout would satisfy the replay
+    /// above and prove nothing. Lean pins the coverage; this pins that the
+    /// corpus which reached Rust is the one Lean pinned.
+    #[test]
+    fn the_corpus_decides_every_outcome() {
+        for expected in [
+            RELEASE_FINALIZATION_OUTCOME_ADMIT,
+            RELEASE_FINALIZATION_OUTCOME_NOT_DEPLOYED,
+            RELEASE_FINALIZATION_OUTCOME_SUPERSEDED,
+            RELEASE_FINALIZATION_OUTCOME_ELF_MISMATCH,
+        ] {
+            assert!(
+                RELEASE_FINALIZATION_VECTORS_V1
+                    .iter()
+                    .any(|vector| vector.outcome == expected),
+                "no vector decides outcome {expected}"
+            );
+        }
     }
 }

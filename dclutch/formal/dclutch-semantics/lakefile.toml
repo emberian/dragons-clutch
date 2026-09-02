@@ -255,6 +255,10 @@ name = "emit-capability-funding-activation-corpus-rust"
 root = "EmitCapabilityFundingActivationCorpusRust"
 
 [[lean_exe]]
+name = "emit-artifact-release-finalization-corpus-rust"
+root = "EmitArtifactReleaseFinalizationCorpusRust"
+
+[[lean_exe]]
 name = "emit-protocol-infrastructure-pin-corpus-rust"
 root = "EmitProtocolInfrastructurePinCorpusRust"
 

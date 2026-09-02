@@ -298,9 +298,12 @@ pub fn prepare<'a>(
 /// and comparing them to `identity` compares a value with itself. They passed
 /// for anything, including a hostile that substituted the shard Mint.
 ///
-/// **OWED**: the shard Mint's second authority now belongs in the account
-/// frame -- the Mint alias property -- and until that lands, a substituted
-/// shard Mint is caught by the Claims adapter's own derivation and not here.
+/// Where the shard Mint's second authority went: `ResolvedRequestV2::join`
+/// refuses a derived key that aliases the header's receipt pair, and the Claims
+/// adapter's account frame refuses a coordinate META that presents the receipt
+/// (`ClaimsSbfError::ReceiptAlias`). `prepare` above builds the resolved
+/// request BEFORE calling this, so the alias half is already discharged by the
+/// time control arrives here and what remains is the wire's own operand.
 fn authenticate_asset(
     asset: AssetV2,
     identity: BearerAssetIdentityV2,

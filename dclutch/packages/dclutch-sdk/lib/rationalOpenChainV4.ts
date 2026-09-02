@@ -456,6 +456,34 @@ export function rationalOpenClaimsMetasV4(input: Readonly<{
     roleMeta(input.linkedRaw), roleMeta(input.linkedStaging), roleMeta(input.productRaw), roleMeta(input.productStaging),
     roleMeta(input.domainRaw), roleMeta(input.domainStaging), roleMeta(input.portfolioRaw), roleMeta(input.portfolioStaging),
   ];
+  // `distinct` lived here before physical ABI v3 and checked that a
+  // coordinate's shard Mint, actor shard Account and Structured custody
+  // Account named three different roles. Two of those three left the WIRE in
+  // v3 -- they are derived now -- but all four still arrive in this FRAME, so
+  // the check has its operands back and it is restored here rather than in the
+  // request encoder where it used to live and would now compare one value with
+  // itself.
+  //
+  // Its chain-side owner is `ClaimsSbfError::ReceiptAlias`, raised by
+  // `authenticate_asset_identities` before it derives anything, and its
+  // grammar-side owner is `ResolvedRequestV2::join`. This is the wallet-side
+  // twin of the same property: a browser that assembles a frame naming the
+  // receipt as a coordinate's own backing should say so before a signature is
+  // requested, not discover it in a simulation log.
+  const seen = new Map<string, string>();
+  const claim = (address: string, role: string): void => {
+    const prior = seen.get(address);
+    if (prior !== undefined) throw new Error(`Claims frame names one account as both ${prior} and ${role}`);
+    seen.set(address, role);
+  };
+  claim(input.receiptMint, 'the receipt Mint');
+  if (input.receiptAccount !== null) claim(input.receiptAccount, 'the receipt Account');
+  input.assets.forEach(({ position, asset }, index) => {
+    claim(position, `Claims custody Position ${index}`);
+    claim(asset.shardMint, `shard Mint ${index}`);
+    claim(asset.actorShardAccount, `actor shard Account ${index}`);
+    claim(asset.structuredCustodyAccount, `Structured custody Account ${index}`);
+  });
   input.assets.forEach(({ position, asset }) => metas.push(
     roleMeta(position, false, !input.structured), roleMeta(asset.shardMint, false, !input.structured),
     roleMeta(asset.actorShardAccount, false, true), roleMeta(asset.structuredCustodyAccount, false, input.structured),

@@ -58,6 +58,15 @@ use solana_system_interface::instruction::create_account;
 
 mod batch_v2;
 mod continuation_v1;
+/// Lean-decided ArtifactRelease finalization observations.
+///
+/// Emitted by `formal/dclutch-semantics/EmitArtifactReleaseFinalizationCorpusRust.lean`
+/// and replayed in `record_v1`'s tests through the real
+/// `ArtifactReleaseV1::authenticate_deployment` and this program's three-way
+/// refusal partition. Byte-gated by
+/// `tests/release_finalization_corpus_generator_fresh.rs`.
+#[cfg(test)]
+mod generated_release_finalization_corpus;
 mod hot_continuation_v2;
 mod lineage_v1;
 mod record_v1;
@@ -131,6 +140,50 @@ pub enum RegistryError {
     /// greater" is exactly "was upgraded after". A backward or sideways
     /// declaration cannot be built.
     ReleaseLineageNotForward = 0x1012,
+    /// An `ArtifactRelease` was finalized without its deployment in the frame.
+    ///
+    /// Decision 0012's argument is that observed-slot equality proves a bound
+    /// ELF digest is the current one. It only proves that if the bound digest
+    /// was ever compared against the chain, and until this route existed
+    /// nothing compared it: a finalized `ArtifactRelease` proved its own
+    /// content identity and nothing about the address it named. Every hot
+    /// reader therefore hashed the complete ELF, which measured **370,983 CU**
+    /// on the Dealer accelerator's 744,840 bytes, on every action.
+    ///
+    /// So finalization is where the comparison is made, once. This code says
+    /// the caller did not bring the Program and ProgramData accounts the
+    /// comparison needs -- or brought them for a record that is not a release.
+    ArtifactReleaseDeploymentFrame = 0x1013,
+    /// An `ArtifactRelease` did not describe the deployment at its own address.
+    ///
+    /// Identity, ProgramData link, Loader ownership, executability, the exact
+    /// deployment slot, the exact upgrade authority, or the complete ELF digest
+    /// disagreed with the live accounts. This is the one place in the protocol
+    /// that hashes an ELF to decide something, and it is the reason no hot
+    /// route has to: after this refusal cannot happen, the record's
+    /// `elf_digest` is a chain-observed fact about that exact address, and the
+    /// slot pin carries it forward for free.
+    ///
+    /// `ArtifactReleaseV1::authenticate_deployment` owns the seven conjuncts;
+    /// the Lean corpus in `ProtocolInfrastructure.lean` decides which
+    /// observations this admits and which it names.
+    ArtifactReleaseNotDeployed = 0x1014,
+    /// A deployment is at that address and it is not the release's bytes.
+    ///
+    /// Split from [`Self::ArtifactReleaseNotDeployed`] because the two are
+    /// different accusations and an operator acts on them differently. *Not
+    /// deployed* means the address, the ProgramData link, the Loader ownership
+    /// or the executability does not describe a Loader V3 deployment at all --
+    /// publish the program first. *Elf mismatch* means one is there and its
+    /// slot, its complete ELF digest, or its upgrade authority is not what this
+    /// record claims -- rebuild the record against what is actually deployed.
+    ///
+    /// The third member of the family is [`Self::ReleaseSuperseded`], which
+    /// already exists and already means what it says here: the named authority
+    /// moved the substrate forward. `ProtocolInfrastructure.lean`'s
+    /// `ReleaseObservation.outcome` decides which of the three an observation
+    /// draws, and the corpus replays every one of them through this program.
+    ArtifactReleaseElfMismatch = 0x1015,
 }
 
 impl RegistryError {
@@ -140,7 +193,7 @@ impl RegistryError {
     /// [`RegistryError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 22] = [
         Self::Instruction,
         Self::AccountFrame,
         Self::FinalizedRecord,
@@ -160,6 +213,9 @@ impl RegistryError {
         Self::ReleaseLineageSelfSuccession,
         Self::ReleaseLineageAuthorityMissing,
         Self::ReleaseLineageNotForward,
+        Self::ArtifactReleaseDeploymentFrame,
+        Self::ArtifactReleaseNotDeployed,
+        Self::ArtifactReleaseElfMismatch,
     ];
 
     /// This refusal's position in [`RegistryError::ALL`].
@@ -188,6 +244,9 @@ impl RegistryError {
             Self::ReleaseLineageSelfSuccession => 16,
             Self::ReleaseLineageAuthorityMissing => 17,
             Self::ReleaseLineageNotForward => 18,
+            Self::ArtifactReleaseDeploymentFrame => 19,
+            Self::ArtifactReleaseNotDeployed => 20,
+            Self::ArtifactReleaseElfMismatch => 21,
         }
     }
 }

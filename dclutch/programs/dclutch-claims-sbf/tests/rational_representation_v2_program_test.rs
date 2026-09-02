@@ -6024,22 +6024,19 @@ fn one_atom_skew_request(fixture: &Fixture, coordinate: usize) -> Vec<u8> {
 
 /// A coordinate backed by the RECEIPT Mint: a receipt backed by itself.
 ///
-/// RETIRED ON THE WIRE by physical ABI v3, and named as debt rather than
-/// deleted quietly. This hostile overwrote row zero's inlined shard Mint with
-/// the receipt Mint and was refused by `RepresentationRequestV2::validate`'s
-/// alias check. The Mint is now DERIVED from
-/// `(program_id, descriptor_id, outcome)`, so a coordinate cannot name the
-/// receipt Mint on the wire at all: the alias is unrepresentable rather than
-/// refused, and there is no longer a request byte to corrupt.
+/// MOVED BY physical ABI v3, not retired. The hostile used to overwrite row
+/// zero's inlined shard Mint with the receipt Mint and was refused by
+/// `RepresentationRequestV2::validate`'s alias check. The Mint is DERIVED from
+/// `(program_id, descriptor_id, outcome)` now, so a coordinate cannot name the
+/// receipt Mint on the wire at all and these bytes are honest: the request
+/// below is the canonical `IssueStructured`, byte for byte.
 ///
-/// The property is still real and now lives one layer down, in the ACCOUNT
-/// frame: hand the coordinate the receipt Mint account and
-/// `authenticate_asset_identities` refuses `ClaimsSbfError::Identity` on
-/// `accounts.mint.key != &mint`. OWED: that frame-side substitution, because
-/// this fixture builds request bytes and the caller assembles the frame. Until
-/// it is written the property is checked by the derivation alone, which is one
-/// side where there used to be two.
-#[allow(dead_code)]
+/// The substitution happens one layer down, in the ACCOUNT FRAME, which is
+/// where the property lives now: the caller hands coordinate zero the receipt
+/// Mint account and `authenticate_asset_identities` refuses
+/// `ClaimsSbfError::ReceiptAlias` by name, before deriving anything. Its twin
+/// over the derived keys is `ResolvedRequestV2::join`, and its twin over the
+/// terms is `bind_shard_terms`; this test asserts all three.
 fn receipt_backed_by_receipt_request(fixture: &Fixture) -> Vec<u8> {
     request_bytes(fixture, RepresentationActionV2::IssueStructured, 0)
 }
@@ -6095,25 +6092,13 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
     );
     let receipt_backed = {
         let request = receipt_backed_by_receipt_request(&fixture);
-        // THE OWNER OF THIS REFUSAL MOVED, and the campaign says so rather than
-        // dropping the hostile. The request grammar used to refuse these bytes
-        // outright -- a shard Mint may not alias the receipt Mint -- because the
-        // shard Mint rode the wire and `decode` could compare the two. Physical
-        // ABI v3 takes the shard Mint OFF the wire and has the Claims adapter
-        // derive it, so the grammar has nothing to compare and these bytes are
-        // now a perfectly decodable request. Asserting `AccountAlias` here would
-        // be asserting a check that no longer exists.
-        //
-        // What the hostile still does is the half that always mattered: it
-        // substitutes the receipt Mint for the coordinate Mint IN THE ACCOUNT
-        // METAS below and submits, so the refusal is observed on chain against
-        // the real frame. That is where the property belongs now.
-        //
-        // OWED: the shard Mint alias property, stated in the account frame, so
-        // this has a NAMED owner rather than whichever conjunct the adapter's
-        // own derivation happens to reach first. It is the same debt the Rust
-        // `authenticate_asset` and the browser's deleted `distinct` helper both
-        // record; three hostiles are waiting on it.
+        // THE OWNER OF THIS REFUSAL MOVED, and the campaign now names the new
+        // one. The request grammar used to refuse these bytes outright -- a
+        // shard Mint may not alias the receipt Mint -- because the shard Mint
+        // rode the wire and `decode` could compare the two. Physical ABI v3
+        // takes it OFF the wire and has the Claims adapter derive it, so these
+        // bytes decode clean and the substitution has to be made where the
+        // account actually arrives: the METAS.
         assert!(
             RepresentationRequestV2::decode(&request).is_ok(),
             "v3 leaves the grammar nothing to compare: the shard Mint is derived, not sent"
@@ -6125,11 +6110,23 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
             &request,
         );
         let coordinate = fixture.assets.first().expect("first asset").mint;
+        assert_ne!(
+            coordinate, fixture.receipt_mint,
+            "the fixture must not already alias what this hostile substitutes"
+        );
+        let mut substituted = 0_usize;
         for meta in &mut instruction.accounts {
             if meta.pubkey == coordinate {
                 meta.pubkey = fixture.receipt_mint;
+                substituted += 1;
             }
         }
+        // A hostile that substituted nothing is an honest transaction wearing a
+        // hostile label, and it would COMMIT while this loop reported success.
+        assert_eq!(
+            substituted, 1,
+            "coordinate zero's Mint appears exactly once in the Claims frame"
+        );
         instruction
     };
     let skews: Vec<Instruction> = (0..K)
@@ -6160,25 +6157,33 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
     .await;
     let before = snapshot(&mut context, &fixture).await;
 
+    // Every row names the exact discriminant it must refuse with. A bare
+    // `is_err` here would pass on whatever the transaction reaches first, and
+    // this list is exactly the set of hostiles whose refusal moved once
+    // already.
     let mut labelled = vec![
         (
             "the finalized exposure record in the descriptor's slot",
             "cross-schema substitution: exposure as descriptor",
+            ClaimsSbfError::Identity,
             exposure_as_descriptor,
         ),
         (
             "the immutable descriptor in the exposure record's slot",
             "cross-schema substitution: descriptor as exposure",
+            ClaimsSbfError::Identity,
             descriptor_as_exposure,
         ),
         (
             "a same-width descriptor whose coefficients are the canonical ones permuted",
             "recipe substitution: permuted coefficients",
+            ClaimsSbfError::Identity,
             permuted_recipe,
         ),
         (
             "a coordinate backed by the receipt Mint itself",
             "receipt backed by receipt",
+            ClaimsSbfError::ReceiptAlias,
             receipt_backed,
         ),
     ];
@@ -6190,12 +6195,12 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
                 1 => "one-atom K_i skew at coordinate 1",
                 _ => "one-atom K_i skew at coordinate 2",
             },
+            ClaimsSbfError::Representation,
             instruction,
         ));
     }
 
-    for (why, label, instruction) in labelled {
-        let caller_side = label == "receipt backed by receipt";
+    for (why, label, code, instruction) in labelled {
         let result = submit_v0(
             &mut context,
             &fixture,
@@ -6206,24 +6211,15 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
         )
         .await
         .expect("hostile transaction");
-        assert!(!result.accepted, "{why} must refuse");
-        assert_eq!(
-            result
-                .logs
-                .iter()
-                .any(|log| log.starts_with(&format!("Program {CLAIMS_PROGRAM_ID} failed"))),
-            !caller_side,
-            "{why}: the campaign records WHICH program refused, and \
-             receipt-backed-by-receipt is the one that never reaches Claims"
-        );
+        assert_refused_with(&result, code as u32, why);
         assert_eq!(
             snapshot(&mut context, &fixture).await,
             before,
             "{why} must leave every resource byte-identical"
         );
         eprintln!(
-            "Rational V2 hostile: {label} refused at {} CU, v0={} bytes",
-            result.compute_units, result.wire_bytes,
+            "Rational V2 hostile: {label} refused {:#x} at {} CU, v0={} bytes",
+            code as u32, result.compute_units, result.wire_bytes,
         );
     }
 }

@@ -141,6 +141,31 @@ describe('chain-derived Rational open V4', () => {
     expect(metas[39]).toMatchObject({ address: address(52), isWritable: true });
   });
 
+  // The wallet-side twin of `ClaimsSbfError::ReceiptAlias`. Physical ABI v3
+  // deleted the `distinct` helper because two of its three operands left the
+  // wire; all four still arrive in this FRAME, and these are the substitutions
+  // a caller can actually make.
+  it('refuses a Claims frame that names the receipt, or one account twice, as a coordinate role', () => {
+    const honest = [asset(40, 10n), asset(50, 0n), asset(60, 7n)];
+    expect(claims(honest, true)).toHaveLength(44);
+    const substitute = (index: number, field: keyof RationalOpenAssetV3, value: string) => {
+      const rows = honest.map((row, at) => (at === index ? Object.freeze({ ...row, [field]: value }) : row));
+      return () => claims(rows, true);
+    };
+    // The receipt Mint and the receipt Account, at every coordinate role that
+    // can be handed one.
+    for (const [field, role] of [['shardMint', 'shard Mint 2'], ['structuredCustodyAccount', 'Structured custody Account 2'],
+      ['actorShardAccount', 'actor shard Account 2']] as const) {
+      expect(substitute(2, field, address(19))).toThrow(`both the receipt Mint and ${role}`);
+      expect(substitute(2, field, address(20))).toThrow(`both the receipt Account and ${role}`);
+    }
+    // And the pairwise half: two coordinates presenting one shard Mint.
+    expect(substitute(2, 'shardMint', address(40))).toThrow('both shard Mint 0 and shard Mint 2');
+    // A selected frame has no receipt Account, and its vacant slots are the
+    // Claims program, which is not a coordinate role and must not trip this.
+    expect(claims([asset(40, 10n)], false)).toHaveLength(36);
+  });
+
   it('projects all four Rust-owned raw-delta plans into exact Token-2022 poststates', () => {
     const token = (seed: number) => Object.freeze({
       mint: address(seed), mintSupply: 100n, actorAccount: address(seed + 1), actorAmount: 60n,

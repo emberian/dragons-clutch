@@ -1133,6 +1133,37 @@ This row is for a release set no market selects, so publishing it would turn the
 browser's `release` wall off for nothing. It is recorded here as the shape
 cohort-13's runbook hands the cut, not as a row to ship.
 
+**And one line of that runbook has to be worded carefully, or the guarantee
+evaporates.** The staging tool takes `--release-set HEX64` and refuses a fragment
+whose key is not that value. Two independent proofs are supposed to meet there:
+the ingester proves the fragment is ABOUT the set the cut's Market selects, and
+`validate_prepare` proves the value inside it is the one the artifact derives.
+`prepare` prints `release_set_id` in its own result JSON, so pasting the argument
+from there is the fastest way to fill it — and it silently collapses the two into
+one producer asserting the same value twice, comparing a file against itself. A
+refusal that cannot fire is worse than no refusal, because it reads as coverage.
+**The value must be read off the CHAIN** — the market page prints it, and the
+Direct spine returns it as `releaseSetId`. The web lane wrote the prohibition
+into the staging tool's own header (`52de7519`), which is the right place for it
+and remains the owner; this is the note for whoever writes the cohort-13 step,
+because a runbook line that says "copy it from the prepare output" would undo a
+guarantee neither tool can defend on its own. The load-bearing sentence is quoted
+here rather than only pointed at, so it survives that script being renamed or
+folded into a shared staging tool by a lane that never reads this file:
+
+> SO DO NOT COPY IT OUT OF THE PRODUCER'S OWN OUTPUT. The sealing driver's
+> `prepare` puts the same string in its result JSON as `release_set_id` and uses
+> it as the fragment's single key, so pasting it from there is quicker and
+> silently destroys the guarantee: two independent proofs collapse into one
+> producer asserting the same value twice. The producer proves the row's VALUE is
+> what its artifact derives; this argument proves the row is ABOUT the set the
+> market selects. Only a chain read can supply the second.
+
+Note the phrasing, which is the part that does the work: it says where the value
+may NOT come from. "Read it off the chain" alone is satisfied, in a reader's
+mind, by any string that arrived from somewhere official — including the
+producer's own result JSON, which is exactly the string that must not be used.
+
 ### What cohort-13 owes
 
 Deployed from a commit at or after `0785bd52`: found, then seal against its own

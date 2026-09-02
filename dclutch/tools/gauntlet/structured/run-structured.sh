@@ -124,7 +124,7 @@ SBF_OUT_DIR="$sbf_out" DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR="$evidence_dir" \
         --test-threads=1 \
         the_structured_family_hostiles_refuse_through_the_real_wire \
         a_receipt_mint_missing_its_burn_role_refuses_at_the_first_issue \
-        the_full_width_structured_frame_does_not_fit_a_packet_at_k_three
+        the_full_width_structured_frame_now_fits_a_packet_at_k_three
 
 evidence="$work/structured.evidence.json"
 cargo run --quiet -p dclutch-program-test-evidence \

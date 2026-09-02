@@ -17,6 +17,7 @@ use dclutch_record_contract::{
     RAW_RECORD_PDA_SEED_V1, RecordKeyV1, STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1,
     SchemaReleaseId, StagingCursorV1,
 };
+use dclutch_registry_contract::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -417,15 +418,38 @@ fn build_live(
         {
             return Err(PublicationErrorV1::ProductGraphMismatch);
         }
+        // An `ArtifactRelease` finalization carries the deployment it claims.
+        //
+        // Derived from the record's own CONTENT, not passed in: the release
+        // body names its Program and its ProgramData, so a caller cannot
+        // nominate a different pair to be observed, and every publisher in the
+        // tree -- the successor bootstrap included -- gets the observation
+        // without knowing it needed to ask for one. The Registry refuses
+        // `ArtifactReleaseDeploymentFrame` if these are absent, so a stale
+        // publisher fails loudly at finalization rather than minting a release
+        // nothing ever checked.
+        let mut accounts = vec![
+            AccountMeta::new_readonly(state.raw_record.key, false),
+            AccountMeta::new(state.staging_cursor.key, false),
+            AccountMeta::new(state.sponsor.key, false),
+        ];
+        if content.schema_release_id == ARTIFACT_RELEASE_SCHEMA_ID_V1 {
+            let release = ArtifactReleaseV1::decode(content.content)
+                .map_err(|_| PublicationErrorV1::Record)?;
+            accounts.push(AccountMeta::new_readonly(
+                Pubkey::new_from_array(release.program().to_bytes()),
+                false,
+            ));
+            accounts.push(AccountMeta::new_readonly(
+                Pubkey::new_from_array(release.programdata()),
+                false,
+            ));
+        }
         return Ok(plan(
             RecordPublicationActionV1::Finalize,
             Some(Instruction {
                 program_id: registry_program,
-                accounts: vec![
-                    AccountMeta::new_readonly(state.raw_record.key, false),
-                    AccountMeta::new(state.staging_cursor.key, false),
-                    AccountMeta::new(state.sponsor.key, false),
-                ],
+                accounts,
                 data: FinalizeRecordV1.to_bytes().to_vec(),
             }),
             state,

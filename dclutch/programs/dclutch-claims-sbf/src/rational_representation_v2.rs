@@ -1174,6 +1174,42 @@ fn authenticate_asset_identities(
     requested: Option<dclutch_rational_representation_v2_contract::AssetRowV2>,
     accounts: AssetAccounts<'_, '_>,
 ) -> Result<CoordinateIdentities, ProgramError> {
+    // THE RANK RULE, STATED IN THE ACCOUNT FRAME: a receipt is never backed by
+    // itself. Founding-time this is `bind_shard_terms` refusing terms whose
+    // receipt Mint aliases a shard Mint; on the wire it was
+    // `RepresentationRequestV2::validate` refusing an asset row that named the
+    // receipt Mint as its shard Mint. Physical ABI v3 derives the three
+    // per-coordinate keys instead of carrying them, so the grammar lost its
+    // second operand -- and the substitution simply moved from the request
+    // bytes to the account metas, where until now only the derivation
+    // equality below stood against it, under a code that says "not the account
+    // I derived" rather than "that is the receipt".
+    //
+    // It reads the PRESENTED accounts and not the derived keys deliberately.
+    // The derived side cannot alias: `find_program_address` over
+    // `(program_id, descriptor, outcome)` does not produce the receipt Mint by
+    // accident. The caller's side can, and does, and this is the conjunct that
+    // names it.
+    let receipt_pair = [
+        Some(base.receipt_mint.key),
+        matches!(
+            action,
+            RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured
+        )
+        .then_some(base.actor_receipt.key),
+    ];
+    for receipt in receipt_pair.into_iter().flatten() {
+        if accounts.mint.key == receipt
+            || accounts.position.key == receipt
+            || accounts.structured_token.key == receipt
+            || accounts.actor_token.key == receipt
+        {
+            // No `msg!`: this program emits none at all, and the first one
+            // would link SBF formatting into every route to say what a
+            // dedicated discriminant already says.
+            return Err(ClaimsSbfError::ReceiptAlias.into());
+        }
+    }
     let outcome_bytes = outcome.to_le_bytes();
     let mint = Pubkey::find_program_address(
         &[RATIONAL_SHARD_MINT_SEED_V2, &descriptor, &outcome_bytes],

@@ -320,14 +320,14 @@ function putU64(output: Uint8Array, offset: number, value: bigint): void {
 // Account and the Structured custody Account named three different roles. Its
 // three operands became one when physical ABI v3 stopped carrying the two
 // derived keys, and a one-element uniqueness check is a check of nothing, so
-// the helper is deleted rather than left to pass forever.
+// the helper is not restored HERE -- a request encoder has one operand and
+// always will.
 //
-// OWED, and it is the same debt the Rust `authenticate_asset` records: the
-// shard Mint's identity now has exactly one author on this path, the Claims
-// adapter's own derivation, and the second authority belongs in the account
-// frame as the Mint alias property. Until that lands, no wallet-side check
-// stands between a caller and a substituted Mint -- the adapter's derivation
-// does, on chain, and nothing here does.
+// It came back where its operands are: `rationalOpenClaimsMetasV4` in
+// rationalOpenChainV4.ts, which assembles the frame and therefore holds the
+// receipt pair and every coordinate role at once. Its chain-side owner is
+// `ClaimsSbfError::ReceiptAlias`, raised before the adapter derives anything,
+// and its grammar-side owner is `ResolvedRequestV2::join`.
 
 export function encodeRationalTerminalHotRequestV3(input: RationalTerminalHotInputV3): Uint8Array {
   if (!Number.isInteger(input.outcomeCount) || input.outcomeCount <= 0 || input.outcomeCount > 0xffff_ffff

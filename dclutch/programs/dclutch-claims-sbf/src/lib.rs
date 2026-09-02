@@ -252,6 +252,27 @@ pub enum ClaimsSbfError {
     /// `Economic` here would go looking for a conservation bug that is not
     /// there.
     ExposureNotIdentity = 0x500E,
+    /// An account presented at a representation coordinate is the receipt's
+    /// own Mint or Account: a receipt backed by itself.
+    ///
+    /// The rank rule's physical half. Founding-time, `bind_shard_terms`
+    /// refuses terms whose receipt Mint aliases a shard Mint; on the wire,
+    /// `RepresentationRequestV2::validate` used to refuse a request whose
+    /// asset row named the receipt Mint as its shard Mint. Physical ABI v3
+    /// took the three per-coordinate keys off the wire, so the grammar has
+    /// nothing left to compare and the alias moved down one layer into the
+    /// ACCOUNT FRAME, which is where it is now stated.
+    ///
+    /// Distinct from [`ClaimsSbfError::Identity`], which is the same
+    /// comparison with the other operand: `Identity` means the account
+    /// presented at a coordinate is not the one this program derives, and its
+    /// reader goes looking for a wrong descriptor, outcome, or program id.
+    /// This one means the account presented IS a known account -- the
+    /// receipt's -- offered as the backing of the very receipt it is. Both
+    /// refuse the same substituted meta; only this one says what the caller
+    /// actually did, and three hostiles across two languages assert it by
+    /// name.
+    ReceiptAlias = 0x500F,
 }
 
 impl ClaimsSbfError {
@@ -262,7 +283,7 @@ impl ClaimsSbfError {
     /// to the enum does not compile until its author writes an arm here, and
     /// the only arm that satisfies the assertions is its own index in this
     /// array.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Instruction,
         Self::Accounts,
         Self::Identity,
@@ -278,6 +299,7 @@ impl ClaimsSbfError {
         Self::BasisEvaluatorAbsent,
         Self::PrincipalCapacity,
         Self::ExposureNotIdentity,
+        Self::ReceiptAlias,
     ];
 
     /// This refusal's position in [`ClaimsSbfError::ALL`].
@@ -302,6 +324,7 @@ impl ClaimsSbfError {
             Self::BasisEvaluatorAbsent => 12,
             Self::PrincipalCapacity => 13,
             Self::ExposureNotIdentity => 14,
+            Self::ReceiptAlias => 15,
         }
     }
 }

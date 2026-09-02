@@ -94,7 +94,11 @@ inductive UpgradePolicy where
 /-- The five Loader V3 facts the pin compares.
 
 `bound*` are read out of the finalized, content-addressed `ArtifactRelease`
-record that activation hashed the complete ELF against.  `observed*` are read
+record whose complete ELF the Registry hashed against the live deployment
+before it would finalize the record -- see `ReleaseFinalization` below, which
+is the moment that makes `boundElfDigest` a chain-observed fact rather than a
+claim, and therefore the moment the whole slot-pin argument stands on.
+`observed*` are read
 out of the live ProgramData account in this very invocation.  Passing a
 release's own bound values back in as the observation would make every
 equality below vacuous, which is exactly why the adapter, not this module,
@@ -414,6 +418,207 @@ theorem pin_vector_outcomes_are_exact :
   native_decide
 
 theorem pin_vector_count_is_exact : pinVectors.length = 10 := by
+  native_decide
+
+/-! ## Release finalization: where the bound ELF digest becomes a fact
+
+Decision 0012's slot pin proves that an *observed* slot equal to a *bound* slot
+means the bound ELF digest is the digest of the deployed bytes.  It proves that
+about a bound digest somebody checked.  Until release finalization checked one,
+only role ACTIVATION did, and every other reader of an `ArtifactRelease` -- a
+certificate-pinned accelerator above all -- hashed the complete observed ELF on
+every single action to make up the difference.
+
+Measured on real ELFs 2026-09-02: **370,983 CU** of a 1,399,700 budget, on
+744,840 bytes, per action, forever.
+
+So the comparison moves to finalization, where it is paid once per release.
+This section is that comparison: `ArtifactReleaseV1::authenticate_deployment`,
+in the adapter's own conjunct order, because the ORDER is what decides which
+name an operator reads back.
+-/
+
+/-- The live Loader V3 facts a finalization compares against the record.
+
+The four booleans are the adapter's parse boundary -- identity equality across
+the program/programdata/loader triple, the Program body's ProgramData link,
+Loader ownership of both accounts, and the two executability facts.  The three
+values below them are decided here, exactly as the slot pin decides its own. -/
+structure ReleaseObservation where
+  boundUpgradePolicy : UpgradePolicy
+  boundUpgradeAuthority : Option Identity
+  boundDeploymentSlot : Slot
+  boundElfDigest : Identity
+  observedIdentityMatches : Bool
+  observedProgramDataLinkMatches : Bool
+  observedLoaderOwnsBoth : Bool
+  observedProgramExecutable : Bool
+  observedProgramDataExecutable : Bool
+  observedDeploymentSlot : Slot
+  observedElfDigest : Identity
+  observedUpgradeAuthority : Option Identity
+  deriving DecidableEq, Repr
+
+/-- The adapter's parse-boundary group: is there a deployment here at all. -/
+def ReleaseObservation.deploymentPresent (o : ReleaseObservation) : Bool :=
+  o.observedIdentityMatches && o.observedProgramDataLinkMatches &&
+    o.observedLoaderOwnsBoth && o.observedProgramExecutable &&
+    !o.observedProgramDataExecutable
+
+/-- The bytes group: the deployment exists, but is it THESE bytes. -/
+def ReleaseObservation.bytesAgree (o : ReleaseObservation) : Bool :=
+  o.observedDeploymentSlot == o.boundDeploymentSlot &&
+    o.observedElfDigest == o.boundElfDigest &&
+    o.observedUpgradeAuthority == o.boundUpgradeAuthority
+
+/-- The slot pin this observation induces, for naming a slot disagreement. -/
+def ReleaseObservation.pin (o : ReleaseObservation) : SlotPin :=
+  ⟨o.boundUpgradePolicy, o.boundUpgradeAuthority, o.boundDeploymentSlot,
+   o.observedUpgradeAuthority, o.observedDeploymentSlot⟩
+
+/-- What the Registry publishes when it refuses to finalize a release. -/
+inductive FinalizationOutcome where
+  /-- The record describes the deployment at its own address; finalize. -/
+  | admit
+  /-- There is no such deployment at that address to describe. -/
+  | refuseNotDeployed
+  /-- The named authority moved the substrate forward; re-release. -/
+  | refuseSuperseded
+  /-- A deployment is there and it is not these bytes. -/
+  | refuseElfMismatch
+  deriving DecidableEq, Repr
+
+def FinalizationOutcome.tag : FinalizationOutcome → Nat
+  | .admit => 0
+  | .refuseNotDeployed => 1
+  | .refuseSuperseded => 2
+  | .refuseElfMismatch => 3
+
+/-- The outcome, in the adapter's conjunct order.
+
+The presence group is checked before the bytes group, so a substituted account
+never reads as an upgrade.  Within the bytes group the SLOT is compared first,
+which is why a substrate that was both upgraded and re-keyed reads as
+superseded rather than as an authority substitution -- the same ordering the
+slot pin's own `outcome` already commits to, and it is one ordering because it
+is one adapter. -/
+def ReleaseObservation.outcome (o : ReleaseObservation) : FinalizationOutcome :=
+  if !o.deploymentPresent then
+    FinalizationOutcome.refuseNotDeployed
+  else if o.bytesAgree then
+    FinalizationOutcome.admit
+  else if o.observedDeploymentSlot != o.boundDeploymentSlot
+      && o.pin.slotRefusal == PinRefusal.releaseSupersededByUpgrade then
+    FinalizationOutcome.refuseSuperseded
+  else
+    FinalizationOutcome.refuseElfMismatch
+
+/-- One named finalization decision case. -/
+structure FinalizationVector where
+  name : String
+  observation : ReleaseObservation
+
+private def digest : Identity := 88
+private def otherDigest : Identity := 99
+
+/-- Every decision the finalize route can reach, once each. -/
+def finalizationVectors : List FinalizationVector := [
+  { name := "immutable_release_over_its_own_deployment_finalizes",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      true, true, true, true, false, boundSlot, digest, none⟩ },
+  { name := "upgradeable_release_over_its_own_deployment_finalizes",
+    observation := ⟨.exactAuthority, some authority, boundSlot, digest,
+      true, true, true, true, false, boundSlot, digest, some authority⟩ },
+  { name := "release_naming_an_undeployed_program_refuses",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      false, true, true, true, false, boundSlot, digest, none⟩ },
+  { name := "release_whose_program_does_not_link_its_programdata_refuses",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      true, false, true, true, false, boundSlot, digest, none⟩ },
+  { name := "release_over_accounts_the_loader_does_not_own_refuses",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      true, true, false, true, false, boundSlot, digest, none⟩ },
+  { name := "release_over_a_non_executable_program_refuses",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      true, true, true, false, false, boundSlot, digest, none⟩ },
+  { name := "release_over_executable_programdata_refuses",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      true, true, true, true, true, boundSlot, digest, none⟩ },
+  { name := "release_whose_elf_digest_differs_refuses",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      true, true, true, true, false, boundSlot, otherDigest, none⟩ },
+  { name := "upgradeable_release_already_moved_forward_refuses_superseded",
+    observation := ⟨.exactAuthority, some authority, boundSlot, digest,
+      true, true, true, true, false, boundSlot + 1, otherDigest, some authority⟩ },
+  { name := "immutable_release_at_a_moved_slot_is_not_supersession",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      true, true, true, true, false, boundSlot + 1, digest, none⟩ },
+  { name := "release_whose_upgrade_authority_differs_refuses",
+    observation := ⟨.exactAuthority, some authority, boundSlot, digest,
+      true, true, true, true, false, boundSlot, digest, some substitute⟩ },
+  { name := "absent_deployment_is_named_before_a_digest_disagreement",
+    observation := ⟨.immutable, none, boundSlot, digest,
+      false, true, true, true, false, boundSlot, otherDigest, none⟩ }
+]
+
+/-! ### Finalization corpus theorems -/
+
+/-- Admission is exactly "the deployment is there and it is these bytes".
+This is the property the whole hot path now rests on: after a finalization
+admits, `boundElfDigest` is the digest of the bytes at that address. -/
+theorem finalization_admits_iff_present_and_agreeing (o : ReleaseObservation) :
+    o.outcome = FinalizationOutcome.admit <->
+      (o.deploymentPresent = true /\ o.bytesAgree = true) := by
+  unfold ReleaseObservation.outcome
+  cases present : o.deploymentPresent with
+  | false => simp
+  | true =>
+      cases agree : o.bytesAgree with
+      | true => simp
+      | false => simp; split <;> simp
+
+/-- A refusal is never silent: every non-admitting observation gets a name. -/
+theorem finalization_refusal_is_always_named (o : ReleaseObservation) :
+    o.outcome = FinalizationOutcome.admit \/
+      o.outcome = FinalizationOutcome.refuseNotDeployed \/
+      o.outcome = FinalizationOutcome.refuseSuperseded \/
+      o.outcome = FinalizationOutcome.refuseElfMismatch := by
+  cases outcome : o.outcome <;> simp
+
+/-- Supersession is claimed only where the slot pin itself would claim it, so
+finalization and every later hot read name a moved substrate the same way. -/
+theorem finalization_supersession_agrees_with_the_pin (o : ReleaseObservation)
+    (superseded : o.outcome = FinalizationOutcome.refuseSuperseded) :
+    o.pin.slotRefusal = PinRefusal.releaseSupersededByUpgrade := by
+  unfold ReleaseObservation.outcome at superseded
+  split at superseded
+  · exact absurd superseded (by simp)
+  · split at superseded
+    · exact absurd superseded (by simp)
+    · split at superseded
+      · next hcond =>
+          have parts := (Bool.and_eq_true _ _).mp hcond
+          simpa using parts.2
+      · exact absurd superseded (by simp)
+
+/-- The corpus decides every outcome. -/
+theorem finalization_vectors_cover_every_outcome :
+    finalizationVectors.any (fun v => v.observation.outcome == FinalizationOutcome.admit) &&
+      finalizationVectors.any (fun v =>
+        v.observation.outcome == FinalizationOutcome.refuseNotDeployed) &&
+      finalizationVectors.any (fun v =>
+        v.observation.outcome == FinalizationOutcome.refuseSuperseded) &&
+      finalizationVectors.any (fun v =>
+        v.observation.outcome == FinalizationOutcome.refuseElfMismatch) := by
+  native_decide
+
+/-- The exact expected outcome of every vector, pinned in order. -/
+theorem finalization_vector_outcomes_are_exact :
+    finalizationVectors.map (fun v => v.observation.outcome.tag) =
+      [0, 0, 1, 1, 1, 1, 1, 3, 2, 3, 3, 1] := by
+  native_decide
+
+theorem finalization_vector_count_is_exact : finalizationVectors.length = 12 := by
   native_decide
 
 /-! ## One-time initialization -/

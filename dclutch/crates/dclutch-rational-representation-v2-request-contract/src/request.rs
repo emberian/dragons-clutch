@@ -822,12 +822,33 @@ impl<'a> ResolvedRequestV2<'a> {
         {
             return Err(Error::InvalidWidth);
         }
+        let header = request.header();
         let mut index = 0;
         while index < identities.len() {
             let identity = identities.get(index).ok_or(Error::InvalidWidth)?;
             require_nonzero(identity.shard_mint)?;
             require_nonzero(identity.structured_custody_account)?;
             require_nonzero(identity.claims_custody_owner)?;
+            // THE RECEIPT ALIAS, restored with its second operand back.
+            // `validate` used to refuse an asset row whose shard Mint was the
+            // header's receipt Mint, and physical ABI v3 deleted that conjunct
+            // because the row stopped carrying a shard Mint at all. The key did
+            // not stop existing -- it moved to whoever derives it -- so the
+            // comparison belongs at the join, which is the first place the
+            // derived key and the header sit together. Both sides are real
+            // here: the derivation is one authority and the header the caller
+            // signed is the other, and a receipt backed by itself fails to
+            // resolve at every consumer rather than at whichever one remembered
+            // to look.
+            for receipt in [header.receipt_mint, header.receipt_account] {
+                if !is_zero(receipt)
+                    && (identity.shard_mint == receipt
+                        || identity.structured_custody_account == receipt
+                        || identity.claims_custody_owner == receipt)
+                {
+                    return Err(Error::AccountAlias);
+                }
+            }
             // The wire no longer carries these, so the wire-level distinctness
             // check went with them; the cheap explicit one survives here, where
             // the derived set is finally in one place. It is redundant against
@@ -995,6 +1016,70 @@ mod physical_abi_v3_width {
         assert_eq!(
             RepresentationRequestV2::decode(&bytes).unwrap_err(),
             Error::UnsupportedVersion
+        );
+    }
+
+    fn coordinate(index: u8) -> CoordinateIdentitiesV3 {
+        CoordinateIdentitiesV3 {
+            shard_mint: id(100 + index),
+            structured_custody_account: id(180 + index),
+            claims_custody_owner: id(220 + index),
+        }
+    }
+
+    // THE RECEIPT ALIAS, and the positive control that keeps it from being a
+    // check of nothing: the SAME request bytes with identities that alias
+    // nothing resolve, so a refusal below is the alias and not the fixture.
+    //
+    // Six substitutions, because the property is "no derived key at any
+    // coordinate is either half of the receipt pair", not "the shard Mint is
+    // not the receipt Mint". The third coordinate carries them so a refusal
+    // cannot come from the first row and stop.
+    #[test]
+    fn a_derived_key_aliasing_the_receipt_pair_refuses_at_the_join() {
+        let tail = rows(3);
+        let request =
+            RepresentationRequestV2::new(header(RepresentationActionV2::IssueStructured, 3), &tail)
+                .expect("request");
+        let honest = [coordinate(0), coordinate(1), coordinate(2)];
+        assert!(ResolvedRequestV2::new(request, &honest).is_ok());
+        for substitute in [
+            (|value: &mut CoordinateIdentitiesV3, receipt| value.shard_mint = receipt)
+                as fn(&mut CoordinateIdentitiesV3, [u8; 32]),
+            |value: &mut CoordinateIdentitiesV3, receipt| {
+                value.structured_custody_account = receipt
+            },
+            |value: &mut CoordinateIdentitiesV3, receipt| value.claims_custody_owner = receipt,
+        ] {
+            for receipt in [id(7), id(8)] {
+                let mut aliased = honest;
+                substitute(&mut aliased[2], receipt);
+                assert_eq!(
+                    ResolvedRequestV2::new(request, &aliased).unwrap_err(),
+                    Error::AccountAlias
+                );
+            }
+        }
+    }
+
+    // A selected-outcome request has NO receipt Account -- the header field is
+    // canonically zero -- and the identities are all nonzero, so the absent
+    // half must not become a wildcard that refuses every honest join.
+    #[test]
+    fn the_absent_receipt_account_of_a_selected_action_aliases_nothing() {
+        let tail = rows(1);
+        let request =
+            RepresentationRequestV2::new(header(RepresentationActionV2::Denominate, 1), &tail)
+                .expect("request");
+        assert!(is_zero(
+            header(RepresentationActionV2::Denominate, 1).receipt_account
+        ));
+        assert!(ResolvedRequestV2::selected(request, coordinate(0)).is_ok());
+        let mut aliased = coordinate(0);
+        aliased.shard_mint = id(7);
+        assert_eq!(
+            ResolvedRequestV2::selected(request, aliased).unwrap_err(),
+            Error::AccountAlias
         );
     }
 

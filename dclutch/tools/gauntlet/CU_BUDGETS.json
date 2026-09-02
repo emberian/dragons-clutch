@@ -554,99 +554,99 @@
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: cross-schema substitution: exposure as descriptor",
-      "measured": 185950,
+      "measured": 153291,
       "tolerance": 15000,
-      "budget": 200950,
+      "budget": 168291,
       "enforced": true,
-      "provenance": "Cross-family/cross-schema substitution, direction one: the finalized CompositionExposureBundleV3 record offered in the immutable descriptor's account slot. The cost is the record-authentication prologue -- release set, Product/representation admission, both record digests -- which is where a substituted record is caught, so this row is the price of the join rather than of any transition. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [185950, 185950], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "Cross-family/cross-schema substitution, direction one: the finalized CompositionExposureBundleV3 record offered in the immutable descriptor's account slot. The cost is the record-authentication prologue -- release set, Product/representation admission, both record digests -- which is where a substituted record is caught, so this row is the price of the join rather than of any transition. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [153291, 153291], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-cross-schema-descriptor-as-exposure",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: cross-schema substitution: descriptor as exposure",
-      "measured": 185949,
+      "measured": 153290,
       "tolerance": 15000,
-      "budget": 200949,
+      "budget": 168290,
       "enforced": true,
-      "provenance": "The SAME substitution the other way, because a family wire that refuses one direction and admits the other is not joined. One compute unit cheaper than its twin, which is what a symmetric refusal reached at the same depth looks like. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [185949, 185949], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "The SAME substitution the other way, because a family wire that refuses one direction and admits the other is not joined. One compute unit cheaper than its twin, which is what a symmetric refusal reached at the same depth looks like. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [153290, 153290], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-recipe-substitution-permuted-coefficients",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: recipe substitution: permuted coefficients",
-      "measured": 226236,
+      "measured": 197124,
       "tolerance": 15000,
-      "budget": 241236,
+      "budget": 212124,
       "enforced": true,
-      "provenance": "A same-width RepresentationDescriptorV2 whose coefficients are the canonical ones PERMUTED -- a valid record naming a recipe the composition does not state. More expensive than the cross-schema pair because the descriptor decodes cleanly and the refusal comes from the request/descriptor identity join rather than from the record admission. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [226236, 226236], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "A same-width RepresentationDescriptorV2 whose coefficients are the canonical ones PERMUTED -- a valid record naming a recipe the composition does not state. More expensive than the cross-schema pair because the descriptor decodes cleanly and the refusal comes from the request/descriptor identity join rather than from the record admission. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [197124, 197124], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-receipt-backed-by-receipt",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: receipt backed by receipt",
-      "measured": 11302,
+      "measured": 230625,
       "tolerance": 15000,
-      "budget": 26302,
+      "budget": 245625,
       "enforced": true,
-      "provenance": "The cheapest refusal in the island by an order of magnitude, and the row says why: the request grammar refuses a shard Mint that aliases the receipt Mint, and every caller must decode the request to derive its own Trading authority, so this one dies in the CALLER before a CPI is ever issued. A regression here that made it expensive would mean the refusal moved deeper into the chain. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [11302, 11302], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "THE ACCUSATION MOVED, and with it the price. This row used to read 11,302 -- the cheapest refusal in the island by an order of magnitude -- because the hostile substituted the receipt Mint into the ASSET ROW, where `RepresentationRequestV2::validate` refused it before any caller could derive its Trading authority, so it died in the caller with no CPI issued. Physical ABI v3 derives the three per-coordinate keys instead of carrying them, so no row byte is left to corrupt; the substitution is made in the ACCOUNT METAS now and is refused on chain by `ClaimsSbfError::ReceiptAlias` (0x500F) in `authenticate_asset_identities`. A refusal that reaches the Claims adapter costs what reaching the Claims adapter costs: release authentication, the Product join, the descriptor and exposure decodes and the replay all run first. So a twentyfold rise is the CORRECT reading of a refusal that moved from the caller into the chain, and the regression to watch for is the opposite one -- a collapse back toward the caller would mean the frame check stopped being reached. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [230625, 230625], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-one-atom-skew-coordinate-0",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: one-atom K_i skew at coordinate 0",
-      "measured": 313356,
+      "measured": 264338,
       "tolerance": 15000,
-      "budget": 328356,
+      "budget": 279338,
       "enforced": true,
-      "provenance": "Coordinate 0's backing skewed by exactly ONE shard atom. The full projection is built before prepare() compares the asset row's coefficient against the descriptor's, so a skew costs nearly a whole successful issue -- which is the point: the campaign basis [2, 3, 5] over 7 is pairwise coprime and coprime to the denominator so that a one-atom skew cannot be presented as a legitimate quantity at another coordinate, and the chain has to walk the whole frame to say so. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [313356, 313356], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "Coordinate 0's backing skewed by exactly ONE shard atom. The full projection is built before prepare() compares the asset row's coefficient against the descriptor's, so a skew costs nearly a whole successful issue -- which is the point: the campaign basis [2, 3, 5] over 7 is pairwise coprime and coprime to the denominator so that a one-atom skew cannot be presented as a legitimate quantity at another coordinate, and the chain has to walk the whole frame to say so. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [264338, 264338], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-one-atom-skew-coordinate-1",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: one-atom K_i skew at coordinate 1",
-      "measured": 314120,
+      "measured": 269296,
       "tolerance": 15000,
-      "budget": 329120,
+      "budget": 284296,
       "enforced": true,
-      "provenance": "The same one-atom skew at coordinate 1. The 764-unit spread from coordinate 0 is the extra projection row walked before the mismatch is reached, not noise: both runs are byte-identical. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [314120, 314120], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "The same one-atom skew at coordinate 1. The 764-unit spread from coordinate 0 is the extra projection row walked before the mismatch is reached, not noise: both runs are byte-identical. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [269296, 269296], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-one-atom-skew-coordinate-2",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: one-atom K_i skew at coordinate 2",
-      "measured": 323884,
+      "measured": 265254,
       "tolerance": 15000,
-      "budget": 338884,
+      "budget": 280254,
       "enforced": true,
-      "provenance": "The same one-atom skew at coordinate 2, the last coordinate and therefore the most expensive of the three. Three separate transactions, so the coprime basis is exercised per coordinate rather than once. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [323884, 323884], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "The same one-atom skew at coordinate 2, the last coordinate and therefore the most expensive of the three. Three separate transactions, so the coprime basis is exercised per coordinate rather than once. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [265254, 265254], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-under-configured-receipt-mint-issue",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: issue against a receipt Mint with only the Mint role",
-      "measured": 255972,
+      "measured": 229834,
       "tolerance": 15000,
-      "budget": 270972,
+      "budget": 244834,
       "enforced": true,
-      "provenance": "Decision 0011 s3b's under-configured founding: the receipt Mint carries the representation authority as its Mint authority and not as its permissioned-burn authority. parse_behavior_mint refuses it (ClaimsSbfError::Token, 0x5009) with ZERO Token-2022 CPIs issued, so this row is the cost of the behavior-profile read and everything before it. s3b predicted the failure would land at BurnReceipt with the descriptor already committed; it lands at the first issue instead, and this is what that costs. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [255972, 255972], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "Decision 0011 s3b's under-configured founding: the receipt Mint carries the representation authority as its Mint authority and not as its permissioned-burn authority. parse_behavior_mint refuses it (ClaimsSbfError::Token, 0x5009) with ZERO Token-2022 CPIs issued, so this row is the cost of the behavior-profile read and everything before it. s3b predicted the failure would land at BurnReceipt with the descriptor already committed; it lands at the first issue instead, and this is what that costs. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [229834, 229834], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "structured-under-configured-receipt-mint-unwrap",
       "campaign": "structured-v2-programtest",
       "scope": "transaction",
       "transaction": "claims rational-representation-v2: unwrap against a receipt Mint with only the Mint role",
-      "measured": 251184,
+      "measured": 216007,
       "tolerance": 15000,
-      "budget": 266184,
+      "budget": 231007,
       "enforced": true,
-      "provenance": "The consequence of the row above rather than a second finding: the issue committed nothing, so no representation replay exists to carry revision one and the unwrap is refused on Accounts (0x5001). BurnReceipt is never the thing that fails, because there is never anything to unwrap. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [251184, 251184], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+      "provenance": "The consequence of the row above rather than a second finding: the issue committed nothing, so no representation replay exists to carry revision one and the unwrap is refused on Accounts (0x5001). BurnReceipt is never the thing that fails, because there is never anything to unwrap. Re-pinned 2026-09-02 by STRUCTURED from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [216007, 216007], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     },
     {
       "id": "claims-wallet-position-payout",

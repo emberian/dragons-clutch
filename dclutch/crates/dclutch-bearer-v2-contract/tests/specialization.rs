@@ -524,11 +524,48 @@ fn terminal_resolution_replay_release_and_asset_substitutions_are_exact() {
         ))
     );
 
-    // Substituting the shard Mint no longer refuses HERE: v3 drops its wire
-    // copy, so `prepare` derives it from this very struct and has nothing to
-    // disagree with (see `authenticate_asset`, which OWES that check to the
-    // account frame). The actor shard Account still arrives on the wire, so it
-    // is the substitution this hostile can still make land.
+    // Substituting the shard Mint refuses again, and not where it used to. The
+    // wire copy is gone, so `authenticate_asset` cannot compare it to itself;
+    // what compares now is `ResolvedRequestV2::join`, which is the first place
+    // the DERIVED key and the header the caller signed sit together. This
+    // substitution makes the coordinate's shard Mint the receipt Mint -- a
+    // receipt backed by itself -- and both operands are real.
+    let mut receipt_alias = identity(id(41));
+    receipt_alias.shard_mint = id(4);
+    assert_eq!(
+        prepare(
+            bearer,
+            terminal,
+            projection,
+            receipt_alias,
+            BearerResolutionV2::Resolved { winner: SELECTED },
+        ),
+        Err(Error::Representation(RepresentationError::AccountAlias))
+    );
+
+    // The same alias through the Structured custody Account and the Claims
+    // custody owner, which is what makes this the receipt-alias property and
+    // not one field's spot check.
+    for substitute in [
+        |value: &mut BearerAssetIdentityV2| value.structured_custody_account = id(4),
+        |value: &mut BearerAssetIdentityV2| value.claims_custody_owner = id(4),
+    ] {
+        let mut aliased = identity(id(41));
+        substitute(&mut aliased);
+        assert_eq!(
+            prepare(
+                bearer,
+                terminal,
+                projection,
+                aliased,
+                BearerResolutionV2::Resolved { winner: SELECTED },
+            ),
+            Err(Error::Representation(RepresentationError::AccountAlias))
+        );
+    }
+
+    // The actor shard Account still arrives on the wire, so it is still the
+    // substitution `authenticate_asset` itself refuses.
     let mut substituted_identity = identity(id(41));
     substituted_identity.actor_shard_account = id(45);
     assert_eq!(
