@@ -3046,3 +3046,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   operator `build_wallet_terminal_payout_v3` has never built an instruction any chain executed — the 12 payout tests
   hand-build the frame with no Trading in the bank → byte-identity comparison of the two builders first.
 - Cuts: `76a84c504`.
+
+### Lane map delta — 2026-09-02 17:30
+- GENERAL successor (`d3db8585`, `d5f988b4`, `1fee82fa`, `868a7f0c`): the width derivation's six throwaway banks are
+  phase-local — slope **528 → 384 B/outcome**, tail-reading actions' honest maximum **N = 13 → 30** (N=31 refuses `Content`
+  — the scratch allocator's "out of scratch" wants its own discriminant); batch flat at 50,516. The projection rotation is
+  minimal (the pairs are the preplan arena rented early) — premise refuted. OUTCOME note landed (6 → 5 is 64 B/outcome but
+  the register feeds the Claims affine-batch row; a wire question). **The input scratch page's producer cannot be written**
+  (the bank carries CURRENT_SLOT so a caller-written page is stale one slot later — proven by a control; 1,072 B does not fit a
+  packet; every reader requires it read-only). The defect: `classify_bank_transport_v2` classifies the RETURN-DATA bound and
+  Trading uses it for the INPUT transport; every bank fits inline in one CPI (≤ 8,192 vs 10,240) → **delete the requirement**;
+  inline input is being landed (four-artifact join, Lean-first). End state: inline input + the output page (ember's 0003).
+- Cuts: `08dfa60f9`.

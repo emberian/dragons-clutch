@@ -527,6 +527,7 @@ archive_revision() {
 tier_frameguard() {
   say "frameguard -- exact per-function SBF frame ratchet"
   local build_root="$repo_root" archive_root=""
+  local frame_source=()
   if [ -n "$commit_rev" ]; then
     local resolved
     resolved="$(cd "$repo_root" && git rev-parse --verify "$commit_rev^{commit}" 2>/dev/null)" || {
@@ -537,8 +538,13 @@ tier_frameguard() {
     note "measuring COMMIT $resolved (clean git archive)"
     archive_revision "$resolved" "$archive_root"
     build_root="$archive_root"
+    # The archive supplies the runner, checker and parser -- a commit measured
+    # by its own tools -- while `--at` hands the runner a source tree the
+    # repository can NAME, so the manifest records $resolved instead of nothing.
+    frame_source=(--at "$resolved")
   else
     note "measuring the working tree; use --commit HEAD for a quoteable ratchet run"
+    frame_source=(--source "$build_root")
   fi
 
   local dir="$build_root/tools/frameguard"
@@ -565,7 +571,7 @@ tier_frameguard() {
   # ("which commits since the baseline moved a frame") is about history, not
   # about the bytes being compiled.
   local code=0
-  (cd "$build_root" && bash "$dir/run.sh" --source "$build_root" --repo "$repo_root") || code=$?
+  (cd "$build_root" && bash "$dir/run.sh" "${frame_source[@]}" --repo "$repo_root") || code=$?
   case "$code" in
   0) record frameguard $EXIT_PASS ;;
   2) record frameguard $EXIT_PREREQ_MISSING "the exact frame measurement could not run (its exit 2)" ;;

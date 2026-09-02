@@ -172,7 +172,11 @@ if [ -n "$at" ]; then
     fi
     source_root="$worktree"
     printf 'frameguard: measuring commit %s in a detached worktree\n' "$measured_commit"
-elif [ -n "$repo_top" ]; then
+elif [ -n "$repo_top" ] && [ "$(cd "$source_root" && pwd -P)" = "$(cd "$repo_top" && pwd -P)" ]; then
+    # Only the repository's OWN working tree can be named by its HEAD. When
+    # `--source` points somewhere else -- an unpacked archive, say -- the live
+    # repository's cleanliness says nothing about the bytes being compiled, and
+    # reporting a dirty tree there would be a claim about the wrong directory.
     repo="$repo_top"
     dirty="$(git -C "$repo" status --porcelain --untracked-files=no)"
     if [ -n "$dirty" ]; then
@@ -188,9 +192,12 @@ elif [ -n "$repo_top" ]; then
         [ -n "$measured_commit" ] && printf 'frameguard: measuring clean HEAD %s\n' "$measured_commit"
     fi
 elif [ -n "$capture" ]; then
-    printf 'frameguard: REFUSING to capture from %s, which is not a git repository\n' "$repo" >&2
+    printf 'frameguard: REFUSING to capture from %s, which no repository names\n' "$source_root" >&2
     printf 'frameguard: a capture must name the commit it measured; use --repo DIR --at <commit>\n' >&2
     exit "$EXIT_PREREQ_MISSING"
+else
+    printf 'frameguard: measuring %s, which no repository names; the comparison names no commit\n' \
+        "$source_root"
 fi
 
 # --- the instrument, and the subject -----------------------------------------
