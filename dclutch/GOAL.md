@@ -2469,3 +2469,7 @@ digest; its own unit, for a lane with `formal/` authority and budget.
 
 - `af0d560c200fa8218` GENERAL — **closed, row exhausted pending others.** C-05 executes at both widths; every refusal names its conjunct; OpenBatch at `ProductIdentity`, blocked on the digest primitive (proposal handed to Direct) and the width-258 rows on the `BumpHeapV1` extraction (cleanups).
 - `a42033e11f655c7c5` C-10 WITNESS — thirteen unwitnessed retirement-chain routes; get the journey a market so L8 stops reporting `inapplicable`; bindings from observation only; undrivable → `blocked.json` with reason and owner.
+
+### Lane map delta — 20:55
+
+- `a84c8bf71f714d16c` CLEANUPS — **closed.** Five landed; the sixth (`BumpHeapV1` extraction) **built, measured, discarded by its own control** — a lifted heap ceiling turned a named OOM into an unnamed access violation because the grant never arrived. Artifacts preserved under `scratchpad/h6/`; the budget-forcing question is with General. Two generated registers now stale on my side (`docs/reference/refusals.md:291` spells `HeapFrameNotGranted`; `capabilitySurfaceV1` lists the deleted codec) — regenerate from a clean worktree at HEAD when the lanes quiesce.
