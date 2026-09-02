@@ -3502,3 +3502,21 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   instrument's count; census 95/95). Owed: six coreFound reads; the 700-line browser profile mirror's retirement.
   → CI-TARGETS **`(spawned)`**: measure the 80, wire the cheap ones into a budgeted tier, close the escape hatch.
 - Cuts: `9fd134161`.
+
+### 2026-09-02 18:45 EDT — THE FULL LIFECYCLE ON DEVNET
+- RESOLUTION-2 closed (`f56b1d2d8` `devnet-sponsored-push-v1 --action admit-terminal` — the builder was separable, the
+  command was not (four refusals); **Terminal at 95,854 CU**, winner 3; `31d09aed2` the Claims-role Custody replay's
+  missing public producer (fifth instance) — **the founder's 500,000,000 failure claims PAID through
+  `build_wallet_terminal_payout_v3` at 353,233 CU**, Hoard 500,000,000 → 0; participant-2's zero asserted from chain;
+  `62a0b7fb5` the sponsored-push input producer reproduces the hand-authored document in all 42 fields, the certificate-seat
+  prepay arm reads the rent sysvar; `66c78bf52` **the griefing window RETRACTED** — `normalize_authenticated_update` already
+  refuses a publish_time outside the window as ProviderWindow; what it uncovered instead: `cadence_tolerance_seconds` is
+  INERT on the two single-snapshot Pyth routes → PHASE-CENSUS (holds source-contract); `128394732` evidence, ledger to the
+  lamport: 0.0144 SOL, deployer unmoved). **Founded → activated → filled → settled → resolved → Terminal → paid: every stage
+  of a market's life has now run on devnet.** Browser redemption test RED at two measured bytes: the frame chunker splits
+  by 32 keys where the node's cap is 4 MiB (first chunk 5.27 MB); a Token-2022 ATA carries ImmutableOwner (170 B) and the
+  chain refuses every extension → REDEMPTION-UX **`(spawned)`**.
+- EMISSION's final correction: be488cdb is doc-only (Dealer lineage, told); dcfb7deb is 307 lines of real code across three
+  links (phase-census's scenario admission machine, told). Three attribution errors in one afternoon, all "a true statement
+  about one thing generalised to a pair" — the ratchet answers per commit. A `Lane:` trailer on lane.sh commits → CI-TARGETS.
+- Cuts: `d986da6b2`, `ba93e26e1`.
