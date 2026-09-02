@@ -434,6 +434,42 @@ async fn run(args: &RunArgs) -> Result<()> {
         })
         .collect();
 
+    // §4.11's refusal list includes a `deployment_slot` change, and that
+    // refusal is only worth anything if it outlives the process that made it.
+    // A restarted daemon with an empty map reads the upgraded slot as the first
+    // one it has ever seen and attests a program it had already refused, so
+    // every watcher is seeded from the newest artifact it published for its
+    // set. A refused cycle writes no artifact, so that artifact carries the
+    // last slot this daemon ACCEPTED, which is what the refusal compares
+    // against.
+    for watcher in &mut watchers {
+        let set_name = watcher.config().name.clone();
+        match artifacts.last_deployment_slots(&set_name)? {
+            Some(seeded) => {
+                for (key, slot) in &seeded.slots {
+                    watcher.seed_deployment_slot(*key, *slot);
+                }
+                println!(
+                    "set {set_name:?}: carried {} deployment_slot(s) forward from the artifact at \
+                     slot {}; an upgrade refused before this restart is still refused",
+                    seeded.slots.len(),
+                    seeded.observed_slot
+                );
+            }
+            None => {
+                // Named limit, said out loud rather than left to be inferred
+                // from silence: with no published artifact there is nothing to
+                // remember, so this set's first observation defines its
+                // baseline and a refusal cannot outlive this process.
+                println!(
+                    "set {set_name:?}: no published artifact to carry a deployment_slot forward \
+                     from; this set's first observation sets its baseline, and a redeploy \
+                     refused after it survives only as long as this process"
+                );
+            }
+        }
+    }
+
     let mut cycle_index = 0u32;
     loop {
         if args.cycles != 0 && cycle_index >= args.cycles {

@@ -53,9 +53,16 @@ fn pool_bytes() -> Vec<u8> {
 }
 
 fn programdata_bytes() -> Vec<u8> {
+    programdata_bytes_at(DEPLOYMENT_SLOT)
+}
+
+/// The same fixture at a chosen `deployment_slot`, so a redeploy can be served
+/// by a second mock instead of by mutating shared state a concurrent test can
+/// see.
+fn programdata_bytes_at(deployment_slot: u64) -> Vec<u8> {
     let mut bytes = vec![0u8; PROGRAMDATA_LEN];
     bytes[..4].copy_from_slice(&3u32.to_le_bytes());
-    bytes[4..12].copy_from_slice(&DEPLOYMENT_SLOT.to_le_bytes());
+    bytes[4..12].copy_from_slice(&deployment_slot.to_le_bytes());
     bytes[12] = 1;
     bytes[13..45].copy_from_slice(&[0x7Eu8; 32]);
     for (index, byte) in bytes.iter_mut().enumerate().skip(45) {
@@ -87,7 +94,7 @@ fn slice_of(full: &[u8], offset: usize, length: usize) -> Vec<u8> {
         .to_vec()
 }
 
-fn respond(request: &Value) -> Value {
+fn respond(request: &Value, deployment_slot: u64) -> Value {
     let method = request.get("method").and_then(Value::as_str).unwrap_or("");
     let params = request
         .get("params")
@@ -104,7 +111,7 @@ fn respond(request: &Value) -> Value {
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as usize;
             let pool = pool_bytes();
-            let programdata = programdata_bytes();
+            let programdata = programdata_bytes_at(deployment_slot);
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -132,7 +139,7 @@ fn respond(request: &Value) -> Value {
                 .and_then(|s| s.get("length"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as usize;
-            let programdata = programdata_bytes();
+            let programdata = programdata_bytes_at(deployment_slot);
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -157,6 +164,11 @@ fn respond(request: &Value) -> Value {
 
 /// A single-threaded loopback JSON-RPC server good enough for reqwest.
 async fn spawn_mock() -> String {
+    spawn_mock_at(DEPLOYMENT_SLOT).await
+}
+
+/// The same server serving a chosen `deployment_slot`.
+async fn spawn_mock_at(deployment_slot: u64) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("addr");
     tokio::spawn(async move {
@@ -200,7 +212,8 @@ async fn spawn_mock() -> String {
                         .get(body_start..body_start + content_length)
                         .unwrap_or(&[]);
                     let request: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-                    let response = serde_json::to_vec(&respond(&request)).expect("encode");
+                    let response =
+                        serde_json::to_vec(&respond(&request, deployment_slot)).expect("encode");
                     let head = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response.len()
@@ -433,5 +446,107 @@ async fn a_cluster_that_is_not_the_pinned_cluster_refuses_before_anything_is_sig
             dclutch_relayer::error::RelayerError::GenesisMismatch { .. }
         ),
         "{error:?}"
+    );
+}
+
+/// A redeploy refused before a restart is still refused after it.
+///
+/// `SetWatcher::seed_deployment_slot` existed for exactly this and had no
+/// caller, so a restarted daemon began with an empty map, read the upgraded
+/// `deployment_slot` as the first one it had ever seen, and attested a program
+/// whose pinned `elf_digest` it had already refused. The negative control is
+/// the load-bearing half: the same fresh watcher, against the same upgraded
+/// cluster, ACCEPTS when it is not seeded -- so the refusal below is the seed's
+/// doing and not something the fixture would have produced anyway.
+#[tokio::test]
+async fn a_redeploy_refused_before_a_restart_is_still_refused_after_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let key_path = dir.path().join("keys/attestation.json");
+    generate_keypair_file(&key_path, None).expect("keygen");
+    let signer = AttestationSigner::load(&key_path, None).expect("load");
+    let set = account_set();
+    let artifacts = ArtifactWriter::new(dir.path());
+
+    // Nothing published yet is the honest first-run answer, and it is what the
+    // daemon announces as its named limit rather than inferring from silence.
+    assert!(
+        artifacts
+            .last_deployment_slots(&set.name)
+            .expect("read")
+            .is_none(),
+        "an empty artifact root carries nothing forward"
+    );
+
+    // One accepted cycle against the pre-upgrade cluster, published.
+    let before = spawn_mock().await;
+    let rpc_before = RpcClient::new(&before, Duration::from_secs(5), None).expect("client");
+    let mut original = SetWatcher::new(set.clone(), CLUSTER, None, 448);
+    let cycle = original
+        .observe(&rpc_before, &[], &signer)
+        .await
+        .expect("the pre-upgrade cluster is attestable");
+    artifacts.write_cycle(&cycle).expect("write");
+
+    // The published artifact carries the accepted deployment slot, recovered
+    // from the manifest's inline ProgramData prefix rather than a state file.
+    let seeded = artifacts
+        .last_deployment_slots(&set.name)
+        .expect("read")
+        .expect("one cycle has been published");
+    assert_eq!(seeded.observed_slot, OBSERVED_SLOT);
+    assert_eq!(
+        seeded.slots,
+        vec![(PROGRAMDATA_KEY, DEPLOYMENT_SLOT)],
+        "only the Loader V3 ProgramData position carries a deployment slot"
+    );
+
+    // The program is redeployed: same account, new deployment_slot.
+    let upgraded = DEPLOYMENT_SLOT + 1;
+    let after = spawn_mock_at(upgraded).await;
+    let rpc_after = RpcClient::new(&after, Duration::from_secs(5), None).expect("client");
+
+    // NEGATIVE CONTROL: an unseeded restart accepts the upgrade. This is the
+    // defect, and it must be reproducible or the assertion below proves nothing.
+    let mut amnesiac = SetWatcher::new(set.clone(), CLUSTER, None, 448);
+    amnesiac
+        .observe(&rpc_after, &[], &signer)
+        .await
+        .expect("an unseeded restart cannot tell this is an upgrade, which is the bug");
+    assert!(
+        amnesiac.stopped_reason().is_none(),
+        "the unseeded watcher attested a program it had already refused"
+    );
+
+    // SUBJECT: a restart seeded from the published artifact refuses, and the
+    // refusal names both slots rather than only failing.
+    let mut restarted = SetWatcher::new(set.clone(), CLUSTER, None, 448);
+    for (key, slot) in &seeded.slots {
+        restarted.seed_deployment_slot(*key, *slot);
+    }
+    let error = restarted
+        .observe(&rpc_after, &[], &signer)
+        .await
+        .expect_err("a seeded restart must refuse the redeploy it already refused");
+    let reason = match &error {
+        dclutch_relayer::error::RelayerError::ObservationRefused { set: name, reason } => {
+            assert_eq!(name, &set.name);
+            reason.clone()
+        }
+        other => panic!("expected ObservationRefused, got {other:?}"),
+    };
+    assert!(
+        reason.contains(&format!(
+            "deployment_slot moved from {DEPLOYMENT_SLOT} to {upgraded}"
+        )),
+        "the refusal must name the two slots it compared: {reason}"
+    );
+    assert!(
+        reason.contains(&base58(&PROGRAMDATA_KEY)),
+        "the refusal must name the position: {reason}"
+    );
+    assert_eq!(
+        restarted.stopped_reason(),
+        Some(reason.as_str()),
+        "a refused set stays stopped"
     );
 }

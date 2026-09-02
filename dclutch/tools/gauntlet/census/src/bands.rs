@@ -23,6 +23,14 @@ use crate::{
 
 const REGISTRY_SOURCE: &str = "crates/dclutch-refusal-registry/src/lib.rs";
 
+/// The band table itself, which `DClutchSemantics.RefusalBandsV1` emits.
+///
+/// The census reads the SAME artifact the crate compiles rather than a second
+/// copy of the allocation, for the same reason it parses dispatch branches
+/// instead of a hand-kept list. This was `REGISTRY_SOURCE` until the table
+/// moved out of the crate's hand-written half and became generated.
+const REGISTRY_BANDS_SOURCE: &str = "crates/dclutch-refusal-registry/src/generated_bands.rs";
+
 /// The band table and the alias list, as the registry crate declares them.
 pub struct Allocation {
     pub bands: Vec<Band>,
@@ -71,9 +79,8 @@ fn array_elements(expr: &Expr) -> Option<&syn::punctuated::Punctuated<Expr, syn:
     }
 }
 
-/// Read the band allocation out of the registry crate under `root`.
-pub fn read(root: &Path) -> Result<Allocation, String> {
-    let path = root.join(REGISTRY_SOURCE);
+fn parse(root: &Path, relative: &str) -> Result<syn::File, String> {
+    let path = root.join(relative);
     let text = fs::read_to_string(&path).map_err(|error| {
         format!(
             "read {} (decision 0007 makes this crate the refusal-band authority; \
@@ -81,13 +88,24 @@ pub fn read(root: &Path) -> Result<Allocation, String> {
             path.display()
         )
     })?;
-    let file =
-        syn::parse_file(&text).map_err(|error| format!("parse {}: {error}", path.display()))?;
+    syn::parse_file(&text).map_err(|error| format!("parse {}: {error}", path.display()))
+}
+
+/// Read the band allocation out of the registry crate under `root`.
+///
+/// Two files, because the crate has two halves and only one of them is
+/// authored by hand: `generated_bands.rs` carries the emitted allocation --
+/// the span, the named bases and the `BANDS` table -- and `lib.rs` carries the
+/// hand-written `ALIASES`. The census reads the emitted table itself rather
+/// than a transcription of it, which is the same relation the crate has to it.
+pub fn read(root: &Path) -> Result<Allocation, String> {
+    let generated = parse(root, REGISTRY_BANDS_SOURCE)?;
+    let registry = parse(root, REGISTRY_SOURCE)?;
 
     let mut consts: BTreeMap<String, i64> = BTreeMap::new();
     let mut bands_expr = None;
     let mut aliases_expr = None;
-    for item in &file.items {
+    for item in generated.items.iter().chain(registry.items.iter()) {
         let Item::Const(konst) = item else {
             continue;
         };
@@ -103,7 +121,10 @@ pub fn read(root: &Path) -> Result<Allocation, String> {
         }
     }
 
-    let bands_expr = bands_expr.ok_or("the refusal registry declares no BANDS table")?;
+    let bands_expr = bands_expr.ok_or(
+        "the refusal registry declares no BANDS table in \
+         crates/dclutch-refusal-registry/src/generated_bands.rs",
+    )?;
     let elements =
         array_elements(&bands_expr).ok_or("the refusal registry's BANDS is not an array")?;
 
@@ -174,7 +195,7 @@ pub fn read(root: &Path) -> Result<Allocation, String> {
     Ok(Allocation {
         bands,
         aliases,
-        source: REGISTRY_SOURCE.to_string(),
+        source: REGISTRY_BANDS_SOURCE.to_string(),
     })
 }
 

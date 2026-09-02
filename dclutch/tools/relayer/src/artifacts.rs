@@ -27,8 +27,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::chain::programdata_deployment_slot;
 use crate::error::{RelayerError, Result};
-use crate::id32::{base58, to_hex};
+use crate::id32::{ID_BYTES, base58, to_hex};
 use crate::observe::{ObservationCycle, TailDigestSource};
 use crate::publog::wall_unix_seconds;
 
@@ -112,6 +113,116 @@ impl ArtifactWriter {
         write_bytes(&dir.join("seal.sig"), &cycle.seal_signature)?;
         write_json(&manifest_path, &manifest)?;
         Ok(dir)
+    }
+}
+
+/// What the last published cycle knew about Loader V3 deployment slots.
+///
+/// [`SetWatcher::seed_deployment_slot`] exists so a restart does not silently
+/// forget an upgrade it had already refused, and until this it had no caller:
+/// a restarted daemon began with an empty map, read the upgraded
+/// `deployment_slot` as the first one it had ever seen, and attested a program
+/// whose pinned `elf_digest` it had already refused. This is the value that
+/// closes it, and it is read back out of the daemon's own published artifact
+/// rather than a new state file, because the artifact already carries it: the
+/// manifest records each position's exact inline `ProgramData` prefix, and the
+/// deployment slot is a field of that prefix.
+///
+/// The reading is sound in the direction that matters. A refused cycle writes
+/// no artifact -- the daemon stops attesting the set -- so the newest
+/// directory holds the last slot the daemon *accepted*, which is exactly the
+/// value the refusal compares against.
+///
+/// [`SetWatcher::seed_deployment_slot`]: crate::observe::SetWatcher::seed_deployment_slot
+#[derive(Clone, Debug)]
+pub struct SeededDeploymentSlots {
+    /// The `observed_slot` of the artifact directory this came from.
+    pub observed_slot: u64,
+    /// Each Loader V3 `ProgramData` position and the deployment slot last
+    /// published for it.
+    pub slots: Vec<([u8; ID_BYTES], u64)>,
+}
+
+impl ArtifactWriter {
+    /// Recover the deployment slots the newest published cycle for `set_name`
+    /// carried, or `None` when this set has never published one.
+    ///
+    /// `None` is the honest first-run answer and the daemon must say so out
+    /// loud, because it is also the state a wiped `output_dir` produces: with
+    /// no artifact there is nothing to remember, and a refusal cannot outlive
+    /// the process that made it.
+    ///
+    /// A manifest that exists and does not parse is a hard error rather than a
+    /// fallback to `None`. Starting amnesiac is the precise defect this closes,
+    /// so it may not be reached by a quiet failure -- a daemon that cannot read
+    /// its own last artifact refuses to start.
+    pub fn last_deployment_slots(&self, set_name: &str) -> Result<Option<SeededDeploymentSlots>> {
+        let set_dir = self.root.join(set_name);
+        let Ok(entries) = std::fs::read_dir(&set_dir) else {
+            return Ok(None);
+        };
+        let mut latest: Option<(u64, PathBuf)> = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(slot) = name
+                .strip_prefix("slot-")
+                .and_then(|digits| digits.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            let newer = match &latest {
+                Some((seen, _)) => slot > *seen,
+                None => true,
+            };
+            if newer {
+                latest = Some((slot, path));
+            }
+        }
+        let Some((observed_slot, dir)) = latest else {
+            return Ok(None);
+        };
+        let path = dir.join("manifest.json");
+        let refuse =
+            |reason: String| RelayerError::Serialization(format!("{}: {reason}", path.display()));
+        let text =
+            std::fs::read_to_string(&path).map_err(|source| RelayerError::io(&path, source))?;
+        let manifest: serde_json::Value =
+            serde_json::from_str(&text).map_err(|source| refuse(source.to_string()))?;
+        let positions = manifest
+            .get("positions")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| refuse("no positions array".to_owned()))?;
+        let mut slots = Vec::new();
+        for position in positions {
+            let key_hex = position
+                .get("key_hex")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| refuse("a position has no key_hex".to_owned()))?;
+            let inline_hex = position
+                .get("inline_hex")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| refuse(format!("position {key_hex} has no inline_hex")))?;
+            let key: [u8; ID_BYTES] = hex::decode(key_hex)
+                .ok()
+                .and_then(|bytes| <[u8; ID_BYTES]>::try_from(bytes.as_slice()).ok())
+                .ok_or_else(|| refuse(format!("key_hex {key_hex} is not 32 hex bytes")))?;
+            let inline = hex::decode(inline_hex)
+                .map_err(|_| refuse(format!("position {key_hex} has non-hex inline_hex")))?;
+            // A position the config does not pin as Loader V3 ProgramData never
+            // reaches the watcher's deployment-slot map, so a prefix that
+            // happens to decode here and is not one costs nothing. The gate is
+            // the config's, and it is not restated.
+            if let Some(slot) = programdata_deployment_slot(&inline) {
+                slots.push((key, slot));
+            }
+        }
+        Ok(Some(SeededDeploymentSlots {
+            observed_slot,
+            slots,
+        }))
     }
 }
 

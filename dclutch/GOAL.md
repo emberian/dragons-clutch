@@ -2834,3 +2834,21 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - WEB `8baf2c9f`: **14 type errors → 0**; the browser could never have submitted a trade (SDK lacked sendRawTransaction).
   DIRECT `ec451bbd`: fee completion executed for days and read NEVER-EXECUTED because nothing bound it.
 - Cuts: `929eaa683`, `b1e05164d`.
+
+### Lane map delta — 2026-09-02 08:15
+- RIP `ae0b9b375646fb099` closed (5 commits): `d3ca2bec` **the relayer's refusal survives a restart** (seeded from the
+  artifact manifest it already writes; unseeded control accepts the refused upgrade). Census gate green again with the
+  preimage check (`3c0cf2d7` by EMISSION fixed bands.rs): 380 codes / 26 bands / 270 magics / 99 of 99 identities / 167 routes.
+  Five vertical-slice gaps (live routes, operator builder, no campaign) → SLICES **`ae6c830801525563c`** (claim-check
+  redemption + escrow close; dealer checkpoint rollback + custody rollback; delegated custody).
+- DEALER `a929bd24b931c8297` closed: finalization is one-way (`7e135a7d`, Registry's four verbs); the flag belongs in the
+  activation cache (70 → 46 locks). C-06 waits on the channel ruling (`afe080030dc5b0ada`). `frontier.rs` red at HEAD
+  (`Break::RootPrestate` 0x4001 vs asserted 0x4002) — unowned.
+- DIRECT `db4d5ff4`: the +6,233 bisects to `5de38ef2` — nine lines, eight comments, one empty macro moved the margin
+  statistic by 4,836 → **the gate's key-independence claim is false** (a relink moves it through the release-set digest that
+  seeds capability addresses; the eighth search is uncounted). Not pinned. Repairing the instrument, then the C-09 harness
+  extension (Trading + Claims loaded; a Direct root resolved on real ELFs), then redemption through real Trading.
+- GENERAL `c291f7a3`: heap = 59,376 + 528·(N−2), 480 of 528 is repetition across eleven full-width banks; OpenBatch reads no
+  item tail → stride 0 makes N=258 cost what N=2 costs; OUTCOME is a second author (13 writers, always the index).
+  Frameguard recaptured (`afa556f3`), gate runs again.
+- Cuts: `d504d189f`, `ea37964a3`, `7968cae29`.
