@@ -170,3 +170,94 @@ route's account layout, the bundle builders, `admitted_composition_v3`'s
 accelerator coordinates, and `apps/dclutch-web`. What this answers is only that
 the per-action half needs no new persisted fact and no re-activation to become
 sound — which was the half the document could not price.
+
+## Superseded: the frame move is not how these six locks come off
+
+*Appended by the Dealer lane, 2026-09-02, from a measurement.*
+
+Everything above about the per-ACTION six is right and its premise holds. What
+it got wrong is the price. This document treats "the six coordinates leave
+`HOT_FIXED_ACCOUNT_COUNT_V3`" as the necessary cost -- 209 references over
+60-odd files, every family's account layout, both TypeScript trees. **That
+frame move is not required to remove the locks, and it should not be done for
+this reason.** The mechanism that removes them already exists, is already
+authenticated, and is already shipping.
+
+`hot_v3.rs` carries `SEALED_EXECUTION_FIXED_ALIASES_V3`,
+`validate_hot_fixed_alias_shape_v3`, and
+`HotFixedFrameV3::uses_sealed_execution_aliases`, and `hot_v3/seal.rs`'s
+`require_sealed_record_coordinates_v1` takes a `direct_alias_shape` flag. In
+that shape each of the six staging coordinates carries **its own raw record
+again** instead of the vacant cursor, so the transaction locks one account per
+record rather than two -- and the conjunct it stops re-observing is precisely
+the one this document proves is already durably recorded by the seal. The
+coordinate stays in the frame; only the lock goes away. Direct ordinary
+execution has been submitting exactly this shape.
+
+Nothing scopes it to Direct except one exact-equality family gate in
+`authenticate_and_execute_hot_v3`, which compares
+`frame.uses_sealed_execution_aliases()` against
+`kind == DIRECT_SUCCESSOR_KIND_ID_V3 && action == InlineOrdinary`. Widening
+that predicate to the Dealer kind is the whole of the on-chain intent.
+
+### The measurement
+
+Real ELFs, `dealer-accelerator-sbf/program-test/tests/accepted.rs`, the frame
+built with the six per-action staging coordinates aliased onto their raw
+records:
+
+| row | before | after |
+| --- | --- | --- |
+| LP-hot | 54 unique locks | **48**, measured |
+| equity Add (selector 1) | 70 unique locks | **64**, by the same six |
+
+Minus six exactly, which is what the arithmetic requires: the frame is proven
+duplicate-free by `validate_hot_fixed_alias_shape_v3`, so each of the six
+staging PDAs contributes exactly one distinct key and aliasing removes exactly
+six. 64 is the devnet ceiling
+(`dclutch_operator::dealer_scenario_hot_v4::SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1`),
+so selector 1 reaches it with no headroom, and the per-ROOT and per-STRATEGY
+cursors this document also names are where any further margin has to come from.
+
+### Two blockers, both measured, neither previously known
+
+The alias shape is not free for the Dealer family, because the Dealer family
+reaches its accelerator and the Direct family does not.
+
+1. **`HotFrameV3::parse_accelerator_readonly` carried its own bare pairwise
+   distinctness loop** instead of calling `validate_hot_fixed_alias_shape_v3`.
+   That copy is the strictly older rule -- it refuses the alias shape the
+   shared authority exists to admit -- and since every AdmittedAot family
+   reaches its accelerator through that function, the duplicate silently
+   confined the alias shape to families that never take the path. Replacing the
+   loop with the call is both the fix and one fewer parallel authority.
+
+2. **`admitted_composition_v3::require_record_pair` refuses the aliased
+   descriptor pair**, because it derives the staging-cursor PDA and compares.
+   Convicted, not read: with the gate widened and blocker 1 fixed, LP Open
+   refuses `Custom(16407)` = `0x4017 AdmittedFrame`. The shape bit has to reach
+   that validator -- through `AdmittedCpiFrameV3`, whose accelerator-side parse
+   must carry it too -- so the descriptor pair admits `staging == raw` exactly
+   when the family does. Note that
+   `execution_strategy_v2::authenticate_common_frame_with_sealed_capability_pair`
+   ALREADY handles both shapes (`let capability_is_aliased = raw.key ==
+   staging.key`), which is the evidence that the mechanism was built general
+   and only this one validator was left behind.
+
+### What is still owed
+
+The on-chain half above; `DEALER_KIND_ID_V2` as a pinned literal beside
+`DEALER_KIND_PREIMAGE_V2`; the producers writing the raw key into the six
+staging slots (the campaign's is one loop in the bundle builder, and the frame
+SHAPE has to come from one declaration both the executor and the builders
+read); eleven hard-coded lock-count assertions in the operator crate re-pinned
+from runs rather than edited to taste; the TypeScript projector in both trees,
+which today would render an aliased frame as one address printed twice; and the
+existing sealed-execution-alias hostile extended to the Dealer kind. Two ELFs,
+both owing frame rows. It is one green series or it is nothing: the gate
+compares with `!=`, so a producer and an executor that disagree about the shape
+refuse in either direction.
+
+A partial implementation is saved at
+`unit2-sealed-alias-partial.patch` in the lane scratchpad; it is deliberately
+unlanded, because a half-landed frame shape breaks the family it half-lands in.

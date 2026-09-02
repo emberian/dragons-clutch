@@ -92,7 +92,7 @@ mod tests {
             DealerObligationProjectionV3,
         },
         v3_trade::{
-            DEALER_SCENARIO_TRADE_HEADER_BYTES_V3, ScenarioTradeDirectionV3,
+            DEALER_SCENARIO_TRADE_HEADER_BYTES_V4, ScenarioTradeDirectionV3,
             build_scenario_trade_request_v3, scenario_trade_max_request_bytes_v3,
         },
     };
@@ -249,7 +249,7 @@ mod tests {
         let v4 = build_scenario_trade_request_v4(chain, intent, set, exact, &mut v4_output)
             .expect("schema-bound request");
 
-        assert!(v4.request_bytes() > DEALER_SCENARIO_TRADE_HEADER_BYTES_V3);
+        assert!(v4.request_bytes() > DEALER_SCENARIO_TRADE_HEADER_BYTES_V4);
         assert_eq!(v4.selected_descriptor(), exact);
         assert_eq!(v4.request_bytes(), v3.request_bytes);
         assert_eq!(

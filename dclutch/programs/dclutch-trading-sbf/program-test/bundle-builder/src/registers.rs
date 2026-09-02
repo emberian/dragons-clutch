@@ -451,6 +451,13 @@ pub(crate) fn run_engine_with_admitted_candidate(
         }
         .map_err(|error| {
             std::eprintln!("account projection kernel refused: {error:?}");
+            // The kernel names the RULE it broke and not the coordinates that
+            // broke it, and for the alias rules that is the whole question:
+            // `CrossItemAlias` says two distinct representatives share a key
+            // without saying which two, and the frame here is fifty-odd
+            // coordinates wide. Re-deriving the partition costs nothing on the
+            // host and turns one word into a pair of coordinates.
+            report_alias_partition_collisions(profile, tail_count, span_counts, &observations);
             BuilderError::Projection("account-projection")
         })?;
     }
@@ -728,6 +735,56 @@ pub(crate) fn run_engine_with_admitted_candidate(
     })
 }
 
+/// Name every pair of DISTINCT representatives that observed the same key.
+///
+/// `AccountProfileV2`'s alias rules refuse when two coordinates that the
+/// profile says are separate accounts turn out to be one. The kernel refuses
+/// with `CrossItemAlias` and no coordinates, so this walks the same partition
+/// the kernel walked and prints the pairs -- which is the difference between
+/// "the frame aliases somewhere" and "coordinate 19 and coordinate 33 are both
+/// the Core Market".
+fn report_alias_partition_collisions(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    observations: &[AccountObservationV1<'_>],
+) {
+    let mut found = false;
+    for (coordinate, account) in observations.iter().enumerate() {
+        let Ok(representative) =
+            profile_ops::representative(profile, tail_count, span_counts, coordinate)
+        else {
+            continue;
+        };
+        if representative != coordinate {
+            continue;
+        }
+        for (prior, other) in observations
+            .get(..coordinate)
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+        {
+            if other.key() != account.key() {
+                continue;
+            }
+            if profile_ops::representative(profile, tail_count, span_counts, prior) == Ok(prior) {
+                found = true;
+                std::eprintln!(
+                    "alias-partition collision: coordinates {prior} and {coordinate} are \
+                     distinct representatives holding one key {:?}",
+                    account.key()
+                );
+            }
+        }
+    }
+    if !found {
+        std::eprintln!(
+            "no two distinct representatives share a key; the refusal is another alias rule"
+        );
+    }
+}
+
 const fn prestate_uses_variable_marker(prestate: AccountPrestateV2) -> bool {
     matches!(
         prestate,
@@ -1001,22 +1058,33 @@ pub fn derive_dynamic_span_geometry(
             // disposition is a strategy defect, and a second selector nothing
             // writes is a profile defect. `hot_v3` publishes one `Content` for
             // all three; the builder is a diagnostic and can afford to say.
-            std::eprintln!(
-                "dynamic fixed span {index} is written by no request operation: \
-                 count_scalar={} insertion_coordinate={} effect_owned={effect_owned} \
-                 disposition={disposition:?} transport_span_already_taken={}",
-                span.count_scalar(),
-                span.insertion_coordinate(),
-                transport_span.is_some(),
-            );
-            if effect_owned {
-                return Err(BuilderError::Spans("effect-span-unwritten-selector"));
-            }
-            if disposition != StrategyDispositionV2::AdmittedAot {
-                return Err(BuilderError::Spans("unowned-span-disposition"));
-            }
-            if transport_span.is_some() {
-                return Err(BuilderError::Spans("second-transport-span"));
+            //
+            // A selector nothing writes is NOT yet an error: it is how the
+            // sole AccountProfile-only scratch-transport span is spelled, and
+            // that span is admitted a few lines below. So the diagnostic is
+            // owed to the refusing cases only -- printing it for the transport
+            // span made every healthy AdmittedAot run report a defect it did
+            // not have.
+            let refusal = if effect_owned {
+                Some("effect-span-unwritten-selector")
+            } else if disposition != StrategyDispositionV2::AdmittedAot {
+                Some("unowned-span-disposition")
+            } else if transport_span.is_some() {
+                Some("second-transport-span")
+            } else {
+                None
+            };
+            if let Some(refusal) = refusal {
+                std::eprintln!(
+                    "dynamic fixed span {index} is written by no request operation and is not \
+                     the scratch-transport span: {refusal} (count_scalar={}, \
+                     insertion_coordinate={}, effect_owned={effect_owned}, \
+                     disposition={disposition:?}, transport_span_already_taken={})",
+                    span.count_scalar(),
+                    span.insertion_coordinate(),
+                    transport_span.is_some(),
+                );
+                return Err(BuilderError::Spans(refusal));
             }
             require_trailing_profile_only_span(profile, span)?;
             let page_count = transport_page_count.ok_or(BuilderError::Spans("inline-bank"))?;

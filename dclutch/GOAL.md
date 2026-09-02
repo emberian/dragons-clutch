@@ -3383,3 +3383,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   scratchpad held 235 GB of closed lanes' targets and worktrees — removed (53 → 246 GiB free); kept `c13-recov` (reserved for
   the resolution lane) and three worktrees carrying UNCOMMITTED work from closed lanes: `seal-wt`, `wire2`, `wt-structured`
   under `…/3db4cac9…/scratchpad/` — to be read, not swept.
+
+### Lane map delta — 2026-09-02 15:45 EDT
+- DEALER closed (`27c1cb3d`, `f5d4912e`, `7cb080d2`, `f7754ece`): **selector 9's request declares the frame it executes in** —
+  the six {0,14} Custody route-span counts at 384..389 (header `_BYTES_V4`, version 5; `scenario_route_span_counts_v3` derived
+  once; the trade header has NO Lean owner — Rust is its author, an emission debt); all nine spans pass; the wall is now the
+  account projection: `CrossItemAlias` at 16/28 … 20/32 — five roles the Claims fixed frame and a runtime Custody span both
+  name — selector 9's AccountProfile declares no cross-frame alias partition. Unit 2 documented as superseded (7cb080d2): the
+  seal-backed alias shape reaches LP-hot 48 / equity Add 64 without moving the frame; partial patch saved.
+  → DEALER **`a4e108c1118546d0d`**: the dynamic-span-aware alias partition, then unit 2 from the patch as one series.
+- The three "dirty" worktrees kept earlier were pre-landing snapshots (every changed file identical to or behind main) —
+  removed; 251 GiB free.
+- Cuts: `e328bc44f`, `c8638b219`, `213ac7589`, `40700d238`.

@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "318fc1a61bcab8e6ff6bdfd8bfe69118023f5bb5",
+  "commit": "f5d4912eab7d8fc3ccda8467f85bb41a89b9d998",
   "link_count": 12,
   "links": [
     {
@@ -6100,7 +6100,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 951,
+      "frame_count": 952,
       "functions": [
         {
           "frames_bytes": [
@@ -7484,7 +7484,7 @@
         },
         {
           "frames_bytes": [
-            1216
+            1280
           ],
           "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v127prepare_claims_authority_v117h<hash>E"
         },
@@ -8762,13 +8762,13 @@
         },
         {
           "frames_bytes": [
-            1920
+            2176
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer18v3_trade_artifacts41authenticate_dealer_scenario_artifacts_v417h<hash>E"
         },
         {
           "frames_bytes": [
-            832
+            1280
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer18v3_trade_artifacts41encode_dealer_scenario_request_profile_v417h<hash>E"
         },
@@ -9116,7 +9116,7 @@
         },
         {
           "frames_bytes": [
-            1472
+            1536
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer8v3_trade28DealerScenarioTradeRequestV36decode17h<hash>E"
         },
@@ -9137,6 +9137,12 @@
             64
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer8v3_trade29derive_counterparty_poststate17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer8v3_trade29scenario_route_span_counts_v317h<hash>E"
         },
         {
           "frames_bytes": [

@@ -76,8 +76,9 @@ use super::{
     v3_trade::{
         DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
         DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3,
-        DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3, DEALER_SCENARIO_TRADE_HEADER_BYTES_V3,
+        DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3, DEALER_SCENARIO_TRADE_HEADER_BYTES_V4,
         DEALER_SCENARIO_TRADE_MAGIC_V3, DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3,
+        DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4,
         DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3, DEALER_SCENARIO_TRADE_VERSION_V3,
     },
 };
@@ -189,7 +190,13 @@ const DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4: usize = 6
     + 2 * 7
     + 2;
 
-const REQUEST_PROFILE_OPERATIONS_V4: usize = 10;
+// Ten header projections plus the six optional-Custody route-span counts.
+// The six are what make selector 9 authenticable at all: every EffectV4 span
+// selector must be written by a request operation, and until these existed the
+// six `{0, 14}` spans on common scalars 7..12 were written only by the admitted
+// candidate, which `authenticate_dynamic_span_widths_v3` runs before and does
+// not trust.
+const REQUEST_PROFILE_OPERATIONS_V4: usize = 16;
 const REQUEST_PROFILE_V1_BYTES_V4: usize = dclutch_request_profile_contract::HEADER_BYTES
     + REQUEST_PROFILE_OPERATIONS_V4 * dclutch_request_profile_contract::OPERATION_BYTES;
 /// Exact selector-9 RequestProfile V3 bytes.
@@ -296,6 +303,12 @@ pub fn encode_dealer_scenario_request_profile_v4(
             RequestCoordinateV1::fixed(112),
             IdentityRegisterV1::common(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
         ),
+        route_span_instruction(0)?,
+        route_span_instruction(1)?,
+        route_span_instruction(2)?,
+        route_span_instruction(3)?,
+        route_span_instruction(4)?,
+        route_span_instruction(5)?,
     ];
     let item_instructions = [RequestInstructionV1::project_u64(
         RequestCoordinateV1::item(0),
@@ -305,7 +318,7 @@ pub fn encode_dealer_scenario_request_profile_v4(
     let mut embedded = [0_u8; REQUEST_PROFILE_V1_BYTES_V4];
     encode_request_profile_v1_atomic(
         RequestGeometryV1::new(
-            u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
                 .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
             8,
             DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
@@ -352,7 +365,7 @@ pub fn encode_dealer_scenario_transition_v4(
     let instructions = [
         InstructionV3::load_const(
             ScalarRegisterV3::common(DEALER_SCENARIO_WITNESS_OFFSET_SCALAR_V4),
-            u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
                 .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
         ),
         InstructionV3::nonzero(ScalarRegisterV3::common(
@@ -726,6 +739,29 @@ fn scenario_custody_route(slot: usize) -> Result<u16, DealerScenarioArtifactsErr
         4 | 5 => u16::try_from(slot + 1).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic),
         _ => Err(DealerScenarioArtifactsErrorV4::Effect),
     }
+}
+
+/// Project one declared optional-Custody route-span count into its selector.
+///
+/// The request byte and the EffectV4 span selector are derived from the SAME
+/// two constants -- `DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4` and
+/// `DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4` -- so the operation that writes
+/// scalar `7 + slot` and the span that reads it cannot be given different
+/// slots.
+fn route_span_instruction(
+    slot: usize,
+) -> Result<RequestInstructionV1, DealerScenarioArtifactsErrorV4> {
+    Ok(RequestInstructionV1::project_u8(
+        RequestCoordinateV1::fixed(
+            u32::try_from(
+                DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4
+                    .checked_add(slot)
+                    .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?,
+            )
+            .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+        ),
+        ScalarRegisterV1::common(scenario_route_span_scalar(slot)?),
+    ))
 }
 
 fn scenario_route_span_scalar(slot: usize) -> Result<u16, DealerScenarioArtifactsErrorV4> {
@@ -1196,7 +1232,7 @@ fn seed_scenario_projection_header_v4(
     set_scenario_scalar(
         staged_scalars,
         DEALER_SCENARIO_WITNESS_OFFSET_SCALAR_V4,
-        u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+        u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
             .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
     )?;
     set_scenario_scalar(
@@ -1545,7 +1581,7 @@ pub fn encode_dealer_scenario_effect_program_v4(
         BorrowedRangeV4::new(
             SEMANTIC_RANGE_ROUTE_V4,
             RequestCoordinateV4::Fixed(
-                u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+                u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
                     .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
             ),
             RequestCoordinateV4::ProductTailAffine { base: 0, stride: 8 },
@@ -1553,7 +1589,7 @@ pub fn encode_dealer_scenario_effect_program_v4(
         BorrowedRangeV4::new(
             DEALER_SCENARIO_CLAIMS_ROUTE_V4,
             RequestCoordinateV4::ProductTailAffine {
-                base: u16::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+                base: u16::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
                     .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
                 stride: 8,
             },
@@ -1563,7 +1599,7 @@ pub fn encode_dealer_scenario_effect_program_v4(
     encode_program_v4_atomic(
         base_program,
         BorrowedRangePolicyV4::DisjointExactCoverage,
-        u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+        u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
             .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
         &spans,
         &ranges,
@@ -1614,7 +1650,7 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
         .map_err(|_| DealerScenarioArtifactsErrorV4::Effect)?;
     validate_base_effect(effect.base().bytes())?;
     if request.request_profile().fixed_request_bytes()
-        != u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+        != u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
             .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?
         || request.request_profile().item_request_bytes() != 8
         || request.request_profile().common_scalar_count() != DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4
@@ -1656,7 +1692,7 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
     *scalars
         .get_mut(usize::from(DEALER_SCENARIO_WITNESS_OFFSET_SCALAR_V4))
         .ok_or(DealerScenarioArtifactsErrorV4::Effect)? =
-        u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+        u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
             .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?;
     let mut coverage_scalars = vec![0_u64; scalars.len() + 1];
     coverage_scalars
@@ -1665,7 +1701,7 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
         .copy_from_slice(scalars);
     effect
         .validate_request_coverage(
-            DEALER_SCENARIO_TRADE_HEADER_BYTES_V3
+            DEALER_SCENARIO_TRADE_HEADER_BYTES_V4
                 .checked_add(8)
                 .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?
                 .checked_add(
@@ -1977,7 +2013,7 @@ mod tests {
             );
             assert_eq!(
                 program.validate_request_coverage(
-                    DEALER_SCENARIO_TRADE_HEADER_BYTES_V3
+                    DEALER_SCENARIO_TRADE_HEADER_BYTES_V4
                         + usize::try_from(tail_count).expect("bounded") * 8
                         + usize::try_from(witness).expect("bounded"),
                     tail_count,
@@ -2221,12 +2257,16 @@ mod tests {
             decoded.witness_policy().consumer_role,
             BorrowedWitnessRoleV3::Claims
         );
-        assert_eq!(decoded.request_profile().fixed_request_bytes(), 384);
+        assert_eq!(
+            usize::try_from(decoded.request_profile().fixed_request_bytes()).expect("bounded"),
+            DEALER_SCENARIO_TRADE_HEADER_BYTES_V4
+        );
         assert_eq!(decoded.request_profile().item_request_bytes(), 8);
 
         let witness = usize::try_from(dealer_scenario_witness_bounds_v4().expect("bounds").0)
             .expect("bounded");
-        let mut family_request = vec![0_u8; 384 + 2 * 8 + witness];
+        let mut family_request =
+            vec![0_u8; DEALER_SCENARIO_TRADE_HEADER_BYTES_V4 + 2 * 8 + witness];
         family_request
             .get_mut(..8)
             .expect("request offset in bounds")
@@ -2260,16 +2300,25 @@ mod tests {
             .get_mut(112..144)
             .expect("request offset in bounds")
             .copy_from_slice(&[7; 32]);
-        family_request
-            .get_mut(384..392)
-            .expect("request offset in bounds")
-            .copy_from_slice(&11_u64.to_le_bytes());
+        // Two live optional-Custody routes, declared where the executor carves
+        // the frame from; then the candidate-obligation vector, eight bytes
+        // later than it used to sit.
+        *family_request
+            .get_mut(DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4 + 3)
+            .expect("request offset in bounds") = 14;
+        *family_request
+            .get_mut(DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4 + 5)
+            .expect("request offset in bounds") = 14;
         family_request
             .get_mut(392..400)
             .expect("request offset in bounds")
-            .copy_from_slice(&29_u64.to_le_bytes());
+            .copy_from_slice(&11_u64.to_le_bytes());
         family_request
             .get_mut(400..408)
+            .expect("request offset in bounds")
+            .copy_from_slice(&29_u64.to_le_bytes());
+        family_request
+            .get_mut(408..416)
             .expect("request offset in bounds")
             .copy_from_slice(&SIGNED_DELTA_PLAN_MAGIC_V3);
         let scalar_count = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4) + 2;

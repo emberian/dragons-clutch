@@ -33,6 +33,7 @@ use super::{
         EquityClaimsContextV3, EquityClaimsTransitionV3, equity_claims_geometry_v3,
         validate_equity_claims_packet_v3,
     },
+    v3_hot_artifact::DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3,
     v3_obligation::{
         DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3, obligation_account_bytes_v3,
         scenario_obligation_replacement_digest_v3, stage_scenario_obligation_replacement_v3,
@@ -44,16 +45,58 @@ use super::v3_equity_claims::encode_equity_claims_packet_v3;
 
 /// Canonical exact-fill request magic.
 pub const DEALER_SCENARIO_TRADE_MAGIC_V3: [u8; 8] = *b"DCLDST03";
-/// Successor exact-fill request version carrying one canonical Claims packet
-/// and the exact readonly evidence width required before admitted evaluation.
-pub const DEALER_SCENARIO_TRADE_VERSION_V3: u16 = 4;
+/// Successor exact-fill request version carrying one canonical Claims packet,
+/// the exact readonly evidence width required before admitted evaluation, and
+/// the six optional-Custody route-span counts the frame is carved from.
+///
+/// Version 5, not 4: the header grew, so a request built by an older encoder
+/// is a different shape and must refuse at `decode` rather than be read with
+/// its fields eight bytes out of place.
+pub const DEALER_SCENARIO_TRADE_VERSION_V3: u16 = 5;
 /// Family-neutral CapabilityProgramSet selector offset.
 pub const DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3: u32 = 10;
 /// Exact fixed header before the `u64[N]` candidate and SignedDeltaV3 witness.
-pub const DEALER_SCENARIO_TRADE_HEADER_BYTES_V3: usize = 384;
+///
+/// 392 and not 384, and the name carries `_V4` for exactly that reason: this
+/// is a POSITION, and a position that moves must not keep its old name, or a
+/// consumer that was not updated goes on compiling against a value that is now
+/// wrong. Everything downstream of the header derives from this constant, so
+/// renaming it is what makes the eight new bytes a compile error everywhere
+/// they matter instead of a silent eight-byte shift.
+pub const DEALER_SCENARIO_TRADE_HEADER_BYTES_V4: usize = 392;
 /// First exact candidate-obligation `u64` after the fixed header.
-pub const DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3: usize =
-    DEALER_SCENARIO_TRADE_HEADER_BYTES_V3;
+pub const DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4: usize =
+    DEALER_SCENARIO_TRADE_HEADER_BYTES_V4;
+/// First of the six exact optional-Custody route-span counts.
+///
+/// THE REQUEST IS THE AUTHOR OF THE FRAME'S SHAPE, and these six bytes are why.
+/// `hot_v3::authenticate_dynamic_span_widths_v3` carves the account frame from
+/// the widths it can project out of the family request BEFORE any account is
+/// expanded, and it requires every EffectV4 span selector to be one a request
+/// operation writes. Selector 9 declares six `{0, 14}` optional-Custody spans
+/// on common scalars 7..12; until this field existed nothing in the request
+/// wrote them, the counts were produced only by the admitted candidate -- which
+/// runs later and is UNTRUSTED -- and the action could not be authenticated at
+/// all. Declaring them here does not weaken the check: the frame is carved from
+/// the declaration and `require_dynamic_span_values_v3` then requires the final
+/// transition scalars to reproduce exactly these widths, so a request that lies
+/// about its own shape refuses after execution instead of being believed.
+pub const DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4: usize = 384;
+/// Exact number of optional Custody routes selector 9 can enable.
+pub const DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4: usize = 6;
+/// Two reserved bytes keeping the candidate-obligation vector `u64`-aligned.
+const DEALER_SCENARIO_TRADE_RESERVED_OFFSET_V4: usize = 390;
+const DEALER_SCENARIO_TRADE_RESERVED_BYTES_V4: usize = 2;
+/// One enabled optional Custody route's exact account width, as a request byte.
+///
+/// Pinned to the frame constant that decides it rather than restated: the span
+/// admits `{0, DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3}` and nothing else, so
+/// if that width ever moves this assertion is what goes red.
+const DEALER_SCENARIO_TRADE_ROUTE_SPAN_WIDTH_V4: u8 = 14;
+const _: () = assert!(
+    DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 as usize
+        == DEALER_SCENARIO_TRADE_ROUTE_SPAN_WIDTH_V4 as usize
+);
 /// Fixed-header routing coordinate for the Claims Position-table width.
 pub const DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3: usize = 377;
 /// Fixed-header routing coordinate for the conditional Dealer Position
@@ -155,12 +198,15 @@ pub struct DealerScenarioTradeRequestV3<'a> {
     pub evidence_span_count: u8,
     /// Exact borrowed SignedDeltaV3 packet width.
     pub claims_packet_bytes: u32,
+    /// Exact `{0, 14}` account width of each optional Custody route, in slot
+    /// order. The frame the executor carves is these six numbers.
+    pub route_span_counts: [u8; DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4],
 }
 
 impl<'a> DealerScenarioTradeRequestV3<'a> {
     /// Hostile-decode the exact count-derived request.
     pub fn decode(bytes: &'a [u8]) -> Result<Self, ScenarioTradeErrorV3> {
-        if bytes.len() < DEALER_SCENARIO_TRADE_HEADER_BYTES_V3
+        if bytes.len() < DEALER_SCENARIO_TRADE_HEADER_BYTES_V4
             || bytes.get(..8) != Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
             || read_u16(bytes, 8)? != DEALER_SCENARIO_TRADE_VERSION_V3
             || read_u16(bytes, 10)? != DEALER_SCENARIO_TRADE_ACTION_V3
@@ -174,6 +220,35 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
         let evidence_span_count = byte(bytes, DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3)?;
         let claims_packet_bytes =
             read_u32(bytes, DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3)?;
+        // The declared frame shape. Each slot is exactly absent or exactly one
+        // Custody transfer frame -- a third value would carve an account window
+        // no route can fill -- and the two alignment bytes are canonical zero,
+        // because a header with a free byte is a header with an unauthenticated
+        // one.
+        let mut route_span_counts = [0_u8; DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4];
+        for (slot, count) in route_span_counts.iter_mut().enumerate() {
+            let observed = byte(
+                bytes,
+                DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4
+                    .checked_add(slot)
+                    .ok_or(ScenarioTradeErrorV3::InvalidRequest)?,
+            )?;
+            if observed != 0 && observed != DEALER_SCENARIO_TRADE_ROUTE_SPAN_WIDTH_V4 {
+                return Err(ScenarioTradeErrorV3::InvalidRequest);
+            }
+            *count = observed;
+        }
+        for offset in 0..DEALER_SCENARIO_TRADE_RESERVED_BYTES_V4 {
+            if byte(
+                bytes,
+                DEALER_SCENARIO_TRADE_RESERVED_OFFSET_V4
+                    .checked_add(offset)
+                    .ok_or(ScenarioTradeErrorV3::InvalidRequest)?,
+            )? != 0
+            {
+                return Err(ScenarioTradeErrorV3::InvalidRequest);
+            }
+        }
         let expected = scenario_trade_request_bytes_v3(width, claims_packet_bytes)?;
         if width == 0
             || !matches!(claims_position_count, 1 | 2)
@@ -216,6 +291,7 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
             dealer_evidence_count,
             evidence_span_count,
             claims_packet_bytes,
+            route_span_counts,
         };
         if value.dealer_owner == value.counterparty_owner
             || value.current_obligation_revision == 0
@@ -256,7 +332,7 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
     /// Borrow the exact signed fixed header which identifies the Claims request.
     pub fn header_bytes(self) -> &'a [u8] {
         self.bytes
-            .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
             .unwrap_or(&[])
     }
 
@@ -270,7 +346,7 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
     pub fn candidate_obligations_bytes(self) -> &'a [u8] {
         let end = scenario_trade_claims_packet_offset_v3(self.width).unwrap_or(0);
         self.bytes
-            .get(DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3..end)
+            .get(DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4..end)
             .unwrap_or(&[])
     }
 
@@ -500,7 +576,7 @@ pub fn scenario_trade_claims_packet_offset_v3(width: u32) -> Result<usize, Scena
     usize::try_from(width)
         .ok()
         .and_then(|value| value.checked_mul(8))
-        .and_then(|value| DEALER_SCENARIO_TRADE_HEADER_BYTES_V3.checked_add(value))
+        .and_then(|value| DEALER_SCENARIO_TRADE_HEADER_BYTES_V4.checked_add(value))
         .ok_or(ScenarioTradeErrorV3::InvalidRequest)
 }
 
@@ -705,16 +781,29 @@ pub(super) fn encode_scenario_trade_request_v3(
         DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
         &packet_bytes.to_le_bytes(),
     )?;
+    // The frame shape, declared from the same plan the evidence width above is
+    // derived from, so the two cannot disagree about which routes are live.
+    write_bytes(
+        output,
+        DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNTS_OFFSET_V4,
+        &scenario_route_span_counts_v3(
+            intent.direction,
+            intent.principal,
+            intent.realized_fee,
+            scenario.minimum_complete_sets_to_split,
+            scenario.maximum_complete_sets_to_merge,
+        ),
+    )?;
     for (index, obligation) in intent.candidate_obligations.iter().copied().enumerate() {
         let offset = index
             .checked_mul(8)
-            .and_then(|relative| DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3.checked_add(relative))
+            .and_then(|relative| DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4.checked_add(relative))
             .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
         write_bytes(output, offset, &obligation.to_le_bytes())?;
     }
     let request_id = hash(
         output
-            .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
             .ok_or(ScenarioTradeErrorV3::InvalidRequest)?,
     )
     .to_bytes();
@@ -934,6 +1023,49 @@ pub fn prepare_scenario_trade_v3<'a>(
         plan,
         candidate_obligation: candidate,
     })
+}
+
+/// Exact `{0, 14}` account width of each optional Custody route, in slot order.
+///
+/// One author for the frame's shape. The six slots are fixed compartment pairs
+/// (`v3_trade_artifacts::validate_scenario_custody_shape`): 0 External ->
+/// TradingPrincipal, 1 External -> FeeVault, 2 TradingPrincipal -> FeeVault,
+/// 3 TradingPrincipal -> HoardPrincipal, 4 HoardPrincipal -> TradingPrincipal,
+/// 5 TradingPrincipal -> External. A slot is enabled exactly when the trade
+/// moves value along that pair, which is decided by the direction, whether a
+/// fee is realized, and whether the Claims transition splits or merges.
+///
+/// This is the SAME predicate `scenario_evidence_span_count_v3` already
+/// depends on, stated once instead of twice: that function adds a FeeVault
+/// observation row exactly when neither fee route is enabled, and a Hoard row
+/// exactly when neither Hoard route is, and the debug assertion below is what
+/// keeps the two from drifting apart.
+#[must_use]
+pub fn scenario_route_span_counts_v3(
+    direction: ScenarioTradeDirectionV3,
+    principal: u64,
+    realized_fee: u64,
+    split: u64,
+    merge: u64,
+) -> [u8; DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4] {
+    let counterparty_pays = matches!(direction, ScenarioTradeDirectionV3::CounterpartyPaysDealer);
+    let enabled = [
+        counterparty_pays && principal != 0,
+        counterparty_pays && realized_fee != 0,
+        !counterparty_pays && realized_fee != 0,
+        split != 0,
+        merge != 0,
+        !counterparty_pays && principal != 0,
+    ];
+    let mut counts = [0_u8; DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4];
+    let mut slot = 0;
+    while slot < DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4 {
+        if enabled[slot] {
+            counts[slot] = DEALER_SCENARIO_TRADE_ROUTE_SPAN_WIDTH_V4;
+        }
+        slot += 1;
+    }
+    counts
 }
 
 /// Derive the one pre-AOT trailing evidence width from accepted semantics.
@@ -1287,7 +1419,7 @@ mod tests {
         let mut output = std::vec![0; scenario_trade_max_request_bytes_v3(3).expect("width")];
         let unsigned =
             build_scenario_trade_request_v3(chain, intent, set, &mut output).expect("request");
-        assert!(unsigned.request_bytes > DEALER_SCENARIO_TRADE_HEADER_BYTES_V3);
+        assert!(unsigned.request_bytes > DEALER_SCENARIO_TRADE_HEADER_BYTES_V4);
         assert_eq!(unsigned.selected_program.to_bytes(), [42; 32]);
         let request = DealerScenarioTradeRequestV3::decode(
             output.get(..unsigned.request_bytes).expect("initialized"),
@@ -1381,7 +1513,7 @@ mod tests {
         );
         let claims_start = scenario_trade_claims_packet_offset_v3(3).expect("offset");
         let mut omitted_vector = accepted
-            .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V4)
             .expect("request holds a full header")
             .to_vec();
         omitted_vector.extend_from_slice(
@@ -1396,29 +1528,29 @@ mod tests {
         let mut swapped_vector = accepted;
         let first = swapped_vector
             .get(
-                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
-                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8,
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4 + 8,
             )
             .expect("obligation offset inside the request")
             .to_vec();
         let second = swapped_vector
             .get(
-                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
-                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16,
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4 + 8
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4 + 16,
             )
             .expect("obligation offset inside the request")
             .to_vec();
         swapped_vector
             .get_mut(
-                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
-                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8,
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4 + 8,
             )
             .expect("obligation offset inside the request")
             .copy_from_slice(&second);
         swapped_vector
             .get_mut(
-                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
-                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16,
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4 + 8
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4 + 16,
             )
             .expect("obligation offset inside the request")
             .copy_from_slice(&first);
@@ -1436,7 +1568,7 @@ mod tests {
         );
         assert!(untouched.iter().all(|byte| *byte == 0xa5));
 
-        let candidate_offset = DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3;
+        let candidate_offset = DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V4;
         *output
             .get_mut(candidate_offset)
             .expect("obligation offset inside the request") ^= 1;
@@ -1458,7 +1590,7 @@ mod tests {
 
     #[test]
     fn packetless_and_noncanonical_headers_refuse() {
-        let mut bytes = std::vec![0; DEALER_SCENARIO_TRADE_HEADER_BYTES_V3];
+        let mut bytes = std::vec![0; DEALER_SCENARIO_TRADE_HEADER_BYTES_V4];
         bytes
             .get_mut(..8)
             .expect("header offset in bounds")
