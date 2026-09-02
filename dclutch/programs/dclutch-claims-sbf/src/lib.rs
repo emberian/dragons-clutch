@@ -4,6 +4,7 @@
 
 //! Authenticated SBF adapter for the one canonical Claims economic owner.
 
+use crate::market_admission_v1::CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1;
 use dclutch_claims_svm::{
     CallerRole, ClaimsAction, ClaimsAggregateSeedsV1, ClaimsPlanV1, ClaimsPositionSeedsV1,
     ClaimsReceiptV1, NO_POSITION_REVISION,
@@ -46,6 +47,7 @@ pub mod fractional_atomic_v3;
 pub mod fractional_claim_check_v1;
 mod fractional_retirement_v3;
 pub mod liability_basis_v2;
+mod market_admission_v1;
 pub mod market_closure_v1;
 mod product_runtime_v2;
 pub mod protocol_position_v2;
@@ -864,7 +866,7 @@ fn prepare_foundational_split(
         plan.market(),
         plan.release_set_id(),
     )?;
-    if core.phase != CorePhase::Founding
+    if !CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase)
         || core.identity.generation != envelope.generation()
         || envelope.context().to_bytes() != plan.request_id()
     {

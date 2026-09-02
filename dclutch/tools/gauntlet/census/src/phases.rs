@@ -294,12 +294,40 @@ fn variant(expr: &Expr, enumeration: &str) -> Result<String, String> {
 /// What one function body says about admissible prestates.
 #[derive(Default)]
 struct GuardScan {
-    /// Constants named outside any variant-keyed match arm: gates every route
-    /// reaching this function passes.
+    /// Constants named outside any variant-keyed match arm and outside any
+    /// boolean branch: gates every route reaching this function passes.
     unconditional: BTreeSet<String>,
     /// `Enum::Variant => CONSTANT` arms, keyed by the variant's own name.
     by_variant: BTreeMap<String, BTreeSet<String>>,
-    /// Call targets, for the descent.
+    /// The two sides of one `if`/`else`, each as what it declares and what it
+    /// calls.
+    ///
+    /// Exactly one side runs, so a route reaching this function passes the
+    /// UNION of the two sides' gates -- and passes it only if BOTH sides gate,
+    /// because a side that gates nothing admits everything. `if action ==
+    /// Redeem { SETTLED } else { OPEN }` is the union of two different sets;
+    /// `if parent { core(OPEN) } else { basis_and_core(OPEN) }` is the union
+    /// of one set with itself, which is that set, and is why the sides carry
+    /// their CALLS: the gate is usually one call further down. Read as two
+    /// independent gates -- which is what every entry outside a group means --
+    /// a reader intersects them and reports the empty set for a route that
+    /// admits three phases.
+    alternatives: Vec<[BranchSide; 2]>,
+    /// Straight-line call targets, for the descent.
+    calls: BTreeSet<String>,
+    /// Call targets reached only under a boolean condition, and the constants
+    /// named there. Recorded so the under-count has a name, never attributed:
+    /// `process_core_effect` calls `prepare_foundational_split` under
+    /// `if foundational`, and descending into it unconditionally published
+    /// `Founding` as the admissible set of the REDEEM route.
+    conditional: BTreeSet<String>,
+}
+
+/// One side of an `if`: the gates written there, and the calls that may carry
+/// more of them further down.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct BranchSide {
+    names: BTreeSet<String>,
     calls: BTreeSet<String>,
 }
 
@@ -308,11 +336,27 @@ struct GuardVisitor<'a> {
     scan: GuardScan,
     /// The variant whose match arm we are inside, if any.
     variant: Option<String>,
+    /// Whether we are inside a boolean branch, whose contents gate only the
+    /// executions that took it.
+    conditional: bool,
 }
 
 impl<'a> GuardVisitor<'a> {
+    fn fresh(&self) -> GuardVisitor<'a> {
+        GuardVisitor {
+            index: self.index,
+            scan: GuardScan::default(),
+            variant: self.variant.clone(),
+            conditional: self.conditional,
+        }
+    }
+
     fn note(&mut self, name: &str) {
         if self.index.resolve(name).is_none() {
+            return;
+        }
+        if self.conditional {
+            self.scan.conditional.insert(name.to_string());
             return;
         }
         match &self.variant {
@@ -328,6 +372,35 @@ impl<'a> GuardVisitor<'a> {
             }
         }
     }
+
+    /// Absorb a sub-scan made under a condition: nothing it saw is a gate every
+    /// route through this function passes.
+    fn absorb_conditional(&mut self, scan: GuardScan) {
+        self.scan.alternatives.extend(scan.alternatives);
+        self.scan.conditional.extend(scan.unconditional);
+        self.scan.conditional.extend(scan.conditional);
+        self.scan.conditional.extend(scan.calls);
+        for names in scan.by_variant.into_values() {
+            self.scan.conditional.extend(names);
+        }
+    }
+
+    /// What one branch declares and calls, scanned in isolation.
+    fn side(&self, scan_one: impl FnOnce(&mut GuardVisitor<'a>)) -> (BranchSide, GuardScan) {
+        let mut inner = self.fresh();
+        scan_one(&mut inner);
+        let side = BranchSide {
+            names: inner
+                .scan
+                .unconditional
+                .iter()
+                .cloned()
+                .chain(inner.scan.by_variant.values().flatten().cloned())
+                .collect(),
+            calls: inner.scan.calls.clone(),
+        };
+        (side, inner.scan)
+    }
 }
 
 impl<'ast> Visit<'ast> for GuardVisitor<'_> {
@@ -340,7 +413,12 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
 
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
         if let Expr::Path(path) = node.func.as_ref() {
-            self.scan.calls.insert(render_path(&path.path));
+            let target = render_path(&path.path);
+            if self.conditional {
+                self.scan.conditional.insert(target);
+            } else {
+                self.scan.calls.insert(target);
+            }
         }
         visit::visit_expr_call(self, node);
     }
@@ -356,6 +434,40 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
             self.visit_expr(&arm.body);
             self.variant = outer;
         }
+    }
+
+    /// An `if` is a boolean selection, and the census cannot evaluate it.
+    ///
+    /// So it reads the two sides instead. With an `else`, exactly one side
+    /// runs and the route passes the union of the two -- recorded as an
+    /// alternative pair and resolved after the descent, because a side's gate
+    /// is usually one call further down. Without an `else`, or with a side
+    /// that gates nothing, the branch gates only the executions that took it:
+    /// what it says is recorded as conditional and NEVER attributed. That is
+    /// the under-count the `phase` column's legend already names, and it
+    /// stands in place of a false claim -- `process_core_effect` calls
+    /// `prepare_foundational_split` under `if foundational`, and descending
+    /// into it unconditionally published `Founding` as the admissible set of
+    /// the REDEEM route.
+    fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+        self.visit_expr(&node.cond);
+        let then_branch = node.then_branch.clone();
+        let (taken, taken_scan) = self.side(|inner| inner.visit_block(&then_branch));
+        let Some((_, otherwise)) = &node.else_branch else {
+            self.absorb_conditional(taken_scan);
+            return;
+        };
+        let (untaken, untaken_scan) = self.side(|inner| inner.visit_expr(otherwise));
+        let taken_gates = !taken.names.is_empty() || !taken.calls.is_empty();
+        let untaken_gates = !untaken.names.is_empty() || !untaken.calls.is_empty();
+        if taken_gates && untaken_gates {
+            self.scan.alternatives.extend(taken_scan.alternatives);
+            self.scan.alternatives.extend(untaken_scan.alternatives);
+            self.scan.alternatives.push([taken, untaken]);
+            return;
+        }
+        self.absorb_conditional(taken_scan);
+        self.absorb_conditional(untaken_scan);
     }
 }
 
@@ -410,6 +522,7 @@ impl<'a> GuardMap<'a> {
                 index: self.index,
                 scan: GuardScan::default(),
                 variant: None,
+                conditional: false,
             };
             visitor.visit_block(&function.block);
             self.scans.insert(key.clone(), visitor.scan);
@@ -418,11 +531,60 @@ impl<'a> GuardMap<'a> {
         Some((key, scan))
     }
 
+    /// Every gate one side of an `if` reaches, following its calls under the
+    /// same depth bound and the same route-handler boundary as the main
+    /// descent.
+    fn resolve_side(
+        &mut self,
+        module: &str,
+        side: &BranchSide,
+        depth: usize,
+        selected: &Option<String>,
+    ) -> BTreeSet<String> {
+        let mut names = side.names.clone();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut frontier: Vec<(String, String, usize)> = side
+            .calls
+            .iter()
+            .map(|call| (module.to_string(), call.clone(), depth + 1))
+            .collect();
+        while let Some((module, path, depth)) = frontier.pop() {
+            if depth > MAX_GUARD_DEPTH {
+                continue;
+            }
+            if self.boundaries.contains(&path) {
+                continue;
+            }
+            let Some((key, scan)) = self.scan(&module, &path) else {
+                continue;
+            };
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            names.extend(scan.unconditional.iter().cloned());
+            if let Some(selected) = selected
+                && let Some(keyed) = scan.by_variant.get(selected)
+            {
+                names.extend(keyed.iter().cloned());
+            }
+            let here = key
+                .rsplit_once("::")
+                .map_or(String::new(), |(module, _)| module.to_string());
+            let calls: Vec<String> = scan.calls.iter().cloned().collect();
+            for call in calls {
+                frontier.push((here.clone(), call, depth + 1));
+            }
+        }
+        names
+    }
+
     /// The gates `route` passes, as declared constants.
     pub fn for_route(&mut self, route: &Route) -> Vec<PhaseAdmission> {
         let start = handler_path(route).to_string();
         let selected = route_variant(route);
         let mut names: BTreeSet<String> = BTreeSet::new();
+        let mut groups: Vec<BTreeSet<String>> = Vec::new();
+        let mut pending: Vec<(String, [BranchSide; 2], usize)> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut frontier = vec![(String::new(), start.clone(), 0usize)];
         while let Some((module, path, depth)) = frontier.pop() {
@@ -448,25 +610,59 @@ impl<'a> GuardMap<'a> {
             let here = key
                 .rsplit_once("::")
                 .map_or(String::new(), |(module, _)| module.to_string());
+            for pair in scan.alternatives.clone() {
+                pending.push((here.clone(), pair, depth));
+            }
             let calls: Vec<String> = scan.calls.iter().cloned().collect();
             for call in calls {
                 frontier.push((here.clone(), call, depth + 1));
             }
         }
-        let mut admissions: Vec<PhaseAdmission> = names
-            .into_iter()
-            .filter_map(|name| {
-                let fact = self.index.resolve(&name)?;
-                Some(PhaseAdmission {
+        // A side that gates nothing admits everything, so a pair with one such
+        // side is no gate at all. A pair whose sides resolve to the same set
+        // is that set, written twice.
+        for (module, [taken, untaken], depth) in pending {
+            let left = self.resolve_side(&module, &taken, depth, &selected);
+            if left.is_empty() {
+                continue;
+            }
+            let right = self.resolve_side(&module, &untaken, depth, &selected);
+            if right.is_empty() {
+                continue;
+            }
+            let group: BTreeSet<String> = left.union(&right).cloned().collect();
+            if !groups.contains(&group) {
+                groups.push(group);
+            }
+        }
+        // A constant that also stands alone as an unconditional gate is not an
+        // alternative: the conjunct it is written in runs on every execution.
+        groups.retain(|group| group.iter().all(|name| !names.contains(name)));
+        let mut admissions: Vec<PhaseAdmission> = Vec::new();
+        let mut push = |name: String, alternative: Option<u32>, index: &AdmissionIndex| {
+            if let Some(fact) = index.resolve(&name) {
+                admissions.push(PhaseAdmission {
                     constant: name,
                     kind: fact.kind,
                     phases: fact.phases.clone(),
                     prestates: fact.prestates.clone(),
                     provenance: fact.provenance.clone(),
-                })
-            })
-            .collect();
-        admissions.sort_by(|left, right| left.constant.cmp(&right.constant));
+                    alternative,
+                });
+            }
+        };
+        for name in names {
+            push(name, None, self.index);
+        }
+        for (group, members) in groups.iter().enumerate() {
+            let group = u32::try_from(group).unwrap_or(u32::MAX);
+            for name in members {
+                push(name.clone(), Some(group), self.index);
+            }
+        }
+        admissions.sort_by(|left, right| {
+            (left.alternative, &left.constant).cmp(&(right.alternative, &right.constant))
+        });
         admissions
     }
 }
@@ -604,6 +800,89 @@ mod tests {
                 .iter()
                 .any(|e| e.provenance.starts_with("programs/b/"))
         );
+    }
+
+    /// Scan one function body against an index holding exactly `declared`.
+    fn scan_body(source: &str, declared: &[&str]) -> GuardScan {
+        let mut index = AdmissionIndex::default();
+        for name in declared {
+            index.insert(
+                (*name).to_string(),
+                AdmissionFact {
+                    kind: AdmissionKind::Phases,
+                    phases: vec!["Open".into()],
+                    prestates: Vec::new(),
+                    provenance: "programs/a/src/one.rs:1".into(),
+                },
+            );
+        }
+        let file = syn::parse_file(source).expect("parses");
+        let Item::Fn(function) = &file.items[0] else {
+            panic!("not a fn")
+        };
+        let mut visitor = GuardVisitor {
+            index: &index,
+            scan: GuardScan::default(),
+            variant: None,
+            conditional: false,
+        };
+        visitor.visit_block(&function.block);
+        visitor.scan
+    }
+
+    /// A guard reached only when a boolean branch is taken gates only the
+    /// executions that took it.
+    ///
+    /// This is the exact shape that published `Founding` as the admissible set
+    /// of Claims' REDEEM route: `process_core_effect` calls
+    /// `prepare_foundational_split` under `if foundational`, and a descent
+    /// that walked into it regardless attributed a founding-only gate to three
+    /// routes that never call it. An under-count is a legend entry; this was a
+    /// false claim, and a client acting on it refuses a valid act.
+    #[test]
+    fn a_gate_behind_a_one_sided_condition_is_not_every_routes_gate() {
+        let scan = scan_body(
+            "fn process() { if foundational { split(A_V1); } authenticate(); }",
+            &["A_V1"],
+        );
+        assert!(scan.unconditional.is_empty(), "{:?}", scan.unconditional);
+        assert!(!scan.calls.contains("split"), "{:?}", scan.calls);
+        assert!(scan.calls.contains("authenticate"));
+        assert!(scan.conditional.contains("A_V1"));
+        assert!(scan.conditional.contains("split"));
+        assert!(scan.alternatives.is_empty());
+    }
+
+    /// `if c { A } else { B }` is ONE gate whose set is `A | B`.
+    #[test]
+    fn the_two_sides_of_a_selection_are_one_gate_and_not_two() {
+        let scan = scan_body(
+            "fn process() { let set = if redeeming { A_V1 } else { B_V1 }; check(set); }",
+            &["A_V1", "B_V1"],
+        );
+        assert!(scan.unconditional.is_empty());
+        assert_eq!(scan.alternatives.len(), 1);
+        let [taken, untaken] = &scan.alternatives[0];
+        assert_eq!(taken.names, ["A_V1".to_string()].into_iter().collect());
+        assert_eq!(untaken.names, ["B_V1".to_string()].into_iter().collect());
+    }
+
+    /// A side carries its CALLS, because the gate is usually one call down.
+    ///
+    /// `if parent { core(OPEN) } else { basis_and_core() }` gates on the same
+    /// set either way, and a rule that read only the constants written at the
+    /// site would see one side declaring nothing and drop the gate.
+    #[test]
+    fn a_side_that_only_calls_still_counts_as_gating() {
+        let scan = scan_body(
+            "fn process() { let caps = if parent { core(A_V1) } else { basis() }; }",
+            &["A_V1"],
+        );
+        assert_eq!(scan.alternatives.len(), 1);
+        let [taken, untaken] = &scan.alternatives[0];
+        assert_eq!(taken.names, ["A_V1".to_string()].into_iter().collect());
+        assert!(untaken.names.is_empty());
+        assert!(untaken.calls.contains("basis"));
     }
 
     /// A tag naming a tuple or a union of actions is not one variant, and a

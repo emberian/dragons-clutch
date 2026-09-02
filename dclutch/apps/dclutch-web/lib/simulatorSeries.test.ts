@@ -106,6 +106,28 @@ describe('the published simulator series', () => {
     expect(series.market).not.toBeNull();
   });
 
+  it('carries the three fields this decoder has always read and no producer wrote', () => {
+    // `mint_supply`, `payer_lamports` and `position_totals` have been decoded
+    // here since v3 and drawn by hoardCoverageLinesV1/campaignSpendLineV1 since
+    // v3, and the PULSE producer dropped all three -- so /pulse could not draw
+    // either chart, and the reason had nothing to do with the page. A pin here
+    // rather than only in the producer, because the artifact is what ships.
+    for (const point of series.points) {
+      expect(point.mintSupply, `boundary ${point.stage ?? point.cycle} carries no Mint supply`).not.toBeNull();
+      expect(point.payerLamports, `boundary ${point.stage ?? point.cycle} carries no payer balance`).not.toBeNull();
+      expect(point.positionTotals).toHaveLength(series.outcomeCount);
+    }
+    // And both derived lines must be constructible from it, which is the thing
+    // a per-field check cannot say: each returns nothing on a hole anywhere.
+    expect(hoardCoverageLinesV1(series).length).toBeGreaterThan(2);
+    expect(campaignSpendLineV1(series)).not.toBeNull();
+  });
+
+  it('carries every boundary its own name, since the axis is not a count', () => {
+    for (const point of series.points) expect(point.stage).not.toBeNull();
+    expect(new Set(campaignStageLabelsV1(series)).size).toBeGreaterThan(1);
+  });
+
   it('keeps its cycles in order and its quantities exact', () => {
     for (const [index, point] of series.points.entries()) {
       if (index > 0) expect(point.cycle).toBeGreaterThan(series.points[index - 1].cycle);

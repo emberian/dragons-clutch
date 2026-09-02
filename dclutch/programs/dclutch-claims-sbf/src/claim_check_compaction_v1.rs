@@ -24,6 +24,7 @@
 //! tamper surface is a release re-point, which does not exist today and must
 //! refuse a shortening when it does.
 
+use crate::market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1;
 use dclutch_claims_svm::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
 use dclutch_claims_svm::claim_check_conservation_v1::{
     ClaimCheckAccountObservationV1, ClaimCheckCompactionObservationV1, ClaimCheckCompactionPlanV1,
@@ -43,7 +44,7 @@ use dclutch_claims_svm::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
     TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
@@ -438,7 +439,7 @@ fn authenticate_core(
     // that refused there would leave exactly the markets a stranger pushed into
     // Retiring unrescuable -- which is the hostage-taking this design exists to
     // end, re-created one phase later.
-    if !matches!(core.phase, Phase::Terminal | Phase::Retiring) {
+    if !CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase) {
         return Err(ClaimCheckCompactionSbfErrorV1::Phase.into());
     }
     // Checked even though the phase invariant implies it. A checked invariant

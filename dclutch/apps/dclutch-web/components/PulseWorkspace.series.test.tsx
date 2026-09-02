@@ -37,6 +37,19 @@ describe('the pulse surface, with a recorded run', () => {
     expect(html).toContain(`census file ${series.censusFile}`);
   });
 
+  it('draws the collateral coverage and the spend, which the producer had starved', () => {
+    // Both charts are library functions the /campaign surface has drawn since
+    // v3. /pulse could draw neither, and the reason was upstream of this file:
+    // scripts/simulator-series.mjs dropped `mint_supply` and `payer_lamports`
+    // before they reached the artifact. Pinned on the SHIPPED capture, so the
+    // day a producer stops carrying them this goes red here rather than the
+    // charts quietly vanishing from the page.
+    expect(html).toContain('The collateral, and everything the census could find of it');
+    expect(html).toContain('the collateral Mint’s whole supply');
+    expect(html).toContain('What the run has spent');
+    expect(html).toContain('lamports the fee payer has spent since the first boundary');
+  });
+
   it('tells the reader the line is a record, not a feed', () => {
     expect(html).toContain('The run continues past the last point; this page does not.');
     expect(html).toContain('the last write before publication');

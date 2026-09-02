@@ -1865,20 +1865,59 @@ impl<'a> AccountProfileV2<'a> {
                 return Err(Error::NonCanonicalReserved);
             }
             validate_rule(rule, true, item, self.fixed_accounts, self.artifact_profile)?;
-            if self.uses_dynamic_fixed_spans() {
+            // One coordinate of a runtime-inserted span may be DECLARED the
+            // same account as one fixed-prefix coordinate. The declaration is
+            // the profile's -- it is never inferred from two observations
+            // happening to carry one key -- and it is what lets a span whose
+            // frame names a role the fixed frame also names say so, instead of
+            // presenting two representatives of one account and refusing
+            // `CrossItemAlias` in the projection.
+            //
+            // Its canonicality conditions are the fixed prefix's, restated in
+            // the coordinate space a span actually has:
+            //
+            // * the borrowed coordinate precedes the borrower. A span inserted
+            //   at `insertion_coordinate` sits before every base coordinate at
+            //   or after that point and after every base coordinate below it,
+            //   so `alias_index < span.insertion_coordinate` is exactly the
+            //   fixed prefix's `alias_index < index`, and the whole tree's
+            //   alias partitions -- `dclutch_effect_kernel::v2`'s included --
+            //   are backward.
+            // * the representative is its own representative, so the partition
+            //   has exactly one fixed point per class and no chain to walk.
+            // * the borrower carries the route-alias prestate, so it declares
+            //   no independent width or authentication bit of its own.
+            let span_route_alias = if self.uses_dynamic_fixed_spans() {
                 let span = self.dynamic_span_for_rule_template(item)?;
-                if rule.alias_kind == AliasKindV2::Fixed
-                    && rule.alias_index >= span.insertion_coordinate
-                {
-                    return Err(Error::InvalidAlias);
+                match rule.alias_kind {
+                    AliasKindV2::SelfCoordinate => false,
+                    AliasKindV2::Fixed => {
+                        if rule.alias_index >= span.insertion_coordinate {
+                            return Err(Error::InvalidAlias);
+                        }
+                        if rule.prestate != AccountPrestateV2::AuthenticatedRouteAlias {
+                            return Err(Error::InvalidRouteAlias);
+                        }
+                        let representative = self.rule(false, rule.alias_index)?;
+                        if representative.alias_kind != AliasKindV2::SelfCoordinate
+                            || representative.alias_index != 0
+                        {
+                            return Err(Error::InvalidRouteAlias);
+                        }
+                        true
+                    }
+                    AliasKindV2::SameItem => return Err(Error::InvalidRouteAlias),
                 }
-            }
+            } else {
+                false
+            };
             if matches!(
                 self.artifact_profile,
                 AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                     | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
                     | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
             ) && rule.alias_kind != AliasKindV2::SelfCoordinate
+                && !span_route_alias
             {
                 return Err(Error::InvalidRouteAlias);
             }
@@ -3685,10 +3724,16 @@ fn validate_rule(
     {
         return Err(Error::InvalidVariableDataPrestate);
     }
+    // A fixed-prefix route alias borrows an EARLIER fixed coordinate, so its
+    // canonicality condition is `alias_index < index`. A span template's index
+    // is an ordinal in the rule table, not a logical coordinate, so the same
+    // condition would compare two different spaces; the span's own condition is
+    // that the borrowed coordinate is inserted before the span
+    // (`validate_rules`), and that it lies in the fixed prefix at all, which the
+    // alias-kind match at the end of this function already requires.
     if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias
-        && (item
-            || rule.alias_kind != AliasKindV2::Fixed
-            || rule.alias_index >= index
+        && (rule.alias_kind != AliasKindV2::Fixed
+            || (!item && rule.alias_index >= index)
             || rule.privileges != 0
             || rule.effect_permissions != 0
             || rule.data_length != 0

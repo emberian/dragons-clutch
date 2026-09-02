@@ -368,6 +368,23 @@ fn fixed_rules(
     Ok(rules)
 }
 
+/// The five roles a Custody transfer frame and the Claims fixed frame both name.
+///
+/// `(Custody frame offset, Claims frame offset)` for the Core Market, the
+/// release activation cache, the Registry program, the caller program and its
+/// ProgramData. `CustodyFrameSpecV1`'s common prefix carries them at 1..=5 and
+/// `SignedDeltaFrameSpecV3` at 11..=15, and in one selector-9 execution each
+/// pair is ONE account: the same Core Market, the same activation cache, the
+/// same Registry, and Trading itself as the caller of both children.
+///
+/// Undeclared, an active route span presents five second representatives of
+/// accounts the Claims frame already names, and the account projection refuses
+/// `CrossItemAlias` -- measured at `c4b1c5b3` as coordinates 16/28, 17/29,
+/// 18/30, 19/31 and 20/32 of the P2 Dealer-pays-counterparty frame.
+#[cfg(not(target_os = "solana"))]
+const DEALER_SCENARIO_SHARED_CUSTODY_CLAIMS_ROLES_V4: [(u16, u16); 5] =
+    [(1, 11), (2, 12), (3, 13), (4, 14), (5, 15)];
+
 #[cfg(not(target_os = "solana"))]
 fn span_rules() -> Result<
     [AccountRuleWithPrestateInputV2; DEALER_SCENARIO_PROFILE_SPAN_RULES_V4],
@@ -387,6 +404,40 @@ fn span_rules() -> Result<
                 privileges.writable(),
                 privileges.executable(),
             ));
+        }
+    }
+    // The cross-frame alias partition, declared here and authenticated by the
+    // projection. A route span borrows the Claims coordinate rather than
+    // observing the account a second time on its own authority, so the alias
+    // check the projection then runs -- key, owner, lamports, data and
+    // privileges equal to the representative's -- is strictly more than the
+    // opaque self-coordinate it replaces, which authenticated no key at all.
+    //
+    // The condition is the tree's backward-alias rule, read off the span table
+    // instead of hard-coded: a span inserted at `insertion_coordinate` sits
+    // after every base coordinate below that point and before every one at or
+    // after it, so only a route span inserted past the Claims frame can name a
+    // Claims coordinate as its representative. Today that is routes 4 and 5
+    // (insertion 25); routes 0 through 3 insert at 5, ahead of the frame they
+    // would borrow from, and a trade that enables one of them still refuses
+    // `CrossItemAlias` at these five pairs. `route_spans_declare_the_alias_they_can_reach`
+    // pins which spans carry the declaration and says what closing the rest costs.
+    let spans = dynamic_spans();
+    for start in starts {
+        let insertion = spans
+            .iter()
+            .find(|span| usize::from(span.rule_start) == start)
+            .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?
+            .insertion_coordinate;
+        for (custody_offset, claims_offset) in DEALER_SCENARIO_SHARED_CUSTODY_CLAIMS_ROLES_V4 {
+            let representative = CLAIMS_START_V4
+                .checked_add(claims_offset)
+                .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+            if representative >= insertion {
+                continue;
+            }
+            *rule_mut(&mut rules, start + usize::from(custody_offset))? =
+                route_alias(readonly(), representative);
         }
     }
     *rule_mut(&mut rules, 56)? = opaque(claims_position_privileges()?);
@@ -658,6 +709,11 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
         // Every count is one higher than before the Custody callee coordinate
         // existed, and no coordinate before it moved.
+        // The logical widths are unchanged by the cross-frame alias partition:
+        // the borrowed coordinates stay in the frame and stay observed. What
+        // moves is the PHYSICAL count, by exactly five per route span that
+        // declares the five shared Claims roles -- routes 4 and 5 -- so one
+        // active late route drops 62 to 57 and all six drop 116 to 106.
         let sparse = [14_u32, 0, 0, 0, 1, 0, 14, 3, 6];
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(16, &sparse),
@@ -665,7 +721,7 @@ mod tests {
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(16, &sparse),
-            Ok(62)
+            Ok(57)
         );
         let full = [14_u32, 14, 14, 14, 2, 14, 14, 0, 6];
         assert_eq!(
@@ -674,7 +730,7 @@ mod tests {
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(16, &full),
-            Ok(116)
+            Ok(106)
         );
         let obligation = profile.rule(false, OBLIGATION_V4).expect("obligation");
         assert_eq!(
@@ -683,6 +739,66 @@ mod tests {
         );
         assert_eq!(obligation.data_item_stride(), 8);
         assert_eq!(obligation.effect_permissions(), 4);
+    }
+
+    /// Which route spans carry the cross-frame alias, and what the rest cost.
+    ///
+    /// The campaign's P2 Dealer-pays-counterparty frame is `[0, 0, 0, 0, 2, 0,
+    /// 14, 2, 6]`: route 5 alone, inserted at base 25, so its five shared roles
+    /// resolve to the Claims frame's own coordinates 16..=20 instead of
+    /// standing as second representatives. Routes 0 through 3 insert at base 5,
+    /// AHEAD of the frame they would borrow, and the tree's alias partitions
+    /// are backward, so they cannot declare it and a trade that enables one
+    /// still refuses `CrossItemAlias` at exactly these five pairs.
+    ///
+    /// Two walls remain and they close together, not separately:
+    ///
+    /// * routes 0..=3 are inserted before their representative;
+    /// * two simultaneously active route spans share seven MORE roles -- caller
+    ///   authority, Realm record, Realm staging, replay, mint, Custody
+    ///   authority, token program -- whose representative would itself be
+    ///   runtime-inserted, and `AliasKindV2::Fixed` names base coordinates only.
+    ///
+    /// One shape answers both: the Custody frame's twelve non-endpoint roles
+    /// become fixed coordinates ahead of every span, and each route span
+    /// carries only its source/destination pair. That is a frame move, and it
+    /// is not this declaration's to make.
+    #[test]
+    fn route_spans_declare_the_alias_they_can_reach() {
+        let bytes = profile();
+        let decoded = AccountProfileV2::decode(&bytes).expect("decode");
+        let campaign = [0_u32, 0, 0, 0, 2, 0, 14, 2, 6];
+        let frame = dealer_scenario_logical_frame_v4(campaign).expect("campaign frame");
+        let route_five = usize::try_from(frame.custody_starts[5]).expect("route 5 start");
+        assert_eq!(route_five, 27);
+        for (custody_offset, claims_offset) in DEALER_SCENARIO_SHARED_CUSTODY_CLAIMS_ROLES_V4 {
+            let borrower = route_five + usize::from(custody_offset);
+            let representative = usize::from(CLAIMS_START_V4 + claims_offset);
+            assert_eq!(
+                decoded.representative_with_dynamic_spans(0, &campaign, borrower),
+                Ok(representative),
+                "route 5 coordinate {borrower} borrows the Claims frame at {representative}",
+            );
+            assert_eq!(
+                decoded.representative_with_dynamic_spans(0, &campaign, representative),
+                Ok(representative),
+                "the Claims coordinate is its own representative",
+            );
+        }
+        // Route 0, the same five roles, one span earlier than the frame it
+        // would borrow: still five distinct representatives.
+        let early = [14_u32, 0, 0, 0, 2, 0, 0, 2, 6];
+        let early_frame = dealer_scenario_logical_frame_v4(early).expect("route 0 frame");
+        let route_zero = usize::try_from(early_frame.custody_starts[0]).expect("route 0 start");
+        assert_eq!(route_zero, 5);
+        for (custody_offset, _) in DEALER_SCENARIO_SHARED_CUSTODY_CLAIMS_ROLES_V4 {
+            let coordinate = route_zero + usize::from(custody_offset);
+            assert_eq!(
+                decoded.representative_with_dynamic_spans(0, &early, coordinate),
+                Ok(coordinate),
+                "route 0 cannot backward-alias a frame inserted after it",
+            );
+        }
     }
 
     #[test]

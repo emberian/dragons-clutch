@@ -43,7 +43,7 @@ use solana_program::{
 
 use super::{
     ClaimsSbfError,
-    affine_batch_v2::CorePhaseGateV3,
+    market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
     rational_product_v3::AuthenticatedRationalProductV3,
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
@@ -270,7 +270,7 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         // Retiring as well as Terminal because `begin_retiring` is
         // permissionless, and a redemption that refused there would hand any
         // stranger the power to end this holder's claim.
-        CorePhaseGateV3::TerminalOrRetiring,
+        CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
     )?;
     let candidate_digest = hashv(&[
         TERMINAL_CANDIDATE_DOMAIN_V3,

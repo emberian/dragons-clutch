@@ -21,7 +21,7 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
-    AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES,
+    AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, CoreState, MarketCoreStateSeedsV2, STATE_BYTES,
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::continuation_v1::{
@@ -41,6 +41,7 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 
 use super::{ClaimsSbfError, authenticate_activated_role};
+use crate::market_admission_v1::CLAIMS_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1;
 
 /// Core caller PDA signer.
 pub const AUTHORITY_ACCOUNT_V1: usize = 0;
@@ -645,7 +646,7 @@ fn authenticate_core(
     )
     .0;
     if expected != *accounts.core_market.key
-        || core.phase != Phase::Retiring
+        || !CLAIMS_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase)
         || core.identity.market_id.to_bytes() != request.market
         || core.identity.selected_release_set.to_bytes() != request.release_set
         || core.identity.registry_program.to_bytes() != accounts.registry.key.to_bytes()

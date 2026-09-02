@@ -30,7 +30,6 @@ use dclutch_claims_svm::{
         SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferReceiptV1,
     },
 };
-use dclutch_market_core_codec::Phase as CorePhase;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
@@ -48,8 +47,8 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
 use super::{
-    affine_batch_v2::{CorePhaseGateV3, authenticate_runtime_product_basis_core_v3},
-    authenticate_activated_role,
+    affine_batch_v2::authenticate_runtime_product_basis_core_v3, authenticate_activated_role,
+    market_admission_v1::CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1,
 };
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -484,7 +483,7 @@ fn process_admit(
         market,
         product_digest,
         linked_digest,
-        CorePhaseGateV3::Exactly(CorePhase::Open),
+        CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1,
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
 

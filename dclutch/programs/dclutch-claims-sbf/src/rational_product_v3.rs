@@ -11,9 +11,7 @@ use alloc::boxed::Box;
 use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
 };
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
-};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3,
@@ -32,8 +30,11 @@ use solana_program::{
 };
 
 use super::{
-    ClaimsSbfError, affine_batch_v2::CorePhaseGateV3,
+    ClaimsSbfError,
     liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2,
+    market_admission_v1::{
+        CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1, CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -199,13 +200,13 @@ fn authenticate_core(
     // permissionless (`core-sbf begin_retiring.rs:57`) and moves nothing but
     // the phase, so gating this route on Terminal alone let any stranger end
     // every holder's redemption right for one transaction fee.
-    let phase_gate = if action == RepresentationActionV2::RedeemTerminal {
-        CorePhaseGateV3::TerminalOrRetiring
+    let admission = if action == RepresentationActionV2::RedeemTerminal {
+        CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1
     } else {
-        CorePhaseGateV3::Exactly(CorePhase::Open)
+        CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1
     };
     if expected != *frame.core_market.key
-        || !phase_gate.admits(core.phase)
+        || !admission.admits_phase(core.phase)
         || core.identity.market_id.to_bytes() != market.logical_market
         || core.identity.product_id.to_bytes() != market.product_instance_id
         || core.identity.selected_release_set.to_bytes() != market.release_set

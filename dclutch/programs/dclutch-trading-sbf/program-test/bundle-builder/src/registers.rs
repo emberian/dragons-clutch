@@ -714,7 +714,7 @@ pub(crate) fn run_engine_with_admitted_candidate(
 
     // Walk the routes and slice each invocation's projected request.
     let invocations = resolve_invocations(
-        effect_base,
+        effect,
         tail_count,
         &transition_scalars,
         &transition_identities,
@@ -1298,11 +1298,19 @@ struct PreplannedV1 {
 
 /// Exact observation prefix lifecycle may inspect.
 ///
-/// Dynamic fixed spans are projection transport. The current executable shape
-/// admits them here only when every span is trailing, so the fixed prefix keeps
-/// its AccountProfile coordinates byte-for-byte. Lifecycle's own join rejects
-/// item coordinates for these profiles; no scratch page can become a state,
-/// payer, or RentCredit by changing this slice.
+/// Dynamic fixed spans are projection transport, and lifecycle addresses
+/// AccountProfile coordinates. The two agree exactly on the coordinates whose
+/// runtime index IS their profile index, which is every coordinate ahead of the
+/// FIRST span's insertion point: a span inserted at `c` shifts every base
+/// coordinate at or after `c` by its selected width and leaves every earlier
+/// one where it was. This used to demand that every span be trailing, which is
+/// the same width for a profile whose spans all insert at `fixed_account_count`
+/// and no width at all for one with an interior span -- selector 9 inserts its
+/// six Custody routes and its Claims Position tail INSIDE the frame, so the
+/// demand refused it outright rather than handing lifecycle the five common Hot
+/// coordinates that are in fact byte-for-byte where the profile says.
+/// Lifecycle's own join rejects item coordinates for these profiles; no scratch
+/// page can become a state, payer, or RentCredit by changing this slice.
 fn lifecycle_semantic_prefix_width(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -1327,20 +1335,19 @@ fn lifecycle_semantic_prefix_width(
     if !profile.uses_dynamic_fixed_spans() {
         return Ok(expanded_width);
     }
-    let fixed = profile.fixed_account_count();
+    let mut prefix = profile.fixed_account_count();
     let mut span = 0_u16;
     while span < profile.dynamic_fixed_span_count() {
-        if profile
+        let insertion = profile
             .dynamic_fixed_span(span)
             .map_err(|_| BuilderError::Lifecycle("span-decode"))?
-            .insertion_coordinate()
-            != fixed
-        {
-            return Err(BuilderError::Lifecycle("non-trailing-lifecycle-span"));
+            .insertion_coordinate();
+        if insertion < prefix {
+            prefix = insertion;
         }
         span = span.checked_add(1).ok_or(BuilderError::Arithmetic)?;
     }
-    Ok(usize::from(fixed))
+    Ok(usize::from(prefix))
 }
 
 /// The lifecycle preplan of `prepare_lifecycle_v4`, with adoption in place of
@@ -1636,7 +1643,7 @@ fn apply_candidates(
 }
 
 fn resolve_invocations(
-    effect: EffectBaseV3<'_>,
+    effect: EffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -1644,11 +1651,12 @@ fn resolve_invocations(
     family_request: &[u8],
     synthesize_disabled_shadows: bool,
 ) -> Result<Vec<DerivedInvocationV1>, BuilderError> {
+    let base = effect.base();
     let mut output = Vec::new();
     let mut request_offset = 0_usize;
     let mut route = 0_u16;
-    while route < effect.route_count() {
-        let declared = effect
+    while route < base.route_count() {
+        let declared = base
             .route(route)
             .map_err(|_| BuilderError::Projection("route-decode"))?;
         let route_request_bytes = usize::try_from(declared.fixed_request_bytes())
@@ -1660,7 +1668,7 @@ fn resolve_invocations(
                     .checked_add(fixed)
             })
             .ok_or(BuilderError::Arithmetic)?;
-        let count = effect
+        let count = base
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| BuilderError::Projection("invocation-count"))?;
         if count == 0 && synthesize_disabled_shadows {
@@ -1702,9 +1710,17 @@ fn resolve_invocations(
         }
         let mut invocation = 0_u32;
         while invocation < count {
+            // Through the V4 successor, not the V3 base: the successor is what
+            // shifts every route's `fixed_account_start` past the spans
+            // inserted before it and widens a spanned route's own frame. A
+            // family whose routes carry no V4 span reads the same either way,
+            // which is why the base was enough until selector 9 -- whose six
+            // Custody routes declare a ZERO base frame and take their whole
+            // width from a span.
             let resolved = effect
                 .resolved_invocation(route, invocation, tail_count, scalars, identities)
-                .map_err(|_| BuilderError::Projection("invocation-resolve"))?;
+                .map_err(|_| BuilderError::Projection("invocation-resolve"))?
+                .invocation;
             let end = resolved
                 .request_offset
                 .checked_add(resolved.request_len)
@@ -1712,8 +1728,43 @@ fn resolve_invocations(
             let fixed = request_bank
                 .get(resolved.request_offset..end)
                 .ok_or(BuilderError::Projection("request-slice"))?;
+            // A route's child request is its projected bank bytes followed by
+            // every V4 borrowed range it declares, which is
+            // `hot_v3::BorrowedRouteRangesV4::append_to`'s order and the order
+            // `child_request_digest_v5` commits to. The V3 single witness is
+            // the older grammar for the same thing and the two never coexist:
+            // Hot refuses a route that declares both, so this does too.
+            //
+            // Reading only the V3 half is what selector 9's Claims route fell
+            // through: it declares zero bank bytes and no V3 witness, borrows
+            // the Claims packet out of the family request through one V4 range,
+            // and the builder handed `derive_authority` an EMPTY request --
+            // which then refused `UnsupportedRoute` for a magic it could not
+            // read, two files from the route that had never been assembled.
+            let range_count = effect
+                .borrowed_range_count_for_route(route)
+                .map_err(|_| BuilderError::Projection("borrowed-range-count"))?;
             let request = match resolved.borrowed_witness {
-                None => fixed.to_vec(),
+                Some(_) if range_count != 0 => {
+                    return Err(BuilderError::Projection("witness-and-ranges"));
+                }
+                None => {
+                    let mut request = fixed.to_vec();
+                    let mut ordinal = 0_u16;
+                    while ordinal < range_count {
+                        request.extend_from_slice(
+                            effect
+                                .resolved_borrowed_range_for_tail(
+                                    route, ordinal, tail_count, scalars,
+                                )
+                                .map_err(|_| BuilderError::Projection("borrowed-range-resolve"))?
+                                .slice(family_request)
+                                .map_err(|_| BuilderError::Projection("borrowed-range-slice"))?,
+                        );
+                        ordinal = ordinal.checked_add(1).ok_or(BuilderError::Arithmetic)?;
+                    }
+                    request
+                }
                 Some(witness) if fixed.is_empty() => witness
                     .slice(family_request)
                     .map_err(|_| BuilderError::Projection("borrowed-witness"))?

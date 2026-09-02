@@ -1,6 +1,6 @@
 {
   "schema": "dclutch-simulator-series-v2",
-  "captured_at": "2026-09-02T18:12:24+00:00",
+  "captured_at": "2026-09-02T19:11:58+00:00",
   "law_ids": [
     "L1",
     "L2",
@@ -137,8 +137,16 @@
         "500000000",
         "500000000"
       ],
+      "position_totals": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
       "hoard_atoms": "500000000",
       "tracked_collateral": "999999799",
+      "mint_supply": "1000000000",
+      "payer_lamports": "1554337728",
       "checks_held": 2,
       "checks_broken": 1,
       "checks_inapplicable": 5,
@@ -155,8 +163,16 @@
         "500000000",
         "500000000"
       ],
+      "position_totals": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "1554337728",
       "checks_held": 5,
       "checks_broken": 1,
       "checks_inapplicable": 2,
@@ -173,8 +189,16 @@
         "500000000",
         "500000000"
       ],
+      "position_totals": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "1524491622",
       "checks_held": 7,
       "checks_broken": 0,
       "checks_inapplicable": 1,
@@ -191,8 +215,16 @@
         "500000000",
         "500000000"
       ],
+      "position_totals": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "1524416622",
       "checks_held": 8,
       "checks_broken": 0,
       "checks_inapplicable": 0,

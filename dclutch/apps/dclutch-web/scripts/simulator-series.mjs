@@ -96,6 +96,21 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+/**
+ * An exact non-negative decimal string when the census recorded one, else null.
+ *
+ * The three fields this serves -- `mint_supply`, `payer_lamports` and
+ * `position_totals` -- have been read by lib/simulatorSeries.ts since v3 and
+ * written by scripts/campaign-series.mjs since v3, and this producer dropped
+ * all three on the floor. The campaign one REQUIRES them, which is right for a
+ * transcript it also authors; a poller census is older than the fields, so an
+ * absent one here is a capture taken before the census recorded them and is a
+ * true thing to say rather than a refusal.
+ */
+function optional(value, field) {
+  return value === undefined || value === null ? null : exact(value, field);
+}
+
 /** An exact non-negative decimal string, whatever JSON handed us. */
 function exact(value, field) {
   if (typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value)) return value;
@@ -194,8 +209,18 @@ function main() {
       slot: exact(observation.slot, `observation ${index} slot`),
       recorded_at: pollerCycle === null || stageOccurrences.get(stage) !== 1 ? null : instants.get(pollerCycle) ?? null,
       supply: (observation.aggregate_supply ?? []).map((atoms, cell) => exact(atoms, `observation ${index} aggregate_supply ${cell}`)),
+      // What the POSITIONS hold, against what the aggregate says was issued.
+      // L3 is exactly the comparison of these two, and until now the artifact
+      // carried only one side of it.
+      position_totals: (Array.isArray(observation.position_totals) ? observation.position_totals : [])
+        .map((atoms, cell) => exact(atoms, `observation ${index} position_totals ${cell}`)),
       hoard_atoms: exact(observation.hoard_atoms, `observation ${index} hoard_atoms`),
       tracked_collateral: exact(observation.tracked_collateral, `observation ${index} tracked_collateral`),
+      // The Mint's whole supply, which is what L1 compares the tracked total
+      // against, and the fee payer's balance, which is the only quantity in a
+      // census-only record that a run can make move by itself.
+      mint_supply: optional(observation.mint_supply, `observation ${index} mint_supply`),
+      payer_lamports: optional(observation.payer_lamports, `observation ${index} payer_lamports`),
       // A law that does not apply at this boundary is neither held nor broken,
       // so it is counted apart rather than folded into either number.
       checks_held: verdicts.filter((verdict) => verdict.status === 'holds').length,
@@ -238,6 +263,11 @@ function main() {
   for (const point of kept) {
     if (point.supply.length !== outcomeCount) {
       throw new Error(`boundary ${point.stage ?? point.cycle} carries ${point.supply.length} outcomes and the newest carries ${outcomeCount}; this series would be drawing two different markets on one axis`);
+    }
+    // Refused here as well as in the decoder, so a bad width is a producer
+    // error naming its boundary rather than a browser error naming a point.
+    if (point.position_totals.length !== 0 && point.position_totals.length !== outcomeCount) {
+      throw new Error(`boundary ${point.stage ?? point.cycle} carries ${point.position_totals.length} position totals against ${outcomeCount} outcomes`);
     }
   }
 
@@ -358,7 +388,7 @@ function main() {
   const last = kept[kept.length - 1];
   console.log(`simulator-series: ${kept.length} of ${cyclesRun} boundaries kept, ${first.stage ?? `cycle ${first.cycle}`} to ${last.stage ?? `cycle ${last.cycle}`}`);
   console.log(`simulator-series: slot ${first.slot} to ${last.slot}, ${outcomeCount} outcomes, ${status.trades?.landed ?? '?'} trades landed`);
-  const moved = ['slot', 'hoard_atoms', 'tracked_collateral']
+  const moved = ['slot', 'hoard_atoms', 'tracked_collateral', 'mint_supply', 'payer_lamports']
     .filter((field) => new Set(kept.map((point) => point[field])).size > 1);
   console.log(`simulator-series: fields that actually move across these cycles: ${moved.join(', ') || 'none but the supply vector, if that'}`);
   console.log(`simulator-series: ${lawIds.length} laws named (${lawIds.join(' ')})${

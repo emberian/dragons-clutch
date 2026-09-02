@@ -87,11 +87,11 @@ use spl_token_2022_interface::{
 };
 
 use crate::ClaimsSbfError;
-use crate::affine_batch_v2::CorePhaseGateV3;
 use crate::claim_check_compaction_v1::{
     COMPACT_TERMINAL_POSITION_ACCOUNT_V1, allocate_and_assign, close_and_split, observation,
     token_balance,
 };
+use crate::market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1;
 use crate::protocol_position_v2::{LifecycleRentCreditIdentityV2, authenticate_rent_credit};
 use crate::rational_representation_v2::authenticate_finalized_rational_record;
 use crate::signed_delta_v3::SignedDeltaSbfErrorV3;
@@ -1199,7 +1199,7 @@ fn authenticate_core_phase(
     {
         return Err(FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity.into());
     }
-    if !CorePhaseGateV3::TerminalOrRetiring.admits(core.phase) {
+    if !CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase) {
         return Err(FractionalClaimCheckCompactionSbfErrorV1::Phase.into());
     }
     // Checked even though the phase invariant implies it, exactly as the native

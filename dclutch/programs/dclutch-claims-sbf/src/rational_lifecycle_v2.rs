@@ -17,7 +17,7 @@ use dclutch_claims_svm::protocol_position_v2::{
     ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_rational_representation_v2_contract::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReceiptMintSeedsV2,
@@ -55,6 +55,9 @@ use spl_token_2022_interface::{
 };
 
 use super::authenticate_activated_role;
+use crate::market_admission_v1::{
+    CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1, CLAIMS_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1,
+};
 use crate::{
     liability_basis_v2::{LIABILITY_BASIS_MARKET_SEED_V2, MarketViewV2},
     protocol_position_v2,
@@ -670,10 +673,10 @@ fn authenticate_market(
     let core_seeds = MarketCoreStateSeedsV2::new(core.identity);
     let expected_core =
         Pubkey::find_program_address(&core_seeds.as_slices(), common.core_program.key).0;
-    let expected_phase = if header.action.activates() {
-        CorePhase::Open
+    let admission = if header.action.activates() {
+        CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1
     } else {
-        CorePhase::Retiring
+        CLAIMS_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1
     };
     if common.core_market.owner != common.core_program.key
         || common.core_market.key != &expected_core
@@ -682,7 +685,7 @@ fn authenticate_market(
         || core.identity.registry_program.to_bytes() != common.registry.key.to_bytes()
         || core.identity.generation != header.generation
         || core.rent_beneficiary.to_bytes() != header.rent_credit
-        || core.phase != expected_phase
+        || !admission.admits_phase(core.phase)
     {
         return Err(RationalLifecycleSbfErrorV2::Market.into());
     }

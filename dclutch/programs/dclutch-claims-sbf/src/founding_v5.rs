@@ -30,8 +30,8 @@ use dclutch_custody_contract::{
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyReceiptV1,
 };
 use dclutch_market_core_codec::{
-    CoreState, FoundingIntentV5, Identity, Phase as CorePhase, SERIES_FOUNDING_PERMIT_BYTES_V1,
-    STATE_BYTES, SeriesFoundingPermitV1,
+    CoreState, FoundingIntentV5, Identity, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
+    SeriesFoundingPermitV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -51,14 +51,13 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
-use super::affine_batch_v2::{
-    CorePhaseGateV3, authenticate_runtime_product_basis_core_with_rent_v3,
-};
+use super::affine_batch_v2::authenticate_runtime_product_basis_core_with_rent_v3;
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2, MarketViewV2,
     encode_liability_basis_market_v2, encode_liability_basis_position_v2, vector_width,
 };
+use crate::market_admission_v1::CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1;
 use dclutch_claims_svm::liability_basis_state_v2::{
     put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
 };
@@ -1055,7 +1054,7 @@ fn authenticate_product_core(
         market,
         request.product_record_digest(),
         request.linked_basis_record_digest(),
-        CorePhaseGateV3::Exactly(CorePhase::Founding),
+        CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1,
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     let aggregate_seeds = ClaimsFoundingAggregateSeedsV5::new(request.market())

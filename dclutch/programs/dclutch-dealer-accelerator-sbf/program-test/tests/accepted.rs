@@ -766,6 +766,14 @@ fn scenario() -> Scenario {
         source_after: DELIVERY_SOURCE_AFTER,
         destination_before: DELIVERY_DESTINATION_BEFORE,
         replay_revision: DELIVERY_REPLAY_REVISION,
+        // This fixture stages a standalone collateral graph and then DECLARES
+        // its own Custody effect from the staged request, so there is no
+        // composed effect for the semantic context to agree with. Zero here is
+        // the fixture's own choice, restated where a reader can see it rather
+        // than defaulted inside the staging helper.
+        candidate: [0; 32],
+        order: [0; 32],
+        order_nonce: 0,
     });
     let membership_manifest = dealer_scenario_membership_manifest_address_v1(
         MANIFEST_PRODUCER,
@@ -1236,14 +1244,38 @@ async fn submit(
     instruction: Instruction,
     extra_signers: &[&Keypair],
 ) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
+    submit_with_compute_limit(context, instruction, extra_signers, None).await
+}
+
+/// The same, with an explicitly stated compute-unit limit.
+///
+/// `None` keeps the runtime default of 200,000, which is what every row
+/// measured before a route needed to say otherwise. A stated limit prepends one
+/// ComputeBudget instruction, so the census this prints is the census of the
+/// transaction actually submitted, budget instruction included.
+async fn submit_with_compute_limit(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    extra_signers: &[&Keypair],
+    compute_unit_limit: Option<u32>,
+) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let payer = context.payer.insecure_clone();
     let mut signers: Vec<&Keypair> = vec![&payer];
     signers.extend_from_slice(extra_signers);
     let instruction_data = instruction.data.clone();
     let census = packet_census_v1(payer.pubkey(), &instruction);
+    let mut instructions = Vec::new();
+    if let Some(limit) = compute_unit_limit {
+        instructions.push(
+            solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
+                limit,
+            ),
+        );
+    }
+    instructions.push(instruction);
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &instructions,
         Some(&payer.pubkey()),
         &signers,
         blockhash,
@@ -2361,7 +2393,15 @@ async fn prepare_through_evaluation_with_delta(
     for (page_index, page) in scenario.pages.iter().enumerate() {
         let ordinal = u8::try_from(page_index).expect("six pages");
         let (instruction, _) = page_instruction(scenario, payer, ordinal, page);
-        let processed = submit(context, instruction, &[])
+        // A page commit is submitted with a stated budget, because the runtime
+        // default of 200,000 is not one. Measured over the selector-9 scenario
+        // at this commit: pages 0 and 1 cost 1,187,826 and 1,304,367 units,
+        // page 4 costs 399,044, and the other three cost 25,000 to 30,000. The
+        // fixture scenario's pages all fit under the default, which is the only
+        // reason this path ever ran without saying what it needs. That page 1
+        // stands at 93% of the 1.4M ceiling is DEBT, named here rather than
+        // hidden behind a default that happens to be big enough today.
+        let processed = submit_with_compute_limit(context, instruction, &[], Some(1_400_000))
             .await
             .expect("ProgramTest processing");
         processed.result.expect("every page must commit");
@@ -4024,12 +4064,38 @@ async fn submit_v0(
     table: Pubkey,
     addresses: &[Pubkey],
 ) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
+    submit_v0_with_compute_limit(context, instruction, table, addresses, None).await
+}
+
+/// The same, with an explicitly stated compute-unit limit.
+///
+/// The selector-9 commit CPIs the accelerator, which alone exceeded the
+/// runtime's 200,000 default -- `exceeded CUs meter at BPF instruction` inside
+/// the child, surfacing at the parent as `ProgramFailedToComplete`. A route
+/// that invokes a child program has to say what it needs; the default is not a
+/// declaration.
+async fn submit_v0_with_compute_limit(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    table: Pubkey,
+    addresses: &[Pubkey],
+    compute_unit_limit: Option<u32>,
+) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let instruction_data = instruction.data.clone();
+    let mut instructions = Vec::new();
+    if let Some(limit) = compute_unit_limit {
+        instructions.push(
+            solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
+                limit,
+            ),
+        );
+    }
+    instructions.push(instruction);
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &context.payer.pubkey(),
-            &[instruction],
+            &instructions,
             &[AddressLookupTableAccount {
                 key: table,
                 addresses: addresses.to_vec(),
@@ -4175,9 +4241,15 @@ async fn submit_commit(
     )
     .expect("commit packet");
     let table = create_live_lookup_table(context, &addresses).await;
-    submit_v0(context, packet.instruction, table, &addresses)
-        .await
-        .expect("ProgramTest processing")
+    submit_v0_with_compute_limit(
+        context,
+        packet.instruction,
+        table,
+        &addresses,
+        Some(1_400_000),
+    )
+    .await
+    .expect("ProgramTest processing")
 }
 
 #[tokio::test]
@@ -4664,9 +4736,15 @@ async fn submit_activation(
     )
     .expect("activation packet");
     let table = create_live_lookup_table(context, &addresses).await;
-    submit_v0(context, packet.instruction, table, &addresses)
-        .await
-        .expect("ProgramTest processing")
+    submit_v0_with_compute_limit(
+        context,
+        packet.instruction,
+        table,
+        &addresses,
+        Some(1_400_000),
+    )
+    .await
+    .expect("ProgramTest processing")
 }
 
 #[tokio::test]
@@ -8155,6 +8233,13 @@ mod lp_lifecycle {
             source_after: effect.source_after,
             destination_before,
             replay_revision: custody_request.expected_revision,
+            // Derived from the campaign, not copied from the effect the
+            // assertion below compares against: the composer stamps the
+            // obligation account, the counterparty owner, and the replay
+            // revision its transfer ordinal zero was planned against.
+            candidate: campaign.obligation.to_bytes(),
+            order: chain.counterparty_position.position_owner,
+            order_nonce: custody_request.expected_revision,
         });
         assert_eq!(
             MultiLpCustodyRequestV3::Canonical(delivery.request),

@@ -170,8 +170,15 @@ pub enum BuilderError {
     Spans(&'static str),
     /// The lifecycle preplan refused or derived an unusable plan.
     Lifecycle(&'static str),
-    /// A child route's request kind is not yet understood by the builder.
-    UnsupportedRoute,
+    /// A child route's request kind is not yet understood by the builder
+    /// (the payload is the refusing source line).
+    ///
+    /// Twenty-two sites publish this, which during a wall era makes it a
+    /// universal donor: `routes.rs` refuses here for a request that does not
+    /// decode, a frame width that does not match, a role the activation cache
+    /// does not name, and a plan whose geometry the builder cannot express.
+    /// The line is the difference between "some route" and one call site.
+    UnsupportedRoute(u32),
     /// Arithmetic or width joins failed.
     Arithmetic,
 }

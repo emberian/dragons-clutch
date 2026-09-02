@@ -11,9 +11,11 @@ import Sparkline from '@/components/charts/Sparkline';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
 import { marketEditorialV1 } from '@/lib/marketRegistry';
 import {
+  campaignSpendLineV1,
   campaignStageLabelsV1,
   conservationLawRowsV1,
   conservationReadingV1,
+  hoardCoverageLinesV1,
   everyLineFlatV1,
   holdingsReadingV1,
   isCompleteSetV1,
@@ -262,6 +264,11 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
   // never heard of keeps its claim indices and says nothing else.
   const editorial = series.market === null ? null : marketEditorialV1(series.market);
   const supplyLines = issuedSupplyLinesV1(series, editorial?.outcomes ?? null);
+  // Both are null-safe by construction: each returns nothing when the record
+  // did not carry the field, which is what a capture taken before the producer
+  // wrote it looks like.
+  const coverage = hoardCoverageLinesV1(series);
+  const spend = campaignSpendLineV1(series);
   // The boundary's own name where the record has one. `campaignStageLabelsV1`
   // has existed for the campaign series since v3 and this page kept counting,
   // because the pulse producer never wrote `stage` — so a census that chains a
@@ -302,6 +309,49 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
         : undefined}
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
+
+    {/* FE-CHART mount: the collateral, three ways.
+        `hoardCoverageLinesV1` and `campaignSpendLineV1` have existed since the
+        v3 series and /campaign has drawn both since then, while /pulse could
+        draw neither -- not because this page had no room for them but because
+        THIS RUN'S PRODUCER dropped `mint_supply` and `payer_lamports` before
+        they reached the artifact. They are carried now, so the two charts the
+        library already had can finally be pointed at a poller's record.
+
+        The Mint line is what L1 compares the tracked total against, which is
+        the law that broke twice in this capture; the gap between the two IS
+        the finding, drawn. */}
+    {coverage.length > 1 && <>
+      <h3 className="detail-subhead">The collateral, and everything the census could find of it</h3>
+      <Sparkline
+        lines={coverage}
+        xLabels={xLabels}
+        unit="atoms"
+        caption="The market's own vault, every collateral atom the census could name, and the Mint's whole supply."
+        flatNote={everyLineFlatV1(coverage)
+          ? 'every line held still across every boundary drawn'
+          : undefined}
+        emptyReason={NO_SERIES_SENTENCE_V1}
+      />
+      <p className="slot-clock-note">
+        When the tracked total and the Mint&apos;s supply differ, collateral is sitting in an account this
+        census does not name — which is L1, and which is what it caught here.
+      </p>
+    </>}
+
+    {spend !== null && <>
+      <h3 className="detail-subhead">What the run has spent</h3>
+      {/* FE-CHART mount: the one quantity a census-only run moves by itself.
+          A level, drawn as the drop from the first boundary, because the raw
+          balance is eighteen digits and the interesting part is the last six. */}
+      <Sparkline
+        lines={[spend]}
+        xLabels={xLabels}
+        unit="lamports"
+        caption="Lamports the fee payer has spent since the first boundary."
+        emptyReason={NO_SERIES_SENTENCE_V1}
+      />
+    </>}
 
   </>;
 }

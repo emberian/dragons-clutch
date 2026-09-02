@@ -15,6 +15,8 @@ import {
 } from './decoders';
 
 const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_LOG_MESSAGES = 64;
+const MAX_LOG_MESSAGE_BYTES = 512;
 const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
 const MAX_MULTIPLE_ACCOUNTS = 32;
@@ -123,6 +125,25 @@ function exactUnsigned(value: unknown, field: string): number {
 function exactText(value: unknown, field: string, maximum = 512): string {
   if (typeof value !== 'string' || value.trim() !== value || value.length === 0 || value.length > maximum) throw new Error(`${field} is not bounded canonical text`);
   return value;
+}
+
+/**
+ * One log line, bounded but not refused.
+ *
+ * A log message is a program's own `msg!` output, not a protocol field: it can
+ * be empty, or carry trailing whitespace, and neither means the transaction is
+ * malformed. Passing these through `exactText` -- which requires
+ * `value.trim() === value` and a nonzero length -- made a single cosmetic log
+ * line throw away the entire transaction read, including its refusal code. The
+ * bound is kept; the refusal is not.
+ *
+ * ABSORBED FROM apps/dclutch-web/lib/rpc.ts, where it has been correct since
+ * b6f33c33 on 2026-08-27. This pair is exempted from `twinIdentity` for
+ * deliberate SDK-side edits, and the exemption hid a real disagreement for six
+ * days: the browser could read the first devnet fill and the package could not.
+ */
+function boundedLogMessage(value: unknown): string {
+  return typeof value === 'string' ? value.slice(0, MAX_LOG_MESSAGE_BYTES) : '';
 }
 
 function plain(value: unknown): value is Record<string, unknown> {
@@ -637,7 +658,7 @@ export class SolanaRpcClient {
       preBalances: Object.freeze(meta.preBalances.map((value, index) => String(exactUnsigned(value, `pre-balance ${index}`)))),
       postBalances: Object.freeze(meta.postBalances.map((value, index) => String(exactUnsigned(value, `post-balance ${index}`)))),
       logMessages: Object.freeze(Array.isArray(meta.logMessages)
-        ? meta.logMessages.slice(0, 64).map((entry, index) => exactText(entry, `log message ${index}`, 512))
+        ? meta.logMessages.slice(0, MAX_LOG_MESSAGES).map(boundedLogMessage)
         : []),
       returnData: decodeTransactionReturnDataV1(meta.returnData),
       transactionBytes: bytes,

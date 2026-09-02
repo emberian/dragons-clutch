@@ -175,11 +175,20 @@ python3 tools/release/private-validator-lifecycle/run.py \
 # the web app's test suite:
 cd apps/dclutch-web && npm test
 
+# the web app, served locally:
+cd apps/dclutch-web && npm run dev
+
 # workspace checks:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+After anything under `packages/dclutch-sdk` moves — the deployment manifest
+above all — delete `apps/dclutch-web/node_modules/.vite` before trusting what
+`npm run dev` shows you: Vite pre-bundles the package and a cache from before a
+cohort redeploy serves the browser a *dead* cohort's program ids, which the site
+then reports as an honest refusal on a market that is perfectly healthy.
 
 Working on the code itself? Read [`AGENTS.md`](AGENTS.md) and
 [`WAVE.md`](WAVE.md) first — they carry the working agreements this

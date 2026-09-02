@@ -119,9 +119,11 @@ receipt exists for every future, including the one where Pyth never answers.
 role)→ `Terminal` →(`begin_retiring`, permissionless since the C0 weld)→
 `Retiring` →(`retire`)→ `Retired`, returning `core_account_lamports` to the
 RentCredit (`generated.rs:1177-1201`). Redemption is open the whole way: both
-payout routes gate on `CorePhaseGateV3::TerminalOrRetiring`
-(`programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs:412`;
-`rational_terminal_v3.rs:266`).
+payout routes gate on `CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1`
+(`programs/dclutch-claims-sbf/src/market_admission_v1.rs`, read by
+`terminal_settlement_v3.rs` and `rational_terminal_v3.rs`; it was
+`CorePhaseGateV3::TerminalOrRetiring` until the guards took a name the route
+census can read).
 
 **And the gate that would otherwise block retirement is clear for exactly the
 reason these markets are stuck.** Both `retire` (`generated.rs:1179-1181`) and

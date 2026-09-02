@@ -61,9 +61,9 @@ pub fn derive_authority(
                 == Some(PROJECTED_CUSTODY_REQUEST_MAGIC_V1.as_slice()))
     {
         let decoded = ProjectedCustodyRequestV1::decode(request)
-            .map_err(|_| BuilderError::UnsupportedRoute)?;
+            .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
         if decoded.caller_program != trading_program.to_bytes() {
-            return Err(BuilderError::UnsupportedRoute);
+            return Err(BuilderError::UnsupportedRoute(line!()));
         }
         let seeds = ProjectedCustodyCallerSeedsV1::new(decoded, request_digest);
         let authority = Pubkey::find_program_address(&seeds.as_slices(), &trading_program).0;
@@ -79,13 +79,13 @@ pub fn derive_authority(
         FixedRole::Claims => claims_context(request)?,
     };
     let seeds = CallerAuthoritySeedsV1::new(
-        ContentId::new(release_set).map_err(|_| BuilderError::UnsupportedRoute)?,
+        ContentId::new(release_set).map_err(|_| BuilderError::UnsupportedRoute(line!()))?,
         market,
         ExecutionRoleV1::Trading,
         context,
         request_digest,
     )
-    .map_err(|_| BuilderError::UnsupportedRoute)?;
+    .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
     let authority = Pubkey::find_program_address(&seeds.as_slices(), &trading_program).0;
     Ok(Some(DerivedAuthorityV1 {
         coordinate: usize::from(invocation.resolved.fixed_account_start),
@@ -101,8 +101,7 @@ mod tests {
         ProjectedCustodyRequestV1,
     };
     use dclutch_rational_representation_v2_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2,
-        REQUEST_SELECTED_HEADER_BYTES_V3,
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_SELECTED_HEADER_BYTES_V3,
         RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
@@ -257,21 +256,21 @@ mod tests {
 
         let mut wrong_magic = bytes;
         wrong_magic[0] ^= 1;
-        assert_eq!(
+        assert!(matches!(
             derive_authority(&invocation(wrong_magic.to_vec()), id(7), trading_program),
-            Err(BuilderError::UnsupportedRoute)
-        );
+            Err(BuilderError::UnsupportedRoute(_))
+        ));
 
         let mut wrong_reserved_field = bytes;
         wrong_reserved_field[13] = 1;
-        assert_eq!(
+        assert!(matches!(
             derive_authority(
                 &invocation(wrong_reserved_field.to_vec()),
                 id(7),
                 trading_program,
             ),
-            Err(BuilderError::UnsupportedRoute)
-        );
+            Err(BuilderError::UnsupportedRoute(_))
+        ));
 
         let mut changed_digest = bytes;
         changed_digest[688] ^= 1;
@@ -282,20 +281,20 @@ mod tests {
         assert_ne!(changed.request_digest, derived.request_digest);
         assert_ne!(changed.authority, derived.authority);
 
-        assert_eq!(
+        assert!(matches!(
             derive_authority(
                 &invocation(bytes.to_vec()),
                 id(7),
                 Pubkey::new_from_array(id(31)),
             ),
-            Err(BuilderError::UnsupportedRoute)
-        );
+            Err(BuilderError::UnsupportedRoute(_))
+        ));
 
         let truncated = bytes[..PROJECTED_CUSTODY_REQUEST_BYTES_V1 - 1].to_vec();
-        assert_eq!(
+        assert!(matches!(
             derive_authority(&invocation(truncated), id(7), trading_program),
-            Err(BuilderError::UnsupportedRoute)
-        );
+            Err(BuilderError::UnsupportedRoute(_))
+        ));
     }
 
     #[test]
@@ -304,18 +303,18 @@ mod tests {
         assert_eq!(claims_context(&bytes), Ok((id(2), id(5))));
 
         let wrong_role = rational_request(CallerRoleV2::Core);
-        assert_eq!(
+        assert!(matches!(
             claims_context(&wrong_role),
-            Err(BuilderError::UnsupportedRoute)
-        );
+            Err(BuilderError::UnsupportedRoute(_))
+        ));
 
         let mut noncanonical = bytes;
         // Still the last byte of the class's canonically zero reserved tail.
         noncanonical[REQUEST_SELECTED_HEADER_BYTES_V3 - 1] = 1;
-        assert_eq!(
+        assert!(matches!(
             claims_context(&noncanonical),
-            Err(BuilderError::UnsupportedRoute)
-        );
+            Err(BuilderError::UnsupportedRoute(_))
+        ));
     }
 }
 
@@ -336,7 +335,7 @@ fn custody_market_and_context(request: &[u8]) -> Result<([u8; 32], [u8; 32]), Bu
         request
             .get(base + offset..base + offset + 32)
             .and_then(|bytes| bytes.try_into().ok())
-            .ok_or(BuilderError::UnsupportedRoute)
+            .ok_or(BuilderError::UnsupportedRoute(line!()))
     };
     Ok((
         read(CustodyRequestLayoutV1::MARKET)?,
@@ -346,38 +345,43 @@ fn custody_market_and_context(request: &[u8]) -> Result<([u8; 32], [u8; 32]), Bu
 
 fn claims_context(request: &[u8]) -> Result<([u8; 32], [u8; 32]), BuilderError> {
     if request.get(..8) == Some(SPARSE_NATIVE_TRANSFER_MAGIC_V1.as_slice()) {
-        let decoded =
-            SparseNativeTransferV1::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
+        let decoded = SparseNativeTransferV1::decode(request)
+            .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
         let input = decoded.input();
         Ok((input.market, input.request_id))
     } else if request.get(..8) == Some(PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice()) {
         let decoded = ProtocolPositionRequestV2::decode(request)
-            .map_err(|_| BuilderError::UnsupportedRoute)?;
+            .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
         Ok((decoded.market, decoded.position_owner))
     } else if request.get(..8) == Some(AFFINE_BATCH_PLAN_MAGIC_V2.as_slice()) {
-        let decoded =
-            AffineBatchPlanV2::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
+        let decoded = AffineBatchPlanV2::decode(request)
+            .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
         Ok((decoded.market(), decoded.request_id()))
     } else if request.get(..8) == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) {
-        let decoded =
-            SignedDeltaPlanV3::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
+        let decoded = SignedDeltaPlanV3::decode(request)
+            .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
         Ok((decoded.market(), decoded.request_id()))
     } else if request.get(..8) == Some(CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice()) {
-        let decoded =
-            ClaimsFoundingRequestV5::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
+        let decoded = ClaimsFoundingRequestV5::decode(request)
+            .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
         Ok((decoded.market(), decoded.founding_intent_digest()))
     } else if request.get(..8) == Some(REQUEST_MAGIC_V2.as_slice()) {
-        let decoded =
-            RepresentationRequestV2::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
+        let decoded = RepresentationRequestV2::decode(request)
+            .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
         let header = decoded.header();
         if header.caller_role != CallerRoleV2::Trading {
-            return Err(BuilderError::UnsupportedRoute);
+            return Err(BuilderError::UnsupportedRoute(line!()));
         }
         Ok((header.market, header.parent_context))
     } else {
         // Rational lifecycle remains a named boundary until a reproduced
         // family needs it. Representation is decoded through its semantic
         // owner above; no request offset is restated here.
-        Err(BuilderError::UnsupportedRoute)
+        std::eprintln!(
+            "UNKNOWN CLAIMS MAGIC len={} head={:?}",
+            request.len(),
+            request.get(..8)
+        );
+        Err(BuilderError::UnsupportedRoute(line!()))
     }
 }

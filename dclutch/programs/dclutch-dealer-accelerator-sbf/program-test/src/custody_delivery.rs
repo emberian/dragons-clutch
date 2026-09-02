@@ -149,6 +149,20 @@ pub struct DealerDeliveryInputV1 {
     pub destination_before: u64,
     /// Revision the replay cursor stands at when delivery is submitted.
     pub replay_revision: u64,
+    /// `ContextV1::candidate` the composer stamps: the obligation account.
+    ///
+    /// These last three are the semantic context the Dealer composers author
+    /// (`v3_composer::…` and `v3_multi_lp::…` both set
+    /// `candidate = obligation_account`, `order = counterparty owner`,
+    /// `order_nonce = custody replay revision`). A staged delivery is compared
+    /// field-for-field against the composed effect it is supposed to execute,
+    /// so they cannot be assumed zero here and read from the composer there.
+    pub candidate: [u8; 32],
+    /// `ContextV1::order` the composer stamps: the counterparty owner.
+    pub order: [u8; 32],
+    /// `ContextV1::order_nonce` the composer stamps: the replay revision the
+    /// transfer at ordinal zero is planned against.
+    pub order_nonce: u64,
 }
 
 /// The staged collateral graph one Dealer delivery executes against.
@@ -306,12 +320,12 @@ pub fn stage_dealer_delivery_v1(input: DealerDeliveryInputV1) -> DealerDeliveryV
         context: input.context,
         caller_program: input.trading_program.to_bytes(),
         semantic: ContextV1 {
-            candidate: [0; 32],
+            candidate: input.candidate,
             source_owner: [0; 32],
             destination_owner: input.destination_owner.to_bytes(),
-            order: [0; 32],
+            order: input.order,
             parent_request_digest: input.request_digest,
-            order_nonce: 0,
+            order_nonce: input.order_nonce,
             generation: input.generation,
             page_index: 0,
             execution_index: 0,
@@ -359,7 +373,9 @@ pub fn stage_dealer_delivery_v1(input: DealerDeliveryInputV1) -> DealerDeliveryV
 
 /// Read the raw collateral balance out of a staged or observed token account.
 pub fn token_account_amount(bytes: &[u8]) -> u64 {
-    SplAccount::unpack(bytes).expect("canonical token account").amount
+    SplAccount::unpack(bytes)
+        .expect("canonical token account")
+        .amount
 }
 
 /// Read the issued supply out of a staged or observed Mint.
@@ -369,7 +385,9 @@ pub fn mint_total_supply(bytes: &[u8]) -> u64 {
 
 /// Read the owner out of a staged or observed token account.
 pub fn token_account_owner(bytes: &[u8]) -> Pubkey {
-    SplAccount::unpack(bytes).expect("canonical token account").owner
+    SplAccount::unpack(bytes)
+        .expect("canonical token account")
+        .owner
 }
 
 /// The exact canonical body of a collateral Mint with no live authority.

@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+use crate::market_admission_v1::CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 use dclutch_claims_svm::{
     CallerRole,
     composition_v3::validate_sparse_admission_receipt_v3,
@@ -27,9 +28,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
-};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
@@ -681,7 +680,7 @@ fn authenticate_product_and_core(
         None => Pubkey::find_program_address(&base, accounts.core_program.key).0,
     };
     if expected != *accounts.core_market.key
-        || core.phase != CorePhase::Open
+        || !CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase)
         || core.identity.market_id.to_bytes() != input.market
         || core.identity.product_record.to_bytes() != input.product_record_digest
         || core.identity.product_id.to_bytes() != market.product_instance_id

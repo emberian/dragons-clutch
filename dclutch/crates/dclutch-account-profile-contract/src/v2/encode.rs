@@ -4503,6 +4503,199 @@ mod tests {
         assert_eq!(hostile_output_identities, [[0x77; 32]]);
     }
 
+    /// A runtime-inserted span may DECLARE one of its roles to be a fixed
+    /// coordinate, and the projection then authenticates that declaration.
+    ///
+    /// This is the cross-frame half of the alias partition. Two child frames
+    /// composed into one account list routinely name one role each -- a Core
+    /// Market, an activation cache, a caller program -- and without a
+    /// declaration each presents its own representative of one account, which
+    /// the projection refuses as `CrossItemAlias`. With one, the borrower
+    /// carries no independent authority and every account fact must match the
+    /// representative's, so a hostile substitution at the borrowed coordinate
+    /// refuses `AliasMismatch` instead of being read as a second account.
+    #[test]
+    fn a_span_role_declared_a_fixed_coordinate_is_authenticated_against_it() {
+        let exact = |data_length| AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let opaque = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        };
+        let borrowed = |representative| AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::Fixed(representative),
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+        };
+        // Fixed prefix: 0 an ordinary account, 1 the shared role, 2 a fixed
+        // coordinate the span is inserted before. The span's second rule
+        // borrows coordinate 1.
+        let fixed_rules = [exact(0), opaque, exact(0)];
+        let span_rules = [opaque, borrowed(1)];
+        let spans = [DynamicFixedSpanInputV2 {
+            insertion_coordinate: 2,
+            count_scalar: 0,
+            rule_start: 0,
+            rule_stride: 2,
+            minimum: 0,
+            maximum: 2,
+            step: 2,
+        }];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (fixed_rules.len() + span_rules.len()) * RULE_BYTES;
+        let encode = |span_rules: &[AccountRuleWithPrestateInputV2]| {
+            let mut scratch = std::vec![0_u8; width];
+            let mut encoded = std::vec![0_u8; width];
+            encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                TrustedBuiltinIdentityV2::None,
+                &spans,
+                &fixed_rules,
+                span_rules,
+                &[],
+                RegisterGeometryV2 {
+                    common_scalars: 1,
+                    item_scalar_stride: 0,
+                    common_identities: 1,
+                    item_identity_stride: 0,
+                },
+                &mut scratch,
+                &mut encoded,
+            )
+            .map(|()| encoded)
+        };
+        let encoded = encode(&span_rules).expect("span route alias encodes");
+        let profile = AccountProfileV2::decode(&encoded).expect("span route alias decodes");
+        // The declaration, read back: logical coordinate 3 is the span's second
+        // role and its representative is the fixed coordinate 1.
+        assert_eq!(
+            profile.logical_account_count_with_dynamic_spans(0, &[2]),
+            Ok(5)
+        );
+        assert_eq!(profile.representative_with_dynamic_spans(0, &[2], 3), Ok(1));
+        assert_eq!(profile.representative_with_dynamic_spans(0, &[2], 1), Ok(1));
+        assert_eq!(
+            profile.physical_account_count_with_dynamic_spans(0, &[2]),
+            Ok(4)
+        );
+
+        static OWNER: [u8; 32] = [0x44; 32];
+        static SHARED: [u8; 32] = [0x66; 32];
+        static OTHER: [u8; 32] = [0x99; 32];
+        let owner = OWNER;
+        let observe = |borrowed_key: &'static [u8; 32]| {
+            [
+                AccountObservationV1::new(&[1; 32], &OWNER, 1, &[], false, false, false),
+                AccountObservationV1::new(&SHARED, &OWNER, 7, &[], false, false, false),
+                AccountObservationV1::new(&[3; 32], &OWNER, 3, &[], false, false, false),
+                AccountObservationV1::new(borrowed_key, &OWNER, 7, &[], false, false, false),
+                AccountObservationV1::new(&[5; 32], &OWNER, 5, &[], false, false, false),
+            ]
+        };
+        let project = |accounts: &[AccountObservationV1<'_>]| {
+            let input_scalars = [2_u64];
+            let input_identities = [owner];
+            let mut scratch_scalars = [0_u64];
+            let mut output_scalars = [0_u64];
+            let mut scratch_identities = [[0_u8; 32]];
+            let mut output_identities = [[0_u8; 32]];
+            project_dynamic_fixed_spans_atomic(
+                profile,
+                0,
+                &[2],
+                accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+            )
+        };
+        // Honest: the span presents the account the fixed coordinate names, and
+        // the two coordinates are one representative rather than two.
+        let honest = observe(&SHARED);
+        assert_eq!(project(&honest), Ok(()));
+        // Hostile: a different account at the borrowed coordinate. The refusal
+        // is the alias partition's own name, not a width or a privilege.
+        let hostile = observe(&OTHER);
+        assert_eq!(project(&hostile), Err(Error::AliasMismatch));
+        // And the same two accounts with no declaration at all is the refusal
+        // the declaration exists to answer.
+        let undeclared = encode(&[opaque, opaque]).expect("undeclared span encodes");
+        let undeclared = AccountProfileV2::decode(&undeclared).expect("undeclared decodes");
+        let input_scalars = [2_u64];
+        let input_identities = [owner];
+        let mut scratch_scalars = [0_u64];
+        let mut output_scalars = [0_u64];
+        let mut scratch_identities = [[0_u8; 32]];
+        let mut output_identities = [[0_u8; 32]];
+        assert_eq!(
+            project_dynamic_fixed_spans_atomic(
+                undeclared,
+                0,
+                &[2],
+                &honest,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+            ),
+            Err(Error::CrossItemAlias)
+        );
+        // The canonicality conditions, each refused at decode: a borrower that
+        // names a coordinate the span is inserted BEFORE is a forward alias,
+        // and one that carries any prestate but the route alias declares an
+        // authority it does not have.
+        assert_eq!(
+            encode(&[opaque, borrowed(2)])
+                .and_then(|bytes| AccountProfileV2::decode(&bytes).map(|_| ())),
+            Err(Error::InvalidAlias)
+        );
+        let mistyped = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::Fixed(1),
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        };
+        assert_eq!(
+            encode(&[opaque, mistyped])
+                .and_then(|bytes| AccountProfileV2::decode(&bytes).map(|_| ())),
+            Err(Error::InvalidOpaqueDataPrestate)
+        );
+    }
+
     #[test]
     fn dynamic_spans_admit_exact_runtime_width_lifecycle_state_atomically() {
         let lifecycle = AccountRuleWithPrestateInputV2 {

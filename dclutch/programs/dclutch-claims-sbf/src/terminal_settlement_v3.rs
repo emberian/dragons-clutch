@@ -106,8 +106,8 @@ use solana_sdk_ids::system_program;
 
 use super::{
     ClaimsSbfError,
-    affine_batch_v2::CorePhaseGateV3,
     liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2,
+    market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
     rational_terminal_v3::{
         RationalTerminalFrameV3, TerminalCustodyInputV3, execute_terminal_custody_v3,
     },
@@ -463,7 +463,7 @@ fn execute(
         // Retiring as well as Terminal because `begin_retiring` is
         // permissionless, and a redemption that refused there would hand any
         // stranger the power to end this holder's claim.
-        CorePhaseGateV3::TerminalOrRetiring,
+        CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
     )?;
     let packet_digest = hash(&prepared.packet).to_bytes();
     if signed_receipt.packet_digest() != packet_digest
@@ -662,7 +662,7 @@ fn authenticate_core(
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     let core = CoreState::decode(&bytes).map_err(|_| ClaimsSbfError::Identity)?;
-    if !CorePhaseGateV3::TerminalOrRetiring.admits(core.phase)
+    if !CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase)
         || accounts[11].key
             != &Pubkey::find_program_address(
                 &MarketCoreStateSeedsV2::new(core.identity).as_slices(),

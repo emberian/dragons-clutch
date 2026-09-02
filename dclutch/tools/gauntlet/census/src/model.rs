@@ -84,7 +84,9 @@ pub struct Route {
     /// same from here. The census says only what it read.
     ///
     /// More than one entry is a conjunction: every gate on the path admits, so
-    /// the route's admissible set is their intersection.
+    /// the route's admissible set is their intersection -- EXCEPT that entries
+    /// sharing an `alternative` group are one gate written as a selection, and
+    /// unite before they intersect with the rest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub admissible_prestates: Vec<PhaseAdmission>,
 }
@@ -108,6 +110,16 @@ pub struct PhaseAdmission {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prestates: Vec<Prestate>,
     pub provenance: Provenance,
+    /// Which alternative group this entry belongs to, if any.
+    ///
+    /// Entries sharing a group are MUTUALLY EXCLUSIVE branches of one
+    /// selection -- `if action == Redeem { A } else { B }` -- so the route's
+    /// admissible set over that group is their UNION. Entries with no group
+    /// are conjunctive with each other and with every group, exactly as the
+    /// field's own doc says. Read a group as a conjunction and a route that
+    /// admits three phases reads as admitting none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternative: Option<u32>,
 }
 
 /// Whether a constant names exact prestates or whole phases.

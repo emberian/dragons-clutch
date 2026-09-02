@@ -68,7 +68,7 @@ use spl_token_2022_interface::instruction as token_instruction;
 
 use crate::{
     ClaimsSbfError,
-    affine_batch_v2::CorePhaseGateV3,
+    market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
     protocol_position_v2::{
         AuthenticatedProtocolPositionCloseParentV2, LifecycleRentCreditIdentityV2,
         PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2, authenticate_rent_credit,
@@ -1139,7 +1139,9 @@ fn authenticate_terminal_market(
     {
         return Err(ClaimsSbfError::Identity.into());
     }
-    if !CorePhaseGateV3::TerminalOrRetiring.admits(core.phase) || core.terminal_receipt.is_none() {
+    if !CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase)
+        || core.terminal_receipt.is_none()
+    {
         return Err(ClaimsSbfError::Identity.into());
     }
     Ok(())

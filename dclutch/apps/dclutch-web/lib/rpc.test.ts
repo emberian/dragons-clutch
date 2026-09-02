@@ -315,6 +315,36 @@ describe('bounded finalized RPC client', () => {
     expect(observation?.accountAddresses).toEqual([]);
   });
 
+  it('bounds a cosmetic log line instead of throwing the whole transaction away', async () => {
+    // MEASURED, not imagined: the first devnet fill
+    // (3FpQ2fSE...B1P2eJ, 2026-09-02) carries a program log line that is not
+    // "bounded canonical text" -- padded, and one of sixty-odd. Running each
+    // line through `exactText` made that ONE line refuse the entire read, so
+    // this client could not see the protocol's first crossing while the
+    // browser's could. A log message is a program's own `msg!` output and not
+    // a protocol field; the byte bound is kept and the refusal is not.
+    const fetcher: typeof fetch = async () => response({
+      slot: 92,
+      blockTime: null,
+      transaction: [btoa(String.fromCharCode(1, 2, 3, 4)), 'base64'],
+      meta: {
+        err: null,
+        fee: 5000,
+        preBalances: [],
+        postBalances: [],
+        logMessages: ['  Program log: padded  ', '', 'x'.repeat(900), 7],
+      },
+    });
+    const observation = await new SolanaRpcClient('http://127.0.0.1:8899', fetcher).transaction('8'.repeat(88));
+    expect(observation).not.toBeNull();
+    expect(observation?.logMessages[0]).toBe('  Program log: padded  ');
+    expect(observation?.logMessages[1]).toBe('');
+    expect(observation?.logMessages[2]).toHaveLength(512);
+    // A non-string is not a log line, and is carried as the absence of one
+    // rather than as a reason to refuse the transaction it rode in on.
+    expect(observation?.logMessages[3]).toBe('');
+  });
+
   it('reports missing finalized return data as explicit absence', async () => {
     const fetcher: typeof fetch = async () => response({
       slot: 92,
