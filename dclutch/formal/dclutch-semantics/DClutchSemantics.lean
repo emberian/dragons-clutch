@@ -115,9 +115,36 @@ Fresh Lean-owned semantics for dClutch's compact protocol specializer.
 This package intentionally has no dependency on the neighboring research
 repositories or on the Rust implementation.  The Rust implementation is a
 differential oracle, not a source of formal definitions.
+
+## What this list is, and what it is NOT
+
+It is the package's ENTRY POINT: `import DClutchSemantics` gets everything
+named here, so a module missing from it is a module a downstream importer does
+not receive.  That is the only thing a missing line costs.
+
+It is NOT what decides whether a module is BUILT.  `lakefile.toml` gives the
+library `globs = ["DClutchSemantics.+"]`, and the glob -- not this list --
+selects what `lake build` compiles.  a1cb5217 recorded the opposite ("a schema
+module nobody imports therefore compiles only when something names it") and
+added four modules here to close a build gap.  The facts it reported were
+right, the inference was not, and the difference is worth a paragraph because
+it changes what a lane does next.
+
+Measured 2026-09-02 with a deliberate `(1 : Nat) = 2` in `RefusalBandsV1`,
+which this list did not name at the time: BOTH bare `lake build` and
+`lake build DClutchSemantics` exit 1, and the build log names the module at
+job 131 of 132.  So the coverage was never missing.  Add a module here because
+you want importers to get it, not to make it compile -- and if you want to know
+whether a module compiles, put an error in it and look, which is the check that
+settled this one.
 -/
 import DClutchSemantics.AbiCoverage
 import DClutchSemantics.ClaimsLiabilityBasisStateV2Abi
 import DClutchSemantics.DealerScenarioTradeV4Abi
 import DClutchSemantics.CoreFoundFrameV3Abi
 import DClutchSemantics.LifecycleRentV2Abi
+import DClutchSemantics.CapabilityFundingHeaderV2Abi
+import DClutchSemantics.GeneralRuntimeWireV2
+import DClutchSemantics.ProductBasisV3
+import DClutchSemantics.ProductBasisV3Agreement
+import DClutchSemantics.RefusalBandsV1

@@ -297,8 +297,16 @@ struct GuardScan {
     /// Constants named outside any variant-keyed match arm and outside any
     /// boolean branch: gates every route reaching this function passes.
     unconditional: BTreeSet<String>,
-    /// `Enum::Variant => CONSTANT` arms, keyed by the variant's own name.
+    /// `Enum::Variant => CONSTANT` arms, keyed by the variant's own name --
+    /// and an or-pattern arm keyed under EVERY variant it names, because the
+    /// constant gates each of them and none of their siblings. Reading such an
+    /// arm as unconditional publishes `authenticate_core`'s founding-only set
+    /// as the gate of the routes that admit a terminal and close a fund.
     by_variant: BTreeMap<String, BTreeSet<String>>,
+    /// Call targets reached only through a variant-keyed arm, keyed the same
+    /// way. A call under one arm is not a call every route through this
+    /// function makes.
+    calls_by_variant: BTreeMap<String, BTreeSet<String>>,
     /// The two sides of one `if`/`else`, each as what it declares and what it
     /// calls.
     ///
@@ -334,8 +342,9 @@ struct BranchSide {
 struct GuardVisitor<'a> {
     index: &'a AdmissionIndex,
     scan: GuardScan,
-    /// The variant whose match arm we are inside, if any.
-    variant: Option<String>,
+    /// The variants whose match arm we are inside. Empty is unconditional; an
+    /// or-pattern arm holds every variant it names.
+    variant: BTreeSet<String>,
     /// Whether we are inside a boolean branch, whose contents gate only the
     /// executions that took it.
     conditional: bool,
@@ -359,17 +368,16 @@ impl<'a> GuardVisitor<'a> {
             self.scan.conditional.insert(name.to_string());
             return;
         }
-        match &self.variant {
-            Some(variant) => {
-                self.scan
-                    .by_variant
-                    .entry(variant.clone())
-                    .or_default()
-                    .insert(name.to_string());
-            }
-            None => {
-                self.scan.unconditional.insert(name.to_string());
-            }
+        if self.variant.is_empty() {
+            self.scan.unconditional.insert(name.to_string());
+            return;
+        }
+        for variant in &self.variant {
+            self.scan
+                .by_variant
+                .entry(variant.clone())
+                .or_default()
+                .insert(name.to_string());
         }
     }
 
@@ -382,6 +390,9 @@ impl<'a> GuardVisitor<'a> {
         self.scan.conditional.extend(scan.calls);
         for names in scan.by_variant.into_values() {
             self.scan.conditional.extend(names);
+        }
+        for calls in scan.calls_by_variant.into_values() {
+            self.scan.conditional.extend(calls);
         }
     }
 
@@ -397,7 +408,13 @@ impl<'a> GuardVisitor<'a> {
                 .cloned()
                 .chain(inner.scan.by_variant.values().flatten().cloned())
                 .collect(),
-            calls: inner.scan.calls.clone(),
+            calls: inner
+                .scan
+                .calls
+                .iter()
+                .cloned()
+                .chain(inner.scan.calls_by_variant.values().flatten().cloned())
+                .collect(),
         };
         (side, inner.scan)
     }
@@ -416,8 +433,16 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
             let target = render_path(&path.path);
             if self.conditional {
                 self.scan.conditional.insert(target);
-            } else {
+            } else if self.variant.is_empty() {
                 self.scan.calls.insert(target);
+            } else {
+                for variant in &self.variant {
+                    self.scan
+                        .calls_by_variant
+                        .entry(variant.clone())
+                        .or_default()
+                        .insert(target.clone());
+                }
             }
         }
         visit::visit_expr_call(self, node);
@@ -426,8 +451,13 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
     fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
         self.visit_expr(&node.expr);
         for arm in &node.arms {
-            let outer = self.variant.take();
-            self.variant = pattern_variant(&arm.pat).or(outer.clone());
+            let outer = core::mem::take(&mut self.variant);
+            let named = pattern_variants(&arm.pat);
+            self.variant = if named.is_empty() {
+                outer.clone()
+            } else {
+                named
+            };
             if let Some(guard) = &arm.guard {
                 self.visit_expr(&guard.1);
             }
@@ -471,21 +501,51 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
     }
 }
 
-/// The variant name an arm pattern selects, when it selects exactly one.
+/// Every variant name an arm pattern selects.
 ///
-/// An or-pattern selects several and is deliberately not read: a constant
-/// under it gates every one of them, which is what the unconditional set
-/// already means for the arm's own routes.
-fn pattern_variant(pattern: &Pat) -> Option<String> {
+/// An or-pattern selects several, and a constant under it gates each of them
+/// -- and none of the sibling arms. Reading it as naming NOTHING made it
+/// unconditional, so `authenticate_core`'s
+/// `CreateFund | VerifyFundReady => ..` arm published a founding-only set as
+/// the gate of the two sibling routes that admit a terminal and close a fund.
+/// An empty result is the honest "this arm names no variant", which inherits
+/// whatever match encloses it.
+fn pattern_variants(pattern: &Pat) -> BTreeSet<String> {
     match pattern {
-        Pat::Path(path) => path.path.segments.last().map(|s| s.ident.to_string()),
-        Pat::TupleStruct(tuple) => tuple.path.segments.last().map(|s| s.ident.to_string()),
-        Pat::Struct(structure) => structure.path.segments.last().map(|s| s.ident.to_string()),
+        Pat::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .into_iter()
+            .collect(),
+        Pat::TupleStruct(tuple) => tuple
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .into_iter()
+            .collect(),
+        Pat::Struct(structure) => structure
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .into_iter()
+            .collect(),
         Pat::Ident(ident) => ident
             .subpat
             .as_ref()
-            .and_then(|(_, inner)| pattern_variant(inner)),
-        _ => None,
+            .map(|(_, inner)| pattern_variants(inner))
+            .unwrap_or_default(),
+        Pat::Or(alternatives) => alternatives
+            .cases
+            .iter()
+            .flat_map(pattern_variants)
+            .collect(),
+        Pat::Reference(inner) => pattern_variants(&inner.pat),
+        Pat::Paren(inner) => pattern_variants(&inner.pat),
+        _ => BTreeSet::new(),
     }
 }
 
@@ -496,6 +556,18 @@ pub struct GuardMap<'a> {
     /// Every route handler in the program: the descent stops at these, so one
     /// route's gates never leak into the entry route that dispatches to it.
     boundaries: BTreeSet<String>,
+    /// Each route's handler and parent, so an action route can start its scan
+    /// at every ancestor as well as at itself.
+    ///
+    /// The boundary rule stops one route's gates leaking UP into the entry
+    /// route that dispatches to it; the parent chain is the other direction,
+    /// and it is not symmetric. Resolution authenticates the Market in
+    /// `process_core_effect` -- one `match request.action` with four arms --
+    /// and only then dispatches to `process_create`, `process_verify`,
+    /// `process_admit` and `process_close`. The gate each of those four passes
+    /// is written in their parent, keyed by their own action, and a scan that
+    /// started at the child alone reported all four as ungated.
+    lineage: BTreeMap<String, (String, Option<String>)>,
     /// Keyed by `module::function`, the identity a call is resolved from.
     scans: BTreeMap<String, GuardScan>,
 }
@@ -506,10 +578,20 @@ impl<'a> GuardMap<'a> {
             .iter()
             .map(|route| handler_path(route).to_string())
             .collect();
+        let lineage = routes
+            .iter()
+            .map(|route| {
+                (
+                    route.id.clone(),
+                    (handler_path(route).to_string(), route.parent.clone()),
+                )
+            })
+            .collect();
         Self {
             index,
             crate_index,
             boundaries,
+            lineage,
             scans: BTreeMap::new(),
         }
     }
@@ -521,7 +603,7 @@ impl<'a> GuardMap<'a> {
             let mut visitor = GuardVisitor {
                 index: self.index,
                 scan: GuardScan::default(),
-                variant: None,
+                variant: BTreeSet::new(),
                 conditional: false,
             };
             visitor.visit_block(&function.block);
@@ -570,7 +652,12 @@ impl<'a> GuardMap<'a> {
             let here = key
                 .rsplit_once("::")
                 .map_or(String::new(), |(module, _)| module.to_string());
-            let calls: Vec<String> = scan.calls.iter().cloned().collect();
+            let mut calls: Vec<String> = scan.calls.iter().cloned().collect();
+            if let Some(selected) = selected
+                && let Some(keyed) = scan.calls_by_variant.get(selected)
+            {
+                calls.extend(keyed.iter().cloned());
+            }
             for call in calls {
                 frontier.push((here.clone(), call, depth + 1));
             }
@@ -578,15 +665,45 @@ impl<'a> GuardMap<'a> {
         names
     }
 
+    /// This route's handler, then each ancestor's, outermost last.
+    ///
+    /// A cycle in the recorded parents would loop forever, so the walk is
+    /// bounded by the number of routes and stops the first time it revisits an
+    /// id -- an enumerator that hangs is worse than one that under-reports.
+    fn ancestry(&self, route: &Route) -> Vec<String> {
+        let mut handlers = vec![handler_path(route).to_string()];
+        let mut seen: BTreeSet<String> = [route.id.clone()].into_iter().collect();
+        let mut parent = route.parent.clone();
+        while let Some(id) = parent {
+            if !seen.insert(id.clone()) {
+                break;
+            }
+            let Some((handler, next)) = self.lineage.get(&id) else {
+                break;
+            };
+            if !handlers.contains(handler) {
+                handlers.push(handler.clone());
+            }
+            parent = next.clone();
+        }
+        handlers
+    }
+
     /// The gates `route` passes, as declared constants.
     pub fn for_route(&mut self, route: &Route) -> Vec<PhaseAdmission> {
-        let start = handler_path(route).to_string();
         let selected = route_variant(route);
         let mut names: BTreeSet<String> = BTreeSet::new();
         let mut groups: Vec<BTreeSet<String>> = Vec::new();
         let mut pending: Vec<(String, [BranchSide; 2], usize)> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
-        let mut frontier = vec![(String::new(), start.clone(), 0usize)];
+        // The route's own handler and every ancestor's, all at depth 0: a
+        // parent's gates are not one call away from the child, they are on the
+        // same execution before it.
+        let mut frontier: Vec<(String, String, usize)> = self
+            .ancestry(route)
+            .into_iter()
+            .map(|handler| (String::new(), handler, 0usize))
+            .collect();
         while let Some((module, path, depth)) = frontier.pop() {
             if depth > MAX_GUARD_DEPTH {
                 continue;
@@ -613,7 +730,12 @@ impl<'a> GuardMap<'a> {
             for pair in scan.alternatives.clone() {
                 pending.push((here.clone(), pair, depth));
             }
-            let calls: Vec<String> = scan.calls.iter().cloned().collect();
+            let mut calls: Vec<String> = scan.calls.iter().cloned().collect();
+            if let Some(selected) = &selected
+                && let Some(keyed) = scan.calls_by_variant.get(selected)
+            {
+                calls.extend(keyed.iter().cloned());
+            }
             for call in calls {
                 frontier.push((here.clone(), call, depth + 1));
             }
@@ -823,7 +945,7 @@ mod tests {
         let mut visitor = GuardVisitor {
             index: &index,
             scan: GuardScan::default(),
-            variant: None,
+            variant: BTreeSet::new(),
             conditional: false,
         };
         visitor.visit_block(&function.block);
@@ -883,6 +1005,103 @@ mod tests {
         assert_eq!(taken.names, ["A_V1".to_string()].into_iter().collect());
         assert!(untaken.names.is_empty());
         assert!(untaken.calls.contains("basis"));
+    }
+
+    /// An or-pattern arm gates every variant it names, and no sibling arm's.
+    ///
+    /// Resolution's `authenticate_core` matches `CreateFund | VerifyFundReady`
+    /// against two sibling arms for `AdmitTerminal` and `CloseFund`. Read as
+    /// naming no variant, the arm was unconditional and published a
+    /// founding-only set as the gate of the two routes that admit a terminal
+    /// and close a fund -- neither of which the arm can be reached by.
+    #[test]
+    fn an_or_pattern_arm_keys_every_variant_it_names_and_no_others() {
+        let scan = scan_body(
+            "fn process() { match action { A::Create | A::Verify => gate(A_V1),              A::Admit => gate(B_V1), A::Close => gate(C_V1) } }",
+            &["A_V1", "B_V1", "C_V1"],
+        );
+        assert!(scan.unconditional.is_empty(), "{:?}", scan.unconditional);
+        assert_eq!(
+            scan.by_variant.get("Create"),
+            Some(&["A_V1".to_string()].into_iter().collect())
+        );
+        assert_eq!(
+            scan.by_variant.get("Verify"),
+            Some(&["A_V1".to_string()].into_iter().collect())
+        );
+        assert_eq!(
+            scan.by_variant.get("Admit"),
+            Some(&["B_V1".to_string()].into_iter().collect())
+        );
+        assert_eq!(
+            scan.by_variant.get("Close"),
+            Some(&["C_V1".to_string()].into_iter().collect())
+        );
+    }
+
+    /// A call made only inside one arm is not a call every route makes.
+    #[test]
+    fn a_call_under_one_arm_is_keyed_to_that_arm() {
+        let scan = scan_body(
+            "fn process() { match action { A::Admit => admit(), A::Close => close() } }",
+            &[],
+        );
+        assert!(scan.calls.is_empty(), "{:?}", scan.calls);
+        assert_eq!(
+            scan.calls_by_variant.get("Admit"),
+            Some(&["admit".to_string()].into_iter().collect())
+        );
+        assert_eq!(
+            scan.calls_by_variant.get("Close"),
+            Some(&["close".to_string()].into_iter().collect())
+        );
+    }
+
+    /// An action route starts its scan at every ancestor as well as itself.
+    ///
+    /// Resolution writes the Market gate in `process_core_effect`, one match
+    /// with four arms, and only then dispatches; the gate `process_create`
+    /// passes is written in its parent and keyed by its own action. A scan
+    /// that started at the child alone reported all four as ungated.
+    #[test]
+    fn a_routes_ancestry_is_itself_then_every_parent() {
+        let route = |id: &str, handler: &str, parent: Option<&str>| Route {
+            id: id.to_string(),
+            kind: crate::model::RouteKind::Action,
+            parent: parent.map(str::to_string),
+            handler: handler.to_string(),
+            selectors: Vec::new(),
+            provenance: "x:1".into(),
+            cfg: Vec::new(),
+            admissible_prestates: Vec::new(),
+        };
+        let entry = route("r/entry", "entry", None);
+        let child = route("r/child#Create", "create", Some("r/entry"));
+        let index = AdmissionIndex::default();
+        let crate_index = CrateIndex::default();
+        let map = GuardMap::new(&index, &crate_index, &[entry, child.clone()]);
+        assert_eq!(map.ancestry(&child), vec!["create", "entry"]);
+    }
+
+    /// A parent cycle stops rather than hanging the enumerator.
+    #[test]
+    fn a_parent_cycle_terminates() {
+        let route = |id: &str, handler: &str, parent: &str| Route {
+            id: id.to_string(),
+            kind: crate::model::RouteKind::Action,
+            parent: Some(parent.to_string()),
+            handler: handler.to_string(),
+            selectors: Vec::new(),
+            provenance: "x:1".into(),
+            cfg: Vec::new(),
+            admissible_prestates: Vec::new(),
+        };
+        let left = route("r/left", "left", "r/right");
+        let right = route("r/right", "right", "r/left");
+        let index = AdmissionIndex::default();
+        let crate_index = CrateIndex::default();
+        let map = GuardMap::new(&index, &crate_index, &[left.clone(), right]);
+        assert_eq!(map.ancestry(&left), vec!["left", "right"]);
     }
 
     /// A tag naming a tuple or a union of actions is not one variant, and a

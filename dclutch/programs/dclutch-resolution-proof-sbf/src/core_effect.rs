@@ -12,8 +12,7 @@ use dclutch_capability_contract::{
 use dclutch_market_core_codec::{
     CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_DIGEST_DOMAIN_V1,
     CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2, CoreEffectAckV1, CoreEffectActionV1,
-    CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2, Phase as CorePhase,
-    Readiness as CoreReadiness, Role,
+    CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2, Role,
 };
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
@@ -55,6 +54,10 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
+use crate::market_admission_v1::{
+    RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1, RESOLUTION_FUND_ADMISSIBLE_PRESTATES_V1,
+    RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1,
+};
 use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
     authenticate_rent, cached_deployment_observation,
@@ -910,8 +913,7 @@ fn authenticate_direct_close_market(
         || state.identity.selected_release_set.to_bytes() != request.release_set
         || state.identity.resolution_policy.to_bytes() != request.role.source_material
         || state.identity.capability_manifest.to_bytes() != request.role.capability_manifest
-        || state.phase != CorePhase::Retiring
-        || state.readiness != CoreReadiness::Consumed
+        || !RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
         || state.terminal_receipt.map(|value| value.to_bytes())
             != Some(direct.certificate.key.to_bytes())
         || state.rent_beneficiary.to_bytes() != request.role.beneficiary
@@ -1109,11 +1111,7 @@ fn authenticate_direct_market(
         || state.identity.resolution_policy.to_bytes() != request.role.source_material
         || state.identity.capability_manifest.to_bytes() != request.role.capability_manifest
         || state.terminal_receipt.is_some()
-        || !matches!(
-            (state.phase, state.readiness),
-            (CorePhase::Founding, CoreReadiness::Prepaid)
-                | (CorePhase::Open, CoreReadiness::Consumed)
-        )
+        || !RESOLUTION_FUND_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
         || Pubkey::find_program_address(&seeds.as_slices(), direct.core_program.key).0
             != *direct.market.key
     {
@@ -1773,22 +1771,19 @@ fn authenticate_core(
             // the Resolution subset ledger was already initialized before
             // Market Found. This route only consumes that immutable authority.
             if state.terminal_receipt.is_some()
-                || !matches!(
-                    (state.phase, state.readiness),
-                    (CorePhase::Founding, CoreReadiness::Prepaid)
-                        | (CorePhase::Open, CoreReadiness::Consumed)
-                )
+                || !RESOLUTION_FUND_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
             {
                 return Err(ResolutionError::MarketAuthority.into());
             }
         }
         ResolutionCoreActionV1::AdmitTerminal => {
-            if state.phase != CorePhase::Open || state.readiness != CoreReadiness::Consumed {
+            if !RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
+            {
                 return Err(ResolutionError::MarketAuthority.into());
             }
         }
         ResolutionCoreActionV1::CloseFund => {
-            if state.phase != CorePhase::Retiring || state.readiness != CoreReadiness::Consumed {
+            if !RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness) {
                 return Err(ResolutionError::MarketAuthority.into());
             }
         }

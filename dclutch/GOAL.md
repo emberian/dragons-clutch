@@ -3431,3 +3431,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `478a350e` **the package refused the first fill's transaction over one padded log line** — the web fixed it on 08-27 and
   the SDK never absorbed it, behind a twin exemption). README's milestone paragraph brought current.
 - Cuts: `5e1ee8b9e`, `99bdf5822`, `98cb056e8`.
+
+### Lane map delta — 2026-09-02 16:40 EDT
+- DEALER closed (`efca6966`, rows `af24774c`): **the trade leg (selector 9) installs its bundle and COMMITS on real ELFs at
+  376,030 CU** — a route span may declare a role as an alias of a fixed-frame coordinate (backward, representative its own,
+  prestate AuthenticatedRouteAlias; the gate opened on the terms of an already-written, unreachable canonicality guard);
+  four more walls fell behind it, each a reader seeing half a shape (trailing-span demand; an empty child request for a
+  zero-bank V4 route; V3 base account starts under a V4 span; three fields hard-coded to zero). Page 1 at 93% of the ceiling
+  is named debt. Next wall: the delivery activation refuses `CustodySbfError::Replay` — the composed effect expects the
+  replay revision read before its own reservation advanced it (sequencing). Owed by the profile: the Custody frame's twelve
+  non-endpoint roles as fixed coordinates ahead of every span. Unit 2 (the alias lock shape) still one-series-or-nothing.
+  → DEALER **`a2bbdb8d4511b10bb`**: the sequencing wall, the profile shape, unit 2 as one series.
+- Cuts: `f64c17f26`.

@@ -2,9 +2,7 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, Readiness as CoreReadiness,
-};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, PythReleaseV1, ReceiverConfigV2View,
     VerifiedEncodedVaaV1,
@@ -48,6 +46,7 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
+use crate::market_admission_v1::RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1;
 use crate::{
     ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
@@ -582,8 +581,7 @@ fn authenticate_current_submission(
         .map_err(|_| ResolutionError::MarketAuthority)?;
     let market = CoreState::decode(&market_data).map_err(|_| ResolutionError::MarketAuthority)?;
     if frame.account(5).owner != frame.account(12).key
-        || market.phase != CorePhase::Open
-        || market.readiness != CoreReadiness::Consumed
+        || !RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1.admits(market.phase, market.readiness)
         || market.identity.market_id.to_bytes() != request.market
         || market.identity.generation != request.generation
         || market.identity.registry_program.to_bytes() != frame.account(8).key.to_bytes()

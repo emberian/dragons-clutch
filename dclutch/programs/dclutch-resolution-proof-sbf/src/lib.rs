@@ -24,6 +24,7 @@ mod core_effect;
 /// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
 /// compartment a deadline-driven terminal spends.
 pub mod funded;
+mod market_admission_v1;
 mod pre_market_funding_abort_v1;
 mod pre_market_funding_v1;
 mod provider_instruction_v3;

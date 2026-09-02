@@ -258,6 +258,7 @@ pub(crate) struct FunctionFact {
 }
 
 /// A parsed program crate: every function in it, indexed for call resolution.
+#[derive(Default)]
 pub(crate) struct CrateIndex {
     functions: Vec<FunctionFact>,
 }

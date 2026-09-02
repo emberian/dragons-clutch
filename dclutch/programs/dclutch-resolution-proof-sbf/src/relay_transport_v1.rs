@@ -61,9 +61,7 @@ use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerStatusV2, FundingLedgerV2,
 };
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, Readiness as CoreReadiness,
-};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_product_runtime_v2::{ContentId as ProductContentId, ResultDomainV2};
 use dclutch_product_runtime_v2_svm_reader::{
     AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
@@ -126,6 +124,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
+use crate::market_admission_v1::RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1;
 use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
     authenticate_rent,
@@ -263,8 +262,7 @@ pub(crate) fn authenticate_market(
     let state = CoreState::decode(&market_data).map_err(|_| ResolutionError::MarketAuthority)?;
     if market.owner != core.key
         || market.executable
-        || state.phase != CorePhase::Open
-        || state.readiness != CoreReadiness::Consumed
+        || !RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1.admits(state.phase, state.readiness)
         || state.identity.generation != generation
         || state.identity.resolution_policy.to_bytes() != source_material_id
         || Pubkey::find_program_address(
