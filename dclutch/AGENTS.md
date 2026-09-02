@@ -39,20 +39,15 @@ is not a source tree to copy wholesale.
   private-key material outside the devnet keypair this work requires.
 - Local commits are ordinary work. Add named files explicitly while parallel
   work is live.
-- **Shared-index discipline, earned 2026-09-01, three times.** Commit with
-  `git commit -o <exact paths>`, never `git add` + `git commit` — a lane using
-  the shared index swept another lane's staged rename into its own commit, and a
-  second swept seven of another lane's staged files. **And `-o` is the floor, not
-  the ceiling:** when two lanes edit *one file*, the staged hunk carries both, and
-  a third lane committed another's unstaged ceiling change that way. **Read
-  `git diff --cached` before every commit.** If it shows a hunk you did not write,
-  `git apply --cached -R` that hunk out (or stage only yours with `git add -p`),
-  then commit. **Run `cargo check` on the
-  affected workspace before any SBF build**: two dealer `accepted` runs died on
-  another lane's half-applied refactor mid-build, and the check gate is what got
-  the third through. If `.git/index.lock` is held, check `ps` for a live
-  `git`/`op-ssh-sign` and wait; it clears in seconds and deleting it corrupts the
-  other lane's commit.
+- **Commit through `tools/lane.sh commit <msg> -- <paths>`, nothing else.** It has
+  enforced `git commit --only` and read back the commit's actually-changed paths
+  since 2026-08-30; on 2026-09-01 four lanes committed another lane's hunks by
+  using `git add`/`git commit`/`-o` by hand instead. **Its known limit, learned
+  the hard way:** `--only` commits the working-tree state of a path, so when two
+  lanes edit *one file* it cannot separate their hunks — stage only your own with
+  `git apply --cached` and commit *without* `--only` in that case, and say so in
+  the message. Run `cargo check` on the touched workspace before any SBF build. If
+  `.git/index.lock` is held, check `ps` for a live `git`/`op-ssh-sign` and wait.
 - **The live tree is `/Users/ember/dev/dclutch`. There is a STALE NESTED COPY
   of it at `/Users/ember/dev/dragons-clutch/dclutch`** — the publication subtree
   host, frozen at whatever the last cut was. The shell's working directory
