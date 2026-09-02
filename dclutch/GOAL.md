@@ -3333,3 +3333,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   stages. Next candidate wall named: `authenticate_funding_readiness_route_v1(…, "accept")` at market.rs:11359.
   → COHORT-13 RESUME **`a293fa83f654b0965`**: rebuild at be012a46, recover, activate (root from `facts.root`; 4GzDzNxj… must
   become occupied), admissions, the fee-bearing fill, settlement, the census with the recorded flags. ~42 h to the deadline.
+- Started beside the resume: MAGICS **`a3d44f2e3d858266a`** (DCLTDMR1, d5e005d1…, DCLTSTV3; genref green; the owed refusal
+  rows for five lanes' codes; emission-guard COVERAGE row) and DEALER **`a525f0a87751fcc5a`** (the trade leg's V3
+  borrowed-witness RequestProfile in the bundle engine at registers.rs:802; then the 70 → 64 lock frame move).
