@@ -2451,3 +2451,8 @@ to build the repair** — `claims_composition_v3.rs:639-641` refuses any
 representation route that is not `Once`, and `AffineOnce` would bind K == N, which
 the family exists to deny. The scholar's four *facts* held; the *inference* was
 inverted. Third time today. See WAVE.md, "REVERSAL".
+
+### Lane map delta — 20:15
+
+- `acbf4b5b36cee638f` NON-PRICE — **closed, row complete.** Non-price resolution exists, is witnessed twice on real ELFs (rows 0 and 1, 24/24), the founding belief is a family (`SpotBand | StatedProposition`, mismatched pair unrepresentable), zero-cut and the width-2 tension closed as consequences, observable #2 cost 35 emitted Rust lines and 23 lines of TOML.
+- `a0a5010a5119d7214` C-09 WITNESS — drive the fourteen unwitnessed resolution routes on real ELFs; bindings from observation only; structurally undrivable → `blocked.json` with reason and owner; recovery-ladder routes are ember's open ruling, not a fixture to fake.
