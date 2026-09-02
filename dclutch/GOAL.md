@@ -3545,3 +3545,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   two-arm `match` as a selection; derive where the surface decodes the machine; `source.close-fund` NO_ROUTE.
   Declined → SOURCE-TOLERANCE **`(spawned)`**: cadence_tolerance_seconds inert on the single-snapshot Pyth routes.
 - Cuts: `d3caa5cf1`, `368da2065`.
+- SOURCE-TOLERANCE closed (`0b0a05e93`, rows `4d132a371`): one author for the window predicate (`contains_observation`;
+  the narrow site at provider_join_v2.rs:244 calls it); **the finding was sharper than briefed** — a positive tolerance
+  cannot reach either single-snapshot Pyth route in any constructible state (three gates: `tolerating_cadence` refuses
+  nonzero on a terminal window and is the sole mutator; `decode` routes through it; the obligation refuses non-Terminal
+  windows), so the change is the identity everywhere reachable — proven by removing a gate in scratch: END+120 admitted,
+  END+121 refused; cohort-13's real window runs through both joins (its actual publication, 616 s late, refuses on the
+  schedule bound). The offchain preflight (flagship_resolution.rs:1941) had used the WIDE spelling — the more permissive of
+  the two; they agree now. → TIDY **`(spawned)`**: the design note's §4 overstates twice; clippy red in
+  source_admission_v1.rs (f6e9b8d08).
+- Cuts: `7c7d93b24`, `0c338096d`.

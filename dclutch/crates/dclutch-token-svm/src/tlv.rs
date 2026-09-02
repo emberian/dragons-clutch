@@ -25,6 +25,9 @@ pub(crate) const TLV_START_OFFSET: usize = 166;
 /// Account-type discriminant of a Mint.
 pub(crate) const MINT_ACCOUNT_TYPE: u8 = 1;
 
+/// Account-type discriminant of a token Account.
+pub(crate) const ACCOUNT_ACCOUNT_TYPE: u8 = 2;
+
 /// Bytes one TLV entry spends on its type and length header.
 pub(crate) const TLV_HEADER_BYTES: usize = 4;
 
@@ -33,6 +36,9 @@ pub(crate) const AUTHORITY_EXTENSION_BYTES: usize = 32;
 
 /// `MintCloseAuthority` extension type.
 pub(crate) const MINT_CLOSE_AUTHORITY_EXTENSION: u16 = 3;
+
+/// `ImmutableOwner` extension type. Its value is empty; the type IS the fact.
+pub(crate) const IMMUTABLE_OWNER_EXTENSION: u16 = 7;
 
 /// `MetadataPointer` extension type.
 pub(crate) const METADATA_POINTER_EXTENSION: u16 = 18;

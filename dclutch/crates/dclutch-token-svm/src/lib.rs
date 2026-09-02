@@ -62,7 +62,10 @@ pub use release::{
     ADAPTER_RELEASE_BYTES, ADAPTER_RELEASE_MAGIC, ADAPTER_RELEASE_SCHEMA_VERSION,
     CollateralAdapterReleaseV1, ExtensionStoragePolicy, PRODUCTION_ADAPTER_RELEASES, ProfileKind,
 };
-pub use state::{ACCOUNT_BYTES, AccountState, COption, MINT_BYTES, Mint, TokenAccount};
+pub use state::{
+    ACCOUNT_BYTES, AccountState, COption, IMMUTABLE_OWNER_ACCOUNT_BYTES,
+    IMMUTABLE_OWNER_ACCOUNT_SUFFIX, MINT_BYTES, Mint, TokenAccount,
+};
 
 /// One raw SVM public-key or address value without an SDK dependency.
 pub type Address = [u8; 32];

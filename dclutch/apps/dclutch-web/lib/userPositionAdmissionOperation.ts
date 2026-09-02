@@ -104,7 +104,7 @@ export type PreparedAdmissionV1 = CompiledAdmissionTransactionV1 & Readonly<{
  * putting its instructions into one message for the wallet.
  */
 export async function prepareUserPositionAdmissionV1(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'probe' | 'blockTime' | 'multipleAccounts' | 'latestBlockhash'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'probe' | 'blockTime' | 'multipleAccounts' | 'multipleAccountDataSlices' | 'latestBlockhash'>,
   request: UserPositionAdmissionRequestV1,
   loadPlanner: typeof loadUserPositionAdmissionWasmV1 = loadUserPositionAdmissionWasmV1,
 ): Promise<PreparedAdmissionV1> {

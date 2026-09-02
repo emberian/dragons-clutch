@@ -2,12 +2,45 @@
 
 use core::convert::TryInto;
 
-use crate::{Address, Error, Result};
+use crate::{
+    Address, Error, Result,
+    tlv::{
+        ACCOUNT_ACCOUNT_TYPE, ACCOUNT_TYPE_OFFSET, IMMUTABLE_OWNER_EXTENSION, TLV_HEADER_BYTES,
+        TLV_START_OFFSET, TlvCursor, require_extension,
+    },
+};
 
 /// Exact SPL Token Mint base width.
 pub const MINT_BYTES: usize = 82;
 /// Exact SPL Token Account base width.
 pub const ACCOUNT_BYTES: usize = 165;
+
+/// Exact width of a Token-2022 account carrying only `ImmutableOwner`.
+///
+/// The base account, the account-type discriminant that follows it, and one
+/// empty TLV entry: 165 + 1 + 4. This is what the Associated Token Account
+/// program produces under Token-2022 for EVERY wallet, so it is the width a
+/// stranger's payout destination actually has.
+pub const IMMUTABLE_OWNER_ACCOUNT_BYTES: usize = TLV_START_OFFSET + TLV_HEADER_BYTES;
+
+/// The exact bytes the ATA program appends to a base account under Token-2022.
+///
+/// The account-type discriminant, then `ImmutableOwner` at length zero. Spelled
+/// from the named constants rather than typed, and pinned to
+/// [`TokenAccount::parse_base_or_immutable_owner`] by that function's own
+/// tests, so a producer staging this shape and the parser admitting it cannot
+/// drift apart.
+pub const IMMUTABLE_OWNER_ACCOUNT_SUFFIX: [u8; IMMUTABLE_OWNER_ACCOUNT_BYTES - ACCOUNT_BYTES] = {
+    let extension = IMMUTABLE_OWNER_EXTENSION.to_le_bytes();
+    let length = 0_u16.to_le_bytes();
+    [
+        ACCOUNT_ACCOUNT_TYPE,
+        extension[0],
+        extension[1],
+        length[0],
+        length[1],
+    ]
+};
 
 const MINT_AUTHORITY_OFFSET: usize = 0;
 const MINT_SUPPLY_OFFSET: usize = 36;
@@ -196,6 +229,57 @@ impl TokenAccount {
         Ok(output)
     }
 
+    /// Parse a base account, or the exact account the ATA program creates.
+    ///
+    /// THE CONTRADICTION THIS RESOLVES. The wallet-terminal input operator
+    /// documents the owner's associated token account as "the conventional
+    /// destination for a payout" and derives it. Under Token-2022 the ATA
+    /// program ALWAYS adds `ImmutableOwner` -- it is not optional and no caller
+    /// chooses it -- so that account is 170 bytes and [`TokenAccount::parse`],
+    /// which refuses every extension suffix by design, refuses it. Measured on
+    /// cohort-13, on chain: the founder's ATA was created, read back at 170
+    /// bytes, and the payout refused it. "The conventional destination" and
+    /// "every extension suffix refuses" cannot both stand, and the one that has
+    /// to give is the refusal, because the alternative is that no ordinary
+    /// wallet can ever be paid.
+    ///
+    /// WHY THIS ONE EXTENSION AND NO OTHER. `ImmutableOwner` says the token
+    /// program will refuse `SetAuthority(AccountOwner)` on this account. Every
+    /// check a payout makes against a destination -- its mint, its owner, its
+    /// initialized state -- is STRENGTHENED by that, because the owner it
+    /// authenticated cannot afterwards be changed. The base layout offers no
+    /// such guarantee. No other extension has that property: a transfer hook, a
+    /// transfer fee, a confidential balance or a CPI guard all change what a
+    /// transfer MEANS, and each would have to be reasoned about on its own.
+    /// They stay refused, and the width check is what refuses them -- 170 bytes
+    /// admits exactly one empty TLV entry and the type check pins which one.
+    pub fn parse_base_or_immutable_owner(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() == ACCOUNT_BYTES {
+            return Self::parse(bytes);
+        }
+        if bytes.len() != IMMUTABLE_OWNER_ACCOUNT_BYTES {
+            return Err(Error::InvalidLength);
+        }
+        if read_byte(bytes, ACCOUNT_TYPE_OFFSET)? != ACCOUNT_ACCOUNT_TYPE {
+            return Err(Error::InvalidExtensionLayout);
+        }
+        let mut cursor = TlvCursor::new(
+            bytes
+                .get(TLV_START_OFFSET..)
+                .ok_or(Error::InvalidExtensionLayout)?,
+        );
+        let entry = cursor.next()?.ok_or(Error::InvalidExtensionLayout)?;
+        require_extension(entry, IMMUTABLE_OWNER_EXTENSION, 0)?;
+        if cursor.next()?.is_some() {
+            return Err(Error::InvalidExtensionLayout);
+        }
+        Self::parse(
+            bytes
+                .get(..ACCOUNT_BYTES)
+                .ok_or(Error::InvalidExtensionLayout)?,
+        )
+    }
+
     /// Parse exactly 165 bytes, refusing truncation and every extension suffix.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != ACCOUNT_BYTES {
@@ -358,6 +442,186 @@ pub(crate) mod fixtures {
         for (destination, source) in output.iter_mut().skip(offset).zip(input) {
             *destination = *source;
         }
+    }
+}
+
+#[cfg(test)]
+mod immutable_owner_tests {
+    use super::fixtures::{MINT_KEY, OWNER_KEY, account};
+    use super::*;
+    use crate::tlv::put_tlv;
+    use std::vec::Vec;
+
+    /// Cohort-13's founder ATA `4BENW7YgFnAbagoRr8rAdD8p2kqhwiyvtyDzNKj8ef6W`,
+    /// read off devnet at finalized commitment.
+    ///
+    /// Not a fixture shaped like an ATA: the bytes the Associated Token Account
+    /// program itself wrote, for a real wallet, on the cluster this protocol
+    /// runs on. Its last five bytes are the whole finding -- account type `2`,
+    /// then extension `7` at length `0` -- and they are why the payout refused
+    /// it and why a 165-byte auxiliary account had to be created by hand.
+    const DEVNET_FOUNDER_ATA_V1: [u8; IMMUTABLE_OWNER_ACCOUNT_BYTES] = [
+        0xcc, 0x23, 0xee, 0x31, 0x28, 0xc7, 0x38, 0x13, 0x07, 0x1e, 0xba, 0x3e, 0x6d, 0x84, 0x68,
+        0x6f, 0xe0, 0x02, 0x09, 0x39, 0x73, 0xe7, 0x07, 0x26, 0x22, 0x39, 0xca, 0xbd, 0x45, 0x8e,
+        0xaf, 0x14, 0xd2, 0xb7, 0x0b, 0x80, 0xfb, 0x1b, 0x46, 0x47, 0x55, 0x97, 0xf0, 0xdb, 0x11,
+        0xe8, 0x7d, 0xb4, 0x61, 0x27, 0xb8, 0x1c, 0x0e, 0xf5, 0x19, 0xf8, 0x1e, 0x38, 0x48, 0x1a,
+        0x60, 0x98, 0xa0, 0x97, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x02, 0x07, 0x00, 0x00, 0x00,
+    ];
+
+    /// One base account with an arbitrary extension suffix appended.
+    fn suffixed(account_type: u8, extension_type: u16, value: &[u8]) -> Vec<u8> {
+        let mut bytes = account(OWNER_KEY, 7).to_vec();
+        bytes.push(account_type);
+        put_tlv(&mut bytes, extension_type, value);
+        bytes
+    }
+
+    #[test]
+    fn the_real_devnet_ata_is_admitted_and_its_base_fields_survive_the_suffix() {
+        assert_eq!(DEVNET_FOUNDER_ATA_V1.len(), 170);
+        // The three bytes that made it unpayable, named rather than implied.
+        assert_eq!(DEVNET_FOUNDER_ATA_V1[ACCOUNT_TYPE_OFFSET], ACCOUNT_ACCOUNT_TYPE);
+        assert_eq!(
+            u16::from_le_bytes([DEVNET_FOUNDER_ATA_V1[166], DEVNET_FOUNDER_ATA_V1[167]]),
+            IMMUTABLE_OWNER_EXTENSION,
+        );
+        assert_eq!(
+            u16::from_le_bytes([DEVNET_FOUNDER_ATA_V1[168], DEVNET_FOUNDER_ATA_V1[169]]),
+            0,
+        );
+
+        assert_eq!(
+            TokenAccount::parse(&DEVNET_FOUNDER_ATA_V1),
+            Err(Error::InvalidLength),
+            "the base parser still refuses it; the admission is a separate function",
+        );
+        let parsed = TokenAccount::parse_base_or_immutable_owner(&DEVNET_FOUNDER_ATA_V1)
+            .expect("the ATA program's own output is admitted");
+        assert_eq!(parsed.state, AccountState::Initialized);
+        assert_eq!(parsed.amount, 0);
+        assert!(parsed.delegate.is_none());
+        assert!(parsed.close_authority.is_none());
+        assert!(parsed.native_reserve.is_none());
+        // Read from the same bytes by hand, so the parser is not its own witness.
+        assert_eq!(parsed.mint.as_slice(), &DEVNET_FOUNDER_ATA_V1[0..32]);
+        assert_eq!(parsed.owner.as_slice(), &DEVNET_FOUNDER_ATA_V1[32..64]);
+    }
+
+    #[test]
+    fn the_published_suffix_is_the_one_the_ata_program_wrote_and_the_one_admitted() {
+        assert_eq!(
+            DEVNET_FOUNDER_ATA_V1[ACCOUNT_BYTES..],
+            IMMUTABLE_OWNER_ACCOUNT_SUFFIX,
+            "the constant and the chain agree byte for byte",
+        );
+        let mut staged = account(OWNER_KEY, 3).to_vec();
+        staged.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&staged)
+                .expect("the published suffix is admitted")
+                .amount,
+            3,
+        );
+    }
+
+    #[test]
+    fn a_base_account_still_parses_through_the_admitting_function() {
+        let bytes = account(OWNER_KEY, 41);
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&bytes),
+            TokenAccount::parse(&bytes),
+        );
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&bytes)
+                .expect("base account")
+                .mint,
+            MINT_KEY,
+        );
+    }
+
+    #[test]
+    fn every_other_extension_suffix_is_still_refused() {
+        // The four that would each change what a transfer MEANS, at the exact
+        // width `ImmutableOwner` occupies where their own value is empty. Only
+        // the type distinguishes them, so only the type check can refuse them.
+        for extension_type in [
+            1_u16,  // TransferFeeConfig
+            5,      // NonTransferable
+            11,     // CpiGuard
+            14,     // TransferHookAccount
+            6,      // ImmutableOwner is 7; 6 is its neighbour and is not it
+            8,      // MemoTransfer
+        ] {
+            let bytes = suffixed(ACCOUNT_ACCOUNT_TYPE, extension_type, &[]);
+            assert_eq!(bytes.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
+            assert_eq!(
+                TokenAccount::parse_base_or_immutable_owner(&bytes),
+                Err(Error::InvalidExtensionLayout),
+                "extension {extension_type} must not be admitted",
+            );
+        }
+    }
+
+    #[test]
+    fn the_admission_is_pinned_to_one_width_one_account_type_and_one_entry() {
+        // A Mint's account-type discriminant with ImmutableOwner's bytes.
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&suffixed(1, IMMUTABLE_OWNER_EXTENSION, &[])),
+            Err(Error::InvalidExtensionLayout),
+        );
+        // ImmutableOwner with a nonempty value: the right type at the wrong width.
+        let wide = suffixed(ACCOUNT_ACCOUNT_TYPE, IMMUTABLE_OWNER_EXTENSION, &[0]);
+        assert_eq!(wide.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES + 1);
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&wide),
+            Err(Error::InvalidLength),
+        );
+        // ImmutableOwner followed by a second entry.
+        let mut two = suffixed(ACCOUNT_ACCOUNT_TYPE, IMMUTABLE_OWNER_EXTENSION, &[]);
+        put_tlv(&mut two, 11, &[0]);
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&two),
+            Err(Error::InvalidLength),
+        );
+        // One byte of the base account cut away, with the suffix intact.
+        let mut short = DEVNET_FOUNDER_ATA_V1.to_vec();
+        short.remove(0);
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&short),
+            Err(Error::InvalidLength),
+        );
+        // The base account with the account-type byte and nothing after it.
+        let mut typed = account(OWNER_KEY, 1).to_vec();
+        typed.push(ACCOUNT_ACCOUNT_TYPE);
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&typed),
+            Err(Error::InvalidLength),
+        );
+    }
+
+    #[test]
+    fn the_admitted_suffix_does_not_launder_a_corrupt_base_account() {
+        // The extension says the OWNER cannot change. It says nothing about the
+        // lifecycle byte, and admitting it must not skip any base check.
+        let mut bytes = DEVNET_FOUNDER_ATA_V1;
+        bytes[ACCOUNT_STATE_OFFSET] = 9;
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&bytes),
+            Err(Error::InvalidAccountState),
+        );
+        let mut tagged = DEVNET_FOUNDER_ATA_V1;
+        tagged[ACCOUNT_DELEGATE_OFFSET] = 2;
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&tagged),
+            Err(Error::InvalidOptionTag),
+        );
     }
 }
 

@@ -360,6 +360,76 @@ chooses to move them onto Hot, and there is no reason to do that first.
 Consolidating the two generations is a separate, later question, and this
 document recommends explicitly **not** bundling it into the admission work.
 
+### 6.4 The planner generation that had no route, and what deleting it cost
+
+`programs/dclutch-trading-sbf/src/direct/` — `buy_escrow`, `sell_escrow`,
+`complementary`, `inline`, and the `lifecycle`/`physical` they shared — was
+6,509 lines whose every public function was called only by its own
+`#[cfg(test)]` sibling. Nothing outside that directory named `crate::direct`,
+`process_instruction` had no arm for it, and `docs/reference/routes.md` listed
+no route. It has been deleted.
+
+**It was the pre-artifact generation of this document's own subject**, and
+three readings settle that rather than one:
+
+- `inline.rs`'s header said so itself: "a differential/executable oracle, not a
+  family dispatch authority". `hot_v3` grew exactly that oracle as
+  `DirectHotCrosscheckV3::InlineOrdinary`, importing `inline_candidate_v2`
+  directly rather than through the wrapper. Two second opinions existed for one
+  route and only one was ever linked to it.
+- When the dispatch §4 specified was actually built (`3e4ff9980`, wall A), its
+  author re-derived the registered creation through
+  `successor::register_intent_v2` and called neither escrow module.
+  `registered_sell_then_buy_execute_on_current_elves` is no longer `#[ignore]`,
+  and the three Custody routes a Buy's registration takes are emitted by
+  `registered_effect_artifacts_v4.rs:249-256` — the same three that
+  `DIRECT_BUY_ESCROW_REGISTRATION_STEPS_V2 = 3` hand-planned beside them.
+- §8's measured fact contradicts `sell_escrow.rs` outright. Its header claimed
+  "an affine Claims effect moves the signed maximum fill from maker to record";
+  the landed Sell moves nothing.
+
+**The control is the strongest one available: the deployed ELF is
+byte-identical across the deletion.** At `0f0d7f57b`, with and without the
+directory, `deploy/dclutch_trading_sbf.so` is 2,326,864 bytes with SHA-256
+`8ccf7875…`, and `llvm-nm` finds no `dclutch_trading_sbf::direct::*` symbol in
+the linked object either way (positive control: 182 `hot_v3` symbols in the
+same run). The SBF linker was already collecting all of it. So the family cost
+**zero on-chain bytes**, and its deletion cannot change program behaviour.
+
+What it did cost is the part worth recording: 51 of the Trading link's 955
+frameguard rows, 36,544 bytes of object-file stack frames (largest single
+frame 3,904, `prepare_buy_escrow_fill_v2`), 567,364 bytes of rlib, 22 lib unit
+tests — and three documents citing unreachable code as protocol authority,
+which is why this is a paragraph and not a line.
+`TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1` went with it: four guard sites,
+all inside the deleted escrow contexts, and no other reader.
+
+**Two things this deletion makes owed.**
+
+- **A second wave inside `dclutch-direct-codec`, not taken here.** The
+  registered/complementary settlement planners in `successor.rs` (roughly
+  `:1700-2400` — `settle_registered_ordinary_v2`, `RegisteredTerminalResultV2`,
+  `RegisteredOrdinaryInputV2`, `RegisteredOrdinarySettlementV2`,
+  `ComplementaryActionV2`, `ComplementarySettlementV2`,
+  `RegisteredFillCandidateV2`, `RegisteredRecordCloseV2`,
+  `RegisteredRecordAfterFillV2`, `RegisteredIntentCreationV2`,
+  `DirectRegisteredIntentV2`) and the projection half of
+  `inline_candidate_v2.rs` (`prepare_inline_ordinary_candidate_v2`,
+  `project_inline_custody_effect_v2`, `encode_inline_claims_request_v2`,
+  `verify_inline_effect_partition_v2`) now have **no consumer outside that
+  crate**. They are not swept here on purpose: §6.2's terminal draft is
+  untracked in the same crate, and cascading a deletion into a file someone
+  has open is how two lanes lose an afternoon. Whoever finishes §7.7 should
+  decide whether the draft needs any of them before they go.
+- **`LIVENESS_CENSUS_2026_08_29.md` R13 is now measurably cheaper than it
+  says.** It prices the Claims-close guard repair as "a TWO-ELF change over
+  five binding sites" because "trading-sbf re-derives rather than passes
+  through (`direct/sell_escrow.rs:497-523` rebuilds the entire expected receipt
+  and compares all 19 fields)". That site was reached by no route and is gone;
+  the remaining Trading binders are `claims_composition_v3.rs:1042` and
+  `dealer/v3_lifecycle.rs:257`. The census is a dated snapshot and is left as
+  written — the correction lives here, where the repair would be planned.
+
 ## 7. Buildable order
 
 Each step is independently landable and independently falsifiable.
@@ -414,6 +484,16 @@ back if they are gone.
 Whether that asymmetry is the intended design decides §6.2's first bullet, and
 therefore decides whether the terminal artifacts or the creation artifacts move.
 Both are consistent with themselves; they are not consistent with each other.
+
+One written statement of the escrowing branch was deleted with §6.4's planner
+generation — `direct/sell_escrow.rs` described a registered Sell that admits a
+record-owned Claims Position and moves the signed maximum fill into it. It was
+reached by no route and settled nothing, but a reader ruling this question in
+that direction will want to have read it: `git show 0f0d7f57b:programs/dclutch-trading-sbf/src/direct/sell_escrow.rs`.
+The surface layer has meanwhile ruled the other way for vocabulary only —
+`apps/dclutch-web/lib/reservationVocabulary.test.ts` forbids the browser to say
+"escrowed" of a Sell — which is a statement about today's behaviour and not
+about the intent this section is asking after.
 
 ## 9. What must not be done
 

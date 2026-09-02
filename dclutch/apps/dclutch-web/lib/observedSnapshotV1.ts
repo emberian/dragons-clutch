@@ -15,7 +15,7 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
  * every check — which accounts may be vacant included; this owns the reads.
  */
 
-export type ObservedRoundClientV1 = Pick<SolanaRpcClient, 'multipleAccounts'>;
+export type ObservedRoundClientV1 = Pick<SolanaRpcClient, 'multipleAccounts' | 'multipleAccountDataSlices'>;
 
 function base64(bytes: Uint8Array): string {
   let binary = '';

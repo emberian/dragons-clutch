@@ -172,10 +172,14 @@ stuck:
 
 So the single Hoard→External path in Claims is `execute_terminal_custody_v3`
 (`rational_terminal_v3.rs:332-349`), reachable only from the two
-`TerminalOrRetiring` routes; and the one Open-phase merge-out that does move
-collateral, `programs/dclutch-trading-sbf/src/direct/complementary.rs:801-813`,
-needs the live capability root these markets can never have. **Terminal
-admission is not merely the cheapest route out — it is the only one.**
+`TerminalOrRetiring` routes; and there is no Open-phase merge-out at all. The
+planner this line used to cite — `trading-sbf/src/direct/complementary.rs` —
+was reached by no route and has been deleted; `MergeRegistered` (6) and
+`MergeInline` (14) refuse at
+`programs/dclutch-trading-sbf/src/hot_v3.rs:5986-5988` with
+`UnsupportedContent`, because no crosscheck planner for them exists. **Terminal
+admission is not merely the cheapest route out — it is the only one**, and it
+is now the only one by a wider margin than this decision measured.
 
 A small honesty note that follows from this: the web portfolio reports
 `kind: 'mergeable'` for any Open market with a complete set

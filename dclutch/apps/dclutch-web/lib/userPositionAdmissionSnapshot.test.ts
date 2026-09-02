@@ -120,6 +120,7 @@ function client(asked: string[][], floors: (string | undefined)[]): SolanaRpcCli
     finalizedSlot: async () => '900',
     probe: async () => ({ genesisHash: MARKET, solanaCore: '2.0.0', endpoint: 'http://x', featureSetHash: '' }),
     blockTime: async () => '1790000000',
+    ...SIZING_ROUND_V1,
     multipleAccounts: async (addresses: ReadonlyArray<string>, floor?: string) => {
       asked.push([...addresses]);
       floors.push(floor);
@@ -139,6 +140,23 @@ function client(asked: string[][], floors: (string | undefined)[]): SolanaRpcCli
     },
   } as unknown as SolanaRpcClient;
 }
+
+/**
+ * The sizing round every client double now needs, and nothing more.
+ *
+ * `acquireFinalizedAccountsInChunksV1` learns each address's data length before
+ * it splits, so a double that answers only `multipleAccounts` is no longer a
+ * node. It is deliberately separate from the body reads each double records:
+ * those count the ROUNDS this derivation makes, and a size decides only how one
+ * round is split. A vacant answer plans every address at zero bytes, which is
+ * the one chunk these fixtures were always read in.
+ */
+const SIZING_ROUND_V1 = {
+  multipleAccountDataSlices: async (addresses: ReadonlyArray<string>) => ({
+    slot: '900',
+    accounts: addresses.map((address) => ({ address, account: null })),
+  }),
+};
 
 const request = Object.freeze({
   market: MARKET,
@@ -166,6 +184,7 @@ describe('the linked-basis record is addressed by the digest that addresses it',
       finalizedSlot: async () => '900',
       probe: async () => ({ genesisHash: MARKET, solanaCore: '2.0.0', endpoint: 'http://x', featureSetHash: '' }),
       blockTime: async () => '1790000000',
+      ...SIZING_ROUND_V1,
       multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
         slot: '900',
         accounts: addresses.map((address, index) => ({
@@ -188,6 +207,7 @@ describe('the linked-basis record is addressed by the digest that addresses it',
       finalizedSlot: async () => '900',
       probe: async () => ({ genesisHash: MARKET, solanaCore: '2.0.0', endpoint: 'http://x', featureSetHash: '' }),
       blockTime: async () => '1790000000',
+      ...SIZING_ROUND_V1,
       multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
         slot: '900',
         accounts: addresses.map((address, index) => ({
@@ -263,6 +283,7 @@ describe('the admission snapshot is derived and finalized', () => {
       finalizedSlot: async () => '900',
       probe: async () => ({ genesisHash: MARKET, solanaCore: '2.0.0', endpoint: 'http://x', featureSetHash: '' }),
       blockTime: async () => '1790000000',
+      ...SIZING_ROUND_V1,
       multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
         slot: '900',
         accounts: addresses.map((address) => ({
@@ -280,6 +301,7 @@ describe('the admission snapshot is derived and finalized', () => {
       finalizedSlot: async () => '900',
       probe: async () => ({ genesisHash: MARKET, solanaCore: '2.0.0', endpoint: 'http://x', featureSetHash: '' }),
       blockTime: async () => '1790000000',
+      ...SIZING_ROUND_V1,
       multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
         slot: '900',
         accounts: addresses.map((address) => ({ address, account: null })),

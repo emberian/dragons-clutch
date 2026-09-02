@@ -410,6 +410,61 @@ pub enum LifecycleOperationV3 {
     AuthenticateOrCreate,
 }
 
+/// The effect permissions one lifecycle operation requires of the coordinates
+/// its plan names.
+///
+/// This is the one author of that requirement, and it has four readers:
+/// [`StateLifecyclePolicyV4::validate_account_profile`] checks an artifact
+/// against it, `plan_create` and `plan_close` re-check it against the same
+/// profile at execution, and a producer emitting an AccountProfile beside a
+/// lifecycle policy GRANTS from it.
+///
+/// It exists because those readers used to each write the mask by hand.
+/// 73ffb0108 added the `Close` requirement and updated the General producer's
+/// grants; the Fractional V1 producer, which grants no permissions at all, was
+/// not updated, so its release compiler returned `Err` for every input from
+/// that day until the never-executed test that covers it was finally run.
+/// Nothing was red, because the two halves of one fact had two authors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlanEffectPermissionsV3 {
+    /// Required of the recipe's state account.
+    pub state: u8,
+    /// Required of `payer`, which a creating operation must also name.
+    pub payer: u8,
+    /// Required of `rent_credit`. A creating operation must name one and
+    /// requires no permission of it; `Close` credits it the closed principal.
+    pub rent_credit: u8,
+}
+
+impl LifecycleOperationV3 {
+    /// The exact effect permissions this operation requires. See
+    /// [`PlanEffectPermissionsV3`].
+    pub const fn plan_effect_permissions(self) -> PlanEffectPermissionsV3 {
+        match self {
+            // Authentication mutates nothing, so it grants nothing.
+            Self::Authenticate => PlanEffectPermissionsV3 {
+                state: 0,
+                payer: 0,
+                rent_credit: 0,
+            },
+            // `AuthenticateOrCreate` is deliberately the same row as `Create`:
+            // its `LifecycleBound` prestate admits both a live state and a
+            // vacancy, so admitting only the authenticate branch would make
+            // the same selected artifacts pass or fail on current chain state.
+            Self::Create | Self::AuthenticateOrCreate => PlanEffectPermissionsV3 {
+                state: EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
+                payer: EFFECT_PERMISSION_DEBIT_LAMPORTS,
+                rent_credit: 0,
+            },
+            Self::Close => PlanEffectPermissionsV3 {
+                state: EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
+                payer: 0,
+                rent_credit: EFFECT_PERMISSION_CREDIT_LAMPORTS,
+            },
+        }
+    }
+}
+
 /// Whose rent a lifecycle-managed state carries.
 ///
 /// A state's refund identity is a property OF THE STATE, not of the
@@ -3291,16 +3346,10 @@ fn plan_create(
     let credit_coordinate = selected.rent_credit.ok_or(Error::InvalidFunding)?;
     let payer = account_at(context, payer_coordinate)?;
     let credit_account = account_at(context, credit_coordinate)?;
-    require_permissions(
-        context.account_profile,
-        recipe.account,
-        EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
-    )?;
-    require_permissions(
-        context.account_profile,
-        payer_coordinate,
-        EFFECT_PERMISSION_DEBIT_LAMPORTS,
-    )?;
+    const REQUIRED: PlanEffectPermissionsV3 =
+        LifecycleOperationV3::Create.plan_effect_permissions();
+    require_permissions(context.account_profile, recipe.account, REQUIRED.state)?;
+    require_permissions(context.account_profile, payer_coordinate, REQUIRED.payer)?;
     // The credit ACCOUNT is authenticated here. WHO the refund belongs to is
     // decided below, after the funding this create actually performs is known.
     let credit = authenticate_credit_account(context, credit_account)?;
@@ -3399,15 +3448,12 @@ fn plan_close(
     }
     let credit_coordinate = selected.rent_credit.ok_or(Error::InvalidFunding)?;
     let credit_account = account_at(context, credit_coordinate)?;
-    require_permissions(
-        context.account_profile,
-        recipe.account,
-        EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
-    )?;
+    const REQUIRED: PlanEffectPermissionsV3 = LifecycleOperationV3::Close.plan_effect_permissions();
+    require_permissions(context.account_profile, recipe.account, REQUIRED.state)?;
     require_permissions(
         context.account_profile,
         credit_coordinate,
-        EFFECT_PERMISSION_CREDIT_LAMPORTS,
+        REQUIRED.rent_credit,
     )?;
     let credit = authenticate_credit_account(context, credit_account)?;
     let beneficiary = closing_refund_identity(selected, context, credit)?;
@@ -3979,15 +4025,13 @@ fn validate_plan_permissions(
     match plan.operation {
         LifecycleOperationV3::Authenticate => Ok(()),
         LifecycleOperationV3::Create | LifecycleOperationV3::AuthenticateOrCreate => {
-            require_permissions(
-                profile,
-                recipe.account,
-                EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
-            )?;
+            const REQUIRED: PlanEffectPermissionsV3 =
+                LifecycleOperationV3::Create.plan_effect_permissions();
+            require_permissions(profile, recipe.account, REQUIRED.state)?;
             require_permissions(
                 profile,
                 plan.payer.ok_or(Error::ProfileMismatch)?,
-                EFFECT_PERMISSION_DEBIT_LAMPORTS,
+                REQUIRED.payer,
             )?;
             if plan.rent_credit.is_none() {
                 return Err(Error::ProfileMismatch);
@@ -3995,15 +4039,13 @@ fn validate_plan_permissions(
             Ok(())
         }
         LifecycleOperationV3::Close => {
-            require_permissions(
-                profile,
-                recipe.account,
-                EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
-            )?;
+            const REQUIRED: PlanEffectPermissionsV3 =
+                LifecycleOperationV3::Close.plan_effect_permissions();
+            require_permissions(profile, recipe.account, REQUIRED.state)?;
             require_permissions(
                 profile,
                 plan.rent_credit.ok_or(Error::ProfileMismatch)?,
-                EFFECT_PERMISSION_CREDIT_LAMPORTS,
+                REQUIRED.rent_credit,
             )
         }
     }

@@ -57,9 +57,6 @@ pub mod dealer;
 /// Lock-bounded durable Dealer scenario checkpoint lifecycle.
 #[cfg(any(feature = "families", feature = "dealer-family"))]
 pub mod dealer_scenario_checkpoint_v1;
-/// Direct family projection behind the common data-defined Trading boundary.
-#[cfg(feature = "families")]
-pub mod direct;
 /// Permissionless, release-authenticated Direct Open-to-Retiring transition.
 #[cfg(feature = "families")]
 pub mod direct_begin_retiring_v1;

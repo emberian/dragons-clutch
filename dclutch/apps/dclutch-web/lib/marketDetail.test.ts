@@ -19,6 +19,7 @@ import {
   marketPhaseMeaningV1,
   realmProvenanceV1,
   requiredBackingMeaningV1,
+  terminalOutcomeMeaningV1,
 } from './marketDetail';
 import { provenanceChipV1 } from './marketDiscovery';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
@@ -192,5 +193,51 @@ describe('Market detail projection', () => {
     );
     expect(foreign.card.status).toBe('refused');
     expect(foreign.reason).toMatch(/owner differs from the selected Core program/);
+  });
+});
+
+describe('what a resolved market\'s answer means for a holder', () => {
+  it('names the source-failure outcome as a disclosed fallback, never as a fault', () => {
+    // Cohort-13's exact shape: four outcomes, the last one won.
+    const meaning = terminalOutcomeMeaningV1({ winner: 3, outcomeCount: 4, outcomeName: 'The source failed to report' });
+    expect(meaning.sourceFailure).toBe(true);
+    expect(meaning.headline).toMatch(/data source never reported/);
+    expect(meaning.headline, 'the fallback was named and paid for in advance').toMatch(/before it opened/);
+    expect(meaning.headline, 'not a fault, and the page must not let it read as one').toMatch(/did not get stuck/);
+    // The derived label IS the sentence "The source failed to report", so
+    // naming it inside a sentence that already says so reads as a stutter.
+    expect(meaning.headline).not.toMatch(/which is The source failed to report/);
+    expect(meaning.headline).toMatch(/claim 3/);
+    expect(meaning.forTheWinners).toMatch(/Anyone holding claim 3 can cash in/);
+  });
+
+  it('uses the outcome\'s own name when the source did report', () => {
+    const meaning = terminalOutcomeMeaningV1({ winner: 1, outcomeCount: 4, outcomeName: 'Between $120 and $180' });
+    expect(meaning.sourceFailure).toBe(false);
+    expect(meaning.headline).toBe('The data source reported, and Between $120 and $180 is the outcome that won.');
+    expect(meaning.forTheWinners).toMatch(/Anyone holding Between \$120 and \$180 can cash in/);
+  });
+
+  it('falls back to the claim index when nothing named the outcome', () => {
+    const meaning = terminalOutcomeMeaningV1({ winner: 1, outcomeCount: 4, outcomeName: undefined });
+    expect(meaning.headline).toBe('The data source reported, and claim 1 is the outcome that won.');
+  });
+
+  it('tells a losing holder they are finished, not waiting', () => {
+    // The sentence a wallet with zero at the winning claim needs, and the one
+    // the redemption flow only ever produced after two clicks.
+    for (const winner of [0, 3]) {
+      const meaning = terminalOutcomeMeaningV1({ winner, outcomeCount: 4 });
+      expect(meaning.forEveryoneElse).toMatch(/worth exactly nothing/);
+      expect(meaning.forEveryoneElse).toMatch(/not stuck and it is not pending/);
+      expect(meaning.forEveryoneElse).toMatch(/pays zero/);
+    }
+  });
+
+  it('claims no source failure when the outcome width is unread', () => {
+    // A width of zero means the claims ledger was not read, not that the last
+    // outcome won. Saying "the source never reported" off an unread width
+    // would be an invented fact on the page's most load-bearing sentence.
+    expect(terminalOutcomeMeaningV1({ winner: 0, outcomeCount: 0 }).sourceFailure).toBe(false);
   });
 });

@@ -1,10 +1,11 @@
 //! Canonical action-specialized generic artifacts for the Fractional family.
 
 use dclutch_account_profile_contract::{
+    lifecycle_v3::Error as LifecycleErrorV3,
     lifecycle_v3::{
         ACTION_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES,
-        IMMUTABLE_IDENTITY_BINDING_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
-        StateLifecyclePolicyV4,
+        IMMUTABLE_IDENTITY_BINDING_BYTES, LifecycleOperationV3, PROTECTED_OUTPUT_BYTES,
+        PlanEffectPermissionsV3, RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV4,
         encode::{
             LifecycleAccountCoordinateV3, LifecycleGuardInputV3,
             LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3,
@@ -13,13 +14,15 @@ use dclutch_account_profile_contract::{
         },
     },
     v2::{
-        AccountProfileV2, HEADER_BYTES as ACCOUNT_HEADER_BYTES,
+        AccountPrestateV2, AccountProfileV2, Error as AccountProfileErrorV2,
         OPERATION_BYTES as ACCOUNT_OPERATION_BYTES, RULE_BYTES as ACCOUNT_RULE_BYTES,
+        TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES as ACCOUNT_HEADER_BYTES, TrustedEnvironmentV2,
+        TrustedIdentityEnvironmentV2,
         encode::{
             AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-            AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
-            AccountRuleInputV2, IdentityCoordinateV2, RegisterGeometryV2, ScalarCoordinateV2,
-            encode_account_profile_v2_atomic,
+            AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+            ScalarCoordinateV2, encode_account_profile_with_trusted_executing_program_v2_atomic,
         },
     },
 };
@@ -81,10 +84,18 @@ use crate::CheckedFractionalCompositionV1;
 /// Scalar bank width shared by Account, Request, Transition, and Effect programs.
 pub const FRACTIONAL_COMMON_SCALARS_V1: u16 = 7;
 /// Identity bank width shared by Account, Request, Transition, and Effect programs.
-pub const FRACTIONAL_COMMON_IDENTITIES_V1: u16 = 14;
+pub const FRACTIONAL_COMMON_IDENTITIES_V1: u16 = 15;
 
-const ROOT_ACCOUNT: u16 = 0;
-const RENT_BENEFICIARY_ACCOUNT: u16 = 1;
+/// Fixed AccountProfile coordinate of the Fractional root, which is the
+/// lifecycle recipe's state account and the coordinate `ZeroSupplyRetire`
+/// closes.
+pub const FRACTIONAL_ROOT_COORDINATE_V1: u16 = 0;
+/// Fixed AccountProfile coordinate of the permanent rent beneficiary the root
+/// is closed to, which is the `rent_credit` every Close plan names.
+pub const FRACTIONAL_RENT_BENEFICIARY_COORDINATE_V1: u16 = 1;
+
+const ROOT_ACCOUNT: u16 = FRACTIONAL_ROOT_COORDINATE_V1;
+const RENT_BENEFICIARY_ACCOUNT: u16 = FRACTIONAL_RENT_BENEFICIARY_COORDINATE_V1;
 const CLAIMS_FRAME_START: u16 = 2;
 
 const S_ACTION: u16 = 0;
@@ -109,9 +120,13 @@ const I_ROOT_TERMS: u16 = 10;
 const I_ROOT_MARKET: u16 = 11;
 const I_ROOT_BENEFICIARY: u16 = 12;
 const I_RENT_BENEFICIARY_ACCOUNT: u16 = 13;
+/// The Registry-selected current executing program, written by the trusted
+/// identity declaration rather than by any caller-supplied byte. It is the
+/// owner the root's close-time debit authority is anchored to.
+const I_TRADING_PROGRAM: u16 = 14;
 
 const REQUEST_INSTRUCTIONS: usize = 20;
-const ACCOUNT_OPERATIONS: usize = 6;
+const ACCOUNT_OPERATIONS: usize = 7;
 const EFFECT_OPERATIONS: usize = 14;
 const LIFECYCLE_PLANS: usize = 7;
 
@@ -169,8 +184,12 @@ pub struct FractionalFinalizedArtifactBundleV1 {
 pub enum FractionalArtifactCompilerErrorV1 {
     /// A selected physical identity or Claims frame was empty/oversized.
     InvalidInput,
-    /// AccountProfile emission or hostile decoding refused.
-    AccountProfile,
+    /// AccountProfile emission or hostile decoding refused, carrying which
+    /// conjunct refused. It carries it because a `map_err(|_| _)` here cost a
+    /// probe: granting the root the close-time debit Lifecycle requires needs
+    /// the owner anchor `EffectOwnerUnanchored` names, and the discarded code
+    /// was the only thing that said so.
+    AccountProfile(AccountProfileErrorV2),
     /// Lifecycle policy emission or hostile decoding refused.
     Lifecycle,
     /// RequestProfile emission or hostile decoding refused.
@@ -183,6 +202,19 @@ pub enum FractionalArtifactCompilerErrorV1 {
     Strategy,
     /// Capability descriptor construction refused.
     Descriptor,
+    /// The emitted ExecutionStrategy did not select the emitted descriptor.
+    StrategySelection,
+    /// The emitted lifecycle policy and AccountProfile disagreed, and the
+    /// carried cause names WHICH conjunct -- `ProfileMismatch` for a
+    /// coordinate the profile does not cover or does not grant, `RuntimeWidth`
+    /// for a bank the two size differently, and so on.
+    ///
+    /// It carries the cause because it used to discard it. `Validation` then
+    /// covered this whole builder, so when Lifecycle began requiring `Close`
+    /// permissions this compiler's every refusal read as one code with no
+    /// conjunct attached, and reading it meant re-deriving a fact the callee
+    /// had already computed.
+    LifecycleAccountProfile(LifecycleErrorV3),
     /// Independently decoded artifact joins differed.
     Validation,
 }
@@ -275,29 +307,48 @@ fn encode_account_profile(
                 .map_err(|_| FractionalArtifactCompilerErrorV1::InvalidInput)?,
         )
         .ok_or(FractionalArtifactCompilerErrorV1::InvalidInput)?;
+    // The root is authenticated by every action but ZeroSupplyRetire, whose
+    // plan CLOSES it to the rent beneficiary. Both grants are the exact rows
+    // Lifecycle's `Close` arm requires, read from the one table that states
+    // that requirement rather than restated here -- the restatement is what
+    // broke: 73ffb0108 added the requirement, the two coordinates below kept
+    // granting nothing, and this compiler refused every input it was given.
+    const CLOSE: PlanEffectPermissionsV3 = LifecycleOperationV3::Close.plan_effect_permissions();
     let no_effect = AccountEffectPermissionsV2::new(false, false, false);
+    // Every Fractional coordinate is required LIVE at its declared width --
+    // the root by the six authenticating actions and by ZeroSupplyRetire,
+    // which closes an account it first requires live. `LifecycleBound` would
+    // admit a vacancy none of them admits, so the prestate stays `Exact` and
+    // the root's debit authority is anchored by the explicit `RequireOwner`
+    // below instead of by a weaker declared prestate.
+    let exact = |rule| AccountRuleWithPrestateInputV2 {
+        rule,
+        prestate: AccountPrestateV2::Exact,
+    };
     let mut rules = Vec::with_capacity(usize::from(fixed_count));
-    rules.push(AccountRuleInputV2 {
+    rules.push(exact(AccountRuleInputV2 {
         privileges: AccountPrivilegesV2::new(false, true, false),
-        effect_permissions: no_effect,
+        effect_permissions: AccountEffectPermissionsV2::granting(CLOSE.state),
         alias: AccountAliasInputV2::SelfCoordinate,
         data_length: u32::try_from(FRACTIONAL_ROOT_BYTES_V1)
             .map_err(|_| FractionalArtifactCompilerErrorV1::InvalidInput)?,
         data_item_stride: 0,
-    });
-    rules.push(AccountRuleInputV2 {
+    }));
+    rules.push(exact(AccountRuleInputV2 {
         privileges: AccountPrivilegesV2::new(false, true, false),
-        effect_permissions: no_effect,
+        effect_permissions: AccountEffectPermissionsV2::granting(CLOSE.rent_credit),
         alias: AccountAliasInputV2::SelfCoordinate,
         data_length: 0,
         data_item_stride: 0,
-    });
-    rules.extend(claims_frame.iter().map(|rule| AccountRuleInputV2 {
-        privileges: AccountPrivilegesV2::new(rule.signer, rule.writable, rule.executable),
-        effect_permissions: no_effect,
-        alias: AccountAliasInputV2::SelfCoordinate,
-        data_length: rule.data_length,
-        data_item_stride: 0,
+    }));
+    rules.extend(claims_frame.iter().map(|rule| {
+        exact(AccountRuleInputV2 {
+            privileges: AccountPrivilegesV2::new(rule.signer, rule.writable, rule.executable),
+            effect_permissions: no_effect,
+            alias: AccountAliasInputV2::SelfCoordinate,
+            data_length: rule.data_length,
+            data_item_stride: 0,
+        })
     }));
     let operations = [
         AccountOperationInputV2::ProjectDataIdentity {
@@ -329,6 +380,14 @@ fn encode_account_profile(
             destination: ScalarCoordinateV2::common(S_ROOT_PRINCIPAL),
             data_offset: narrow_u32(FRACTIONAL_ROOT_RENT_PRINCIPAL_OFFSET_V1)?,
         },
+        // ZeroSupplyRetire debits this account's whole balance and zeroes its
+        // data, so an `Exact` coordinate carrying that authority must state
+        // whose account it is. Without it a caller substitutes any account of
+        // the right width and the emitted effect drains it.
+        AccountOperationInputV2::RequireOwner {
+            account: AccountCoordinateV2::fixed(ROOT_ACCOUNT),
+            expected: IdentityCoordinateV2::common(I_TRADING_PROGRAM),
+        },
     ];
     let bytes = ACCOUNT_HEADER_BYTES
         .checked_add(
@@ -341,8 +400,11 @@ fn encode_account_profile(
         .ok_or(FractionalArtifactCompilerErrorV1::InvalidInput)?;
     let mut scratch = vec![0; bytes];
     let mut output = vec![0; bytes];
-    encode_account_profile_v2_atomic(
-        AccountProfileArtifactV2::RuntimeTail,
+    encode_account_profile_with_trusted_executing_program_v2_atomic(
+        TrustedEnvironmentV2::None,
+        TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
+            destination: I_TRADING_PROGRAM,
+        },
         &rules,
         &[],
         &operations,
@@ -351,7 +413,7 @@ fn encode_account_profile(
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| FractionalArtifactCompilerErrorV1::AccountProfile)?;
+    .map_err(FractionalArtifactCompilerErrorV1::AccountProfile)?;
     Ok(output)
 }
 
@@ -714,7 +776,7 @@ fn validate_bundle(
     let descriptor = CapabilityProgramV3::decode(&bundle.descriptor)
         .map_err(|_| FractionalArtifactCompilerErrorV1::Descriptor)?;
     let account = AccountProfileV2::decode(&bundle.account_profile)
-        .map_err(|_| FractionalArtifactCompilerErrorV1::AccountProfile)?;
+        .map_err(FractionalArtifactCompilerErrorV1::AccountProfile)?;
     let lifecycle_id = digest(&bundle.lifecycle);
     let lifecycle =
         StateLifecyclePolicyV4::decode_selected(lifecycle_id, lifecycle_id, &bundle.lifecycle)
@@ -732,10 +794,10 @@ fn validate_bundle(
         .map_err(|_| FractionalArtifactCompilerErrorV1::Effect)?;
     strategy
         .validate_descriptor_selection(content(digest(&bundle.strategy))?, descriptor)
-        .map_err(|_| FractionalArtifactCompilerErrorV1::Validation)?;
+        .map_err(|_| FractionalArtifactCompilerErrorV1::StrategySelection)?;
     lifecycle
         .validate_account_profile(account)
-        .map_err(|_| FractionalArtifactCompilerErrorV1::Validation)?;
+        .map_err(FractionalArtifactCompilerErrorV1::LifecycleAccountProfile)?;
     let fixed_accounts = usize::from(CLAIMS_FRAME_START)
         .checked_add(claims_accounts)
         .ok_or(FractionalArtifactCompilerErrorV1::InvalidInput)?;

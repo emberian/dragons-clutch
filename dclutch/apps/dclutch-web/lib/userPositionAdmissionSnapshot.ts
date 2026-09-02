@@ -167,7 +167,7 @@ function requireFirstAdmissionDigestV1(request: UserPositionAdmissionRequestV1):
 
 /** Assemble one finalized admission snapshot, deriving every coordinate. */
 export async function acquireUserPositionAdmissionSnapshotV1(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'probe' | 'blockTime' | 'multipleAccounts'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'probe' | 'blockTime' | 'multipleAccounts' | 'multipleAccountDataSlices'>,
   request: UserPositionAdmissionRequestV1,
   derivation: Pick<UserPositionAdmissionWasmV1, 'linked_basis_record_digest_v1'>,
 ): Promise<AcquiredAdmissionSnapshotV1> {

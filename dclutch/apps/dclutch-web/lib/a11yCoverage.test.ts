@@ -132,7 +132,17 @@ describe('accessibility coverage', () => {
     // that works is still the one named below -- match each rule against the
     // RENDERED tree with `element.matches` and composite with this file's own
     // `tokens()` -- and it is a project, not a patch.
-    expect(report().unresolvedContrast.length).toBe(194);
+    //
+    // 194 -> 196 on 2026-09-02 with `.market-answer-meaning` and its eyebrow,
+    // the block that tells a reader of a resolved market what the answer means.
+    // The block carries its own colour and its children inherit it, so it adds
+    // TWO rules and not the four it started as; the two it adds are the same
+    // pair `.phase-meaning` and `.phase-meaning strong` already contribute, for
+    // the same reason -- a translucent tint over the page ground is a
+    // background this instrument cannot resolve. That is the wall's own edge,
+    // not a new dark corner, and the rules were checked by hand against the
+    // rendered page at 1280 and 390 before the number moved.
+    expect(report().unresolvedContrast.length).toBe(196);
   });
 
   it('composes element opacity into the ratio, on the two colours that were on the page', () => {

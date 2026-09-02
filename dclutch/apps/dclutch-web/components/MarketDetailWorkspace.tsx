@@ -12,6 +12,7 @@ import { type CapabilityFundingQuoteV1 } from '@/lib/capabilityManifest';
 import {
   inspectMarketDetailV1,
   requiredBackingMeaningV1,
+  terminalOutcomeMeaningV1,
   type MarketDetailV1,
 } from '@/lib/marketDetail';
 import { marketEditorialV1, marketNarrativeV1, type MarketNarrativeV1 } from '@/lib/marketRegistry';
@@ -423,6 +424,17 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     ? Object.freeze({ status: 'unknown', reason: 'This market has not been read from the chain yet.' })
     : marketActivationOutlookV1(card);
   const narrative = marketNarrativeV1(address, decoded?.phase ?? null, editorial, derived);
+  /**
+   * The answer in words, once, from the decoded settlement and the market's own
+   * outcome width. Null until there is an answer to speak about.
+   */
+  const terminalMeaning = decoded === null || decoded.settlement.status !== 'terminal'
+    ? null
+    : terminalOutcomeMeaningV1({
+      winner: decoded.settlement.winner,
+      outcomeCount: decoded.liability.status === 'bound' ? decoded.liability.supplyAtoms.length : 0,
+      outcomeName: narrative.outcomes?.[decoded.settlement.winner],
+    });
   const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, narrative, detail?.phaseMeaning ?? null, derived, nowMs);
 
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
@@ -445,6 +457,20 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     </section>
 
     <MarketDecisionStats stats={decisionStats} />
+
+    {/* THE ANSWER, IN WORDS, ON THE PAGE ITSELF. `Resolved — <name>` in the
+        stat above and a `won`/`lost` beside each cell say WHICH claim won and
+        never what it is; a market that settled because its data source went
+        quiet read as an outcome with no reason. This first sat under the phase
+        meaning and rendered into a COLLAPSED drawer, which is the same as not
+        saying it -- the capture that caught that is why it is here, in the
+        page's own flow, above the exact values rather than inside them. */}
+    {terminalMeaning !== null && <section className="market-answer-meaning">
+      <h2>What this answer means</h2>
+      <p><strong>{terminalMeaning.headline}</strong></p>
+      <p>{terminalMeaning.forTheWinners}</p>
+      <p>{terminalMeaning.forEveryoneElse}</p>
+    </section>}
 
     <section className="trade-v3-card route-card">
       <header>

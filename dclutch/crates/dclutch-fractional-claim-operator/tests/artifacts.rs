@@ -2,6 +2,10 @@
 
 #![allow(clippy::panic, clippy::unwrap_used)]
 
+use dclutch_account_profile_contract::{
+    lifecycle_v3::{LifecycleOperationV3, PlanEffectPermissionsV3, StateLifecyclePolicyV4},
+    v2::AccountProfileV2,
+};
 use dclutch_fractional_claim_contract::{
     ArtifactAdmissionV1, FRACTIONAL_FAMILY_REQUEST_BYTES_V1, FractionalActionV1,
     FractionalArtifactAdmissionsV1, FractionalArtifactBytesV1, FractionalArtifactSelectionV1,
@@ -13,7 +17,9 @@ use dclutch_fractional_claim_kernel::{
     SCHEMA_VERSION_V1,
 };
 use dclutch_fractional_claim_operator::{
-    FractionalClaimsAccountRuleV1, build_fractional_finalized_artifact_bundle_v1,
+    FRACTIONAL_RENT_BENEFICIARY_COORDINATE_V1, FRACTIONAL_ROOT_COORDINATE_V1,
+    FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
+    build_fractional_finalized_artifact_bundle_v1,
 };
 use dclutch_request_profile_contract::RequestProfileV1;
 use dclutch_token_svm::{TOKEN_2022_PROGRAM_ID, TokenBehaviorSelectionV2};
@@ -115,18 +121,69 @@ fn every_action_emits_a_distinct_self_consistent_finalized_bundle() {
 
 #[test]
 fn empty_claims_frame_and_zero_physical_profile_refuse() {
-    assert!(
-        build_fractional_finalized_artifact_bundle_v1(FractionalActionV1::Wrap, [44; 32], &[],)
-            .is_err()
+    // Named, not `is_err()`: for four days this builder refused EVERY input,
+    // and a bare `is_err()` here would have gone on passing throughout.
+    assert_eq!(
+        build_fractional_finalized_artifact_bundle_v1(FractionalActionV1::Wrap, [44; 32], &[]),
+        Err(FractionalArtifactCompilerErrorV1::InvalidInput)
     );
-    assert!(
+    assert_eq!(
         build_fractional_finalized_artifact_bundle_v1(
             FractionalActionV1::Wrap,
             [0; 32],
             &claims_frame(),
-        )
-        .is_err()
+        ),
+        Err(FractionalArtifactCompilerErrorV1::InvalidInput)
     );
+}
+
+/// The producer's grants and Lifecycle's `Close` requirement are ONE fact.
+///
+/// Both sides here are read from
+/// [`LifecycleOperationV3::plan_effect_permissions`], which is the only place
+/// either is written down: this test cannot agree with a producer that drifted
+/// from the validator, because there is no second copy for them to drift
+/// apart in. What it replaces is 73ffb0108, which added the requirement and
+/// updated one of the two producers that had to satisfy it.
+#[test]
+fn the_root_and_its_rent_credit_grant_exactly_what_lifecycle_close_requires() {
+    const REQUIRED: PlanEffectPermissionsV3 = LifecycleOperationV3::Close.plan_effect_permissions();
+    // Not vacuous: a `Close` demands something of both coordinates, so the
+    // producer that granted `new(false, false, false)` fails both equalities.
+    assert_ne!(REQUIRED.state, 0);
+    assert_ne!(REQUIRED.rent_credit, 0);
+
+    let bundle = build_fractional_finalized_artifact_bundle_v1(
+        FractionalActionV1::ZeroSupplyRetire,
+        [44; 32],
+        &claims_frame(),
+    )
+    .unwrap();
+    let profile = AccountProfileV2::decode(&bundle.account_profile).unwrap();
+    assert_eq!(
+        profile
+            .rule(false, FRACTIONAL_ROOT_COORDINATE_V1)
+            .unwrap()
+            .effect_permissions(),
+        REQUIRED.state,
+        "the root is the recipe's state account and ZeroSupplyRetire closes it"
+    );
+    assert_eq!(
+        profile
+            .rule(false, FRACTIONAL_RENT_BENEFICIARY_COORDINATE_V1)
+            .unwrap()
+            .effect_permissions(),
+        REQUIRED.rent_credit,
+        "the rent beneficiary is that plan's `rent_credit`"
+    );
+
+    // And the join itself, stated where a reader of this file sees it rather
+    // than only inside the builder's private `validate_bundle`.
+    let lifecycle_id = digest(&bundle.lifecycle);
+    let lifecycle =
+        StateLifecyclePolicyV4::decode_selected(lifecycle_id, lifecycle_id, &bundle.lifecycle)
+            .unwrap();
+    lifecycle.validate_account_profile(profile).unwrap();
 }
 
 #[test]

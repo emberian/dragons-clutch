@@ -84,13 +84,16 @@ describe('Redemption route', () => {
   const html = renderToStaticMarkup(<PortfolioWorkspace mode="redemption" />);
 
   it('starts with the connected wallet and the live Market set instead of the representation console', () => {
-    // The headline used to offer a payout this page cannot make, and then --
-    // once redemption shipped here -- to deny one it can. Both are refused by
-    // name; the headline states the only thing standing in the way, which is
-    // that no market has reached an answer.
+    // The headline used to offer a payout this page cannot make; then -- once
+    // redemption shipped here -- to deny one it can; then to state a COUNT of
+    // resolved markets, which went false the day one resolved. All three are
+    // refused by name. What stands is a statement about the page, and the
+    // per-market fact is read live below where it cannot go stale.
     expect(html).toContain('Your winning claims');
     expect(html).not.toContain('Payout is not open yet');
-    expect(html).toContain('Nothing has resolved yet');
+    expect(html).not.toContain('Nothing has resolved yet');
+    expect(html).not.toContain('no market on this deployment has reached an answer');
+    expect(html).toContain('Cashed in here');
     expect(html).toContain('no file and no operator');
     expect(html).not.toContain('Redeem your winning claims');
     // Renegotiated 2026-08-31: the wallet panel no longer takes a `purpose`

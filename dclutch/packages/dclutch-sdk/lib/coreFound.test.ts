@@ -2,13 +2,16 @@ import { AddressLookupTableAccount, PublicKey, TransactionInstruction } from '@s
 import { describe, expect, it } from 'vitest';
 
 import { sha256 } from './bytes';
+import frameSizes from '../fixtures/cohort13-terminal-frame-sizes-v1.json';
 import {
+  MAX_MULTIPLE_ACCOUNT_KEYS_V1,
   acquireFinalizedAccountsInChunksV1,
   compileLifecycleRentCreateTransactionV2,
   compileCoreFoundTransactionV2,
   decodeCoreFoundProductGraphV2,
   decodeResultDomainV2,
   deriveCoreFoundRecordsV2,
+  planFinalizedAccountChunksV1,
   prepareCoreFoundV2,
   validateCoreFoundCapabilityManifestV1,
   validateCoreFoundSourceMaterialV3,
@@ -74,42 +77,153 @@ async function graph258(): Promise<Readonly<{ product: Uint8Array; domain: Uint8
   return Object.freeze({ product, domain, portfolio, domainDigest, portfolioDigest });
 }
 
+/**
+ * A node that answers sizes from a table and bodies of exactly that width.
+ *
+ * The sizing round is what makes the plan possible, so a double that did not
+ * distinguish the two calls would let a count-only chunker pass every test
+ * below. `space` is carried through the slice exactly as devnet carries it.
+ */
+function sizedNode(
+  spaceByAddress: ReadonlyMap<string, number>,
+  options: Readonly<{ slotStep?: number; mutate?: string }> = {},
+): Readonly<{
+  client: SolanaRpcClient;
+  sizingCalls: Array<number>;
+  bodyCalls: Array<Readonly<{ keys: number; bytes: number }>>;
+}> {
+  const sizingCalls: Array<number> = [];
+  const bodyCalls: Array<Readonly<{ keys: number; bytes: number }>> = [];
+  // A node whose finalized slot ADVANCES between calls, because devnet's does:
+  // two chunks of one frame came back two slots apart on every attempt. A
+  // double that answered one fixed slot would let a same-slot requirement look
+  // satisfiable when nothing can satisfy it.
+  const step = options.slotStep ?? 2;
+  let slot = 77;
+  const account = (address: string, length: number, marker: number) => Object.freeze({
+    address,
+    account: Object.freeze({
+      data: Uint8Array.from({ length }, () => (address === options.mutate ? marker : 0)),
+      executable: false,
+      lamports: '1',
+      owner: new PublicKey(id(255)).toBase58(),
+      space: spaceByAddress.get(address) ?? 0,
+    }),
+  });
+  const client = {
+    multipleAccountDataSlices: async (chunk: ReadonlyArray<string>, _offset: number, length: number) => {
+      sizingCalls.push(chunk.length);
+      return Object.freeze({ slot: String(slot), accounts: Object.freeze(chunk.map((address) => account(address, length, 0))) });
+    },
+    multipleAccounts: async (chunk: ReadonlyArray<string>) => {
+      const bytes = chunk.reduce((total, address) => total + 4 * Math.ceil((spaceByAddress.get(address) ?? 0) / 3) + 256, 1_024);
+      bodyCalls.push(Object.freeze({ keys: chunk.length, bytes }));
+      const observed = String(slot);
+      slot += step;
+      return Object.freeze({
+        slot: observed,
+        accounts: Object.freeze(chunk.map((address) => account(address, spaceByAddress.get(address) ?? 0, bodyCalls.length))),
+      });
+    },
+  } as unknown as SolanaRpcClient;
+  return Object.freeze({ client, sizingCalls, bodyCalls });
+}
+
 describe('Core Found37 browser kernel', () => {
-  it('acquires Found37 in 32-key chunks at one finalized context slot', async () => {
+  it('acquires Found37 in size-aware chunks at one finalized context slot', async () => {
     const addresses = Array.from({ length: 37 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
-    const calls: Array<{ count: number; floor: string | undefined }> = [];
-    const client = {
-      multipleAccounts: async (chunk: ReadonlyArray<string>, floor?: string) => {
-        calls.push({ count: chunk.length, floor });
-        return Object.freeze({
-          slot: '77',
-          accounts: Object.freeze(chunk.map((address) => Object.freeze({ address, account: null }))),
-        });
-      },
-    } as unknown as SolanaRpcClient;
-    const observation = await acquireFinalizedAccountsInChunksV1(client, addresses, '77');
-    expect(calls).toEqual([{ count: 32, floor: '77' }, { count: 5, floor: '77' }]);
-    expect(observation.slot).toBe('77');
+    const node = sizedNode(new Map(addresses.map((address) => [address, 0])));
+    const observation = await acquireFinalizedAccountsInChunksV1(node.client, addresses, '77');
+    // Nothing here is large, so the KEY bound is the one that binds and the
+    // split is the one this function always made. The third body call is the
+    // consistency re-read of the first chunk, taken after the last one.
+    expect(node.sizingCalls).toEqual([32, 5]);
+    expect(node.bodyCalls.map((call) => call.keys)).toEqual([32, 5, 32]);
+    expect(observation.slot, 'the greatest slot the composite was observed at').toBe('79');
     expect(observation.accounts.map((entry) => entry.address)).toEqual(addresses);
   });
 
-  it('refuses regressed or mixed finalized chunk contexts', async () => {
+  it('splits by SIZE when size is what binds, and reads every address exactly once', async () => {
+    // Four addresses of 1.5 MiB apiece: base64 makes each 2 MiB of response, so
+    // two per chunk is the most a 4 MiB bound admits and a 32-key chunker would
+    // ask for all four at once.
+    const addresses = Array.from({ length: 4 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
+    const node = sizedNode(new Map(addresses.map((address) => [address, 1_500_000])));
+    const observation = await acquireFinalizedAccountsInChunksV1(node.client, addresses, '77');
+    expect(node.sizingCalls).toEqual([4]);
+    expect(node.bodyCalls.map((call) => call.keys)).toEqual([2, 2, 2]);
+    for (const call of node.bodyCalls) expect(call.bytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(observation.accounts.map((entry) => entry.address)).toEqual(addresses);
+  });
+
+  it('plans cohort-13\'s own payout frame under the 4 MiB response bound', () => {
+    // The measured frame, from devnet: 38 addresses, four of them ProgramData
+    // accounts carrying whole ELFs. Its first 32-key chunk came back 5,272,883
+    // bytes and the browser refused it, which is the defect this plan closes.
+    expect(frameSizes.accounts.length).toBe(38);
+    expect(Math.max(...frameSizes.accounts.map((entry) => entry.space))).toBe(1_369_757);
+    const chunks = planFinalizedAccountChunksV1(frameSizes.accounts);
+    expect(chunks.length).toBeGreaterThan(1);
+    const space = new Map(frameSizes.accounts.map((entry) => [entry.address, entry.space]));
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(MAX_MULTIPLE_ACCOUNT_KEYS_V1);
+      const bytes = chunk.reduce((total, address) => total + 4 * Math.ceil((space.get(address) ?? 0) / 3) + 256, 1_024);
+      expect(bytes, `chunk of ${chunk.length} keys`).toBeLessThanOrEqual(4 * 1024 * 1024);
+    }
+    // Not one address dropped, repeated, or reordered: the concatenation is the
+    // frame, which is the property every caller downstream depends on.
+    expect(chunks.flatMap((chunk) => [...chunk])).toEqual(frameSizes.accounts.map((entry) => entry.address));
+  });
+
+  it('refuses an account no chunking could read whole, by name', () => {
+    const address = new PublicKey(id(9)).toBase58();
+    expect(() => planFinalizedAccountChunksV1([{ address, space: 4_000_000 }]))
+      .toThrow(new RegExp(`account ${address} is 4000000 bytes`));
+  });
+
+  it('refuses a composite whose earlier chunk moved under it', async () => {
+    // The check a slot comparison was standing in for, and the one a live node
+    // can actually answer: read the earlier chunks again after the last, and
+    // require the same bytes. Here one address changes on every read.
+    const addresses = Array.from({ length: 4 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
+    const node = sizedNode(new Map(addresses.map((address) => [address, 1_500_000])), { mutate: addresses[0] });
+    await expect(acquireFinalizedAccountsInChunksV1(node.client, addresses, '77'))
+      .rejects.toThrow(new RegExp(`read ${addresses[0]} changing between its chunks`));
+  });
+
+  it('accepts a composite that straddles a slot tick and did not move', async () => {
+    // The case the old same-slot requirement made impossible: two chunks, two
+    // different context slots, nothing changed. This is every multi-chunk read
+    // against a live node.
+    const addresses = Array.from({ length: 4 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
+    const node = sizedNode(new Map(addresses.map((address) => [address, 1_500_000])), { slotStep: 7 });
+    const observation = await acquireFinalizedAccountsInChunksV1(node.client, addresses, '77');
+    // Two chunks at 77 and 84; the re-read that proved them one picture landed
+    // at 91. The reported slot is the latest at which a body was FIRST read.
+    expect(observation.slot).toBe('84');
+    expect(observation.accounts).toHaveLength(4);
+  });
+
+  it('refuses a chunk observed below its context floor', async () => {
     const addresses = Array.from({ length: 33 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
-    let call = 0;
-    const mixed = {
-      multipleAccounts: async (chunk: ReadonlyArray<string>) => {
-        call += 1;
-        return { slot: call === 1 ? '77' : '78', accounts: chunk.map((address) => ({ address, account: null })) };
-      },
-    } as unknown as SolanaRpcClient;
-    await expect(acquireFinalizedAccountsInChunksV1(mixed, addresses, '77')).rejects.toThrow(/different context slots/);
     const regressed = {
+      multipleAccountDataSlices: async (chunk: ReadonlyArray<string>) => ({
+        slot: '77',
+        accounts: chunk.map((address) => ({ address, account: null })),
+      }),
       multipleAccounts: async (chunk: ReadonlyArray<string>) => ({
         slot: '76',
         accounts: chunk.map((address) => ({ address, account: null })),
       }),
     } as unknown as SolanaRpcClient;
     await expect(acquireFinalizedAccountsInChunksV1(regressed, addresses, '77')).rejects.toThrow(/regressed/);
+    const sizingRegressed = {
+      multipleAccountDataSlices: async (chunk: ReadonlyArray<string>) => ({
+        slot: '76',
+        accounts: chunk.map((address) => ({ address, account: null })),
+      }),
+    } as unknown as SolanaRpcClient;
+    await expect(acquireFinalizedAccountsInChunksV1(sizingRegressed, addresses, '77')).rejects.toThrow(/sizing regressed/);
   });
 
   it('joins a runtime-width Product with 258 outcomes and refuses same-width substitution', async () => {

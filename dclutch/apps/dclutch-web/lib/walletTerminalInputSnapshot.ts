@@ -60,7 +60,7 @@ export type AcquiredPayoutInputV1 = Readonly<{
   rounds: number;
 }>;
 
-type RoundClientV1 = Pick<SolanaRpcClient, 'finalizedSlot' | 'blockTime' | 'multipleAccounts'>;
+type RoundClientV1 = Pick<SolanaRpcClient, 'finalizedSlot' | 'blockTime' | 'multipleAccounts' | 'multipleAccountDataSlices'>;
 
 /**
  * The caller's own ask, in the exact shape the boundary accepts.

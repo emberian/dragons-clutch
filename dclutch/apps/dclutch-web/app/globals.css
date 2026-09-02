@@ -1088,6 +1088,13 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 /* What a phase MEANS, in words. Prose, therefore sans. */
 .phase-meaning { margin: 0; padding: var(--sp-3) var(--sp-4); border: 1px solid rgba(105,212,174,.18); border-radius: var(--r-md); background: rgba(105,212,174,.035); color: #a3b8ab; font-size: var(--fs-base); line-height: var(--lh-body); }
 .phase-meaning strong { color: var(--signal); font: var(--fs-micro) var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
+/* what a resolved market's answer IS, above the exact-values drawer: the same
+   ground as the phase meaning it sits under, because it is the same kind of
+   statement -- what this state means for the reader, not a value */
+.market-answer-meaning { display: grid; gap: var(--sp-3); margin: var(--sp-5) 0 0; padding: var(--sp-5); border: 1px solid rgba(105,212,174,.18); border-radius: var(--r-lg); background: rgba(105,212,174,.035); color: #a3b8ab; font-size: var(--fs-base); line-height: var(--lh-body); }
+.market-answer-meaning h2 { margin: 0; color: var(--signal); font: var(--fs-micro) var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
+.market-answer-meaning p { margin: 0; }
+.market-answer-meaning strong { font-weight: 600; }
 .outcome-vector { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
 .outcome-vector li { min-width: 0; padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-md); background: rgba(1,8,4,.42); }
 .outcome-vector li.winning-outcome { border-color: rgba(185,255,100,.3); background: rgba(185,255,100,.05); }
@@ -1128,6 +1135,8 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 .portfolio-claim span { display: block; color: #8a988e; font: var(--fs-micro) var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
 .portfolio-claim strong { display: block; margin-top: var(--sp-2); color: var(--acid); font: var(--fs-h2)/1.2 var(--font-geist-mono); font-variant-numeric: tabular-nums; }
 .portfolio-claim p { margin: var(--sp-3) 0 0; color: #8a988e; font-size: var(--fs-small); line-height: var(--lh-body); }
+/* a zero that is an answer, not a wait: same voice as the note under it */
+.portfolio-claim-zero { padding-top: var(--sp-3); border-top: 1px solid rgba(185,255,100,.16); }
 /* what the Positions above can pay together */
 .bundle-exposure { display: grid; gap: var(--sp-4); min-width: 0; margin-top: var(--sp-4); padding: var(--sp-5); border: 1px solid var(--line); border-radius: var(--r-lg); background: rgba(8,16,11,.96); }
 .bundle-exposure .market-card-top strong { color: #d6e0d8; font-size: var(--fs-lead); }

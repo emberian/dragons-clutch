@@ -128,8 +128,8 @@ where the bytes come from.
 
 | Compartment | Site | Context | Why |
 |---|---|---|---|
-| `TradingPrincipal` | `trading-sbf/direct/buy_escrow.rs:839` | the registered-intent record PDA | Direct escrows are per-INTENT, not per-Market. Two intents on one Market must not share a vault; the record address is the correct partition and the Market has no say in it. |
-| replay | `trading-sbf/direct/inline.rs:507` | the buyer maker-root PDA | Same grain, per-maker. |
+| `TradingPrincipal` | `direct-codec/registered_effect_artifacts_v4.rs:750, 793` | the registered-intent record PDA | Direct escrows are per-INTENT, not per-Market. Two intents on one Market must not share a vault; the record address is the correct partition and the Market has no say in it. |
+| replay | `direct-codec/ordinary_effect_artifacts_v3.rs:568-570` (`CONTEXT` bound to `IDENTITY_BUYER_MAKER_ROOT_V3`) | the buyer maker-root PDA | Same grain, per-maker. |
 | `TradingPrincipal`, `FeeVault`, `LivenessVault` | `trading-sbf/dealer/{mod.rs:365, v3_composer.rs:559-560, v3_accelerator_accounts.rs:766-772, v3_multi_lp.rs:986}` | the Dealer `child_root` digest | A Dealer child is its own capital domain under one Market. Collapsing these onto the Market namespace would merge every child's principal into one vault. |
 | replay | `trading-sbf/dealer/v3_accelerator_accounts.rs:728` | `request.child_root` | Same. |
 | `TradingPrincipal`, `FeeVault`, `LivenessVault` | `dealer-sbf/src/lib.rs:974-993` | the Dealer STATE account address | Dealer v1, a *different* partition key from the v2/v3/v4 `child_root` above. Flagged in §6; not changed here. |
@@ -275,8 +275,9 @@ Registry activation cache that `caller_program` is the activated program for
 Claims program. The founding cannot create it. Core's legacy Open cannot create
 it. A wallet cannot create it. There is exactly one place it can live.
 
-**What shape it takes is settled the same way.** Direct's escrow plan opens with
-an `InitializeReplay` (`trading-sbf/direct/buy_escrow.rs`), Series' does
+**What shape it takes is settled the same way.** The registered Buy's emitted
+Effect opens with an `InitializeReplay`
+(`direct-codec/registered_effect_artifacts_v4.rs:249-256`), Series' does
 (`trading-sbf/series/custody_v3.rs`), and Core's legacy Open dispatches one as
 its own outer route (`core-sbf/open_market.rs`). No route in the tree creates a
 replay as a side effect of a transfer. Folding creation into a payout would put a
@@ -336,7 +337,6 @@ Composition sites, all now deriving through the owning type:
 | `programs/dclutch-claims-sbf/src/custody_replay_v1.rs` | Claims | new: the creation route |
 | `programs/dclutch-core-sbf/src/open_market.rs` | request (Core) | `from_request` |
 | `programs/dclutch-core-sbf/src/generic_founding_v1.rs` | Trading | restated array → the owning type |
-| `programs/dclutch-trading-sbf/src/direct/{buy_escrow,inline}.rs` | Trading | `from_request` |
 | `programs/dclutch-trading-sbf/src/dealer/v3_accelerator_accounts.rs` | Trading | `from_request` |
 | `programs/dclutch-trading-sbf/src/projected_custody_composition_v4.rs` | Trading | restated array → `ProjectedCustodySourceReplaySeedsV1` |
 | the four operator crates, `dclutch-svm-harness` tests | request | `from_request` |

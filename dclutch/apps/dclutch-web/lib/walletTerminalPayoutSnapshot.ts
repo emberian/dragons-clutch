@@ -37,7 +37,7 @@ export type AcquiredPayoutSnapshotV1 = Readonly<{
 
 /** Read the derivation's own frame at one finalized floor. */
 export async function acquireWalletTerminalPayoutSnapshotV1(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'blockTime' | 'multipleAccounts'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'blockTime' | 'multipleAccounts' | 'multipleAccountDataSlices'>,
   planner: WalletTerminalPayoutWasmV1,
   inputJson: string,
 ): Promise<AcquiredPayoutSnapshotV1> {
@@ -75,7 +75,7 @@ export async function acquireWalletTerminalPayoutSnapshotV1(
  * Rust binary computed elsewhere.
  */
 export async function deriveWalletTerminalPayoutManifestV1(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'blockTime' | 'multipleAccounts'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'blockTime' | 'multipleAccounts' | 'multipleAccountDataSlices'>,
   planner: WalletTerminalPayoutWasmV1,
   inputJson: string,
 ): Promise<string> {

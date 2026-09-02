@@ -45,6 +45,15 @@ function client(floors: (string | undefined)[]): SolanaRpcClient {
   return {
     finalizedSlot: async () => '900',
     blockTime: async () => '1790000000',
+    // The chunk planner's sizing round: sizes only, no floor recorded, because
+    // `floors` counts the rounds the derivation asked for.
+    multipleAccountDataSlices: async (addresses: ReadonlyArray<string>) => ({
+      slot: '900',
+      accounts: addresses.map((address) => ({
+        address,
+        account: { owner: '11111111111111111111111111111111', executable: false, lamports: '2000000', space: 3, data: new Uint8Array([1]) },
+      })),
+    }),
     multipleAccounts: async (addresses: ReadonlyArray<string>, floor?: string) => {
       floors.push(floor);
       return {

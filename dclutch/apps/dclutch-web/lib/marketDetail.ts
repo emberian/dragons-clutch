@@ -42,6 +42,58 @@ export function marketPhaseMeaningV1(phase: MarketCorePhaseV2): string {
   return MARKET_PHASE_MEANING_V1[phase];
 }
 
+/** What a resolved market's answer is, and what it leaves each holder holding. */
+export type TerminalOutcomeMeaningV1 = Readonly<{
+  /** Whether the outcome that won is the market's source-failure outcome. */
+  sourceFailure: boolean;
+  /** One sentence naming what won. */
+  headline: string;
+  /** What it leaves the winning side holding. */
+  forTheWinners: string;
+  /** What it leaves everybody else holding. */
+  forEveryoneElse: string;
+}>;
+
+/**
+ * The answer, in the words a holder needs, including the one nobody had.
+ *
+ * A resolved market already said WHICH claim won -- `Resolved — <outcome>` and
+ * a `won` / `lost · pays nothing` beside every cell. What it never said is what
+ * that IS. Cohort-13 resolved to its source-failure outcome, and a reader who
+ * did not already know that the last cell is the failure cell saw only an
+ * outcome name and no reason.
+ *
+ * SOURCE FAILURE IS NOT AN ERROR STATE and the page must not let it read as
+ * one. It is the fallback the market wrote down and prepaid for before it
+ * opened, so that a silent data source could never strand it. Someone holding
+ * that claim is paid exactly the way any other winner is paid.
+ *
+ * The failure outcome is the LAST one, which is the same rule
+ * `derivedOutcomeLabelsV1` places its label by and the same one the terminal
+ * payout reads (`terminalWinner === resultOutcomeCount - 1`). It is stated once
+ * here rather than a third time at the call site.
+ */
+export function terminalOutcomeMeaningV1(
+  input: Readonly<{ winner: number; outcomeCount: number; outcomeName?: string | undefined }>,
+): TerminalOutcomeMeaningV1 {
+  const sourceFailure = input.outcomeCount > 0 && input.winner === input.outcomeCount - 1;
+  // The failure cell's DERIVED name is the sentence "The source failed to
+  // report", so naming it inside a sentence that already says the source never
+  // reported says it twice and reads as a stutter. There it is called by its
+  // index, which is what a holder matches against their own position anyway.
+  const named = sourceFailure || input.outcomeName === undefined || input.outcomeName === ''
+    ? `claim ${input.winner}`
+    : input.outcomeName;
+  return Object.freeze({
+    sourceFailure,
+    headline: sourceFailure
+      ? `The data source never reported. This market did not get stuck: it settled on the fallback outcome it named and paid for before it opened, which is ${named}.`
+      : `The data source reported, and ${named} is the outcome that won.`,
+    forTheWinners: `Anyone holding ${named} can cash in, at one unit of collateral for every claim atom they hold. Nobody has to ask permission and there is no deadline on it.`,
+    forEveryoneElse: 'Every other claim on this market is worth exactly nothing. It is not stuck and it is not pending: the market answered, that claim was not the answer, and it pays zero. Claims can no longer be created or unwound either way.',
+  });
+}
+
 export function requiredBackingMeaningV1(basis: RequiredBackingBasisV2): string {
   return REQUIRED_BACKING_MEANING_V1[basis];
 }

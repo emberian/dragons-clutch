@@ -116,7 +116,10 @@ use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, RecordAdmissionV3,
 };
 use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
-use dclutch_token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount};
+use dclutch_token_svm::{
+    ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_SUFFIX,
+    PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount,
+};
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
@@ -8222,6 +8225,143 @@ async fn a_wallet_held_position_is_paid_from_the_resolved_markets_hoard() {
             before.shard_mints.get(index).expect("pre shard Mint"),
         );
     }
+}
+
+/// THE CONVENTIONAL DESTINATION, ON REAL ELFS: Claims admits it, Custody does not.
+///
+/// Under Token-2022 the Associated Token Account program ALWAYS writes the
+/// `ImmutableOwner` extension, so every ordinary wallet's ATA is 165 base bytes
+/// plus an account-type byte plus one empty TLV entry -- exactly 170. Cohort-13
+/// measured that on chain: the founder's ATA was created, read back at 170
+/// bytes, and the payout refused it, so the redemption had to be paid into a
+/// 165-byte account created by hand -- a thing no stranger with a browser can
+/// do. `TokenAccount::parse_base_or_immutable_owner` is the admission, and
+/// `rational_terminal_v3::token_amount` and the host-side builder both use it.
+///
+/// THIS TEST EXISTS TO SAY EXACTLY HOW FAR THAT GOT, on the real Claims,
+/// Custody and Token-2022 ELFs, because "the parse admits it" and "the payout
+/// lands" are different claims and only one of them is true today.
+///
+/// It gets past Claims and stops inside CUSTODY, which authenticates both
+/// transfer participants through `ExactTransferProfileV1::check_transfer_account`
+/// -- and that profile is not a function anyone may quietly widen. Its
+/// `ExtensionStoragePolicy::ExactBaseWidthsOnly` byte is inside the
+/// `CollateralAdapterReleaseV1` PREIMAGE, the realm record on chain stores the
+/// SHA-256 of that preimage as `collateral_adapter_release_id`, and Custody
+/// SELECTS the profile by matching that stored id against the tree's known
+/// releases. Redefining the existing release would strand every market founded
+/// under it, cohort-13's included, the moment the tree and the chain disagreed
+/// about what one id means.
+///
+/// So the wall is real, it is not in Claims, and its repair is a THIRD adapter
+/// release -- a new `ExtensionStoragePolicy` and a new profile variant, added
+/// beside the two that exist rather than replacing either -- which a realm
+/// founded by a later cohort selects. `docs/design/` owes that its own note;
+/// this test owes the measurement, which is that the refusal is Custody's
+/// `TokenState`, on real bytes, at the destination and nowhere earlier.
+///
+/// The control is `a_wallet_held_position_is_paid_from_the_resolved_markets_hoard`:
+/// the same payout, the same frame, a 165-byte destination, and it commits.
+#[tokio::test]
+async fn a_conventional_170_byte_associated_token_account_is_refused_by_custody_alone() {
+    let (test, fixture) = fixture_with_real_trading_role(TerminalV1::Provider);
+    let mut context = test.start_with_context().await;
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+
+    // The ATA program's own output shape, planted over the fixture's base
+    // account: the same mint, owner and balance, five bytes longer.
+    let base = observed(&mut context, terminal.recipient).await;
+    let mut suffixed = base.data.clone();
+    assert_eq!(suffixed.len(), ACCOUNT_BYTES, "the fixture plants a base account");
+    suffixed.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+    assert_eq!(suffixed.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
+    context.set_account(
+        &terminal.recipient,
+        &AccountSharedData::from(Account {
+            lamports: Rent::default().minimum_balance(suffixed.len()).max(1),
+            data: suffixed,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        }),
+    );
+    let planted = observed(&mut context, terminal.recipient).await;
+    assert_eq!(planted.data.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
+    assert_eq!(
+        TokenAccount::parse(&planted.data),
+        Err(dclutch_token_svm::Error::InvalidLength),
+        "this is exactly the account the base parser refuses",
+    );
+    assert!(
+        TokenAccount::parse_base_or_immutable_owner(&planted.data).is_ok(),
+        "and exactly the account the admitting parser takes",
+    );
+
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: ATA-shaped wallet payout",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    // The host-side builder RUNS. Before this lane it refused offline as
+    // `WalletTerminalPayoutErrorV3::Custody`, so no transaction existed and the
+    // chain was never asked. Reaching a submitted packet at all is what the
+    // operator's own admission bought.
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims rational-representation-v2: a 170-byte associated token account reaches Custody",
+    )
+    .await;
+    assert!(
+        !result.accepted,
+        "Custody's released exact-base-width profile must still refuse the suffix",
+    );
+    // Named from the registry, not typed: taking a dependency on another
+    // program's crate to read one discriminant is the wrong edge, and
+    // `CustodySbfError::TokenState` is offset 6 of Custody's band.
+    let token_state = dclutch_refusal_registry::CUSTODY_REFUSAL_BASE + 6;
+    assert!(
+        result.logs.iter().any(|log| log
+            == &format!("Program {CUSTODY_PROGRAM_ID} failed: custom program error: {token_state:#x}")),
+        "the refusal is Custody's TokenState at the destination: {:#?}",
+        result.logs,
+    );
+    // AND NOTHING MOVED. A wall that half-executed would be worse than one that
+    // refuses, so the whole prestate is asserted unchanged.
+    let after = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard")),
+        INITIAL_HOARD_ATOMS,
+    );
+    assert_eq!(
+        TokenAccount::parse_base_or_immutable_owner(
+            &after.recipient.as_ref().expect("recipient").data
+        )
+        .expect("the ATA still decodes")
+        .amount,
+        INITIAL_RECIPIENT_ATOMS,
+    );
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, WINNER),
+        lbv2_position_quantity(&before.actor_position.data, WINNER),
+    );
+    assert_eq!(
+        custody_replay_revision(after.custody_replay.as_ref().expect("Claims-role replay")),
+        CUSTODY_EXPECTED_REVISION,
+    );
+    eprintln!(
+        "ATA-shaped wallet payout: recipient={} bytes refusal={token_state:#x} CU={} wire={}",
+        after.recipient.as_ref().expect("recipient").data.len(),
+        result.compute_units,
+        result.wire_bytes,
+    );
 }
 
 /// A WALLET EXITS A MARKET NOBODY RESOLVED, at the terms disclosed up front.

@@ -338,6 +338,24 @@ impl AccountEffectPermissionsV2 {
         }
     }
 
+    /// The exact grant satisfying one effect-permission requirement mask.
+    ///
+    /// The inverse of [`Self::bits`], so a producer that must satisfy a
+    /// requirement stated as a mask -- every row of
+    /// [`crate::lifecycle_v3::PlanEffectPermissionsV3`] is -- grants precisely
+    /// that mask instead of restating it as three booleans a hundred lines and
+    /// one crate away from the check. This is total on every mask a profile
+    /// can carry: the assertion below pins the round trip over all of them,
+    /// and `encode_account_profile_v2_atomic` refuses a rule whose permissions
+    /// carry any other bit.
+    pub const fn granting(required: u8) -> Self {
+        Self {
+            debit_lamports: required & EFFECT_PERMISSION_DEBIT_LAMPORTS != 0,
+            credit_lamports: required & EFFECT_PERMISSION_CREDIT_LAMPORTS != 0,
+            write_data: required & EFFECT_PERMISSION_WRITE_DATA != 0,
+        }
+    }
+
     const fn bits(self) -> u8 {
         (if self.debit_lamports {
             EFFECT_PERMISSION_DEBIT_LAMPORTS
@@ -354,6 +372,18 @@ impl AccountEffectPermissionsV2 {
         })
     }
 }
+
+/// `granting` reproduces every representable mask exactly, so granting a
+/// requirement is never granting more or less than the requirement.
+const _: () = {
+    let mut mask = 0_u8;
+    while mask <= crate::EFFECT_PERMISSION_MASK {
+        if mask & !crate::EFFECT_PERMISSION_MASK == 0 {
+            assert!(AccountEffectPermissionsV2::granting(mask).bits() == mask);
+        }
+        mask += 1;
+    }
+};
 
 /// Canonical alias relation for one account rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

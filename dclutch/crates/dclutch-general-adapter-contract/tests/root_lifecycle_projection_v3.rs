@@ -25,6 +25,7 @@ use dclutch_account_profile_contract::{
     AccountObservationV1,
     v2::{
         AccountProfileV2, PhysicalAccountDataGeometryV2, ProjectionRegistersV2,
+        encode::{AccountCoordinateV2, AccountOperationInputV2, IdentityCoordinateV2},
         project_dynamic_fixed_spans_atomic,
     },
 };
@@ -36,17 +37,11 @@ use dclutch_core_contract::ContentId;
 use dclutch_general_adapter_contract::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
-        general_account_profile_bytes_v3,
+        general_account_profile_bytes_v3, general_account_profile_fixed_count_v3,
+        general_account_profile_operation_count_v3, general_account_profile_operation_v3,
     },
-    hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, scalar,
-    },
+    hot_candidate_v3::{GENERAL_HOT_COMMON_IDENTITIES_V3, identity, scalar},
     release_v3::{GENERAL_ACTIONS_V3, GENERAL_ACTIONS_V5},
-    state_artifacts_v3::{
-        GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
-        GENERAL_VERIFY_PAYER_ACCOUNT_V3,
-    },
     transition_artifacts_v3::{
         GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3, encode_general_transition_program_v3_atomic,
         general_transition_instruction_count_v3, general_transition_program_bytes_v3,
@@ -76,8 +71,6 @@ const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
 
 /// Product-authenticated runtime width this fixture projects at.
 const TAIL_COUNT: u32 = 1;
-/// Trading-owned authenticated scratch pages the dynamic span expands to.
-const SCRATCH_PAGES: u32 = 3;
 /// The Market this capability belongs to.
 const MARKET: [u8; 32] = [0x21; 32];
 /// The executing Trading program, which owns every General runtime account.
@@ -261,6 +254,8 @@ fn transition_program(action: Action) -> Vec<u8> {
 struct ObservedFrame {
     /// Account data per logical coordinate, aliases sharing their representative's.
     data: Vec<Vec<u8>>,
+    /// Adapter-established SHA-256 over that data, where the artifact reads one.
+    digests: Vec<Option<[u8; 32]>>,
     /// Account key per logical coordinate, derived from the representative.
     keys: Vec<[u8; 32]>,
     /// Account owner per logical coordinate.
@@ -277,45 +272,111 @@ struct ObservedFrame {
 /// representative's coordinate -- same key, same bytes, same privileges --
 /// which is exactly what `validate_aliases` requires and what a runtime adapter
 /// materialises.
-/// The coordinate whose owner the profile's System Program anchor names.
+/// The value the fixture seeds into one common identity register.
 ///
-/// Read off the same partition `account_rules_v3` selects `creation_payer`
-/// from, so the fixture cannot anchor a different account than the artifact.
-fn creation_payer_coordinate(action: Action) -> usize {
-    usize::from(match action {
-        Action::VerifyCandidateRow => GENERAL_VERIFY_PAYER_ACCOUNT_V3,
-        Action::Close | Action::PlaceOrder | Action::CancelOrder => GENERAL_CLOSE_PAYER_ACCOUNT_V3,
-        _ => GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
-    })
+/// Only the two an outer seeds are modelled. Anything else means the artifact
+/// grew an identity relation this fixture cannot satisfy, and a panic naming
+/// the register is a better answer than materialising thirty-two zero bytes
+/// and calling the resulting projection evidence.
+fn seeded_identity(expected: IdentityCoordinateV2) -> [u8; 32] {
+    if expected == IdentityCoordinateV2::common(register16(identity::TRADING_PROGRAM)) {
+        TRADING_PROGRAM
+    } else if expected == IdentityCoordinateV2::common(register16(identity::RESULT_OWNER)) {
+        SYSTEM_PROGRAM
+    } else {
+        panic!("the fixture seeds no identity register for {expected:?}")
+    }
+}
+
+/// Every key, owner and adapter-established digest the action's own artifact
+/// REQUIRES, by fixed coordinate.
+///
+/// The frame is derived from the profile's `RequireKey` and `RequireOwner`
+/// operations rather than from a copy of the adapter's account table. The copy
+/// is what went stale: it named the creation payer by a constant, so when
+/// `a517d27c` moved General's account set the fixture went on anchoring the
+/// coordinate that used to be the payer and the projection refused
+/// `IdentityMismatch` with nothing to say which relation it meant. Read this
+/// way there is nothing to keep in step -- an anchor the artifact adds, moves
+/// or drops moves the frame with it.
+fn required_observations(action: Action) -> RequiredObservations {
+    let fixed = usize::from(general_account_profile_fixed_count_v3(action).expect("fixed count"));
+    let mut required = RequiredObservations {
+        keys: vec![None; fixed],
+        owners: vec![None; fixed],
+        digests: vec![false; fixed],
+    };
+    let coordinate_of = |account: AccountCoordinateV2| {
+        (0..fixed)
+            .find(|candidate| {
+                account
+                    == AccountCoordinateV2::fixed(u16::try_from(*candidate).expect("coordinate"))
+            })
+            .expect("every General account relation names a fixed coordinate")
+    };
+    for index in 0..general_account_profile_operation_count_v3(action) {
+        let (account, expected, into) =
+            match general_account_profile_operation_v3(action, index).expect("exact operation") {
+                AccountOperationInputV2::RequireKey { account, expected } => {
+                    (account, expected, &mut required.keys)
+                }
+                AccountOperationInputV2::RequireOwner { account, expected } => {
+                    (account, expected, &mut required.owners)
+                }
+                // `ProjectDataDigest` consumes a fact the ADAPTER establishes;
+                // an observation carrying none refuses `DataDigestUnavailable`
+                // rather than projecting thirty-two zero bytes, so the fixture
+                // has to establish it exactly where the artifact reads it.
+                AccountOperationInputV2::ProjectDataDigest { account, .. } => {
+                    *required
+                        .digests
+                        .get_mut(coordinate_of(account))
+                        .expect("coordinate") = true;
+                    continue;
+                }
+                _ => continue,
+            };
+        *into.get_mut(coordinate_of(account)).expect("coordinate") =
+            Some(seeded_identity(expected));
+    }
+    required
+}
+
+/// What one action's artifact requires of the frame it will be projected over.
+struct RequiredObservations {
+    /// Key each fixed coordinate is anchored to, where one is.
+    keys: Vec<Option<[u8; 32]>>,
+    /// Owner each fixed coordinate is anchored to, where one is.
+    owners: Vec<Option<[u8; 32]>>,
+    /// Whether the artifact consumes an adapter-established data digest.
+    digests: Vec<bool>,
 }
 
 fn observed_data(action: Action, profile: AccountProfileV2<'_>, root: &[u8]) -> ObservedFrame {
+    let required = required_observations(action);
     let logical = profile
-        .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[SCRATCH_PAGES])
+        .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
         .expect("logical count");
     let mut data = Vec::with_capacity(logical);
+    let mut digests = Vec::with_capacity(logical);
     let mut keys = Vec::with_capacity(logical);
     let mut owners = Vec::with_capacity(logical);
     let mut representatives: Vec<usize> = Vec::with_capacity(logical);
     for coordinate in 0..logical {
         let representative = profile
-            .representative_with_dynamic_spans(TAIL_COUNT, &[SCRATCH_PAGES], coordinate)
+            .representative_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
             .expect("representative");
         let geometry = profile
             .physical_account_geometry_with_dynamic_spans(
                 TAIL_COUNT,
-                &[SCRATCH_PAGES],
+                &[],
                 profile
-                    .physical_account_ordinal_with_dynamic_spans(
-                        TAIL_COUNT,
-                        &[SCRATCH_PAGES],
-                        coordinate,
-                    )
+                    .physical_account_ordinal_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
                     .expect("physical ordinal"),
             )
             .expect("geometry");
         let width = exact_width(geometry.data());
-        data.push(if representative == 0 {
+        let bytes = if representative == 0 {
             assert_eq!(
                 width,
                 root.len(),
@@ -324,17 +385,39 @@ fn observed_data(action: Action, profile: AccountProfileV2<'_>, root: &[u8]) -> 
             root.to_vec()
         } else {
             vec![0x5a_u8; width]
-        });
-        keys.push(coordinate_key(representative));
-        owners.push(if representative == creation_payer_coordinate(action) {
-            SYSTEM_PROGRAM
-        } else {
-            TRADING_PROGRAM
-        });
+        };
+        digests.push(
+            required
+                .digests
+                .get(representative)
+                .copied()
+                .unwrap_or(false)
+                .then(|| sha256_digest(&bytes)),
+        );
+        data.push(bytes);
+        // Keyed and owned by REPRESENTATIVE, so a route alias inherits the
+        // physical account's identity exactly as `validate_aliases` requires.
+        keys.push(
+            required
+                .keys
+                .get(representative)
+                .copied()
+                .flatten()
+                .unwrap_or_else(|| coordinate_key(representative)),
+        );
+        owners.push(
+            required
+                .owners
+                .get(representative)
+                .copied()
+                .flatten()
+                .unwrap_or(TRADING_PROGRAM),
+        );
         representatives.push(representative);
     }
     ObservedFrame {
         data,
+        digests,
         keys,
         owners,
         representatives,
@@ -361,9 +444,19 @@ fn coordinate_key(coordinate: usize) -> [u8; 32] {
     key
 }
 
-fn scalar_width() -> usize {
-    usize::try_from(GENERAL_HOT_COMMON_SCALARS_V3 + TAIL_COUNT * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
-        .expect("scalar width")
+/// One projected register bank's exact width, from the artifact's own geometry.
+///
+/// Not from the Hot frame's constants. `GENERAL_HOT_ITEM_SCALAR_STRIDE_V3` is
+/// the per-Product-outcome stride the SETTLEMENT SEVEN declare; the batch,
+/// order and candidate actions declare none, so one width written here for all
+/// fifteen is wrong for some of them -- `WidthMismatch`, which is what this
+/// fixture said until it read the stride off the profile it projects.
+fn bank_width(common: u16, item_stride: u16) -> usize {
+    usize::try_from(TAIL_COUNT)
+        .expect("tail count")
+        .checked_mul(usize::from(item_stride))
+        .and_then(|tail| tail.checked_add(usize::from(common)))
+        .expect("bank width")
 }
 
 fn identity_width() -> usize {
@@ -372,6 +465,15 @@ fn identity_width() -> usize {
 
 fn register(coordinate: u32) -> usize {
     usize::try_from(coordinate).expect("register coordinate")
+}
+
+fn register16(coordinate: u32) -> u16 {
+    u16::try_from(coordinate).expect("register coordinate")
+}
+
+/// The same whole-account SHA-256 the runtime adapter establishes.
+fn sha256_digest(bytes: &[u8]) -> [u8; 32] {
+    dclutch_sha256_adapter::digest(bytes)
 }
 
 /// Project one real composite root through one action's real Profile13.
@@ -396,13 +498,9 @@ fn project_banks(action: Action, root: &[u8]) -> (Vec<u64>, Vec<[u8; 32]>) {
             let geometry = profile
                 .physical_account_geometry_with_dynamic_spans(
                     TAIL_COUNT,
-                    &[SCRATCH_PAGES],
+                    &[],
                     profile
-                        .physical_account_ordinal_with_dynamic_spans(
-                            TAIL_COUNT,
-                            &[SCRATCH_PAGES],
-                            index,
-                        )
+                        .physical_account_ordinal_with_dynamic_spans(TAIL_COUNT, &[], index)
                         .expect("physical ordinal"),
                 )
                 .expect("geometry");
@@ -428,7 +526,7 @@ fn project_banks(action: Action, root: &[u8]) -> (Vec<u64>, Vec<[u8; 32]>) {
                     privileges.executable(),
                 )
             } else {
-                AccountObservationV1::new(
+                let observation = AccountObservationV1::new(
                     key,
                     owner,
                     1,
@@ -436,16 +534,22 @@ fn project_banks(action: Action, root: &[u8]) -> (Vec<u64>, Vec<[u8; 32]>) {
                     privileges.signer(),
                     privileges.writable(),
                     privileges.executable(),
-                )
+                );
+                match frame.digests.get(index).expect("digest slot") {
+                    Some(digest) => observation.with_adapter_data_digest(digest),
+                    None => observation,
+                }
             }
         })
         .collect::<Vec<_>>();
 
-    let mut input_scalars = vec![0_u64; scalar_width()];
-    *input_scalars
-        .get_mut(register(scalar::INPUT_SCRATCH_PAGE_COUNT))
-        .expect("page count register") = u64::from(SCRATCH_PAGES);
-    let mut input_identities = vec![[0_u8; 32]; identity_width()];
+    let scalars = bank_width(profile.common_scalar_count(), profile.item_scalar_stride());
+    let identities = bank_width(
+        profile.common_identity_count(),
+        profile.item_identity_stride(),
+    );
+    let input_scalars = vec![0_u64; scalars];
+    let mut input_identities = vec![[0_u8; 32]; identities];
     *input_identities
         .get_mut(register(identity::TRADING_PROGRAM))
         .expect("trading program register") = TRADING_PROGRAM;
@@ -456,14 +560,14 @@ fn project_banks(action: Action, root: &[u8]) -> (Vec<u64>, Vec<[u8; 32]>) {
     *input_identities
         .get_mut(register(identity::RESULT_OWNER))
         .expect("result owner register") = SYSTEM_PROGRAM;
-    let mut scratch_scalars = vec![0_u64; scalar_width()];
-    let mut scratch_identities = vec![[0_u8; 32]; identity_width()];
-    let mut output_scalars = vec![0_u64; scalar_width()];
-    let mut output_identities = vec![[0_u8; 32]; identity_width()];
+    let mut scratch_scalars = vec![0_u64; scalars];
+    let mut scratch_identities = vec![[0_u8; 32]; identities];
+    let mut output_scalars = vec![0_u64; scalars];
+    let mut output_identities = vec![[0_u8; 32]; identities];
     project_dynamic_fixed_spans_atomic(
         profile,
         TAIL_COUNT,
-        &[SCRATCH_PAGES],
+        &[],
         &accounts,
         ProjectionRegistersV2 {
             input_scalars: &input_scalars,

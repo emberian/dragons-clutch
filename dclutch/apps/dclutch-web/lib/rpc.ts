@@ -14,7 +14,16 @@ import {
   verifyLocalBindings,
 } from './decoders';
 
-const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
+/**
+ * The largest JSON body this client will read from a node, in bytes.
+ *
+ * Exported because it is a BOUND CALLERS HAVE TO PLAN AGAINST, not merely one
+ * this client enforces. `getMultipleAccounts` has two limits — 32 keys and this
+ * response size — and for a frame carrying ProgramData accounts it is the size
+ * that binds. A chunker that restated `4 MiB` in its own words would be a
+ * second authority for one number.
+ */
+export const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
 const MAX_MULTIPLE_ACCOUNTS = 32;

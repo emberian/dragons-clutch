@@ -38,6 +38,21 @@
 # laptop: a lane adding a target has to measure it and write the number down.
 # The tier's own wall-clock assertion is the coarse backstop and says so.
 #
+# `quarantine` IS ALSO EMPTY NOW, and the branch stays for the next red target
+# rather than because one is pending. It held seven rows when this file was
+# written: six `dclutch-fractional-claim-operator` targets that were ONE live
+# defect -- the V1 producer granted no effect permissions at all, so Lifecycle's
+# `Close` arm refused every bundle it built -- and `root_lifecycle_projection_v3`,
+# whose fixture frame a517d27c made stale. Both are fixed and their rows are
+# `run`.
+#
+# THOSE SEVEN ROWS were re-measured on the tree that fixed them, minimum of
+# EIGHT rounds rather than three because three other lanes were building and the
+# spread showed it: `chain_artifacts` read 0.85s and 11.59s inside one window.
+# `root_lifecycle_projection_v3` more than doubled its recorded time, 0.67s to
+# 1.47s, and that is the fix rather than the load -- a red target stops at its
+# first assertion and a green one projects all fifteen actions.
+#
 # `lake` and ELF targets are NOT in this file. The census classifies those from
 # source text and the tier prints its answer; a copy here would be a second
 # author for a question that already has one.
@@ -61,17 +76,17 @@ run	dclutch-fractional-claim-kernel	fractional_claims	0.46
 run	dclutch-fractional-claim-kernel	projection_encode	0.40	
 run	dclutch-fractional-claim-kernel	terms_encode	0.43	
 run	dclutch-fractional-claim-operator	actions	1.14	
-quarantine	dclutch-fractional-claim-operator	artifacts	0.70	RED at 0bac7f001
-quarantine	dclutch-fractional-claim-operator	chain_artifacts	0.66	RED at 0bac7f001
-quarantine	dclutch-fractional-claim-operator	claims	0.65	RED at 0bac7f001
-quarantine	dclutch-fractional-claim-operator	composition	0.77	RED at 0bac7f001
+run	dclutch-fractional-claim-operator	artifacts	0.64	
+run	dclutch-fractional-claim-operator	chain_artifacts	0.85	
+run	dclutch-fractional-claim-operator	claims	0.82	
+run	dclutch-fractional-claim-operator	composition	0.97	
 run	dclutch-fractional-claim-operator	exposure_action_v2	0.62	
-quarantine	dclutch-fractional-claim-operator	exposure_v3	0.69	RED at 0bac7f001
+run	dclutch-fractional-claim-operator	exposure_v3	0.68	
 run	dclutch-fractional-claim-operator	hot_v2	0.83	
 run	dclutch-fractional-claim-operator	selected_release_v4	0.89	
-quarantine	dclutch-fractional-claim-operator	token2022	0.76	RED at 0bac7f001
+run	dclutch-fractional-claim-operator	token2022	0.86	
 run	dclutch-fractional-claim-operator	topology_v3	0.68	
-quarantine	dclutch-general-adapter-contract	root_lifecycle_projection_v3	0.67	RED at 0bac7f001
+run	dclutch-general-adapter-contract	root_lifecycle_projection_v3	1.47	
 run	dclutch-general-adapter-contract	selection_decision_corpus	0.47	
 run	dclutch-general-adapter-contract	unauthored_actions_v1	0.67	
 run	dclutch-liability-basis-v2-kernel	agreement	0.77	

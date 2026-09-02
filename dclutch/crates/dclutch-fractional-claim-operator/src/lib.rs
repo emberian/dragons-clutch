@@ -44,6 +44,7 @@ use solana_program::{
 
 pub use artifacts::{
     FRACTIONAL_COMMON_IDENTITIES_V1, FRACTIONAL_COMMON_SCALARS_V1,
+    FRACTIONAL_RENT_BENEFICIARY_COORDINATE_V1, FRACTIONAL_ROOT_COORDINATE_V1,
     FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
     FractionalFinalizedArtifactBundleV1, build_fractional_composed_artifact_bundle_v1,
     build_fractional_finalized_artifact_bundle_v1,

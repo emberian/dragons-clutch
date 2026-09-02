@@ -610,7 +610,23 @@ fn authenticate_custody_accounts(
     Ok(())
 }
 
-fn token_amount(
+/// Authenticate one token account of this terminal payout and read its balance.
+///
+/// THE ONE SITE WHERE THE ADMITTED TOKEN LAYOUT IS DECIDED for the terminal
+/// route. `terminal_settlement_v3` calls this rather than carrying a second
+/// copy of it, because a destination admitted on one of the two paths and
+/// refused on the other is a split a reader cannot see.
+///
+/// The parse is `parse_base_or_immutable_owner` and not `parse`. Under
+/// Token-2022 the Associated Token Account program ALWAYS adds
+/// `ImmutableOwner`, so every ordinary wallet's conventional destination is 170
+/// bytes and the base parser refuses it -- measured on cohort-13, where the
+/// founder's own ATA had to be abandoned for a hand-created 165-byte account.
+/// `ImmutableOwner` only removes the token program's ability to change the
+/// owner this function just authenticated, so admitting it strengthens the
+/// check rather than weakening it. Every other extension stays refused, in
+/// `dclutch-token-svm`, by width and by type.
+pub(crate) fn token_amount(
     account: &AccountInfo<'_>,
     token_program: &AccountInfo<'_>,
     mint: [u8; 32],
@@ -622,7 +638,8 @@ fn token_amount(
     let bytes = account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    let token = TokenAccount::parse(&bytes).map_err(|_| ClaimsSbfError::Accounts)?;
+    let token =
+        TokenAccount::parse_base_or_immutable_owner(&bytes).map_err(|_| ClaimsSbfError::Accounts)?;
     if token.mint != mint || token.owner != owner {
         return Err(ClaimsSbfError::Identity.into());
     }

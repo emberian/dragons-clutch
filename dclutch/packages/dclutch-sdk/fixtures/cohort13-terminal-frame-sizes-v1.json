@@ -1,0 +1,162 @@
+{
+  "format": "dclutch-wallet-terminal-payout-input-frame-sizes-v1",
+  "market": "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15",
+  "owner": "FBYW95Fo3fyHHkd2ff55Zqr5HvjzGctTacSAgcvkQJ3Q",
+  "claimIndex": 3,
+  "observedSlot": "492170112",
+  "note": "Cohort-13's wallet terminal payout FRAME round, read from devnet on 2026-09-02: every address the derivation named and the data length the node reported for it. Four of the thirty-eight are ProgramData accounts carrying whole ELFs, which is why a 32-key split produced a 5,272,883-byte response against this client's 4 MiB bound.",
+  "accounts": [
+    {
+      "address": "9z5WV9C7MMMH2GGs34g7humKnn4DCdWb1rwDxPnT2yR",
+      "space": 0
+    },
+    {
+      "address": "SysvarRent111111111111111111111111111111111",
+      "space": 17
+    },
+    {
+      "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "space": 36
+    },
+    {
+      "address": "wi9BF3z7TDhim1E7ZL6bJkUzqjz5LKFpgZQ1pe9Kr2W",
+      "space": 0
+    },
+    {
+      "address": "2qGnF2Zc7qbR6d5iB4dZhEZ9jZVpUcUak9a3v2o4ZLA1",
+      "space": 256
+    },
+    {
+      "address": "3XHt6sRpdFxeAa1J23T8TKKFgA78ioJQAdeqJ3HZ5zMv",
+      "space": 36
+    },
+    {
+      "address": "3YhoeyybCdQubFn28uzaPDLwxUD5UXNDWqNRXSD7KGAU",
+      "space": 0
+    },
+    {
+      "address": "4BENW7YgFnAbagoRr8rAdD8p2kqhwiyvtyDzNKj8ef6W",
+      "space": 170
+    },
+    {
+      "address": "4crJDLAwZD8Xm7fCZnsNbcuewm16RwUfQ98NwVavwPVd",
+      "space": 0
+    },
+    {
+      "address": "4omgGnaiYEPEomH8k7mRwjrog8Ayg7mBeQJjsQh7D1dv",
+      "space": 1186221
+    },
+    {
+      "address": "5LgoaEwg2o9GCb1iYk71pTjPLJRCWTPZ24KDCJB71545",
+      "space": 192
+    },
+    {
+      "address": "5gDAYhWhRvp4AcpQbSQBtJ6ca8AnL4yR3zdJvm6Tvim6",
+      "space": 272
+    },
+    {
+      "address": "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15",
+      "space": 368
+    },
+    {
+      "address": "74uE3Ze5SNmBMBERFmy4fM6geFXtDQmW78tKMGcjT6w6",
+      "space": 0
+    },
+    {
+      "address": "7S9tCjXTHMPjtAoRq3uUPGDRfy2hG4rtQtAN5Uybd8Za",
+      "space": 312
+    },
+    {
+      "address": "8PMHP6cweSPjqpQmQurstNXKcBB855t6hXELePzdibY3",
+      "space": 165
+    },
+    {
+      "address": "8XsxVn35gtemD9PuWC9pHYX1rxBAC4T8xV4xdrkdfCBV",
+      "space": 36
+    },
+    {
+      "address": "8iXLcqN5NAV3N1xHkeu1jDtxKUxqJ8qFQsNTdvNKrNue",
+      "space": 288
+    },
+    {
+      "address": "B5xswn7DAB5fBkNQ6oe3Pmbcadj4WDHZe5YMf19ghKx2",
+      "space": 832
+    },
+    {
+      "address": "C2uWWP156Az5u978GCKL2MGjrMTJ8JZ7WfxuXHXATKb6",
+      "space": 112
+    },
+    {
+      "address": "CgFGAk7jhAq9wrvqJjZivvDxAwRUnQMy44dNz8Gamk4J",
+      "space": 240
+    },
+    {
+      "address": "D79Zn9KfAFzzXuPipcvGWcdEetiXVu43W5xhfEjjwryg",
+      "space": 0
+    },
+    {
+      "address": "D7nZhwBe81dN2RgnGinxz2YDYh9vFBWLos5Yd7aCBZDR",
+      "space": 819301
+    },
+    {
+      "address": "E5DW3Qwb1SGexx4P9DTK4zy6CEZTUxhCTs1uzJDPnDvk",
+      "space": 112
+    },
+    {
+      "address": "E64zDwMKVti1KqoHW2WKWNGnYL29ZjfbLDBZdL1pz2xW",
+      "space": 1369757
+    },
+    {
+      "address": "EjhAJbGWueYSFmU89wwsFAHb8cZZyfaZBWizEt3tiKka",
+      "space": 0
+    },
+    {
+      "address": "Ejswx4ypMm1SohutytuJrvzCHhD2VqGwZMRewYvSB1qu",
+      "space": 82
+    },
+    {
+      "address": "Fuc2yvDc9Kp9paDxKftbJSLSPR2tvKLkaww4trxYPbnB",
+      "space": 0
+    },
+    {
+      "address": "G7VcHyzkns2gwFwVHde6WumHj4JEJU1RZfB5TMQxT5ew",
+      "space": 0
+    },
+    {
+      "address": "G7xAFLpJzdCnc7FXjj5uE3qWSk3ZgCgL684YCQEdCah4",
+      "space": 36
+    },
+    {
+      "address": "GNQPpNXzXpRD2FXm1j7fjJb4ETFmyTNsvzeFAtYSeRid",
+      "space": 592
+    },
+    {
+      "address": "GuQLkd2HfhAeRG7jTfHVGs4P4shxxesZR93bmqGEauUs",
+      "space": 572317
+    },
+    {
+      "address": "HCnz8YXLnQdLgEBb8RAPjJg7R3Eh3qQx4oQiWmqGUhsc",
+      "space": 288
+    },
+    {
+      "address": "HETBPPJFC7HbxmPdCnU4f1bmZEDABXG98b1KV1YfJnQg",
+      "space": 1288
+    },
+    {
+      "address": "HKw5UzhNYxv2i4BHuGh4cuWpEjE6Nkncc5g3dpLeZYNZ",
+      "space": 160
+    },
+    {
+      "address": "HZsbUHHwJLUqXdUhjDc4vhnmtgqr65VkU36G8hTijWiy",
+      "space": 36
+    },
+    {
+      "address": "J33AaXnVDFGYJXYhDxFCPGk4MSM2Ssc69ZcU5PbkYfbb",
+      "space": 36
+    },
+    {
+      "address": "JDYMLZAUddAsF9u1eh9wig8qu2bA2msm7VS165r5Wgs8",
+      "space": 368
+    }
+  ]
+}

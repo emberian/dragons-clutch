@@ -92,7 +92,6 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3, RecordAdmissionV3,
 };
-use dclutch_token_svm::TokenAccount;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -109,7 +108,7 @@ use super::{
     liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2,
     market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
     rational_terminal_v3::{
-        RationalTerminalFrameV3, TerminalCustodyInputV3, execute_terminal_custody_v3,
+        RationalTerminalFrameV3, TerminalCustodyInputV3, execute_terminal_custody_v3, token_amount,
     },
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
@@ -968,24 +967,6 @@ fn token_poststate_digest(accounts: &[AccountInfo<'_>]) -> Result<[u8; 32], Prog
     .to_bytes())
 }
 
-fn token_amount(
-    account: &AccountInfo<'_>,
-    token_program: &AccountInfo<'_>,
-    mint: [u8; 32],
-    owner: [u8; 32],
-) -> Result<u64, ProgramError> {
-    if account.owner != token_program.key {
-        return Err(ClaimsSbfError::Accounts.into());
-    }
-    let bytes = account
-        .try_borrow_data()
-        .map_err(|_| ClaimsSbfError::Accounts)?;
-    let token = TokenAccount::parse(&bytes).map_err(|_| ClaimsSbfError::Accounts)?;
-    if token.mint != mint || token.owner != owner {
-        return Err(ClaimsSbfError::Identity.into());
-    }
-    Ok(token.amount)
-}
 
 fn shared_frame<'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],

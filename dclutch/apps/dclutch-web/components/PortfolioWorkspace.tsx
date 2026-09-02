@@ -101,6 +101,15 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
       {position.claim.kind === 'redeemable' && <div className="portfolio-claim">
         <span>Winning claims you can cash in</span>
         <strong>{position.claim.redeemableAtoms}</strong>
+        {/* A ZERO IS AN ANSWER, and it was only ever delivered as a refusal
+            after the reader had clicked through two steps of a redemption they
+            could not make. A holder of a losing claim on a resolved market is
+            not waiting for anything, and saying so here is the difference
+            between a finished market and a broken page. */}
+        {BigInt(position.claim.redeemableAtoms) === 0n && <p className="portfolio-claim-zero">
+          This market has answered, and none of what you hold here was the
+          answer. There is nothing to cash in and nothing to wait for.
+        </p>}
         <p>{position.claim.note}</p>
       </div>}
       {position.claim.kind === 'redeemable' && <RedeemFlow
@@ -182,15 +191,19 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
         {/*
           "Payout is not open yet" was false from the moment redemption
           shipped: the whole path -- terminal input, payout, replay account --
-          runs in this browser and needs no file from anybody. What is true is
-          narrower and is a fact about the MARKETS rather than about this page:
-          none has reached an answer, so there is nothing to redeem yet. The
-          two were being said as one sentence, and the false half was the half
-          that told a reader not to come back.
+          runs in this browser and needs no file from anybody. What replaced it
+          was narrower and ALSO went false, on 2026-09-02, when a market on this
+          deployment resolved and was paid: "no market has reached an answer
+          yet" is a CENSUS, and a census written into a hero is a sentence with
+          a shelf life. It rotted in a day, exactly as the count it replaced
+          had.
+          So this says what is true of the page whatever the markets are doing.
+          Which market has answered is read from the chain, below, per position,
+          where it can never be stale.
         */}
-        <h1>{redemption ? <>Your winning claims.<br /><em>Nothing has resolved yet.</em></> : <>Everything one wallet<br /><em>holds here.</em></>}</h1>
+        <h1>{redemption ? <>Your winning claims.<br /><em>Cashed in here.</em></> : <>Everything one wallet<br /><em>holds here.</em></>}</h1>
         <p>{redemption
-          ? <>Connect your wallet to find every claim it holds. Redeeming runs right here, in this browser, with no file and no operator: no market on this deployment has reached an answer yet, so there is nothing to pay out — when one does and you hold the winning side, this is where you do it.</>
+          ? <>Connect your wallet to find every claim it holds. Redeeming runs right here, in this browser, with no file and no operator: every market you hold is read live, and where one has reached its answer and you hold the winning side, this is where you cash it in.</>
           : <>Paste an address, or connect a wallet, to see what claims it holds in every market on this deployment.</>}</p>
       </div>
       <aside>

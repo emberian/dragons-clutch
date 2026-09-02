@@ -562,7 +562,7 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
         .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
     let before_hoard = TokenAccount::parse(&report.pre_hoard_token_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let before_recipient = TokenAccount::parse(&report.pre_recipient_token_bytes)
+    let before_recipient = TokenAccount::parse_base_or_immutable_owner(&report.pre_recipient_token_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
     let after_hoard_amount = before_hoard
         .amount
@@ -840,7 +840,13 @@ fn validate_custody_route(
     let expected_hoard = Pubkey::find_program_address(&vault.as_slices(), &route.custody_program).0;
     let hoard = TokenAccount::parse(input.hoard_token_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Custody)?;
-    let recipient = TokenAccount::parse(input.recipient_token_bytes)
+    // The DESTINATION, and the one account in this route a stranger owns. Every
+    // ordinary wallet's is 170 bytes under Token-2022 -- the ATA program adds
+    // `ImmutableOwner` and gives no one a choice -- so refusing that suffix here
+    // refused every conventional destination there is. Cohort-13 paid a
+    // hand-created 165-byte account instead. The Claims program parses the same
+    // account with the same rule; see `rational_terminal_v3::token_amount`.
+    let recipient = TokenAccount::parse_base_or_immutable_owner(input.recipient_token_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Custody)?;
     if route.custody_replay != expected_replay
         || route.custody_authority != expected_authority
@@ -1069,13 +1075,19 @@ fn write_u64(
     Ok(())
 }
 
+/// The prestate's own bytes with one balance replaced, at the prestate's width.
+///
+/// The extension suffix is COPIED, not dropped: the chain hashes the whole
+/// account, so a 170-byte destination's poststate is 170 bytes or the operator
+/// and the program commit to different pictures of the same transfer.
 fn token_amount_bytes(
     prestate: &[u8],
     amount: u64,
 ) -> Result<Vec<u8>, WalletTerminalPayoutErrorV3> {
     let mut poststate = prestate.to_vec();
     write_u64(&mut poststate, 64, amount)?;
-    TokenAccount::parse(&poststate).map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+    TokenAccount::parse_base_or_immutable_owner(&poststate)
+        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
     Ok(poststate)
 }
 

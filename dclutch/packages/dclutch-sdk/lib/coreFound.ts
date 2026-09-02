@@ -121,7 +121,7 @@ import {
   SYSVAR_OWNER_ID,
   deriveFinalizedRecordAddressesV1,
 } from './releaseRegistry';
-import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import { MAX_RPC_RESPONSE_BYTES, type RpcAccount, type SolanaRpcClient } from './rpc';
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 
 const PRODUCT_RECORD_BYTES = 112;
@@ -248,30 +248,182 @@ function accountMap(entries: Awaited<ReturnType<SolanaRpcClient['multipleAccount
   return new Map(entries.accounts.map((entry) => [entry.address, entry.account]));
 }
 
-/** Acquire one finalized observation floor without exceeding the RPC's 32-key bound. */
+/** The RPC's hard bound on how many keys one `getMultipleAccounts` may name. */
+export const MAX_MULTIPLE_ACCOUNT_KEYS_V1 = 32;
+
+/**
+ * Bytes one account costs a `getMultipleAccounts` response beyond its payload.
+ *
+ * Measured against a devnet node rather than guessed: a single-account response
+ * over a 572,317-byte ProgramData came back 269 bytes longer than the base64 of
+ * its data, and a seven-account response 167 bytes per account longer. This is
+ * that figure with slack, because a planner that underestimates the envelope
+ * plans a chunk the node refuses.
+ */
+const RPC_ACCOUNT_ENVELOPE_BYTES_V1 = 256;
+
+/** Bytes the JSON-RPC result wrapper itself costs, with the same slack. */
+const RPC_RESPONSE_ENVELOPE_BYTES_V1 = 1_024;
+
+/** What one account of this data length will cost the response, base64 included. */
+function accountResponseBytesV1(space: number): number {
+  return 4 * Math.ceil(space / 3) + RPC_ACCOUNT_ENVELOPE_BYTES_V1;
+}
+
+/**
+ * Split one address list into chunks the node can actually answer.
+ *
+ * `getMultipleAccounts` has TWO bounds and only one of them is a key count.
+ * Splitting at 32 keys and stopping there is correct for a frame of protocol
+ * records, which are hundreds of bytes each, and wrong for any frame carrying a
+ * ProgramData account, which is a whole ELF. Measured on cohort-13: the wallet
+ * terminal payout frame's first 32-key chunk was 5,269,020 bytes against this
+ * client's 4 MiB response bound, and the derivation could not complete in a
+ * browser at all.
+ *
+ * So the split is by CUMULATIVE SIZE, under the key bound as well. Order is
+ * preserved and no address is dropped or repeated: the concatenation of the
+ * chunks is the input.
+ *
+ * A single account too large to be read on its own is REFUSED BY NAME rather
+ * than emitted as a chunk the node will reject. That is a real bound — an
+ * account above roughly 3 MiB cannot be read whole by this client — and the
+ * caller that hits it needs a byte window (`multipleAccountDataSlices`), not a
+ * different chunking.
+ */
+export function planFinalizedAccountChunksV1(
+  sizes: ReadonlyArray<Readonly<{ address: string; space: number }>>,
+  responseBound: number = MAX_RPC_RESPONSE_BYTES,
+): ReadonlyArray<ReadonlyArray<string>> {
+  const budget = responseBound - RPC_RESPONSE_ENVELOPE_BYTES_V1;
+  const chunks: Array<Array<string>> = [];
+  let current: Array<string> = [];
+  let bytes = 0;
+  for (const entry of sizes) {
+    const cost = accountResponseBytesV1(entry.space);
+    if (cost > budget) {
+      throw new Error(
+        `account ${entry.address} is ${entry.space} bytes and cannot be read whole under the ${responseBound}-byte response bound`,
+      );
+    }
+    if (current.length === MAX_MULTIPLE_ACCOUNT_KEYS_V1 || bytes + cost > budget) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(entry.address);
+    bytes += cost;
+  }
+  if (current.length > 0) chunks.push(current);
+  return Object.freeze(chunks.map((chunk) => Object.freeze(chunk)));
+}
+
+/**
+ * Learn every address's data length without downloading one body.
+ *
+ * `space` is the account's FULL data length and the node reports it whether or
+ * not a `dataSlice` was asked for -- confirmed against devnet, where a
+ * one-byte slice over the seven cohort-13 ProgramData accounts came back in
+ * 1,296 bytes total and still named 2,320,197 for the largest. A vacant address
+ * costs nothing and plans as zero.
+ */
+async function learnFinalizedAccountSizesV1(
+  client: Pick<SolanaRpcClient, 'multipleAccountDataSlices'>,
+  addresses: ReadonlyArray<string>,
+  minimumContextSlot: string,
+): Promise<ReadonlyArray<Readonly<{ address: string; space: number }>>> {
+  const sizes: Array<Readonly<{ address: string; space: number }>> = [];
+  for (let offset = 0; offset < addresses.length; offset += MAX_MULTIPLE_ACCOUNT_KEYS_V1) {
+    const window = addresses.slice(offset, offset + MAX_MULTIPLE_ACCOUNT_KEYS_V1);
+    const observation = await client.multipleAccountDataSlices(window, 0, 1, minimumContextSlot);
+    if (BigInt(observation.slot) < BigInt(minimumContextSlot)) {
+      throw new Error('chunked finalized sizing regressed below its context floor');
+    }
+    for (const entry of observation.accounts) {
+      sizes.push(Object.freeze({ address: entry.address, space: entry.account === null ? 0 : entry.account.space }));
+    }
+  }
+  return Object.freeze(sizes);
+}
+
+/** Whether two observations of one address are the same account, byte for byte. */
+function sameAccountV1(left: RpcAccount | null, right: RpcAccount | null): boolean {
+  if (left === null || right === null) return left === right;
+  return left.owner === right.owner
+    && left.lamports === right.lamports
+    && left.executable === right.executable
+    && left.space === right.space
+    && left.data.length === right.data.length
+    && left.data.every((byte, index) => byte === right.data[index]);
+}
+
+/**
+ * Acquire one finalized observation without exceeding EITHER RPC bound.
+ *
+ * A sizing round first, then bodies in chunks planned from those sizes. The
+ * sizing round is deliberately outside the consistency proof below: a size is
+ * only used to PLAN, so a stale one either still fits or is refused loudly by
+ * the response bound, and holding the round that decides nothing to the same
+ * bar would let it fail the acquisition.
+ *
+ * WHAT REPLACED "EVERY CHUNK REPORTS THE SAME SLOT", and why it had to. That
+ * check read as the strongest possible statement and was in fact
+ * UNSATISFIABLE: `getMultipleAccounts` answers from the node's current
+ * finalized bank, and devnet's advances while a round is in flight. Measured
+ * 2026-09-02 against cohort-13's payout frame -- two chunks, four attempts,
+ * and the second chunk came back **two slots later every single time**. It had
+ * never fired only because every round this client made until now fit in one
+ * chunk, and the byte bound stopped the first round that did not before the
+ * second chunk was ever requested. A check nothing can satisfy is not a strong
+ * check; it is a wall in front of the feature.
+ *
+ * So the composite is allowed to straddle a tick, and it is PROVED to be one
+ * picture instead of asserted to be: every chunk but the last is read again
+ * after the last one, at the greatest slot observed, and must come back byte
+ * for byte identical. If nothing an earlier chunk named changed over the whole
+ * window, the accounts read at either end describe the same state.
+ *
+ * That costs one extra read per chunk beyond the first, and NOTHING at all for
+ * a single-chunk round, which is every round but the payout frame. An account
+ * that changed and changed back inside the window would pass; every account
+ * these frames name is either content-addressed by the digest it was found
+ * through or carries a monotonic revision, so that is not a shape this chain
+ * produces.
+ */
 export async function acquireFinalizedAccountsInChunksV1(
-  client: Pick<SolanaRpcClient, 'multipleAccounts'>,
+  client: Pick<SolanaRpcClient, 'multipleAccounts' | 'multipleAccountDataSlices'>,
   addresses: ReadonlyArray<string>,
   minimumContextSlot: string,
 ): Promise<Awaited<ReturnType<SolanaRpcClient['multipleAccounts']>>> {
   if (addresses.length === 0 || new Set(addresses).size !== addresses.length) {
     throw new Error('chunked finalized acquisition requires distinct nonempty addresses');
   }
+  const plan = planFinalizedAccountChunksV1(
+    await learnFinalizedAccountSizesV1(client, addresses, minimumContextSlot),
+  );
   const accounts: Array<{ address: string; account: RpcAccount | null }> = [];
   let observedSlot: string | null = null;
-  for (let offset = 0; offset < addresses.length; offset += 32) {
-    const chunk = addresses.slice(offset, offset + 32);
+  for (const chunk of plan) {
     const observation = await client.multipleAccounts(chunk, minimumContextSlot);
     if (BigInt(observation.slot) < BigInt(minimumContextSlot)) {
       throw new Error('chunked finalized acquisition regressed below its context floor');
     }
-    if (observedSlot !== null && observation.slot !== observedSlot) {
-      throw new Error('chunked finalized acquisition returned different context slots');
-    }
-    observedSlot = observation.slot;
+    if (observedSlot === null || BigInt(observation.slot) > BigInt(observedSlot)) observedSlot = observation.slot;
     accounts.push(...observation.accounts);
   }
   if (observedSlot === null) throw new Error('chunked finalized acquisition returned no context');
+  const first = new Map(accounts.map((entry) => [entry.address, entry.account]));
+  for (const chunk of plan.slice(0, -1)) {
+    const again = await client.multipleAccounts(chunk, observedSlot);
+    if (BigInt(again.slot) < BigInt(observedSlot)) {
+      throw new Error('chunked finalized acquisition regressed below its context floor');
+    }
+    for (const entry of again.accounts) {
+      if (!sameAccountV1(first.get(entry.address) ?? null, entry.account)) {
+        throw new Error(`chunked finalized acquisition read ${entry.address} changing between its chunks`);
+      }
+    }
+  }
   return Object.freeze({ slot: observedSlot, accounts: Object.freeze(accounts) });
 }
 
@@ -814,7 +966,7 @@ export type CoreFoundDerivedRecordsV2 = Readonly<{
  * constant is a routed finding rather than a fifth quiet mirror.
  */
 export async function deriveCoreFoundRecordsV2(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'multipleAccountDataSlices'>,
   input: Readonly<{ registryProgram: string; productRecord: string; sourceMaterialRecord: string }>,
 ): Promise<CoreFoundDerivedRecordsV2> {
   const registry = key(input.registryProgram, 'Registry program').toBase58();

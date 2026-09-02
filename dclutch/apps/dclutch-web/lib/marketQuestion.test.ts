@@ -91,17 +91,27 @@ async function solUsdMarket(windowBounds: Readonly<{ start: bigint; end: bigint 
     [addressFor(PORTFOLIO_SCHEMA_ID_V2, portfolioDigest), portfolio],
     [addressFor(WINDOW_SPEC_SCHEMA_ID_V1, windowDigest), window],
   ]);
+  const observe = (addresses: ReadonlyArray<string>, length: number | null) => ({
+    slot: '491885036',
+    accounts: addresses.map((address) => ({
+      address,
+      account: served.has(address)
+        ? {
+            owner: registry,
+            executable: false,
+            lamports: '1000000',
+            // `space` is the FULL data length whether or not a slice was asked
+            // for, which is what devnet reports and what the chunk planner reads.
+            space: served.get(address)!.length,
+            data: length === null ? served.get(address)! : served.get(address)!.slice(0, length),
+          }
+        : null,
+    })),
+  });
   const client = {
     finalizedSlot: async () => '491885036',
-    multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
-      slot: '491885036',
-      accounts: addresses.map((address) => ({
-        address,
-        account: served.has(address)
-          ? { owner: registry, executable: false, lamports: '1000000', space: served.get(address)!.length, data: served.get(address)! }
-          : null,
-      })),
-    }),
+    multipleAccountDataSlices: async (addresses: ReadonlyArray<string>, _offset: number, length: number) => observe(addresses, length),
+    multipleAccounts: async (addresses: ReadonlyArray<string>) => observe(addresses, null),
   } as unknown as SolanaRpcClient;
 
   return { client, registry, productRecordId: hex(productDigest), resolutionPolicyId: hex(sourceDigest), served };

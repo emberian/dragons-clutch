@@ -239,7 +239,7 @@ function message(error: unknown): string {
  * named. Reading fifty records in one call buys latency and buys nothing else.
  */
 export async function inspectMarketQuestionsV1(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'multipleAccountDataSlices'>,
   request: Readonly<{ registryProgramId: string; markets: ReadonlyArray<Omit<MarketQuestionRequestV1, 'registryProgramId'>> }>,
 ): Promise<ReadonlyArray<MarketQuestionOutcomeV1>> {
   const registry = request.registryProgramId;
@@ -367,7 +367,7 @@ export async function inspectMarketQuestionsV1(
  * page asking about exactly one market wants the reason, not a list of one.
  */
 export async function inspectMarketQuestionV1(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'multipleAccountDataSlices'>,
   request: MarketQuestionRequestV1,
 ): Promise<MarketQuestionV1> {
   const [outcome] = await inspectMarketQuestionsV1(client, {

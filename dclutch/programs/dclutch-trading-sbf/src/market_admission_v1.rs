@@ -1,10 +1,11 @@
 //! Named admissible Market prestates for Trading's Core phase guards.
 //!
-//! Trading authenticates the Core Market on nine guards spread over the Direct
-//! venue and the Dealer accelerators, and the route census enumerated ZERO
-//! gates over its twenty-eight routes, because every one is written inline
-//! inside a disjunction that also joins market ids, generations, release sets
-//! and digests -- a shape nothing outside the function can read.
+//! Trading authenticates the Core Market on five guards spread over the Direct
+//! top-level routes and the Dealer accelerators, and the route census
+//! enumerated ZERO gates over its twenty-eight routes, because every one is
+//! written inline inside a disjunction that also joins market ids,
+//! generations, release sets and digests -- a shape nothing outside the
+//! function can read.
 //!
 //! [`MarketAdmissionV1`] is the vocabulary Core, Custody, Claims and
 //! Resolution publish (`315f1931`, `20a45ea1`, `9438c8a1`, `f47c25fe`), and
@@ -31,8 +32,8 @@ use dclutch_market_core_codec::{MarketAdmissionV1, Phase};
 /// A Market open for trading.
 ///
 /// Every route that creates, funds or moves a live position: Direct token
-/// setup, Direct replay setup, the inline Direct fill, both complementary
-/// legs, and the Dealer scenario and equity accelerators' Core join.
+/// setup, Direct replay setup, and the Dealer scenario and equity
+/// accelerators' Core join.
 pub const TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
     MarketAdmissionV1::phases(&[Phase::Open]);
 
@@ -44,18 +45,6 @@ pub const TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
 /// exist to tear down what retirement has already started.
 pub const TRADING_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
     MarketAdmissionV1::phases(&[Phase::Retiring]);
-
-/// A Market that has opened, whether or not it has since resolved.
-///
-/// The Direct escrow contexts' TERMINAL arm. An escrow opened while the Market
-/// traded must still be closable after the Market resolves, or the escrowed
-/// principal is stranded by the resolution it was posted against; the
-/// non-terminal arm of the same guard names
-/// [`TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1`] and is the narrower set.
-/// `Founding` stays out because no escrow can exist yet, and `Retired` stays
-/// out because closure has already demanded that none does.
-pub const TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
-    MarketAdmissionV1::phases(&[Phase::Open, Phase::Terminal, Phase::Retiring]);
 
 #[cfg(test)]
 mod tests {
@@ -93,11 +82,9 @@ mod tests {
     #[test]
     fn admissible_prestates() {
         // direct_token_setup_v1, direct_replay_setup_v1:
-        // `state.phase != Phase::Open`. direct/inline, direct/complementary
-        // (both legs): `core_market.phase() != Phase::Open`.
+        // `state.phase != Phase::Open`.
         // dealer/v3_accelerator_accounts, dealer/v4_equity_accelerator_accounts:
-        // `core.phase != CorePhase::Open`. Both escrow contexts'
-        // non-terminal arm: `core_market.phase() == Phase::Open`.
+        // `core.phase != CorePhase::Open`.
         agrees(
             "TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1",
             TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1,
@@ -110,34 +97,6 @@ mod tests {
             TRADING_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1,
             |phase| phase == Phase::Retiring,
         );
-        // direct/buy_escrow, direct/sell_escrow, terminal arm:
-        // `matches!(core_market.phase(), Phase::Open | Phase::Terminal | Phase::Retiring)`.
-        agrees(
-            "TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1",
-            TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1,
-            |phase| matches!(phase, Phase::Open | Phase::Terminal | Phase::Retiring),
-        );
-    }
-
-    /// The escrow's terminal arm is a strict widening of its own other arm.
-    ///
-    /// The two arms are one guard written as a selection, and the whole reason
-    /// the terminal arm exists is that an escrow posted while the Market traded
-    /// must survive the Market resolving. If someone narrows the terminal set
-    /// below the open one, this fails rather than leaving an escrow reachable
-    /// in a phase its own opening was not.
-    #[test]
-    fn the_terminal_escrow_arm_contains_the_open_one() {
-        for phase in EVERY_PHASE {
-            if TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(phase) {
-                assert!(
-                    TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(phase),
-                    "the terminal escrow arm refuses {phase:?}, which the open arm admits"
-                );
-            }
-        }
-        assert!(!TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(Phase::Founding));
-        assert!(!TRADING_OPENED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(Phase::Retired));
     }
 
     /// Retirement and trading are disjoint, and neither admits a dead Market.
