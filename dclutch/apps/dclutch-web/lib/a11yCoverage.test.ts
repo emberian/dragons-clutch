@@ -109,7 +109,29 @@ describe('accessibility coverage', () => {
     // it even for rules it resolves. It does now; see the two cases below.
     //
     // 196 -> 194 with the creation-studio remnant, the last dead family left in
-    // the sheet.
+    // the sheet. 223 -> 194 in total, and THE DELETIONS ARE FINISHED: the 194
+    // resolve to 94 distinct leading class stems and every one of them is
+    // rendered by a component. Nothing further comes off this number by
+    // deleting; what is left is the instrument's own edge.
+    //
+    // THE FOURTH DRAFT, REFUSED WITH A MEASUREMENT, like the third below.
+    // The cheap way to shrink this is to composite the selector's PREFIX
+    // ancestors -- provably ancestors, the same soundness that makes
+    // `dimmerFor` safe -- over the ground and call that the background. Tried
+    // on 2026-09-02: it takes 194 to 13 and produces 28 findings, and the
+    // findings are WRONG. `.trade-v3-preview span` came back at 4.42:1,
+    // measured against the hairline grid's 1px divider, because the element it
+    // actually sits in is `.trade-v3-preview > div` -- an opaque cell that is
+    // not in the span's selector and cannot be. Its true ratio is 6.13:1 and
+    // it was never a failure. A prefix ancestor is a real ancestor, but it is
+    // not the NEAREST painter, and only the nearest painter is the background.
+    //
+    // So the refusal stands, and for a sharper reason than before: it is not
+    // that this file will not guess, it is that every cheaper model has now
+    // been run and each invents failures on rules that are fine. The method
+    // that works is still the one named below -- match each rule against the
+    // RENDERED tree with `element.matches` and composite with this file's own
+    // `tokens()` -- and it is a project, not a patch.
     expect(report().unresolvedContrast.length).toBe(194);
   });
 
