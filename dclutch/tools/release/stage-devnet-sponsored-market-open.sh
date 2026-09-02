@@ -14,6 +14,7 @@ REGISTRY=""
 FEE_RECIPIENT=""
 WINDOW_START=""
 FEE_BPS=""
+MEAN_UNFILLABLE=0
 # The market's SHAPE. These three were hardcoded into the compiler invocation
 # below until 2026-08-31, which meant every devnet market this script had ever
 # founded asked the same question about the same two prices -- $120 and $180 --
@@ -43,7 +44,7 @@ Usage:
   stage-devnet-sponsored-market-open.sh --work ABSOLUTE_NEW_DIR \
     --plan ABSOLUTE_CHECKED_PLAN_JSON --registry-program-id PUBKEY \
     --direct-fee-recipient PUBKEY --direct-fee-basis-points N \
-    --window-start UNIX_SECONDS [--rpc-url URL] \
+    --window-start UNIX_SECONDS [--rpc-url URL] [--i-mean-unfillable] \
     [--cuts I128,..] [--coefficients U64,..] [--cut-denominator U64]
 
 --cuts, --coefficients and --cut-denominator set the market's SHAPE and each
@@ -120,6 +121,7 @@ while [ "$#" -gt 0 ]; do
         --registry-program-id) REGISTRY="${2:?--registry-program-id needs a value}"; shift 2 ;;
         --direct-fee-recipient) FEE_RECIPIENT="${2:?--direct-fee-recipient needs a value}"; shift 2 ;;
         --direct-fee-basis-points) FEE_BPS="${2:?--direct-fee-basis-points needs a value}"; shift 2 ;;
+        --i-mean-unfillable) MEAN_UNFILLABLE=1; shift ;;
         --window-start) WINDOW_START="${2:?--window-start needs a value}"; shift 2 ;;
         --cuts) CUTS="${2:?--cuts needs a value}"; shift 2 ;;
         --coefficients) COEFFICIENTS="${2:?--coefficients needs a value}"; shift 2 ;;
@@ -160,6 +162,39 @@ case "$FEE_BPS" in ''|*[!0-9]*) echo "--direct-fee-basis-points must be a plain 
 # the operator's own console is cheaper than refusing after a staged build.
 if [ "$FEE_BPS" -gt 500 ]; then
     echo "--direct-fee-basis-points exceeds MAX_FEE_BPS=500 (decision 0014 D2)" >&2
+    exit 2
+fi
+# A WALL, because this one has been a landmine four times.
+#
+# `direct_token_setup_v1` is the sole creator of the seller's and the venue's
+# Direct token accounts, so it precedes every fill, and it refuses unless the
+# Market's finalized Direct config reads exactly
+# DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1 = 50
+# (programs/dclutch-trading-sbf/src/direct_token_setup_v1.rs:477,
+#  crates/dclutch-direct-codec/src/token_setup_v1.rs:25). The config is a
+# finalized Registry record, so the rate is sealed at founding and no later
+# artifact -- no release, no redeploy, no upgrade -- can change it.
+#
+# The paragraph above this gate has said PASS 50 since 2026-08-31 and prose does
+# not refuse. Devnet market19 6WZXJ7jB was founded at 0, two more followed, and
+# cohort-11's SOL/USD market was founded at 30 on 2026-09-01 -- the day AFTER
+# the warning was written -- and every stage before the fill is indifferent to
+# the rate, so all four founded, opened, activated and admitted successfully and
+# are permanently unfillable.
+#
+# Drawing such a market on purpose stays possible, because the world is allowed
+# to contain markets this release cannot fill; it just has to be said out loud.
+if [ "$FEE_BPS" != "50" ] && [ "$MEAN_UNFILLABLE" != "1" ]; then
+    cat >&2 <<UNFILLABLE
+--direct-fee-basis-points $FEE_BPS founds a PERMANENTLY UNFILLABLE market.
+direct_token_setup_v1 creates the seller's and venue's Direct token accounts
+before any fill and refuses unless the Market's finalized Direct config reads
+exactly 50; that config is a finalized Registry record, so the rate is sealed
+at founding and no release, redeploy or upgrade can change it. Four devnet
+markets have already been founded this way and can never take a trade.
+Pass --direct-fee-basis-points 50, or add --i-mean-unfillable to state that an
+unfillable market is what you meant.
+UNFILLABLE
     exit 2
 fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac

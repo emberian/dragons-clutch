@@ -2,10 +2,21 @@
 # Refusal tests for the sponsored-market-open stager and the wrapper it emits.
 #
 # Two irreversible founding parameters are covered, both of which killed a live
-# devnet market: the Direct fee rate (a fee-bearing trade is 115,003 CU over the
-# ceiling, so a nonzero rate founds a market that cannot trade) and the founder
-# identity (an identity whose secret nobody holds strands the collateral and
-# blocks retirement forever -- decision 0015 section 8).
+# devnet market: the Direct fee rate and the founder identity (an identity whose
+# secret nobody holds strands the collateral and blocks retirement forever --
+# decision 0015 section 8).
+#
+# THE FEE RATE'S CAUSE IS NOT WHAT THIS HEADER USED TO SAY. It said "a nonzero
+# rate founds a market that cannot trade", pointing at the 115,003 CU a
+# fee-bearing fill is over the ceiling. That is a real bound and it is not this
+# one, and reading it that way is how a market got founded at 0 and another at
+# 30. The permanent killer is inequality with FIFTY:
+# `direct_token_setup_v1` creates the seller's and venue's Direct token accounts
+# before any fill and refuses unless the finalized Direct config reads exactly
+# DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1 = 50, so 0 is as fatal as 30 and both
+# are fatal FOREVER -- the config is a finalized Registry record. The CU ceiling
+# is then a bound on the fill SIZE at 50, not on the rate: gross collateral of
+# 1..=199 atoms floors the fee to zero and takes the one-CPI branch.
 #
 # Every case below runs before the price reader and before cargo: no network,
 # no build, no key. The wrapper cases extract the emitted script and run it with
@@ -45,9 +56,26 @@ run_stager 2 '--direct-fee-basis-points is required' -- "${COMMON[@]}"
 # 2. and 3. It must be a plain decimal within decision 0014 D2's band.
 run_stager 2 '--direct-fee-basis-points must be a plain decimal count' -- "${COMMON[@]}" --direct-fee-basis-points 5x
 run_stager 2 'exceeds MAX_FEE_BPS=500' -- "${COMMON[@]}" --direct-fee-basis-points 501
-# 4. A stated rate passes the fee gate and stops at the next refusal.
-run_stager 2 '--work must be absolute' -- "${COMMON[@]}" --direct-fee-basis-points 0
-run_stager 2 '--work must be absolute' -- "${COMMON[@]}" --direct-fee-basis-points 500
+# 4. 50 is the ONLY rate the deployed setup release can fill, so it is the only
+#    one that passes the gate on its own. `direct_token_setup_v1` creates the
+#    seller's and venue's Direct token accounts before any fill and refuses
+#    anything else; the config is a finalized Registry record, so the rate is
+#    sealed at founding forever.
+run_stager 2 '--work must be absolute' -- "${COMMON[@]}" --direct-fee-basis-points 50
+# 5. Every other rate in the band is now a REFUSAL, not a pass. These two lines
+#    asserted the opposite until 2026-09-02, which is how four devnet markets
+#    were founded permanently unfillable -- market19 6WZXJ7jB at 0, and
+#    cohort-11's SOL/USD at 30 the day after the prose warning was written.
+run_stager 2 'PERMANENTLY UNFILLABLE' -- "${COMMON[@]}" --direct-fee-basis-points 0
+run_stager 2 'PERMANENTLY UNFILLABLE' -- "${COMMON[@]}" --direct-fee-basis-points 30
+run_stager 2 'PERMANENTLY UNFILLABLE' -- "${COMMON[@]}" --direct-fee-basis-points 500
+# 6. The refusal names the remedy, both halves of it.
+run_stager 2 '--direct-fee-basis-points 50' -- "${COMMON[@]}" --direct-fee-basis-points 30
+run_stager 2 '--i-mean-unfillable' -- "${COMMON[@]}" --direct-fee-basis-points 30
+# 7. An unfillable market may still be drawn on purpose, said out loud. The
+#    world is allowed to contain markets this release cannot fill.
+run_stager 2 '--work must be absolute' -- "${COMMON[@]}" --direct-fee-basis-points 30 --i-mean-unfillable
+run_stager 2 '--work must be absolute' -- "${COMMON[@]}" --direct-fee-basis-points 0 --i-mean-unfillable
 
 # The red controls below run the LAST revision of this stager that carried
 # neither guard, not simply HEAD -- a control pinned to HEAD stops discriminating
@@ -173,4 +201,4 @@ CHECK
 python3 "$WORK/redaction-check.py" "$STAGER" || fail 'staging manifest redaction missing or leaking'
 echo 'redaction: the staging manifest emits a redacted origin and no raw rpcUrl'
 
-echo 'stage-devnet-sponsored-market-open refusals: PASS (13 cases)'
+echo 'stage-devnet-sponsored-market-open refusals: PASS (20 cases)'

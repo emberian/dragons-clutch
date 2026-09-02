@@ -9,16 +9,17 @@ The V2 artifact's byte vocabulary: magic, schema identity, the artifact-profile
 numbers, the four header cut points, the rule/operation/dynamic-span record
 layouts, and the twenty-one operation opcodes.
 
-This module owns LAYOUT and NUMBERING only.  Two things are deliberately
-outside it, because they are the interpreter's meaning rather than the wire's
-shape, and modelling them here would make a table out of something that is not
-one:
+This module owns LAYOUT and NUMBERING only.  It also owns the prestate ADMISSIBILITY RELATION, which is finite -- thirteen
+artifact profiles against six tags -- and therefore a table, however much a
+nested match made it look like control flow.
 
-* which prestate tag is admissible under which artifact profile -- a relation
-  over thirteen profiles and six tags, with per-profile exceptions;
-* what an opcode requires of its operands -- identity versus scalar register
-  space, whether a data offset and stride are canonically zero, whether a
-  selected window must precede it.
+One thing is deliberately outside it, because it is the interpreter's meaning
+rather than the wire's shape and is not finite in the same way: what an opcode
+requires of its OPERANDS -- identity versus scalar register space, whether a
+data offset and stride are canonically zero, whether a selected window must
+precede it. Those depend on the register geometry of the profile being
+decoded and on the order of earlier operations, so they are not a relation
+over two small finite sets. That is the unit after this one.
 
 `AccountProfileV2Profile13` and `AccountProfileV2Profile14` are instances over
 this vocabulary, not definitions of it; neither defines an operation opcode.
@@ -383,6 +384,70 @@ def prestateTags : List Nat := [
   prestateAuthenticatedRouteAlias, prestateAuthenticatedOpaqueReadonlyData
 ]
 
+/-! ## Prestate admissibility
+
+Which prestate tag a rule may carry depends on the artifact profile that
+declares it.  The relation is NOT monotone in the profile number: profiles 13
+and 14 admit the route-alias and opaque-readonly tags while refusing the
+variable-data-alias tag that 9 through 12 admit.  A nested match hides that; a
+table states it, and the theorem below makes removing it a visible change.
+-/
+
+/-- Which refusal an inadmissible tag earns.  This is a function of the
+artifact profile alone, not of the cell. -/
+inductive PrestateRefusal where
+  | nonCanonicalReserved | invalidLifecyclePrestate | invalidVariableDataPrestate
+  deriving DecidableEq, Repr
+
+namespace PrestateRefusal
+
+def tag : PrestateRefusal → Nat
+  | .nonCanonicalReserved => 0
+  | .invalidLifecyclePrestate => 1
+  | .invalidVariableDataPrestate => 2
+
+end PrestateRefusal
+
+def prestateRefusal (profile : Nat) : PrestateRefusal :=
+  if profile = lifecyclePrestateArtifactProfile then
+    .invalidLifecyclePrestate
+  else if adapterAuthenticatedVariableDataArtifactProfile ≤ profile
+      && profile ≤ fixedDataPredicateArtifactProfile then
+    .invalidVariableDataPrestate
+  else
+    .nonCanonicalReserved
+
+/-- The admitted tags of one artifact profile, in increasing order. -/
+def admissiblePrestates (profile : Nat) : List Nat :=
+  if profile = lifecyclePrestateArtifactProfile then
+    [prestateExact, prestateLifecycleBound]
+  else if profile = adapterAuthenticatedVariableDataArtifactProfile
+      || profile = trustedExecutingProgramArtifactProfile then
+    [prestateExact, prestateLifecycleBound, prestateAdapterAuthenticatedVariableData]
+  else if profile = adapterAuthenticatedVariableDataAliasArtifactProfile
+      || profile = nonzeroU64TailCountArtifactProfile
+      || profile = nonzeroU64TailRowsArtifactProfile then
+    [prestateExact, prestateLifecycleBound, prestateAdapterAuthenticatedVariableData,
+      prestateAdapterAuthenticatedVariableDataAlias]
+  else if profile = authenticatedRouteAliasArtifactProfile then
+    [prestateExact, prestateLifecycleBound, prestateAdapterAuthenticatedVariableData,
+      prestateAdapterAuthenticatedVariableDataAlias, prestateAuthenticatedRouteAlias]
+  else if profile = dynamicFixedSpanArtifactProfile
+      || profile = fixedDataPredicateArtifactProfile then
+    [prestateExact, prestateLifecycleBound, prestateAdapterAuthenticatedVariableData,
+      prestateAuthenticatedRouteAlias, prestateAuthenticatedOpaqueReadonlyData]
+  else
+    [prestateExact]
+
+def admissible (profile tag : Nat) : Bool := (admissiblePrestates profile).contains tag
+
+/-- One row of the emitted table per artifact profile, one column per tag. -/
+def admissibilityRows : List (List Bool) :=
+  artifactProfiles.map fun profile => prestateTags.map (admissible profile)
+
+def refusalClasses : List Nat :=
+  artifactProfiles.map fun profile => (prestateRefusal profile).tag
+
 /-! ## Theorems -/
 
 theorem record_widths_are_exact :
@@ -466,6 +531,56 @@ theorem prestate_tags_are_dense_from_zero :
 theorem schema_identity_has_exact_width :
     magic.length = 8 ∧ schemaReleasePreimage.length = 33 ∧
       schemaReleaseId.length = 32 := by
+  native_decide
+
+/-! ### Prestate admissibility -/
+
+/-- The relation is total: one row per artifact profile, one column per tag,
+with no profile and no tag left undecided. -/
+theorem admissibility_is_total_over_profiles_and_tags :
+    admissibilityRows.length = artifactProfiles.length ∧
+      admissibilityRows.all (fun row => row.length = prestateTags.length) ∧
+      refusalClasses.length = artifactProfiles.length := by
+  native_decide
+
+/-- The exact table, pinned. -/
+theorem admissibility_table_is_exact : admissibilityRows = [
+    [true, false, false, false, false, false],
+    [true, false, false, false, false, false],
+    [true, false, false, false, false, false],
+    [true, false, false, false, false, false],
+    [true, true, false, false, false, false],
+    [true, true, true, false, false, false],
+    [true, true, true, false, false, false],
+    [true, true, true, true, false, false],
+    [true, true, true, true, false, false],
+    [true, true, true, true, true, false],
+    [true, true, true, true, false, false],
+    [true, true, true, false, true, true],
+    [true, true, true, false, true, true]
+  ] := by native_decide
+
+theorem refusal_classes_are_exact :
+    refusalClasses = [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2] := by
+  native_decide
+
+/-- Every artifact profile admits the exact prestate, which is what makes a
+profile-agnostic rule expressible at all. -/
+theorem every_profile_admits_exact :
+    artifactProfiles.all (fun profile => admissible profile prestateExact) := by
+  native_decide
+
+/-- The relation is not monotone in the profile number, and this is the
+exception.  Profiles 13 and 14 refuse the tag that 9 through 12 admit while
+admitting two that those four do not.  Stated so that "tidying" the table into
+a prefix relation is a red theorem rather than a silent widening. -/
+theorem span_profiles_refuse_the_alias_tag_their_predecessors_admit :
+    [9, 10, 11, 12].all (fun profile =>
+        admissible profile prestateAdapterAuthenticatedVariableDataAlias) ∧
+      [13, 14].all (fun profile =>
+        !admissible profile prestateAdapterAuthenticatedVariableDataAlias
+          && admissible profile prestateAuthenticatedRouteAlias
+          && admissible profile prestateAuthenticatedOpaqueReadonlyData) := by
   native_decide
 
 end DClutch.AccountProfileV2Abi

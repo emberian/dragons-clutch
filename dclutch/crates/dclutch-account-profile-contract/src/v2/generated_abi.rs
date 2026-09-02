@@ -112,3 +112,24 @@ pub const ACCOUNT_PRESTATE_V2_ADAPTER_AUTHENTICATED_VARIABLE_DATA: u8 = 2;
 pub const ACCOUNT_PRESTATE_V2_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS: u8 = 3;
 pub const ACCOUNT_PRESTATE_V2_AUTHENTICATED_ROUTE_ALIAS: u8 = 4;
 pub const ACCOUNT_PRESTATE_V2_AUTHENTICATED_OPAQUE_READONLY_DATA: u8 = 5;
+pub const ACCOUNT_PRESTATE_V2_MIN_ARTIFACT_PROFILE: u16 = 2;
+pub const ACCOUNT_PRESTATE_V2_TAG_COUNT: usize = 6;
+pub const ACCOUNT_PRESTATE_V2_REFUSAL_NON_CANONICAL_RESERVED: u8 = 0;
+pub const ACCOUNT_PRESTATE_V2_REFUSAL_INVALID_LIFECYCLE_PRESTATE: u8 = 1;
+pub const ACCOUNT_PRESTATE_V2_REFUSAL_INVALID_VARIABLE_DATA_PRESTATE: u8 = 2;
+pub const ACCOUNT_PRESTATE_V2_ADMISSIBLE: [[bool; 6]; 13] = [
+    [true, false, false, false, false, false],
+    [true, false, false, false, false, false],
+    [true, false, false, false, false, false],
+    [true, false, false, false, false, false],
+    [true, true, false, false, false, false],
+    [true, true, true, false, false, false],
+    [true, true, true, false, false, false],
+    [true, true, true, true, false, false],
+    [true, true, true, true, false, false],
+    [true, true, true, true, true, false],
+    [true, true, true, true, false, false],
+    [true, true, true, false, true, true],
+    [true, true, true, false, true, true],
+];
+pub const ACCOUNT_PRESTATE_V2_REFUSAL_CLASS: [u8; 13] = [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2];

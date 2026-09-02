@@ -211,6 +211,14 @@ const PRESTATE_AUTHENTICATED_ROUTE_ALIAS: u8 =
     generated_abi::ACCOUNT_PRESTATE_V2_AUTHENTICATED_ROUTE_ALIAS;
 const PRESTATE_AUTHENTICATED_OPAQUE_READONLY_DATA: u8 =
     generated_abi::ACCOUNT_PRESTATE_V2_AUTHENTICATED_OPAQUE_READONLY_DATA;
+const PRESTATE_MIN_ARTIFACT_PROFILE: u16 = generated_abi::ACCOUNT_PRESTATE_V2_MIN_ARTIFACT_PROFILE;
+const PRESTATE_ADMISSIBLE: [[bool; generated_abi::ACCOUNT_PRESTATE_V2_TAG_COUNT]; 13] =
+    generated_abi::ACCOUNT_PRESTATE_V2_ADMISSIBLE;
+const PRESTATE_REFUSAL_CLASS: [u8; 13] = generated_abi::ACCOUNT_PRESTATE_V2_REFUSAL_CLASS;
+const PRESTATE_REFUSAL_INVALID_LIFECYCLE_PRESTATE: u8 =
+    generated_abi::ACCOUNT_PRESTATE_V2_REFUSAL_INVALID_LIFECYCLE_PRESTATE;
+const PRESTATE_REFUSAL_INVALID_VARIABLE_DATA_PRESTATE: u8 =
+    generated_abi::ACCOUNT_PRESTATE_V2_REFUSAL_INVALID_VARIABLE_DATA_PRESTATE;
 
 const TRUSTED_ENVIRONMENT_NONE: u8 = generated_abi::ACCOUNT_PROFILE_V2_TRUSTED_ENVIRONMENT_NONE;
 const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 =
@@ -3699,6 +3707,54 @@ fn validate_rule(
     }
 }
 
+/// Admit one prestate tag under one artifact profile.
+///
+/// The relation is `DClutchSemantics.AccountProfileV2Abi.admissibilityRows`,
+/// emitted as a table, and this is a lookup in it rather than a second copy of
+/// it. It is not monotone in the profile number -- profiles 13 and 14 refuse
+/// the variable-data-alias tag that 9 through 12 admit -- which is exactly the
+/// shape a nested match hid.
+///
+/// `decode_shape` has already refused every artifact profile outside the
+/// table, so the two row lookups cannot miss for bytes that reach here. They
+/// still refuse rather than assume.
+fn decode_prestate(artifact_profile: u16, prestate_tag: u8) -> Result<AccountPrestateV2> {
+    let row_index = usize::from(
+        artifact_profile
+            .checked_sub(PRESTATE_MIN_ARTIFACT_PROFILE)
+            .ok_or(Error::UnsupportedProfile)?,
+    );
+    let row = PRESTATE_ADMISSIBLE
+        .get(row_index)
+        .ok_or(Error::UnsupportedProfile)?;
+    if row.get(usize::from(prestate_tag)).copied() != Some(true) {
+        return Err(match PRESTATE_REFUSAL_CLASS.get(row_index).copied() {
+            Some(PRESTATE_REFUSAL_INVALID_LIFECYCLE_PRESTATE) => Error::InvalidLifecyclePrestate,
+            Some(PRESTATE_REFUSAL_INVALID_VARIABLE_DATA_PRESTATE) => {
+                Error::InvalidVariableDataPrestate
+            }
+            _ => Error::NonCanonicalReserved,
+        });
+    }
+    match prestate_tag {
+        PRESTATE_EXACT => Ok(AccountPrestateV2::Exact),
+        PRESTATE_LIFECYCLE_BOUND => Ok(AccountPrestateV2::LifecycleBound),
+        PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA => {
+            Ok(AccountPrestateV2::AdapterAuthenticatedVariableData)
+        }
+        PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS => {
+            Ok(AccountPrestateV2::AdapterAuthenticatedVariableDataAlias)
+        }
+        PRESTATE_AUTHENTICATED_ROUTE_ALIAS => Ok(AccountPrestateV2::AuthenticatedRouteAlias),
+        PRESTATE_AUTHENTICATED_OPAQUE_READONLY_DATA => {
+            Ok(AccountPrestateV2::AuthenticatedOpaqueReadonlyData)
+        }
+        // The table admits only the six tags above, so this arm is the
+        // totality of the match and not a reachable refusal.
+        _ => Err(Error::NonCanonicalReserved),
+    }
+}
+
 fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<AccountRuleV2> {
     let alias_kind = match byte(bytes, add(offset, RULE_ALIAS_KIND_OFFSET)?)? {
         ALIAS_SELF_COORDINATE => AliasKindV2::SelfCoordinate,
@@ -3707,60 +3763,7 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
         _ => return Err(Error::InvalidAlias),
     };
     let prestate_tag = byte(bytes, add(offset, RULE_PRESTATE_OFFSET)?)?;
-    let prestate = if artifact_profile == LIFECYCLE_PRESTATE_ARTIFACT_PROFILE {
-        match prestate_tag {
-            0 => AccountPrestateV2::Exact,
-            1 => AccountPrestateV2::LifecycleBound,
-            _ => return Err(Error::InvalidLifecyclePrestate),
-        }
-    } else if matches!(
-        artifact_profile,
-        ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
-            | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
-            | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
-            | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
-            | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
-            | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
-            | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-            | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
-    ) {
-        match prestate_tag {
-            0 => AccountPrestateV2::Exact,
-            1 => AccountPrestateV2::LifecycleBound,
-            2 => AccountPrestateV2::AdapterAuthenticatedVariableData,
-            3 if matches!(
-                artifact_profile,
-                ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
-                    | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
-                    | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
-                    | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
-            ) =>
-            {
-                AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
-            }
-            4 if matches!(
-                artifact_profile,
-                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
-                    | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-                    | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
-            ) =>
-            {
-                AccountPrestateV2::AuthenticatedRouteAlias
-            }
-            5 if matches!(
-                artifact_profile,
-                DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
-            ) =>
-            {
-                AccountPrestateV2::AuthenticatedOpaqueReadonlyData
-            }
-            _ => return Err(Error::InvalidVariableDataPrestate),
-        }
-    } else if prestate_tag == 0 {
-        AccountPrestateV2::Exact
-    } else {
-        return Err(Error::NonCanonicalReserved);
-    };
+    let prestate = decode_prestate(artifact_profile, prestate_tag)?;
     if read_u16(bytes, add(offset, RULE_RESERVED_OFFSET)?)? != 0 {
         return Err(Error::NonCanonicalReserved);
     }
@@ -4810,6 +4813,44 @@ mod tests {
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }
+    }
+
+    #[test]
+    fn prestate_admissibility_is_a_table_lookup_and_names_the_profile_refusal() {
+        // Positive control first: this artifact decodes untouched, so every
+        // refusal below is attributable to the one prestate byte and is not a
+        // code reached before its subject.
+        let exact = typed_u16_profile_bytes(TYPED_SCALAR_ARTIFACT_PROFILE);
+        assert_eq!(AccountProfileV2::decode(&exact).err(), None);
+
+        // Profile 4 admits only the exact prestate.
+        let mut typed = exact.clone();
+        put(
+            &mut typed,
+            HEADER_BYTES + RULE_PRESTATE_OFFSET,
+            &[PRESTATE_LIFECYCLE_BOUND],
+        );
+        assert_eq!(
+            AccountProfileV2::decode(&typed).err(),
+            Some(Error::NonCanonicalReserved)
+        );
+
+        // The refusal an inadmissible tag earns belongs to the profile, not to
+        // the cell. The same tag one row down is a lifecycle refusal where the
+        // one above was a reserved-byte refusal, which is the column of the
+        // table this pins. (What a profile 6 rule must ALSO satisfy to carry
+        // the lifecycle-bound tag is the prestate/permission rule, which is
+        // interpreter semantics and the unit after this one.)
+        let mut lifecycle = typed_u16_profile_bytes(LIFECYCLE_PRESTATE_ARTIFACT_PROFILE);
+        put(
+            &mut lifecycle,
+            HEADER_BYTES + RULE_PRESTATE_OFFSET,
+            &[PRESTATE_ADAPTER_AUTHENTICATED_VARIABLE_DATA],
+        );
+        assert_eq!(
+            AccountProfileV2::decode(&lifecycle).err(),
+            Some(Error::InvalidLifecyclePrestate)
+        );
     }
 
     #[test]

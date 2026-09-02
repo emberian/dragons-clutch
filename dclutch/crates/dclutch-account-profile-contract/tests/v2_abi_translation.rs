@@ -1,10 +1,11 @@
 //! Lean-owned AccountProfile V2 coordinates, pinned against their literals.
 //!
-//! `v2` derives all 68 of its named constants from `generated_abi.rs`, so
+//! `v2` derives all of its named constants from `generated_abi.rs`, so
 //! asserting the two against each other would compare a name with itself. What
 //! derivation cannot give away is whether Lean still says the numbers this wire
 //! committed to, so every emitted constant is pinned here. A renumbered opcode,
-//! a moved field or a changed header cut point reds this file.
+//! a moved field, a changed header cut point or a flipped admissibility cell
+//! reds this file.
 
 #[allow(dead_code, missing_docs)]
 #[path = "../src/v2/generated_abi.rs"]
@@ -229,5 +230,41 @@ fn lean_v2_coordinates_are_the_pinned_account_profile_abi() {
     assert_eq!(
         generated::ACCOUNT_PRESTATE_V2_AUTHENTICATED_OPAQUE_READONLY_DATA,
         5
+    );
+    assert_eq!(generated::ACCOUNT_PRESTATE_V2_MIN_ARTIFACT_PROFILE, 2);
+    assert_eq!(generated::ACCOUNT_PRESTATE_V2_TAG_COUNT, 6);
+    assert_eq!(
+        generated::ACCOUNT_PRESTATE_V2_REFUSAL_NON_CANONICAL_RESERVED,
+        0
+    );
+    assert_eq!(
+        generated::ACCOUNT_PRESTATE_V2_REFUSAL_INVALID_LIFECYCLE_PRESTATE,
+        1
+    );
+    assert_eq!(
+        generated::ACCOUNT_PRESTATE_V2_REFUSAL_INVALID_VARIABLE_DATA_PRESTATE,
+        2
+    );
+    assert_eq!(
+        generated::ACCOUNT_PRESTATE_V2_ADMISSIBLE,
+        [
+            [true, false, false, false, false, false],
+            [true, false, false, false, false, false],
+            [true, false, false, false, false, false],
+            [true, false, false, false, false, false],
+            [true, true, false, false, false, false],
+            [true, true, true, false, false, false],
+            [true, true, true, false, false, false],
+            [true, true, true, true, false, false],
+            [true, true, true, true, false, false],
+            [true, true, true, true, true, false],
+            [true, true, true, true, false, false],
+            [true, true, true, false, true, true],
+            [true, true, true, false, true, true],
+        ]
+    );
+    assert_eq!(
+        generated::ACCOUNT_PRESTATE_V2_REFUSAL_CLASS,
+        [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2]
     );
 }
