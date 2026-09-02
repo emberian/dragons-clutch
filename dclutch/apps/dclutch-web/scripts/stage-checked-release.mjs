@@ -8,12 +8,20 @@
  * row it produces would be exactly as authoritative either way.
  *
  * `--release-set` is the execution release set the cut's Market actually
- * selects, read off the chain -- the market page prints it, and
+ * selects, and it must be READ OFF THE CHAIN: the market page prints it and
  * `inspectDirectTradeSpineV1` returns it as `releaseSetId`. It is required and
  * it is not taken from the fragment, because the fragment is the thing being
- * checked: a fragment for another deployment's release set would otherwise
+ * checked -- a fragment for another deployment's release set would otherwise
  * turn the trade spine's `release` wall off for a market the release was never
  * checked against, which is the exact failure the wall exists to prevent.
+ *
+ * SO DO NOT COPY IT OUT OF THE PRODUCER'S OWN OUTPUT. The sealing driver's
+ * `prepare` puts the same string in its result JSON as `release_set_id` and
+ * uses it as the fragment's single key, so pasting it from there is quicker
+ * and silently destroys the guarantee: two independent proofs collapse into
+ * one producer asserting the same value twice. The producer proves the row's
+ * VALUE is what its artifact derives; this argument proves the row is ABOUT
+ * the set the market selects. Only a chain read can supply the second.
  *
  * The fixture is replaced ATOMICALLY through a temporary file on the same
  * filesystem, and only after the result parses as a cut, so a refused stage

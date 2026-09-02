@@ -1951,12 +1951,59 @@ mod tests {
     /// in the code under test and is not one. The process id makes the name
     /// space per-run, so stale roots are inert; `direct_ticket.rs` already
     /// spells it this way.
+    ///
+    /// The pid alone makes a collision UNLIKELY, not impossible: process ids
+    /// recycle, and the counter above redraws the same values in every process,
+    /// so a recycled pid reproduces the whole name. `fresh_directory` is what
+    /// makes it structural -- a stale root is overwritten rather than refused.
     fn scratch_root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
+        let path = std::env::temp_dir().join(format!(
             "dclutch-successor-{label}-{}-{}",
             std::process::id(),
             Pubkey::new_unique()
-        ))
+        ));
+        fresh_directory(&path);
+        path
+    }
+
+    /// Make `path` an existing EMPTY directory, whatever was there before.
+    ///
+    /// `create_dir` alone refuses a stale directory, which is the defect above.
+    /// `create_dir_all` alone accepts one *with its old contents still in it*,
+    /// which trades a loud failure for a quiet one -- a test would then read a
+    /// previous run's file and pass or fail on it. Removing first is the only
+    /// spelling that is both idempotent and empty.
+    fn fresh_directory(path: &Path) {
+        fs::remove_dir_all(path).ok();
+        fs::create_dir(path).expect("create scratch directory");
+    }
+
+    /// The recycled-pid case, made deterministic.
+    ///
+    /// `scratch_root`'s own path cannot be predicted from outside the process,
+    /// so the property is proved on the step that carries it: a path that is
+    /// already a directory, and already has a previous run's file in it, must
+    /// come back existing and EMPTY rather than refusing or inheriting.
+    #[test]
+    fn a_scratch_directory_survives_a_dead_runs_leftovers_and_comes_back_empty() {
+        let path = scratch_root("fresh");
+        // scratch_root already created it; seed it the way a dead run would.
+        fs::write(path.join("left-behind.bin"), b"a previous run").expect("seed leftover");
+        assert!(path.join("left-behind.bin").exists());
+
+        fresh_directory(&path);
+        assert!(path.is_dir(), "the directory must exist");
+        assert_eq!(
+            fs::read_dir(&path).expect("read scratch").count(),
+            0,
+            "a reused scratch directory must not inherit a previous run's files"
+        );
+
+        // And it is idempotent on a path that does not exist at all.
+        fs::remove_dir_all(&path).expect("remove scratch");
+        fresh_directory(&path);
+        assert!(path.is_dir());
+        fs::remove_dir_all(&path).expect("remove scratch");
     }
 
     fn write_test_elf(directory: &Path, name: &str, tag: u8) -> (PathBuf, String) {
@@ -2296,7 +2343,6 @@ mod tests {
         resolution_semantic_release_id: [u8; 32],
     ) -> (Result<SuccessorPlan>, PathBuf) {
         let root = scratch_root("plan");
-        fs::create_dir(&root).expect("create test root");
         let (registry_elf, registry_sha256) = write_test_elf(&root, "dclutch_registry_sbf.so", 1);
         let (core_elf, core_sha256) = write_test_elf(&root, "dclutch_core_sbf.so", 2);
         let (claims_elf, claims_sha256) = write_test_elf(&root, "dclutch_claims_sbf.so", 3);
