@@ -28,7 +28,13 @@ use dclutch_resolution_codec::{
     SPONSORED_PUSH_HEAD_PDA_DOMAIN_V1, SPONSORED_PUSH_RECEIPT_PDA_DOMAIN_V1, SponsoredPushActionV1,
     SponsoredPushCandidateV1, SponsoredPushHeadV1, SponsoredPushInstructionV1,
 };
-use dclutch_source_contract::{ProviderReleaseV1, SourceAccessProfile, SourceSpecV1};
+use dclutch_resolution_core_v3_operator::{
+    ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
+};
+use dclutch_source_contract::{
+    ProviderReleaseV1, SourceAccessProfile, SourceResolutionPhaseV1, SourceResolutionStateV2,
+    SourceSpecV1,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_address_lookup_table_interface::{
@@ -76,6 +82,13 @@ struct SponsoredAccountsInputV1 {
     registry_program: String,
     activation_cache: String,
     core_program: String,
+    /// Core's ProgramData, which only the terminal admission needs.
+    ///
+    /// `default` is carried so an input authored for the five sponsored-push
+    /// actions still deserializes; an empty value never reaches a message,
+    /// because [`InputKeysV1::core_programdata`] refuses it by name.
+    #[serde(default)]
+    core_programdata: String,
     resolution_program: String,
     resolution_programdata: String,
     market: String,
@@ -117,6 +130,14 @@ enum ExteriorActionV1 {
     Capture,
     Settle,
     CommitFailure,
+    /// Project the committed Resolution certificate to Core.
+    ///
+    /// This is the one action whose instruction belongs to Core rather than to
+    /// Resolution, and the one action with no [`SponsoredPushActionV1`] wire
+    /// discriminant: Core's `AdmitTerminal` is a different program's route,
+    /// built by `build_resolution_admit_terminal_v3` from the same finalized
+    /// snapshot this command already authenticates.
+    AdmitTerminal,
     CloseCandidate,
     CloseHead,
 }
@@ -127,6 +148,7 @@ impl ExteriorActionV1 {
             "capture" => Ok(Self::Capture),
             "settle" => Ok(Self::Settle),
             "commit-failure" => Ok(Self::CommitFailure),
+            "admit-terminal" => Ok(Self::AdmitTerminal),
             "close-candidate" => Ok(Self::CloseCandidate),
             "close-head" => Ok(Self::CloseHead),
             _ => Err(Error::new(format!(
@@ -135,18 +157,40 @@ impl ExteriorActionV1 {
         }
     }
 
-    const fn wire(self) -> SponsoredPushActionV1 {
+    /// The Resolution wire action, absent for the Core-owned admission.
+    const fn wire(self) -> Option<SponsoredPushActionV1> {
         match self {
-            Self::Capture => SponsoredPushActionV1::Capture,
-            Self::Settle => SponsoredPushActionV1::Settle,
-            Self::CommitFailure => SponsoredPushActionV1::CommitFailure,
-            Self::CloseCandidate => SponsoredPushActionV1::CloseCandidate,
-            Self::CloseHead => SponsoredPushActionV1::CloseHead,
+            Self::Capture => Some(SponsoredPushActionV1::Capture),
+            Self::Settle => Some(SponsoredPushActionV1::Settle),
+            Self::CommitFailure => Some(SponsoredPushActionV1::CommitFailure),
+            Self::AdmitTerminal => None,
+            Self::CloseCandidate => Some(SponsoredPushActionV1::CloseCandidate),
+            Self::CloseHead => Some(SponsoredPushActionV1::CloseHead),
         }
     }
 
+    /// Whether the action's meaning includes a positive terminal sequence.
+    ///
+    /// The admission carries one for the same reason the two terminal walks do:
+    /// the certificate it projects is addressed by that sequence, and Core
+    /// recomputes it from the Source decision and refuses a mismatch.
     const fn terminal(self) -> bool {
-        matches!(self, Self::Settle | Self::CommitFailure)
+        matches!(
+            self,
+            Self::Settle | Self::CommitFailure | Self::AdmitTerminal
+        )
+    }
+
+    /// Whether the transaction's fee payer must not appear in the instruction.
+    ///
+    /// These routes take no signer meta at all, so a payer that aliased one of
+    /// their read-only protocol accounts would silently promote it to a
+    /// writable signer in the compiled message.
+    const fn payer_is_outside_the_frame(self) -> bool {
+        matches!(
+            self,
+            Self::AdmitTerminal | Self::CloseCandidate | Self::CloseHead
+        )
     }
 }
 
@@ -408,15 +452,15 @@ pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
 pub(crate) const fn usage() -> &'static str {
     "  dclutch-local-successor-bootstrap devnet-sponsored-push-v1 --rpc-url URL \
      --i-mean-devnet DEVNET_GENESIS --input ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON \
-     --action capture|settle|commit-failure|close-candidate|close-head --signer PUBKEY \
-     [--candidate PUBKEY] [--execute] [--signer-keypair ABSOLUTE_JSON]"
+     --action capture|settle|commit-failure|admit-terminal|close-candidate|close-head \
+     --signer PUBKEY [--candidate PUBKEY] [--execute] [--signer-keypair ABSOLUTE_JSON]"
 }
 
 pub(crate) const fn owned_loopback_usage() -> &'static str {
     "  dclutch-local-successor-bootstrap local-private-validator-sponsored-push-v1 \
      --rpc-url http://127.0.0.1:PORT --input ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON \
-     --action capture|settle|commit-failure|close-candidate|close-head --signer PUBKEY \
-     [--candidate PUBKEY] [--execute] [--signer-keypair ABSOLUTE_JSON]"
+     --action capture|settle|commit-failure|admit-terminal|close-candidate|close-head \
+     --signer PUBKEY [--candidate PUBKEY] [--execute] [--signer-keypair ABSOLUTE_JSON]"
 }
 
 fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
@@ -443,7 +487,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         .ok_or_else(|| Error::new("--action is required"))?;
     if action.terminal() != (input.terminal_sequence != 0) {
         return Err(Error::new(
-            "terminal sequence must be positive exactly for settle or commit-failure",
+            "terminal sequence must be positive exactly for settle, commit-failure, or admit-terminal",
         ));
     }
     if (action == ExteriorActionV1::CloseCandidate) != args.candidate.is_some() {
@@ -777,6 +821,15 @@ fn authenticate_report_coordinates(
                 && report.receipt.is_none()
                 && required_matches(22, &report.head)?
         }
+        // Core's own `ADMIT_CERTIFICATE` index. The head is still recorded as a
+        // derived coordinate of this market, and still pinned by
+        // `authenticate_reprepared_coordinates`, but Core's admission frame does
+        // not carry it: the certificate is what it authenticates.
+        ExteriorActionV1::AdmitTerminal => {
+            report.candidate.is_none()
+                && report.receipt.is_none()
+                && optional_matches(14, report.certificate.as_deref())?
+        }
         ExteriorActionV1::CloseCandidate => {
             optional_matches(2, report.candidate.as_deref())?
                 && report.certificate.is_none()
@@ -892,7 +945,9 @@ fn prepare(
                 .map_err(|error| Error::new(format!("sponsored head: {error:?}")))?;
             Some(Pubkey::new_from_array(decoded.best_candidate))
         }
-        ExteriorActionV1::CommitFailure | ExteriorActionV1::CloseHead => None,
+        ExteriorActionV1::CommitFailure
+        | ExteriorActionV1::AdmitTerminal
+        | ExteriorActionV1::CloseHead => None,
     };
     let certificate = match action {
         ExteriorActionV1::Settle => Some(certificate_address(
@@ -905,6 +960,15 @@ fn prepare(
             keys.resolution_program,
             keys.source_state,
             FAILURE_CERTIFICATE_KIND,
+            input.terminal_sequence,
+        )),
+        // The admission does not choose a certificate kind: the terminal Source
+        // it is projecting already did, and reading it anywhere else would let
+        // a caller ask Core to accept a success certificate for a failed walk.
+        ExteriorActionV1::AdmitTerminal => Some(certificate_address(
+            keys.resolution_program,
+            keys.source_state,
+            terminal_certificate_kind(rpc, keys.source_state, keys.resolution_program)?,
             input.terminal_sequence,
         )),
         _ => None,
@@ -965,13 +1029,11 @@ fn prepare(
     require_distinct_metas(&instruction)?;
     let lookup_table = snapshot.observed(keys.lookup_table, "sponsored routing table")?;
     authenticate_frozen_routing_table(&lookup_table)?;
-    if matches!(
-        action,
-        ExteriorActionV1::CloseCandidate | ExteriorActionV1::CloseHead
-    ) && instruction
-        .accounts
-        .iter()
-        .any(|meta| meta.pubkey == signer)
+    if action.payer_is_outside_the_frame()
+        && instruction
+            .accounts
+            .iter()
+            .any(|meta| meta.pubkey == signer)
     {
         return Err(Error::new(
             "cleanup transaction payer aliases a read-only protocol account; use a distinct permissionless worker",
@@ -990,6 +1052,8 @@ struct InputKeysV1 {
     registry_program: Pubkey,
     activation_cache: Pubkey,
     core_program: Pubkey,
+    /// `None` when the input predates the terminal-admission arm.
+    core_programdata: Option<Pubkey>,
     resolution_program: Pubkey,
     resolution_programdata: Pubkey,
     market: Pubkey,
@@ -1022,6 +1086,11 @@ impl InputKeysV1 {
             registry_program: pubkey(&value.registry_program)?,
             activation_cache: pubkey(&value.activation_cache)?,
             core_program: pubkey(&value.core_program)?,
+            core_programdata: if value.core_programdata.is_empty() {
+                None
+            } else {
+                Some(pubkey(&value.core_programdata)?)
+            },
             resolution_program: pubkey(&value.resolution_program)?,
             resolution_programdata: pubkey(&value.resolution_programdata)?,
             market: pubkey(&value.market)?,
@@ -1048,6 +1117,13 @@ impl InputKeysV1 {
         })
     }
 
+    /// Core's ProgramData, refused by name when the input omits it.
+    fn core_programdata(&self) -> Result<Pubkey> {
+        self.core_programdata.ok_or_else(|| {
+            Error::new("terminal admission requires accounts.coreProgramdata; this input omits it")
+        })
+    }
+
     fn all_accounts(&self) -> Vec<Pubkey> {
         let mut out = vec![
             self.registry_program,
@@ -1066,6 +1142,7 @@ impl InputKeysV1 {
             self.receiver_config,
             self.lookup_table,
         ];
+        out.extend(self.core_programdata);
         for pair in [
             self.source_material,
             self.source_spec,
@@ -1252,9 +1329,70 @@ fn authenticate_final_coordinates(
                 ));
             }
         }
+        // The certificate kind was chosen from a Source read taken before the
+        // snapshot. Re-derive it from the snapshot's own Source body: if the
+        // phase moved between the two finalized reads, the planned address is
+        // for a certificate this Source no longer names.
+        ExteriorActionV1::AdmitTerminal => {
+            let source = SourceResolutionStateV2::decode(
+                &snapshot
+                    .required(keys.source_state, "Source resolution state")?
+                    .data,
+            )
+            .map_err(|error| Error::new(format!("Source resolution state: {error:?}")))?;
+            let kind = match source.phase() {
+                SourceResolutionPhaseV1::Resolved => SUCCESS_CERTIFICATE_KIND,
+                SourceResolutionPhaseV1::FailureCommitted => FAILURE_CERTIFICATE_KIND,
+                other => {
+                    return Err(Error::new(format!(
+                        "terminal admission requires a Resolved or FailureCommitted Source; this one is {other:?}"
+                    )));
+                }
+            };
+            let expected = certificate_address(
+                keys.resolution_program,
+                keys.source_state,
+                kind,
+                input.terminal_sequence,
+            );
+            if coordinates.certificate != Some(expected) {
+                return Err(Error::new(
+                    "Source terminal phase changed between finalized observations; retry preflight",
+                ));
+            }
+        }
         ExteriorActionV1::CloseCandidate | ExteriorActionV1::CloseHead => {}
     }
     Ok(())
+}
+
+/// Read the terminal certificate kind off the Source state itself.
+///
+/// `Resolved` and `FailureCommitted` are the only two phases Core's
+/// `authenticate_admit_projection` admits, and each pins one certificate kind
+/// tag in the PDA seeds. Every other phase is refused here, by name, before a
+/// snapshot is taken — an admission built for a Source still walking would
+/// otherwise be planned in full and refused only by the chain.
+fn terminal_certificate_kind(
+    rpc: &mut Rpc,
+    source_state: Pubkey,
+    resolution_program: Pubkey,
+) -> Result<u8> {
+    let account = rpc.required_account(source_state, "Source resolution state")?;
+    if account.owner != resolution_program || account.executable {
+        return Err(Error::new(
+            "Source resolution state is not owned by the selected Resolution deployment",
+        ));
+    }
+    let source = SourceResolutionStateV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("Source resolution state: {error:?}")))?;
+    match source.phase() {
+        SourceResolutionPhaseV1::Resolved => Ok(SUCCESS_CERTIFICATE_KIND),
+        SourceResolutionPhaseV1::FailureCommitted => Ok(FAILURE_CERTIFICATE_KIND),
+        other => Err(Error::new(format!(
+            "terminal admission requires a Resolved or FailureCommitted Source; this one is {other:?}"
+        ))),
+    }
 }
 
 fn candidate_address(
@@ -1303,8 +1441,13 @@ fn build_instruction(
     coordinates: &CoordinatesV1,
     snapshot: &SnapshotV1,
 ) -> Result<Instruction> {
+    if action == ExteriorActionV1::AdmitTerminal {
+        return admit_terminal_instruction(input, keys, coordinates, snapshot);
+    }
     let data = SponsoredPushInstructionV1 {
-        action: action.wire(),
+        action: action
+            .wire()
+            .ok_or_else(|| Error::new("this action has no sponsored-push wire discriminant"))?,
         generation: input.generation,
         terminal_sequence: input.terminal_sequence,
     }
@@ -1315,6 +1458,9 @@ fn build_instruction(
         ExteriorActionV1::Capture => capture_metas(signer, keys, coordinates)?,
         ExteriorActionV1::Settle => settle_metas(signer, keys, coordinates, snapshot)?,
         ExteriorActionV1::CommitFailure => failure_metas(signer, keys, coordinates)?,
+        ExteriorActionV1::AdmitTerminal => {
+            return Err(Error::new("terminal admission builds its own Core frame"));
+        }
         ExteriorActionV1::CloseCandidate => close_candidate_metas(keys, coordinates, snapshot)?,
         ExteriorActionV1::CloseHead => close_head_metas(keys, coordinates, snapshot)?,
     };
@@ -1322,6 +1468,112 @@ fn build_instruction(
         program_id: keys.resolution_program,
         accounts,
         data,
+    })
+}
+
+/// Build Core's `AdmitTerminal` from the same finalized snapshot.
+///
+/// Nothing here is hand-assembled: `build_resolution_admit_terminal_v3` owns
+/// the frame, the role request, the caller-authority derivation and every
+/// conjunct Core will recheck, and it is the same builder the relayed ladder's
+/// `accept` stage calls. The route that was missing on devnet was never the
+/// capability — it was a producer that could reach the builder for a market
+/// whose Source resolved from a sponsored snapshot rather than a relayed VAA.
+///
+/// The three guards after the call are the ones a caller can still get wrong
+/// by pointing this input at another deployment: the instruction must belong to
+/// the Core program this input names, it must carry no signer meta (Core's
+/// admission is permissionless, and a signer meta would make the fee payer
+/// authorize it), and its terminal sequence must be the one the input declares
+/// rather than one the builder happened to find.
+fn admit_terminal_instruction(
+    input: &SponsoredInputV1,
+    keys: &InputKeysV1,
+    coordinates: &CoordinatesV1,
+    snapshot: &SnapshotV1,
+) -> Result<Instruction> {
+    let certificate = coordinates
+        .certificate
+        .ok_or_else(|| Error::new("terminal admission certificate missing"))?;
+    let report = build_resolution_admit_terminal_v3(&ResolutionAdmitTerminalSnapshotV3 {
+        market: snapshot.observed(keys.market, "Market")?,
+        activation_cache: snapshot.observed(keys.activation_cache, "activation cache")?,
+        registry_program: snapshot.observed(keys.registry_program, "Registry program")?,
+        core_program: snapshot.observed(keys.core_program, "Core program")?,
+        core_programdata: snapshot.observed(keys.core_programdata()?, "Core ProgramData")?,
+        resolution_program: snapshot.observed(keys.resolution_program, "Resolution program")?,
+        resolution_programdata: snapshot
+            .observed(keys.resolution_programdata, "Resolution ProgramData")?,
+        source_material: snapshot.observed(keys.source_material.0, "SourceMaterial")?,
+        source_material_staging: observed_or_vacant(snapshot, keys.source_material.1)?,
+        capability_manifest: snapshot.observed(keys.capability_manifest.0, "CapabilityManifest")?,
+        capability_manifest_staging: observed_or_vacant(snapshot, keys.capability_manifest.1)?,
+        source_state: snapshot.observed(keys.source_state, "Source resolution state")?,
+        funding_ledger: snapshot.observed(keys.failure_funding, "Resolution funding ledger")?,
+        certificate: snapshot.observed(certificate, "terminal certificate")?,
+        rent_sysvar: snapshot.observed(sysvar::rent::ID, "Rent sysvar")?,
+        product_raw: snapshot.observed(keys.product.0, "Product")?,
+        product_staging: observed_or_vacant(snapshot, keys.product.1)?,
+        result_domain_raw: snapshot.observed(keys.result_domain.0, "ResultDomain")?,
+        result_domain_staging: observed_or_vacant(snapshot, keys.result_domain.1)?,
+        portfolio_raw: snapshot.observed(keys.portfolio.0, "Portfolio")?,
+        portfolio_staging: observed_or_vacant(snapshot, keys.portfolio.1)?,
+    })
+    .map_err(|error| Error::new(format!("Core terminal admission builder: {error:?}")))?;
+    if report.instruction.program_id != keys.core_program {
+        return Err(Error::new(
+            "terminal admission was built against a different Core program",
+        ));
+    }
+    if report
+        .instruction
+        .accounts
+        .iter()
+        .any(|meta| meta.is_signer)
+    {
+        return Err(Error::new(
+            "terminal admission must carry no signer meta; the fee payer is not an authority",
+        ));
+    }
+    if report.terminal_sequence != input.terminal_sequence {
+        return Err(Error::new(format!(
+            "Source decision names terminal sequence {}, the input names {}",
+            report.terminal_sequence, input.terminal_sequence
+        )));
+    }
+    Ok(report.instruction)
+}
+
+/// A staging cursor, read as vacant only where the snapshot actually looked.
+///
+/// A key the snapshot never requested and a key it read back empty are two
+/// different facts that would otherwise produce the same `ObservedAccount`, and
+/// the builder treats a vacant staging cursor as a positive authentication of
+/// a finalized record. So an unrequested key is a refusal, not a vacancy.
+fn observed_or_vacant(snapshot: &SnapshotV1, key: Pubkey) -> Result<ObservedAccount> {
+    let account = snapshot
+        .accounts
+        .get(&key)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "finalized snapshot never observed {key}; a vacant reading would be a fabrication"
+            ))
+        })?
+        .clone()
+        .unwrap_or(RpcAccount {
+            lamports: 0,
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: Vec::new(),
+        });
+    Ok(ObservedAccount {
+        observation: snapshot.observation,
+        key,
+        owner: account.owner,
+        lamports: account.lamports,
+        executable: account.executable,
+        data: account.data,
     })
 }
 
@@ -1768,6 +2020,7 @@ mod tests {
             registry_program: take(&mut next),
             activation_cache: take(&mut next),
             core_program: take(&mut next),
+            core_programdata: Some(take(&mut next)),
             resolution_program: take(&mut next),
             resolution_programdata: take(&mut next),
             market: take(&mut next),
@@ -1800,6 +2053,7 @@ mod tests {
             ("capture", ExteriorActionV1::Capture),
             ("settle", ExteriorActionV1::Settle),
             ("commit-failure", ExteriorActionV1::CommitFailure),
+            ("admit-terminal", ExteriorActionV1::AdmitTerminal),
             ("close-candidate", ExteriorActionV1::CloseCandidate),
             ("close-head", ExteriorActionV1::CloseHead),
         ] {
@@ -1809,6 +2063,77 @@ mod tests {
             );
         }
         assert!(ExteriorActionV1::parse("pull").is_err());
+    }
+
+    /// The Core admission is the one action with no Resolution wire action,
+    /// the one that must not put the payer inside its frame, and one of the
+    /// three that carry a terminal sequence.
+    #[test]
+    fn terminal_admission_is_a_core_action_not_a_sponsored_push_one() {
+        assert!(ExteriorActionV1::AdmitTerminal.wire().is_none());
+        assert!(ExteriorActionV1::AdmitTerminal.terminal());
+        assert!(ExteriorActionV1::AdmitTerminal.payer_is_outside_the_frame());
+        for other in [
+            ExteriorActionV1::Capture,
+            ExteriorActionV1::Settle,
+            ExteriorActionV1::CommitFailure,
+            ExteriorActionV1::CloseCandidate,
+            ExteriorActionV1::CloseHead,
+        ] {
+            assert!(
+                other.wire().is_some(),
+                "{other:?} lost its sponsored-push wire discriminant"
+            );
+        }
+    }
+
+    /// An input authored before this arm existed still deserializes, and the
+    /// refusal names the field rather than reporting a zero address.
+    #[test]
+    fn terminal_admission_refuses_an_input_without_core_programdata() {
+        let mut keys = keys();
+        keys.core_programdata = None;
+        let refusal = keys
+            .core_programdata()
+            .expect_err("an omitted ProgramData must refuse by name");
+        assert!(
+            refusal.0.contains("accounts.coreProgramdata"),
+            "expected the omitted-field refusal, got: {refusal}"
+        );
+    }
+
+    /// A snapshot that never requested a staging cursor must refuse rather
+    /// than hand the builder a fabricated vacancy, because the builder reads a
+    /// vacant cursor as a positive authentication of its finalized record.
+    #[test]
+    fn an_unobserved_staging_cursor_is_a_refusal_and_not_a_vacancy() {
+        let cursor = key(200);
+        let observed = SnapshotV1 {
+            observation: Observation {
+                slot: 7,
+                unix_timestamp: 11,
+                finality: Finality::Finalized,
+            },
+            accounts: BTreeMap::from([(cursor, None)]),
+        };
+        assert_eq!(
+            observed_or_vacant(&observed, cursor)
+                .expect("an observed vacancy is a vacancy")
+                .owner,
+            system_program::ID
+        );
+        let unobserved = SnapshotV1 {
+            observation: observed.observation,
+            accounts: BTreeMap::new(),
+        };
+        let refusal = observed_or_vacant(&unobserved, cursor)
+            .expect_err("an unrequested key must not read as vacant");
+        assert!(
+            refusal
+                .0
+                .contains("a vacant reading would be a fabrication"),
+            "expected the fabrication refusal, got: {refusal}"
+        );
     }
 
     #[test]

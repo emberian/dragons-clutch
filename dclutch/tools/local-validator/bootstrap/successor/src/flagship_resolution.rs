@@ -8361,6 +8361,64 @@ mod tests {
         }
     }
 
+    /// A sponsored-push market that resolved by the failure walk is NOT an
+    /// `accept` stage, and `--through accept` cannot reach one.
+    ///
+    /// The Core builder this stage calls — `build_resolution_admit_terminal_v3`
+    /// in `core_terminal_accept_report` — names no relayed-VAA coordinate at
+    /// all: its snapshot is Market, activation cache, the four deployment
+    /// programs, SourceMaterial, capability manifest, Source state, funding
+    /// ledger, certificate, Rent and the three product record pairs. So the
+    /// *capability* is separable. The *command* is not, and this test is the
+    /// cheap half of why: cohort-13's chain state — Market Open/Consumed,
+    /// Source `FailureCommitted`, no provider lifecycle, no Receiver update,
+    /// certificate written — does not classify as `Accept`, because `Accept`
+    /// demands a Consumed lifecycle and a Submitted update account that a
+    /// snapshot-route market never creates. `--through` caps the LAST stage
+    /// run; the entry stage always comes from `classify`, so no flag reaches
+    /// past this refusal.
+    ///
+    /// Three further refusals stand in front of it in `SelectedInputV1::parse`,
+    /// which is why the answer is a design fact and not a missing flag:
+    /// `encodedVaa` and `updateAccount` are `nonzero_pubkey`, and
+    /// `postUpdateBodyBase64` must parse as `PostUpdateParamsView`. A market
+    /// resolved from a sponsored snapshot has none of the three and never will.
+    ///
+    /// The arm that does reach Core for such a market is
+    /// `devnet-sponsored-push-v1 --action admit-terminal`.
+    #[test]
+    fn sponsored_push_failure_state_is_not_an_accept_stage() {
+        use SlotKindV1::{Submitted, Vacant};
+        let cohort_thirteen = facts(
+            CorePhase::Open,
+            SourceResolutionPhaseV1::FailureCommitted,
+            Vacant,
+            Vacant,
+            Submitted,
+        );
+        let refusal = classify(cohort_thirteen).expect_err("sponsored-push state is not a stage");
+        assert!(
+            refusal.0.contains(
+                "Market, Source, lifecycle, update, and certificate do not form one canonical stage"
+            ),
+            "expected the canonical-stage refusal, got: {refusal}"
+        );
+        // The same Source phase with the relayed ladder's own accounts IS an
+        // accept stage, so the refusal above is about the missing VAA route and
+        // not about failure resolution being unrepresentable.
+        assert_eq!(
+            classify(facts(
+                CorePhase::Open,
+                SourceResolutionPhaseV1::FailureCommitted,
+                SlotKindV1::Consumed,
+                Submitted,
+                Submitted,
+            ))
+            .expect("relayed failure accept"),
+            StageV1::Accept
+        );
+    }
+
     #[test]
     fn cli_refuses_keys_during_read_only_preflight_and_duplicate_flags() {
         assert!(

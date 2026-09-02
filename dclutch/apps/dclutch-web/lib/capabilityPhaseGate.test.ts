@@ -5,13 +5,19 @@ import { describe, expect, it } from 'vitest';
 import {
   CAPABILITY_ACTIONS_V1,
   capabilityActPhaseGatesV1,
+  capabilityActUnobservableMachinesV1,
   capabilityActsWithNoPhaseGateV1,
   capabilityRequiresMarketV1,
   evaluateCapabilityV1,
   type CapabilityMarketSnapshotV1,
 } from './capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
-import { ROUTE_PHASE_GATES_V1, routePhaseGateV1 } from '@dclutch/sdk/generated/marketPhaseAdmissionV1';
+import {
+  ROUTE_PHASE_GATES_V1,
+  ROUTES_GATED_ON_ANOTHER_MACHINE_V1,
+  routeOtherMachineGateV1,
+  routePhaseGateV1,
+} from '@dclutch/sdk/generated/marketPhaseAdmissionV1';
 
 /**
  * The cohort-12 SOL/USD market, and the phase the chain reports for it.
@@ -129,6 +135,54 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
       'claims.redeem',
     ]);
     expect(ungated).toHaveLength(CAPABILITY_ACTIONS_V1.length - gated.length);
+  });
+});
+
+/**
+ * A machine this snapshot cannot observe is not an admission and not an absence.
+ *
+ * `ROUTES_GATED_ON_ANOTHER_MACHINE_V1` exists because Resolution's sponsored
+ * routes are gated on the SOURCE resolution state as well as the Market's
+ * phase, and a Market is `Open` for the whole span in which its Source moves
+ * `Primary` to `Resolved` -- so the Market half admitting is not the answer.
+ *
+ * No act in the catalogue declares one of those routes yet, and that is
+ * exactly why this is here: a field whose only writer is a literal is a field
+ * nobody has run. These cases drive the path with a standing built over a real
+ * route id from the generated table, so the mechanism is exercised before an
+ * act needs it rather than after.
+ */
+describe('an act gated on a machine this observation cannot read', () => {
+  const sourceGated = ROUTES_GATED_ON_ANOTHER_MACHINE_V1[0];
+
+  const overRoute = (route: string) => {
+    const base = standing('source.provider');
+    return { ...base, action: { ...base.action, routes: [route] } };
+  };
+
+  it('the generated table names at least one such route, with its machine', () => {
+    expect(sourceGated).toBeDefined();
+    expect(sourceGated!.machines).toContain('source');
+    expect(routeOtherMachineGateV1(sourceGated!.route)).toEqual(sourceGated);
+    expect(routeOtherMachineGateV1('core/execute_provider_v3::process#ExecuteProvider')).toBeNull();
+  });
+
+  it('says needs-chain and names the machine, against an observation its Market half admits', () => {
+    // The Market half of `resolution/process_capture#Capture` is
+    // `Open+Consumed`, which this observation IS. A reader that answered from
+    // the Market alone would call it ready.
+    const verdict = evaluateCapabilityV1(overRoute(sourceGated!.route), observed('Open', 'Consumed'));
+    expect(verdict.status).toBe('needs-chain');
+    expect(verdict.phaseGate.verdict).toBe('other-machine');
+    expect(verdict.phaseGate.unobservableMachines).toEqual(['source']);
+    expect(verdict.reason).toContain('source state machine');
+  });
+
+  it('is not counted as an act with no published gate', () => {
+    // The census read a gate for it. Calling it ungated would be the same
+    // false claim `no-phase-gate` exists one level down to prevent.
+    expect(capabilityActUnobservableMachinesV1(overRoute(sourceGated!.route).action)).toEqual(['source']);
+    expect(capabilityActUnobservableMachinesV1(standing('source.provider').action)).toEqual([]);
   });
 });
 

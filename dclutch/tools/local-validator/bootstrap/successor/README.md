@@ -414,6 +414,7 @@ finalized Registry record and its vacant staging account:
     "registryProgram": "PUBKEY",
     "activationCache": "PUBKEY",
     "coreProgram": "PUBKEY",
+    "coreProgramdata": "PUBKEY",
     "resolutionProgram": "PUBKEY",
     "resolutionProgramdata": "PUBKEY",
     "market": "PUBKEY",
@@ -473,12 +474,44 @@ run. A normal exit removes it. A crash leaves it fail-closed; confirm that no
 process still owns the report before you manually remove the named stale lock.
 
 Use
-`terminalSequence: 1` for `settle` or `commit-failure`, and zero for the other
-actions. `settle` reads the selected candidate from the canonical head.
-`close-candidate` additionally requires `--candidate PUBKEY`. Cleanup is
-permissionless, but its transaction payer must be different from every account
-in the cleanup instruction; in particular, do not reuse the captured rent
-beneficiary as that transaction's payer.
+`terminalSequence: 1` for `settle`, `commit-failure`, or `admit-terminal`, and
+zero for the other actions. `settle` reads the selected candidate from the
+canonical head. `close-candidate` additionally requires `--candidate PUBKEY`.
+Cleanup and terminal admission are permissionless, but their transaction payer
+must be different from every account in the instruction; in particular, do not
+reuse the captured rent beneficiary as that transaction's payer.
+
+`coreProgramdata` is required only by `admit-terminal`; an input authored for
+the five sponsored-push actions may omit it, and the admission then refuses by
+naming the field.
+
+### `admit-terminal`: telling Core the certificate exists
+
+`settle` and `commit-failure` write a Resolution-owned terminal certificate and
+move the Source to `Resolved` or `FailureCommitted`. **Neither of them makes the
+Market Terminal.** Core learns about the certificate through a separate,
+permissionless instruction of its own — `ResolutionCoreActionV1::AdmitTerminal`
+— and until it runs, the Market is still Open, no payout is reachable, and the
+post-terminal ladder (`devnet-terminal-sequence-v1`) refuses because it wants a
+Market that already is Terminal.
+
+`--action admit-terminal` is that instruction. It is the one action here whose
+instruction belongs to **Core** rather than Resolution, so it has no
+`SponsoredPushActionV1` wire discriminant, it carries no signer meta at all, and
+its frame is built by `build_resolution_admit_terminal_v3` — the same builder
+`flagship-resolution-v1`'s `accept` stage calls. The certificate kind is not a
+flag: it is read off the Source state's own phase (`Resolved` → success,
+`FailureCommitted` → failure), and any other phase refuses before a snapshot is
+taken.
+
+The reason this arm exists rather than reusing `flagship-resolution-v1 --through
+accept` is that the flagship command cannot be entered for a sponsored-push
+market. Its `PlanInputV1` requires `encodedVaa`, `updateAccount` and a parseable
+`postUpdateBodyBase64`, and its stage classifier reaches `accept` only from a
+Consumed provider lifecycle plus a Submitted Receiver update account. A market
+resolved from a sponsored snapshot has none of those four and never will, and
+`--through` caps the last stage rather than choosing the first. The *builder*
+was always separable; the *command* never was.
 
 The report format is `dclutch-sponsored-push-exterior-report-v2`. It retains
 the reviewed instruction and prestate, the durable signed packet, finalized

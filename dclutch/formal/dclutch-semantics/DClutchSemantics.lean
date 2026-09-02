@@ -148,3 +148,4 @@ import DClutchSemantics.GeneralRuntimeWireV2
 import DClutchSemantics.ProductBasisV3
 import DClutchSemantics.ProductBasisV3Agreement
 import DClutchSemantics.RefusalBandsV1
+import DClutchSemantics.SourceWindowSpecV1Abi

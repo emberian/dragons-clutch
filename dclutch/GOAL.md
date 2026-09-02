@@ -3468,3 +3468,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the browser's redemption test, the two producer gaps, the griefing-window design note (+ Lean-first repair if small).
 - DEALER (`1f41f40a`): **the selector-9 trade DELIVERS** — the delivery's reservation is Custody's own.
 - Cuts: `58c0d6594`, `c92480583`.
+- PHASE-CENSUS successor closed (14 commits; f47c25fe, 90061c16, 9438c8a1, 69c7b91a …): **12 → 49 of 169 routes gated** —
+  claims 19 guard sites (CorePhaseGateV3 deleted), resolution 5 Market + 4 Source, trading 10; a second machine
+  (`SourceAdmissionV1`) read by one enumerator with a MACHINES table; **four enumerator over-claims fixed in the dangerous
+  direction** (a one-sided `if` attributed to every route published Founding as the redeem routes' set; if/else intersected
+  not united; or-pattern arms read as unconditional; children not reading the parent's gate); the abandon route's reclaim
+  guard was inverted in the first draft. SDK table 48 rows + 4 other-machine; **live: `claims.redeem → wrong-phase` on
+  cohort-13's Open market**, `source.provider → ready`. Owed → successor **`(spawned)`**: six Trading routes behind method
+  calls; six unnamed machines (two read `Phase::Open` and mean something else); Registry's 11 routes have no persisted
+  guard at all (a distinct fact). Correction: 90061c16's "seven Phase imports" is ten.
+- Cuts: `4994ceb55`.

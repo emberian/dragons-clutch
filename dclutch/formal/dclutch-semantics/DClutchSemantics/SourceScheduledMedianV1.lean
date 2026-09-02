@@ -1,3 +1,4 @@
+import DClutchSemantics.SourceWindowSpecV1Abi
 import DClutchSemantics.AbiSchema
 import DClutchSemantics.Codec
 import Std.Tactic
@@ -468,9 +469,15 @@ written before the tolerance existed reads `τ = 0`. -/
 
 open DClutch.AbiSchema
 
-def windowSpecBytes : Nat := 112
-def windowSpecTailOffset : Nat := 104
-def windowSpecTailBytes : Nat := 8
+-- These three were bare literals, and `tail_fits_former_reserved` below
+-- therefore compared two numbers somebody had typed.  `SourceWindowSpecV1Abi`
+-- places the whole 112-byte record, so the width is a sum of twelve fields and
+-- the tail's cursor is the width of the eleven in front of it.  The theorem now
+-- says the tail ends exactly where the record does, which is what it was always
+-- meant to say and could not.
+def windowSpecBytes : Nat := DClutch.SourceWindowSpecV1Abi.windowSpecBytes
+def windowSpecTailOffset : Nat := DClutch.SourceWindowSpecV1Abi.tailOffset
+def windowSpecTailBytes : Nat := DClutch.SourceWindowSpecV1Abi.tailBytes
 
 inductive TailField where
   | cadenceToleranceSeconds | tailReserved

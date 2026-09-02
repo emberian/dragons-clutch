@@ -77,3 +77,30 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
 export function routePhaseGateV1(route: string): RoutePhaseGateV1 | null {
   return ROUTE_PHASE_GATES_V1.find((gate) => gate.route === route) ?? null;
 }
+
+/**
+ * Routes whose admissibility is over a state machine this table cannot state.
+ *
+ * A Source resolution state, a Dealer root's lifecycle, a Series ticket: none
+ * of them is the Core Market's phase, and a Market is `Open` for the whole
+ * span in which its Source moves `Primary` to `Resolved`. So these routes are
+ * NOT ungated, and a consumer that treated them as ungated would report an
+ * admission the chain refuses. A consumer that cannot observe the named
+ * machine must say `needs-chain` and not `no-phase-gate`.
+ */
+export interface RouteOtherMachineGateV1 {
+  readonly route: string;
+  readonly machines: ReadonlyArray<string>;
+}
+
+export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachineGateV1> = [
+  { route: "resolution/process_abandon#magic", machines: ["source"] },
+  { route: "resolution/process_capture#Capture", machines: ["source"] },
+  { route: "resolution/process_commit_failure#CommitFailure", machines: ["source"] },
+  { route: "resolution/process_settle#Settle", machines: ["source"] },
+];
+
+/** The machines gating one route that this table cannot state, if any. */
+export function routeOtherMachineGateV1(route: string): RouteOtherMachineGateV1 | null {
+  return ROUTES_GATED_ON_ANOTHER_MACHINE_V1.find((entry) => entry.route === route) ?? null;
+}

@@ -73,7 +73,7 @@ def main : IO Unit := do
   IO.println "use super::{MedianCaseV1, ScheduleCaseV1};"
   for field in tailLayout do
     IO.println s!"pub const {TailField.rustName field.spec.name}: usize = {field.offset};"
-  IO.println "pub const WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_BYTES_V1: usize = 4;"
+  IO.println s!"pub const WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_BYTES_V1: usize = {_root_.DClutch.SourceWindowSpecV1Abi.Field.width .tailReserved};"
   emitSlice "CADENCE_TOLERANCE_LIFTING_PLAN_PREIMAGE_V1" liftingPlanPreimage
   emitBytes "pub" "CADENCE_TOLERANCE_LIFTING_PLAN_ID_V1" liftingPlanId
   IO.println s!"pub const SCHEDULED_MEDIAN_CORPUS_MAX_SAMPLES_V1: usize = {maxSamples};"

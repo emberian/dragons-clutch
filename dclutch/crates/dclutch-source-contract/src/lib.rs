@@ -36,6 +36,8 @@ mod generated_source_material_v3;
 mod generated_source_recovery_policy_v2;
 #[allow(missing_docs)]
 mod generated_source_resolution_state_v2;
+#[allow(missing_docs)]
+mod generated_window_spec_v1;
 mod principal_capacity_v1;
 mod provider_join_v2;
 mod scheduled_median_v1;
@@ -87,6 +89,22 @@ pub use generated_source_recovery_policy_v2::{
     RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAGIC_V2,
     RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
     RECOVERY_POLICY_SCHEMA_PREIMAGE_V2, RECOVERY_POLICY_SCHEMA_VERSION_V2,
+};
+// The whole WindowSpecV1 preimage, from `DClutch.SourceWindowSpecV1Abi`. The
+// record used to have two authors that could not see each other: this file
+// wrote the magic, the width and the two time bounds as literals and left six
+// more coordinates as bare arguments inside `decode`/`to_bytes`, while
+// `SourceScheduledMedianV1` owned the last eight bytes from a cursor it had
+// asserted. The tail's offset is the width of the eleven fields in front of it
+// now, so the two ends of the record are the same object.
+pub use generated_window_spec_v1::{
+    WINDOW_SPEC_BYTES, WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
+    WINDOW_SPEC_HEADER_RESERVED_BYTES_V1, WINDOW_SPEC_HEADER_RESERVED_OFFSET_V1,
+    WINDOW_SPEC_KIND_OFFSET_V1, WINDOW_SPEC_MAGIC, WINDOW_SPEC_MAGIC_BYTES_V1,
+    WINDOW_SPEC_MAGIC_OFFSET_V1, WINDOW_SPEC_MAX_AGE_SECONDS_OFFSET_V1,
+    WINDOW_SPEC_MAX_FUTURE_SKEW_SECONDS_OFFSET_V1, WINDOW_SPEC_SCHEDULE_ID_OFFSET_V1,
+    WINDOW_SPEC_SCHEMA_VERSION_OFFSET_V1, WINDOW_SPEC_SOURCE_SPEC_ID_OFFSET_V1,
+    WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1,
 };
 pub use provider_join_v2::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1,
@@ -140,8 +158,6 @@ pub const PYTH_ADAPTER_CONFIG_BYTES: usize = 64;
 pub const SOURCE_CAPACITY_PROFILE_BYTES: usize = 112;
 /// Exact width of a source-specification preimage.
 pub const SOURCE_SPEC_BYTES: usize = 192;
-/// Exact width of a window-specification preimage.
-pub const WINDOW_SPEC_BYTES: usize = 112;
 /// Exact width of a statistic-specification preimage.
 pub const STATISTIC_SPEC_BYTES: usize = 176;
 /// Exact width of a resolution-policy preimage.
@@ -196,20 +212,6 @@ pub const PYTH_ADAPTER_CONFIG_MAGIC: [u8; 8] = *b"DCLTPAC1";
 pub const SOURCE_CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTSCP1";
 /// Canonical source-specification magic.
 pub const SOURCE_SPEC_MAGIC: [u8; 8] = *b"DCLTSRC1";
-/// Canonical window-specification magic.
-pub const WINDOW_SPEC_MAGIC: [u8; 8] = *b"DCLTWIN1";
-/// Byte coordinate of a window preimage's closed lower time bound.
-///
-/// Named because a reader outside this crate needs it. The whole window a
-/// market settles on lives in this record, and the browser that has to say
-/// *when a market settles* could reach the record and not its interior: the
-/// two bounds were bare `48` and `56` inside `decode`/`to_bytes`, so any other
-/// consumer had to restate them in its own words, which is exactly the mirror
-/// `abi-coverage` refuses. `apps/dclutch-web/scripts/generate-core-found.mjs`
-/// emits these two and the browser derives its settlement time from them.
-pub const WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1: usize = 48;
-/// Byte coordinate of a window preimage's closed upper time bound.
-pub const WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1: usize = 56;
 /// Canonical statistic-specification magic.
 pub const STATISTIC_SPEC_MAGIC: [u8; 8] = *b"DCLTSTA1";
 /// Canonical resolution-policy magic.
@@ -1126,20 +1128,27 @@ impl WindowSpecV1 {
     /// Decode one exact hostile window preimage.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         header(bytes, WINDOW_SPEC_BYTES, WINDOW_SPEC_MAGIC)?;
-        zero(bytes, 11, 5)?;
+        zero(
+            bytes,
+            WINDOW_SPEC_HEADER_RESERVED_OFFSET_V1,
+            WINDOW_SPEC_HEADER_RESERVED_BYTES_V1,
+        )?;
         zero(
             bytes,
             WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_OFFSET_V1,
             WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_BYTES_V1,
         )?;
         Self::new(
-            content(bytes, 16)?,
-            WindowKind::decode(one(bytes, 10)?)?,
+            content(bytes, WINDOW_SPEC_SOURCE_SPEC_ID_OFFSET_V1)?,
+            WindowKind::decode(one(bytes, WINDOW_SPEC_KIND_OFFSET_V1)?)?,
             i64::from_le_bytes(read_array(bytes, WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1)?),
             i64::from_le_bytes(read_array(bytes, WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1)?),
-            u32::from_le_bytes(read_array(bytes, 64)?),
-            u32::from_le_bytes(read_array(bytes, 68)?),
-            content(bytes, 72)?,
+            u32::from_le_bytes(read_array(bytes, WINDOW_SPEC_MAX_AGE_SECONDS_OFFSET_V1)?),
+            u32::from_le_bytes(read_array(
+                bytes,
+                WINDOW_SPEC_MAX_FUTURE_SKEW_SECONDS_OFFSET_V1,
+            )?),
+            content(bytes, WINDOW_SPEC_SCHEDULE_ID_OFFSET_V1)?,
         )?
         .tolerating_cadence(u32::from_le_bytes(read_array(
             bytes,
@@ -1150,8 +1159,12 @@ impl WindowSpecV1 {
     /// Encode exact canonical window bytes.
     pub fn to_bytes(self) -> [u8; WINDOW_SPEC_BYTES] {
         let mut out = base::<WINDOW_SPEC_BYTES>(WINDOW_SPEC_MAGIC);
-        put(&mut out, 10, &[self.kind.byte()]);
-        put(&mut out, 16, self.source_spec_id.as_bytes());
+        put(&mut out, WINDOW_SPEC_KIND_OFFSET_V1, &[self.kind.byte()]);
+        put(
+            &mut out,
+            WINDOW_SPEC_SOURCE_SPEC_ID_OFFSET_V1,
+            self.source_spec_id.as_bytes(),
+        );
         put(
             &mut out,
             WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1,
@@ -1162,9 +1175,21 @@ impl WindowSpecV1 {
             WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
             &self.end_unix_seconds.to_le_bytes(),
         );
-        put(&mut out, 64, &self.max_age_seconds.to_le_bytes());
-        put(&mut out, 68, &self.max_future_skew_seconds.to_le_bytes());
-        put(&mut out, 72, self.schedule_id.as_bytes());
+        put(
+            &mut out,
+            WINDOW_SPEC_MAX_AGE_SECONDS_OFFSET_V1,
+            &self.max_age_seconds.to_le_bytes(),
+        );
+        put(
+            &mut out,
+            WINDOW_SPEC_MAX_FUTURE_SKEW_SECONDS_OFFSET_V1,
+            &self.max_future_skew_seconds.to_le_bytes(),
+        );
+        put(
+            &mut out,
+            WINDOW_SPEC_SCHEDULE_ID_OFFSET_V1,
+            self.schedule_id.as_bytes(),
+        );
         put(
             &mut out,
             WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1,

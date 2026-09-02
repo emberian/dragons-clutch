@@ -85,3 +85,17 @@ verify EmitSourceResolutionStateV2AbiRust.lean generated_source_resolution_state
 )
 grep -q '^pub const WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1: usize = 104;$' "$candidate"
 verify EmitSourceScheduledMedianV1Rust.lean generated_scheduled_median_v1.rs 180
+
+# The seventh: the whole WindowSpecV1 preimage. Its tail two coordinates stay
+# with the scheduled median's emitter above -- one Lean author, one Rust
+# definition of each constant -- so the pins below are the head's, and the width
+# is the one the two old authors each stated separately.
+(
+  cd "$formal_dir"
+  lake build DClutchSemantics.SourceWindowSpecV1Abi >/dev/null
+  lake env lean --run EmitSourceWindowSpecV1Rust.lean >"$candidate"
+)
+grep -q '^pub const WINDOW_SPEC_BYTES: usize = 112;$' "$candidate"
+grep -q '^pub const WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1: usize = 48;$' "$candidate"
+grep -q '^pub const WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1: usize = 56;$' "$candidate"
+verify EmitSourceWindowSpecV1Rust.lean generated_window_spec_v1.rs 28

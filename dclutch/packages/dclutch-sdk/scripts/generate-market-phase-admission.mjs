@@ -76,9 +76,20 @@ if (routes.length < 100) throw new Error(`only ${routes.length} route rows parse
 const pairKey = (phase, readiness) => `${phase}+${readiness}`;
 const EVERY_PAIR = PHASES.flatMap((phase) => READINESS.map((readiness) => pairKey(phase, readiness)));
 
-function declarationPairs(route, declaration) {
+// `market: Open+Consumed` -> the machine and the terms. A set that names no
+// machine is a page written before machines were named, and it throws rather
+// than defaulting to `market`: defaulting is how a Source set would be checked
+// against a Market phase.
+function declarationMachine(route, declaration) {
+  const body = declaration.replace(/^`|`$/g, '');
+  const split = body.indexOf(': ');
+  if (split < 0) throw new Error(`route ${route} names a set with no state machine: ${body}`);
+  return { machine: body.slice(0, split), terms: body.slice(split + 2) };
+}
+
+function declarationPairs(route, terms) {
   const pairs = new Set();
-  for (const term of declaration.replace(/^`|`$/g, '').split(', ')) {
+  for (const term of terms.split(', ')) {
     const [phase, readiness] = term.split('+');
     if (!PHASES.includes(phase)) throw new Error(`route ${route} names phase ${phase}, which is not a Core phase`);
     if (readiness === undefined) {
@@ -96,16 +107,36 @@ function declarationPairs(route, declaration) {
 }
 
 const gates = [];
+// A route gated on a machine this table cannot express, and which machines.
+// Reported rather than dropped: a route whose only gate is over the Source
+// resolution state is NOT ungated, and a client told it was ungated would
+// report an admission the chain refuses.
+const otherMachines = [];
 for (const entry of routes) {
   if (entry.phase === 'no phase gate') continue;
   let admitted = new Set(EVERY_PAIR);
+  let sawMarket = false;
+  const machines = [];
   for (const conjunct of entry.phase.split('; ')) {
     const united = new Set();
+    let machine = null;
     for (const alternative of conjunct.split(' or ')) {
-      for (const pair of declarationPairs(entry.route, alternative)) united.add(pair);
+      const declaration = declarationMachine(entry.route, alternative);
+      if (machine !== null && machine !== declaration.machine) {
+        throw new Error(`route ${entry.route} unites sets over two machines: ${entry.phase}`);
+      }
+      machine = declaration.machine;
+      if (machine !== 'market') continue;
+      for (const pair of declarationPairs(entry.route, declaration.terms)) united.add(pair);
     }
+    if (!machines.includes(machine)) machines.push(machine);
+    if (machine !== 'market') continue;
+    sawMarket = true;
     admitted = new Set([...admitted].filter((pair) => united.has(pair)));
   }
+  const other = machines.filter((one) => one !== 'market');
+  if (other.length > 0) otherMachines.push({ route: entry.route, machines: other });
+  if (!sawMarket) continue;
   if (admitted.size === 0) {
     // Contradictory gates on one route: either the census attributed a gate
     // to a route that cannot reach it, or the route is genuinely dead. Both
@@ -153,6 +184,29 @@ generated += '];\n\n';
 generated += `/** The gate for one route, or \`null\` when the census read none for it. */
 export function routePhaseGateV1(route: string): RoutePhaseGateV1 | null {
   return ROUTE_PHASE_GATES_V1.find((gate) => gate.route === route) ?? null;
+}\n\n`;
+generated += `/**
+ * Routes whose admissibility is over a state machine this table cannot state.
+ *
+ * A Source resolution state, a Dealer root's lifecycle, a Series ticket: none
+ * of them is the Core Market's phase, and a Market is \`Open\` for the whole
+ * span in which its Source moves \`Primary\` to \`Resolved\`. So these routes are
+ * NOT ungated, and a consumer that treated them as ungated would report an
+ * admission the chain refuses. A consumer that cannot observe the named
+ * machine must say \`needs-chain\` and not \`no-phase-gate\`.
+ */
+export interface RouteOtherMachineGateV1 {
+  readonly route: string;
+  readonly machines: ReadonlyArray<string>;
+}\n\n`;
+generated += 'export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachineGateV1> = [\n';
+for (const entry of otherMachines) {
+  generated += `  { route: ${ts(entry.route)}, machines: [${entry.machines.map(ts).join(', ')}] },\n`;
+}
+generated += '];\n\n';
+generated += `/** The machines gating one route that this table cannot state, if any. */
+export function routeOtherMachineGateV1(route: string): RouteOtherMachineGateV1 | null {
+  return ROUTES_GATED_ON_ANOTHER_MACHINE_V1.find((entry) => entry.route === route) ?? null;
 }\n`;
 
 if (process.argv.includes('--check')) {
