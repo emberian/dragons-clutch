@@ -134,6 +134,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
     invocation_index: u32,
     invocation: ResolvedInvocationV3,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
+    aliases: &[usize],
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
@@ -161,13 +162,20 @@ pub(crate) fn execute_claims_route_v3<'info>(
     }
     let request = invocation_request(invocation, request_bank, family_request)?;
     gather_invocation_accounts(&mut buffers.accounts, invocation, effect_accounts)?;
+    // ONE counter, shared with the preflight walk, and ALIAS-AWARE. This used
+    // to be a second hand-rolled filter over the gathered infos, and the two
+    // copies of the predicate agreed with each other and disagreed with the
+    // frame's own AccountProfile: a coordinate declared an
+    // `AuthenticatedRouteAlias` counted as a second occurrence of the child
+    // program, which is what the Claims representation wire's inactive-slot
+    // sentinel always is. See `invocation_accounts_contain_program`.
     if buffers.accounts.is_empty()
-        || buffers
-            .accounts
-            .iter()
-            .filter(|account| account.key == claims_program.key)
-            .count()
-            != 1
+        || crate::hot_v3::invocation_accounts_contain_program(
+            invocation,
+            effect_accounts,
+            aliases,
+            claims_program.key,
+        )? != 1
     {
         return Err(TradingSbfError::Content.into());
     }

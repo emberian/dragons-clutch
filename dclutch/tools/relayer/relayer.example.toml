@@ -139,15 +139,76 @@ inline_len = 45
 # founding-time constant.  A redeploy is caught by deployment_slot instead.
 
 # 3. the venue state account, the subject of the claim, carried fully inline.
+#    424, not 416: `VirtualPool` is `#[account(zero_copy)]` allocated
+#    `8 + INIT_SPACE`, so the on-chain length is the 416-byte `PoolState` body
+#    plus its eight-byte discriminator. The decoding rules own this number --
+#    `RelayedVenueDecodingRulesV1.lean`'s `admittedDataLengths = [424]` and
+#    `venueInlineBytes = 424` -- and this file was quoting the inner body.
 [[account_sets.positions]]
 key = "11111111111111111111111111111119"                              # PLACEHOLDER
 expected_owner = "1111111111111111111111111111111A"                   # PLACEHOLDER
-inline_len = 416
-admitted_data_lens = [416]
+inline_len = 424
+admitted_data_lens = [424]
 
 # 4. the observed cluster's Clock sysvar, so that cluster's wall time is an
 #    ordinary decoded field of an ordinary attested account rather than
 #    something the relayer asserts.
+[[account_sets.positions]]
+key = "SysvarC1ock11111111111111111111111111111111"
+expected_owner = "Sysvar1111111111111111111111111111111111111"
+inline_len = 40
+admitted_data_lens = [40]
+
+# ---------------------------------------------------------------------------
+# OBSERVABLE #2, and the whole point of this file: THIS IS THE ENTIRE COST.
+#
+# `tools/relayer/` is twelve thousand lines and contains no venue logic at all.
+# A second attestor is a second `[[account_sets]]` block -- these twenty lines
+# -- because the daemon observes an ordered set of accounts and signs their
+# bytes, and every question about what those bytes MEAN is answered on the
+# observing cluster by the release-pinned decoding rules.
+#
+# Row 1 of that table: SPL Token-2022 `Mint.mint_authority`, as a renunciation
+# proposition. "Has this token's supply become permanently fixed?" The observed
+# program enforces the terminality itself (`processor.rs:722` refuses
+# `SetAuthority(MintTokens)` with `FixedSupply` once the authority is `None`),
+# so the observation proves something about every later slot too.
+#
+# Set `decoding_rules_id` to the same schema release as any other set; what
+# selects THIS row is `RelayedAdapterConfigV1.observable_selector = 1`, which
+# lives in the market's adapter config and not in this file.
+[[account_sets]]
+name = "token2022-mint-authority-renounced"
+relay_family_id = "095d90fce8c9ae83f08c4e379ffd73a8ef768e3030d2f9080c835bcbb7e6f50f"
+decoding_rules_id = "9c68c8b943616bba40ad6190cba6be11a803afe75ea3bc1a8b1a8e11e329c26b"  # PLACEHOLDER
+
+# 1. the Token-2022 Program account. Token-2022 is Loader V3, which is what
+#    makes this row reachable at all: classic SPL Token is BPFLoader2, has no
+#    ProgramData, and cannot be pinned cross-cluster by this family.
+[[account_sets.positions]]
+key = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+expected_owner = "BPFLoaderUpgradeab1e11111111111111111111111"
+inline_len = 36
+admitted_data_lens = [36]
+
+# 2. the Token-2022 ProgramData. A Token-2022 UPGRADE makes every later
+#    observation refuse, which for a grammar read out of that program's own
+#    accounts is the correct behaviour and is free.
+[[account_sets.positions]]
+key = "1111111111111111111111111111111J"                              # PLACEHOLDER
+expected_owner = "BPFLoaderUpgradeab1e11111111111111111111111"
+inline_len = 45
+
+# 3. the observed Mint, carried whole. 82 is the BASE mint; a mint carrying
+#    TLV extensions is longer and refuses on its length rather than decoding
+#    under rules minted for a base one.
+[[account_sets.positions]]
+key = "1111111111111111111111111111111K"                              # PLACEHOLDER
+expected_owner = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+inline_len = 82
+admitted_data_lens = [82]
+
+# 4. the observed cluster's Clock sysvar, identically to every other set.
 [[account_sets.positions]]
 key = "SysvarC1ock11111111111111111111111111111111"
 expected_owner = "Sysvar1111111111111111111111111111111111111"

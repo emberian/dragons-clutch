@@ -54,3 +54,38 @@ pub(crate) const DBC_GRADUATION_ACCEPTANCE_TABLE_V1: [(u8, u8, u64, bool, i128);
     (3, 1, 0, false, 0),
     (0, 1, 0, false, 0),
 ];
+// Row 1: SPL Token-2022 `Mint.mint_authority`, as a renunciation proposition.
+pub const RELAYED_OBSERVABLE_MINT_AUTHORITY_RENOUNCED_V1: u32 = 1;
+pub const RELAYED_OBSERVABLE_MINT_AUTHORITY_RAW_EXPONENT_V1: i32 = 0;
+pub const MINT_AUTHORITY_SET_CARDINALITY_V1: u16 = 4;
+pub const MINT_AUTHORITY_PROGRAM_POSITION_V1: u16 = 0;
+pub const MINT_AUTHORITY_PROGRAMDATA_POSITION_V1: u16 = 1;
+pub const MINT_AUTHORITY_MINT_POSITION_V1: u16 = 2;
+pub const MINT_AUTHORITY_CLOCK_POSITION_V1: u16 = 3;
+pub const MINT_ADMITTED_DATA_LENGTHS_V1: &[u32] = &[82];
+pub const MINT_AUTHORITY_TAG_OFFSET_V1: usize = 0;
+pub const MINT_COPTION_TAG_BYTES_V1: usize = 4;
+pub const MINT_SUPPLY_OFFSET_V1: usize = 36;
+pub const MINT_DECIMALS_OFFSET_V1: usize = 44;
+pub const MINT_IS_INITIALIZED_OFFSET_V1: usize = 45;
+pub const MINT_FREEZE_AUTHORITY_TAG_OFFSET_V1: usize = 46;
+pub const MINT_INLINE_BYTES_V1: usize = 82;
+pub const COPTION_NONE_TAG_V1: u32 = 0;
+pub const COPTION_SOME_TAG_V1: u32 = 1;
+pub const MINT_AUTHORITY_HELD_V1: u8 = 0;
+pub const MINT_AUTHORITY_RENOUNCED_V1: u8 = 1;
+#[cfg(test)]
+pub(crate) const MINT_AUTHORITY_ACCEPTANCE_TABLE_V1_COUNT: usize = 9;
+#[cfg(test)]
+#[rustfmt::skip]
+pub(crate) const MINT_AUTHORITY_ACCEPTANCE_TABLE_V1: [(u32, u8, u32, bool, i128); 9] = [
+    (0, 1, 1, true, 1),
+    (0, 1, 0, true, 1),
+    (1, 1, 1, false, 0),
+    (1, 1, 0, false, 0),
+    (0, 0, 0, false, 0),
+    (0, 2, 1, false, 0),
+    (0, 1, 2, false, 0),
+    (2, 1, 1, false, 0),
+    (255, 1, 1, false, 0),
+];

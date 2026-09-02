@@ -25,16 +25,24 @@
 use dclutch_registry_contract::{ArtifactReleaseV1, DeploymentObservationV1};
 
 use crate::{
-    ADDRESS_BYTES, DBC_ADMITTED_DATA_LENGTHS_V1, DBC_CLOCK_POSITION_V1, DBC_DISCRIMINATOR_BYTES_V1,
-    DBC_DISCRIMINATOR_OFFSET_V1, DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1, DBC_IS_MIGRATED_OFFSET_V1,
+    ADDRESS_BYTES, COPTION_NONE_TAG_V1, COPTION_SOME_TAG_V1, DBC_ADMITTED_DATA_LENGTHS_V1,
+    DBC_CLOCK_POSITION_V1, DBC_DISCRIMINATOR_BYTES_V1, DBC_DISCRIMINATOR_OFFSET_V1,
+    DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1, DBC_IS_MIGRATED_OFFSET_V1,
     DBC_MIGRATION_PROGRESS_OFFSET_V1, DBC_PROGRAM_POSITION_V1, DBC_PROGRAMDATA_POSITION_V1,
     DBC_TRANSFER_HOOK_POOL_DISCRIMINATOR_V1, DBC_VENUE_INLINE_BYTES_V1, DBC_VENUE_POSITION_V1,
     DBC_VENUE_SET_CARDINALITY_V1, DBC_VIRTUAL_POOL_DISCRIMINATOR_V1, Error,
     MIGRATION_PROGRESS_CREATED_POOL_V1, MIGRATION_PROGRESS_LOCKED_VESTING_V1,
     MIGRATION_PROGRESS_POST_BONDING_CURVE_V1, MIGRATION_PROGRESS_PRE_BONDING_CURVE_V1,
+    MINT_ADMITTED_DATA_LENGTHS_V1, MINT_AUTHORITY_CLOCK_POSITION_V1, MINT_AUTHORITY_HELD_V1,
+    MINT_AUTHORITY_MINT_POSITION_V1, MINT_AUTHORITY_PROGRAM_POSITION_V1,
+    MINT_AUTHORITY_PROGRAMDATA_POSITION_V1, MINT_AUTHORITY_RENOUNCED_V1,
+    MINT_AUTHORITY_SET_CARDINALITY_V1, MINT_AUTHORITY_TAG_OFFSET_V1,
+    MINT_FREEZE_AUTHORITY_TAG_OFFSET_V1, MINT_INLINE_BYTES_V1, MINT_IS_INITIALIZED_OFFSET_V1,
     OBSERVED_CLOCK_SLOT_OFFSET_V1, OBSERVED_CLOCK_SYSVAR_KEY_V1,
     OBSERVED_CLOCK_UNIX_TIMESTAMP_OFFSET_V1, OBSERVED_SYSVAR_OWNER_V1,
-    RELAYED_OBSERVABLE_DBC_MIGRATION_PROGRESS_V1, RELAYED_OBSERVABLE_DBC_RAW_EXPONENT_V1, Result,
+    RELAYED_OBSERVABLE_DBC_MIGRATION_PROGRESS_V1, RELAYED_OBSERVABLE_DBC_RAW_EXPONENT_V1,
+    RELAYED_OBSERVABLE_MINT_AUTHORITY_RAW_EXPONENT_V1, RELAYED_OBSERVABLE_MINT_AUTHORITY_RENOUNCED_V1,
+    Result,
     identity::{LOADER_V3_PROGRAM_ID, reconstruct_deployment_observation_v1},
     record::RelayedObservationRecordViewV1,
     release::{AccountSetEntryV1, RelayedAdapterConfigV1},
@@ -53,6 +61,15 @@ pub enum RelayedObservableV1 {
     /// Meteora DBC `VirtualPool.migration_progress`, as a graduation
     /// proposition over a terminal window.
     DbcMigrationProgressV1,
+    /// SPL Token-2022 `Mint.mint_authority`, as a renunciation proposition
+    /// over a terminal window.
+    ///
+    /// "Has this token's supply become permanently fixed?" The observed
+    /// program enforces the terminality itself — `processor.rs:722` refuses
+    /// `SetAuthority(MintTokens)` with `FixedSupply` once the authority is
+    /// `None` — so an observation of the renounced state is a proof about
+    /// every later slot and not only about the observed one.
+    Token2022MintAuthorityRenouncedV1,
 }
 
 impl RelayedObservableV1 {
@@ -60,6 +77,8 @@ impl RelayedObservableV1 {
     pub fn from_selector(selector: u32) -> Result<Self> {
         if selector == RELAYED_OBSERVABLE_DBC_MIGRATION_PROGRESS_V1 {
             Ok(Self::DbcMigrationProgressV1)
+        } else if selector == RELAYED_OBSERVABLE_MINT_AUTHORITY_RENOUNCED_V1 {
+            Ok(Self::Token2022MintAuthorityRenouncedV1)
         } else {
             Err(Error::UnknownObservable)
         }
@@ -69,6 +88,9 @@ impl RelayedObservableV1 {
     pub const fn selector(self) -> u32 {
         match self {
             Self::DbcMigrationProgressV1 => RELAYED_OBSERVABLE_DBC_MIGRATION_PROGRESS_V1,
+            Self::Token2022MintAuthorityRenouncedV1 => {
+                RELAYED_OBSERVABLE_MINT_AUTHORITY_RENOUNCED_V1
+            }
         }
     }
 
@@ -76,6 +98,9 @@ impl RelayedObservableV1 {
     pub const fn raw_exponent(self) -> i32 {
         match self {
             Self::DbcMigrationProgressV1 => RELAYED_OBSERVABLE_DBC_RAW_EXPONENT_V1,
+            Self::Token2022MintAuthorityRenouncedV1 => {
+                RELAYED_OBSERVABLE_MINT_AUTHORITY_RAW_EXPONENT_V1
+            }
         }
     }
 
@@ -83,6 +108,21 @@ impl RelayedObservableV1 {
     pub const fn set_cardinality(self) -> u16 {
         match self {
             Self::DbcMigrationProgressV1 => DBC_VENUE_SET_CARDINALITY_V1,
+            Self::Token2022MintAuthorityRenouncedV1 => MINT_AUTHORITY_SET_CARDINALITY_V1,
+        }
+    }
+
+    /// The exact inline width this row's state position is pinned at.
+    ///
+    /// Both rows carry their state account WHOLE, which the decoding rules
+    /// prove: `venueInlineBytes == admittedDataLengths` for row 0 and
+    /// `mintInlineBytes == mintAdmittedDataLengths` for row 1. A founder
+    /// building the pinned account set reads this rather than typing the
+    /// number a second time.
+    pub const fn state_inline_bytes(self) -> u16 {
+        match self {
+            Self::DbcMigrationProgressV1 => DBC_VENUE_INLINE_BYTES_V1 as u16,
+            Self::Token2022MintAuthorityRenouncedV1 => MINT_INLINE_BYTES_V1 as u16,
         }
     }
 
@@ -95,6 +135,12 @@ impl RelayedObservableV1 {
                 state: DBC_VENUE_POSITION_V1,
                 clock: DBC_CLOCK_POSITION_V1,
             },
+            Self::Token2022MintAuthorityRenouncedV1 => RelayedSetLayoutV1 {
+                program: MINT_AUTHORITY_PROGRAM_POSITION_V1,
+                programdata: MINT_AUTHORITY_PROGRAMDATA_POSITION_V1,
+                state: MINT_AUTHORITY_MINT_POSITION_V1,
+                clock: MINT_AUTHORITY_CLOCK_POSITION_V1,
+            },
         }
     }
 }
@@ -106,8 +152,10 @@ impl RelayedObservableV1 {
 /// being added here does not compile.
 ///
 /// [`table_rows_are_exhaustive_and_well_formed`]: self
-pub const RELAYED_OBSERVABLE_TABLE_V1: &[RelayedObservableV1] =
-    &[RelayedObservableV1::DbcMigrationProgressV1];
+pub const RELAYED_OBSERVABLE_TABLE_V1: &[RelayedObservableV1] = &[
+    RelayedObservableV1::DbcMigrationProgressV1,
+    RelayedObservableV1::Token2022MintAuthorityRenouncedV1,
+];
 
 /// Which position of one observable's ordered account set carries which role.
 ///
@@ -419,6 +467,95 @@ fn read_dbc_graduation(venue: AccountObservationV1<'_>) -> Result<i128> {
     Ok(i128::from(progress.byte()))
 }
 
+/// Whether an SPL Token-2022 mint can still mint.
+///
+/// Two states, and the observed program itself makes the transition between
+/// them one-way: `spl-token-2022 4.0.0 processor.rs:722` reads
+/// `mint.base.mint_authority.ok_or(TokenError::FixedSupply)?` before it will
+/// write a new one, so `Renounced` is terminal on the observed cluster and not
+/// merely terminal in this table's opinion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MintAuthorityStateV1 {
+    /// Some authority may still mint. Not a negative answer; not an answer.
+    Held,
+    /// The authority is `COption::None`. The only terminal state.
+    Renounced,
+}
+
+impl MintAuthorityStateV1 {
+    /// Hostile-decode the observed four-byte `COption` tag.
+    ///
+    /// `unpack_coption_key` admits exactly `[0,0,0,0]` and `[1,0,0,0]`; every
+    /// other word is not a tag this program ever wrote, and is a refusal
+    /// rather than a third state.
+    pub fn from_tag(tag: u32) -> Result<Self> {
+        if tag == COPTION_NONE_TAG_V1 {
+            Ok(Self::Renounced)
+        } else if tag == COPTION_SOME_TAG_V1 {
+            Ok(Self::Held)
+        } else {
+            Err(Error::UnenumeratedVenueState)
+        }
+    }
+
+    /// The on-wire discriminant this row reports as its atom.
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Held => MINT_AUTHORITY_HELD_V1,
+            Self::Renounced => MINT_AUTHORITY_RENOUNCED_V1,
+        }
+    }
+
+    /// Whether this state terminates the renunciation proposition.
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Renounced)
+    }
+}
+
+/// Apply the SPL Token-2022 `Mint` grammar to one attested account body.
+///
+/// SPL Token carries NO discriminator. What plays its role here is the
+/// admitted length together with the two `COption` tags: `Account` is 165
+/// bytes and `Multisig` is 355, so no other account this program owns can
+/// present as 82, and an 82-byte body whose tags are not one of the two
+/// admitted words is not a `Mint` this program wrote.
+fn read_mint_authority_renounced(mint: AccountObservationV1<'_>) -> Result<i128> {
+    if !MINT_ADMITTED_DATA_LENGTHS_V1
+        .iter()
+        .any(|admitted| *admitted == mint.data_len())
+    {
+        return Err(Error::VenueLengthNotAdmitted);
+    }
+    if mint.inline().len() != MINT_INLINE_BYTES_V1 || mint.executable() {
+        return Err(Error::InvalidInlineWidth);
+    }
+    let inline = mint.inline();
+    let state = MintAuthorityStateV1::from_tag(crate::u32_at(inline, MINT_AUTHORITY_TAG_OFFSET_V1)?)?;
+    let is_initialized = crate::one(inline, MINT_IS_INITIALIZED_OFFSET_V1)?;
+    let freeze_authority_tag = crate::u32_at(inline, MINT_FREEZE_AUTHORITY_TAG_OFFSET_V1)?;
+    if is_initialized != 1 {
+        // AN UNINITIALIZED MINT IS ALL ZEROES, and all zeroes reads as
+        // `COption::None`. Without this line a freshly allocated 82-byte
+        // account would prove the proposition the instant it existed. This is
+        // the row's sharpest refusal and `Pack::unpack_from_slice` refuses the
+        // same byte for the same reason.
+        return Err(Error::IncoherentVenueBody);
+    }
+    if freeze_authority_tag != COPTION_NONE_TAG_V1 && freeze_authority_tag != COPTION_SOME_TAG_V1 {
+        // A body that is not a well-formed `Mint` in its second `COption` is
+        // not one in its first either. With no discriminator to lean on, this
+        // is what stops a foreign 82-byte body decoding under these rules.
+        return Err(Error::IncoherentVenueBody);
+    }
+    if !state.is_terminal() {
+        // Not a negative answer: no answer. A terminal-window renunciation is
+        // only ever *proved* by renunciation, and "it did not renounce" is
+        // proved by the deadline passing.
+        return Err(Error::WindowNotSatisfied);
+    }
+    Ok(i128::from(state.byte()))
+}
+
 /// Interpret one sealed record into exactly one observation.
 ///
 /// Every input except `record` is a founding-time pin the caller authenticated
@@ -487,6 +624,9 @@ pub fn interpret_sealed_record_v1(
     // `set_layout`, and edits nothing else in this function.
     let atoms = match observable {
         RelayedObservableV1::DbcMigrationProgressV1 => read_dbc_graduation(state)?,
+        RelayedObservableV1::Token2022MintAuthorityRenouncedV1 => {
+            read_mint_authority_renounced(state)?
+        }
     };
     Ok(RelayedObservationOutcomeV1 {
         observable,
@@ -500,7 +640,10 @@ pub fn interpret_sealed_record_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DBC_GRADUATION_ACCEPTANCE_TABLE_V1, DBC_GRADUATION_ACCEPTANCE_TABLE_V1_COUNT};
+    use crate::{
+        DBC_GRADUATION_ACCEPTANCE_TABLE_V1, DBC_GRADUATION_ACCEPTANCE_TABLE_V1_COUNT,
+        MINT_AUTHORITY_ACCEPTANCE_TABLE_V1, MINT_AUTHORITY_ACCEPTANCE_TABLE_V1_COUNT,
+    };
 
     fn venue_body(progress: u8, is_migrated: u8, finish: u64) -> [u8; DBC_VENUE_INLINE_BYTES_V1] {
         let mut data = [0u8; DBC_VENUE_INLINE_BYTES_V1];
@@ -607,12 +750,154 @@ mod tests {
             RelayedObservableV1::from_selector(0),
             Ok(RelayedObservableV1::DbcMigrationProgressV1)
         );
-        for selector in [1u32, 2, 0xffff_ffff] {
+        assert_eq!(
+            RelayedObservableV1::from_selector(1),
+            Ok(RelayedObservableV1::Token2022MintAuthorityRenouncedV1)
+        );
+        // Driven off the table rather than off a literal, so adding a row
+        // moves this boundary instead of turning the test into a lie.
+        for selector in [2u32, 3, 0xffff_ffff] {
+            assert!(
+                !RELAYED_OBSERVABLE_TABLE_V1
+                    .iter()
+                    .any(|row| row.selector() == selector)
+            );
             assert_eq!(
                 RelayedObservableV1::from_selector(selector),
                 Err(Error::UnknownObservable)
             );
         }
+    }
+
+    fn mint_body(authority_tag: u32, is_initialized: u8, freeze_tag: u32) -> [u8; MINT_INLINE_BYTES_V1]
+    {
+        let mut data = [0u8; MINT_INLINE_BYTES_V1];
+        data[MINT_AUTHORITY_TAG_OFFSET_V1..MINT_AUTHORITY_TAG_OFFSET_V1 + 4]
+            .copy_from_slice(&authority_tag.to_le_bytes());
+        data[MINT_IS_INITIALIZED_OFFSET_V1] = is_initialized;
+        data[MINT_FREEZE_AUTHORITY_TAG_OFFSET_V1..MINT_FREEZE_AUTHORITY_TAG_OFFSET_V1 + 4]
+            .copy_from_slice(&freeze_tag.to_le_bytes());
+        data
+    }
+
+    fn mint_observation(body: &[u8]) -> AccountObservationV1<'_> {
+        AccountObservationV1::new(
+            [0x77; 32],
+            [0x2a; 32],
+            1_461_600,
+            u32::try_from(MINT_INLINE_BYTES_V1).expect("fits"),
+            body,
+            false,
+            crate::SHA256_EMPTY_DIGEST,
+        )
+        .expect("canonical mint body")
+    }
+
+    #[test]
+    fn the_rust_mint_grammar_agrees_with_the_lean_acceptance_table() {
+        assert_eq!(
+            MINT_AUTHORITY_ACCEPTANCE_TABLE_V1.len(),
+            MINT_AUTHORITY_ACCEPTANCE_TABLE_V1_COUNT,
+            "the Rust side is iterating fewer rows than Lean emitted"
+        );
+        for (index, (authority_tag, is_initialized, freeze_tag, accepted, atoms)) in
+            MINT_AUTHORITY_ACCEPTANCE_TABLE_V1.iter().enumerate()
+        {
+            let body = mint_body(*authority_tag, *is_initialized, *freeze_tag);
+            let produced = read_mint_authority_renounced(mint_observation(&body));
+            assert_eq!(
+                produced.is_ok(),
+                *accepted,
+                "row {index} disagrees with Lean about whether it is a renunciation"
+            );
+            assert_eq!(
+                produced.unwrap_or(*atoms),
+                *atoms,
+                "row {index} produced a different atom than Lean"
+            );
+        }
+    }
+
+    /// The row's sharpest refusal, stated on its own so it cannot be lost in a
+    /// table walk: a zeroed 82-byte account reads as `COption::None` in both
+    /// tags, and only `is_initialized` stands between it and a proof.
+    #[test]
+    fn a_zeroed_account_does_not_prove_a_renunciation() {
+        let zeroed = [0u8; MINT_INLINE_BYTES_V1];
+        assert_eq!(
+            read_mint_authority_renounced(mint_observation(&zeroed)),
+            Err(Error::IncoherentVenueBody)
+        );
+        // POSITIVE CONTROL in the same run: the same tags with the one byte
+        // set is the graduation of this proposition.
+        let initialized = mint_body(COPTION_NONE_TAG_V1, 1, COPTION_NONE_TAG_V1);
+        assert_eq!(
+            read_mint_authority_renounced(mint_observation(&initialized)),
+            Ok(i128::from(MINT_AUTHORITY_RENOUNCED_V1))
+        );
+    }
+
+    /// A held authority is NO ANSWER, exactly as a pre-terminal pool is, and
+    /// the two rows must not be distinguishable on that point.
+    #[test]
+    fn a_held_authority_refuses_as_an_unsatisfied_window_not_as_a_decode_failure() {
+        for freeze_tag in [COPTION_NONE_TAG_V1, COPTION_SOME_TAG_V1] {
+            let body = mint_body(COPTION_SOME_TAG_V1, 1, freeze_tag);
+            assert_eq!(
+                read_mint_authority_renounced(mint_observation(&body)),
+                Err(Error::WindowNotSatisfied),
+                "a held authority is not a low value and not a decode failure"
+            );
+        }
+    }
+
+    /// A length no `Mint` ever has refuses on the length, and the two other
+    /// accounts this program owns are exactly the lengths it must refuse.
+    #[test]
+    fn a_token_account_or_multisig_length_is_not_admitted() {
+        for foreign_len in [165_u32, 355, 81, 83, 0] {
+            assert!(
+                !MINT_ADMITTED_DATA_LENGTHS_V1
+                    .iter()
+                    .any(|admitted| *admitted == foreign_len),
+                "{foreign_len} must not be an admitted Mint length"
+            );
+        }
+        let body = mint_body(COPTION_NONE_TAG_V1, 1, COPTION_SOME_TAG_V1);
+        let wrong_length = AccountObservationV1::new(
+            [0x77; 32],
+            [0x2a; 32],
+            1_461_600,
+            165,
+            &body,
+            false,
+            [0x11; 32],
+        )
+        .expect("a body whose account is longer than its inline prefix");
+        assert_eq!(
+            read_mint_authority_renounced(wrong_length),
+            Err(Error::VenueLengthNotAdmitted)
+        );
+    }
+
+    /// The two rows must not be able to resolve each other's markets.
+    #[test]
+    fn the_two_rows_are_distinguishable_in_every_way_that_matters() {
+        let dbc = RelayedObservableV1::DbcMigrationProgressV1;
+        let mint = RelayedObservableV1::Token2022MintAuthorityRenouncedV1;
+        assert_ne!(dbc.selector(), mint.selector());
+        // A graduated pool body under the mint grammar, and a renounced mint
+        // body under the graduation grammar: both refuse.
+        let pool = venue_body(MIGRATION_PROGRESS_CREATED_POOL_V1, 1, 1_756_000_500);
+        assert!(read_mint_authority_renounced(observation(&pool)).is_err());
+        let renounced = mint_body(COPTION_NONE_TAG_V1, 1, COPTION_SOME_TAG_V1);
+        assert!(read_dbc_graduation(mint_observation(&renounced)).is_err());
+        // And their terminal atoms are different numbers, so a Product carving
+        // one observable cannot be silently resolved by the other.
+        assert_ne!(
+            read_dbc_graduation(observation(&pool)).expect("graduated"),
+            read_mint_authority_renounced(mint_observation(&renounced)).expect("renounced")
+        );
     }
 
     #[test]
@@ -623,6 +908,7 @@ mod tests {
         for observable in RELAYED_OBSERVABLE_TABLE_V1.iter().copied() {
             match observable {
                 RelayedObservableV1::DbcMigrationProgressV1 => {}
+                RelayedObservableV1::Token2022MintAuthorityRenouncedV1 => {}
             }
             let layout = observable.set_layout();
             layout
@@ -634,7 +920,18 @@ mod tests {
                 "a row's selector must round-trip to the row"
             );
         }
-        assert_eq!(RELAYED_OBSERVABLE_TABLE_V1.len(), 1);
+        assert_eq!(RELAYED_OBSERVABLE_TABLE_V1.len(), 2);
+        // The state width every row pins is the one its own grammar admits.
+        assert_eq!(
+            u32::from(RelayedObservableV1::DbcMigrationProgressV1.state_inline_bytes()),
+            DBC_ADMITTED_DATA_LENGTHS_V1[0]
+        );
+        assert_eq!(
+            u32::from(
+                RelayedObservableV1::Token2022MintAuthorityRenouncedV1.state_inline_bytes()
+            ),
+            MINT_ADMITTED_DATA_LENGTHS_V1[0]
+        );
     }
 
     #[test]

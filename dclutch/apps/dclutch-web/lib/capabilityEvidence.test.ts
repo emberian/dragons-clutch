@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -180,6 +180,67 @@ describe('walls are named and cited, never softened', () => {
       for (const word of FORBIDDEN) {
         expect(prose.includes(word), `${candidate.id} says "${word}". A wall states what stops it; it does not promise.`).toBe(false);
       }
+    }
+  });
+});
+
+/**
+ * The one wall in this catalogue that states an ABSENCE, held to the absence.
+ *
+ * `claims.conserve` carried a single wall — "no route renders a control for it
+ * and no browser module builds its transaction" — which is true and reads as a
+ * complaint about the UI. A reader concludes the wire is live and only the page
+ * is missing. It is not: the contract declares `DCLCNS01`, the operator planner
+ * is landed, and the Claims program has no handler that dispatches it, so there
+ * is nothing on chain for a control to reach. Its sibling `claims.represent`
+ * already carries a second wall naming the real campaign wall; this one did not.
+ *
+ * A wall that states an absence is a claim about the tree, so it is measured
+ * like one, in both directions: while the Claims program has no conservation
+ * route the wall must stand, and the moment one lands the wall must come off in
+ * the same commit. That is the same two-way shape the twin-identity DIVERGED
+ * map uses, and the same reason — an exemption outliving its cause is a hole
+ * nobody is watching.
+ */
+const CLAIMS_PROGRAM_SOURCE = join(repoRoot, 'programs', 'dclutch-claims-sbf', 'src');
+const OPERATOR_PLANNER = join(repoRoot, 'crates', 'dclutch-operator', 'src', 'claims_conservation_v1.rs');
+/** What a Claims-side conservation handler would have to name to exist at all. */
+const CONSERVATION_MARKER = /dclutch_claims_conservation_contract|CLAIMS_CONSERVATION_REQUEST_MAGIC_V1/;
+
+function namesTheConservationWire(path: string): boolean {
+  return CONSERVATION_MARKER.test(readFileSync(path, 'utf8'));
+}
+
+describe('a wall that states an absence is held to the absence', () => {
+  it('has an instrument that can find the wire where the wire is', () => {
+    // The positive control. "Nothing matched" and "the scan was pointed at the
+    // wrong thing" log identically, and this is the difference between them:
+    // the operator planner names the wire, so a scan that cannot see it there
+    // proves nothing about the program directory.
+    expect(existsSync(OPERATOR_PLANNER)).toBe(true);
+    expect(namesTheConservationWire(OPERATOR_PLANNER)).toBe(true);
+  });
+
+  it('keeps the on-chain wall exactly as long as the Claims program has no conservation route', () => {
+    const conserve = CAPABILITY_ACTIONS_V1.find((candidate) => candidate.id === 'claims.conserve');
+    expect(conserve, 'claims.conserve left the catalogue; this gate needs a new subject').toBeDefined();
+    if (conserve === undefined) return;
+
+    const dispatched = readdirSync(CLAIMS_PROGRAM_SOURCE)
+      .filter((entry) => entry.endsWith('.rs'))
+      .some((entry) => namesTheConservationWire(join(CLAIMS_PROGRAM_SOURCE, entry)));
+    const stated = conserve.walls.some((held) => held.statement.includes('absent on chain'));
+
+    if (dispatched) {
+      expect(
+        stated,
+        'the Claims program now names the conservation wire, so the wall saying it is absent on chain is false and must come off in the commit that landed the route.',
+      ).toBe(false);
+    } else {
+      expect(
+        stated,
+        'the Claims program dispatches no conservation route, so claims.conserve must say the wire is absent on chain — without it a reader concludes only the UI is missing.',
+      ).toBe(true);
     }
   });
 });

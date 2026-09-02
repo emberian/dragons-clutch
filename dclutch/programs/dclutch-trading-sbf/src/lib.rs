@@ -346,6 +346,27 @@ pub enum TradingSbfError {
     /// Distinct from [`TradingSbfError::Root`], which this route already raises
     /// when the width cannot be DECODED at all: this one decoded and disagreed.
     DescriptorRootWidth = 0x4016,
+    /// The authenticated admitted-AOT frame or one of its Registry records.
+    ///
+    /// Raised only before the accelerator is invoked, by
+    /// `admitted_composition_v3::validate_authenticated_frame` and the five
+    /// `require_record_pair` calls beneath it. Split out of `Content`
+    /// (decision 0007) because `Content` has 2,126 sites in this program and
+    /// the honest equity Add and a hostile Position substitution were refusing
+    /// with the same one -- which makes the hostile assertion a universal donor
+    /// and the honest wall unlocalizable.
+    AdmittedFrame = 0x4017,
+    /// The admitted-AOT register-bank transport: encoding, chunking, caller
+    /// authority width, or the authenticated input scratch pages.
+    ///
+    /// Also pre-CPI. Same split, same reason.
+    AdmittedTransport = 0x4018,
+    /// The admitted-AOT invocation context: an identity that is not a valid
+    /// `ContentId`, or a strategy that names no certificate, admission, or
+    /// artifact release.
+    ///
+    /// Also pre-CPI. Same split, same reason.
+    AdmittedContext = 0x4019,
 }
 
 impl TradingSbfError {
@@ -355,7 +376,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 26] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -379,6 +400,9 @@ impl TradingSbfError {
         Self::DescriptorKind,
         Self::DescriptorManifestEntry,
         Self::DescriptorRootWidth,
+        Self::AdmittedFrame,
+        Self::AdmittedTransport,
+        Self::AdmittedContext,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -411,6 +435,9 @@ impl TradingSbfError {
             Self::DescriptorKind => 20,
             Self::DescriptorManifestEntry => 21,
             Self::DescriptorRootWidth => 22,
+            Self::AdmittedFrame => 23,
+            Self::AdmittedTransport => 24,
+            Self::AdmittedContext => 25,
         }
     }
 }

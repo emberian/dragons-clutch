@@ -4241,7 +4241,7 @@ fn execute_authenticated_hot_v3(
     // The local-effect discipline is folded into the projection walk above, so
     // this checkpoint now brackets nothing: it is kept so the phase table stays
     // comparable across the lanes that measured the separate walk.
-    let locally_mutated = projected_effects.locally_mutated;
+    let mut participation = projected_effects.participation;
     hot_cu_checkpoint!("p7-effect-projection");
     hot_cu_checkpoint!("p7-local-effect-discipline");
     if root_lifecycle_close {
@@ -4295,7 +4295,7 @@ fn execute_authenticated_hot_v3(
         selected_program.to_bytes(),
         &aliases,
         &child_walk,
-        locally_mutated.as_deref(),
+        participation.as_deref_mut(),
         authenticated_series_expiry_replay,
         authenticated_series_expiry_rent_credit,
     )?;
@@ -4398,6 +4398,7 @@ fn execute_authenticated_hot_v3(
             selected_program,
             funding_profile,
             lifecycle_plans: &lifecycle_plans,
+            participation: participation.as_deref(),
             root_lifecycle_close,
             aliases: &aliases,
             output_lamports: &output_lamports,
@@ -4445,6 +4446,11 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     root_lifecycle_close: bool,
     aliases: &'a [usize],
     output_lamports: &'a [u64],
+    // Sixteen bytes on the boxed input, and they buy the one thing the lamport
+    // plan cannot derive for itself: which coordinates a declared child route
+    // reached. `None` when the Effect declares no child route at all, which is
+    // exactly when the plan IS the sole authority.
+    participation: Option<&'a [CoordinateParticipationV3]>,
     rent: &'a Rent,
     immutable_root_header: &'a [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
     root_prestate: [u8; 32],
@@ -4548,6 +4554,7 @@ fn execute_prepared_child_routes_v3(
         prepared.scalars,
         prepared.identities,
         prepared.effect_accounts,
+        prepared.aliases,
         prepared.request_bank,
         prepared.family_request,
         prepared.request_digest,
@@ -4603,6 +4610,7 @@ fn commit_prepared_post_children_v3(
         prepared.runtime_accounts,
         prepared.aliases,
         prepared.output_lamports,
+        prepared.participation,
         prepared.rent,
         &mut prepared.root_commit_plan,
     )?;
@@ -4620,6 +4628,7 @@ fn commit_prepared_post_children_v3(
             prepared.runtime_accounts,
             prepared.aliases,
             prepared.output_lamports,
+            prepared.participation,
             prepared.rent,
             &prepared.root_commit_plan,
         )?;
@@ -5354,7 +5363,7 @@ struct ProjectedEffectsV3 {
     /// One flag per representative coordinate the local effects mutate, or
     /// `None` when the Effect declares no child route and the answer has no
     /// consumer. Folded out of the projection's own walk.
-    locally_mutated: Option<Vec<bool>>,
+    participation: Option<Vec<CoordinateParticipationV3>>,
 }
 
 /// Direct-only semantic cross-check retained through child execution.
@@ -6135,10 +6144,13 @@ fn project_hot_effects_v3(
             .ok_or(TradingSbfError::Transition)?;
     }
     let mut written = ScratchVecV1::filled(&phase, &false, binding_count)?;
-    let mut locally_mutated = if effect.route_count() == 0 {
+    let mut participation = if effect.route_count() == 0 {
         None
     } else {
-        Some(try_projection_bank_v3(&false, aliases.len())?)
+        Some(try_projection_bank_v3(
+            &CoordinateParticipationV3::default(),
+            aliases.len(),
+        )?)
     };
     hot_heap_mark!("effects-discipline-banks");
     hot_cu_checkpoint!("p7e-banks");
@@ -6175,7 +6187,7 @@ fn project_hot_effects_v3(
                     resolved,
                     aliases,
                     &mut written,
-                    locally_mutated.as_deref_mut(),
+                    participation.as_deref_mut(),
                 )
             }) {
             Ok(()) => Ok(()),
@@ -6194,7 +6206,7 @@ fn project_hot_effects_v3(
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
         requests,
-        locally_mutated,
+        participation,
     })
 }
 
@@ -8624,21 +8636,22 @@ fn require_lifecycle_replan_agreement_v4(
 /// conjunction written in the other order - and the agreement still refuses
 /// first-class if they ever disagree.
 ///
-/// `locally_mutated` is `None` when the Effect declares no child route, which
-/// is precisely when route disjointness has no consumer.
+/// `participation` is `None` when the Effect declares no child route, which is
+/// precisely when route disjointness has no consumer and the local plan is the
+/// only thing that can move a lamport.
 fn inspect_local_effect_discipline_v5(
     plans: &[PreparedLifecycleInvocationV3],
     resolved: ResolvedEffectV3,
     aliases: &[usize],
     written: &mut [bool],
-    locally_mutated: Option<&mut [bool]>,
+    participation: Option<&mut [CoordinateParticipationV3]>,
 ) -> Result<(), ProgramError> {
     require_root_write_is_state_only(resolved, aliases)?;
     if selected_root_lifecycle_close_v3(plans)? {
         require_no_root_local_mutation_v3(resolved, aliases)?;
     }
     inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, written)?;
-    if let Some(bank) = locally_mutated {
+    if let Some(bank) = participation {
         mark_local_mutation(resolved, aliases, bank)?;
     }
     Ok(())
@@ -9868,7 +9881,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     // Folded out of the one walk over this Effect that
     // `require_local_effect_discipline_v5` already makes, at these exact
     // registers. `None` only when that walk saw no route to answer for.
-    locally_mutated: Option<&[bool]>,
+    participation: Option<&mut [CoordinateParticipationV3]>,
     authenticated_series_expiry_replay: bool,
     authenticated_series_expiry_rent_credit: [u8; 32],
 ) -> Result<ChildCallerBumpsV4, ProgramError> {
@@ -9882,8 +9895,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     if effect.route_count() == 0 {
         return Ok(caller_bumps);
     }
-    let locally_mutated = locally_mutated.ok_or(TradingSbfError::Content)?;
-    if locally_mutated.len() != aliases.len() {
+    let participation = participation.ok_or(TradingSbfError::Content)?;
+    if participation.len() != aliases.len() {
         return Err(TradingSbfError::Content.into());
     }
     let successor_account_count = effect
@@ -9964,7 +9977,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     request_bank,
                     family_request,
                     aliases,
-                    locally_mutated,
+                    participation,
                     effect_accounts,
                     authenticated_series_expiry_replay,
                     authenticated_series_expiry_rent_credit,
@@ -9976,10 +9989,10 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     },
                 )?
             };
-            require_child_disjoint_from_local(
+            record_child_reach_and_require_disjoint_from_local(
                 invocation,
                 aliases,
-                locally_mutated,
+                participation,
                 allowed_local_overlap,
             )?;
             match invocation.role {
@@ -10029,16 +10042,18 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     {
                         let composition = claims_composition.ok_or(TradingSbfError::Content)?;
                         let selected = claims_program.ok_or(TradingSbfError::Release)?;
-                        if invocation_index != 0
-                            || !(composition.admit_route() == Some(route)
-                                || composition.mutation_route() == route
-                                || composition.close_route() == Some(route))
-                            || invocation_accounts_contain_program(
-                                invocation,
-                                effect_accounts,
-                                selected.key,
-                            )? != 1
-                        {
+                        // Three conjuncts behind one `Content` is a search, not
+                        // a refusal, and this one cost a wall: the route
+                        // reached here for the first time on 2026-09-01 and
+                        // published the same code as 2,124 other sites. The
+                        // wire still carries one code -- these causes really
+                        // are one accusation, "this is not a child route this
+                        // composition owns" -- so the distinction goes where a
+                        // reader looks first.
+                        if invocation_index != 0 {
+                            solana_program::log::sol_log(
+                                "dclutch-hot-claims-preflight: nonzero invocation index",
+                            );
                             return Err(TradingSbfError::Content.into());
                         }
                         caller_bumps.record_wire_bytes(claims_child_wire_capacity_v3(
@@ -10211,6 +10226,15 @@ fn execute_child_routes_v3<'accounts, 'info>(
     scalars: &[u64],
     identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
+    // Per-logical-coordinate representative table. It came BACK onto this
+    // signature on 2026-09-01 for a second reader: the Claims route's
+    // "the child frame carries the child program exactly once" check counted
+    // raw keys, so a coordinate the frame's own profile declares an alias
+    // counted as a second occurrence and refused every representation route.
+    // It is a borrowed slice, so carrying it materialises nothing -- the
+    // earlier removal was about not BUILDING the table here, and it is built
+    // once for the projection either way.
+    aliases: &[usize],
     request_bank: &[u8],
     family_request: &[u8],
     request_digest: [u8; 32],
@@ -10461,6 +10485,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 invocation,
                                 resolved,
                                 effect_accounts,
+                                aliases,
                                 request_bank,
                                 family_request,
                                 prior_receipt,
@@ -10807,7 +10832,7 @@ fn active_roles_v3(
 fn mark_local_mutation(
     effect: ResolvedEffectV3,
     aliases: &[usize],
-    output: &mut [bool],
+    output: &mut [CoordinateParticipationV3],
 ) -> Result<(), ProgramError> {
     let coordinates = match effect {
         ResolvedEffectV3::TransferLamports {
@@ -10826,15 +10851,16 @@ fn mark_local_mutation(
     };
     for coordinate in coordinates.into_iter().flatten() {
         let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Content)?;
-        *output
+        output
             .get_mut(representative)
-            .ok_or(TradingSbfError::Content)? = true;
+            .ok_or(TradingSbfError::Content)?
+            .mark_local_mutation();
     }
     Ok(())
 }
 
 /// Refuse a child invocation that reaches a coordinate this Effect's own local
-/// operations mutate.
+/// operations mutate, and record that it reached the rest.
 ///
 /// The coordinates are ENUMERATED, never COLLECTED. This used to gather them
 /// into a `Vec<usize>` and then walk it, once per invocation, on an allocator
@@ -10843,24 +10869,119 @@ fn mark_local_mutation(
 /// second `extend` pays for. The check is per coordinate and order-independent,
 /// so the window walk answers directly and the first offending coordinate
 /// refuses in exactly the same place it did before.
-fn require_child_disjoint_from_local(
+/// What one logical coordinate participates in during this execution.
+///
+/// Two facts, one bank, written by two walks that are not allowed to disagree
+/// about a coordinate. The Effect projection marks every coordinate its own
+/// local operations mutate; the preflight child walk marks every coordinate a
+/// declared child invocation reaches. `record_child_reach_and_require_disjoint_
+/// from_local` refuses a coordinate carrying both, outside the closed
+/// `AllowedLocalOverlapV3` set.
+///
+/// That refusal is what the commit's lamport authority rests on. A child-reached
+/// coordinate is never a local-effect target, so `output_lamports` for it is its
+/// own observed PRESTATE -- the plan holds no opinion about it at all -- and
+/// writing that plan back could only ever REVERT what the child did. Keeping the
+/// two facts in one bank is not a space saving: it is what makes it impossible
+/// for the walk that proves disjointness and the walk that relies on it to be
+/// looking at different coordinates.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CoordinateParticipationV3(u8);
+
+impl CoordinateParticipationV3 {
+    const LOCAL_MUTATION: u8 = 1;
+    const CHILD_REACH: u8 = 2;
+
+    /// No Effect declares child routes, so the local plan is the sole authority.
+    const PLAN_IS_SOLE_AUTHORITY: Self = Self(Self::LOCAL_MUTATION);
+
+    const fn locally_mutated(self) -> bool {
+        self.0 & Self::LOCAL_MUTATION != 0
+    }
+
+    const fn child_reached(self) -> bool {
+        self.0 & Self::CHILD_REACH != 0
+    }
+
+    fn mark_local_mutation(&mut self) {
+        self.0 |= Self::LOCAL_MUTATION;
+    }
+
+    fn mark_child_reach(&mut self) {
+        self.0 |= Self::CHILD_REACH;
+    }
+}
+
+/// What the commit may do to one coordinate's lamports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommittedLamportsV3 {
+    /// This Effect declared the movement, so its plan is what lands.
+    Apply,
+    /// The account already holds the planned balance; there is nothing to do.
+    Settled,
+    /// A declared child route reached this coordinate and what it left stands.
+    ///
+    /// The commit has no plan to apply here -- see `CoordinateParticipationV3`
+    /// -- so the only thing writing would accomplish is undoing the child.
+    ChildPoststate,
+    /// Lamports moved and nothing in this execution declared that they would.
+    Unexplained,
+}
+
+/// The commit's lamport authority over ONE coordinate, as a pure decision.
+///
+/// Separated from the account walk so all four arms can be driven directly. The
+/// arm that matters is `ChildPoststate`: the registered creation route is the
+/// first in the protocol whose child CPI CREATES AND FUNDS a frame account --
+/// Custody's replay and its vault -- and until this existed the commit wrote the
+/// observed-vacant zero back over the child's rent and then refused its own
+/// postcondition, `require_committed_rent_exemption_v3`, on the account it had
+/// just emptied. Measured on real ELFs 2026-09-01: coordinate 20, 0 lamports
+/// against 288 bytes needing 2,895,360, `Commit` 0x4005 at 1,205,519 CU.
+///
+/// `Unexplained` is the guard that used to be accidental. The old walk wrote the
+/// prestate back over ANY unexplained movement, which the runtime then rejected
+/// as an unbalanced instruction -- a real refusal, but one that named nothing and
+/// pointed nowhere. It is stated here instead.
+const fn committed_lamports_v3(
+    planned: u64,
+    observed: u64,
+    participation: CoordinateParticipationV3,
+) -> CommittedLamportsV3 {
+    if participation.locally_mutated() {
+        CommittedLamportsV3::Apply
+    } else if observed == planned {
+        CommittedLamportsV3::Settled
+    } else if participation.child_reached() {
+        CommittedLamportsV3::ChildPoststate
+    } else {
+        CommittedLamportsV3::Unexplained
+    }
+}
+
+fn record_child_reach_and_require_disjoint_from_local(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     aliases: &[usize],
-    locally_mutated: &[bool],
+    participation: &mut [CoordinateParticipationV3],
     allowed_local_overlap: AllowedLocalOverlapV3,
 ) -> Result<(), ProgramError> {
-    let refuse_window = |start: usize, end: usize| -> Result<(), ProgramError> {
+    let mut refuse_window = |start: usize, end: usize| -> Result<(), ProgramError> {
         let mut coordinate = start;
         while coordinate < end {
             let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Content)?;
-            if locally_mutated
-                .get(representative)
-                .copied()
-                .ok_or(TradingSbfError::Content)?
-                && !allowed_local_overlap.permits(representative)
-            {
+            let slot = participation
+                .get_mut(representative)
+                .ok_or(TradingSbfError::Content)?;
+            if slot.locally_mutated() && !allowed_local_overlap.permits(representative) {
                 return Err(TradingSbfError::Content.into());
             }
+            // Marked for EVERY window this walk admits, the permitted overlaps
+            // included: the mark says a declared child route reaches the
+            // coordinate, which is true whether or not the local effect also
+            // touches it. The commit reads it beside `locally_mutated` and the
+            // local plan wins when both are set, so a permitted overlap keeps
+            // exactly the authority it had.
+            slot.mark_child_reach();
             coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         Ok(())
@@ -10929,7 +11050,7 @@ fn series_expiry_local_replay_overlap_v1(
     request_bank: &[u8],
     family_request: &[u8],
     aliases: &[usize],
-    locally_mutated: &[bool],
+    participation: &[CoordinateParticipationV3],
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     authenticated_series_expiry_replay: bool,
     authenticated_series_expiry_rent_credit: [u8; 32],
@@ -10995,11 +11116,16 @@ fn series_expiry_local_replay_overlap_v1(
     let logical_ticket = SERIES_EXPIRE_CORE_ROUTE_START_V1 + CORE_TICKET_LOCAL_V1;
     if aliases.get(logical_root).copied() != Some(0)
         || aliases.get(logical_ticket).copied() != Some(SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
-        || !locally_mutated.first().copied().unwrap_or(false)
-        || !locally_mutated
+        || !participation
+            .first()
+            .copied()
+            .unwrap_or_default()
+            .locally_mutated()
+        || !participation
             .get(SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
             .copied()
-            .unwrap_or(false)
+            .unwrap_or_default()
+            .locally_mutated()
     {
         return Ok(AllowedLocalOverlapV3::None);
     }
@@ -11222,22 +11348,52 @@ fn require_no_common_projection_child_accounts_v3(
     feature = "series-family",
     feature = "dealer-family"
 ))]
-fn invocation_accounts_contain_program(
+/// Count occurrences of the child program in one invocation frame, resolving
+/// aliases the way every other check in this walk already does.
+///
+/// AN ALIAS IS NOT A SECOND OCCURRENCE. A coordinate whose representative is
+/// another coordinate carries no privilege of its own -- `authenticate` reads
+/// `representative_privileges` for it (`v2.rs:2360-2369`), and `cc228cdd` made
+/// a nonzero privilege on one a refusal -- so counting its key as a second
+/// appearance of the child program contradicts the frame's own profile.
+///
+/// This was the wall behind the Structured composition wall, measured on real
+/// ELFs on 2026-09-01: the Claims representation wire fills an INACTIVE slot
+/// with the Claims program id, and `IssueStructured`/`UnwrapStructured` are the
+/// only actions that leave one inactive -- `RepresentationRequestV2::validate`
+/// requires their actor-position revision ABSENT (`request.rs:494-500`). So the
+/// program appeared at coordinate 19 and again at the placeholder 28, which the
+/// operator's own AccountProfile already declares an `AuthenticatedRouteAlias`
+/// of 19, and the preflight refused `2 != 1`. Every selected-outcome action
+/// carries a live position there and counts one, which is why no route had ever
+/// reached it.
+///
+/// The refusal is not weakened: two DISTINCT representative coordinates both
+/// carrying the child program still refuse.
+pub(crate) fn invocation_accounts_contain_program(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    aliases: &[usize],
     program: &Pubkey,
 ) -> Result<usize, ProgramError> {
+    let count_window = |start: usize, end: usize| -> Result<usize, ProgramError> {
+        let mut total = 0_usize;
+        let mut coordinate = start;
+        while coordinate < end {
+            if *aliases.get(coordinate).ok_or(TradingSbfError::Content)? == coordinate {
+                total = total
+                    .checked_add(accounts.count_program_in_window(coordinate, 1, program)?)
+                    .ok_or(TradingSbfError::Content)?;
+            }
+            coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Ok(total)
+    };
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    let mut count = accounts.count_program_in_window(
-        fixed_start,
-        fixed_end
-            .checked_sub(fixed_start)
-            .ok_or(TradingSbfError::Content)?,
-        program,
-    )?;
+    let mut count = count_window(fixed_start, fixed_end)?;
     let item_count = usize::from(invocation.item_account_count);
     let stride = usize::from(invocation.item_account_stride);
     let mut item = 0_u32;
@@ -11255,11 +11411,7 @@ fn invocation_accounts_contain_program(
             .checked_add(item_count)
             .ok_or(TradingSbfError::Content)?;
         count = count
-            .checked_add(accounts.count_program_in_window(
-                start,
-                end.checked_sub(start).ok_or(TradingSbfError::Content)?,
-                program,
-            )?)
+            .checked_add(count_window(start, end)?)
             .ok_or(TradingSbfError::Content)?;
         item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
@@ -11528,6 +11680,7 @@ fn execute_claims_route_digest_v3<'info>(
     invocation_index: u32,
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
+    aliases: &[usize],
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
@@ -11544,6 +11697,7 @@ fn execute_claims_route_digest_v3<'info>(
         invocation_index,
         invocation,
         effect_accounts,
+        aliases,
         request_bank,
         family_request,
         prior_receipt,
@@ -13006,6 +13160,7 @@ fn commit_non_root_effects_into_v3(
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     output_lamports: &[u64],
+    participation: Option<&[CoordinateParticipationV3]>,
     rent: &Rent,
     plan: &mut RootCommitPlanV3,
 ) -> Result<(), ProgramError> {
@@ -13014,7 +13169,14 @@ fn commit_non_root_effects_into_v3(
     {
         return Err(TradingSbfError::Commit.into());
     }
-    commit_output_lamports_v3(effect, accounts, aliases, output_lamports, false)?;
+    commit_output_lamports_v3(
+        effect,
+        accounts,
+        aliases,
+        output_lamports,
+        participation,
+        false,
+    )?;
     let mut ordinal = 0_u32;
     let mut fixed = 0_u16;
     while fixed < effect.fixed_operation_count() {
@@ -13056,6 +13218,7 @@ fn commit_non_root_effects_v3(
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     output_lamports: &[u64],
+    participation: Option<&[CoordinateParticipationV3]>,
     rent: &Rent,
 ) -> Result<RootCommitPlanV3, ProgramError> {
     let mut plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
@@ -13067,6 +13230,7 @@ fn commit_non_root_effects_v3(
         accounts,
         aliases,
         output_lamports,
+        participation,
         rent,
         &mut plan,
     )?;
@@ -13083,13 +13247,21 @@ fn commit_root_effects_v3(
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     output_lamports: &[u64],
+    participation: Option<&[CoordinateParticipationV3]>,
     rent: &Rent,
     plan: &RootCommitPlanV3,
 ) -> Result<(), ProgramError> {
     if plan.ordinals != root_commit_ordinal_count_v3(effect, tail_count)? {
         return Err(TradingSbfError::Commit.into());
     }
-    commit_output_lamports_v3(effect, accounts, aliases, output_lamports, true)?;
+    commit_output_lamports_v3(
+        effect,
+        accounts,
+        aliases,
+        output_lamports,
+        participation,
+        true,
+    )?;
     let item_operations = u32::from(effect.item_operation_count());
     for (byte_index, byte) in plan.bits.iter().enumerate() {
         let mut remaining = *byte;
@@ -13132,11 +13304,18 @@ fn commit_root_effects_v3(
     require_committed_rent_exemption_v3(accounts, aliases, rent, true)
 }
 
+/// Land the planned lamports, and leave a declared child route's poststate alone.
+///
+/// `participation` is `None` only when the Effect declares no child route, and
+/// then every coordinate is treated as the plan's: with no child there is
+/// nothing else in the transaction that could have moved a lamport, so the two
+/// readings are the same walk.
 fn commit_output_lamports_v3(
     effect: SelectedEffectProgramV4<'_>,
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     output_lamports: &[u64],
+    participation: Option<&[CoordinateParticipationV3]>,
     root_only: bool,
 ) -> Result<(), ProgramError> {
     for (coordinate, account) in accounts.iter().enumerate() {
@@ -13152,10 +13331,20 @@ fn commit_output_lamports_v3(
         let output = *output_lamports
             .get(coordinate)
             .ok_or(TradingSbfError::Commit)?;
-        if account.lamports() != output {
-            **account
-                .try_borrow_mut_lamports()
-                .map_err(|_| TradingSbfError::Commit)? = output;
+        let participation = match participation {
+            Some(bank) => *bank.get(coordinate).ok_or(TradingSbfError::Commit)?,
+            None => CoordinateParticipationV3::PLAN_IS_SOLE_AUTHORITY,
+        };
+        match committed_lamports_v3(output, account.lamports(), participation) {
+            CommittedLamportsV3::Apply => {
+                if account.lamports() != output {
+                    **account
+                        .try_borrow_mut_lamports()
+                        .map_err(|_| TradingSbfError::Commit)? = output;
+                }
+            }
+            CommittedLamportsV3::Settled | CommittedLamportsV3::ChildPoststate => {}
+            CommittedLamportsV3::Unexplained => return Err(TradingSbfError::Commit.into()),
         }
     }
     Ok(())
@@ -14283,18 +14472,18 @@ mod tests {
         let root = usize::from(invocation.fixed_account_start)
             + dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ROOT_V3;
         aliases[root] = 0;
-        let mut locally_mutated = vec![false; logical_count];
-        locally_mutated[0] = true;
+        let mut participation = vec![CoordinateParticipationV3::default(); logical_count];
+        participation[0].mark_local_mutation();
 
         assert_eq!(
             fractional_local_root_overlap_v3(invocation, &request, &request, &aliases)
                 .expect("exact overlap"),
             Some(0)
         );
-        require_child_disjoint_from_local(
+        record_child_reach_and_require_disjoint_from_local(
             invocation,
             &aliases,
-            &locally_mutated,
+            &mut participation,
             AllowedLocalOverlapV3::FractionalRoot(0),
         )
         .expect("sole root overlap");
@@ -14307,21 +14496,21 @@ mod tests {
             None
         );
         assert!(
-            require_child_disjoint_from_local(
+            record_child_reach_and_require_disjoint_from_local(
                 invocation,
                 &aliases,
-                &locally_mutated,
+                &mut participation,
                 AllowedLocalOverlapV3::None,
             )
             .is_err()
         );
 
-        locally_mutated[6] = true;
+        participation[6].mark_local_mutation();
         assert!(
-            require_child_disjoint_from_local(
+            record_child_reach_and_require_disjoint_from_local(
                 invocation,
                 &aliases,
-                &locally_mutated,
+                &mut participation,
                 AllowedLocalOverlapV3::FractionalRoot(0),
             )
             .is_err(),
@@ -14369,28 +14558,37 @@ mod tests {
         aliases[series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1 + 14] = 0;
         aliases[series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1 + 15] =
             series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1;
-        let mut locally_mutated = vec![false; series_expiry_v1::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1];
-        locally_mutated[0] = true;
-        locally_mutated[series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1] = true;
+        let mut participation = vec![
+            CoordinateParticipationV3::default();
+            series_expiry_v1::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1
+        ];
+        participation[0].mark_local_mutation();
+        participation[series_expiry_v1::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1]
+            .mark_local_mutation();
         let exact = AllowedLocalOverlapV3::SeriesExpiryReplay { root: 0, ticket: 5 };
 
-        require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, exact)
-            .expect("exact replay pair");
+        record_child_reach_and_require_disjoint_from_local(
+            invocation,
+            &aliases,
+            &mut participation,
+            exact,
+        )
+        .expect("exact replay pair");
         assert!(
-            require_child_disjoint_from_local(
+            record_child_reach_and_require_disjoint_from_local(
                 invocation,
                 &aliases,
-                &locally_mutated,
+                &mut participation,
                 AllowedLocalOverlapV3::FractionalRoot(0),
             )
             .is_err(),
             "root-only overlap cannot omit Ticket",
         );
         assert!(
-            require_child_disjoint_from_local(
+            record_child_reach_and_require_disjoint_from_local(
                 invocation,
                 &aliases,
-                &locally_mutated,
+                &mut participation,
                 AllowedLocalOverlapV3::FractionalRoot(5),
             )
             .is_err(),
@@ -14398,10 +14596,15 @@ mod tests {
         );
 
         aliases[series_expiry_v1::SERIES_EXPIRE_CORE_ROUTE_START_V1] = 6;
-        locally_mutated[6] = true;
+        participation[6].mark_local_mutation();
         assert!(
-            require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, exact)
-                .is_err(),
+            record_child_reach_and_require_disjoint_from_local(
+                invocation,
+                &aliases,
+                &mut participation,
+                exact
+            )
+            .is_err(),
             "a third representative cannot ride the fixed pair",
         );
     }
@@ -16413,6 +16616,103 @@ mod tests {
         )
     }
 
+    /// The four arms of the commit's lamport authority, driven directly.
+    ///
+    /// `ChildPoststate` is the one that did not exist. Registered creation is
+    /// the first route in the protocol whose child CPI creates and funds a frame
+    /// account, and the walk used to write the observed-vacant plan back over
+    /// the rent Custody had just deposited.
+    #[test]
+    fn the_commit_owns_a_planned_lamport_and_never_a_child_deposited_one() {
+        let none = CoordinateParticipationV3::default();
+        let mut local = CoordinateParticipationV3::default();
+        local.mark_local_mutation();
+        let mut child = CoordinateParticipationV3::default();
+        child.mark_child_reach();
+        let mut both = CoordinateParticipationV3::default();
+        both.mark_local_mutation();
+        both.mark_child_reach();
+
+        // The plan applies where the Effect declared the movement, and the
+        // declaration is what decides it -- not whether the value differs.
+        assert_eq!(
+            committed_lamports_v3(500, 100, local),
+            CommittedLamportsV3::Apply
+        );
+        assert_eq!(
+            committed_lamports_v3(500, 500, local),
+            CommittedLamportsV3::Apply
+        );
+        // A permitted local/child overlap keeps exactly the authority it had.
+        assert_eq!(
+            committed_lamports_v3(500, 100, both),
+            CommittedLamportsV3::Apply
+        );
+        // Undeclared and unmoved: nothing to do, and this is the overwhelming
+        // majority of every frame.
+        assert_eq!(
+            committed_lamports_v3(100, 100, none),
+            CommittedLamportsV3::Settled
+        );
+        assert_eq!(
+            committed_lamports_v3(100, 100, child),
+            CommittedLamportsV3::Settled
+        );
+        // THE REPAIR. 2,895,360 is the exact rent a Custody replay needs; the
+        // plan says the zero it observed before the child ran.
+        assert_eq!(
+            committed_lamports_v3(0, 2_895_360, child),
+            CommittedLamportsV3::ChildPoststate
+        );
+        // And the guard that used to be an unbalanced-instruction abort with no
+        // name on it. No local plan, no declared child: nothing explains this.
+        assert_eq!(
+            committed_lamports_v3(0, 2_895_360, none),
+            CommittedLamportsV3::Unexplained
+        );
+        assert_eq!(
+            committed_lamports_v3(2_895_360, 0, none),
+            CommittedLamportsV3::Unexplained
+        );
+    }
+
+    /// The child-reach mark is written by the walk that proves disjointness.
+    ///
+    /// Not a separate pass over the same windows: one walk, so the fact the
+    /// commit relies on and the fact that makes relying on it sound cannot be
+    /// looking at different coordinates.
+    #[test]
+    fn the_disjointness_walk_records_every_coordinate_the_child_reaches() {
+        let request = fractional_wrap_request();
+        let invocation = fractional_wrap_invocation(request.len());
+        let start = usize::from(invocation.fixed_account_start);
+        let count = usize::from(invocation.fixed_account_count);
+        let logical_count = start + count;
+        let aliases = (0..logical_count).collect::<Vec<_>>();
+        let mut participation = vec![CoordinateParticipationV3::default(); logical_count];
+
+        record_child_reach_and_require_disjoint_from_local(
+            invocation,
+            &aliases,
+            &mut participation,
+            AllowedLocalOverlapV3::None,
+        )
+        .expect("no local mutation to collide with");
+
+        for (coordinate, slot) in participation.iter().enumerate() {
+            let inside = (start..logical_count).contains(&coordinate);
+            assert_eq!(
+                slot.child_reached(),
+                inside,
+                "coordinate {coordinate} child-reach mark disagrees with the invocation window",
+            );
+            assert!(!slot.locally_mutated(), "the walk must mark nothing else");
+        }
+        // A coordinate OUTSIDE every child window stays unmarked, which is what
+        // makes `Unexplained` reachable rather than decorative.
+        assert!(start > 0 && !participation[0].child_reached());
+    }
+
     /// The commit-last split is a REAL ordering, and the second pass really
     /// writes.
     ///
@@ -16451,6 +16751,7 @@ mod tests {
             &accounts,
             &aliases,
             &output_lamports,
+            None,
             &rent,
         )
         .expect("non-root commit pass");
@@ -16495,6 +16796,7 @@ mod tests {
             &accounts,
             &aliases,
             &output_lamports,
+            None,
             &rent,
             &plan,
         )
@@ -16546,6 +16848,7 @@ mod tests {
             &accounts,
             &aliases,
             &output_lamports,
+            None,
             &rent,
         )
         .expect("non-root commit pass");
@@ -16558,6 +16861,7 @@ mod tests {
                 &accounts,
                 &aliases,
                 &output_lamports,
+                None,
                 &rent,
                 &plan,
             ),
@@ -16591,6 +16895,7 @@ mod tests {
             &accounts,
             &aliases,
             &output_lamports,
+            None,
             &rent,
         )
         .expect("non-root commit pass at tail one");
@@ -16604,6 +16909,7 @@ mod tests {
                 &accounts,
                 &aliases,
                 &output_lamports,
+                None,
                 &rent,
                 &plan,
             ),

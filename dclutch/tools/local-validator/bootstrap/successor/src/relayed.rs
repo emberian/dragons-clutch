@@ -39,6 +39,7 @@ use dclutch_registry_contract::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
 use dclutch_relay_contract::{
     RELAYED_FAMILY_RELEASE_ID_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1,
     SOLANA_MAINNET_GENESIS_HASH_V1,
+    decode::RelayedObservableV1,
     identity::LOADER_V3_PROGRAM_ID,
     release::{
         AccountSetEntryV1, RelayedAdapterConfigV1, RelayerKeySetV1, account_set_id_preimage_len_v1,
@@ -71,20 +72,58 @@ use crate::{Error, Result};
 /// lamport by the failure sibling.
 pub(crate) const WALK_BOUNTY_LAMPORTS: u64 = 250_000;
 
-/// This fixture's author's stated ex-ante probability that the pinned pool
-/// graduates inside the market's window, in basis points.
+/// Ceiling on any one outcome's share of a relayed market's ex-ante mass.
 ///
-/// A declaration, not a derivation. The shortfall from 10,000 is the disclosed
-/// failure outcome's own stated share, which is why a zero-cut market is a
-/// question at all: its single ordinary cell does not take the whole market.
-pub(crate) const RELAYED_GRADUATION_PRIOR_BPS_V1: u32 = 3_500;
+/// The same 9,000 the price markets state. A proposition the author believed
+/// at 95%, or at 5%, is as much a foregone conclusion as a price partition
+/// whose middle cell takes everything, and refuses through the same gate.
+pub(crate) const RELAYED_MAX_OUTCOME_SHARE_BPS_V1: u32 = 9_000;
 
-/// Ceiling on any one outcome's share of this market's ex-ante mass.
+/// Everything about a relayed market that is the OBSERVABLE ROW's to say.
 ///
-/// The same 9,000 the price markets state. A graduation the author believed at
-/// 95%, or at 5%, is as much a foregone conclusion as a price partition whose
-/// middle cell takes everything, and refuses through the same gate.
-pub(crate) const RELAYED_GRADUATION_MAX_OUTCOME_SHARE_BPS_V1: u32 = 9_000;
+/// One arm per row of the decoding-rules table. Adding row 2 is adding an arm
+/// here; `relayed_market_input` reads this struct and names no venue.
+struct RelayedRowFactsV1 {
+    /// The venue program's semantic release identity.
+    venue_semantic_release: &'static str,
+    /// The Product's stable semantic identity, seeded by the account set.
+    product: &'static str,
+    /// The coordinate domain: this row's own discriminant.
+    coordinate_domain: &'static str,
+    /// The result unit the discriminant is quoted in.
+    result_unit: &'static str,
+    /// This fixture's author's stated ex-ante probability that the row's
+    /// proposition is proved inside the window, in basis points.
+    ///
+    /// A DECLARATION, not a derivation, exactly as a price fixture's
+    /// volatility is. The shortfall from 10,000 is the disclosed failure
+    /// outcome's own stated share, which is why a zero-cut market is a
+    /// question at all: its single ordinary cell does not take the market.
+    prior_bps: u32,
+}
+
+impl RelayedRowFactsV1 {
+    const fn for_observable(observable: RelayedObservableV1) -> Self {
+        match observable {
+            RelayedObservableV1::DbcMigrationProgressV1 => Self {
+                venue_semantic_release: "relayed/venue-semantic-release/meteora-dbc",
+                product: "relayed/product/dbc-graduation",
+                coordinate_domain: "relayed/coordinate-domain/dbc-migration-progress",
+                result_unit: "relayed/result-unit/migration-progress-discriminant",
+                prior_bps: 3_500,
+            },
+            RelayedObservableV1::Token2022MintAuthorityRenouncedV1 => Self {
+                venue_semantic_release: "relayed/venue-semantic-release/spl-token-2022",
+                product: "relayed/product/mint-authority-renounced",
+                coordinate_domain: "relayed/coordinate-domain/mint-authority-state",
+                result_unit: "relayed/result-unit/mint-authority-discriminant",
+                // A launch that has published a renunciation intention but not
+                // executed it. Stated, not derived.
+                prior_bps: 4_000,
+            },
+        }
+    }
+}
 
 /// §12.6's conflation, disclosed where the founding input is compiled.
 pub(crate) const DISCLOSED_FAILURE_CONFLATION: &str = "For this v1 relayed graduation market, \
@@ -114,7 +153,14 @@ pub(crate) struct RelayedVenueFactsV1 {
     pub(crate) upgrade_authority: [u8; 32],
 }
 
-pub(crate) fn account_set_entries(venue: &RelayedVenueFactsV1) -> [AccountSetEntryV1; 4] {
+pub(crate) fn account_set_entries(
+    observable: RelayedObservableV1,
+    venue: &RelayedVenueFactsV1,
+) -> [AccountSetEntryV1; 4] {
+    // The state position's pinned width comes off the observable's own row
+    // rather than out of this file: 424 for a DBC `VirtualPool`, 82 for a
+    // base SPL Token-2022 `Mint`, and the decoding rules prove each equals the
+    // only length that row admits. Typing it here would be a second author.
     [
         AccountSetEntryV1 {
             key: venue.program,
@@ -129,7 +175,7 @@ pub(crate) fn account_set_entries(venue: &RelayedVenueFactsV1) -> [AccountSetEnt
         AccountSetEntryV1 {
             key: venue.pool,
             expected_owner: venue.program,
-            inline_len: 424,
+            inline_len: observable.state_inline_bytes(),
         },
         AccountSetEntryV1 {
             key: sysvar::clock::ID.to_bytes(),
@@ -141,8 +187,11 @@ pub(crate) fn account_set_entries(venue: &RelayedVenueFactsV1) -> [AccountSetEnt
 
 /// The founding-time pinned set identity, exactly as the adapter re-derives
 /// it: bound to the cluster the attestations CLAIM (mainnet), not to the twin.
-pub(crate) fn account_set_id(venue: &RelayedVenueFactsV1) -> Result<[u8; 32]> {
-    let entries = account_set_entries(venue);
+pub(crate) fn account_set_id(
+    observable: RelayedObservableV1,
+    venue: &RelayedVenueFactsV1,
+) -> Result<[u8; 32]> {
+    let entries = account_set_entries(observable, venue);
     let width = account_set_id_preimage_len_v1(entries.len())
         .map_err(|error| Error::new(format!("account-set preimage width: {error:?}")))?;
     let mut preimage = vec![0u8; width];
@@ -222,14 +271,24 @@ pub(crate) fn window_choice(now_unix_seconds: i64, success: bool) -> WindowChoic
 pub(crate) const MAX_CLUSTER_SKEW_SECONDS: u64 = 120;
 
 /// Compile the whole relayed market input from the run-time facts.
+///
+/// `observable` names the row of the decoding-rules table this market resolves
+/// under. Every place the row's shape shows through -- the state position's
+/// pinned inline width, the adapter config's selector and declared exponent,
+/// the venue's semantic release, the Product's coordinate-domain and
+/// result-unit identities, and the author's stated prior -- reads it, so a
+/// third row is another arm of `RelayedRowFactsV1::for_observable` and no edit
+/// to this function.
 pub(crate) fn relayed_market_input(
     registry: Pubkey,
     relayer_pubkey: [u8; 32],
     window_choice: &WindowChoiceV1,
+    observable: RelayedObservableV1,
     venue: &RelayedVenueFactsV1,
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<RelayedMarketFactsV1> {
-    let set_id = account_set_id(venue)?;
+    let row = RelayedRowFactsV1::for_observable(observable);
+    let set_id = account_set_id(observable, venue)?;
 
     // 2. RelayerKeySetV1, n = 1, m = 1, over the daemon's disclosed key.
     let key_set = RelayerKeySetV1::new(&[relayer_pubkey], 1)
@@ -251,8 +310,8 @@ pub(crate) fn relayed_market_input(
     }
     let adapter_config = RelayedAdapterConfigV1::new(
         set_id,
-        0,
-        0,
+        observable.selector(),
+        observable.raw_exponent(),
         max_observation_age_seconds,
         MAX_CLUSTER_SKEW_SECONDS,
     )
@@ -284,10 +343,7 @@ pub(crate) fn relayed_market_input(
         ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID)
             .map_err(|error| Error::new(format!("loader: {error:?}")))?,
         venue.programdata,
-        dclutch_core_contract::ContentId::new(demo_id(
-            "relayed/venue-semantic-release/meteora-dbc",
-            &[],
-        ))
+        dclutch_core_contract::ContentId::new(demo_id(row.venue_semantic_release, &[]))
         .map_err(|error| Error::new(format!("venue semantic release: {error:?}")))?,
         venue.elf_digest,
         venue.deployment_slot,
@@ -298,11 +354,12 @@ pub(crate) fn relayed_market_input(
     let venue_release_bytes = venue_release.to_bytes().to_vec();
     let venue_release_digest = record_identity(&venue_release_bytes);
 
-    // The Product identities. The coordinate domain is the venue's
-    // MigrationProgress discriminant itself, at exponent zero (§12.6).
-    let product_identity = demo_id("relayed/product/dbc-graduation", &[&set_id]);
-    let coordinate_domain = demo_id("relayed/coordinate-domain/dbc-migration-progress", &[]);
-    let result_unit = demo_id("relayed/result-unit/migration-progress-discriminant", &[]);
+    // The Product identities. The coordinate domain is the observed venue's
+    // own discriminant, at exponent zero (§12.6). Distinct per row, so a
+    // Product carving one observable cannot be resolved by the other.
+    let product_identity = demo_id(row.product, &[&set_id]);
+    let coordinate_domain = demo_id(row.coordinate_domain, &[]);
+    let result_unit = demo_id(row.result_unit, &[]);
     let claim_basis = demo_id("claim-basis/unit-complete-set", &[]);
     let representation = demo_id("representation/categorical-fixed-width", &[]);
     let mapping = demo_id("mapping/scaled-integer-cut", &[&coordinate_domain]);
@@ -559,8 +616,8 @@ pub(crate) fn relayed_market_input(
         // ethics, wrong about the mechanism: there was a belief to declare and
         // no kind of belief to declare it in.
         founding_band: Some(crate::model::FoundingBandInputV1::proposition(
-            vec![RELAYED_GRADUATION_PRIOR_BPS_V1],
-            RELAYED_GRADUATION_MAX_OUTCOME_SHARE_BPS_V1,
+            vec![row.prior_bps],
+            RELAYED_MAX_OUTCOME_SHARE_BPS_V1,
         )),
         generation: 1,
         collateral_display_decimals: 6,
@@ -712,6 +769,7 @@ mod tests {
                 end_unix_seconds: 1_800_003_600,
                 max_age_seconds: 900,
             },
+            RelayedObservableV1::DbcMigrationProgressV1,
             &RelayedVenueFactsV1 {
                 program: [0x51; 32],
                 programdata: [0x52; 32],
@@ -760,7 +818,7 @@ mod the_founding_path {
     use super::*;
     use crate::direct_market::{DirectDeploymentWidthsV1, DirectMarketCompilerOwnedV1};
 
-    fn graduation_input() -> (Pubkey, MarketRunInput) {
+    fn row_input(observable: RelayedObservableV1) -> (Pubkey, MarketRunInput) {
         let registry = Pubkey::new_from_array([0x41; 32]);
         let direct = DirectMarketCompilerOwnedV1::for_test(
             registry,
@@ -774,6 +832,7 @@ mod the_founding_path {
                 end_unix_seconds: 1_800_003_600,
                 max_age_seconds: 900,
             },
+            observable,
             &RelayedVenueFactsV1 {
                 program: [0x51; 32],
                 programdata: [0x52; 32],
@@ -786,6 +845,10 @@ mod the_founding_path {
         )
         .expect("relayed market input");
         (registry, facts.input)
+    }
+
+    fn graduation_input() -> (Pubkey, MarketRunInput) {
+        row_input(RelayedObservableV1::DbcMigrationProgressV1)
     }
 
     /// THE CONTROL THIS UNIT WAS BUILT AROUND. `compile_market_bodies` is the
@@ -802,7 +865,13 @@ mod the_founding_path {
             .expect("the graduation market states a belief");
         assert_eq!(
             declared.cell_probability_bps.as_deref(),
-            Some([RELAYED_GRADUATION_PRIOR_BPS_V1].as_slice()),
+            Some(
+                [RelayedRowFactsV1::for_observable(
+                    RelayedObservableV1::DbcMigrationProgressV1,
+                )
+                .prior_bps]
+                .as_slice()
+            ),
             "and the belief it states is propositional"
         );
         crate::market::native_composition_bodies_for_test(registry, &input)
@@ -828,7 +897,7 @@ mod the_founding_path {
             let mut certain = base.clone();
             certain.founding_band = Some(crate::model::FoundingBandInputV1::proposition(
                 vec![foregone],
-                RELAYED_GRADUATION_MAX_OUTCOME_SHARE_BPS_V1,
+                RELAYED_MAX_OUTCOME_SHARE_BPS_V1,
             ));
             let refusal = crate::market::native_composition_bodies_for_test(registry, &certain)
                 .expect_err("a foregone proposition must refuse");
@@ -852,6 +921,44 @@ mod the_founding_path {
             format!("{refusal}").contains("DegenerateOutcomePartition"),
             "a spot band over a proposition must refuse as degenerate: {refusal}"
         );
+    }
+
+    /// OBSERVABLE #2, THROUGH THE GATED ENTRANCE. The renunciation market is a
+    /// second zero-cut proposition, founded with its own declared prior, on
+    /// the same call the graduation market takes.
+    #[test]
+    fn the_mint_renunciation_market_founds_beside_the_graduation_market() {
+        let (registry, mint) =
+            row_input(RelayedObservableV1::Token2022MintAuthorityRenouncedV1);
+        assert!(mint.cuts.is_empty(), "a proposition places no cuts");
+        assert_eq!(mint.coefficients, vec![1, 0]);
+        let declared = mint
+            .founding_band
+            .as_ref()
+            .expect("row 1 states a belief too");
+        assert_eq!(
+            declared.cell_probability_bps.as_deref(),
+            Some(
+                [RelayedRowFactsV1::for_observable(
+                    RelayedObservableV1::Token2022MintAuthorityRenouncedV1,
+                )
+                .prior_bps]
+                .as_slice()
+            )
+        );
+        crate::market::native_composition_bodies_for_test(registry, &mint)
+            .expect("observable #2 founds through the gated entrance");
+
+        // And the two rows are DIFFERENT markets: distinct Product semantic
+        // identity, distinct coordinate domain, distinct result unit. A
+        // Product carving one observable cannot be resolved by the other.
+        let (_, graduation) = graduation_input();
+        assert_ne!(mint.product_id, graduation.product_id);
+        assert_ne!(mint.coordinate_domain_id, graduation.coordinate_domain_id);
+        assert_ne!(mint.result_unit_id, graduation.result_unit_id);
+        // The pinned account set differs too, because the state position's
+        // inline width comes off the row: 82 against 424.
+        assert_ne!(mint.source_spec_hex, graduation.source_spec_hex);
     }
 
     /// A partial or double declaration refuses naming the field AND the kind --

@@ -10,6 +10,7 @@
 #[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
 mod relayed;
 
+use dclutch_relay_contract::decode::RelayedObservableV1;
 use dclutch_relay_contract::release::AccountSetEntryV1;
 use solana_sdk::pubkey::Pubkey;
 
@@ -35,8 +36,12 @@ fn twin_venue_facts() -> RelayedVenueFactsV1 {
     }
 }
 
+/// The twin exercises row 0; a row-1 twin would supply its own mint facts.
+pub(crate) const TWIN_OBSERVABLE: RelayedObservableV1 =
+    RelayedObservableV1::DbcMigrationProgressV1;
+
 pub(crate) fn account_set_entries() -> [AccountSetEntryV1; 4] {
-    relayed::account_set_entries(&twin_venue_facts())
+    relayed::account_set_entries(TWIN_OBSERVABLE, &twin_venue_facts())
 }
 
 pub(crate) fn relayed_market_input(
@@ -49,6 +54,7 @@ pub(crate) fn relayed_market_input(
         registry,
         relayer_pubkey,
         window_choice,
+        TWIN_OBSERVABLE,
         &twin_venue_facts(),
         direct,
     )

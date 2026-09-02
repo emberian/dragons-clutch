@@ -35,13 +35,34 @@ reason is that widening the 80-byte configuration to inline a venue grammar woul
 change `decoding_rules_id` for every existing row and defeat the tripwire it was
 built to arm.
 
-## The one venue in v1
+## The venues
 
-Meteora Dynamic Bonding Curve (`dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`),
-graduation state only.  *verified-from-source* against
-`MeteoraAg/dynamic-bonding-curve @ 3b540e94`,
+**Row 0 — Meteora Dynamic Bonding Curve**
+(`dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`), graduation state only.
+*verified-from-source* against `MeteoraAg/dynamic-bonding-curve @ 3b540e94`,
 `programs/dynamic-bonding-curve/src/state/virtual_pool.rs`, and confirmed against
 live mainnet bytes; recorded in `MAINNET_STATE_RELAY.md` §10.1.
+
+**Row 1 — SPL Token-2022 mint authority renunciation.**  *verified-from-source*
+against `spl-token-interface 3.0.0` `src/state.rs` (`impl Pack for Mint`,
+`LEN = 82`, the `array_refs![src, 36, 8, 1, 1, 36]` split, and
+`unpack_coption_key`'s two admitted four-byte tags) and
+`spl-token-2022 4.0.0` `src/processor.rs:722`, whose own comment is the whole
+proposition:
+
+> *"Once a mint's supply is fixed, it cannot be undone by setting a new
+> mint_authority"* — `mint.base.mint_authority.ok_or(TokenError::FixedSupply)?`
+
+That is terminality of exactly the kind row 0 has, and from the same place: the
+observed program refuses the transition out of the state, so an observation of
+the state is a proof about every later slot as well as this one.  It is why this
+row can be a **terminal-window proposition** rather than a snapshot.
+
+Row 1 is deliberately NOT a price.  The relayed family carries an attested
+account snapshot and this row reads a four-byte `COption` tag out of it; the
+atom is a two-state discriminant, at scale zero, exactly as row 0's is.  A
+second row that WAS a price would have been the first evidence that the payload
+is price-shaped after all.
 -/
 
 namespace DClutch.RelayedVenueDecodingRulesV1
@@ -59,30 +80,49 @@ default.
 inductive Observable where
   /-- Meteora DBC `VirtualPool.migration_progress`, as a graduation proposition. -/
   | dbcMigrationProgress
+  /-- SPL Token-2022 `Mint.mint_authority`, as a renunciation proposition. -/
+  | token2022MintAuthorityRenounced
   deriving DecidableEq, Repr
 
 namespace Observable
 
+/-- Every row of this release's table, for the properties that quantify over
+all of them.  Exhaustiveness is carried by the `cases` in the theorems below:
+a row added to `Observable` and not to this list fails `all_rows_is_complete`. -/
+def allRows : List Observable := [.dbcMigrationProgress, .token2022MintAuthorityRenounced]
+
 /-- The `RelayedAdapterConfigV1.observable_selector` value naming this row. -/
 def selector : Observable → Nat
   | .dbcMigrationProgress => 0
+  | .token2022MintAuthorityRenounced => 1
 
 /-- The declared base-ten scale of the atom this row produces.  A discrete
-graduation state is a count of states, so its scale is zero. -/
+state is a count of states, so every row's scale is zero. -/
 def rawExponent : Observable → Int
   | .dbcMigrationProgress => 0
+  | .token2022MintAuthorityRenounced => 0
 
 /-- Hostile selection.  An unknown selector has no row and therefore no
 interpretation; it must not fall through to row zero. -/
 def ofSelector (value : Nat) : Option Observable :=
-  if value = 0 then some .dbcMigrationProgress else none
+  if value = 0 then some .dbcMigrationProgress
+  else if value = 1 then some .token2022MintAuthorityRenounced
+  else none
+
+theorem all_rows_is_complete (row : Observable) : row ∈ allRows := by
+  cases row <;> simp [allRows]
 
 theorem selector_round_trips (row : Observable) : ofSelector row.selector = some row := by
   cases row <;> rfl
 
-theorem an_unknown_selector_refuses (value : Nat) (h : 1 ≤ value) : ofSelector value = none := by
-  have nonzero : value ≠ 0 := by omega
-  simp [ofSelector, nonzero]
+theorem the_selectors_are_distinct :
+    (allRows.map selector).eraseDups.length = allRows.length := by
+  native_decide
+
+theorem an_unknown_selector_refuses (value : Nat) (h : 2 ≤ value) : ofSelector value = none := by
+  have h0 : value ≠ 0 := by omega
+  have h1 : value ≠ 1 := by omega
+  simp [ofSelector, h0, h1]
 
 end Observable
 
@@ -94,29 +134,51 @@ cannot know is what each position *is for*; that is a decoding-rules fact and it
 lives here.
 -/
 
-/-- Cardinality of the DBC graduation set. -/
-def venueSetCardinality : Nat := 4
+/-- Cardinality of one row's ordered account set. -/
+def Observable.setCardinality : Observable → Nat
+  | .dbcMigrationProgress => 4
+  | .token2022MintAuthorityRenounced => 4
+
 /-- The venue program's `Program` account, for `DeploymentObservationV1`. -/
-def programPosition : Nat := 0
+def Observable.programPosition : Observable → Nat
+  | .dbcMigrationProgress => 0
+  | .token2022MintAuthorityRenounced => 0
+
 /-- The venue program's `ProgramData` account; its tail digest *is* the ELF digest. -/
-def programDataPosition : Nat := 1
-/-- The observed venue state account. -/
-def venuePosition : Nat := 2
+def Observable.programDataPosition : Observable → Nat
+  | .dbcMigrationProgress => 1
+  | .token2022MintAuthorityRenounced => 1
+
+/-- The observed account whose bytes carry this row's own state. -/
+def Observable.statePosition : Observable → Nat
+  | .dbcMigrationProgress => 2
+  | .token2022MintAuthorityRenounced => 2
+
 /-- The observed cluster's `Clock` sysvar: the only source of foreign time. -/
-def clockPosition : Nat := 3
+def Observable.clockPosition : Observable → Nat
+  | .dbcMigrationProgress => 3
+  | .token2022MintAuthorityRenounced => 3
 
-theorem the_position_roles_are_distinct :
-    [programPosition, programDataPosition, venuePosition, clockPosition].eraseDups.length
-      = venueSetCardinality := by
+/-- Every role of one row, in set order. -/
+def Observable.positions (row : Observable) : List Nat :=
+  [row.programPosition, row.programDataPosition, row.statePosition, row.clockPosition]
+
+/-- No row may put two roles on one position: two roles reading one body is
+the defect the Rust interpreter's `require_well_formed` refuses, and this is
+the reason it can never fire for a shipped row. -/
+theorem the_position_roles_are_distinct_in_every_row :
+    Observable.allRows.all (fun row =>
+      row.positions.eraseDups.length == row.setCardinality) = true := by
   native_decide
 
-theorem every_position_role_is_in_range :
-    [programPosition, programDataPosition, venuePosition, clockPosition].all
-      (fun index => index < venueSetCardinality) = true := by
+theorem every_position_role_is_in_range_in_every_row :
+    Observable.allRows.all (fun row =>
+      row.positions.all (fun index => index < row.setCardinality)) = true := by
   native_decide
 
-theorem the_set_fits_the_release_account_ceiling :
-    venueSetCardinality ≤ RelayedMainnetStateV1Abi.maxAccounts := by
+theorem every_set_fits_the_release_account_ceiling :
+    Observable.allRows.all (fun row =>
+      row.setCardinality ≤ RelayedMainnetStateV1Abi.maxAccounts) = true := by
   native_decide
 
 /-! ## The observed cluster's `Clock` sysvar
@@ -383,6 +445,238 @@ theorem the_acceptance_table_agrees_with_the_proposition :
           match graduationAtoms progress isMigrated finish with
           | none => accepted == false
           | some produced => accepted == true && produced == atoms) = true := by
+  native_decide
+
+/-! ## The SPL Token-2022 `Mint` grammar
+
+*verified-from-source* against `spl-token-interface 3.0.0` `src/state.rs`.
+`impl Pack for Mint` is `LEN = 82` over `array_refs![src, 36, 8, 1, 1, 36]`:
+a 36-byte `COption<Pubkey>` mint authority, a `u64` supply, a `u8` decimals, a
+one-byte `is_initialized` admitting only `[0]` or `[1]`, and a second 36-byte
+`COption<Pubkey>` freeze authority.  `unpack_coption_key` admits exactly two
+four-byte tags, `[0,0,0,0]` and `[1,0,0,0]`, and refuses every other.
+
+SPL Token carries **no discriminator**.  What plays the discriminator's role
+here is the admitted length together with the two `COption` tags: `Account` is
+165 bytes and `Multisig` is 355 (`state.rs:132,218`), so no other account this
+program owns can present as 82, and an 82-byte body whose tags are not one of
+the two admitted words is not a `Mint` that this program wrote.
+-/
+
+/-- The admitted data-length set: the BASE mint only.
+
+A Token-2022 mint carrying TLV extensions is longer and puts an `AccountType`
+byte at `BASE_ACCOUNT_LENGTH - Mint::LEN = 83`.  Admitting only 82 is the
+narrow, honest v1: an extended mint refuses on its length rather than decoding
+under rules minted for a base one.  Lifting plan: admit the extended shape once
+the `AccountType` byte and the TLV walk are themselves verified from source. -/
+def mintAdmittedDataLengths : List Nat := [82]
+
+/-- `mint_authority: COption<Pubkey>` — the four-byte tag. -/
+def mintAuthorityTagOffset : Nat := 0
+/-- Every `COption<Pubkey>` tag in this layout is four bytes. -/
+def coptionTagBytes : Nat := 4
+/-- `supply: u64`. -/
+def mintSupplyOffset : Nat := 36
+/-- `decimals: u8`. -/
+def mintDecimalsOffset : Nat := 44
+/-- `is_initialized: bool`, admitting only `[0]` or `[1]`. -/
+def mintIsInitializedOffset : Nat := 45
+/-- `freeze_authority: COption<Pubkey>` — the four-byte tag. -/
+def mintFreezeAuthorityTagOffset : Nat := 46
+/-- The pinned inline width for the mint position: the account whole. -/
+def mintInlineBytes : Nat := 82
+
+/-- `COption::None`, little-endian. -/
+def coptionNoneTag : Nat := 0
+/-- `COption::Some`, little-endian. -/
+def coptionSomeTag : Nat := 1
+
+theorem every_mint_read_span_lies_inside_every_admitted_length :
+    mintAdmittedDataLengths.all (fun length =>
+      mintAuthorityTagOffset + coptionTagBytes ≤ length
+        && mintSupplyOffset + 8 ≤ length
+        && mintDecimalsOffset + 1 ≤ length
+        && mintIsInitializedOffset + 1 ≤ length
+        && mintFreezeAuthorityTagOffset + coptionTagBytes ≤ length) = true := by
+  native_decide
+
+theorem the_mint_position_is_carried_whole :
+    mintAdmittedDataLengths.all (fun length => mintInlineBytes == length) = true := by
+  native_decide
+
+theorem the_mint_body_fits_the_release_inline_ceiling :
+    mintInlineBytes ≤ RelayedMainnetStateV1Abi.maxInlineBytes := by
+  native_decide
+
+/-- The two `COption` fields do not overlap each other or the scalars between
+them, and the whole 82 bytes is exactly `36 + 8 + 1 + 1 + 36`. -/
+theorem the_mint_fields_tile_the_account :
+    mintAuthorityTagOffset + 36 = mintSupplyOffset
+      ∧ mintSupplyOffset + 8 = mintDecimalsOffset
+      ∧ mintDecimalsOffset + 1 = mintIsInitializedOffset
+      ∧ mintIsInitializedOffset + 1 = mintFreezeAuthorityTagOffset
+      ∧ mintFreezeAuthorityTagOffset + 36 = mintInlineBytes := by
+  native_decide
+
+/-- A `Mint` cannot be confused with the other two accounts this program owns:
+`Account::LEN = 165` and `Multisig::LEN = 355`. -/
+theorem a_mint_length_is_not_a_token_account_or_multisig_length :
+    mintAdmittedDataLengths.all (fun length => length != 165 && length != 355) = true := by
+  native_decide
+
+/-! ## `MintAuthorityState`, and the renunciation proposition -/
+
+/-- Whether this mint can still mint.  Two states, and the transition between
+them runs one way only: `processor.rs:722` refuses `SetAuthority` for
+`MintTokens` when the current authority is `None`. -/
+inductive MintAuthorityState where
+  | held
+  | renounced
+  deriving DecidableEq, Repr
+
+namespace MintAuthorityState
+
+def byte : MintAuthorityState → Nat
+  | .held => 0
+  | .renounced => 1
+
+/-- Hostile decode of the observed four-byte `COption` tag.  `unpack_coption_key`
+admits exactly `[0,0,0,0]` and `[1,0,0,0]`; every other word is not a tag this
+program ever wrote, and is a refusal rather than a third state. -/
+def ofAuthorityTag (tag : Nat) : Option MintAuthorityState :=
+  if tag = coptionNoneTag then some .renounced
+  else if tag = coptionSomeTag then some .held
+  else none
+
+theorem the_none_tag_is_the_renounced_state :
+    ofAuthorityTag coptionNoneTag = some .renounced := by native_decide
+
+theorem the_some_tag_is_the_held_state :
+    ofAuthorityTag coptionSomeTag = some .held := by native_decide
+
+theorem an_unadmitted_tag_refuses (tag : Nat) (h : 2 ≤ tag) : ofAuthorityTag tag = none := by
+  have h0 : tag ≠ coptionNoneTag := by simp [coptionNoneTag]; omega
+  have h1 : tag ≠ coptionSomeTag := by simp [coptionSomeTag]; omega
+  simp [ofAuthorityTag, h0, h1]
+
+/-- Terminal for a `WindowKind.Terminal` renunciation proposition.
+
+`renounced` is terminal and the observed program itself enforces it: once
+`mint_authority` is `None`, `SetAuthority(MintTokens)` returns `FixedSupply`
+without writing.  Terminality here is equality with one state, exactly as it is
+for row 0, and for the same reason: it must never be read as an ordering. -/
+def terminal : MintAuthorityState → Bool
+  | .renounced => true
+  | .held => false
+
+theorem terminality_is_equality_not_an_ordering (state : MintAuthorityState) :
+    state.terminal = decide (state = .renounced) := by
+  cases state <;> rfl
+
+end MintAuthorityState
+
+/-- The coherence rules an observed `Mint` body must satisfy before its
+authority tag means anything.  *verified-from-source*, from `impl Pack for Mint`:
+
+* `is_initialized` admits only `0` or `1` — `unpack_from_slice` returns
+  `InvalidAccountData` for anything else;
+* an **uninitialized** mint is not a mint that renounced anything.  Its zeroed
+  authority tag would read as `None` and therefore as a graduation of the
+  proposition, which is the exact silent-decode this rule exists to stop;
+* the freeze-authority tag must itself be one of the two admitted words, because
+  a body that is not a well-formed `Mint` in its second `COption` is not a
+  well-formed `Mint` in its first either.  With no discriminator to lean on,
+  this is what stops an 82-byte foreign body decoding under these rules. -/
+def mintCoherent (isInitialized freezeAuthorityTag : Nat) : Bool :=
+  isInitialized == 1
+    && (freezeAuthorityTag == coptionNoneTag || freezeAuthorityTag == coptionSomeTag)
+
+/-- The renunciation observable, exactly as the on-chain adapter computes it.
+
+`atoms` is the `MintAuthorityState` discriminant at `rawExponent = 0`.  As with
+row 0, the table does not decide which outcome a discriminant selects; the
+Product's `ResultDomainV2` cuts do.
+
+`none` is a refusal, and there are exactly three sources of one:
+
+* an unadmitted `COption` tag on the mint authority,
+* an incoherent body — uninitialized, or a freeze-authority tag that is not a
+  tag,
+* a **held** authority, which is a pre-terminal state.
+
+The third is the load-bearing one and it is not a defect.  A terminal-window
+renunciation proposition can only ever be *proved* by renunciation; "it did not
+renounce" is proved by the deadline passing, on the same funded permissionless
+failure walk row 0 uses.  A held authority is not a negative answer, it is no
+answer. -/
+def mintAuthorityAtoms (authorityTag isInitialized freezeAuthorityTag : Nat) : Option Int :=
+  match MintAuthorityState.ofAuthorityTag authorityTag with
+  | none => none
+  | some state =>
+      if mintCoherent isInitialized freezeAuthorityTag && state.terminal then
+        some (Int.ofNat state.byte)
+      else
+        none
+
+/-- Over the whole admitted tag range and beyond it, exactly one tag resolves. -/
+theorem only_the_renounced_state_resolves :
+    (List.range 256).all
+        (fun tag => (mintAuthorityAtoms tag 1 coptionSomeTag).isSome == (tag == 0)) = true := by
+  native_decide
+
+/-- A held authority refuses; it does not quietly become a zero atom. -/
+theorem a_held_authority_is_a_refusal_not_a_zero :
+    mintAuthorityAtoms coptionSomeTag 1 coptionSomeTag = none
+      ∧ mintAuthorityAtoms coptionSomeTag 1 coptionNoneTag = none := by
+  native_decide
+
+/-- AN UNINITIALIZED MINT IS ALL ZEROES, and all zeroes reads as `None`.  If
+coherence did not refuse it, a freshly allocated 82-byte account would prove the
+proposition the instant it existed.  This is the row's sharpest refusal. -/
+theorem a_zeroed_account_does_not_prove_a_renunciation :
+    mintAuthorityAtoms coptionNoneTag 0 coptionNoneTag = none := by
+  native_decide
+
+/-- A body whose freeze-authority tag is not a tag is not a `Mint`. -/
+theorem an_incoherent_mint_body_refuses :
+    mintAuthorityAtoms coptionNoneTag 1 2 = none
+      ∧ mintAuthorityAtoms coptionNoneTag 2 coptionSomeTag = none
+      ∧ mintAuthorityAtoms 2 1 coptionSomeTag = none := by
+  native_decide
+
+/-- The terminal state carries its own discriminant into the Product's cuts. -/
+theorem the_renounced_state_carries_its_discriminant :
+    mintAuthorityAtoms coptionNoneTag 1 coptionSomeTag = some 1 := by
+  native_decide
+
+/-- `(mint_authority_tag, is_initialized, freeze_authority_tag, accepted, atoms)`. -/
+def mintAcceptanceTable : List (Nat × Nat × Nat × Bool × Int) :=
+  [ (0, 1, 1, true, 1)
+  , (0, 1, 0, true, 1)
+  , (1, 1, 1, false, 0)
+  , (1, 1, 0, false, 0)
+  , (0, 0, 0, false, 0)
+  , (0, 2, 1, false, 0)
+  , (0, 1, 2, false, 0)
+  , (2, 1, 1, false, 0)
+  , (255, 1, 1, false, 0)
+  ]
+
+theorem the_mint_acceptance_table_agrees_with_the_proposition :
+    mintAcceptanceTable.all (fun row =>
+      match row with
+      | (authorityTag, isInitialized, freezeTag, accepted, atoms) =>
+          match mintAuthorityAtoms authorityTag isInitialized freezeTag with
+          | none => accepted == false
+          | some produced => accepted == true && produced == atoms) = true := by
+  native_decide
+
+/-- The two rows produce atoms that are not the same number, so a Product
+carving one observable cannot silently be resolved by the other.  Row 0's
+terminal atom is 3 and row 1's is 1. -/
+theorem the_two_rows_terminal_atoms_differ :
+    graduationAtoms 3 1 1_756_000_500 ≠ mintAuthorityAtoms 0 1 1 := by
   native_decide
 
 end DClutch.RelayedVenueDecodingRulesV1

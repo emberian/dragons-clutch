@@ -5812,3 +5812,57 @@ instances of getting it wrong: the source must not be the config.** Copy
 `config_id`: the *root* records it as a field, the profile projects the field, the
 accelerator recomputes `hash(config_data)`. A basis projected out of the config
 account compares the config to itself and passes forever.
+
+## 2026-09-01 — the founding belief becomes a family, and observable #2 is twenty lines of TOML
+
+**Red control first**, and it refused verbatim as the scholar had traced by
+reading: driving the relayed graduation market's own input through
+`compile_market_bodies` — the first act of `publish_market_records`, before any RPC
+— returned *`founding_band is required to compile this market's partition … There
+is no default`*. Then three units.
+
+**R1** (`0b8c377d`): DBC positions move onto `RelayedObservableV1` as a
+`RelayedSetLayoutV1 {program, programdata, state, clock}`; the interpreter has
+exactly one observable-specific line left. Control: `dclutch_resolution_proof_sbf.so`
+**byte-identical** at `f64190e2…` with both crates genuinely recompiling, and the 19
+`relayed_mainnet_state` tests **run** on real ELFs — the scholar had counted them.
+
+**R2** (`cbf983fe` + `26179076`): `FoundingBeliefV1 = SpotBand { band,
+plausible_half_widths } | StatedProposition { denominator, cell_probability_bps }`
+replaces the `(band, model)` pair, so **a mismatched pair is unrepresentable**, and
+`PartitionQualityModelV1` becomes the *name* a report carries. New
+`unresolved_share_bps` states the mass landing on no ordinary cell, measured beside
+the cells. **B6 and the B4/B6 width-2 tension close as consequences**: a zero-cut
+partition is degenerate under *every* spot band and a question under a stated
+prior; a near-certain (9,500) proposition **and** a near-hopeless (400, where the
+failure outcome takes the market) both refuse. `market.rs:3204` is a match on kind —
+**no third branch where a market is unmeasured.** The graduation market now declares
+P(graduates) = 3,500 bps.
+
+**Release-lane control, before and after:** SOL/USD → `[3024, 3950, 3024]`, dominant
+3,950, `unresolved = 0`, pinned as a test and re-derived from the shipped default.
+No shipped ELF touched — compiler and operator are host-only.
+
+**R3** (`1fe58874`): observable #2 is **SPL Token-2022 mint-authority
+renunciation**. Terminality is the observed program's, not the table's —
+`spl-token-2022 4.0.0 processor.rs:722` refuses `SetAuthority(MintTokens)` with
+`FixedSupply` once the authority is `None`. Layout verified from
+`spl-token-interface 3.0.0`'s `impl Pack for Mint`. Lean owns the table; the
+emitter regenerates the shipped rules byte-for-byte through rustfmt. **Sharpest
+refusal:** a zeroed 82-byte account reads as `COption::None`, so `is_initialized`
+is all that stands between it and a false proof — proven in Lean, asserted in Rust
+with a positive control. **Relayer: zero code, twenty lines of TOML.** ELF moved
++496 bytes, accounted; 19 passed against it; relay-contract 98 passed.
+
+**Named, not implied:** observable #2 has no twin fixture, so it is proven at the
+interpretation boundary and the founding entrance, not driven relay → seal →
+consume → resolve end to end. And row 1 has the same set cardinality as row 0, so
+R1 bought per-row *positions* here, not a differing set width.
+
+### The shared index, a second time
+
+The lane's first commit used `git add <path> && git commit`, which commits the
+**whole index** — and the index held another lane's staged v3-equity work (+299
+across seven files), now in history under a relay-titled message. Nothing lost;
+history misattributed. This is the second lane to do it in one evening, and the
+`commit -o` rule in `AGENTS.md` postdates both.

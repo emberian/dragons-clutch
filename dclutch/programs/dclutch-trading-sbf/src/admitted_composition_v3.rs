@@ -7,8 +7,30 @@
 //! account is read-only, its complete candidate bank is returned in canonical
 //! authenticated chunks, and Trading remains the sole EffectProgram projector,
 //! child caller, and commit-last state writer.
+//!
+//! ## Every pre-CPI refusal here is named, and none of them is `Content`
+//!
+//! `Content` has 2,126 sites in this program, and until 2026-09-01 the honest
+//! equity Add and a hostile Position substitution both refused with it, from
+//! this route, before the accelerator was invoked. That makes the hostile
+//! assertion at `accepted.rs` a universal donor -- it passes on whatever the
+//! transaction refuses first -- and it makes the honest wall unlocalizable.
+//!
+//! Decision 0007 says split rather than weaken. So the pre-CPI boundary now
+//! carries three codes, and which one a log names says which boundary refused:
+//!
+//! - `AdmittedFrame` (0x4017): the authenticated frame, and the five Registry
+//!   record pairs beneath it.
+//! - `AdmittedTransport` (0x4018): register-bank encoding, chunk
+//!   classification, caller-authority width, the authenticated input scratch
+//!   pages, and the request that is handed to the CPI.
+//! - `AdmittedContext` (0x4019): the invocation-context digest.
+//!
+//! `Content` survives here only AFTER the accelerator has answered, in
+//! `decode_register_bank`, where it means the returned bank is malformed.
 
 extern crate alloc;
+
 
 use alloc::{vec, vec::Vec};
 
@@ -134,17 +156,17 @@ pub fn admitted_caller_authority_count_v3(
     identity_count: u32,
 ) -> Result<usize, ProgramError> {
     match classify_bank_transport_v2(scalar_count, identity_count)
-        .map_err(|_| TradingSbfError::Content)?
+        .map_err(|_| TradingSbfError::AdmittedTransport)?
     {
         BankTransportV2::InlineReturnData { bank_bytes } => {
             if bank_bytes == 0 {
-                Err(TradingSbfError::Content.into())
+                Err(TradingSbfError::AdmittedTransport.into())
             } else {
                 Ok(1)
             }
         }
         BankTransportV2::AuthenticatedScratchPages { page_count, .. } => {
-            usize::try_from(page_count).map_err(|_| TradingSbfError::Content.into())
+            usize::try_from(page_count).map_err(|_| TradingSbfError::AdmittedTransport.into())
         }
     }
 }
@@ -168,22 +190,22 @@ pub fn execute_admitted_aot_v3<'info>(
     input_identities: &[[u8; 32]],
 ) -> Result<AdmittedExecutionV3, ProgramError> {
     let invocation_context =
-        admitted_invocation_context_digest_v3(*context).map_err(|_| TradingSbfError::Content)?;
+        admitted_invocation_context_digest_v3(*context).map_err(|_| TradingSbfError::AdmittedContext)?;
     validate_authenticated_frame(program_id, frame, runtime_accounts, context, authenticated)?;
-    let scalar_count = u32::try_from(input_scalars.len()).map_err(|_| TradingSbfError::Content)?;
+    let scalar_count = u32::try_from(input_scalars.len()).map_err(|_| TradingSbfError::AdmittedTransport)?;
     let identity_count =
-        u32::try_from(input_identities.len()).map_err(|_| TradingSbfError::Content)?;
+        u32::try_from(input_identities.len()).map_err(|_| TradingSbfError::AdmittedTransport)?;
     if scalar_count != context.scalar_count || identity_count != context.identity_count {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AdmittedTransport.into());
     }
     let input_bank = encode_register_bank(input_scalars, input_identities)?;
     let input_bank_digest = content(&input_bank)?;
     let chunk_count = match classify_bank_transport_v2(scalar_count, identity_count)
-        .map_err(|_| TradingSbfError::Content)?
+        .map_err(|_| TradingSbfError::AdmittedTransport)?
     {
         BankTransportV2::InlineReturnData { bank_bytes } => {
             if bank_bytes == 0 {
-                return Err(TradingSbfError::Content.into());
+                return Err(TradingSbfError::AdmittedTransport.into());
             }
             1_usize
         }
@@ -191,12 +213,12 @@ pub fn execute_admitted_aot_v3<'info>(
             bank_bytes,
             page_count,
         } => {
-            if usize::try_from(bank_bytes).map_err(|_| TradingSbfError::Content)?
+            if usize::try_from(bank_bytes).map_err(|_| TradingSbfError::AdmittedTransport)?
                 != input_bank.len()
             {
-                return Err(TradingSbfError::Content.into());
+                return Err(TradingSbfError::AdmittedTransport.into());
             }
-            usize::try_from(page_count).map_err(|_| TradingSbfError::Content)?
+            usize::try_from(page_count).map_err(|_| TradingSbfError::AdmittedTransport)?
         }
     };
     // Input transport and output return-data chunking are orthogonal. The V2
@@ -209,7 +231,7 @@ pub fn execute_admitted_aot_v3<'info>(
         RequestTransportV2::ScratchPages
     };
     if frame.caller_authorities.len() != chunk_count {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AdmittedTransport.into());
     }
     let first_request = accelerator_request(
         transport,
@@ -236,7 +258,7 @@ pub fn execute_admitted_aot_v3<'info>(
     let mut accepted_digest = None;
     let mut transcript = hash(ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3).to_bytes();
     for chunk_index in 0..chunk_count {
-        let chunk_index_u32 = u32::try_from(chunk_index).map_err(|_| TradingSbfError::Content)?;
+        let chunk_index_u32 = u32::try_from(chunk_index).map_err(|_| TradingSbfError::AdmittedTransport)?;
         let request = accelerator_request(
             transport,
             authenticated,
@@ -251,7 +273,7 @@ pub fn execute_admitted_aot_v3<'info>(
         let authority = frame
             .caller_authorities
             .get(chunk_index)
-            .ok_or(TradingSbfError::Content)?;
+            .ok_or(TradingSbfError::AdmittedTransport)?;
         let (ack_bytes, request_digest) = invoke_admitted_chunk(
             program_id,
             frame,
@@ -292,7 +314,7 @@ pub fn execute_admitted_aot_v3<'info>(
     }
     let admitted = authenticated
         .admitted_authorization()
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AdmittedFrame)?;
     let resolved = resolve_execution_candidate_v2(
         StrategyDispositionV2::AdmittedAot,
         None,
@@ -328,7 +350,7 @@ fn accelerator_request<'a>(
         authenticated.strategy_program_id(),
         authenticated
             .certificate_program_id()
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AdmittedTransport)?,
         authenticated.capability_program_id(),
         invocation_context,
         input_bank_digest,
@@ -341,7 +363,7 @@ fn accelerator_request<'a>(
             RequestTransportV2::ScratchPages => &[],
         },
     )
-    .map_err(|_| TradingSbfError::Content.into())
+    .map_err(|_| TradingSbfError::AdmittedTransport.into())
 }
 
 #[inline(never)]
@@ -355,11 +377,11 @@ fn invoke_admitted_chunk<'info>(
 ) -> Result<(Vec<u8>, ContentId), ProgramError> {
     let request_len = ACCELERATOR_REQUEST_HEADER_BYTES_V2
         .checked_add(request.inline_bank().len())
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AdmittedTransport)?;
     let mut request_bytes = vec![0_u8; request_len];
     request
         .encode_into(&mut request_bytes)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::AdmittedTransport)?;
     let request_digest = content(&request_bytes)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         context.release_set,
@@ -368,7 +390,7 @@ fn invoke_admitted_chunk<'info>(
         context.root.to_bytes(),
         request_digest.to_bytes(),
     )
-    .map_err(|_| TradingSbfError::Content)?;
+    .map_err(|_| TradingSbfError::AdmittedTransport)?;
     let (expected_authority, bump) =
         Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
     if caller_authority.key != &expected_authority
@@ -381,7 +403,7 @@ fn invoke_admitted_chunk<'info>(
     let mut metas = Vec::with_capacity(
         ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
             .checked_add(runtime_accounts.len())
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AdmittedTransport)?,
     );
     metas.extend(
         fixed_cpi_accounts(frame, caller_authority)
@@ -401,7 +423,7 @@ fn invoke_admitted_chunk<'info>(
     let mut infos = Vec::with_capacity(
         ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
             .checked_add(runtime_accounts.len())
-            .ok_or(TradingSbfError::Content)?,
+            .ok_or(TradingSbfError::AdmittedTransport)?,
     );
     infos.extend(fixed_cpi_accounts(frame, caller_authority).cloned());
     infos.extend(runtime_accounts.iter().map(|account| (*account).clone()));
@@ -459,12 +481,12 @@ fn validate_authenticated_frame(
     let strategy = authenticated.strategy();
     let artifact = authenticated
         .artifact_release()
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(TradingSbfError::AdmittedFrame)?;
     if frame.hot_fixed_accounts.len() != ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4
         || strategy.disposition() != StrategyDispositionV2::AdmittedAot
         || strategy
             .transport_profile()
-            .map_err(|_| TradingSbfError::Content)?
+            .map_err(|_| TradingSbfError::AdmittedFrame)?
             != AcceleratorTransportProfileV2::ChunkedBankV2
         || authenticated.admitted_authorization().is_none()
         || context.registry_program.to_bytes() != frame.registry.key.to_bytes()
@@ -482,14 +504,14 @@ fn validate_authenticated_frame(
         || context.artifact_release
             != authenticated
                 .artifact_release_id()
-                .ok_or(TradingSbfError::Content)?
+                .ok_or(TradingSbfError::AdmittedFrame)?
         || !exact_deployment_keys_v3(
             artifact.program().to_bytes(),
             artifact.programdata(),
             frame.accelerator_program.key.to_bytes(),
             frame.accelerator_programdata.key.to_bytes(),
         )
-        || usize::try_from(context.account_count).map_err(|_| TradingSbfError::Content)?
+        || usize::try_from(context.account_count).map_err(|_| TradingSbfError::AdmittedFrame)?
             != runtime_accounts.len()
         || !frame.registry.executable
         || frame.registry.is_signer
@@ -605,13 +627,13 @@ fn require_record_pair(
     digest: [u8; 32],
 ) -> Result<(), ProgramError> {
     let key = RecordKeyV1::new(
-        SchemaReleaseId::new(schema).map_err(|_| TradingSbfError::Content)?,
-        ContentDigest::new(digest).map_err(|_| TradingSbfError::Content)?,
+        SchemaReleaseId::new(schema).map_err(|_| TradingSbfError::AdmittedFrame)?,
+        ContentDigest::new(digest).map_err(|_| TradingSbfError::AdmittedFrame)?,
     );
     if raw != &record_address(registry, key.raw_record_pda_seeds())
         || staging != &record_address(registry, key.staging_cursor_pda_seeds())
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AdmittedFrame.into());
     }
     Ok(())
 }
@@ -624,11 +646,11 @@ fn validate_input_scratch_pages(
     input_bank: &[u8],
 ) -> Result<(), ProgramError> {
     if pages.len()
-        != usize::try_from(request.chunk_count()).map_err(|_| TradingSbfError::Content)?
+        != usize::try_from(request.chunk_count()).map_err(|_| TradingSbfError::AdmittedTransport)?
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AdmittedTransport.into());
     }
-    let trading = ContentId::new(program_id.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+    let trading = ContentId::new(program_id.to_bytes()).map_err(|_| TradingSbfError::AdmittedTransport)?;
     let mut cursor = 0_usize;
     for (index, account) in pages.iter().enumerate() {
         if account.owner != program_id
@@ -640,50 +662,50 @@ fn validate_input_scratch_pages(
                 .count()
                 != 1
         {
-            return Err(TradingSbfError::Content.into());
+            return Err(TradingSbfError::AdmittedTransport.into());
         }
         let data = account
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::AdmittedTransport)?;
         let page =
-            AuthenticatedScratchPageV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+            AuthenticatedScratchPageV2::decode(&data).map_err(|_| TradingSbfError::AdmittedTransport)?;
         page.validate_request_input(trading, request)
-            .map_err(|_| TradingSbfError::Content)?;
-        if usize::try_from(page.chunk_index()).map_err(|_| TradingSbfError::Content)? != index
-            || usize::try_from(page.chunk_offset()).map_err(|_| TradingSbfError::Content)? != cursor
+            .map_err(|_| TradingSbfError::AdmittedTransport)?;
+        if usize::try_from(page.chunk_index()).map_err(|_| TradingSbfError::AdmittedTransport)? != index
+            || usize::try_from(page.chunk_offset()).map_err(|_| TradingSbfError::AdmittedTransport)? != cursor
         {
-            return Err(TradingSbfError::Content.into());
+            return Err(TradingSbfError::AdmittedTransport.into());
         }
         let end = cursor
             .checked_add(page.payload().len())
-            .ok_or(TradingSbfError::Content)?;
+            .ok_or(TradingSbfError::AdmittedTransport)?;
         if input_bank.get(cursor..end) != Some(page.payload()) {
-            return Err(TradingSbfError::Content.into());
+            return Err(TradingSbfError::AdmittedTransport.into());
         }
         cursor = end;
     }
     if cursor != input_bank.len() {
-        return Err(TradingSbfError::Content.into());
+        return Err(TradingSbfError::AdmittedTransport.into());
     }
     Ok(())
 }
 
 fn encode_register_bank(scalars: &[u64], identities: &[[u8; 32]]) -> Result<Vec<u8>, ProgramError> {
     let expected = register_bank_bytes_v2(
-        u32::try_from(scalars.len()).map_err(|_| TradingSbfError::Content)?,
-        u32::try_from(identities.len()).map_err(|_| TradingSbfError::Content)?,
+        u32::try_from(scalars.len()).map_err(|_| TradingSbfError::AdmittedTransport)?,
+        u32::try_from(identities.len()).map_err(|_| TradingSbfError::AdmittedTransport)?,
     )
-    .map_err(|_| TradingSbfError::Content)?;
+    .map_err(|_| TradingSbfError::AdmittedTransport)?;
     let mut output =
-        Vec::with_capacity(usize::try_from(expected).map_err(|_| TradingSbfError::Content)?);
+        Vec::with_capacity(usize::try_from(expected).map_err(|_| TradingSbfError::AdmittedTransport)?);
     for scalar in scalars {
         output.extend_from_slice(&scalar.to_le_bytes());
     }
     for identity in identities {
         output.extend_from_slice(identity);
     }
-    if output.len() != usize::try_from(expected).map_err(|_| TradingSbfError::Content)? {
-        return Err(TradingSbfError::Content.into());
+    if output.len() != usize::try_from(expected).map_err(|_| TradingSbfError::AdmittedTransport)? {
+        return Err(TradingSbfError::AdmittedTransport.into());
     }
     Ok(output)
 }

@@ -4988,6 +4988,7 @@ mod tests {
             registry,
             relayer.to_bytes(),
             &window,
+            dclutch_relay_contract::decode::RelayedObservableV1::DbcMigrationProgressV1,
             &venue,
             direct.compiler(),
         )
