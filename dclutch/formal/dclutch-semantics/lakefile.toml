@@ -363,6 +363,10 @@ name = "emit-source-window-spec-v1-rust"
 root = "EmitSourceWindowSpecV1Rust"
 
 [[lean_exe]]
+name = "emit-product-admission-v2-rust"
+root = "EmitProductAdmissionV2Rust"
+
+[[lean_exe]]
 name = "emit-source-recovery-policy-v2-abi-rust"
 root = "EmitSourceRecoveryPolicyV2AbiRust"
 

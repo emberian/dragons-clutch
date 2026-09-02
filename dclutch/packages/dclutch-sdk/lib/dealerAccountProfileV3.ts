@@ -24,6 +24,7 @@ import {
   DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4,
   DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4,
   DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
+  DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4,
   DEALER_SCENARIO_PROFILE_FIXED_RULES_V4,
   DEALER_SCENARIO_PROFILE_SPANS_V4,
   DEALER_SCENARIO_PROFILE_SPAN_RULES_V4,
@@ -341,7 +342,13 @@ function expectedScenarioProfile(lengths: readonly number[]): Uint8Array {
     let value = rule(coordinate === 0 ? 2 : 0, 0, coordinate < 5 ? (lengths[coordinate] ?? -1) : 0);
     const claims = coordinate - DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
     if (claims >= 0 && claims < DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3) {
-      const privileges = claims === 0 ? 1 : claims === 1 ? 2 : [13, 14, 16, 18].includes(claims) ? 4 : 0;
+      // NOT a signer. `SignedDeltaFrameSpecV3` marks its caller authority a
+      // SIGNER, and `claims_privileges` drops that bit on the way into the
+      // profile -- a child caller authority is an outer NON-signer, which
+      // `child_caller_authorities_are_outer_nonsigners` asserts on the Rust
+      // side. Mirroring the frame spec instead of the encoder put a signer
+      // bit here that no emitted profile has ever carried.
+      const privileges = claims === 1 ? 2 : [13, 14, 16, 18].includes(claims) ? 4 : 0;
       const alias = new Map<number, number>([[2, 4], [4, 2], [8, 3]]).get(claims) ?? null;
       value = rule(privileges, 0, 0, alias === null ? 5 : 4, alias);
     } else if (coordinate === DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4) {
@@ -356,17 +363,42 @@ function expectedScenarioProfile(lengths: readonly number[]): Uint8Array {
   }
   for (let coordinate = 0; coordinate < DEALER_SCENARIO_PROFILE_SPAN_RULES_V4; coordinate += 1) {
     let privileges = 0;
+    // The cross-frame alias partition. A Custody transfer frame and the Claims
+    // fixed frame both name the Core Market, the activation cache, the Registry
+    // program, the caller program and its ProgramData -- `CustodyFrameSpecV1`
+    // at 1..=5, `SignedDeltaFrameSpecV3` at 11..=15 -- and in one execution
+    // each pair is ONE account. A route span DECLARES that rather than standing
+    // as a second representative, and the condition is read off the span table
+    // above, not hard-coded: a span borrows a Claims coordinate exactly when it
+    // is inserted past it, so routes 4 and 5 (insertion 25) do and routes 0
+    // through 3 (insertion 5) sit ahead of the frame they would borrow.
+    let borrowed: number | null = null;
     for (const start of [0, 14, 28, 42, 57, 71]) {
       const local = coordinate - start;
-      if (local >= 0 && local < 14) privileges = [8, 10, 11].includes(local) ? 2 : [3, 4, 13].includes(local) ? 4 : 0;
+      if (local < 0 || local >= 14) continue;
+      privileges = [8, 10, 11].includes(local) ? 2 : [3, 4, 13].includes(local) ? 4 : 0;
+      const insertion = EXPECTED_SCENARIO_SPANS.find((span) => span[2] === start)?.[0];
+      if (insertion === undefined) throw new Error('Dealer scenario span table has no entry for a route rule block');
+      const claims = new Map<number, number>([[1, 11], [2, 12], [3, 13], [4, 14], [5, 15]]).get(local);
+      if (claims === undefined) continue;
+      const representative = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + claims;
+      if (representative < insertion) borrowed = representative;
     }
     if (coordinate === 56) privileges = 2;
-    putRule(output, header + (DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 + coordinate) * ACCOUNT_PROFILE_RULE_BYTES_V2, rule(privileges, 0, 0, 5));
+    const value = borrowed === null ? rule(privileges, 0, 0, 5) : rule(0, 0, 0, 4, borrowed);
+    putRule(output, header + (DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 + coordinate) * ACCOUNT_PROFILE_RULE_BYTES_V2, value);
   }
   const operations = header + (DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 + DEALER_SCENARIO_PROFILE_SPAN_RULES_V4) * ACCOUNT_PROFILE_RULE_BYTES_V2;
   putOperation(output, operations, 8, 2, DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4, BASIS_WIDTH_OFFSET_V3);
   putOperation(output, operations + ACCOUNT_PROFILE_OPERATION_BYTES_V2, 1, 25, DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4);
-  putOperation(output, operations + 2 * ACCOUNT_PROFILE_OPERATION_BYTES_V2, 0, 25, DEALER_SCENARIO_OBLIGATION_IDENTITY_V4);
+  // ProjectKey into the OBSERVED obligation register, not RequireKey against
+  // the requested one. The guard this replaced compared the obligation key
+  // against 32 unwritten zero bytes -- `OP_REQUIRE_*` reads the INPUT identity
+  // bank while the request profile that writes that register runs AFTER this
+  // pass -- so selector 9 was unsatisfiable by any account list at all. The
+  // Rust encoder was repaired; this mirror still expected the broken shape,
+  // which means the browser would have refused every profile that works.
+  putOperation(output, operations + 2 * ACCOUNT_PROFILE_OPERATION_BYTES_V2, 2, 25, DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4);
   return output;
 }
 

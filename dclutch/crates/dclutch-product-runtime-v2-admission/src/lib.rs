@@ -13,71 +13,59 @@ use dclutch_product_runtime_v2::{
     ContentId, Error as ProductError, PortfolioV2, ProductJoinV2, ResultDomainV2, join_product_v2,
 };
 
-/// Product record schema label hashed into [`PRODUCT_RECORD_SCHEMA_ID_V2`].
-pub const PRODUCT_RECORD_SCHEMA_PREIMAGE_V2: &[u8] =
-    b"dclutch/schema/product-runtime-v2-product-record";
-/// SHA-256 of [`PRODUCT_RECORD_SCHEMA_PREIMAGE_V2`].
-pub const PRODUCT_RECORD_SCHEMA_ID_V2: [u8; 32] = [
-    0xd9, 0xc3, 0x9f, 0xb6, 0x0c, 0x7d, 0xb7, 0x79, 0xa7, 0x84, 0x4d, 0xe7, 0x85, 0x05, 0x73, 0x8a,
-    0x58, 0x99, 0x26, 0x4f, 0x86, 0x83, 0xdb, 0x4c, 0x6a, 0xe6, 0x1c, 0x9e, 0xf0, 0xe3, 0xcf, 0xf8,
-];
-/// Result-domain schema label hashed into [`RESULT_DOMAIN_SCHEMA_ID_V2`].
-pub const RESULT_DOMAIN_SCHEMA_PREIMAGE_V2: &[u8] =
-    b"dclutch/schema/product-runtime-v2-result-domain";
-/// SHA-256 of [`RESULT_DOMAIN_SCHEMA_PREIMAGE_V2`].
-pub const RESULT_DOMAIN_SCHEMA_ID_V2: [u8; 32] = [
-    0x39, 0x9c, 0xc5, 0x74, 0x0f, 0x62, 0x1e, 0xa5, 0xc3, 0x0f, 0x96, 0x0a, 0x14, 0xaf, 0x83, 0x9b,
-    0x0b, 0x5c, 0xfd, 0x58, 0xa9, 0x30, 0x5d, 0xcc, 0x09, 0xc6, 0x1f, 0xd1, 0x67, 0x81, 0xb7, 0xc2,
-];
-/// Portfolio schema label hashed into [`PORTFOLIO_SCHEMA_ID_V2`].
-pub const PORTFOLIO_SCHEMA_PREIMAGE_V2: &[u8] = b"dclutch/schema/product-runtime-v2-portfolio";
-/// SHA-256 of [`PORTFOLIO_SCHEMA_PREIMAGE_V2`].
-pub const PORTFOLIO_SCHEMA_ID_V2: [u8; 32] = [
-    0x76, 0x70, 0x6d, 0xdf, 0x08, 0x91, 0x7b, 0xb3, 0xdf, 0x08, 0x6b, 0x8c, 0x65, 0x04, 0x92, 0x83,
-    0xbb, 0xab, 0x69, 0x75, 0x9c, 0x5b, 0x24, 0xb0, 0x75, 0x29, 0x7c, 0x47, 0x0f, 0xe3, 0xd6, 0x65,
-];
-/// Reference-only receipt schema label.
-pub const ADMISSION_RECEIPT_SCHEMA_PREIMAGE_V2: &[u8] =
-    b"dclutch/schema/product-runtime-v2-admission-receipt";
-/// SHA-256 of [`ADMISSION_RECEIPT_SCHEMA_PREIMAGE_V2`].
-pub const ADMISSION_RECEIPT_SCHEMA_ID_V2: [u8; 32] = [
-    0xb7, 0x24, 0x54, 0x93, 0x39, 0x06, 0xb8, 0xb7, 0x7f, 0x0d, 0x48, 0xa8, 0xf3, 0x63, 0xf9, 0xd9,
-    0x2b, 0xa1, 0xa2, 0x75, 0x34, 0x07, 0xff, 0xed, 0x39, 0x7e, 0x42, 0x00, 0x14, 0xae, 0xa4, 0x7b,
-];
 
-/// Exact fixed Product record width.
-pub const PRODUCT_RECORD_BYTES_V2: usize = 112;
-/// Exact reference-only admission receipt width.
-pub const ADMISSION_RECEIPT_BYTES_V2: usize = 400;
-/// Exact admission request width.
-pub const ADMISSION_REQUEST_BYTES_V2: usize = 112;
-/// Product record magic.
-pub const PRODUCT_RECORD_MAGIC_V2: [u8; 8] = *b"DCLTPRM2";
-/// Admission receipt magic.
-pub const ADMISSION_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLTPRA2";
-/// Admission request magic.
-pub const ADMISSION_REQUEST_MAGIC_V2: [u8; 8] = *b"DCLTPRQ2";
-/// Shared admission wire version.
-pub const ADMISSION_VERSION_V2: u16 = 2;
-/// Number of finalized records in one complete admission.
-pub const ADMISSION_RECORD_COUNT_V2: u8 = 3;
-/// Admission-program PDA domain for one exact reference-only receipt.
-pub const ADMISSION_RECEIPT_PDA_DOMAIN_V2: &[u8] = b"dclutch/product-v2/admission";
 
-const PRODUCT_ID_OFFSET: usize = 16;
-/// Public byte offset of the Product content identity inside one record.
-///
-/// Account-profile generators project the identity from this coordinate; the
-/// hostile decoder above remains the authority for accepting the whole record.
-pub const PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2: usize = PRODUCT_ID_OFFSET;
-const PRODUCT_DOMAIN_DIGEST_OFFSET: usize = 48;
-const PRODUCT_PORTFOLIO_DIGEST_OFFSET: usize = 80;
-const RECEIPT_COUNT_OFFSET: usize = 10;
-const RECEIPT_RECORDS_OFFSET: usize = 16;
-const RECORD_COORDINATE_BYTES: usize = 128;
-const REQUEST_PRODUCT_DIGEST_OFFSET: usize = 16;
-const REQUEST_DOMAIN_DIGEST_OFFSET: usize = 48;
-const REQUEST_PORTFOLIO_DIGEST_OFFSET: usize = 80;
+
+#[allow(missing_docs)]
+#[rustfmt::skip]
+mod generated_admission_v2;
+
+// Four layouts, from `DClutch.ProductAdmissionV2Abi`. The crate wrote them as
+// seventeen bare constants, six of which were not constants at all but
+// `offset + 32`, `offset + 64` and `offset + 96` spelled twice inside
+// `decode_coordinate` and `encode_coordinate`.
+//
+// The Product record and the admission request are ONE SHAPE, which is why
+// there is no `REQUEST_*` set any more: `the_record_and_the_request_are_one_shape`
+// says in Lean what six parallel declarations used to say by agreeing.
+use generated_admission_v2::{
+    ADMISSION_BODY_RESERVED_BYTES_V2, ADMISSION_BODY_RESERVED_OFFSET_V2,
+    ADMISSION_RECEIPT_COUNT_OFFSET_V2, ADMISSION_RECEIPT_MAGIC_OFFSET_V2,
+    ADMISSION_RECEIPT_PORTFOLIO_OFFSET_V2, ADMISSION_RECEIPT_RECORDS_OFFSET_V2,
+    ADMISSION_RECEIPT_RESERVED_BYTES_V2, ADMISSION_RECEIPT_RESERVED_OFFSET_V2,
+    ADMISSION_RECEIPT_RESULT_DOMAIN_OFFSET_V2, ADMISSION_RECEIPT_VERSION_OFFSET_V2,
+    PRODUCT_DOMAIN_DIGEST_OFFSET, PRODUCT_ID_OFFSET, PRODUCT_PORTFOLIO_DIGEST_OFFSET,
+    RECORD_COORDINATE_BYTES, RECORD_COORDINATE_CONTENT_DIGEST_OFFSET_V2,
+    RECORD_COORDINATE_RAW_ACCOUNT_OFFSET_V2, RECORD_COORDINATE_SCHEMA_ID_OFFSET_V2,
+    RECORD_COORDINATE_STAGING_ACCOUNT_OFFSET_V2,
+};
+pub use generated_admission_v2::{
+    ADMISSION_RECEIPT_BYTES_V2, ADMISSION_RECEIPT_MAGIC_V2, ADMISSION_RECEIPT_PDA_DOMAIN_V2,
+    ADMISSION_RECEIPT_SCHEMA_ID_V2, ADMISSION_RECEIPT_SCHEMA_PREIMAGE_V2,
+    ADMISSION_RECORD_COUNT_V2, ADMISSION_REQUEST_BYTES_V2, ADMISSION_REQUEST_MAGIC_V2,
+    ADMISSION_VERSION_V2, PORTFOLIO_SCHEMA_ID_V2, PORTFOLIO_SCHEMA_PREIMAGE_V2,
+    PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_MAGIC_V2, PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2,
+    PRODUCT_RECORD_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_PREIMAGE_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_PREIMAGE_V2,
+};
+
+// The three receipt coordinates are one stride apart. Lean states this as
+// `the_three_coordinates_are_one_stride`; this is the independent check, and it
+// is what goes red if a coordinate's placement and the declared stride ever
+// part. Two authorities that must agree, neither derived from the other.
+const _: () = assert!(
+    ADMISSION_RECEIPT_RESULT_DOMAIN_OFFSET_V2
+        == ADMISSION_RECEIPT_RECORDS_OFFSET_V2 + RECORD_COORDINATE_BYTES
+);
+const _: () = assert!(
+    ADMISSION_RECEIPT_PORTFOLIO_OFFSET_V2
+        == ADMISSION_RECEIPT_RECORDS_OFFSET_V2 + 2 * RECORD_COORDINATE_BYTES
+);
+const _: () = assert!(
+    ADMISSION_RECEIPT_RECORDS_OFFSET_V2
+        + (ADMISSION_RECORD_COUNT_V2 as usize) * RECORD_COORDINATE_BYTES
+        == ADMISSION_RECEIPT_BYTES_V2
+);
 
 /// Product V2 admission refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,11 +111,15 @@ impl AdmissionRequestV2 {
         {
             return Err(Error::UnsupportedSchema);
         }
-        require_zero(bytes, 10, 6)?;
+        require_zero(
+            bytes,
+            ADMISSION_BODY_RESERVED_OFFSET_V2,
+            ADMISSION_BODY_RESERVED_BYTES_V2,
+        )?;
         Ok(Self {
-            product_digest: read_id(bytes, REQUEST_PRODUCT_DIGEST_OFFSET)?,
-            result_domain_digest: read_id(bytes, REQUEST_DOMAIN_DIGEST_OFFSET)?,
-            portfolio_digest: read_id(bytes, REQUEST_PORTFOLIO_DIGEST_OFFSET)?,
+            product_digest: read_id(bytes, PRODUCT_ID_OFFSET)?,
+            result_domain_digest: read_id(bytes, PRODUCT_DOMAIN_DIGEST_OFFSET)?,
+            portfolio_digest: read_id(bytes, PRODUCT_PORTFOLIO_DIGEST_OFFSET)?,
         })
     }
 
@@ -139,19 +131,15 @@ impl AdmissionRequestV2 {
         output.fill(0);
         put(output, 0, &ADMISSION_REQUEST_MAGIC_V2)?;
         put(output, 8, &ADMISSION_VERSION_V2.to_le_bytes())?;
+        put(output, PRODUCT_ID_OFFSET, &self.product_digest.to_bytes())?;
         put(
             output,
-            REQUEST_PRODUCT_DIGEST_OFFSET,
-            &self.product_digest.to_bytes(),
-        )?;
-        put(
-            output,
-            REQUEST_DOMAIN_DIGEST_OFFSET,
+            PRODUCT_DOMAIN_DIGEST_OFFSET,
             &self.result_domain_digest.to_bytes(),
         )?;
         put(
             output,
-            REQUEST_PORTFOLIO_DIGEST_OFFSET,
+            PRODUCT_PORTFOLIO_DIGEST_OFFSET,
             &self.portfolio_digest.to_bytes(),
         )?;
         Ok(())
@@ -191,7 +179,11 @@ impl ProductRecordV2 {
         {
             return Err(Error::UnsupportedSchema);
         }
-        require_zero(bytes, 10, 6)?;
+        require_zero(
+            bytes,
+            ADMISSION_BODY_RESERVED_OFFSET_V2,
+            ADMISSION_BODY_RESERVED_BYTES_V2,
+        )?;
         Ok(Self {
             product_id: read_id(bytes, PRODUCT_ID_OFFSET)?,
             result_domain_digest: read_id(bytes, PRODUCT_DOMAIN_DIGEST_OFFSET)?,
@@ -267,20 +259,22 @@ impl AdmissionReceiptV2 {
         if bytes.len() != ADMISSION_RECEIPT_BYTES_V2 {
             return Err(Error::InvalidLength);
         }
-        if array::<8>(bytes, 0)? != ADMISSION_RECEIPT_MAGIC_V2
-            || read_u16(bytes, 8)? != ADMISSION_VERSION_V2
+        if array::<8>(bytes, ADMISSION_RECEIPT_MAGIC_OFFSET_V2)? != ADMISSION_RECEIPT_MAGIC_V2
+            || read_u16(bytes, ADMISSION_RECEIPT_VERSION_OFFSET_V2)? != ADMISSION_VERSION_V2
         {
             return Err(Error::UnsupportedSchema);
         }
-        if byte(bytes, RECEIPT_COUNT_OFFSET)? != ADMISSION_RECORD_COUNT_V2 {
+        if byte(bytes, ADMISSION_RECEIPT_COUNT_OFFSET_V2)? != ADMISSION_RECORD_COUNT_V2 {
             return Err(Error::NonCanonical);
         }
-        require_zero(bytes, 11, 5)?;
-        let product = decode_coordinate(bytes, RECEIPT_RECORDS_OFFSET)?;
-        let result_domain =
-            decode_coordinate(bytes, RECEIPT_RECORDS_OFFSET + RECORD_COORDINATE_BYTES)?;
-        let portfolio =
-            decode_coordinate(bytes, RECEIPT_RECORDS_OFFSET + 2 * RECORD_COORDINATE_BYTES)?;
+        require_zero(
+            bytes,
+            ADMISSION_RECEIPT_RESERVED_OFFSET_V2,
+            ADMISSION_RECEIPT_RESERVED_BYTES_V2,
+        )?;
+        let product = decode_coordinate(bytes, ADMISSION_RECEIPT_RECORDS_OFFSET_V2)?;
+        let result_domain = decode_coordinate(bytes, ADMISSION_RECEIPT_RESULT_DOMAIN_OFFSET_V2)?;
+        let portfolio = decode_coordinate(bytes, ADMISSION_RECEIPT_PORTFOLIO_OFFSET_V2)?;
         if product.schema_id.to_bytes() != PRODUCT_RECORD_SCHEMA_ID_V2
             || result_domain.schema_id.to_bytes() != RESULT_DOMAIN_SCHEMA_ID_V2
             || portfolio.schema_id.to_bytes() != PORTFOLIO_SCHEMA_ID_V2
@@ -303,18 +297,30 @@ impl AdmissionReceiptV2 {
             return Err(Error::OutputLength);
         }
         output.fill(0);
-        put(output, 0, &ADMISSION_RECEIPT_MAGIC_V2)?;
-        put(output, 8, &ADMISSION_VERSION_V2.to_le_bytes())?;
-        put(output, RECEIPT_COUNT_OFFSET, &[ADMISSION_RECORD_COUNT_V2])?;
-        encode_coordinate(output, RECEIPT_RECORDS_OFFSET, self.product)?;
+        put(
+            output,
+            ADMISSION_RECEIPT_MAGIC_OFFSET_V2,
+            &ADMISSION_RECEIPT_MAGIC_V2,
+        )?;
+        put(
+            output,
+            ADMISSION_RECEIPT_VERSION_OFFSET_V2,
+            &ADMISSION_VERSION_V2.to_le_bytes(),
+        )?;
+        put(
+            output,
+            ADMISSION_RECEIPT_COUNT_OFFSET_V2,
+            &[ADMISSION_RECORD_COUNT_V2],
+        )?;
+        encode_coordinate(output, ADMISSION_RECEIPT_RECORDS_OFFSET_V2, self.product)?;
         encode_coordinate(
             output,
-            RECEIPT_RECORDS_OFFSET + RECORD_COORDINATE_BYTES,
+            ADMISSION_RECEIPT_RESULT_DOMAIN_OFFSET_V2,
             self.result_domain,
         )?;
         encode_coordinate(
             output,
-            RECEIPT_RECORDS_OFFSET + 2 * RECORD_COORDINATE_BYTES,
+            ADMISSION_RECEIPT_PORTFOLIO_OFFSET_V2,
             self.portfolio,
         )?;
         Ok(())
@@ -397,10 +403,10 @@ fn validate_coordinate_schema(
 
 fn decode_coordinate(bytes: &[u8], offset: usize) -> Result<FinalizedRecordCoordinateV2> {
     Ok(FinalizedRecordCoordinateV2 {
-        schema_id: read_id(bytes, offset)?,
-        content_digest: read_id(bytes, offset + 32)?,
-        raw_account: read_id(bytes, offset + 64)?,
-        staging_account: read_id(bytes, offset + 96)?,
+        schema_id: read_id(bytes, offset + RECORD_COORDINATE_SCHEMA_ID_OFFSET_V2)?,
+        content_digest: read_id(bytes, offset + RECORD_COORDINATE_CONTENT_DIGEST_OFFSET_V2)?,
+        raw_account: read_id(bytes, offset + RECORD_COORDINATE_RAW_ACCOUNT_OFFSET_V2)?,
+        staging_account: read_id(bytes, offset + RECORD_COORDINATE_STAGING_ACCOUNT_OFFSET_V2)?,
     })
 }
 
@@ -409,10 +415,26 @@ fn encode_coordinate(
     offset: usize,
     coordinate: FinalizedRecordCoordinateV2,
 ) -> Result<()> {
-    put(output, offset, &coordinate.schema_id.to_bytes())?;
-    put(output, offset + 32, &coordinate.content_digest.to_bytes())?;
-    put(output, offset + 64, &coordinate.raw_account.to_bytes())?;
-    put(output, offset + 96, &coordinate.staging_account.to_bytes())?;
+    put(
+        output,
+        offset + RECORD_COORDINATE_SCHEMA_ID_OFFSET_V2,
+        &coordinate.schema_id.to_bytes(),
+    )?;
+    put(
+        output,
+        offset + RECORD_COORDINATE_CONTENT_DIGEST_OFFSET_V2,
+        &coordinate.content_digest.to_bytes(),
+    )?;
+    put(
+        output,
+        offset + RECORD_COORDINATE_RAW_ACCOUNT_OFFSET_V2,
+        &coordinate.raw_account.to_bytes(),
+    )?;
+    put(
+        output,
+        offset + RECORD_COORDINATE_STAGING_ACCOUNT_OFFSET_V2,
+        &coordinate.staging_account.to_bytes(),
+    )?;
     Ok(())
 }
 
