@@ -379,7 +379,8 @@
       "routes": [
         "custody/dealer_reservation_v1::process",
         "trading/process_instruction",
-        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1"
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1",
+        "custody/reserve#Reserve"
       ],
       "program": "custody",
       "outcome": "executed",
@@ -448,7 +449,8 @@
       "routes": [
         "custody/dealer_reservation_v1::process",
         "trading/process_instruction",
-        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1"
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1",
+        "custody/reserve#Reserve"
       ],
       "program": "custody",
       "outcome": "executed",
@@ -489,7 +491,8 @@
       "routes": [
         "custody/dealer_reservation_v1::process",
         "trading/process_instruction",
-        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1"
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1",
+        "custody/rollback#Rollback"
       ],
       "program": "custody",
       "outcome": "refused",
@@ -928,6 +931,73 @@
       "program": "trading",
       "outcome": "executed",
       "note": "PAGE. Membership pages are streamed into the checkpoint one at a time and each is bound to its ordinal, so a page cannot arrive twice, out of order, or under another checkpoint. The lifecycle is resumable precisely because this stage commits nothing but the page it names. Observed: 806-871 wire bytes over 6 transaction(s); programs invoked trading."
+    },
+    {
+      "label": "dealer accepted: an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_collateral -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "CREATE. The first stage: a Trading-owned checkpoint PDA at the request digest, funded by the payer and bound to a dealer authority, a RentCredit and an immutable beneficiary. Everything downstream addresses the checkpoint by that digest, so this is the stage that fixes what the rest of the lifecycle is about. Observed: 541-541 wire bytes over 1 transaction(s); programs invoked 11111111111111111111111111111111, trading."
+    },
+    {
+      "label": "dealer accepted: an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_collateral -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "EVALUATE. The stage that turns a complete page set into an evaluation receipt. It refuses until every declared page has arrived, which is what makes the receipt a statement about the whole membership rather than the pages that happened to land. Observed: 409-409 wire bytes over 1 transaction(s); programs invoked trading."
+    },
+    {
+      "label": "dealer accepted: an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_collateral -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1 -- executed",
+      "routes": [
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "PAGE. Membership pages are streamed into the checkpoint one at a time and each is bound to its ordinal, so a page cannot arrive twice, out of order, or under another checkpoint. The lifecycle is resumable precisely because this stage commits nothing but the page it names. Observed: 806-871 wire bytes over 6 transaction(s); programs invoked trading."
+    },
+    {
+      "label": "dealer accepted: an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_collateral -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1 -- executed",
+      "routes": [
+        "custody/dealer_reservation_v1::process",
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1",
+        "custody/reserve#Reserve"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "CUSTODY RESERVE, and the Trading ingest that must accept it in the same transaction. Instruction zero is Custody's own `dealer_reservation_v1::process`: it debits the trading-principal vault into an escrow it creates and writes the batch, the state and the typed receipt. Instruction one is Trading's ingest. They share one transaction, so a producer whose receipt Trading refuses is rolled back whole -- the token movement included. This binding names `custody` as its program because Custody is what the chain's logs corroborate for the route claimed here; the Trading stages are claimed from their own rows. RESERVE. Trading's half of the reservation pair: it authenticates a Custody-owned receipt and joins it to the checkpoint at an ordinal. It is deliberately not the producer -- Custody moves the collateral -- so this stage's whole job is to refuse a receipt that does not belong to this checkpoint. Observed: 1026-1026 wire bytes over 1 transaction(s); programs invoked 11111111111111111111111111111111, TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA, custody, trading."
+    },
+    {
+      "label": "dealer accepted: an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_collateral -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1 -- executed",
+      "routes": [
+        "custody/dealer_reservation_v1::process",
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1",
+        "custody/rollback#Rollback"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "CUSTODY RESERVE, and the Trading ingest that must accept it in the same transaction. Instruction zero is Custody's own `dealer_reservation_v1::process`: it debits the trading-principal vault into an escrow it creates and writes the batch, the state and the typed receipt. Instruction one is Trading's ingest. They share one transaction, so a producer whose receipt Trading refuses is rolled back whole -- the token movement included. This binding names `custody` as its program because Custody is what the chain's logs corroborate for the route claimed here; the Trading stages are claimed from their own rows. ROLLBACK. Reverse-order release of outstanding reservations. Reverse order is the point: a checkpoint may not be cleaned up while a reservation it owns is still live, and rolling back out of order would let one be stranded. Observed: 1026-1026 wire bytes over 1 transaction(s); programs invoked 11111111111111111111111111111111, TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA, custody, trading."
+    },
+    {
+      "label": "dealer accepted: an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_collateral -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1 -- refused 0x600b",
+      "routes": [
+        "custody/dealer_reservation_v1::process",
+        "trading/process_instruction",
+        "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1",
+        "custody/rollback#Rollback"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::Expiry",
+      "note": "CUSTODY RESERVE, and the Trading ingest that must accept it in the same transaction. Instruction zero is Custody's own `dealer_reservation_v1::process`: it debits the trading-principal vault into an escrow it creates and writes the batch, the state and the typed receipt. Instruction one is Trading's ingest. They share one transaction, so a producer whose receipt Trading refuses is rolled back whole -- the token movement included. This binding names `custody` as its program because Custody is what the chain's logs corroborate for the route claimed here; the Trading stages are claimed from their own rows. ROLLBACK. Reverse-order release of outstanding reservations. Reverse order is the point: a checkpoint may not be cleaned up while a reservation it owns is still live, and rolling back out of order would let one be stranded. Observed: 1026-1026 wire bytes over 1 transaction(s); programs invoked custody."
     },
     {
       "label": "dealer accepted: an_expired_uncommitted_checkpoint_closes_to_its_immutable_beneficiary -- trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1 -- executed",

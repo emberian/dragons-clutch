@@ -1747,6 +1747,7 @@ dependencies = [
  "dclutch-program-test-evidence",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",

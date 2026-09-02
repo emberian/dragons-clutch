@@ -30,6 +30,12 @@ dclutch-direct-ticket = { path = "../../../../crates/dclutch-direct-ticket" }
 # moved to a workspace crate so a browser can compile the same code; this
 # binary keeps the shell and consumes it.
 dclutch-wallet-terminal-payout-operator = { path = "../../../../crates/dclutch-wallet-terminal-payout-operator", features = ["test-fixtures"] }
+# Stage ONE of the same derivation: the three pure phases that produce the
+# payout input stage two consumes. It moved out for the same reason stage two
+# did -- so a browser can compile it instead of reimplementing it -- and this
+# binary keeps the shell: arguments, the two artifact files, RPC, and the
+# cluster-origin policy.
+dclutch-wallet-terminal-input-operator = { path = "../../../../crates/dclutch-wallet-terminal-input-operator" }
 
 dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }

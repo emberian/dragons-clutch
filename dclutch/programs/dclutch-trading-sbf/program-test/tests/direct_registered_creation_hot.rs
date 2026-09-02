@@ -46,47 +46,42 @@
 //! one_policy_serves_both_registered_creation_actions`. A recorded wall decays
 //! exactly like a recorded total; this one did.
 //!
-//! **Wall C is CROSSED, and behind the wall-A probe THE CAMPAIGN COMPLETES.**
-//! It was the commit's lamport plan: `output_lamports` is seeded from the
-//! OBSERVED prestate, the Custody replay is vacant then, and
-//! `commit_output_lamports_v3` wrote that zero back over the rent the child had
-//! just deposited -- then refused its own postcondition,
-//! `require_committed_rent_exemption_v3`, on the account it had emptied.
-//! Coordinate 20, 0 lamports against 288 bytes needing 2,895,360, `Commit`
-//! 0x4005 at 1,205,519 CU. `CoordinateParticipationV3` closed it: the walk that
-//! proves a child invocation disjoint from the Effect's local operations now
-//! records, on the same pass, which coordinates that invocation reaches, and the
-//! commit leaves a child-reached coordinate at the child's poststate. See
-//! `hot_v3::committed_lamports_v3`.
-//!
-//! Measured behind the wall-A probe on a `hot-cu-profile` build (diagnostic
-//! figures, not comparable with the production numbers below), worktree at
-//! `8553f0e8`:
+//! **EVERY WALL IS CROSSED AND THE CAMPAIGN IS LIVE.** No probe, no relaxed
+//! gate, no softened assertion. `registered_sell_then_buy_execute_on_current_
+//! elves` below carries no `#[ignore]`.
 //!
 //! ```text
-//! REGSELL   368,334 CU   executes
-//! REGBUY  1,159,689 CU   executes -- and every assertion in this file passes
-//!   InitializeReplay 123,796 CU   OpenVault 141,105 CU   deposit 136,253 CU
+//! REGSELL   369,305 CU   executes
+//! REGBUY  1,144,079 CU   executes
+//!   InitializeReplay + OpenVault + delegated deposit, all successful
 //! ```
 //!
 //! A registered Sell and a registered Buy, two transactions on one bank, with
 //! the Buy creating its maker replay and registered record, opening a Custody
 //! replay and a TradingPrincipal vault, moving the maker's collateral into it
 //! through the SPL Token program, and committing exact root, maker-replay and
-//! record poststates with Claims conservation held. That had never happened.
+//! record poststates with Claims conservation held and `reserved_claims` at
+//! exact equality.
 //!
-//! **Only wall A remains**, and it is a missing implementation rather than a
-//! gate: `DirectInlineHotCrosscheckV3` is the Direct planner's independent
-//! re-derivation of every account's expected poststate, and a crosscheck that
-//! cannot check an action must refuse it. Crossing it means writing the
-//! registered analogue -- which is what the 1,604 uncalled lines of
-//! `src/direct/{sell,buy}_escrow.rs` are the input to -- not relaxing the
-//! refusal.
+//! **Wall C** was the commit's lamport plan: `output_lamports` is seeded from
+//! the OBSERVED prestate, the Custody replay is vacant then, and
+//! `commit_output_lamports_v3` wrote that zero back over the rent the child had
+//! just deposited -- then refused its own postcondition on the account it had
+//! emptied. Coordinate 20, 0 lamports against 288 bytes needing 2,895,360.
+//! `CoordinateParticipationV3` closed it; see `hot_v3::committed_lamports_v3`.
 //!
-//! Neither wall may be relaxed to make a campaign pass.
-//! `registered_sell_then_buy_execute_on_current_elves` below is the complete
-//! acceptance gate, written and ignored. Removing its `#[ignore]` is the one
-//! edit that turns a wall closure into evidence.
+//! **Wall A** was never a gate. `prepare_direct_hot_crosscheck_v3` had ONE
+//! variant, and a crosscheck that cannot check an action must refuse it. The
+//! registered variant re-derives the three accounts Direct owns -- the root, the
+//! maker replay and the registered record -- through `register_intent_v2` on
+//! inputs assembled from the runtime frame, and holds the Buy's two
+//! Custody-created accounts to the owner, balance and width Direct quotes. One
+//! flipped bit in the planner's expected record body refuses `Commit` 0x4005 at
+//! 375,255 CU, which is the measure of what the second opinion is worth.
+//!
+//! **Wall B** was crossed earlier: one manifest entry per root pinned one
+//! lifecycle policy, and Direct now emits one policy for both sides. A recorded
+//! wall decays exactly like a recorded total; all three did.
 //!
 //! # What IS live here, measured on the current ELF pack
 //!
@@ -525,25 +520,22 @@ fn table(case: &CreationCase) -> Vec<Pubkey> {
 ///
 /// # This is the acceptance gate, and it is ignored because it is BLOCKED
 ///
-/// Not skipped, not weakened: written in full, run against a probe build, and
-/// held one attribute away from being live. Behind wall A (the Direct action
-/// gate, relaxed to `Ok(None)` in a throwaway build) every assertion down to
-/// the Sell's Claims-conservation checks passes on real Core/Claims/Custody/
-/// Registry/Rent ELFs. The Buy now creates its maker replay and registered
-/// record, opens a Custody replay and a TradingPrincipal vault, and moves the
-/// maker's collateral into that vault -- three child CPIs, all successful --
-/// and COMMITS. Every assertion below passes behind that one probe. See the
-/// file header.
+/// LIVE. No probe, no relaxed gate, no softened assertion.
 ///
-/// Remove `#[ignore]` when the walls close and this file states whether the
-/// campaign completes -- do not soften an assertion to get there.
+/// It was written in full and ignored for as long as wall A stood, and wall A
+/// stood because `prepare_direct_hot_crosscheck_v3` had one variant: a
+/// crosscheck that cannot check an action must refuse it. The registered
+/// variant exists now, so the action dispatches instead of refusing, and every
+/// assertion below runs on real Core/Claims/Custody/Registry/Rent ELFs -- exact
+/// root, maker-replay and record poststates for both sides, Claims
+/// conservation, and `reserved_claims` at exact equality.
+///
+/// The Buy creates its maker replay and registered record, opens a Custody
+/// replay and a TradingPrincipal vault, moves the maker's collateral into that
+/// vault through the SPL Token program, and commits -- with the Direct planner's
+/// independent re-derivation of all three Trading-owned accounts checked against
+/// what the effect kernel actually wrote.
 #[tokio::test]
-#[ignore = "blocked on wall A ALONE: hot_v3 admits only InlineOrdinary through \
-            the Direct crosscheck, which is a missing registered crosscheck and \
-            not a gate to remove. Behind that one probe this case PASSES end to \
-            end -- Sell 368,334 CU, Buy 1,159,689 CU, three Custody children. \
-            Writing the registered DirectInlineHotCrosscheckV3 is the one edit \
-            that makes it live. See this file's header."]
 async fn registered_sell_then_buy_execute_on_current_elves() {
     let (mut context, case) = started().await;
     let fixture = &case.fixture;
@@ -844,38 +836,30 @@ async fn a_release_substitution_refuses_before_the_direct_action_wall() {
     println!("REGWALL release-substitution refusal cost: {units} CU");
 }
 
-/// WALL A, measured: the registered Sell authenticates completely and is then
-/// refused for its ACTION.
+/// WALL A, CROSSED -- and this case is the record of what it cost to cross.
 ///
-/// `TradingSbfError::UnsupportedContent` is raised in exactly one place a Direct
-/// Hot execution can reach this late --
-/// `prepare_direct_inline_hot_crosscheck_v3`'s second statement, quoted in this
-/// file's header. The two `UnsupportedContent` sites near it in `hot_v3` belong
-/// to `authenticate_strategy_for_accelerator_boxed_v4` and
-/// `authenticate_strategy_from_sealed_boxed_v3`, which run hundreds of thousands
-/// of compute units earlier, before the artifact band closes.
+/// It used to submit this exact registered Sell and require
+/// `UnsupportedContent`, measured 451 CU after the `preflight-children`
+/// checkpoint: past the manifest, the program set, the validated-artifact seal,
+/// the descriptor, the config, the lifecycle policy, the account profile, the
+/// request profile, the transition, the effect projection, the lifecycle
+/// preplan, the candidate, the replan and the child preflight. Everything about
+/// the Sell was correct and admitted; only its action was not on the
+/// crosscheck's list.
 ///
-/// The depth is the point. A `hot-cu-profile` build of this exact transaction
-/// puts the refusal 451 CU after the `preflight-children` checkpoint -- past
-/// the manifest, the program set, the validated-artifact seal, the descriptor,
-/// the config, the lifecycle policy, the account profile, the request profile,
-/// the transition, the effect projection, the lifecycle preplan, the candidate,
-/// the replan and the child preflight. Everything about this registered Sell is
-/// correct and admitted; only its action is not on the crosscheck's list.
-#[tokio::test]
-async fn registered_sell_creation_refuses_at_the_direct_action_wall() {
-    let (mut context, case) = started().await;
-    let instructions = side_instructions(&case, 0);
-    let units = refusal(
-        &mut context,
-        &case,
-        &instructions,
-        TradingSbfError::UnsupportedContent,
-        "wall A: registered Sell at the Direct crosscheck",
-    )
-    .await;
-    println!("REGWALL sell action-wall refusal cost: {units} CU");
-}
+/// The refusal was never a gate to relax. `prepare_direct_hot_crosscheck_v3`
+/// had ONE variant, and a crosscheck that cannot check an action must refuse
+/// it. The registered variant exists now, so this Sell executes -- see
+/// `registered_sell_then_buy_execute_on_current_elves` above, which is the same
+/// transaction with every poststate assertion attached.
+///
+/// The law this case guarded is not gone and is not untested. It moved to
+/// `hot_v3::tests::wall_a_still_stands_for_every_registered_action_without_a_
+/// planner`, which drives the closed action list directly instead of paying a
+/// whole chain campaign to observe one refusal -- and which can name the
+/// actions that still refuse, where this could only ever name the one it
+/// submitted.
+
 
 /// The chain is ordered, and the root prestate commitment is what orders it.
 ///

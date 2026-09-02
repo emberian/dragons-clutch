@@ -230,11 +230,6 @@
       "route": "core/resolution::process#VerifyFundReady",
       "reason": "DEAD ARM, the same defect as `core/resolution::process#AdmitTerminal` one line below it. `resolution::process` handles VerifyFundReady in a block that ends `return Ok(())` at programs/dclutch-core-sbf/src/resolution.rs:193, so control cannot reach the trailing match at line 263 and this arm (line 265) can never be selected. ADOPTED into blocked.json by C-09 (WITNESS) 2026-09-01 while convicting its neighbour: it is not in C-09's row and was carrying NO STATED REASON AT ALL, which reads as unstarted work rather than as unreachable code. Same fix, same commit. Do not confuse it with the DISTINCT and live route `resolution/process_verify#VerifyFundReady`, which is Resolution's own child handler and is separately blocked in this file on evidence wiring: the two share a name and nothing else.",
       "owner": "Core owner -- the fix is a deletion in programs/dclutch-core-sbf/src/resolution.rs:263-272, which C-09's charter forbids it from making. Found and convicted by C-09 (WITNESS) 2026-09-01."
-    },
-    {
-      "route": "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1",
-      "reason": "NOT structurally undrivable, and deliberately not phrased as blocked: no campaign drives an ACCEPTING rollback. The route IS observed by tools/gauntlet/dealer-checkpoint, but only refused -- its single driver is the hostile case in accepted.rs that replaces the Trading ingest instruction's data with a bare DCLTDRB1 rollback magic inside the Custody reservation bundle, which Trading refuses `Transition` (0x4004) after authenticating the Custody-owned receipt. `DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1` occurs exactly once in the whole campaign and that is it. What is missing is a case that reserves, then rolls back in reverse order, and asserts the reservation released -- the on-chain twin of `outstanding_reservations_require_reverse_order_rollback_before_cleanup`, which today exists only as a dealer-codec unit test. Delete this entry the moment that case lands: rollback is the only one of the seven checkpoint stages without an executed row.",
-      "owner": "C-06 Dealer"
     }
   ]
 }

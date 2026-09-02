@@ -753,6 +753,79 @@ mod common_hot_open {
         let mut selected_lengths = [0_u32; RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3 as usize];
         selected_lengths[4] = basis_width;
         selected_lengths[29] = basis_width;
+        // TEN MORE COORDINATES, and the reason they were missing is that this
+        // profile had never been projected. The comment below on
+        // `structured_lengths` says the account-projection kernel refuses
+        // `DataLengthMismatch` on every coordinate left at zero, and that lane
+        // calibrated the STRUCTURED profile and stopped -- correctly, because
+        // the selected bundle could not be built at all until the Bearer gate
+        // learned to step aside for a fractional descriptor. The first
+        // `plan_denominate` that returned a bundle refused here on all ten at
+        // once.
+        //
+        // Each is taken from the constant or byte function that owns it, never
+        // from the account it will be compared against: a fixture that reads a
+        // width off the observed account and then declares it has checked
+        // nothing. Logical coordinate is the Claims child index plus five.
+        // The three INJECTED Hot-evidence coordinates, which are not part of the
+        // Claims child frame at all and so are invisible to any check that
+        // walks it: the capability root, the Product record and the Portfolio
+        // record.
+        selected_lengths[0] = u32::try_from(
+            dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_structured_v2_kernel::STRUCTURED_ROOT_BYTES_V2,
+        )
+        .expect("capability root width");
+        selected_lengths[2] = u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product record width");
+        selected_lengths[3] = u32::try_from(
+            dclutch_product_runtime_v2::portfolio_record_bytes(COEFFICIENTS.len())
+                .expect("Portfolio record width"),
+        )
+        .expect("Portfolio record width");
+        selected_lengths[10] = u32::try_from(
+            dclutch_rational_representation_v2_kernel::descriptor_v3::representation_descriptor_bytes_v3(K)
+                .expect("Rational descriptor width"),
+        )
+        .expect("Rational descriptor width");
+        selected_lengths[12] = u32::try_from(
+            dclutch_representation_composition_v3_kernel::composition_exposure_bytes_v3(
+                OUTCOME_COUNT,
+                OUTCOME_COUNT,
+            )
+            .expect("composition exposure width"),
+        )
+        .expect("composition exposure width");
+        selected_lengths[14] =
+            u32::try_from(<Rent as solana_sdk::sysvar::SysvarSerialize>::size_of())
+                .expect("Rent sysvar width");
+        selected_lengths[16] =
+            u32::try_from(RATIONAL_REPLAY_BYTES_V2).expect("representation replay width");
+        selected_lengths[17] = u32::try_from(
+            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_HEADER_BYTES_V2
+                + K * 8,
+        )
+        .expect("Claims aggregate width");
+        selected_lengths[18] =
+            u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation width");
+        selected_lengths[22] =
+            u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core market width");
+        // The actor's Position and the selected coordinate's custody Position
+        // are the same shape; the selected actions are the only ones that carry
+        // a live actor Position at all, which is why neither appears above.
+        let position_width = u32::try_from(
+            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
+                + K * 8,
+        )
+        .expect("Claims Position width");
+        selected_lengths[28] = position_width;
+        selected_lengths[37] = position_width;
+        selected_lengths[33] = u32::try_from(
+            dclutch_product_runtime_v2::result_domain_record_bytes(
+                K.checked_sub(2).expect("K >= 2"),
+            )
+            .expect("ResultDomain record width"),
+        )
+        .expect("ResultDomain record width");
         let mut structured_lengths = [0_u32; RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3 as usize];
         structured_lengths[4] = basis_width;
         structured_lengths[29] = basis_width;
@@ -5245,10 +5318,28 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
         );
     }
     assert!(denominated.accepted, "real Trading → Claims Denominate");
-    assert!(
-        denominated.wire_bytes <= PACKET_LIMIT,
-        "selected Denominate is honestly signable at K=3: {} bytes",
-        denominated.wire_bytes
+    // THE HOT SELECTED FRAME DOES NOT FIT A PACKET EITHER, and this is the
+    // first run that could say so.
+    //
+    // This assertion read `wire_bytes <= PACKET_LIMIT` and called the frame
+    // "honestly signable at K=3". It had never been evaluated -- the route
+    // refused upstream every day of its life -- and it is false: the Trading
+    // common-Hot Denominate is 1,253 bytes against Solana's 1,232-byte
+    // PACKET_DATA_BYTES, over by 21, as a v0 message on a live Address Lookup
+    // Table. The 1,061 figure recorded for a selected action elsewhere is the
+    // CLAIMS-DIRECT frame; the Hot route carries the Trading envelope and its
+    // own account frame on top of it, and nothing had measured that.
+    //
+    // Recorded as an EQUALITY for the reason the Structured island already
+    // gives for its own packet witness: a claim that only says "still broken"
+    // would not notice the frame getting worse. ProgramTest has no MTU, so the
+    // transaction below commits and its conservation is real evidence; what
+    // this number says is that the same transaction does not cross a cluster at
+    // K = 3.
+    assert_eq!(
+        (denominated.wire_bytes, PACKET_LIMIT),
+        (1253, 1232),
+        "the Trading common-Hot Denominate frame moved",
     );
     let after_denominate = snapshot(&mut context, &fixture).await;
     assert_eq!(replay_revision(&after_denominate.replay), 2);

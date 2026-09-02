@@ -741,6 +741,7 @@ dependencies = [
  "dclutch-token-svm",
  "dclutch-trading-sbf",
  "dclutch-versioned-message-operator",
+ "dclutch-wallet-terminal-input-operator",
  "dclutch-wallet-terminal-payout-operator",
  "reqwest",
  "serde",
@@ -1191,6 +1192,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-sbf-bump-heap"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-series-v3-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1286,6 +1294,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
+ "dclutch-sbf-bump-heap",
  "dclutch-series-v3-kernel",
  "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",
@@ -1320,6 +1329,20 @@ dependencies = [
  "solana-address-lookup-table-interface",
  "solana-hash 4.6.0",
  "solana-message",
+ "solana-program",
+]
+
+[[package]]
+name = "dclutch-wallet-terminal-input-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-market-core-codec",
+ "dclutch-operator",
+ "dclutch-wallet-terminal-payout-operator",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "sha2 0.10.9",
  "solana-program",
 ]
 

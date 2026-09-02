@@ -1,0 +1,339 @@
+{
+  "campaign": "claims-claim-check-programtest",
+  "note": "Real-ELF ProgramTest for the NATIVE claim-check life: a stranger opens the escrow on a terminal or retiring market, cranks a sleeping holder's position into a claim-check, and the holder is paid from it long afterwards without ever signing. Campaign: programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs run FILTERED to `claim_check::` -- the same relationship tools/gauntlet/structured/ has to that binary, and for the same reason: the claim-check module lives beside the representation campaign because everything a claim-check needs (a founded market that went terminal, a funded Hoard, a real Custody replay, a wallet position at the winning coordinate) is already built there, and forking that scaffold would give the fixture a second author. EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE: outcomes, invoked programs and refusal codes are the ones the runtime reported in a 96-transaction fold across 58 labels, and each label was checked to carry exactly one outcome AND one refusal code before it was written down. TWO ROWS ARE DELIBERATELY NOT CLAIM-CHECK ROUTES. `the holder redeems for itself` and `redemption after a deadline-sized warp` are ORDINARY WALLET PAYOUTS through claims/terminal_settlement_v3::process -- they are the control the compaction is measured against, they invoke Custody and cost 507,165 CU against redemption's 13,610, and binding them to the redemption route because their labels say 'redeem' would credit it with transactions it never saw. WHY THIS IS A SEPARATE TIER: the unfiltered binary is bound by tools/gauntlet/claims-rational-representation-v2/, whose bindings have drifted well behind its campaign -- folding the full 273-transaction run against them reports 143 problems, including one stale binding. Repairing that is the row that owns the representation campaign, not this one; this tier is scoped to the filtered run so the claim-check rows stand on an instrument that is green.",
+  "bindings": [
+    {
+      "label": "claims claim-check: *: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup, not a protocol route: an Address Lookup Table the wallet-payout control needs to fit its frame. Bound because it is a real transaction this campaign submits and the census should not have to guess which of its 96 are load-bearing; it claims no route because it drives none."
+    },
+    {
+      "label": "claims claim-check: *: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Campaign setup; see the create row above."
+    },
+    {
+      "label": "claims claim-check: a stranger opens the escrow on a terminal market",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTCCO1. The opener is ANYBODY: it holds no role, stands in no relation to the market, and is the fee payer rather than the fixture's actor. 40,031 CU across Claims, SPL Token and the System Program."
+    },
+    {
+      "label": "claims claim-check: the escrow opens on a retiring market",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The same route on a market a stranger pushed into Retiring rather than one that resolved -- the escrow's precondition is the phase, not who caused it. 40,031 CU."
+    },
+    {
+      "label": "claims claim-check: the first open",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The first of the pair the next row's hostile follows."
+    },
+    {
+      "label": "claims claim-check: open before compaction",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The escrow every compaction case opens before its crank; observed ten times across the campaign, always accepted, always Claims + SPL Token + System."
+    },
+    {
+      "label": "claims claim-check: open without elapsing",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The open that the premature-crank case cranks against without letting the deadline elapse."
+    },
+    {
+      "label": "claims claim-check: a second open is refused",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::AlreadyCompacted",
+      "note": "HOSTILE. A second open cannot restart the compaction clock: Custom(0x5605). If it could, anyone could push a sleeping holder's deadline out forever."
+    },
+    {
+      "label": "claims claim-check: a mint the Realm does not name",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Escrow",
+      "note": "HOSTILE. The escrow's vault mint must be the one the Realm names: Custom(0x5609), 18,474 CU."
+    },
+    {
+      "label": "claims claim-check: an escrow at an address its seeds do not derive",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Identity",
+      "note": "HOSTILE. Custom(0x5602)."
+    },
+    {
+      "label": "claims claim-check: a vault at an address its seeds do not derive",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Identity",
+      "note": "HOSTILE. Custom(0x5602), 31,564 CU -- the vault variant goes further into the route than the escrow one before it refuses."
+    },
+    {
+      "label": "claims claim-check: an aggregate that is not this market's",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Identity",
+      "note": "HOSTILE. Custom(0x5602)."
+    },
+    {
+      "label": "claims claim-check: a second signer in the open frame",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Accounts",
+      "note": "HOSTILE. The route admits exactly one signer, the opener: Custom(0x5600). The campaign signs with the payer ALONE at every open call site so a co-signature cannot quietly satisfy the signer this case is about."
+    },
+    {
+      "label": "compaction",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTCCC1, and the first census evidence of the native compaction route of any kind. A STRANGER cranks a sleeping holder's position into a claim-check: 530,670 CU across Claims, Custody, SPL Token and the System Program. The holder never signs anything in this campaign, which is its whole claim."
+    },
+    {
+      "label": "first crank",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The accepted crank the next row's replay hostile follows."
+    },
+    {
+      "label": "paid crank",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The crank is paid from rent that was leaving anyway: the cranker's fee comes out of the position's own rent refund, not from a subsidy. 530,670 CU."
+    },
+    {
+      "label": "pre-redemption",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The crank the redemption cases run before they redeem; observed four times, always accepted, always 530,670 CU -- the route's cost does not depend on which case is driving it."
+    },
+    {
+      "label": "the arc",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The crank in the full arc: a market retires a sleeping holder's position and the holder is still paid, long afterwards, from the claim-check."
+    },
+    {
+      "label": "premature crank",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Deadline",
+      "note": "HOSTILE. A crank before the compaction deadline: Custom(0x5603), 11,960 CU. Forty-four times cheaper than the accepted crank, which is what a deadline conjunct checked early should look like."
+    },
+    {
+      "label": "second crank",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Accounts",
+      "note": "HOSTILE. A position cannot be compacted twice: Custom(0x5600), and the campaign asserts the refused second crank moved no byte of the claim-check."
+    },
+    {
+      "label": "crank on a position whose owner cannot sign",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckCompactionSbfErrorV1::Scope",
+      "note": "HOSTILE, twice, at 24,120 and 24,210 CU. A claim-check may only be promised to an owner that can sign for it: Custom(0x560a). Both variants raise the SAME code, which is why they can share this label -- the census would refuse it otherwise."
+    },
+    {
+      "label": "claims claim-check: the sleeping holder redeems",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_redemption#else"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTCCR1 fallthrough, and the first census evidence of the native redemption route of any kind. The holder returns long after the crank and is paid: 13,610 CU, Claims and SPL Token only -- redemption is cheap because the compaction already did the settlement work."
+    },
+    {
+      "label": "claims claim-check: first redemption",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_redemption#else"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "13,610 CU. The pair for the next row: a claim-check pays exactly once."
+    },
+    {
+      "label": "claims claim-check: the last redemption",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_redemption#else"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The redemption that empties the vault, after which the escrow can close."
+    },
+    {
+      "label": "claims claim-check: the sleeper finally returns",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_redemption#else"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The arc's payoff: the sleeping holder is paid from the claim-check the stranger's crank minted, with no cooperation from anyone."
+    },
+    {
+      "label": "claims claim-check: a second redemption",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_redemption#else"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckRedemptionSbfErrorV1::Accounts",
+      "note": "HOSTILE. Custom(0x5620), and the campaign asserts the second attempt paid nothing."
+    },
+    {
+      "label": "claims claim-check: a stranger tries to redeem",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_redemption#else"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckRedemptionSbfErrorV1::Authority",
+      "note": "HOSTILE, and the cheapest refusal in the campaign at 3,120 CU: Custom(0x5621). A stranger may CREATE a claim-check for a holder and may not redeem it -- the asymmetry the whole family exists for, stated as a code."
+    },
+    {
+      "label": "claims claim-check: the escrow closes",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTCCR1 / CloseEscrow. The settled escrow closes and its rent returns to the cranker; observed twice, 7,728 CU, Claims and SPL Token."
+    },
+    {
+      "label": "claims claim-check: close with a live claim-check",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckRedemptionSbfErrorV1::Vault",
+      "note": "HOSTILE. A close attempted while a claim-check is still unredeemed: Custom(0x5625)."
+    },
+    {
+      "label": "claims claim-check: the holder redeems for itself",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "NOT a claim-check redemption -- the CONTROL it is measured against. This is the ordinary wallet payout the holder would have taken had it not been asleep, 507,165 CU across Claims, Custody and SPL Token, and the campaign asserts a compacted claim-check is worth exactly what it paid. Binding it to the claim-check routes would credit them with a transaction they never saw."
+    },
+    {
+      "label": "claims claim-check: redemption after a deadline-sized warp",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The same wallet-payout route after the bank has warped past the compaction deadline: an ordinary holder's own redemption must not stop working merely because time passed. 507,165 CU."
+    },
+    {
+      "label": "claims rational-representation-v2: create the Claims-role Custody replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Fixture setup shared with claims-rational-representation-v2, where this route is already witnessed. Observed thirteen times here, always accepted at 199,392 CU. Bound because every transaction a campaign submits must be accounted for."
+    },
+    {
+      "label": "claims rational-representation-v2: a stranger begins retiring",
+      "routes": [],
+      "program": "core",
+      "outcome": "executed",
+      "note": "Fixture setup: the stranger-driven BeginRetiring that puts the market into the phase the escrow admits. It drives a Core route this tier does not own and therefore claims none -- naming the program without claiming a route is the honest form for a setup transaction whose route belongs to another row."
+    }
+  ]
+}

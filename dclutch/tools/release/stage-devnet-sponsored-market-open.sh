@@ -23,6 +23,17 @@ FEE_BPS=""
 # not a market. The defaults below are EXACTLY the old hardcoded values, so a
 # command line written without these flags stages the market it always did.
 CUTS="12000,18000"
+# The author's BELIEF about the outcome. Since `26179076` the gated product
+# entrance measures a partition for degeneracy against a declared band, and a
+# Pyth market without one refuses by name -- so a stager that could not pass one
+# could not stage a Pyth market at all. All five or none, the same discipline
+# the compiler enforces: a partial band is not a weaker belief, it is an
+# unstated one.
+BAND_ANCHOR=""
+BAND_VOLATILITY_BPS=""
+BAND_WINDOW_SLOTS=""
+BAND_PLAUSIBLE_HALF_WIDTHS=""
+BAND_MAX_CELL_SHARE_BPS=""
 COEFFICIENTS="1,0,1,0"
 CUT_DENOMINATOR="100"
 
@@ -55,6 +66,13 @@ real `devnet-sponsored-market` MarketRunInput, then writes an execute-only
 campaign wrapper that requires explicit environment variables and
 DCLUTCH_AUTHORIZE_MARKET_OPEN=YES.  No key file is read and no transaction is
 submitted by this command.
+
+--band-anchor, --band-volatility-bps, --band-window-slots,
+--band-plausible-half-widths and --band-max-cell-share-bps state the author's
+BELIEF and are required together or not at all.  The gated product entrance
+measures the partition for degeneracy against that belief, so a Pyth market
+without one refuses by name rather than founding a market whose answer is
+already known.
 
 --direct-fee-basis-points has no default and must be stated.  The rate is
 sealed into the Market at founding and cannot be changed afterwards.
@@ -106,6 +124,11 @@ while [ "$#" -gt 0 ]; do
         --cuts) CUTS="${2:?--cuts needs a value}"; shift 2 ;;
         --coefficients) COEFFICIENTS="${2:?--coefficients needs a value}"; shift 2 ;;
         --cut-denominator) CUT_DENOMINATOR="${2:?--cut-denominator needs a value}"; shift 2 ;;
+        --band-anchor) BAND_ANCHOR="${2:?--band-anchor needs a value}"; shift 2 ;;
+        --band-volatility-bps) BAND_VOLATILITY_BPS="${2:?--band-volatility-bps needs a value}"; shift 2 ;;
+        --band-window-slots) BAND_WINDOW_SLOTS="${2:?--band-window-slots needs a value}"; shift 2 ;;
+        --band-plausible-half-widths) BAND_PLAUSIBLE_HALF_WIDTHS="${2:?--band-plausible-half-widths needs a value}"; shift 2 ;;
+        --band-max-cell-share-bps) BAND_MAX_CELL_SHARE_BPS="${2:?--band-max-cell-share-bps needs a value}"; shift 2 ;;
         --rpc-url) DEVNET_RPC="${2:?--rpc-url needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -190,6 +213,21 @@ PRICE_READER="$REPO/tools/release/devnet-price-update.sh"
 mkdir -m 700 "$WORK"
 trap 'rm -rf "$WORK"' ERR INT TERM
 
+# All five band parts or none. The compiler refuses a partial band by name; this
+# refuses it before a socket is opened, naming the same five.
+BAND_SET=0
+for part in "$BAND_ANCHOR" "$BAND_VOLATILITY_BPS" "$BAND_WINDOW_SLOTS" \
+            "$BAND_PLAUSIBLE_HALF_WIDTHS" "$BAND_MAX_CELL_SHARE_BPS"; do
+    [ -n "$part" ] && BAND_SET=$((BAND_SET + 1))
+done
+BAND_FLAGS=""
+if [ "$BAND_SET" = 5 ]; then
+    BAND_FLAGS="--band-anchor $BAND_ANCHOR --band-volatility-bps $BAND_VOLATILITY_BPS --band-window-slots $BAND_WINDOW_SLOTS --band-plausible-half-widths $BAND_PLAUSIBLE_HALF_WIDTHS --band-max-cell-share-bps $BAND_MAX_CELL_SHARE_BPS"
+elif [ "$BAND_SET" != 0 ]; then
+    echo "an incomplete founding band was stated: --band-anchor, --band-volatility-bps, --band-window-slots, --band-plausible-half-widths and --band-max-cell-share-bps are required together, because the band is the author's belief about the outcome and no part of it has a default" >&2
+    exit 2
+fi
+
 # The price reader makes exactly the bounded public reads it documents and
 # writes a fresh 134-byte account body. It never contacts Hermes/Price Service.
 "$PRICE_READER" --url "$DEVNET_RPC" --out "$WORK/sol-usd.price-update-v2"
@@ -211,6 +249,7 @@ cargo run --locked --manifest-path "$BOOT/Cargo.toml" -- devnet-sponsored-market
     --cuts "$CUTS" \
     --coefficients "$COEFFICIENTS" \
     --cut-denominator "$CUT_DENOMINATOR" \
+    $BAND_FLAGS \
     > "$WORK/market.json"
 
 # This only makes the remaining authority explicit. It invokes the existing

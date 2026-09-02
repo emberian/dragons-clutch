@@ -10,13 +10,21 @@
 
 use std::{io::Write, path::PathBuf};
 
-use dclutch_claims_svm::liability_basis_state_v2::{
-    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
-};
-use dclutch_market_core_codec::{CoreState, StateBumpsV1};
+use dclutch_market_core_codec::CoreState;
 use dclutch_operator::ObservedAccount;
+use dclutch_wallet_terminal_input_operator::{
+    ProtocolCoordinatesV1, RoutedRecordV1, TerminalPayoutRequestV1, TerminalRecordRoutingV1,
+    TerminalRoutingTableV1, complete_terminal_payout_input_v1, decode_routed_market_v1,
+    route_terminal_payout_frame_v1, terminal_payout_round_one_addresses_v1,
+};
 use sha2::{Digest, Sha256};
-use solana_program::{hash::hashv, pubkey::Pubkey};
+use solana_program::pubkey::Pubkey;
+
+// The three pure phases moved to `dclutch-wallet-terminal-input-operator`, and
+// every item this binary's other modules were reaching is re-exported at its
+// old path. `terminal_sequence` and `aggregate_retirement_exterior` call these
+// unchanged; the move changed where the code lives, not what may call it.
+pub(crate) use dclutch_wallet_terminal_input_operator::authenticate_zero_claims_v1 as authenticate_zero_claims;
 
 use crate::wallet_terminal::snapshot_from_rpc;
 use crate::{
@@ -29,14 +37,9 @@ use crate::{
     model::SuccessorPlan,
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, WritePolicyV1},
-    wallet_terminal::{
-        FinalizedSnapshotV1, INPUT_FORMAT, LookupTableRequirementV1, PlanInputV1,
-        ProgramSelectorsV1, RecordPairV1, RecordSelectorsV1, SelectedInputV1, build_report,
-        record_pair,
-    },
+    wallet_terminal::{FinalizedSnapshotV1, PlanInputV1, RecordPairV1, record_pair},
 };
 
-const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context/v1";
 pub(crate) const OWNED_LOOPBACK_WALLET_TERMINAL_INPUT_COMMAND_V1: &str =
     "local-private-validator-wallet-terminal-payout-input-v1";
 const TERMINAL_COMPOSITION_LABELS_V1: [&str; 4] = [
@@ -100,14 +103,6 @@ struct ArgumentsV1 {
     quantity: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CoreTerminalReceiptMeaningV1 {
-    /// Every admitted Core writer persists the exact Resolution certificate
-    /// account key. Market-family interpretation belongs to the authenticated
-    /// certificate body, never to this identity.
-    ResolutionCertificate(Pubkey),
-}
-
 pub(crate) fn run_wallet_terminal_input(arguments: Vec<String>) -> Result<()> {
     stdout_json(&produce_wallet_terminal_input_v1(
         arguments,
@@ -145,163 +140,124 @@ fn produce_wallet_terminal_input_v1(
     authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
     require_terminal_composition_evidence(&evidence)?;
 
-    authenticate_campaign_market_v1(&evidence, arguments.market)?;
-    let mut rpc = Rpc::connect_cluster(&arguments.origin, WritePolicyV1::ReadsOnly)?;
-    let receipt_snapshot = finalized_snapshot(&mut rpc, &[arguments.market])?;
-    let live_market = decode_routed_market(
-        receipt_snapshot.required(arguments.market, "Core Market")?,
-        pubkey(&plan.core.program_id)?,
-        &plan,
-    )?;
-    let terminal_receipt = live_market
-        .terminal_receipt
-        .ok_or_else(|| Error::new("Core Market has no accepted terminal receipt"))?
-        .to_bytes();
+    // THE SHELL'S WHOLE PROTOCOL CONTRIBUTION, enumerated rather than assumed:
+    // six coordinates out of the plan, and one address book out of the sealed
+    // campaign report. Everything past this line is pure and lives in
+    // `dclutch-wallet-terminal-input-operator`, which is why a browser can run
+    // it. The two file reads, the RPC and the cluster-origin policy stay here.
+    let coordinates = protocol_coordinates_v1(&plan)?;
+    let routing = terminal_routing_table_v1(&evidence)?;
+    let request = TerminalPayoutRequestV1 {
+        market: arguments.market,
+        owner: arguments.owner,
+        recipient: arguments.recipient,
+        claim_index: arguments.claim_index,
+        quantity: arguments.quantity,
+    };
 
+    // ROUND ONE, and there are only two.
+    //
     // Decision 0008 §1: the Claims aggregate is the SOLE persisted owner of
     // this Market's Custody namespace, and no route may re-guess it. The
     // campaign report's `founding_custody_context` records the founding's own
     // action pre-image, and Custody addresses the Claims-role replay a payout
-    // decodes under that pre-image's projected-hoard digest — so taking the
+    // decodes under that pre-image's projected-hoard digest -- so taking the
     // context from evidence here addressed a replay that has never existed at
-    // any market, and the refusal named the raw-form address.
+    // any market, and the refusal named the raw-form address. This reads the
+    // owner of the namespace directly instead, which is the decision applied
+    // rather than worked around.
     //
-    // The refresh is the remedy where a document must carry the row
-    // (EVIDENCE_REFRESH_V1 §3, and `chain_persisted_custody_context`). Here no
-    // document is needed at all: this command already holds a finalized RPC and
-    // the aggregate is on chain, so it reads the owner of the namespace
-    // directly. That is the decision applied rather than worked around.
-    let custody_context = chain_custody_context_v1(&mut rpc, &plan, arguments.market)?;
-    let mut input = routed_input(
-        &plan,
-        &evidence,
-        &arguments,
-        terminal_receipt,
-        custody_context,
-    )?;
-    let routed = SelectedInputV1::parse(&input, LookupTableRequirementV1::Absent)?;
-    authenticate_routing_hints(&routed, &evidence)?;
+    // And the aggregate's address is a PDA of the Market under the plan's
+    // Claims program, derivable before any read -- so it shares the Market's
+    // round rather than costing one of its own. This command took three
+    // rounds and takes two.
+    let round_one_keys = terminal_payout_round_one_addresses_v1(&coordinates, &routing, &request)?;
+    let mut rpc = Rpc::connect_cluster(&arguments.origin, WritePolicyV1::ReadsOnly)?;
+    let round_one = finalized_snapshot(&mut rpc, &round_one_keys)?;
+    let frame = route_terminal_payout_frame_v1(&coordinates, &routing, &request, &round_one)?;
 
-    let addresses = routed.addresses();
-    let floor = receipt_snapshot.observation.slot;
+    // ROUND TWO, at the floor round one established, over the addresses the
+    // derivation itself names. Nothing here assembles that list.
+    let addresses = frame.addresses();
+    let floor = round_one.observation.slot;
     let (slot, values) = rpc.finalized_accounts(&addresses, floor)?;
-    let snapshot = snapshot_from_rpc(slot, rpc.block_time(slot)?, &addresses, values)?;
-    let receipt_meaning = authenticate_core_terminal_receipt_meaning_v1(&routed, &snapshot)?;
+    let round_two = snapshot_from_rpc(slot, rpc.block_time(slot)?, &addresses, values)?;
 
-    let position_account = snapshot.required(routed.position, "Claims Position")?;
-    let position = LiabilityBasisPositionViewV2::decode(&position_account.data)
-        .map_err(|error| Error::new(format!("Claims Position: {error:?}")))?;
-    let full_balance = position
-        .balance(&position_account.data, arguments.claim_index)
-        .map_err(|error| Error::new(format!("Claims Position balance: {error:?}")))?;
-    let quantity = arguments.quantity.unwrap_or(full_balance);
-    if quantity == 0 || quantity > full_balance {
-        return Err(Error::new(format!(
-            "payout quantity must be within 1..={full_balance} atoms at claim index {}",
-            arguments.claim_index
-        )));
-    }
-    input.quantity = quantity.to_string();
-    input.parent_context = hex(&stable_parent_context_v1(
-        &routed,
-        &snapshot,
-        quantity,
-        arguments.claim_index,
-    )?);
-
-    let selected = SelectedInputV1::parse(&input, LookupTableRequirementV1::Absent)?;
-    if selected.addresses() != addresses {
-        return Err(Error::new(
-            "wallet payout selectors changed after authenticated quantity/context construction",
-        ));
-    }
-    let _authenticated = build_report(&selected, &snapshot)?;
-    let receipt_label = match receipt_meaning {
-        CoreTerminalReceiptMeaningV1::ResolutionCertificate(_) => "Resolution certificate",
-    };
+    let completed = complete_terminal_payout_input_v1(&frame, &round_two, &request)?;
     eprintln!(
         "wallet-terminal-payout-input: authenticated one finalized snapshot at slot {} with live Core {}",
-        snapshot.observation.slot, receipt_label,
+        round_two.observation.slot,
+        completed.receipt_meaning.label(),
     );
-    Ok(input)
+    Ok(completed.input)
 }
 
-fn authenticate_core_terminal_receipt_meaning_v1(
-    selected: &SelectedInputV1,
-    snapshot: &FinalizedSnapshotV1,
-) -> Result<CoreTerminalReceiptMeaningV1> {
-    let market = CoreState::decode(&snapshot.required(selected.market, "Core Market")?.data)
-        .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
-    let receipt = market
-        .terminal_receipt
-        .ok_or_else(|| Error::new("Core Market has no accepted terminal receipt"))?
-        .to_bytes();
-    if receipt != selected.terminal_certificate.to_bytes() {
-        return Err(Error::new(
-            "live Core terminal receipt differs from the projected payout identity",
-        ));
-    }
-    Ok(CoreTerminalReceiptMeaningV1::ResolutionCertificate(
-        Pubkey::new_from_array(receipt),
-    ))
+/// The six protocol coordinates the derivation takes from the plan.
+///
+/// Enumerated rather than assumed: every `plan.*` access the producer made is
+/// one of these. A browser holds five of them from its own deployment table and
+/// reads the sixth out of the Market's Core state.
+fn protocol_coordinates_v1(plan: &SuccessorPlan) -> Result<ProtocolCoordinatesV1> {
+    Ok(ProtocolCoordinatesV1 {
+        registry: pubkey(&plan.registry.program_id)?,
+        core: pubkey(&plan.core.program_id)?,
+        claims: pubkey(&plan.claims.program_id)?,
+        custody: pubkey(&plan.custody.program_id)?,
+        resolution: pubkey(&plan.resolution.program_id)?,
+        release_set: hex32(&plan.release_set_id)?,
+    })
 }
 
+/// The routing table the derivation takes from one sealed campaign report.
+///
+/// The campaign emitter and its parser deliberately live together, so this
+/// PROJECTS the report rather than moving it: exactly the eleven rows the
+/// derivation reads, and nothing of the report's execution, transaction or
+/// account vocabulary crosses the boundary. Every address it names is
+/// re-derived from its own digest and re-authenticated against finalized state
+/// on the far side, which is what keeps it an address book rather than an
+/// authority.
+fn terminal_routing_table_v1(
+    evidence: &CampaignTerminalEvidenceV1,
+) -> Result<TerminalRoutingTableV1> {
+    let routed = |label: &str| -> Result<RoutedRecordV1> {
+        let persisted = required_account(evidence, label)?;
+        Ok(RoutedRecordV1 {
+            digest: hex32(&persisted.data_sha256)?,
+            address: pubkey(&persisted.address)?,
+        })
+    };
+    let mint = required_account(evidence, "collateral_mint")?;
+    Ok(TerminalRoutingTableV1 {
+        founding_market: pubkey(&required_account(evidence, "founding_market")?.address)?,
+        collateral_mint: pubkey(&mint.address)?,
+        token_program: pubkey(&mint.owner)?,
+        records: TerminalRecordRoutingV1 {
+            realm: routed("realm_record")?,
+            product: routed("product_record")?,
+            result_domain: routed("result_domain_record")?,
+            portfolio: routed("portfolio_record")?,
+            product_basis: routed("linked_liability_basis_record")?,
+            composition_descriptor: routed(TERMINAL_COMPOSITION_LABELS_V1[0])?,
+            composition_graph: routed(TERMINAL_COMPOSITION_LABELS_V1[1])?,
+            composition_translation: routed(TERMINAL_COMPOSITION_LABELS_V1[2])?,
+            composition_exposure: routed(TERMINAL_COMPOSITION_LABELS_V1[3])?,
+        },
+    })
+}
+
+/// Decode one Core Market against the plan's own routing coordinates.
+///
+/// The derivation moved; the four call sites in `terminal_sequence` keep the
+/// shape they had, with `core` passed explicitly as they always passed it.
 pub(crate) fn decode_routed_market(
     account: &ObservedAccount,
     core: Pubkey,
     plan: &SuccessorPlan,
 ) -> Result<CoreState> {
-    let market = CoreState::decode(&account.data)
-        .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
-    if account.owner != core
-        || account.executable
-        || account.key.to_bytes() != market.identity.market_id.to_bytes()
-        || market.identity.registry_program.to_bytes()
-            != pubkey(&plan.registry.program_id)?.to_bytes()
-        || market.identity.selected_release_set.to_bytes() != hex32(&plan.release_set_id)?
-    {
-        return Err(Error::new(
-            "Core Market owner/address/Registry/release-set routing authentication refused",
-        ));
-    }
-    Ok(market)
-}
-
-pub(crate) fn authenticate_zero_claims(
-    account: &ObservedAccount,
-    expected: Pubkey,
-    claims: Pubkey,
-    market: CoreState,
-    custody_context: [u8; 32],
-) -> Result<()> {
-    let aggregate = LiabilityBasisMarketViewV2::decode(&account.data)
-        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
-    if account.key != expected
-        || account.owner != claims
-        || account.executable
-        || aggregate.logical_market != market.identity.market_id.to_bytes()
-        || aggregate.release_set != market.identity.selected_release_set.to_bytes()
-        || aggregate.registry_program != market.identity.registry_program.to_bytes()
-        || aggregate.product_instance_id != market.identity.product_id.to_bytes()
-        || aggregate.realm_id != market.identity.realm_id.to_bytes()
-        || aggregate.custody_context != custody_context
-        || aggregate.generation != market.identity.generation
-    {
-        return Err(Error::new(
-            "Claims aggregate address/owner/Market/release/Product/Realm/custody/generation join refused",
-        ));
-    }
-    for claim_index in 0..aggregate.claim_count {
-        let supply = aggregate
-            .supply(&account.data, claim_index)
-            .map_err(|error| Error::new(format!("Claims supply {claim_index}: {error:?}")))?;
-        if supply != 0 {
-            return Err(Error::new(format!(
-                "BeginRetiring is blocked: Claims supply at index {claim_index} is {supply}; produce and execute wallet terminal payouts first"
-            )));
-        }
-    }
-    Ok(())
+    let mut coordinates = protocol_coordinates_v1(plan)?;
+    coordinates.core = core;
+    Ok(decode_routed_market_v1(account, &coordinates)?)
 }
 
 pub(crate) fn routed_record(
@@ -329,171 +285,6 @@ pub(crate) fn finalized_snapshot(rpc: &mut Rpc, keys: &[Pubkey]) -> Result<Final
     let floor = rpc.finalized_slot()?;
     let (slot, values) = rpc.finalized_accounts(&keys, floor)?;
     snapshot_from_rpc(slot, rpc.block_time(slot)?, &keys, values)
-}
-
-/// The Market's Custody namespace, read from the account that owns it.
-///
-/// The aggregate is addressed by derivation rather than by an evidence label,
-/// so a substituted document cannot point this at another market's namespace;
-/// the seed is the one every other `LiabilityBasisV2` consumer uses.
-fn chain_custody_context_v1(
-    rpc: &mut Rpc,
-    plan: &SuccessorPlan,
-    market: Pubkey,
-) -> Result<[u8; 32]> {
-    let claims = pubkey(&plan.claims.program_id)?;
-    let key =
-        Pubkey::find_program_address(&[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()], &claims).0;
-    let snapshot = finalized_snapshot(rpc, &[key])?;
-    let account = snapshot.required(key, "Claims aggregate")?;
-    if account.owner != claims || account.executable {
-        return Err(Error::new(format!(
-            "the Claims aggregate at {key} is owned by {}, not the plan's Claims program {claims}",
-            account.owner
-        )));
-    }
-    let aggregate = LiabilityBasisMarketViewV2::decode(&account.data)
-        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
-    if aggregate.logical_market != market.to_bytes() {
-        return Err(Error::new(
-            "the Claims aggregate names another logical market",
-        ));
-    }
-    Ok(aggregate.custody_context)
-}
-
-fn routed_input(
-    plan: &SuccessorPlan,
-    evidence: &CampaignTerminalEvidenceV1,
-    arguments: &ArgumentsV1,
-    terminal_receipt: [u8; 32],
-    custody_context: [u8; 32],
-) -> Result<PlanInputV1> {
-    let record_digest = |label: &str| -> Result<String> {
-        Ok(required_account(evidence, label)?.data_sha256.clone())
-    };
-    let mint = required_account(evidence, "collateral_mint")?;
-    Ok(PlanInputV1 {
-        format: INPUT_FORMAT.into(),
-        market: arguments.market.to_string(),
-        owner: arguments.owner.to_string(),
-        recipient_owner: arguments.owner.to_string(),
-        recipient: arguments.recipient.to_string(),
-        collateral_mint: mint.address.clone(),
-        token_program: mint.owner.clone(),
-        // Quantity and parent context do not select accounts. They are filled
-        // from the authenticated snapshot before this input is emitted.
-        quantity: "1".into(),
-        claim_index: arguments.claim_index,
-        transfer_index: 0,
-        parent_context: hex(&[1; 32]),
-        custody_context: hex(&custody_context),
-        release_set: plan.release_set_id.clone(),
-        terminal_certificate: Pubkey::new_from_array(terminal_receipt).to_string(),
-        lookup_table: None,
-        programs: ProgramSelectorsV1 {
-            registry: plan.registry.program_id.clone(),
-            core: plan.core.program_id.clone(),
-            claims: plan.claims.program_id.clone(),
-            custody: plan.custody.program_id.clone(),
-            resolution: plan.resolution.program_id.clone(),
-        },
-        records: RecordSelectorsV1 {
-            realm: record_digest("realm_record")?,
-            product: record_digest("product_record")?,
-            result_domain: record_digest("result_domain_record")?,
-            portfolio: record_digest("portfolio_record")?,
-            product_basis: record_digest("linked_liability_basis_record")?,
-            composition_descriptor: record_digest(TERMINAL_COMPOSITION_LABELS_V1[0])?,
-            composition_graph: record_digest(TERMINAL_COMPOSITION_LABELS_V1[1])?,
-            composition_translation: record_digest(TERMINAL_COMPOSITION_LABELS_V1[2])?,
-            composition_exposure: record_digest(TERMINAL_COMPOSITION_LABELS_V1[3])?,
-        },
-    })
-}
-
-fn authenticate_routing_hints(
-    selected: &SelectedInputV1,
-    evidence: &CampaignTerminalEvidenceV1,
-) -> Result<()> {
-    let expected = [
-        ("realm_record", selected.realm.raw),
-        ("product_record", selected.product.raw),
-        ("result_domain_record", selected.result_domain.raw),
-        ("portfolio_record", selected.portfolio.raw),
-        ("linked_liability_basis_record", selected.product_basis.raw),
-        (
-            TERMINAL_COMPOSITION_LABELS_V1[0],
-            selected.composition_descriptor.raw,
-        ),
-        (
-            TERMINAL_COMPOSITION_LABELS_V1[1],
-            selected.composition_graph.raw,
-        ),
-        (
-            TERMINAL_COMPOSITION_LABELS_V1[2],
-            selected.composition_translation.raw,
-        ),
-        (
-            TERMINAL_COMPOSITION_LABELS_V1[3],
-            selected.composition_exposure.raw,
-        ),
-    ];
-    for (label, derived) in expected {
-        let persisted = pubkey(&required_account(evidence, label)?.address)?;
-        if persisted != derived {
-            return Err(Error::new(format!(
-                "persisted {label} address {persisted} is not the canonical raw-record PDA {derived}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn stable_parent_context_v1(
-    selected: &SelectedInputV1,
-    snapshot: &FinalizedSnapshotV1,
-    quantity: u64,
-    claim_index: u32,
-) -> Result<[u8; 32]> {
-    let market = snapshot.required(selected.market, "Core Market")?;
-    let aggregate = snapshot.required(selected.aggregate, "Claims aggregate")?;
-    let position = snapshot.required(selected.position, "Claims Position")?;
-    let replay = snapshot.required(selected.custody_replay, "Claims Custody replay")?;
-    let hoard = snapshot.required(selected.hoard, "Hoard token account")?;
-    let recipient = snapshot.required(selected.recipient, "recipient token account")?;
-    let market_digest = Sha256::digest(&market.data);
-    let aggregate_digest = Sha256::digest(&aggregate.data);
-    let position_digest = Sha256::digest(&position.data);
-    let replay_digest = Sha256::digest(&replay.data);
-    let hoard_digest = Sha256::digest(&hoard.data);
-    let recipient_digest = Sha256::digest(&recipient.data);
-    let quantity_bytes = quantity.to_le_bytes();
-    let claim_index_bytes = claim_index.to_le_bytes();
-    let transfer_index_bytes = 0_u16.to_le_bytes();
-    let context = hashv(&[
-        PARENT_CONTEXT_DOMAIN_V1,
-        selected.market.as_ref(),
-        selected.owner.as_ref(),
-        selected.position.as_ref(),
-        selected.recipient.as_ref(),
-        &quantity_bytes,
-        &claim_index_bytes,
-        &transfer_index_bytes,
-        &selected.release_set,
-        selected.terminal_certificate.as_ref(),
-        &market_digest,
-        &aggregate_digest,
-        &position_digest,
-        &replay_digest,
-        &hoard_digest,
-        &recipient_digest,
-    ])
-    .to_bytes();
-    if context == [0; 32] {
-        return Err(Error::new("derived wallet payout parent context was zero"));
-    }
-    Ok(context)
 }
 
 pub(crate) fn authenticate_plan_source(source: &[u8], expected: &str) -> Result<()> {
@@ -781,59 +572,12 @@ mod tests {
         LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
         liability_basis_vector_width_v2,
     };
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness};
+    use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
     use dclutch_operator::{Finality, Observation, ObservedAccount};
     use serde_json::Value;
     use solana_sdk::signature::{Keypair, Signer as _};
-    use solana_sdk_ids::system_program;
 
     use super::*;
-
-    fn observed(key: Pubkey, tag: u8, slot: u64) -> ObservedAccount {
-        ObservedAccount {
-            observation: Observation {
-                slot,
-                unix_timestamp: 1_700_000_000,
-                finality: Finality::Finalized,
-            },
-            key,
-            owner: system_program::ID,
-            lamports: 1,
-            executable: false,
-            data: vec![tag; 32],
-        }
-    }
-
-    fn context_fixture(slot: u64) -> (SelectedInputV1, FinalizedSnapshotV1) {
-        let mut value = super::super::wallet_terminal::tests::input();
-        value.lookup_table = None;
-        let selected = SelectedInputV1::parse(&value, LookupTableRequirementV1::Absent)
-            .expect("selected input");
-        let keys = [
-            selected.market,
-            selected.aggregate,
-            selected.position,
-            selected.custody_replay,
-            selected.hoard,
-            selected.recipient,
-        ];
-        let accounts = keys
-            .into_iter()
-            .enumerate()
-            .map(|(index, key)| (key, observed(key, u8::try_from(index + 1).unwrap(), slot)))
-            .collect();
-        (
-            selected,
-            FinalizedSnapshotV1 {
-                observation: Observation {
-                    slot,
-                    unix_timestamp: 1_700_000_000,
-                    finality: Finality::Finalized,
-                },
-                accounts,
-            },
-        )
-    }
 
     fn identity(value: u8) -> Identity {
         Identity::new([value; 32]).expect("identity")
@@ -915,67 +659,40 @@ mod tests {
         }
     }
 
+    /// The routing table demands each of its eleven rows BY LABEL.
+    ///
+    /// The projection is what crosses the boundary into the pure derivation, so
+    /// a report missing a row must be blamed here, at the document, rather than
+    /// producing a table with a zero coordinate that the far side then refuses
+    /// with a sentence about a PDA.
     #[test]
-    fn retry_context_ignores_observation_slot_but_binds_request_and_prestate() {
-        let (selected_a, snapshot_a) = context_fixture(100);
-        let (mut selected_b, mut snapshot_b) = context_fixture(200);
-        let first = stable_parent_context_v1(&selected_a, &snapshot_a, 7, 1).unwrap();
-        let retry = stable_parent_context_v1(&selected_b, &snapshot_b, 7, 1).unwrap();
-        assert_eq!(first, retry, "finalized slot is not caller entropy");
-
-        assert_ne!(
-            first,
-            stable_parent_context_v1(&selected_b, &snapshot_b, 6, 1).unwrap()
-        );
-        assert_ne!(
-            first,
-            stable_parent_context_v1(&selected_b, &snapshot_b, 7, 0).unwrap()
-        );
-        selected_b.owner = Pubkey::new_unique();
-        assert_ne!(
-            first,
-            stable_parent_context_v1(&selected_b, &snapshot_b, 7, 1).unwrap()
-        );
-        selected_b.owner = selected_a.owner;
-        let mut substituted_certificate = selected_b.terminal_certificate.to_bytes();
-        substituted_certificate[0] ^= 1;
-        selected_b.terminal_certificate = Pubkey::new_from_array(substituted_certificate);
-        assert_ne!(
-            first,
-            stable_parent_context_v1(&selected_b, &snapshot_b, 7, 1).unwrap()
-        );
-        selected_b.terminal_certificate = selected_a.terminal_certificate;
-        snapshot_b
-            .accounts
-            .get_mut(&selected_b.custody_replay)
-            .expect("replay")
-            .data[0] ^= 1;
-        assert_ne!(
-            first,
-            stable_parent_context_v1(&selected_b, &snapshot_b, 7, 1).unwrap()
-        );
-        snapshot_b
-            .accounts
-            .get_mut(&selected_b.custody_replay)
-            .expect("replay")
-            .data[0] ^= 1;
-        selected_b.recipient = Pubkey::new_unique();
-        snapshot_b
-            .accounts
-            .insert(selected_b.recipient, observed(selected_b.recipient, 6, 200));
-        assert_ne!(
-            first,
-            stable_parent_context_v1(&selected_b, &snapshot_b, 7, 1).unwrap()
-        );
-    }
-
-    #[test]
-    fn context_refuses_a_missing_authenticated_prestate() {
-        let (selected, mut snapshot) = context_fixture(100);
-        snapshot.accounts.remove(&selected.custody_replay);
-        let error = stable_parent_context_v1(&selected, &snapshot, 7, 1)
-            .expect_err("missing replay must refuse");
-        assert!(error.to_string().contains("snapshot omitted"));
+    fn the_routing_table_names_every_row_the_derivation_reads() {
+        let labels = [
+            "founding_market",
+            "collateral_mint",
+            "realm_record",
+            "product_record",
+            "result_domain_record",
+            "portfolio_record",
+            "linked_liability_basis_record",
+            TERMINAL_COMPOSITION_LABELS_V1[0],
+            TERMINAL_COMPOSITION_LABELS_V1[1],
+            TERMINAL_COMPOSITION_LABELS_V1[2],
+            TERMINAL_COMPOSITION_LABELS_V1[3],
+        ];
+        let exact = evidence_with_labels(&labels);
+        terminal_routing_table_v1(&exact).expect("a complete address book projects");
+        for label in labels {
+            let mut hostile = exact.clone();
+            hostile.accounts.remove(label);
+            let error = terminal_routing_table_v1(&hostile)
+                .expect_err("a missing row must refuse")
+                .to_string();
+            assert!(
+                error.contains(label) && error.contains("missing account label"),
+                "{label}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -1362,15 +1079,6 @@ mod tests {
         assert_eq!(canonical_u64("1", "quantity").unwrap(), 1);
         assert!(canonical_u64("0", "quantity").is_err());
         assert!(canonical_u64("01", "quantity").is_err());
-    }
-
-    #[test]
-    fn live_core_receipt_has_one_certificate_account_meaning() {
-        let receipt = [23; 32];
-        assert_eq!(
-            CoreTerminalReceiptMeaningV1::ResolutionCertificate(Pubkey::new_from_array(receipt)),
-            CoreTerminalReceiptMeaningV1::ResolutionCertificate(Pubkey::new_from_array(receipt))
-        );
     }
 
     #[test]

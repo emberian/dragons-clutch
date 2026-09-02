@@ -681,23 +681,30 @@ fn encode_transition() -> Result<Vec<u8>> {
         InstructionV3::scalar_lt(s(SCALAR_SELECTED_OUTCOME), s(SCALAR_OUTCOME_COUNT)),
         InstructionV3::nonzero(s(SCALAR_QUANTITY)),
         InstructionV3::nonzero(s(SCALAR_DENOMINATOR)),
-        // THE BEARER BASIS VECTOR, restated at the one coordinate this request
-        // carries. A Bearer descriptor is `D * e_k`: the selected coordinate's
-        // coefficient IS the denominator and every other coordinate is zero,
-        // which `BearerDescriptorV2::authenticate` requires outright
-        // (`bearer-v2-contract/src/lib.rs:140-151`) and which
-        // `construct_chain_denominate` applies to every selected open action
-        // before it will build one (`lib.rs:167-178`). A selected request whose
-        // coefficient is not `D` therefore names a coordinate its own planner
-        // refuses as `NotBearer`, and this is where the artifact says so.
+        // AT MOST THE DENOMINATOR, the same property the full-width sibling
+        // asserts and for the same reason: it is the one thing true of both
+        // families this wire now carries.
         //
-        // It was briefly changed to `nonzero` on 2026-09-01 as the "same
-        // correction" the full-width sibling took, and that was wrong: the
-        // sibling's guard demanded `D` of EVERY coordinate, which no descriptor
-        // in either family can satisfy, while this one demands it of the ONE
-        // coordinate that is defined to have it. Restored the same day, before
-        // anything ran on it.
-        InstructionV3::scalar_eq(s(SCALAR_COEFFICIENT), s(SCALAR_DENOMINATOR)),
+        // This WAS `scalar_eq(coefficient, denominator)`, and under the old
+        // hardcoded Bearer gate that was a faithful restatement -- the selected
+        // builders could only ever produce a Bearer request, whose selected
+        // coordinate's coefficient IS `D` by definition of `D * e_k`. Choosing
+        // the specialization from the descriptor instead
+        // (`lib.rs::authenticate_basis_bytes`) removes that guarantee ON
+        // PURPOSE: these builders now serve a fractional descriptor too, and
+        // the campaign's is `[2, 3, 5]` over `7`, so the equality refused the
+        // very request the chain admits. Measured: prelude operation 4,
+        // register 12 (coefficient, 3) against register 7 (denominator, 7).
+        //
+        // Nothing that should be refused becomes admitted. A Bearer descriptor
+        // asked for the wrong coordinate is still refused, by
+        // `BearerDescriptorV2::authenticate`, BEFORE any artifact runs -- and
+        // that is the right owner, because the basis-vector property needs the
+        // whole coefficient vector and this artifact is compiled per RELEASE
+        // and never sees a descriptor at all. An artifact-level restatement of
+        // a property the artifact cannot evaluate is how the two ended up
+        // disagreeing.
+        InstructionV3::scalar_le(s(SCALAR_COEFFICIENT), s(SCALAR_DENOMINATOR)),
     ];
     let width = TRANSITION_HEADER_BYTES + TRANSITION_INSTRUCTIONS * TRANSITION_INSTRUCTION_BYTES;
     let mut scratch = vec![0_u8; width];

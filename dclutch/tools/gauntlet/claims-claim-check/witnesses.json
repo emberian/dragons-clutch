@@ -1,0 +1,40 @@
+{
+  "campaign": "claims-claim-check-programtest",
+  "witnesses": [
+    {
+      "id": "claim-check-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The heaviest transaction here is the compaction crank at 530,670."
+    },
+    {
+      "id": "exactly-one-claim-check-transaction-is-unmeasured",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null) | .label] | join(\" + \")",
+      "expect": "claims rational-representation-v2: a stranger begins retiring",
+      "provenance": "A null `wire_bytes` is the emitter's word for 'did not measure', which is honest but is not a claim that the frame fits. Exactly one transaction in this campaign is unmeasured, and it is a FIXTURE step rather than a claim-check route -- the stranger-driven BeginRetiring, which travels as a v0 message and which this package has no serializer for. Naming it rather than counting it means a claim-check route becoming unmeasured turns this red."
+    },
+    {
+      "id": "every-measured-claim-check-frame-fits-a-legacy-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes != null) | select(.wire_bytes > 1232)] | length | tostring",
+      "expect": "0",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES); ProgramTest submits no packet and cannot enforce it, so the campaign MEASURES. The widest measured frame here is the 1,050-byte wallet-payout control; every claim-check open, crank, redemption and close is smaller. The family is submittable on a bare legacy message, which matters for a route whose whole point is that a stranger with no infrastructure can drive it."
+    },
+    {
+      "id": "every-claim-check-refusal-reached-the-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. All thirteen refusals here are decisions Claims made on a named field. A bare runtime refusal would mean a hostile stopped being about the claim-check family -- and in particular that the one-signer case had started passing on the runtime rejecting an unused keypair rather than on the route refusing a second signer."
+    },
+    {
+      "id": "redemption-is-cheaper-than-the-payout-it-stands-in-for",
+      "kind": "evidence-jq",
+      "query": "(([.transactions[] | select(.label | startswith(\"claims claim-check: the holder redeems for itself\")) | .compute_units_consumed] | min) > 30 * ([.transactions[] | select(.label | startswith(\"claims claim-check: the sleeping holder redeems\")) | .compute_units_consumed] | max)) | tostring",
+      "expect": "true",
+      "provenance": "The point of compaction is that it does the settlement work ONCE, at the cranker's expense, so the sleeping holder's later redemption is cheap. The wallet payout the holder would otherwise have taken costs 507,165 CU; the claim-check redemption costs 13,610 -- a factor of 37. Asserting a factor of 30 rather than the exact pair leaves room for ordinary drift while turning red if redemption ever starts re-doing the settlement, which is the specific regression that would make the family pointless."
+    }
+  ]
+}

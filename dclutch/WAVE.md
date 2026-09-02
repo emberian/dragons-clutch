@@ -6713,3 +6713,118 @@ the **program's own dispatch predicates** (the functions `process_dealer_family_
 branches on), with disposition in the key. A label cannot name a route Trading
 would not take, and a witness fails if the predicate set drifts from the
 dispatcher.
+
+## 2026-09-01 - the fourth conjunct closes and the wall leaves the accelerator
+
+**`c9942668`.** `PRODUCT_RECORD_DIGEST` has a source, and OpenBatch at N=2 through
+real Trading ELFs now runs **four accelerator chunks at 32,451 CU each and
+accepts every one** — no refusal, no `general:` line, **all four domain conjuncts
+satisfied for the first time.**
+
+| era | refusal |
+|---|---|
+| the frame table | `0xC00A InstructionsSysvarAccount` |
+| the basis | `ConfigMarket` |
+| the digest | `ProductIdentity` |
+| now | **none, in this program** |
+
+### The wall has left the accelerator
+
+Trading dies on **its own heap** — `memory allocation failed, out of memory` — at
+708,284 CU. **That is not a cost I spent.** Trading had been refusing on the
+accelerator's first chunk and never reaching the rest of its route: 529,073 CU
+before, 708,284 now. **The extra 179,211 is ground this route has never
+covered**, and the allocation dies in it. The cleanups lane's `DCLTHOT3` peak of
+32,652 against 32,768 — 116 bytes clear — was measured on a route that stopped
+earlier than this one now goes, so that margin wants re-measuring at this HEAD
+before anyone treats it as current.
+
+### Two adapters, and the second one announced itself
+
+`ProjectDataDigest` projects a fact the **adapter** establishes rather than
+teaching the interpreter to hash — so *both* adapters must supply it. The
+chain-side supply went in first and the bundle then failed **host**-side with
+`Projection("account-projection")`.
+
+> **That was `DataDigestUnavailable` firing exactly as designed. The primitive
+> announced its own second consumer, which is what refusing beats reading
+> thirty-two zero bytes.**
+
+Supplied for the Product coordinate only: hashing every observed account is a
+per-account SHA-256 on a CU-bound path for a fact almost no profile asks for, and
+the Product record is a fixed Hot-frame coordinate rather than a family one — the
+same family-neutral special case the selected-config and linked-basis markers
+beside it already are. `hash` over the **whole account data** is the convention
+the consumer recomputes; a Registry record's `content_digest` is over record
+content and is deliberately not what goes there.
+
+### The hostile asserts both halves
+
+A substituted Product account must produce the accelerator's exact
+`ProductIdentity` line **and an unsubstituted one must not** — without the second
+half it passes against a program that refuses everything with the same words.
+**Until this conjunct had a source that assertion was impossible**: the register
+was thirty-two zero bytes on every run, so the refusal fired for a reason that
+had nothing to do with the substitution. Its sibling still asserts only
+`Refused` — a bare `is_err()` one level up — and is left as the contrast.
+
+Control: the accelerator program-test is **26 passed / 0 failed** (25 plus this
+hostile), zero allocation failures, zero access violations.
+
+**Debt, named.** The chain-side supply is ~20 lines in `hot_v3.rs` and is not in
+the commit: that file carries 469 lines of the Direct lane's in-flight work and a
+named-path commit takes the whole file. Until they land it the General real route
+refuses `DataDigestUnavailable` rather than `ProductIdentity`. Routed with the
+measurement; the accelerator program-test is unaffected, because it hand-builds
+its banks and runs no profile.
+
+## 2026-09-01 — wall A crossed: the registered crosscheck, and the campaign goes live
+
+`registered_sell_then_buy_execute_on_current_elves` has no `#[ignore]`. Sell
+369,305 CU, Buy 1,144,079 CU, three Custody children, every poststate assertion
+attached. The first complete registered Sell **and** Buy on one bank, on real
+ELFs, with nothing relaxed to get there.
+
+### The refusal was an absence, and absences are crossed by building
+
+`prepare_direct_hot_crosscheck_v3` had one variant. **A crosscheck that cannot
+check an action must refuse it**, so all fourteen Direct actions but one were
+refused by a `return Err(UnsupportedContent)` that read like a gate and was
+really a missing implementation. Two of them have a second opinion now:
+`register_intent_v2` re-derives the root, the maker replay and the registered
+record from inputs assembled off the runtime frame, and the commit compares it
+to what the effect kernel wrote. One flipped bit in the planner's expected
+record body refuses `Commit` 0x4005 at 375,255 CU.
+
+**What it declines to claim is the part worth keeping.** The Buy's Custody
+replay and vault are child-created, so their BYTES are Custody's; the crosscheck
+holds them to the owner, balance and width Direct quotes and leaves the bodies to
+`verify_custody_receipt_v3`, which already binds them to Custody's own receipt on
+the same path. The ack and the ordered child transcript stay the inline planner's
+alone, because a registered creation cannot predict Custody's three receipts
+without reimplementing Custody. A second opinion that overreaches is a second
+semantic owner, which is exactly how this family came to write a Realm ADDRESS
+into a field holding a content digest.
+
+### The crosscheck's first two catches were of its own author
+
+- `direct_config` was decoded `if action == InlineOrdinary`. The registered
+  planner got `None` and refused `Content` from a line that reads like a
+  malformed request — 330,040 CU, immediately after crossing the wall. **A
+  predicate that decides whether a value gets built, written out separately from
+  the predicate that decides whether it is needed, is two lists that drift in
+  silence.** One `const fn` now answers both.
+- The vault's expected owner was the Custody program. A vault is an SPL TOKEN
+  account. Coordinate 35, lamports and width exact, owner wrong.
+
+Both were caught by the thing being built, before it ever ran green — which is
+the argument for building the second opinion rather than trusting the first.
+
+### A campaign case retired rather than repaired
+
+`registered_sell_creation_refuses_at_the_direct_action_wall` submitted a whole
+Direct execution to observe one refusal, and its subject now executes. It is
+gone, and the law moved to a unit case that drives the closed action list and
+**names all fourteen** — where the chain campaign could only ever name the one
+action it submitted. A wall test whose wall falls should get cheaper and more
+complete, not deleted and not left lying.

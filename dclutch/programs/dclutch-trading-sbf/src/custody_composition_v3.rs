@@ -26,7 +26,12 @@ use crate::{
     hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
-const CUSTODY_REPLAY_FRAME_COORDINATE_V1: usize = 8;
+/// The replay's coordinate inside every Custody frame.
+///
+/// `pub(crate)` since 2026-09-01: the registered creation crosscheck names the
+/// same coordinate to commit the replay a Buy's child CREATES, and two copies of
+/// a frame coordinate is the defect class `68f7c849` spent a wall on.
+pub(crate) const CUSTODY_REPLAY_FRAME_COORDINATE_V1: usize = 8;
 
 /// Immutable parent facts every projected Custody request must reproduce.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

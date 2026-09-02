@@ -3005,6 +3005,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-wallet-terminal-input-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-market-core-codec",
+ "dclutch-operator",
+ "dclutch-wallet-terminal-payout-operator",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "sha2 0.10.9",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-wallet-terminal-payout-operator"
 version = "0.1.0"
 dependencies = [

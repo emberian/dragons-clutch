@@ -56,11 +56,27 @@ pins with witnesses:
   claim**: crediting a route on a frame no validator would accept is worse than
   recording no coverage at all.
 
-One of the eight is **refused-only**. `..._rollback_v1` is observed, but its
-only driver is the hostile case that substitutes a bare rollback magic into the
-Custody reservation bundle. No campaign drives an *accepting* rollback, and
-`tools/gauntlet/blocked.json` says so with a reason and an owner rather than
-leaving it to look like unstarted work.
+All eight **execute**. `..._rollback_v1` was refused-only for one campaign
+generation — its only driver was the hostile case that substitutes a bare
+rollback magic into the Custody reservation bundle — and
+`an_expired_reservation_rolls_back_in_reverse_order_and_returns_the_collateral`
+is the accepting twin: reserve, expire, roll back at the reverse-order ordinal,
+and assert the escrow drained and the vault came back byte-for-byte. Its
+`blocked.json` entry is deleted, which is what that file's own rule asks for the
+moment a route executes.
+
+Writing it found a helper that could not express the case: the receipt PDA is
+seeded by the ACTION, so a reserve and the rollback reversing it write two
+different receipts, and `reservation_receipt_address` hard-wired `Reserve`.
+Handing a rollback the reserve's receipt refuses `AccountFrame` (0x6001) — after
+the token movement has already run, because the identity check sits behind it.
+
+Ten routes, not eight. Custody dispatches `Reserve` and `Rollback` as routes of
+their own beneath `dealer_reservation_v1::process`, and the campaign drives both
+— so the bundle bindings claim the action arm as well as the parent. Which arm a
+transaction drove is not a guess: the Trading ingest magic the label was derived
+from is emitted by the same builder call that chose the Custody action, so the
+two cannot disagree.
 
 ## Running it
 
