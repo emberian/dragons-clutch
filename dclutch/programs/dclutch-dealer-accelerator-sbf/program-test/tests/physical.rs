@@ -28,10 +28,13 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_dealer_accelerator_test_caller_sbf::dealer_accelerator_test_caller_authority_v1;
+use dclutch_dealer_accelerator_test_caller_sbf::{
+    DealerAcceleratorTestCallerErrorV1, dealer_accelerator_test_caller_authority_v1,
+};
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorRequestV2, RequestTransportV2,
 };
+use dclutch_refusal_registry::DEALER_ACCELERATOR_REFUSAL_BASE;
 use dclutch_trading_sbf::admitted_composition_v3::ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4;
 use solana_account::Account;
 use solana_program::{
@@ -53,12 +56,16 @@ const DUMMY: Pubkey = Pubkey::new_from_array([0xd5; 32]);
 const CORE_PROGRAM: Pubkey = Pubkey::new_from_array([0xd6; 32]);
 const REGISTRY_PROGRAM: Pubkey = Pubkey::new_from_array([0xd7; 32]);
 
-/// The exact refusal the accelerator emits when Trading declines the frame.
-const ACCELERATOR_INVALID_INVOCATION: u32 = 0xD001;
+/// The exact refusal the accelerator emits when Trading declines the frame:
+/// `DealerAcceleratorSbfErrorV4::InvalidInvocation`, the second code in its
+/// band. Derived from the REGISTRY base rather than written as a literal --
+/// `assert!(text.contains("Custom(3)"))` also accepts `Custom(30)`, and this
+/// file cannot take a dependency on the program whose ELF it loads.
+const ACCELERATOR_INVALID_INVOCATION: u32 = DEALER_ACCELERATOR_REFUSAL_BASE + 1;
 /// The exact refusal the caller emits when the forwarded frame is malformed.
-const CALLER_FRAME: u32 = 0x10_8000;
+const CALLER_FRAME: u32 = DealerAcceleratorTestCallerErrorV1::Frame as u32;
 /// The exact refusal the caller emits when the authority or privileges differ.
-const CALLER_AUTHORITY: u32 = 0x10_8001;
+const CALLER_AUTHORITY: u32 = DealerAcceleratorTestCallerErrorV1::Authority as u32;
 
 fn content(value: u8) -> ContentId {
     ContentId::new([value; 32]).expect("nonzero fixture content")
@@ -207,7 +214,11 @@ fn geometry_complete_fixture() -> (ProgramTest, Instruction) {
         .collect::<Vec<_>>();
     set(&mut fixed, HOT_TRADING_PROGRAM_ACCOUNT_V3, CALLER);
     set(&mut fixed, HOT_CORE_PROGRAM_ACCOUNT_V3, CORE_PROGRAM);
-    set(&mut fixed, HOT_REGISTRY_PROGRAM_ACCOUNT_V3, REGISTRY_PROGRAM);
+    set(
+        &mut fixed,
+        HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
+        REGISTRY_PROGRAM,
+    );
     set(&mut fixed, HOT_RENT_SYSVAR_ACCOUNT_V3, sysvar::rent::ID);
     set(
         &mut fixed,
@@ -276,9 +287,13 @@ fn geometry_complete_fixture() -> (ProgramTest, Instruction) {
         .encode_into(&mut request_bytes)
         .expect("request encoding");
 
-    let (authority, _, _) =
-        dealer_accelerator_test_caller_authority_v1(&CALLER, &top_level_data, &root, &request_bytes)
-            .expect("canonical caller authority");
+    let (authority, _, _) = dealer_accelerator_test_caller_authority_v1(
+        &CALLER,
+        &top_level_data,
+        &root,
+        &request_bytes,
+    )
+    .expect("canonical caller authority");
     add_account(&mut test, authority, system_program::ID, Vec::new());
     add_account(&mut test, REQUEST_ACCOUNT, REGISTRY_PROGRAM, request_bytes);
 

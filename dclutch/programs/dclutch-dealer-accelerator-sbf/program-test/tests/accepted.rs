@@ -178,14 +178,19 @@ const CLAIMS_PROGRAM: Pubkey = Pubkey::new_from_array([0xe6; 32]);
 /// Release-selected Core program.
 const CORE_PROGRAM: Pubkey = Pubkey::new_from_array([0xe7; 32]);
 
+// Trading's codes, derived from the ENUM. This file already depends on
+// `dclutch-trading-sbf` for the operator half of every request it builds, so
+// there is nothing to take on faith: a discriminant that moved would move here
+// with it, where a literal would keep asserting the old number at a route that
+// no longer raises it.
 /// The refusal Trading raises when a route's account content is not canonical.
-const TRADING_CONTENT: u32 = 0x4003;
+const TRADING_CONTENT: u32 = TradingSbfError::Content as u32;
 /// The refusal Trading raises when a checked data-defined transition refuses.
-const TRADING_TRANSITION: u32 = 0x4004;
+const TRADING_TRANSITION: u32 = TradingSbfError::Transition as u32;
 /// The refusal Trading raises when a projected physical mutation cannot commit.
-const TRADING_COMMIT: u32 = 0x4005;
+const TRADING_COMMIT: u32 = TradingSbfError::Commit as u32;
 /// The refusal Trading raises when the release waist does not authenticate.
-const TRADING_RELEASE: u32 = 0x4001;
+const TRADING_RELEASE: u32 = TradingSbfError::Release as u32;
 // Custody's codes, derived from the REGISTERED BAND rather than written out.
 //
 // `CustodySbfError` lives in `dclutch-custody-sbf`, and a program-test taking a
