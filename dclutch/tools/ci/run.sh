@@ -395,9 +395,21 @@ tier_seam() {
 # never about the assertion being unwelcome:
 #
 #   lib/abiVerification.test.ts  enumerates every `abi:*:verify` script and
-#   runs it; four shell out to `lake build`. By deliberate design they FAIL
-#   rather than skip when lake is absent. They belong to the `emission` tier,
-#   which has the toolchain.
+#   runs it; six per tree shell out to `lake build` and eight compile a crate
+#   to wasm32. By deliberate design they FAIL rather than skip when the
+#   toolchain is absent, which is right for the assertion and wrong for a
+#   one-minute node tier. It runs in the `abi` tier below, which declares that
+#   toolchain as a prerequisite and reports a 2 rather than a red when it is
+#   missing.
+#
+#   That exclusion used to say those tests "belong to the `emission` tier,
+#   which has the toolchain", and it was measured false on 2026-09-03:
+#   `emission` runs `emission_guard.py`, whose census only knows the guards it
+#   can recognise, and a `package.json` script only qualifies when it invokes
+#   `lean-emit.mjs`. So `emission` re-ran 12 of the 53 verifiers -- the six
+#   Lean-emitted modules in each tree -- and the other 41, every Rust-scraped
+#   and wasm-compiled surface the browser decodes against, were gated by
+#   NOTHING in this file. Four of them were red at HEAD and no tier said so.
 #
 #   lib/sbomVerify.test.ts  runs the full SBOM closure and needs a populated
 #   cargo registry. It is gated in the wrapper's hygiene job on terms that
@@ -457,6 +469,88 @@ tier_web() {
     record web $EXIT_PASS
   else
     record web $EXIT_GATE_FAILED
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# abi -- every generated client module still agrees with its authority.
+#
+# 53 verifiers: 28 under `apps/dclutch-web`, 25 under `packages/dclutch-sdk`.
+# Each regenerates its module from the Rust or Lean that owns the facts and
+# byte-compares; a red means the authority moved and `lib/generated/` did not
+# follow. `lib/abiVerification.test.ts` in each tree is the runner, and it also
+# asserts the generator/verifier bijection, so a new generated surface cannot
+# arrive without its gate.
+#
+# WHY IT IS A TIER AND NOT A `web` EXCLUSION. The exclusion in `web` was
+# written as a routing decision -- these belong to `emission` -- and `emission`
+# never ran them (see the note above tier_web). The cost was real, so the
+# answer is a tier that carries the cost, not an exclusion that loses the
+# assertion. The `sbom` tier below is the same repair for the same reason, and
+# its comment says so in the same words.
+#
+# PREREQUISITES, and they are checked BEFORE anything runs so that "the
+# toolchain is absent" and "the browser is stale" arrive as different numbers.
+# The scripts themselves fail rather than skip -- an unverifiable ABI is not a
+# verified one -- so without this check a machine with no `lake` reports twelve
+# red surfaces that are not red, and one with no wasm32 target eight more.
+#
+# WHICH TREE IT MEASURES: the WORKING one, and it cannot be otherwise --
+# `--commit` archives a revision, and an archive has no `node_modules`. That is
+# the opposite of the rule for FIXING a red here, which is to regenerate from a
+# detached worktree at HEAD, and the two are consistent: the gate is asking
+# whether the tree in front of you is stale, and the repair must not bake a
+# neighbouring lane's half-written Rust into a committed digest.
+#
+# COST, measured 2026-09-03 rather than estimated: 8m28s and 8m54s on two
+# consecutive runs -- 6m24s/6m32s for the 28 web verifiers, 2m04s/2m22s for the
+# 25 SDK ones. It does NOT get cheaper on a second run, and that is worth knowing
+# before anyone tries to make this tier cheap: each of the eight wasm
+# generators builds into a FRESH `mkdtemp` target directory, so it recompiles
+# its ~70-crate closure every single time. Seven of those eight minutes are
+# that. Sharing one target directory across the eight would be the obvious
+# saving and is NOT free -- the generators are also what a lane runs by hand,
+# and a shared directory is a shared lock on a checkout with a dozen lanes in
+# it.
+# ---------------------------------------------------------------------------
+tier_abi() {
+  say "abi -- the 53 generated client modules against their authorities"
+  local missing=""
+  have npx || missing="node/npx"
+  have lake || missing="${missing:+$missing, }lake (Lean)"
+  have cargo || missing="${missing:+$missing, }cargo"
+  have wasm-bindgen || missing="${missing:+$missing, }wasm-bindgen"
+  if have rustup && ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
+    missing="${missing:+$missing, }the wasm32-unknown-unknown target"
+  fi
+  if [ -n "$missing" ]; then
+    note "the generators compile and emit; without the toolchain they cannot"
+    note "say whether a module is stale, and they refuse rather than skip."
+    record abi $EXIT_PREREQ_MISSING "$missing not available"
+    return
+  fi
+  local failed=0 ran=0 dir
+  for dir in apps/dclutch-web packages/dclutch-sdk; do
+    local full="$repo_root/$dir"
+    [ -d "$full/node_modules" ] || {
+      note "$dir: node_modules absent -- run npm ci there first"
+      continue
+    }
+    ran=$((ran + 1))
+    note "$dir"
+    (cd "$full" && npx vitest run --config vitest.config.ts lib/abiVerification.test.ts) || failed=1
+  done
+  if [ "$ran" = 0 ]; then
+    record abi $EXIT_PREREQ_MISSING "no client tree had its dependencies installed"
+  elif [ "$failed" = 0 ]; then
+    record abi $EXIT_PASS
+  else
+    note "A generated module no longer matches the Rust or Lean that printed"
+    note "it. Regenerate from a DETACHED WORKTREE AT HEAD -- the generators"
+    note "read the working tree, which on this checkout is a dozen lanes'"
+    note "half-written files -- then read the diff and carry the SDK twin"
+    note "(packages/dclutch-sdk/scripts/sync-from-web.mjs --copy --only)."
+    record abi $EXIT_GATE_FAILED "a generated client module drifted from its authority"
   fi
 }
 
@@ -2363,7 +2457,17 @@ sbom      ~3 min       cargo, python3     the dependency/licence closure over
                                           rows. A git-sourced or checksum-less
                                           dependency, or drift in the committed
                                           SBOM/NOTICES, is a failure
-web       ~1 min       node               the web + SDK vitest suites
+web       ~1 min       node               the web + SDK vitest suites, minus
+                                          the two files the `abi` and `sbom`
+                                          tiers own
+abi       ~8.5 min     lake, cargo,       all 53 `abi:*:verify` scripts in both
+                       wasm-bindgen       client trees: every generated module
+                                          regenerated from the Rust or Lean
+                                          that owns it and byte-compared.
+                                          `emission` re-runs the 12 Lean-emitted
+                                          ones; the other 41 were gated by no
+                                          tier at all until this one, and four
+                                          were red
 emission  minutes      lake (Lean)        every generated file still byte-
                                           matches the emitter that printed it
 frameguard minutes     cargo-build-sbf    every function in the exact twelve
@@ -2432,7 +2536,7 @@ EOF
 
 aliases:  cheap = census fmt locks seam runbooks release
           all   = census fmt locks seam runbooks release genref clippy sbom
-                  sbfcontracts web emission frameguard journey root-targets
+                  sbfcontracts web abi emission frameguard journey root-targets
                   programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
@@ -2493,8 +2597,8 @@ main() {
       exit 0
       ;;
     cheap) tiers+=(census fmt locks seam runbooks release) ;;
-    all) tiers+=(census fmt locks seam runbooks release genref clippy sbom sbfcontracts web emission frameguard journey root-targets programs suites) ;;
-    census | fmt | locks | seam | runbooks | release | genref | clippy | sbom | sbfcontracts | web | emission | frameguard | journey | root-targets | programs | suites | workspaces)
+    all) tiers+=(census fmt locks seam runbooks release genref clippy sbom sbfcontracts web abi emission frameguard journey root-targets programs suites) ;;
+    census | fmt | locks | seam | runbooks | release | genref | clippy | sbom | sbfcontracts | web | abi | emission | frameguard | journey | root-targets | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

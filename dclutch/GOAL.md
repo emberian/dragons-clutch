@@ -4122,3 +4122,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   before founding, Direct + General markets, the fill, OpenBatch on a real chain (first), an honest selector, the winning
   stranger paid, retirement on devnet (first), the cohort's own route witnesses.
 - Cuts: `7894a5bf8`.
+- WEB-VERIFY closed (`76bec37af` the four regenerated from a clean worktree — the movers found by rebuilding the wasm at
+  each of 18 commits (three briefed attributions refuted: two were ancestors of 505d7db3d, one moved nothing); `f1884877d`
+  **an `abi` tier runs all 53 verifiers in both trees** — the `web` tier had said they belonged to `emission`, which
+  recognises only lean-emit guards and so re-ran 12 of 53: **41 verifiers were gated by nothing, four red**; cost measured
+  8m28s / 8m54s). Owed: the `web` tier is red on `DCLTSTA1` unrendered in the explorer (fca070a90's); the wrapper runs no
+  `web`/`emission`/`abi` job; the abi tier's cost is seven minutes of per-generator target dirs. → WEB-EXPLORER **`(spawned)`**.
+- Cuts: `2402b965c`.
