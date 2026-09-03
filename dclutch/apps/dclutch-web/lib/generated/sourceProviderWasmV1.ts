@@ -22,5 +22,5 @@ export const SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1 = 'dclutch-source-provider-su
 export const SOURCE_PROVIDER_SUBMIT_POSTSTATE_INPUT_FORMAT_V1 = 'dclutch-source-provider-submit-poststate-input-v1' as const;
 export const SOURCE_PROVIDER_SUBMIT_POSTSTATE_FORMAT_V1 = 'dclutch-source-provider-submit-poststate-v1' as const;
 export const SOURCE_PROVIDER_SUBMIT_LIFECYCLE_BYTES_V1 = 528 as const;
-export const SOURCE_PROVIDER_WASM_SHA256_V1 = '1eb64241cc20c2eff2a1d5b77de4806f6b43f03ef9c24230ea6d9bc9a2999c49' as const;
-export const SOURCE_PROVIDER_WASM_BYTES_V1 = 617576 as const;
+export const SOURCE_PROVIDER_WASM_SHA256_V1 = 'c5d2630cf5df1f3c76494613adf9647ecb7236246ee05b9f261196af75611045' as const;
+export const SOURCE_PROVIDER_WASM_BYTES_V1 = 617987 as const;

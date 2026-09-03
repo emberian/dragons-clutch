@@ -6,7 +6,7 @@
 //   packages/dclutch-sdk/lib/walletHandoff.ts           (every wallet request and the sole submission)
 //   apps/dclutch-web/package.json                       (the abi:*:verify pairing)
 //
-// 243 surveyed modules, 27 routes, 27 generated authorities, 3 published runbooks.
+// 245 surveyed modules, 27 routes, 27 generated authorities, 3 published runbooks.
 // 12 of those modules cannot start without a file produced outside this browser.
 
 /** What a module's transitive closure is able to ask a wallet for. */
@@ -273,6 +273,7 @@ export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = O
   Object.freeze({ module: "lib/marketResolution.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 3, 7, 13, 15, 16, 17]) }),
   Object.freeze({ module: "lib/observedSnapshotV1.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 3, 7, 13, 15, 16, 17]) }),
   Object.freeze({ module: "lib/operatorSurface.ts", routes: Object.freeze(["/operate", "/portfolio", "/redeem", "/workbench"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([3, 15, 16, 17]) }),
+  Object.freeze({ module: "lib/ordinarySelectorV1.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/portfolio.ts", routes: Object.freeze(["/activity", "/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 3, 15, 16, 17]) }),
   Object.freeze({ module: "lib/productPayoffV2Evaluation.ts", routes: Object.freeze(["/product-v2"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([10, 12]) }),
   Object.freeze({ module: "lib/productRuntimeV2Admission.ts", routes: Object.freeze(["/product-v2"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([11]) }),
@@ -280,7 +281,7 @@ export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = O
   Object.freeze({ module: "lib/publicCutStaging.ts", routes: Object.freeze(["/", "/activity", "/create", "/live", "/market", "/markets", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 3, 7, 13, 15, 16, 17]) }),
   Object.freeze({ module: "lib/publishedRouteManifests.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/quantity.ts", routes: Object.freeze(["/found", "/market", "/markets", "/markets/[address]", "/product-v2", "/release", "/workbench"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 3, 15, 16, 17]) }),
-  Object.freeze({ module: "lib/rationalRetireReceiptV4.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 2, 3, 5, 7, 13, 14, 15, 16, 17]) }),
+  Object.freeze({ module: "lib/rationalRetireReceiptV4.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 2, 3, 5, 7, 13, 14, 15, 16, 17, 25]) }),
   Object.freeze({ module: "lib/realmRecord.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([15]) }),
   Object.freeze({ module: "lib/records.ts", routes: Object.freeze(["/explorer"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([3, 15]) }),
   Object.freeze({ module: "lib/redeemOperationJournal.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([0, 2, 3, 5, 7, 13, 14, 15, 16, 17, 25]) }),
@@ -308,6 +309,7 @@ export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = O
   Object.freeze({ module: "lib/sourceTerminalV1.ts", routes: Object.freeze(["/resolution"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([3, 15, 22]) }),
   Object.freeze({ module: "lib/supplyShares.ts", routes: Object.freeze(["/market", "/markets", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/ticketBoard.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([2, 3, 5, 15, 16, 17]) }),
+  Object.freeze({ module: "lib/tokenAccountAdmissionV1.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([25]) }),
   Object.freeze({ module: "lib/tradeFlowBoard.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([2, 3, 5, 15, 16, 17]) }),
   Object.freeze({ module: "lib/tradeFlowMachine.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "wallet-transaction", submits: true, readsExternalFile: false, generatedAbis: Object.freeze([0, 2, 3, 5, 7, 13, 15, 16, 17]) }),
   Object.freeze({ module: "lib/tradeFlowRefusals.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),

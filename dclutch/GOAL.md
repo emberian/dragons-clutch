@@ -3878,3 +3878,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   seal builder, the cohort-15 runbook (incl. the recorded Core digest).
 - WEB (`e45eaaa0b`): /pulse's last-boundary rule per phase; the paid market published.
 - Cuts: `37a55887d`, `f19ebd789`.
+- WEB closed (`d4deae1e7` the browser admits the 170-byte ATA through one function derived from the Rust's composition — live
+  on market B's paid destination; `22df65441` **the selector ↔ cut join was decidable all along** (`select_ordinary` compares
+  the ratios; every producer pins the denominator to 1) — mirrored and proven against the program's own sweeps — **and
+  market B settled on TWO SCALES: cuts in cents, the observation in raw Pyth atoms at exponent −8; on the cuts' scale the
+  reading is $100.62 → cell 1 (pays zero), the chain paid cell 2** — the exponent is reachable from the certificate and
+  `validate_update` discards it; no SVM test ever ran a resolution with `cut_denominator != 1`; `e45eaaa0b` /pulse's
+  per-phase rule and the paid market published; `9b7fb20f6` og cards run on every test; `505d7db3d` six red verifies → one
+  (route-census red by four line numbers of another lane's uncommitted file — not regenerated). Owed: sbomVerify has two
+  unresolvable workspaces (general-hot; dclutch-cli's lock moved apart from its manifest). → RESOLUTION-SCALE **`(spawned)`**:
+  the factor in StatisticSpecV1 Lean-first, normalization at the one selection site, the adapter binding its exponent, the
+  test the tree never had; RELAY-C told to record market C's selector as the defect's artifact.
+- Cuts: `93b625838`.
