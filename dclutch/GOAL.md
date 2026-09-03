@@ -3680,3 +3680,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   signer's derivation; the unpinned-caller history stays as a hostile. Decision 0012's argument one level down.
   → DEALER **`(spawned)`**: Claims' two re-authentications and the accelerator's prelude, then the Remove.
 - Cuts: `570679f68`.
+- DEALER closed (`0aa70478e`, `30d02f5c0`, `93120acfc`, rows `fa00e8f28`; 8 commits): **the ruling applied to Claims — the
+  SignedDelta child 173,676 → 80,488** (parse 31k → 22k, releases 76k → 31k, product/basis 42k → 3k); the seeds needed
+  nothing added (`role_request_digest = hash(instruction_data)` already covers the plan); the honest split: 45k was a
+  redundant triple hostile-decode of one immutable account needing no ruling, 38k is the ruling's; **the Remove's Claims
+  child executes and commits, and the transaction reached Custody's second route for the first time**; hostiles 0x5201/
+  0x5202 each proven to reach their subject (a shared code would have proved nothing); a suite that read 48 FAILED had not
+  run (a wrong Token-2022 build refused by the fixture digest). **Custody: 77–81% of an invocation is caller
+  re-authentication** (the Token-2022 CPI is 105 CU) — the macro is now `crates/dclutch-cu-checkpoint`. The accelerator's
+  prelude is a chain, so the repair is a MOVE (Trading passes the chain's outputs in the signed request, ~15k) — designed,
+  priced, not built. → DEALER **`(spawned)`**: the move, Custody's rule, the Remove committing.
+- Cuts: `6aaac305c`, `cac7dee28`.

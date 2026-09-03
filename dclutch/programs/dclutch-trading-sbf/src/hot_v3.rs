@@ -1687,20 +1687,28 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
 /// cannot be handed a frame that differs from the one the Trading invocation
 /// was authorized against.
 ///
-/// # The capability seal is bound here by address, and not by content
+/// # The capability seal is bound here by address, and its body elsewhere
 ///
 /// `frame.capability_seal` is compared against its meta below, the same as the
-/// other thirty-eight. Its *body* is not decoded on this path, and that is a
-/// decision rather than an omission: [`authenticate_capability_seal_v3`] exists
-/// to let the ordinary Hot path locate finalized records without re-deriving
-/// them, and the accelerator path does not take that shortcut. Every artifact
-/// a seal would have named is instead bound live by `borrow_finalized_record`
-/// and `borrow_finalized_record_at` in
-/// [`authenticate_accelerator_invocation_v4`], each of which re-derives the
-/// Registry address and requires `hash(bytes) == digest` before the bytes are
-/// read. The seal therefore adds no authority this path is missing; it is
-/// present because the accelerator carries the common Hot fixed frame ENTIRE,
-/// and "entire" is exactly what the comparison below has to mean.
+/// other thirty-eight, and that is all this function does with it. It is
+/// present in the comparison because the accelerator carries the common Hot
+/// fixed frame ENTIRE, and "entire" is exactly what the comparison below has to
+/// mean -- the array it is compared through held thirty-eight entries against
+/// thirty-nine metas once, and this account was the one silently skipped.
+///
+/// **This paragraph used to say the seal is not decoded on the accelerator path
+/// at all, and that the artifacts are instead bound live by
+/// `borrow_finalized_record`. That has not been true since decision 0005's seal
+/// was put on this path.** [`authenticate_accelerator_invocation_v4`] decodes
+/// the body through [`authenticate_capability_seal_v3`] and then reads the
+/// descriptor and the five artifacts through `borrow_sealed_record` -- which
+/// removes the SEARCH, not a conjunct: Registry ownership, read-only
+/// privileges, rent exemption and `hash(bytes) == digest` all still precede the
+/// first byte read, and the row's `exact_data_length`, which the search form
+/// never checked, is added. The measurement that moved it is recorded at the
+/// call site: 135,785 CU in `acc-artifacts` and 26,782 in `acc-records`, spent
+/// searching for addresses a Trading-owned write-once verdict had already
+/// derived and persisted.
 fn authenticate_accelerator_top_level_v4(
     frame: HotFrameV3<'_, '_>,
     strategy_evidence: &[AccountInfo<'_>],

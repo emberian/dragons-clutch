@@ -23,6 +23,33 @@ mod dealer_reservation_v1;
 mod delegated;
 mod projected;
 mod retirement_replay_handoff_v1;
+
+/// One diagnostic phase mark: a label and the transaction meter's remaining CU.
+///
+/// A child program reached by CPI is ONE number in its caller's log, and one
+/// number cannot say whether it was spent on work only this program can do or
+/// on re-deriving what its caller already authenticated. This program is that
+/// number twice in the Dealer partial equity Remove -- 116,203 CU for a cash
+/// leg whose Token-2022 CPI inside it costs 105, and the same again for a merge
+/// the transaction never reaches. See
+/// `docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md`.
+///
+/// The syscalls and the `#[inline(never)]` that guards them live in
+/// `dclutch-cu-checkpoint`, which says why. What stays here is the feature name
+/// a build line names and the domain prefix a log reader greps.
+#[cfg(feature = "custody-cu-profile")]
+macro_rules! custody_cu_checkpoint {
+    ($phase:literal) => {
+        dclutch_cu_checkpoint::cu_checkpoint(concat!("dclutch-custody-cu:", $phase))
+    };
+}
+
+#[cfg(not(feature = "custody-cu-profile"))]
+macro_rules! custody_cu_checkpoint {
+    ($phase:literal) => {};
+}
+
+pub(crate) use custody_cu_checkpoint;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
@@ -302,6 +329,7 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    custody_cu_checkpoint!("cu-enter");
     if dealer_reservation_v1::is_instruction(instruction_data) {
         return dealer_reservation_v1::process(program_id, accounts, instruction_data);
     }
@@ -341,6 +369,7 @@ pub fn process_instruction(
         CustodyRequestV1::decode(request_bytes).map_err(|_| CustodySbfError::Instruction)?;
     require_account_count(accounts, request.operation, continuation.is_some())?;
     let request_digest = hash(request_bytes).to_bytes();
+    custody_cu_checkpoint!("cu-decoded");
     let market = authenticate_series_aware_common_frame(
         program_id,
         accounts,
@@ -349,6 +378,7 @@ pub fn process_instruction(
         continuation,
         relay,
     )?;
+    custody_cu_checkpoint!("cu-common-frame");
     let realm = match market {
         AuthenticatedMarketAdmissionV1::Live(market) => {
             authenticate_realm(program_id, accounts, request, market.state)?
@@ -357,7 +387,8 @@ pub fn process_instruction(
             authenticate_premarket_realm(program_id, accounts, request)?
         }
     };
-    match request.operation {
+    custody_cu_checkpoint!("cu-realm");
+    let outcome = match request.operation {
         OperationV1::InitializeReplay => {
             initialize_replay(program_id, accounts, request, request_digest)
         }
@@ -369,7 +400,9 @@ pub fn process_instruction(
             close_vault(program_id, accounts, request, request_digest, realm)
         }
         OperationV1::CloseReplay => close_replay(program_id, accounts, request, request_digest),
-    }
+    };
+    custody_cu_checkpoint!("cu-return");
+    outcome
 }
 
 /// Strip the optional caller-authority bump the parent appended after its
@@ -1449,6 +1482,7 @@ fn execute_transfer(
     let destination = account(accounts, 11)?;
     let authority = account(accounts, 12)?;
     let token_program = account(accounts, 13)?;
+    custody_cu_checkpoint!("cu-transfer-frame");
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     let authority_bump =
         validate_custody_authority(program_id, authority, request, relay.transfer_authority)?;
@@ -1472,9 +1506,13 @@ fn execute_transfer(
         authority,
         token_program,
     };
+    custody_cu_checkpoint!("cu-transfer-validated");
     let before = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, true)?;
+    custody_cu_checkpoint!("cu-prestate");
     invoke_exact_transfer(transfer_accounts, request, before.decimals, authority_bump)?;
+    custody_cu_checkpoint!("cu-token-cpi");
     let after = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, false)?;
+    custody_cu_checkpoint!("cu-poststate");
     if before
         .source
         .checked_sub(request.amount)

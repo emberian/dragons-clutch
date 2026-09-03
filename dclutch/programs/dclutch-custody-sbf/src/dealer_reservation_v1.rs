@@ -167,21 +167,27 @@ pub(crate) fn process(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
+    crate::custody_cu_checkpoint!("dr-enter");
     if let Ok(effect_count) = decode_dealer_scenario_activation_instruction_v1(instruction_data) {
         return activate_batch(program_id, accounts, effect_count);
     }
     let (action, ordinal) = decode_dealer_scenario_reservation_instruction_v1(instruction_data)
         .map_err(|_| CustodySbfError::Instruction)?;
+    crate::custody_cu_checkpoint!("dr-decoded");
     require_frame(accounts, action)?;
+    crate::custody_cu_checkpoint!("dr-frame");
     let authenticated = authenticate_effect(program_id, accounts, action, ordinal)?;
-    match action {
+    crate::custody_cu_checkpoint!("dr-authenticated");
+    let outcome = match action {
         DealerScenarioReservationActionV1::Reserve => {
             reserve(program_id, accounts, ordinal, &authenticated)
         }
         DealerScenarioReservationActionV1::Rollback => {
             rollback(program_id, accounts, ordinal, &authenticated)
         }
-    }
+    };
+    crate::custody_cu_checkpoint!("dr-return");
+    outcome
 }
 
 fn require_frame(
@@ -258,6 +264,7 @@ fn authenticate_effect(
     let trading = account(accounts, TRADING_PROGRAM)?;
     let checkpoint_account = account(accounts, CHECKPOINT)?;
     let checkpoint = read_checkpoint_facts(trading.key, checkpoint_account, ordinal)?;
+    crate::custody_cu_checkpoint!("dr-checkpoint-facts");
     let producer = account(accounts, EFFECT_PRODUCER)?;
     let manifest_account = account(accounts, EFFECT_MANIFEST)?;
     let effect_account = account(accounts, EFFECT_BODY)?;
@@ -269,6 +276,7 @@ fn authenticate_effect(
         checkpoint.input.request_digest,
         ordinal,
     )?;
+    crate::custody_cu_checkpoint!("dr-manifest-facts");
     if manifest.effect_count != checkpoint.effect_count
         || manifest.effects_digest != checkpoint.effects_digest
     {
@@ -283,6 +291,7 @@ fn authenticate_effect(
         manifest.effect_count,
         manifest.effect_digest,
     )?;
+    crate::custody_cu_checkpoint!("dr-effect-facts");
     let custody = effect.custody;
     if custody.operation != OperationV1::Transfer
         || custody.caller_role != ExecutionRoleV1::Trading
@@ -338,9 +347,13 @@ fn authenticate_effect(
         account(accounts, REALM_STAGING)?.clone(),
         account(accounts, REPLAY)?.clone(),
     ];
+    crate::custody_cu_checkpoint!("dr-effect-joins");
     let market = authenticate_market(&release_frame, custody)?;
+    crate::custody_cu_checkpoint!("dr-market");
     authenticate_calling_release(program_id, &release_frame, custody, None, market.cache_bump)?;
+    crate::custody_cu_checkpoint!("dr-calling-release");
     authenticate_realm(program_id, &release_frame, custody, market.state)?;
+    crate::custody_cu_checkpoint!("dr-realm");
     authenticate_replay_identity(program_id, account(accounts, REPLAY)?, custody, None)?;
     let replay = read_replay(account(accounts, REPLAY)?)?;
     let expected_revision = replay
@@ -518,6 +531,7 @@ fn reserve(
         ordinal,
         DealerScenarioReservationActionV1::Reserve,
     )?;
+    crate::custody_cu_checkpoint!("dr-reservation-identities");
     require_vacant(state_account)?;
     require_vacant(receipt_account)?;
     let replay_data = account(accounts, REPLAY)?
@@ -560,6 +574,7 @@ fn reserve(
         (batch, digest)
     };
 
+    crate::custody_cu_checkpoint!("dr-batch");
     let state = execute_reserve_token_effect(
         program_id,
         accounts,
@@ -568,10 +583,12 @@ fn reserve(
         batch_account.key.to_bytes(),
         checkpoint_key,
     )?;
+    crate::custody_cu_checkpoint!("dr-token-effect");
     let rent =
         Rent::from_account_info(account(accounts, RENT)?).map_err(|_| CustodySbfError::Create)?;
     create_state_account(program_id, accounts, ordinal, &rent)?;
     let state_digest = write_state_value(state_account, &state)?;
+    crate::custody_cu_checkpoint!("dr-state-written");
     let receipt = Box::new(DealerScenarioReservationReceiptV1 {
         action: DealerScenarioReservationActionV1::Reserve,
         effect_ordinal: ordinal,
@@ -594,6 +611,7 @@ fn reserve(
         &rent,
     )?;
     let receipt_digest = write_receipt_value(receipt_account, &receipt)?;
+    crate::custody_cu_checkpoint!("dr-receipt-written");
     let next = Box::new(
         batch
             .append_reserve(
@@ -610,6 +628,7 @@ fn reserve(
     }
     write_batch_value(batch_account, &next)?;
     set_account_return_data(receipt_account)?;
+    crate::custody_cu_checkpoint!("dr-batch-written");
     Ok(())
 }
 

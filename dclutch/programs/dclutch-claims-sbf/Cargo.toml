@@ -25,11 +25,12 @@ custom-panic = []
 # two are separate features rather than one shared crate because Trading's also
 # reports its bump allocator's outstanding heap, which this program does not
 # have. Today this instruments the SignedDelta route only.
-claims-cu-profile = []
+claims-cu-profile = ["dep:dclutch-cu-checkpoint"]
 
 [dependencies]
 dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-cu-checkpoint = { path = "../../crates/dclutch-cu-checkpoint", optional = true }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
 dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }

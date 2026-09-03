@@ -1648,6 +1648,7 @@ dependencies = [
  "dclutch-chain-bundle-builder",
  "dclutch-claims-svm",
  "dclutch-core-contract",
+ "dclutch-cu-checkpoint",
  "dclutch-custody-contract",
  "dclutch-economic-slice-kernel",
  "dclutch-fractional-claim-contract",
@@ -1773,6 +1774,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-cu-checkpoint"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-custody-contract"
 version = "0.1.0"
 dependencies = [
@@ -1787,6 +1795,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-claims-svm",
  "dclutch-core-contract",
+ "dclutch-cu-checkpoint",
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
  "dclutch-market-core-codec",

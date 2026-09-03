@@ -187,7 +187,14 @@ scale with routes, which is why the Remove pays 96,121 where the Add pays
 59,002. Whether these are two questions or one asked twice is a reading of
 `hot_v3.rs` this note does not make, but the pair is the second-largest line
 item in the transaction after the accelerator and it deserves the reading.
-**CU recoverable if they are one projection: on the order of 93,000.**
+~~**CU recoverable if they are one projection: on the order of 93,000.**~~
+
+> **SUPERSEDED 2026-09-03, and this row was wrong.** The reading was made: they
+> are two interpreters over two artifacts, and the second reads registers the
+> accelerator produces after the first has run. Nothing here is recoverable by
+> merging them. The real duplicate is one level down and is worth 15,000 to
+> 25,000. See "The double projection was not one question asked twice" at the
+> end of this note.
 
 **3. Two Custody legs, two frame parses, 210 CU of actual token movement.**
 Custody route 0 costs 123,703 and its Token-2022 CPI inside costs **105**.
@@ -212,7 +219,9 @@ the parent's request, transcript and frame on the other side of the boundary --
 the same class as instances 1 and 3.
 
 **Adding the three measured recoveries: 204,397 + 93,000 + 120,000 = 417,397,
-against a 367,000 shortfall.** Option (a) alone could just barely land the
+against a 367,000 shortfall.** *(Superseded: the 93,000 was never there -- see
+the end of this note. Two of these three were estimates, and the estimate that
+carried this paragraph is the one that did not survive being read.)* Option (a) alone could just barely land the
 Remove inside the ceiling -- at about 1,350,000 of 1,399,700, a 3.5 per cent
 margin, on an action whose sibling already runs at 83 per cent. That is not a
 margin anyone should ship a settlement route on, and it assumes all three
@@ -476,6 +485,11 @@ this action needs and one it might want later.
 
 ### What is still not measured
 
+*(SUPERSEDED the same night: BOTH are settled below. Custody has its own
+profiling feature now and its cash leg is measured at 115,273-121,273 CU, of
+which 92,515-94,015 is caller re-authentication; and the double projection
+turned out not to be a duplicate at all. Read on.)*
+
 The second Custody leg and the second account-frame projection are still
 estimates and have no instrument at all: Custody has no profiling feature, and
 the two Trading projections are one checkpoint each with no interior. Neither is
@@ -483,3 +497,467 @@ load-bearing for the conclusion any more -- the two measured rows come within
 14,000 of even the larger shortfall on their own -- but the Custody one is the
 obvious next flag, and it is the same afternoon's work: a feature, a build, a
 campaign run.
+
+---
+
+## Second addendum, 2026-09-03: the ruling was spent, and the Claims route commits
+
+*Measured at `babf26fed` (before) and `0aa70478e` (after), tree root
+`/Users/ember/dev/dclutch`, real SBF ELFs built in this lane's own worktree with
+its own target directory, zero SBF stack-frame-overwrite diagnostics on every
+link built for this addendum. Campaign 30 passed / 1 failed both sides,
+unchanged in count and the failure still this Remove.*
+
+**The two runs used different Claims ELFs, so the bump draw MOVED between them,
+and the comparison below is cross-run anyway. Here is why, stated as a control
+rather than a claim.** `release_set_id` hashes the deployed ELF digests, so a
+changed Claims executable redraws every PDA search depth in the fixture. The
+campaign invokes this route ten times per run, and reading all ten:
+
+| span | distinct values, BEFORE run | distinct values, AFTER run |
+|---|---|---|
+| `SignedDeltaAccountsV3::parse` | {31,054} | {21,754} |
+| `authenticate_releases` | {76,245} | {30,828} |
+| `authenticate_market` | {2,206} | {2,138} |
+| `authenticate_product_and_basis` | {41,808} | {3,375} |
+| `build_candidates` | {5,213, 6,712, 6,713, 8,213} | {5,243, 6,743, 8,243, 9,743, 11,242, 11,323} |
+
+Four spans take **exactly one value across ten invocations** on each side, and
+`build_candidates` does not: its values differ in multiples of 1,500, the cost
+of one more `create_program_address` iteration, exactly as M-61 and decision
+0012's per-seed decomposition predict. Solving `delta = n x 1,500 + c` on the
+matching pairs (5,213/5,243, 6,713/6,743, 8,213/8,243) gives **c = +30 CU** on
+all three -- `build_candidates` ceasing to be inlined into
+`execute_authenticated`, which the frame manifest independently shows as a new
+704-byte row. Two instruments, one cause.*
+
+**A THIRD RUN then corrected the reading above, and the correction is worth
+more than the reading was.** Constant-within-a-run is NOT the same as
+search-free. Every invocation in one run executes under one `release_set_id`,
+so a bump search whose depth is a function of that id is a per-run CONSTANT and
+looks deterministic from inside the run. A later Claims ELF in this same lane
+(the `dclutch-cu-checkpoint` extraction, which changes `.text` and therefore the
+release-set id) gives a second, independent after-run:
+
+| span | before (two runs, one ELF) | after run A | after run B |
+|---|---:|---:|---:|
+| `SignedDeltaAccountsV3::parse` | 31,054 | 21,754 | **21,754** |
+| `authenticate_releases` | 76,245 | 30,828 | 27,828 |
+| `authenticate_market` | 2,206 | 2,138 | 5,138 |
+| `authenticate_product_and_basis` | 41,808 | 3,375 | 6,375 |
+
+Only the frame parse is genuinely search-free, and it is identical to the digit
+across two different executables. The other three each move by exactly 3,000 --
+two iterations -- between the two after-runs, which is the draw and nothing
+else. So the honest form of every claim in this addendum is a BAND, and every
+band clears the noise by more than an order of magnitude:
+
+- the frame parse saves **exactly 9,300**, draw-free on both sides;
+- `authenticate_releases` saves **45,417 to 48,417**;
+- `authenticate_product_and_basis` saves **35,433 to 38,433**.
+
+The before figures are the ones entitled to be quoted flat: 76,245 / 41,808 /
+31,054 were reproduced to the digit by two runs at two different commits whose
+Claims sources -- and therefore whose Claims ELF, and therefore whose
+release-set id -- are identical.*
+
+The ruling, recorded in `GOAL.md` for ember to reverse:
+
+> **A callee invoked by a PDA-signed CPI from Trading takes the facts that
+> signer's seeds pin as established.** The callee verifies the signer's
+> derivation against Trading's program id and the seeds it presents -- that is
+> the whole authentication of the caller -- and takes the role activation, the
+> release set and the sealed records as established for exactly what the seeds
+> name. The unpinned-caller history stays as a hostile.
+
+### What it bought in Claims
+
+| span | before | after | |
+|---|---:|---:|---|
+| `SignedDeltaAccountsV3::parse` | 31,054 | 21,754 | −9,300 |
+| `authenticate_privileges` | 2,500 | 2,500 | |
+| `authenticate_releases` | 76,245 | 30,828 | **−45,417** |
+| `authenticate_market` | 2,206 | 2,138 | |
+| `authenticate_product_and_basis` | 41,808 | 3,375 | **−38,433** |
+| `apply_deltas` -- the economic work | 662 | 663 | |
+| **a completing invocation** | **173,676** | **80,488** | **−93,188** |
+
+The three spans that were 149,107 CU of 173,676 -- 85.9% -- are now 55,957 of
+80,488. The SHARE only falls to 69.5%, and that is the honest way to read it:
+what is left is dominated by the frame parse and the one cache decode the
+seeds cannot establish, so the remaining ratio is near the floor this shape
+has rather than slack.
+
+**And the Remove's Claims route now EXECUTES AND COMMITS.** The child entered
+with 94,423 CU, cleared the frame, the privileges, the authority, the releases,
+the Market and the product/basis join, built its candidates, reached
+`sd-deltas-applied`, wrote them at `sd-committed`, set its return data, and
+handed **12,210 CU** back. The action that had been compute-bound for two days
+and had never executed a single delta now executes and commits its deltas.
+
+### The honest split of the 45,417, because most of it needed no ruling
+
+`authenticate_releases` called `authenticate_activated_role` three times, and
+each call ran `ActivatedExecutionReleaseSetViewV1::decode` -- the complete
+five-role projection and every aliasing pair, twenty-five `decode_role` calls --
+to answer a question about ONE role. The account was hostile-decoded three times
+in one invocation. `dclutch-registry-activation-auth-v1`'s own doc has said
+since 2026-09-02 that a multi-role frame must decode once and names the pair
+that does it; Claims was not using it.
+
+So the larger part of this saving is a redundant decode that a reading would
+have found without any ruling at all, and the ruling's own contribution is the
+three per-role deployment observations it drops. That is stated here rather
+than folded into one number, because a measurement that lets a ruling take
+credit for a redundancy is not evidence for the ruling.
+
+The product/basis figure is the ruling's, undiluted: 41,808 to 3,375, and it is
+the same repair the in-process arm already had. The plan's
+`product_record_digest` and `linked_basis_record_digest` sit inside
+`hash(instruction_data)`, which is the last seed of the PDA that signs this
+route, so a caller has committed to them cryptographically. What remains is to
+bind the frame's coordinates to those digests -- and the two conjuncts a
+signature cannot carry stay unconditional: `authenticate_core_market_v3`,
+because a caller may pin its own plan to whatever it likes but may not author
+the Market's persisted principal cap, and `authenticate_market`.
+
+The parse saving is a third thing again, and not the ruling either: dropping
+the walk left six frame coordinates bound by name and read by nobody, and
+binding a name costs a full scan of the frame spec. They stay in
+`SignedDeltaFrameSpecV3` -- the frame is a wire contract shared with callers --
+and `authenticate_privileges` still takes every coordinate's privileges by
+index, so an unread account is still a refused writable or signer.
+
+### What was given up
+
+The per-role deployment observation was also the slot pin: decision 0012's
+`ReleaseSuperseded`, raised when the substrate's upgrade authority ships new
+bytes under an open market. The Claims SignedDelta route now inherits that
+refusal from its caller, which observes all five roles before it composes the
+child. It is not lost from the transaction. It is lost from this program, and
+a future caller that does not observe would not be caught here.
+
+### The hostiles, and the one thing that made them worth writing
+
+Three, in the real-ELF fractional SignedDelta program-test, all passing:
+
+- **a caller that is not the activated Trading** -- a second deployment of the
+  identical caller ELF holds the Registry's `Trading` activation while the test
+  caller invokes and signs its own correctly-seeded PDA. `0x5202`.
+- **an activation cache for another release set** -- complete, Registry-owned,
+  at its own canonical address, belonging to another generation. `0x5202`.
+- **an unsigned caller authority** -- the activated caller invokes with
+  `invoke` where `invoke_signed` belongs. `0x5201`.
+
+`SignedDeltaSbfErrorV3::Release` is ONE discriminant over both the authority
+derivation and the release bind, so asserting it proves nothing about where the
+refusal happened -- exactly the trap `AGENTS.md` names. Run against a
+`claims-cu-profile` build, the first two log through **`sd-authority`** and then
+refuse without reaching `sd-releases`: the authority PASSED and the coordinate
+bind is what said no. The third refuses after `sd-frame-parsed` without
+reaching `sd-privileges`. **Owed, and not a lane's act:** `Release` should be
+split so those tests name their own accusation instead of borrowing the
+instrument, and the split makes `docs/reference/refusals.md` stale, which the
+convergence owner regenerates.
+
+Suites, every row run and every row reported: Dealer accelerator campaign 30/1
+unchanged; Claims fractional SignedDelta 4/4; fractional-atomic 29/0;
+protocol-position 7/0; `rational_representation_v2_program_test` **49/0**, which
+carries the two pre-existing `Release` hostiles on the caller coordinate. That
+last one first reported 48 FAILED, and the reason is worth recording: the
+`spl_token_2022.so` borrowed from another lane's scratch was a different build,
+and the suite's own fixture digest check refused it. It DID NOT RUN; it did not
+fail. A second cached fixture had the matching digest and the suite is green.
+
+## Where the wall is now, exactly
+
+The transaction still overruns, and it now overruns in a different place.
+
+| | CU |
+|---|---:|
+| Trading entry through `before-commit` | 1,118,254 |
+| Custody route 0 (the cash leg), with its frame build and the inter-child span | 187,023 |
+| **Claims route 1 -- COMPLETES** | 87,161, of 98,455 given |
+| remaining when Claims returns | **12,210** |
+
+and what is left unreached, priced from this same run:
+
+| unreached | CU | source of the price |
+|---|---:|---|
+| Claims return -> Custody route 2 entry | ~44,000 | the measured inter-child span |
+| Custody route 2 (the merge) | ~116,000 | route 0 in this run cost 116,203 |
+| the commit tail | 61,352 | measured end to end on the equity Add |
+| **total** | **~221,400** | against 12,210 remaining |
+
+**The Remove is short by about 209,000 CU.** It was short by 264,000 to 367,000
+before this addendum. Claims has no more to give: its whole invocation is now
+80,488, of which the frame parse is 21,754 and the activation-cache decode
+30,828, and that decode is the one derivation the seeds cannot establish --
+the seeds pin a release set, not which program holds a role in it.
+
+## The 209,000 is mostly the accelerator's prelude, and it does not come out span by span
+
+*(Refined by the third addendum below, which measured Custody: of the ~221,400
+the transaction still owes when Claims returns, about 115,000 is the Custody
+merge and 92,515 of THAT is caller re-authentication. So the accelerator is the
+larger half of the problem, not the whole of it, and the merge's half is now
+measured rather than estimated. The reading below stands unchanged for the
+accelerator.)*
+
+The accelerator's leg in this run: entry through `acc-enter` 124,454 (which is
+Trading's CPI frame build and the runtime's own charge as much as the
+accelerator's entry), then
+
+| span | CU | what it establishes |
+|---|---:|---|
+| `acc-toplevel` | 22,853 | every one of the 48 frame accounts is the account the TOP-LEVEL instruction named, read back from the Instructions sysvar |
+| `acc-caller-authority` | 5,580 | **the binding**: account 0 is the `CallerAuthoritySeedsV1` PDA under Trading for (release set, market, role Trading, root, `hash(request_bytes)`) |
+| `acc-release-waist` | 39,579 | activation cache, Market, family context |
+| `acc-product-runtime` | 39,217 | the Product/domain/portfolio/linked-basis graph |
+| `acc-records` | 27,901 | manifest, program set, seal, descriptor, config |
+| `acc-strategy` | 38,562 | the admitted-AOT strategy, certificate, admission and artifact-release chain |
+| `acc-input-bank` | 4,897 | the input registers |
+| `acc-artifacts` | 48,638 | the five sealed descriptor artifacts, geometry, representative coordinates |
+| `acc-context` | 32,513 | recompute `AdmittedInvocationContextV3` and require its digest to equal `request.invocation_context()` |
+| **the transition evaluation itself** | **131,790** | the work only this program can do |
+
+**249,263 CU of prelude against a 209,000 shortfall, so the arithmetic works and
+the method does not.** Reading `authenticate_accelerator_invocation_v4` end to
+end, the prelude is a CHAIN, not a list: `family_context` yields the record
+bumps, which locate the manifest and program set, which yield the selected
+action and descriptor, which key the seal, which yields the descriptor body and
+the five artifacts, which yield the geometry, which the context digest closes
+over. Each stage's OUTPUT is the next stage's input, and the evaluator consumes
+the last of them. Deleting a middle stage does not save its CU; it removes a
+value the evaluator needs.
+
+That is why this addendum lands no accelerator cut. The two spans whose outputs
+the evaluator does not consume are `acc-toplevel` (whose 22,853 is mostly the
+sysvar read that also produces the envelope, so only the comparison loops are
+recoverable) and `acc-context`'s comparison. Neither is 209,000, and a partial
+cut that does not land the Remove is not worth a trust change in a frame with
+192 bytes of headroom: `authenticate_accelerator_invocation_v4` sits at 3,904
+of 4,096.
+
+*A correction while I am here, because it has now been repeated three times
+including in this lane's own `fa00e8f28` message: that frame is NOT "the
+tightest first-party frame in the tree." Read straight out of
+`tools/frameguard/baseline.json` at `0aa70478e`, six rows sit deeper at 3,968
+-- `trading::outer::process_close`, `custody::projected::advance_source_state`
+and `realize_and_close`, `core::generic_founding_v1::authenticate_claims_and_custody`,
+and two in `resolution_proof_sbf` -- and two more share 3,904 with it
+(`authenticate_strategy_for_accelerator_boxed_v4` and
+`authenticate_strategy_from_sealed_boxed_v3`). 192 bytes of headroom is the
+true and sufficient fact; the superlative was inherited from `271ce0ed`, whose
+own message named `process_close` at 3,968 as the deepest two sentences
+earlier.*
+
+**The shape the repair has to take, stated so the next lane does not rediscover
+it.** Every value in the chain is something Trading COMPUTED, in the same
+instruction, before it built the CPI -- and the caller-authority PDA already
+pins `hash(request_bytes)`. So the request is a channel that costs nothing to
+widen: anything Trading writes into it is established by a signature the
+accelerator already checks for 5,580 CU. The repair is therefore not a deletion
+but a MOVE -- the `AdmittedInvocationContextV3` preimage, the selected action,
+the span widths, the claims and custody program ids, the outcome count, and the
+representative coordinates travel in the request instead of being re-derived
+from twelve accounts -- and the accelerator's prelude becomes: decode the
+request, verify the caller-authority derivation, read the values, evaluate.
+Priced from this run that is about 15,000 CU against 249,263, and the Remove
+lands with room.
+
+**What must NOT move with them**, and this is the whole of the design's risk:
+the accelerator exists to be a second opinion on the EVALUATION, so every input
+to the transition must still be a fact about an account this program reads --
+the input register bank, the runtime accounts, the root prestate. A request
+field that carried an evaluation INPUT rather than an authentication RESULT
+would make the accelerator a mirror of its caller, and the whole reason the
+Dealer family has one would be gone.
+
+**Author:** the Dealer accelerator's owner jointly with `admitted_composition_v3`'s,
+because the request is composed there and consumed here, and the hostile that
+makes it a repair rather than a relaxation belongs with them: a request field
+that disagrees with the account the accelerator can still see must refuse by
+name.
+
+
+## The double projection was not one question asked twice, and this note's §(a) was wrong about it
+
+Instance 2 above priced `p5r-account-projection` (93,618 here) and
+`p7-effect-projection` (96,121) as possibly "one projection asked twice," put
+**~93,000 CU** in the recoverable column, and said the reading was one this note
+did not make. The reading is made now, and the answer is no. **Strike the
+93,000.**
+
+They are different interpreters over different artifacts, and the second's
+input did not exist when the first ran:
+
+| | `p5r-account-projection` | `p7-effect-projection` |
+|---|---|---|
+| interpreter | `project_dynamic_fixed_spans_atomic`, `crates/dclutch-account-profile-contract/src/v2.rs:2386` | `project_atomic_visiting`, `crates/dclutch-effect-kernel/src/v4.rs:1014` |
+| artifact | `AccountProfileV2` bytes | `EffectProgramV4` bytes |
+| accounts | `&[AccountObservationV1]` -- key, owner, lamports and the full data | `&[AccountInput]` -- `{lamports, data_len}` only |
+| registers | the seeded PRE-transition banks | `candidate.scalars`, the POST-transition output |
+| returns | the authenticated register banks | `ProjectedEffectsV3 { lamports, requests, participation }` |
+
+The ordering makes it impossible in principle rather than merely awkward: the
+accelerator leg sits between them and PRODUCES the register state the second
+one reads, the effect frame's own width is a function of those post-transition
+scalars, and the observation bank the first one walked is dropped before the
+second runs -- `hot_v3.rs` says so in its own words at `project_hot_effects_v3`:
+*"This function never sees that bank: it is released before this runs."*
+
+And the frame-shape guess in §(a) is backwards. The effect frame is a PREFIX of
+the runtime frame, not a superset: `effect_account_count <= runtime_account_count`
+is enforced, every coordinate past it must be read-only, and the kernel is
+handed `.get(..effect_account_count)` slices of the same banks. There are zero
+accounts in one and not the other.
+
+**The tree had already answered this and nobody carried it forward.**
+`docs/evidence/DIRECT_HOT_AOT_MEASUREMENT_2026-08-31.md` says of the effect
+projection: *"a **different interpreter**, over EffectProgram V4 bytes, 131
+fixed effect operations. Not the TransitionVM,"* and of the register
+projection: *"other interpreters over other artifacts."* `96d6e04df`, which
+introduced the `p7e-*` checkpoints, calls them *"the two projections that
+phases 5 and 7 turned out to be almost entirely made of"* -- two. The only text
+in the tree asserting sameness was §(a) of this note, and it asserted it from a
+shared LABEL: both checkpoints have the word "projection" in them.
+
+### What IS computed twice here, and it is worth about 15,000 to 25,000
+
+There is a real duplicate inside the pair, one level down. For every
+coordinate, `expanded_rule_with_dynamic_spans` and
+`representative_with_dynamic_spans` are computed:
+
+- inside `validate_accounts_with_dynamic_spans` (`v2.rs:2662`), during p5r --
+  and both results are **thrown away**;
+- again in `derive_effect_permissions_with_dynamic_spans` (`v2.rs:2522`), which
+  keeps only `authority_rule.permission()`. That is `p7e-permissions`: **14,800
+  CU over ~74 coordinates, about 200 CU each**;
+- a third time in `child_route_privileges_v3` -> `dynamic_declared_privileges_v4`
+  (`programs/dclutch-trading-sbf/src/dynamic_accounts_v4.rs:129`), inside
+  `pf-composition`'s 41,301.
+
+The smallest shareable thing is therefore not a projection but a BANK: p5r
+already decodes every rule and every representative, so it can emit a
+caller-owned permission (and route-privilege) bank beside its register banks.
+One byte per coordinate survives the observation bank's release, and it retires
+`p7e-permissions` outright and part of the third walk. **Ceiling 15,000-25,000,
+not 93,000.**
+
+**What this does to §(a)'s arithmetic.** The four-source table in the first
+addendum totalled 540,000-570,000 against the shortfall. Two of its rows are
+now settled differently: the Claims child's 149,107 was real and has been SPENT
+(93,188 of it landed; the rest was the frame parse and the cache decode, which
+stay), and the double projection's ~93,000 was never there. What remains
+unmeasured in that table is the second Custody leg, and Custody still has no
+profiling feature -- which is now the single largest opaque number left in this
+transaction, exactly where `dclutch-claims-sbf` was two days ago.
+
+**Author:** the shared permission bank is `hot_v3`'s owner jointly with
+`dclutch-account-profile-contract`'s, since the bank has to be emitted by the
+projection that already computes it.
+
+
+## Third addendum, same night: Custody was the last opaque number, and it is 80 per cent caller
+
+*The note above named this as the obvious next flag -- "Custody has no
+profiling feature, and it is now the single largest opaque number left in this
+transaction, exactly where `dclutch-claims-sbf` was two days ago." It took one
+feature, one build and one campaign run, which is the third time that sentence
+has been true.*
+
+`dclutch-custody-sbf` now carries `custody-cu-profile`, off in every shipped
+build, over both routes the Dealer family reaches: the main
+`CustodyRequestV1` route the Remove's legs take, and the Dealer scenario
+reservation route the top-level reservation transactions take. The macro and
+the `#[inline(never)]` that guards it moved into a new crate,
+`dclutch-cu-checkpoint`, because `claims_cu_checkpoint!`'s own doc said to:
+*"If a third program needs one, that is the moment to extract the pair, not
+before."* Custody is the third program. What did NOT move is each program's
+feature name and domain prefix -- a build line names the feature, a log reader
+greps the prefix -- and Trading's `hot_checkpoint`, which also reports its bump
+allocator's outstanding heap and is a different instrument.
+
+**The Remove's Custody cash leg, in two independent campaign runs.** Two,
+because the lesson two sections up applies here too: one run cannot separate the
+code from the bump draw.
+
+| span | run A | run B |
+|---|---:|---:|
+| dispatch, `CustodyRequestV1::decode`, frame count, request digest | 3,240 | 3,240 |
+| **`authenticate_series_aware_common_frame`** | **61,739** | **63,239** |
+| **`authenticate_realm`** | **30,776** | **30,776** |
+| transfer frame coordinates | 277 | 277 |
+| token program, mint, custody authority, vault keys | 5,257 | 9,757 |
+| prestate balances | 2,104 | 2,104 |
+| **`invoke_exact_transfer` -- the economic work** | **2,380** | **2,380** |
+| poststate balances and the conservation check | 1,301 | 1,301 |
+| receipt, replay advance, return data | 4,940 | 4,940 |
+| whole invocation | 115,273 | 121,273 |
+
+Six of the nine spans are identical to the digit across the two, `realm` and the
+token CPI among them. The two that move do so by 1,500 and 4,500 -- one and
+three `create_program_address` iterations, the draw and nothing else.
+
+**The Token-2022 CPI inside that 2,380 consumed 105 CU.** Custody spends
+**92,515 to 94,015 of 115,273 to 121,273 -- between 77 and 81 per cent --
+re-authenticating the market, the release set, the replay cursor and the realm
+that Trading authenticated earlier in the same instruction, and 105 CU moving
+the tokens it exists to move.** The Claims finding, one program over, in the
+same proportion.
+
+Which makes instance 3 of §(a) measured rather than estimated. It guessed "two
+Custody legs pay about 247,000 CU of frame authentication to move 210 CU of
+tokens" and priced the recovery at 112,000-124,000. The true figure per leg is
+92,515 of caller re-authentication, so **185,030 over the Remove's two legs**,
+and the ruling applies to Custody exactly as it applies to Claims: this route is
+reached by a PDA-signed CPI under `CallerAuthoritySeedsV1`, whose last seed is
+`hash(request_bytes)`.
+
+**Caveats, both of them.** This is one invocation per run -- the campaign's other
+Custody legs go through the reservation route -- so unlike the Claims table
+there is no within-run repetition behind it -- the two runs above are the
+control instead. And Custody is
+not Claims: its realm and replay joins bind a cursor that the caller advances,
+so what the seeds establish and what they do not needs the same line-by-line
+reading `authenticate_releases` got, not a copy of its conclusion.
+
+### The instrument costs the shipped Custody executable nothing, and that is proven twice over
+
+Default builds, no feature: **`.text` is byte-identical** -- 555,824 bytes, same
+sha, and `.rodata` identical too. The whole ELF differs in exactly **ONE byte**,
+in `.data.rel.ro`, and it is a `core::panic::Location` line number that goes
+from 40 to 78. This commit adds exactly **38 lines** to
+`programs/dclutch-custody-sbf/src/lib.rs` above it.
+
+Getting there took a wrong turn worth recording. The first version made
+`dclutch-cu-checkpoint` an unconditional dependency, and the default ELF then
+differed in **1,153 of 555,824 `.text` bytes** at identical size and identical
+instruction count -- 378 differing instructions of 68,319, changed opcodes and
+immediates rather than added work. Rebuilding HEAD's own Custody SOURCES against
+only the new manifest reproduced the same 1,153 bytes, which is what identified
+it: the whole difference was the dependency EDGE, and none of it was a line
+anyone wrote. The dependency is now `optional = true` and the feature is
+`["dep:dclutch-cu-checkpoint"]`, so a shipped build has no such edge -- and the
+`.text` sha says so. `dclutch-claims-sbf`'s dependency was made optional in the
+same breath, for the same reason, and there the control is even cleaner: the
+default Claims ELF built after the extraction is **byte-identical, all
+1,373,224 of them**, to the one built before it. Moving a macro into a crate
+and taking its dependency edge back out again is a no-op on the shipped
+executable, and that is a measurement rather than an expectation.
+
+### And the Remove now reaches the merge
+
+In the run before this one -- same code, luckier draw -- the transaction got
+past the Claims child, past the inter-child span, and **invoked Custody a
+second time**, dying 7,908 CU into the merge leg. That is the first time this
+action has reached its third route. The wall has moved twice tonight: from
+inside the Claims child's product/basis join, to after the Claims child's
+commit, to inside the Custody merge.
+
+The remaining arithmetic is unchanged in size and better sourced: the merge
+needs about 115,000 and the commit tail 61,352, against the ~12,000 the
+transaction has when Claims returns. **Still short by roughly 165,000 to
+210,000 depending on the draw** -- and of that, 92,515 is now a MEASURED
+re-authentication inside the merge itself, which was the estimated row.

@@ -15,10 +15,22 @@ default = []
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
+# Diagnostic-only phase checkpoints for measured SBF compute profiling.
+#
+# OFF in every shipped build, and the canonical Custody executable is never
+# built with it. The third of its kind, after `dclutch-trading-sbf`'s
+# `hot-cu-profile` and `dclutch-claims-sbf`'s `claims-cu-profile`, and it exists
+# for the same reason both of those did: this program is ONE number in its
+# caller's log. On the Dealer partial equity Remove that number is 116,203 CU of
+# a 1,399,700 ceiling, spent to move 105 CU of tokens, and nothing in this tree
+# could say what the difference was. Today this instruments the Dealer scenario
+# reservation route only -- the leg that Remove actually calls.
+custody-cu-profile = ["dep:dclutch-cu-checkpoint"]
 
 [dependencies]
 dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-cu-checkpoint = { path = "../../crates/dclutch-cu-checkpoint", optional = true }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }

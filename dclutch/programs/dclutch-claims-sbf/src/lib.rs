@@ -76,15 +76,20 @@ mod terminal_settlement_v3;
 /// directly subtractable -- which is what makes a child's phases comparable
 /// with its parent's at all.
 ///
-/// `dclutch-trading-sbf`'s `hot_cu_checkpoint!` is the sibling instrument.
-/// They are deliberately not one shared macro: Trading's also reports its bump
-/// allocator's outstanding heap at each mark, and this program has no such
-/// allocator to report. If a third program needs one, that is the moment to
-/// extract the pair, not before.
+/// `dclutch-trading-sbf`'s `hot_cu_checkpoint!` is the sibling instrument, and
+/// it keeps its own body: Trading's also reports its bump allocator's
+/// outstanding heap at each mark, and this program has no such allocator.
+///
+/// This doc used to end "if a third program needs one, that is the moment to
+/// extract the pair, not before." `dclutch-custody-sbf` is the third program,
+/// so the pair is extracted: the syscalls and the `#[inline(never)]` that
+/// guards them now live once, in `dclutch-cu-checkpoint`. The FEATURE and the
+/// DOMAIN PREFIX stay here, because the feature name is what a build line names
+/// and the prefix is what a log reader greps.
 #[cfg(feature = "claims-cu-profile")]
 macro_rules! claims_cu_checkpoint {
     ($phase:literal) => {
-        crate::claims_checkpoint(concat!("dclutch-claims-cu:", $phase))
+        dclutch_cu_checkpoint::cu_checkpoint(concat!("dclutch-claims-cu:", $phase))
     };
 }
 
@@ -94,21 +99,6 @@ macro_rules! claims_cu_checkpoint {
 }
 
 pub(crate) use claims_cu_checkpoint;
-
-/// Log one phase label and the transaction meter, as two syscalls.
-///
-/// `#[inline(never)]` for the reason `hot_v3::hot_checkpoint` carries it: a
-/// route near the 4 KiB SBF frame limit that expands two syscalls inline at a
-/// dozen phases spills enough frame to overwrite its own caller's, which
-/// silently invalidates every number it prints. The frameguard ratchet is the
-/// instrument that would catch that, and it only measures builds without this
-/// feature -- so the attribute is the whole guard here.
-#[cfg(feature = "claims-cu-profile")]
-#[inline(never)]
-fn claims_checkpoint(phase: &str) {
-    solana_program::log::sol_log(phase);
-    solana_program::log::sol_log_compute_units();
-}
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
