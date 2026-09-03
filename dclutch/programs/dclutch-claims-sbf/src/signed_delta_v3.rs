@@ -13,6 +13,7 @@ use core::{
     convert::{TryFrom, TryInto},
 };
 
+use crate::claims_cu_checkpoint;
 use dclutch_claims_svm::{
     CallerRole,
     frame_spec_v1::{
@@ -334,12 +335,18 @@ pub(super) fn process(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
+    claims_cu_checkpoint!("sd-enter");
     let plan = SignedDeltaPlanV3::decode(instruction_data)
         .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
+    claims_cu_checkpoint!("sd-plan-decoded");
     let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
+    claims_cu_checkpoint!("sd-frame-parsed");
     authenticate_privileges(program_id, &accounts, plan.caller_role())?;
+    claims_cu_checkpoint!("sd-privileges");
     let packet_digest = hash(instruction_data).to_bytes();
+    claims_cu_checkpoint!("sd-packet-digest");
     authenticate_authority(&accounts, plan, packet_digest)?;
+    claims_cu_checkpoint!("sd-authority");
     let receipt = execute_authenticated(
         program_id,
         &accounts,
@@ -349,6 +356,7 @@ pub(super) fn process(
         CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1,
     )?;
     set_return_data(&receipt.to_bytes());
+    claims_cu_checkpoint!("sd-return-data");
     Ok(())
 }
 
@@ -402,6 +410,7 @@ fn execute_authenticated(
     if !parent_authenticated {
         authenticate_releases(accounts, plan)?;
     }
+    claims_cu_checkpoint!("sd-releases");
 
     let market_before = accounts
         .market
@@ -410,6 +419,7 @@ fn execute_authenticated(
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
     authenticate_market(program_id, accounts, plan, market)?;
+    claims_cu_checkpoint!("sd-market");
     let principal_cap_sets = if parent_authenticated {
         authenticate_parent_product_digests(accounts, plan)?;
         authenticate_core_market_v3(
@@ -424,10 +434,12 @@ fn execute_authenticated(
     } else {
         authenticate_product_and_basis(accounts, plan, market, admission)?
     };
+    claims_cu_checkpoint!("sd-product-basis");
     admit_principal_growth(plan, &market_before, principal_cap_sets)?;
     let (mut market_candidate, mut position_candidates) =
         build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
+    claims_cu_checkpoint!("sd-candidates");
 
     apply_deltas(plan, &mut market_candidate, &mut position_candidates)?;
     let post_market_revision = plan
@@ -445,6 +457,8 @@ fn execute_authenticated(
             .ok_or(SignedDeltaSbfErrorV3::Candidate)?;
         put_u64(candidate, POSITION_REVISION_OFFSET, revision)?;
     }
+
+    claims_cu_checkpoint!("sd-deltas-applied");
 
     let (positions, aggregates, deltas) = plan.table_bytes();
     let table_digest = hashv(&[
@@ -464,7 +478,9 @@ fn execute_authenticated(
         post_market_revision,
     )
     .map_err(|_| SignedDeltaSbfErrorV3::Receipt)?;
+    claims_cu_checkpoint!("sd-digests-and-receipt");
     commit_candidates(accounts, &market_candidate, &position_candidates)?;
+    claims_cu_checkpoint!("sd-committed");
     Ok(receipt)
 }
 

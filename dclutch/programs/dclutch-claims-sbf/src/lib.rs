@@ -61,6 +61,55 @@ pub mod sparse_native_transfer_v1;
 mod terminal_certificate_v3;
 mod terminal_settlement_v3;
 
+/// One diagnostic phase mark: a label and the transaction meter's remaining CU.
+///
+/// A child program reached by CPI is ONE number in its caller's log, and one
+/// number cannot say whether it was spent on work only this program can do or
+/// on re-deriving what its caller already authenticated. The Dealer partial
+/// equity Remove is where that mattered: its SignedDelta child cost about
+/// 205,000 CU against a 1,399,700 transaction ceiling and nothing in this tree
+/// could say on what. See
+/// `docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md`.
+///
+/// `sol_log_compute_units` reports the TRANSACTION meter, not a per-invocation
+/// one, so these readings continue the caller's sequence and the two are
+/// directly subtractable -- which is what makes a child's phases comparable
+/// with its parent's at all.
+///
+/// `dclutch-trading-sbf`'s `hot_cu_checkpoint!` is the sibling instrument.
+/// They are deliberately not one shared macro: Trading's also reports its bump
+/// allocator's outstanding heap at each mark, and this program has no such
+/// allocator to report. If a third program needs one, that is the moment to
+/// extract the pair, not before.
+#[cfg(feature = "claims-cu-profile")]
+macro_rules! claims_cu_checkpoint {
+    ($phase:literal) => {
+        crate::claims_checkpoint(concat!("dclutch-claims-cu:", $phase))
+    };
+}
+
+#[cfg(not(feature = "claims-cu-profile"))]
+macro_rules! claims_cu_checkpoint {
+    ($phase:literal) => {};
+}
+
+pub(crate) use claims_cu_checkpoint;
+
+/// Log one phase label and the transaction meter, as two syscalls.
+///
+/// `#[inline(never)]` for the reason `hot_v3::hot_checkpoint` carries it: a
+/// route near the 4 KiB SBF frame limit that expands two syscalls inline at a
+/// dozen phases spills enough frame to overwrite its own caller's, which
+/// silently invalidates every number it prints. The frameguard ratchet is the
+/// instrument that would catch that, and it only measures builds without this
+/// feature -- so the attribute is the whole guard here.
+#[cfg(feature = "claims-cu-profile")]
+#[inline(never)]
+fn claims_checkpoint(phase: &str) {
+    solana_program::log::sol_log(phase);
+    solana_program::log::sol_log_compute_units();
+}
+
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
 

@@ -350,3 +350,136 @@ The cost of that measurement is one feature flag, one ELF, and one campaign
 run. It is exactly the cost that made the accelerator's interior legible this
 afternoon, and the accelerator's interior turned out to be the largest single
 finding in this note.
+
+---
+
+## Addendum, same afternoon: the measurement was taken, and it answers
+
+*Measured at `104f45d7e` plus the `claims-cu-profile` feature this note asked
+for, on real SBF ELFs, zero frame diagnostics, campaign 30 passed / 1 failed --
+unchanged, so the instrument does not move the suite. A DIFFERENT run from the
+tables above, with cheaper bump draws throughout (the Custody cash leg is
+111,703 against 123,703, the accelerator 395,016 against 420,514), which is why
+the Remove's total requirement reads about 1,664,000 here against 1,767,000
+above -- 24,174 before `start`, 1,070,088 to `before-commit`, 22,549 and 111,703
+for the Custody cash leg, 44,242 between children, 174,120 for the Claims child
+it cannot afford, 44,242 and 111,703 for the unreached merge, 61,352 to commit.
+That hundred-thousand spread IS the draw, and it is the reason the note opened
+by restricting every comparison to one run.*
+
+`dclutch-claims-sbf` now carries fourteen checkpoints on the SignedDelta route
+behind a feature that is off in every shipped build. A completing invocation of
+that child costs **173,680 CU** and spends it like this:
+
+| span | CU | share |
+|---|---:|---:|
+| CPI entry, deserialize -> `sd-enter` | 4,024 | 2.3% |
+| `SignedDeltaPlanV3::decode` | 2,771 | 1.6% |
+| **`SignedDeltaAccountsV3::parse`** | **31,054** | **17.9%** |
+| `authenticate_privileges` | 2,500 | 1.4% |
+| `hash(instruction_data)` | 509 | 0.3% |
+| `authenticate_authority` | 3,532 | 2.0% |
+| **`authenticate_releases`** | **76,245** | **43.9%** |
+| `authenticate_market` | 2,206 | 1.3% |
+| **`authenticate_product_and_basis`** | **41,808** | **24.1%** |
+| `build_candidates` | 5,213 | 3.0% |
+| **`apply_deltas` -- the economic work** | **662** | **0.4%** |
+| table + resource digests, receipt | 1,192 | 0.7% |
+| `commit_candidates` | 453 | 0.3% |
+| `set_return_data` -> return | 1,511 | 0.9% |
+
+Each row includes the one checkpoint that ends it -- two syscalls, on the order
+of 200 CU -- so the instrument is roughly 2,800 of the 173,680 and none of the
+ranking. **Every one of those spans except the entry is IDENTICAL to the digit
+across two independent campaign runs with different key draws**, which the
+figures above the addendum are not: these are deterministic work, not
+bump-search noise.
+
+**The child spends 662 CU applying the deltas it exists to apply. It spends
+149,107 -- 85.9 per cent -- parsing a frame and authenticating releases,
+products and bases that Trading authenticated earlier in the same instruction.**
+Counting every authentication row rather than the three large ones it is
+157,345, or 90.6 per cent; everything from `build_candidates` through
+`commit_candidates` -- copy the market and positions, apply the deltas, digest,
+write -- is 7,520, or 4.3 per cent.
+
+And the Remove's own child dies exactly where that predicts. It entered with
+126,944 CU, cleared the frame parse, the privileges, the authority and
+`authenticate_releases` -- 76,245 of its 126,944 spent re-establishing a release
+set its caller had established -- reached `sd-market` with 3,643 left, and
+exhausted the meter inside `authenticate_product_and_basis`, which needs 41,808.
+It never reached `build_candidates`. **The action that has been called
+compute-bound for two days has never once executed a single delta.**
+
+### What this does to the three options
+
+**Option (a) gains its fourth source, and it is the size the note predicted.**
+The guess above was "perhaps 150,000 CU if the child's cost is mostly
+re-derivation". It is 149,107, and unlike the other three it does not move
+between runs.
+
+| source | CU | measured? |
+|---|---:|---|
+| the accelerator re-deriving what the seal already covers | 186,397 - 204,397 | measured, draw-dependent |
+| **the Claims child's frame parse, releases, product and basis** | **149,107** | **measured, deterministic** |
+| the second Custody leg's repeated frame parse | ~112,000 - 124,000 | estimated |
+| the second account-frame projection, if the two are one question | ~93,000 | estimated |
+| total | **540,000 - 570,000** | |
+
+against a shortfall of 264,000 (this run) to 367,000 (the run above). **Option
+(a) can close the gap with a real margin, and it no longer needs all four to
+land.** The two MEASURED rows alone come to 335,504 - 353,504.
+
+**Which sharpens the question rather than answering it**, because all four are
+the same act: a program declining to take its caller's word. But the Claims
+child's is the best-posed of them, because its 76,245-CU half is one named call
+made three times. `authenticate_releases` runs `authenticate_activated_role` for
+Core, for Claims and -- when the caller is Trading -- for Trading, each against
+the SAME Registry activation cache account Trading itself read earlier in the
+same instruction, to establish the same release set. About 25,400 CU per role,
+three times, for a fact the transaction has already established.
+
+The joint that might carry it is already in the frame and is not a promise from
+the caller: this route's authority is a `CallerAuthoritySeedsV1` PDA, whose seed
+order pins the release set, the market, the execution role and the exact
+role-request digest. A valid signature on it is a cryptographic statement that a
+program holding those seeds is calling. What it does NOT by itself state is that
+the calling program is the Registry-ACTIVATED holder of that role for that
+release set -- which is precisely the gap the comment above
+`authenticate_releases` exists to close, after a caller coordinate that pinned
+nothing let any executable program sit there and demand a PDA under itself. So
+this is not a deletion; it is a question about which authority may state
+activation.
+
+> **May the Claims SignedDelta route take its caller's Registry role activation
+> as established -- by the caller-authority PDA whose seeds already pin the
+> release set, or by an `AuthenticatedRoleReceiptV1` the caller holds and passes
+> -- instead of re-running `authenticate_activated_role` three times against the
+> same activation cache its caller has just read?**
+
+Claims already has the shape for the "my caller did it" case, and it is not
+hypothetical. `execute_parent_authenticated` exists so an enclosing Claims route
+can say exactly that, and `execute_authenticated`'s `parent_authenticated` arm
+swaps the 41,808-CU `authenticate_product_and_basis` for a digest comparison.
+Trading's CPI reaches none of it: it calls `process`, the unauthenticated
+top-level entry, so the child pays the full 149,107. That existing path is
+in-process and `pub(crate)`, so extending it across a CPI boundary is a new
+request kind with its own hostiles, not a one-line reroute. It is still a route
+change with a shape to follow rather than new persisted state with a new cancel
+path.
+
+**Options (b) and (c) are unchanged in structure and cheaper in urgency.** The
+split still works only if the second transaction can skip the accelerator, and
+an abandoned first half still costs a debited vault and a live escrow. They are
+simply no longer the only way through, which is the difference between a design
+this action needs and one it might want later.
+
+### What is still not measured
+
+The second Custody leg and the second account-frame projection are still
+estimates and have no instrument at all: Custody has no profiling feature, and
+the two Trading projections are one checkpoint each with no interior. Neither is
+load-bearing for the conclusion any more -- the two measured rows come within
+14,000 of even the larger shortfall on their own -- but the Custody one is the
+obvious next flag, and it is the same afternoon's work: a feature, a build, a
+campaign run.

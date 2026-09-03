@@ -3665,3 +3665,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Draining reveals: **dclutch-trading-sbf has 318 sites over 15 lints**, invisible until now — DEALER's. Owed: frame rows for
   the drain (fd6cd060 + b840a2361, jointly, one capture after the Dealer series settles); 7 debt rows with owners.
 - Cuts: `9c55d5767`, `24f119b42`.
+
+### Lane map delta — 2026-09-02 23:00 EDT
+- DEALER closed (`a0d556b9e` trading-outer builds — `tests/activation.rs` 14/0 where it had no program; `c4e9bb063` the
+  Remove's wall PRICED: the accelerator leg 538,821 of which **288,724 (69%) is spent before it evaluates anything**; Trading's
+  prelude + the accelerator's = 45% of the transaction authenticating one view twice; the prelude MULTIPLIES per transaction
+  so a split cannot save it; `b97ef3e4a` Claims gets its first CU instrument (`claims-cu-profile`): **a completing SignedDelta
+  child spends 149,107 of 173,680 (85.9%) re-authenticating what Trading authenticated in the same instruction and 662
+  (0.4%) applying deltas** — the Remove's child has never executed a single delta; rows carried, `owed` green). Owed: the
+  `outer-only` composer-reachability ruling; Custody has no profiling feature; the alias row (its operator producer has no
+  consumer at all — the campaign's green would be evidence of nothing).
+- **RULING (under the standing goal; ember may reverse): a callee invoked by a PDA-signed CPI from Trading takes the facts
+  the signer's seeds pin as established** — the release set, the role activation, the sealed records — verifying only the
+  signer's derivation; the unpinned-caller history stays as a hostile. Decision 0012's argument one level down.
+  → DEALER **`(spawned)`**: Claims' two re-authentications and the accelerator's prelude, then the Remove.
+- Cuts: `570679f68`.

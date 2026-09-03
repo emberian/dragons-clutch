@@ -372,3 +372,36 @@ So the row's measured value is now:
 The Add is the case the row is for: it reaches the devnet limit with zero
 headroom, and it is an action that completes. The Remove's sixty-fifth lock is
 a question for after its compute wall, not before it.
+
+### One of the three named producers has no consumer, so repairing it proves nothing
+
+*Appended by the Dealer lane, 2026-09-02, at `b97ef3e4a`, while scoping the row
+and deciding not to start it this session.*
+
+`SEALED_EXECUTION_ALIAS_FAMILIES_V3`'s doc comment says "ADDING A FAMILY IS ONE
+ROW HERE AND THREE PRODUCERS", and names the operator's missing projector as one
+of the three. Checked before starting it:
+`crates/dclutch-operator/src/dealer_equity_hot_v3.rs` is referenced by exactly
+ONE line in this repository -- `pub mod dealer_equity_hot_v3;` in the operator
+crate's `lib.rs` -- and by nothing else, in any language.
+`build_dealer_equity_hot_instruction_v3` has no caller and
+`DealerEquityHotStateV3` has no constructor outside the module's own
+`#[cfg(test)]`. The Dealer campaign builds its hot frame by hand in
+`programs/dclutch-dealer-accelerator-sbf/program-test/tests/accepted.rs`, so the
+operator is not on the path the row's evidence would come from.
+
+That does not remove the operator from the series -- an operator that neither
+requires the alias nor forbids it will sign the wrong frame the day it acquires
+a caller -- but it changes what the series can PROVE. The campaign's green is
+evidence about `accepted.rs`'s hand-built frame and about Trading, and about the
+operator it is evidence of nothing. Whoever lands the row should say which
+producer each piece of evidence covers, and should expect to write the
+operator's first caller or its first adversarial test as part of the row rather
+than after it.
+
+The other consideration for whoever picks this up: the row is an ATOMIC FLIP.
+Trading compares the frame against `hot_frame_uses_sealed_execution_aliases_v3`
+with `!=`, not `||`, so the moment the Dealer kind enters that table every
+Dealer hot transaction in the campaign refuses until the builder, the browser
+and the SDK all produce and accept the aliased shape. There is no half-landed
+state that is green, which is why this is one series and not four commits.
