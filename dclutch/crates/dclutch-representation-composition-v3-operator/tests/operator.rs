@@ -1,5 +1,7 @@
 //! Chain-observation, K/N separation, hostile refusal, and packet corpus.
 
+#![allow(clippy::indexing_slicing)]
+
 use dclutch_account_profile_contract::lifecycle_v3::{
     HEADER_BYTES as LIFECYCLE_POLICY_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
 };

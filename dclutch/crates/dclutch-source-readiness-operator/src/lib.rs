@@ -216,7 +216,13 @@ pub enum SourceCloseFundPlanV1 {
         top_up_lamports: u64,
     },
     /// Execute the signer-free V7 direct Resolution close.
-    Close(FundingReadinessInstructionPlanV1<ResolutionDirectCloseFundReportV1>),
+    ///
+    /// Boxed, and the reason is a measurement rather than a style: the plan is
+    /// 712 bytes against `Prepay`'s 80, so an unboxed enum cost every
+    /// `SourceCloseFundPlanV1` -- including the small variant -- the full 712
+    /// on the stack and in every move. The enum has no consumer outside this
+    /// crate, so the indirection is invisible at the boundary.
+    Close(Box<FundingReadinessInstructionPlanV1<ResolutionDirectCloseFundReportV1>>),
 }
 
 impl SourceCloseFundPlanV1 {
@@ -622,12 +628,12 @@ pub fn plan_source_close_fund_v1(
         frame.closure_receipt,
         readiness.coordinates.beneficiary,
     ];
-    Ok(SourceCloseFundPlanV1::Close(instruction_plan_v1(
+    Ok(SourceCloseFundPlanV1::Close(Box::new(instruction_plan_v1(
         &instruction,
         report,
         None,
         completion,
-    )))
+    ))))
 }
 
 fn plan_from_map_v1(

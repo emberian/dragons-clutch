@@ -3657,3 +3657,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   → COHORT-14 **`(spawned)`**: close 13, deploy, ladder + tenth record, seal, Direct + General markets, activate, fill,
   census, **OpenBatch on a real chain**, the in-window relay, an honest resolution, payout to a real ATA.
 - Cuts: `db3ae5ddd`.
+- CLIPPY-2 closed (`7efe71f83`, `b840a2361`, `a6bdf5246`, `31307bcc3`, `f486a7a40`): clean 72 → **89**, never-reached 22 → 9,
+  inheriting 68 → **100/105** (the "37 without the table" were 35 hand-copied duplicates of it; the five that cannot inherit
+  say why in their manifests — unsafe surfaces, two-workspace crates, dealer-codec's 76 sites); one character under 17 of
+  the 22 (`matches!(12|13|14)` → `12..=14`); the census's opt-in ratio was substring-spoofable and spoofed itself (now
+  tomllib); a test born without `#[test]` at e78fa027d whose commit claimed its criterion satisfied — wired, red-proven.
+  Draining reveals: **dclutch-trading-sbf has 318 sites over 15 lints**, invisible until now — DEALER's. Owed: frame rows for
+  the drain (fd6cd060 + b840a2361, jointly, one capture after the Dealer series settles); 7 debt rows with owners.
+- Cuts: `9c55d5767`, `24f119b42`.

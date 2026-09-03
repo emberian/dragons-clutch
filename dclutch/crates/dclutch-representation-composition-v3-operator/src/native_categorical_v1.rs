@@ -582,6 +582,8 @@ pub fn compile_native_basis_composition_v1(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use dclutch_product_payoff_v2_codec::{
         price_gate_v1::{
