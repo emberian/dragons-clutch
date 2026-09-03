@@ -31,7 +31,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     CoreState, FoundingIntentV5, Identity, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
-    SeriesFoundingPermitV1,
+    SeriesFoundingPermitV1, SeriesPermitJoinMismatchV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_registry_activation_auth_v1::ActivationAuthErrorV1;
@@ -1041,40 +1041,23 @@ fn authenticate_permit_body(
         )
     })?;
     let intent_digest = hash(&intent_bytes).to_bytes();
-    permit
-        .verify_for_intent_and_request(
-            intent,
-            Identity::new(intent_digest).map_err(|_| {
-                refuse(
-                    ClaimsFoundingSbfErrorV5::PermitBody,
-                    "the intent's own digest is the zero identity",
-                )
-            })?,
-            Identity::new(request_digest).map_err(|_| {
-                refuse(
-                    ClaimsFoundingSbfErrorV5::PermitBody,
-                    "the founding request digest is the zero identity",
-                )
-            })?,
-        )
-        .map_err(|_| {
-            refuse(
-                ClaimsFoundingSbfErrorV5::PermitBody,
-                "the permit does not authorize this intent and request pair",
-            )
-        })?;
-    // Eighteen named conjuncts, not one `||` chain. Every founding digest in
-    // the tree converges here: a byte moved anywhere upstream -- a Core bump
-    // written where the projection had no field for it, a revision off by one,
-    // a stale release id -- arrives as two unequal 32-byte strings and nothing
-    // else. Naming the one that disagreed is the difference between reading a
-    // log line and bisecting five programs.
+    // Eighteen named conjuncts, not one `||` chain, AND THEY RUN FIRST. Every
+    // founding digest in the tree converges here: a byte moved anywhere
+    // upstream -- a Core bump written where the projection had no field for
+    // it, a revision off by one, a stale release id -- arrives as two unequal
+    // 32-byte strings and nothing else. Naming the one that disagreed is the
+    // difference between reading a log line and bisecting five programs.
+    //
+    // ORDER IS THE WHOLE DIAGNOSTIC. The permit's own authorization join binds
+    // the complete request body in one digest, so it subsumes every conjunct
+    // below it: while it ran first, all eighteen names were unreachable on
+    // exactly the input that needed them, and the founding could only say that
+    // the pair did not authorize. Measured 2026-09-03 on the tier-1 campaign's
+    // last transaction. So the ladder now descends from the specific to the
+    // general -- coordinate, then intent, then the permit pair -- and nothing
+    // about what is ADMITTED changes: the same conjunctions, all of them, in
+    // an order the accepting path pays nothing for.
     let body = ClaimsFoundingSbfErrorV5::PermitBody;
-    require(
-        intent_digest == request.founding_intent_digest(),
-        body,
-        "intent digest is not the request's founding_intent_digest",
-    )?;
     require(
         intent.release_set().to_bytes() == request.release_set(),
         body,
@@ -1163,6 +1146,42 @@ fn authenticate_permit_body(
         body,
         "pre-custody revision does not step to the intent's normal replay revision",
     )?;
+
+    // Then the intent as a whole, then the permit's authorization of the
+    // (intent, request) pair. `join_for_intent_and_request` is the codec's own
+    // join with its three causes kept rather than collapsed, so this names the
+    // conjunct without keeping a second copy of what the join admits.
+    require(
+        intent_digest == request.founding_intent_digest(),
+        body,
+        "intent digest is not the request's founding_intent_digest",
+    )?;
+    permit
+        .join_for_intent_and_request(
+            intent,
+            Identity::new(intent_digest).map_err(|_| {
+                refuse(body, "the intent's own digest is the zero identity")
+            })?,
+            Identity::new(request_digest).map_err(|_| {
+                refuse(body, "the founding request digest is the zero identity")
+            })?,
+        )
+        .map_err(|mismatch| {
+            refuse(
+                body,
+                match mismatch {
+                    SeriesPermitJoinMismatchV1::Intent => {
+                        "the permit was issued for a different founding intent"
+                    }
+                    SeriesPermitJoinMismatchV1::IntentDigest => {
+                        "the permit records a different intent digest than its own intent hashes to"
+                    }
+                    SeriesPermitJoinMismatchV1::RequestDigest => {
+                        "the permit records a different request digest than these request bytes hash to; the request Core compiled is not the request this founding was handed"
+                    }
+                },
+            )
+        })?;
     Ok(intent)
 }
 
@@ -2003,11 +2022,33 @@ mod tests {
         let (request, permit, lock, projected, lock_digest, projected_digest, core_digest) =
             fixture();
         let request_digest = hash(&request.to_bytes()).to_bytes();
+        // A coordinate the intent carries: one of the named joins owns it, and
+        // the permit's own digests still agree because this hostile is handed
+        // the honest request's digest. Named rather than `is_err()`, which
+        // would also have accepted a refusal from anywhere else in the ladder.
         let mut hostile_input = request.input();
         hostile_input.trading_program = id(99);
         let hostile_request =
             ClaimsFoundingRequestV5::new(hostile_input).expect("same-shape hostile request");
-        assert!(authenticate_permit_body(permit, &hostile_request, request_digest).is_err());
+        assert_eq!(
+            authenticate_permit_body(permit, &hostile_request, request_digest).unwrap_err(),
+            ProgramError::Custom(ClaimsFoundingSbfErrorV5::PermitBody as u32),
+        );
+
+        // And a coordinate NO named join covers: `claim_count` is in the
+        // request and not in the intent, so the only thing standing between it
+        // and a founding is the permit's whole-body request digest. This is
+        // what the named joins are in front of, and it is the case that would
+        // go quiet if a later author ever reordered them past it.
+        let mut uncovered_input = request.input();
+        uncovered_input.claim_count = request.claim_count() + 1;
+        let uncovered_request =
+            ClaimsFoundingRequestV5::new(uncovered_input).expect("same-shape hostile request");
+        let uncovered_digest = hash(&uncovered_request.to_bytes()).to_bytes();
+        assert_eq!(
+            authenticate_permit_body(permit, &uncovered_request, uncovered_digest).unwrap_err(),
+            ProgramError::Custom(ClaimsFoundingSbfErrorV5::PermitBody as u32),
+        );
 
         let intent = authenticate_permit_body(permit, &request, request_digest)
             .expect("permit binds request");

@@ -407,17 +407,54 @@ impl SeriesFoundingPermitV1 {
 
     /// Verify the exact canonical intent projection and Claims V5 request
     /// digest observed by an adapter.
+    ///
+    /// Keeps the one-code shape for callers that have nothing to say about
+    /// which conjunct failed. A caller that does have somewhere to put the
+    /// cause should call [`Self::join_for_intent_and_request`] instead; this
+    /// is that call with the distinction thrown away, so the two can never
+    /// disagree about what the join admits.
     pub fn verify_for_intent_and_request(
         self,
         observed_intent: FoundingIntentV5,
         observed_intent_digest: Identity,
         observed_request_digest: Identity,
     ) -> Result<(), Error> {
-        if self.intent != observed_intent
-            || self.claims_intent_digest != observed_intent_digest
-            || self.claims_request_digest != observed_request_digest
-        {
-            return Err(Error::InvalidCoordinates);
+        self.join_for_intent_and_request(
+            observed_intent,
+            observed_intent_digest,
+            observed_request_digest,
+        )
+        .map_err(|_| Error::InvalidCoordinates)
+    }
+
+    /// Join the permit against an observed intent and request, naming the
+    /// conjunct that failed.
+    ///
+    /// Three unrelated accusations shared one `Error::InvalidCoordinates`: a
+    /// permit issued for another intent entirely, a permit whose recorded
+    /// intent digest does not hash its own intent, and a permit that never
+    /// authorized these request bytes. The third is the one a founding
+    /// actually hits -- Core builds the Claims request itself and records its
+    /// digest, so a single disagreeing field anywhere upstream arrives here as
+    /// two unequal 32-byte strings -- and a caller that got the coarse code
+    /// back could not tell it from the other two.
+    ///
+    /// `Error` is emitted from Lean and is not this crate's to widen for a
+    /// distinction only this join makes, so the cause is its own type.
+    pub fn join_for_intent_and_request(
+        self,
+        observed_intent: FoundingIntentV5,
+        observed_intent_digest: Identity,
+        observed_request_digest: Identity,
+    ) -> Result<(), SeriesPermitJoinMismatchV1> {
+        if self.intent != observed_intent {
+            return Err(SeriesPermitJoinMismatchV1::Intent);
+        }
+        if self.claims_intent_digest != observed_intent_digest {
+            return Err(SeriesPermitJoinMismatchV1::IntentDigest);
+        }
+        if self.claims_request_digest != observed_request_digest {
+            return Err(SeriesPermitJoinMismatchV1::RequestDigest);
         }
         Ok(())
     }
@@ -442,6 +479,21 @@ impl SeriesFoundingPermitV1 {
             self.intent.ticket_context,
         )
     }
+}
+
+/// Which conjunct of a permit's authorization did not hold.
+///
+/// Not a protocol refusal code: it is the cause an adapter names in its own
+/// band, on its own refusing path. Claims' founding is the caller that has
+/// somewhere to put it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SeriesPermitJoinMismatchV1 {
+    /// The permit was issued for a different founding intent entirely.
+    Intent,
+    /// The permit's recorded Claims intent digest is not the observed one.
+    IntentDigest,
+    /// The permit's recorded Claims request digest is not the observed one.
+    RequestDigest,
 }
 
 /// Cycle-free PDA seed projection for one Series founding permit.
