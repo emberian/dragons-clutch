@@ -3843,3 +3843,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   upstream gap that makes `other-machine → derive` unexercised today; the dealer-accelerator's `process_instruction` name
   collision; a built-and-reverted nested-alternative resolver (zero rows moved). C-10's instrument rests here.
 - Cuts: `441ce5f30`, `0f1a331f7`.
+- WEB closed (nine commits: `0de16aad3` deployments derived from plan-seal.json with ProgramData and slots READ off chain;
+  `21a7fd5eb` the cut on market B, `--release-set` piped from a chain read; `c1d254874` four cohort-14 markets, titles
+  removed for live rows — `derivedTitleV1` writes "SOL/USD — 3 ways past $99 and $103"; `d49a16b03` **the honest resolution
+  rendered** — the Market's `terminal_receipt` slot IS the certificate account's address (the explorer had filed it as a
+  digest); `e99a188d7` /pulse from cohort-14's census; `d54f902f6`, `1325e5599`, `cf382128e` og-cards produced no cards and
+  nothing ran it). Capture 1,234 words / 21 $ / 0 hex; live 10/10. **Findings:** the selector ↔ cut join is undecidable
+  from the browser (no exponent in the certificate, no partition-ordering decode) — ordinary cells named by number; the TS
+  token parser refuses the 170-byte ATA (165 exactly) so the browser's payout path cannot read the destination cohort-14
+  exists to pay. → WEB **`(spawned)`**.
+- Cuts: `735d4e993`.
