@@ -433,6 +433,68 @@ jobs:
         if: steps.probe.outputs.present == '1'
         run: npm install --no-save --no-audit --no-fund @ast-grep/cli
 
+      # -------------------------------------------------------------------
+      # WHY A JOB THAT BUILDS NOTHING NOW WARMS A CARGO REGISTRY, for the
+      # second time in this repository and for exactly the same reason.
+      #
+      # `cheap` runs six tiers, and one of them -- `locks` -- resolves every
+      # tracked workspace with `cargo metadata --locked --offline`. Offline
+      # resolution reads the LOCAL registry cache, and a fresh hosted runner
+      # has none, so on 2026-09-03 this job reported ALL SEVENTY workspace
+      # lockfiles stale and told the reader to regenerate seventy locks. The
+      # true figure in that tree was ONE (`tools/dclutch-cli`). A gate that
+      # fails for a reason unrelated to the thing it gates is worse than no
+      # gate: the eventual fix is somebody widening it until the red goes.
+      #
+      # `checks.yml`'s hygiene job learned this for the SBOM gate and its
+      # comment says the conclusion better than a second copy would: "the
+      # tool's classification was never wrong. Its environment was." The
+      # cache key and the fetch loop below are that job's, deliberately --
+      # same key prefix, so the two jobs share one warmed registry rather
+      # than each paying for their own.
+      #
+      # The tier itself was ALSO taught to tell the two apart (dclutch
+      # `tools/ci/run.sh`, tier_locks): a workspace that refuses with cargo's
+      # "offline mode (via --offline)" is now reported as NOT PROVEN and
+      # exits 2, while "because --locked was passed to prevent this" stays a
+      # failure. So this step is what makes the gate RUN; the tree's change
+      # is what stops it lying when the step is missing. Both are wanted --
+      # the runner is not the only host that can have a cold registry.
+      # -------------------------------------------------------------------
+      - uses: actions/cache@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: sbom-registry-${{ hashFiles('dclutch/**/Cargo.lock') }}
+          restore-keys: sbom-registry-
+
+      - name: Warm the registry the locks tier resolves against
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        run: |
+          # Deliberately not fatal on a single refusal: a workspace that will
+          # not fetch under --locked is a real finding about that workspace's
+          # lock, and it is the tier below's to report, not this step's to
+          # abort the job over.
+          warmed=0
+          refused=0
+          for manifest in $(git ls-files '*Cargo.toml'); do
+            [ -f "$(dirname "$manifest")/Cargo.lock" ] || continue
+            if cargo fetch --locked --manifest-path "$manifest" >/dev/null 2>warm.err; then
+              warmed=$((warmed + 1))
+            else
+              refused=$((refused + 1))
+              echo "fetch refused: $manifest"
+              sed -n '1,3p' warm.err | sed 's/^/    /'
+            fi
+          done
+          rm -f warm.err
+          echo "registry warmed for $warmed workspaces; $refused refused"
+          echo "registry warmed for $warmed workspaces; $refused refused" >> "$GITHUB_STEP_SUMMARY"
+
       - name: census and seam
         if: steps.probe.outputs.present == '1'
         working-directory: dclutch
