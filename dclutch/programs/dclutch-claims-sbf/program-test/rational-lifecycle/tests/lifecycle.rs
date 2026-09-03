@@ -526,7 +526,13 @@ fn fixture() -> (ProgramTest, Fixture) {
     )
     .expect("admission seeds");
     let admission = Pubkey::find_program_address(&admission_seeds.as_slices(), &CLAIMS).0;
-    add_exact(&mut test, claims_owner, system_program::ID, Vec::new(), 1);
+    // The Claims custody owner is deliberately NOT added. It is a keyless
+    // derived identity, not a resource: no route allocates it, funds it or
+    // closes it, so its production state is system-owned, empty and zero
+    // lamports -- which is exactly what an unadded address reads as. The
+    // RetireReceipt vacancy row (slot `VACANCY_CUSTODY_OWNER`) requires that
+    // state, so pre-funding this address would refuse the retirement at
+    // `RationalLifecycleSbfErrorV2::Accounts` rather than model anything.
 
     let rent = Rent::default();
     let receipt_rent = rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2);
@@ -815,9 +821,16 @@ fn wrapped(f: &Fixture, bytes: Vec<u8>, fail_after: bool, old_ata: bool) -> Inst
             );
         }
         LifecycleActionV2::RetireReceipt => {
+            // One proven-vacant coordinate, in the contract's vacancy slot
+            // order: shard Mint, structured custody, CLAIMS CUSTODY OWNER,
+            // Position, admission. The owner is slot 2 -- the compact row
+            // supplies it rather than baking it into the effect -- so it sits
+            // between the custody account and the Position, exactly where the
+            // coordinate group puts it.
             forwarded.extend([
                 AccountMeta::new_readonly(f.shard_mint, false),
                 AccountMeta::new_readonly(f.structured_custody, false),
+                AccountMeta::new_readonly(f.claims_owner, false),
                 AccountMeta::new_readonly(f.position, false),
                 AccountMeta::new_readonly(f.admission, false),
             ]);

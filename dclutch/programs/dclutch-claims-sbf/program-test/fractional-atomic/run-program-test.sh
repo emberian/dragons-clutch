@@ -40,16 +40,22 @@ cargo build-sbf \
 # provenance rather than trusting whatever the caller points at.
 provenance="programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance"
 token_2022_so="${TOKEN_2022_SO:-}"
+# EXIT 2 AND NOT 1 WHEN THE ARTIFACT IS SIMPLY NOT HERE. `tools/ci/run.sh`
+# reads 1 as "this tree has the defect the gate detects" and 2 as "the gate
+# could not run", and its `suites` tier honours that PER ROW. An absent fixture
+# is the second thing: nothing was proven, either way. A WRONG digest below
+# stays 1, because that is a real finding about what the caller pointed at.
 if [[ -z "$token_2022_so" ]]; then
-  echo "TOKEN_2022_SO is unset. Build the audited fixture once:" >&2
+  echo "TOKEN_2022_SO is unset, so this suite DID NOT RUN. Build the audited" >&2
+  echo "fixture once:" >&2
   echo "  programs/dclutch-claims-sbf/fixtures/prepare-token-2022-v11.sh \\" >&2
   echo "    <spl-token-2022-11.0.0.crate> <output dir>" >&2
   echo "then point TOKEN_2022_SO at <output dir>/spl_token_2022.so" >&2
-  exit 1
+  exit 2
 fi
 if [[ ! -f "$token_2022_so" ]]; then
-  echo "TOKEN_2022_SO does not exist: $token_2022_so" >&2
-  exit 1
+  echo "TOKEN_2022_SO does not exist, so this suite DID NOT RUN: $token_2022_so" >&2
+  exit 2
 fi
 actual_token_sha="$(shasum -a 256 "$token_2022_so" | awk '{print $1}')"
 canonical_token_sha="$(awk -F= '/^canonical_elf_sha256=/{print $2}' "$provenance")"

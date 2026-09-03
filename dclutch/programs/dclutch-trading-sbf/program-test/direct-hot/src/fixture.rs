@@ -33,7 +33,7 @@ use dclutch_capability_program_contract::{
         HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotBumpHintsV1, HotExecutionEnvelopeV3,
         SEALED_EXECUTION_FIXED_ALIASES_V3,
     },
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
@@ -446,6 +446,54 @@ pub enum DirectHotChainFixtureErrorV5 {
 }
 
 /// Build one executable Direct Hot fixture at the geometry its input states.
+/// The bumps a Direct producer mines off chain, derived HERE, from this
+/// fixture's own seeds.
+///
+/// # Why this is a second derivation and not a copy of the builder's block
+///
+/// `waist::assert_builder_reproduces_hand` compares this fixture against
+/// `dclutch-chain-bundle-builder`'s bundle byte for byte, and that comparison
+/// is evidence only while the two sides are two AUTHORS. The builder's
+/// `mine_bump_hints_v1` reaches its three slots by DECODING account bodies it
+/// was handed -- `CoreState` for the Market identity, `CapabilityRootHeaderV1`
+/// for the root seeds -- and re-deriving from what it read. This side decodes
+/// nothing: it keeps the bump that fell out of the `find_program_address` which
+/// PRODUCED each address, from seeds it built itself out of `input`. Two
+/// preimages, two walks, one answer -- or the assertion is red and one of them
+/// is wrong.
+///
+/// Writing the builder's bytes across instead would have turned all 52 rows
+/// this repaired green while proving exactly nothing, which is the failure this
+/// function is shaped to avoid.
+///
+/// # Which slots are filled, and why the other five stay zero
+///
+/// `market`, `root` and `child_relay[1]` -- Custody's transfer authority, whose
+/// seeds are the Market and the release set -- are the three any off-chain
+/// producer can reach; `HotBumpHintsV1`'s own doc and `mine_bump_hints_v1`'s
+/// give the reason for each of the rest. A zero slot is correct and merely
+/// slower. The whole block is returned rather than three fields because the two
+/// authors must agree about the ABSENCES too: a builder that started filling
+/// `lifecycle` without this side following would go red here, which is the
+/// point.
+fn hand_mined_bump_hints_v1(
+    input: DirectHotChainInputV5,
+    state: &StateFixture,
+    capability: &CapabilityFixture,
+) -> HotBumpHintsV1 {
+    let transfer_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(state.market.to_bytes(), input.release_set).as_slices(),
+        &input.custody_program,
+    )
+    .1;
+    HotBumpHintsV1 {
+        market: state.market_bump,
+        root: capability.root_bump,
+        child_relay: [0, transfer_authority],
+        ..HotBumpHintsV1::ABSENT
+    }
+}
+
 pub fn build_direct_hot_chain_fixture_v5(
     input: DirectHotChainInputV5,
 ) -> Result<DirectHotChainFixtureV5, DirectHotChainFixtureErrorV5> {
@@ -511,7 +559,8 @@ pub fn build_direct_hot_chain_fixture_v5(
         GENERATION,
         hash(&capability.root_bytes).to_bytes(),
     )
-    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+    .with_bump_hints(hand_mined_bump_hints_v1(input, &state, &capability));
     let mut data = Vec::with_capacity(HOT_EXECUTION_ENVELOPE_BYTES_V3 + request.len());
     data.extend_from_slice(&envelope.to_bytes());
     data.extend_from_slice(&request);
@@ -957,6 +1006,11 @@ struct ProductFixture {
 
 struct StateFixture {
     market: Pubkey,
+    /// The canonical bump of `market`, kept from the derivation that produced
+    /// the address rather than searched for a second time. It is what a
+    /// founding writes into `StateBumpsV1` and what the hot envelope's
+    /// `HotBumpHintsV1::market` slot carries.
+    market_bump: u8,
     core_bytes: Vec<u8>,
     claims_market: Pubkey,
     claims_bytes: Vec<u8>,
@@ -965,6 +1019,9 @@ struct StateFixture {
 
 struct CapabilityFixture {
     root: Pubkey,
+    /// The canonical bump of `root`, kept from the same derivation. See
+    /// `StateFixture::market_bump`.
+    root_bump: u8,
     root_bytes: Vec<u8>,
     seller_maker: Pubkey,
     buyer_maker: Pubkey,
@@ -1524,6 +1581,7 @@ fn market_and_claims(
     let _ = rent;
     Ok(StateFixture {
         market,
+        market_bump,
         core_bytes,
         claims_market,
         claims_bytes,
@@ -1839,7 +1897,8 @@ fn capability_fixture(
     );
     root_bytes.extend_from_slice(&header.to_bytes());
     root_bytes.extend_from_slice(&DirectRootStateV1::new().encode());
-    let root = Pubkey::find_program_address(&header.seeds().as_slices(), &input.trading_program).0;
+    let (root, root_bump) =
+        Pubkey::find_program_address(&header.seeds().as_slices(), &input.trading_program);
     let coordinates = DirectCoordinatesV1::new(market.to_bytes(), GENERATION)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let seller_seeds = MakerReplaySeedsV1::new(coordinates, input.makers[0].to_bytes())
@@ -1852,6 +1911,7 @@ fn capability_fixture(
         Pubkey::find_program_address(&buyer_seeds.as_slices(), &input.trading_program).0;
     Ok(CapabilityFixture {
         root,
+        root_bump,
         root_bytes,
         seller_maker,
         buyer_maker,

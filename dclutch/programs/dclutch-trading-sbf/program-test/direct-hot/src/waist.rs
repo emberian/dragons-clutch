@@ -25,7 +25,8 @@ use crate::{
     },
 };
 use dclutch_capability_program_contract::hot_v3::{
-    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_FIXED_ACCOUNT_COUNT_V3, SEALED_EXECUTION_FIXED_ALIASES_V3,
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_BUMP_HINT_COUNT_V1, HOT_BUMP_HINTS_OFFSET_V1,
+    HOT_FIXED_ACCOUNT_COUNT_V3, SEALED_EXECUTION_FIXED_ALIASES_V3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_codec::native_evidence_v3::{
@@ -904,7 +905,7 @@ pub fn direct_case_v5(
 /// External-key order is the one normalized comparison: both sides consume
 /// that list only through `contains`.
 fn assert_builder_reproduces_hand(built: &DirectHotChainFixtureV5, hand: &DirectHotChainFixtureV5) {
-    assert_eq!(built.hot_instruction, hand.hot_instruction);
+    assert_hot_instructions_agree(&built.hot_instruction, &hand.hot_instruction);
     assert_eq!(built.signed_messages, hand.signed_messages);
     assert_eq!(built.accounts, hand.accounts);
     assert_eq!(built.rollback_snapshot_keys, hand.rollback_snapshot_keys);
@@ -924,6 +925,90 @@ fn assert_builder_reproduces_hand(built: &DirectHotChainFixtureV5, hand: &Direct
     built_external.sort_unstable_by_key(Pubkey::to_bytes);
     hand_external.sort_unstable_by_key(Pubkey::to_bytes);
     assert_eq!(built_external, hand_external);
+}
+
+/// The two Hot instructions agree, and when they do not, WHERE.
+///
+/// # Why this is not one `assert_eq!`
+///
+/// It was, and the cost was measured. This instruction carries eighty account
+/// metas and 584 bytes of data, so a one-byte disagreement printed two
+/// twelve-kilobyte `Debug` renderings and left the reader to diff them by eye
+/// -- across 52 failing rows in thirteen binaries. That is `map_err(|_| Coarse)`
+/// in an assertion: the comparison knew exactly which offset moved and threw
+/// the fact away. Three bytes of 584 were the whole disagreement, and finding
+/// that out took a diff of the panic text rather than a read of it.
+///
+/// So: report the first disagreement in the terms of the thing that
+/// disagreed -- a meta index, or a list of byte offsets with both values, with
+/// the envelope FIELD named when the offset lands inside the bump-hint block.
+fn assert_hot_instructions_agree(built: &Instruction, hand: &Instruction) {
+    assert_eq!(
+        built.program_id, hand.program_id,
+        "builder and hand Hot instructions name different programs"
+    );
+    assert_eq!(
+        built.accounts.len(),
+        hand.accounts.len(),
+        "builder Hot instruction has {} account metas, hand-built has {}",
+        built.accounts.len(),
+        hand.accounts.len()
+    );
+    for (index, (left, right)) in built.accounts.iter().zip(hand.accounts.iter()).enumerate() {
+        assert_eq!(
+            left, right,
+            "builder and hand Hot instructions differ at account meta {index}: \
+             builder {left:?}, hand {right:?}"
+        );
+    }
+    assert_eq!(
+        built.data.len(),
+        hand.data.len(),
+        "builder Hot request is {} bytes, hand-built is {}",
+        built.data.len(),
+        hand.data.len()
+    );
+    let differing = built
+        .data
+        .iter()
+        .zip(hand.data.iter())
+        .enumerate()
+        .filter(|(_, (left, right))| left != right)
+        .map(|(offset, (left, right))| {
+            format!(
+                "{offset}{} builder {left} hand {right}",
+                envelope_field(offset)
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        differing.is_empty(),
+        "builder and hand Hot request data differ in {} of {} bytes: {}",
+        differing.len(),
+        built.data.len(),
+        differing.join("; ")
+    );
+}
+
+/// Name the envelope field an offset lands in, for the fields whose
+/// disagreement has a specific author.
+///
+/// Only the caller-mined bump hints are named. They are the block a producer
+/// fills and a fixture can silently leave zero -- which is exactly how 52 rows
+/// came to fail on three bytes -- and an offset inside them points at a
+/// derivation rather than at a digest.
+fn envelope_field(offset: usize) -> &'static str {
+    let slot = match offset.checked_sub(HOT_BUMP_HINTS_OFFSET_V1) {
+        Some(slot) if slot < HOT_BUMP_HINT_COUNT_V1 => slot,
+        _ => return "",
+    };
+    match slot {
+        0 => " (HotBumpHintsV1::market)",
+        1 => " (HotBumpHintsV1::root)",
+        2 | 3 => " (HotBumpHintsV1::lifecycle)",
+        4 | 5 => " (HotBumpHintsV1::child_caller)",
+        _ => " (HotBumpHintsV1::child_relay)",
+    }
 }
 
 pub fn registry_hot_instruction(releases: Releases, mut hot: Instruction) -> (Instruction, Pubkey) {
@@ -1346,6 +1431,17 @@ fn record_campaign_transaction(
     .expect("campaign evidence must be writable when the gauntlet asked for it");
 }
 
+/// The canonical budgeted transparent continuation packet, in wire bytes.
+///
+/// One signature and its count byte plus the serialized v0 message of the
+/// three-instruction canonical frame: SetComputeUnitLimit, the Ed25519
+/// precompile, and the Registry continuation carrying the sealed-execution
+/// aliases. `submit_v0_observed` pins it whenever it recognizes that exact
+/// frame; `tests/hot_heap_frame_is_inert.rs` adds the one instruction it
+/// appends. The derivation of the number is in `submit_v0_observed`, beside the
+/// assertion that reads it.
+pub const TRANSPARENT_CONTINUATION_WIRE_BYTES_V1: usize = 1_167;
+
 /// Submit one canonical v0 transaction and retain exact success metadata.
 pub async fn submit_v0_observed(
     context: &mut ProgramTestContext,
@@ -1406,6 +1502,13 @@ pub async fn submit_v0_observed(
         // program -- moving out of the static set and into the table: a static
         // key costs 32 bytes, a lookup index costs 1.
         //
+        // The number is a CONSTANT now rather than a literal here, because that
+        // 31-byte step was applied to this pin and not to the sibling pin in
+        // `tests/hot_heap_frame_is_inert.rs`, which measures this same packet
+        // plus one appended instruction. It sat 31 bytes stale from `74e044cf3`
+        // until 2026-09-03 and nothing said so -- the row it lives in was red
+        // for an unrelated reason the whole time. Two callers, one author.
+        //
         // `Pubkey::default()` and the System program id are the same 32 zero
         // bytes. The superseded derivation filtered `meta.pubkey != payer`, and
         // every caller here that has not chosen a payer yet passes
@@ -1422,7 +1525,7 @@ pub async fn submit_v0_observed(
         // CPI carries no such rule, and the two cases below execute the whole
         // Direct Hot action with it looked up.
         assert_eq!(
-            wire, 1_167,
+            wire, TRANSPARENT_CONTINUATION_WIRE_BYTES_V1,
             "budgeted transparent continuation wire changed"
         );
     }

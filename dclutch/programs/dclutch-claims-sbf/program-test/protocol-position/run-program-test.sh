@@ -24,7 +24,15 @@ done
 # the real Token-2022 rather than the refusing stand-in the rollback test uses.
 # Same audited v11 artifact and same provenance check as the fractional-atomic
 # campaign; build it once with fixtures/prepare-token-2022-v11.sh.
-: "${TOKEN_2022_SO:?set TOKEN_2022_SO to the prepared spl_token_2022.so (see programs/dclutch-claims-sbf/fixtures/README.md)}"
+# EXIT 2, not 1: an absent fixture means this suite DID NOT RUN, which is a
+# different fact from a failing gate and the one `tools/ci/run.sh`'s `suites`
+# tier reports per row. A `:?` expansion would exit 1 under `set -u` and be read
+# as a protocol finding. The digest mismatch below keeps exit 1.
+if [ -z "${TOKEN_2022_SO:-}" ] || [ ! -f "${TOKEN_2022_SO:-}" ]; then
+  echo "TOKEN_2022_SO is unset or missing, so this suite DID NOT RUN. See" >&2
+  echo "programs/dclutch-claims-sbf/fixtures/README.md to prepare it." >&2
+  exit 2
+fi
 provenance="programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance"
 observed="$(shasum -a 256 "$TOKEN_2022_SO" | cut -d' ' -f1)"
 if ! grep -qE "^(canonical_elf_sha256|macos_arm64_audit_elf_sha256)=${observed}$" "$provenance"; then

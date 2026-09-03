@@ -4,6 +4,44 @@
 //! Fixture construction lives here; the release compiler remains owned by
 //! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
 //! remain owned by the adjacent support module.
+//!
+//! # THREE ROWS ARE RED AND THE FIXTURE IS NOT THE AUTHOR
+//!
+//! `build_chain` refuses `BuilderError::Projection("borrowed-range-resolve")`
+//! on all three campaign rows, and the two `native_tests` beside it pass. This
+//! is not a fixture that stages the wrong request; the Series Expire ARTIFACT
+//! SET contradicts itself, and no request width satisfies both halves:
+//!
+//! * `series::expire_funding_artifacts_v5::emit_request_profile` encodes a **V1**
+//!   RequestProfile at `RequestGeometryV1::new(SERIES_ACTION_HEADER_BYTES_V3, 0, ...)`,
+//!   so the family request is fixed at exactly 128 bytes. That is an EQUALITY on
+//!   both sides of the boundary: `dclutch_request_profile_contract::project_atomic`
+//!   refuses `InvalidLength` otherwise, and `hot_v3`'s `require_request_shape`
+//!   refuses `TradingSbfError::Content` for the same reason on the real ELF.
+//! * `series::expire_funding_artifacts_v5::emit_effect` declares route 4 -- the
+//!   Core unallocated-permit leg -- one borrowed range at `Fixed(128)` of length
+//!   `CommonScalar(SERIES_EXPIRE_PROOF_BYTES_SCALAR_V5)`, which the transition
+//!   computes as `proof_count * SERIES_WITNESS_ITEM_BYTES_V3`. A borrowed range
+//!   is canonically nonempty, so `dclutch_effect_kernel::v4::BorrowedRangeV4::resolve`
+//!   refuses when that length is zero.
+//!
+//! `proof_count = 0` refuses in the effect; `proof_count >= 1` refuses in the
+//! request profile. Measured 2026-09-03 by staging both: a two-occurrence
+//! template with one Merkle sibling moves the refusal from
+//! `borrowed-range-resolve` to `request-projection`/`InvalidLength` at 160
+//! bytes, and moves it back. Neither is reachable from this file.
+//!
+//! Two candidate repairs, both program code in an SBF link and both changing
+//! shipped artifact digests, so neither is taken here: widen the Expire request
+//! profile to a shape that admits a proof tail, or withdraw route 4's range and
+//! let Core authenticate the occurrence without a borrowed proof. The sibling
+//! families are NOT in the same position and that is the clue --
+//! `prepare_funding_artifacts_v5` attaches its proof range to
+//! `SEMANTIC_RANGE_ROUTE_V4` rather than to a child route, so nothing resolves
+//! it per invocation and nothing refuses.
+//!
+//! Whoever owns Series decides. Until then these three rows are a red that
+//! names a real defect, which is worth more than a green that hides it.
 
 #[path = "support/series_premarket_expiry_chain_v1.rs"]
 mod series_premarket_expiry_chain_v1;

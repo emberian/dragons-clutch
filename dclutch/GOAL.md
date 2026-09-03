@@ -3926,3 +3926,19 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   builder mines bump hints** (three bytes of 584); three Claims suites never run on Darwin (Token-2022 v11 needs Linux).
   → FIXTURES **`(spawned)`**: the hand side derives its bumps; the Series fixture; the Claims suites on hbox; a runner census.
 - Cuts: `aa3840edf`, `e656bf27d`, `b798cc216`.
+
+### Lane map delta — 2026-09-03 10:15 EDT
+- FIXTURES closed (`8a691ee57` the Direct hand side DERIVES its bump hints from its own seeds — two preimages, two walks; the
+  assertion now names the differing offsets instead of dumping 12 KB; `mine_bump_hints_v1` total; **Direct surface 33/56 →
+  80/9** over 19 binaries with a runner that keeps "did not run" distinct; `da622ed2d` Claims 45/1 → **46/0** on Darwin with
+  the canonical Token-2022 ELF found locally — the count regression was e78fa027d's four-meta list; `30398e3f8` runner
+  census: 60 real-ELF binaries, 28 in no tier, 11 behind a runner nothing invoked — eight wired with measured budgets).
+  **Three program-side convictions:** RetireReceipt applies resource predicates to an identity slot — a stranger's one
+  lamport blocks retirement forever; the canonical continuation frame carries no heap frame and now needs 33,020 of the
+  default 32,768 (an infallible allocation, so it aborts); `expire_funding_artifacts_v5` pins a 128-byte V1 request while
+  its effect declares a nonempty borrowed range — the Series expiry route is unsatisfiable as shipped.
+  → PROGRAMS **`(spawned)`**. Also: the rulings brief is at scratchpad/RULINGS_CONTEXT.md (40 items; C-15 was already ruled
+  out at 5a371810 and three authority docs still carry it open); a Fable fork is making the five dClutch posters in
+  ~/src/dregg-posters/2026-09-03-typst; Playwright now lives at ~/tools/playwright; the cut's public commits carry the live
+  subjects; the wrapper's red CI has a lane.
+- Cuts: `acf5a0c14`.

@@ -202,12 +202,30 @@ papered over: they build the working tree (so `--commit` cannot reach them, and
 the tier says so), and they do not carry the SBF stack-frame-overwrite refusal
 that `programs` and the accelerator links have.
 
-Known gaps in what the rows cover, found while wiring them:
-`programs/dclutch-core-sbf/tests/` has five targets and its runner drives
-three — `capability_close_alias_program_test` and
-`retirement_replay_handoff_program_test` are run by **nothing**. The `claims`
-row needs a populated cargo registry to build its audited Token-2022 v11
-fixture, and a host without one gets a per-row absence rather than a failure.
+Both of the gaps this section used to name are closed, and the paragraph is
+rewritten rather than annotated because a runbook that teaches a wrong answer is
+worse than one that says nothing. It claimed
+`programs/dclutch-core-sbf/tests/` had five targets with three driven and
+`capability_close_alias_program_test` / `retirement_replay_handoff_program_test`
+"run by nothing"; that runner has globbed `tests/*.rs` since 2026-08-30 and
+drives all seven.
+
+The rows went from seven to fifteen on 2026-09-03, from a census of this file
+against the tree: sixty real-ELF integration binaries exist and twenty-eight ran
+in no tier at all, eleven of them behind a self-contained runner that nothing
+invoked. Eight are wired now, each measured first, and `run.sh --list` prints
+the rows **from `SUITE_RUNNERS`** instead of restating them — the table had said
+seven while the dispatch ran fifteen, which is this file's signature defect
+recurring inside its own runbook.
+
+The three Token-2022 rows (`claims-lifecycle`, `claims-position`,
+`claims-fractional`) are wired because their runners now exit **2** when the
+pinned v11 artifact is absent rather than 1: nothing was proven, which is not
+the same as a failing gate. A wrong DIGEST still exits 1. They are also no
+longer Linux-only — `fixtures/prepare-token-2022-v11.sh` short-circuits its host
+check for a prepared canonical ELF and still verifies digest and length, so
+`TOKEN_2022_V11_ELF` beside `TOKEN_2022_V11_CRATE` runs all six Claims suites on
+Darwin (measured 2026-09-03: 46 passed, 0 failed).
 
 If you interrupt this tier, check `/tmp`: each runner cleans up on a normal
 exit but a killed one leaks 3-7 GB, and `/tmp/dclutch-*` filled a volume once.

@@ -106,10 +106,10 @@ use solana_transaction::versioned::VersionedTransaction;
 
 use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, Elves, LOOKUP_TABLE,
-    REGISTRY_PROGRAM_ID, TRADING_PROGRAM_ID, add_lookup_table, add_program, add_release_waist,
-    canonical_lookup_addresses, direct_case, direct_registry_instructions,
-    direct_top_level_instructions, elves, fixture_substrate, start_with_substrate,
-    submit_v0_observed,
+    REGISTRY_PROGRAM_ID, TRADING_PROGRAM_ID, TRANSPARENT_CONTINUATION_WIRE_BYTES_V1,
+    add_lookup_table, add_program, add_release_waist, canonical_lookup_addresses, direct_case,
+    direct_registry_instructions, direct_top_level_instructions, elves, fixture_substrate,
+    start_with_substrate, submit_v0_observed,
 };
 
 /// The canonical v0 packet limit one continuation transaction must fit in.
@@ -344,11 +344,28 @@ async fn the_continuation_route_is_unaffected_by_a_heap_grant_and_still_fits_its
     );
     // One signature plus its count byte: this transaction has a single signer.
     let wire = 1 + 64 + message.serialize().len();
-    // The execution-only CapabilitySeal projection aliases its six exact
-    // staging coordinates to their authenticated raw coordinates. Each alias
-    // removes one loaded-account index without changing the instruction data
-    // or signer/static-key set: 1,212 - 6 = 1,206 bytes.
-    assert_eq!(wire, 1_206, "compact Hot plus heap-request wire changed");
+    // THIS PACKET IS THE CANONICAL CONTINUATION PLUS ONE INSTRUCTION, so it is
+    // written that way rather than as a second independent literal.
+    //
+    // It used to be `1_206`, restating the alias arithmetic `submit_v0_observed`
+    // already carries; when `74e044cf3` moved the System program out of the
+    // static key set and into the lookup table, that pin dropped by 31 bytes and
+    // THIS one did not follow. It read 1,206 against a true 1,175 from
+    // 2026-09-02 until 2026-09-03 and went unnoticed, because this row was red
+    // for an unrelated reason -- the builder-reproduction assertion -- the whole
+    // time. Deriving removes the second author rather than correcting it.
+    //
+    // The appended instruction is a ComputeBudget `RequestHeapFrame`: a
+    // one-byte program-id index, a one-byte empty account-index vector, and its
+    // five bytes of data behind a one-byte length. Its program id is already a
+    // static key, because the canonical frame's first instruction is a
+    // ComputeBudget `SetComputeUnitLimit`, so it adds no key.
+    const APPENDED_HEAP_FRAME_INSTRUCTION_BYTES: usize = 1 + 1 + 1 + 5;
+    assert_eq!(
+        wire,
+        TRANSPARENT_CONTINUATION_WIRE_BYTES_V1 + APPENDED_HEAP_FRAME_INSTRUCTION_BYTES,
+        "compact Hot plus heap-request wire changed"
+    );
     assert!(wire <= PACKET_LIMIT);
 
     let transaction =

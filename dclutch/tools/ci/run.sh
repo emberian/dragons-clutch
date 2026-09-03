@@ -518,12 +518,21 @@ tier_emission() {
 # the harness panics looking for one and every seed fails for a reason that is
 # not compute.
 # ---------------------------------------------------------------------------
+# The RENT link is here because a test in the suite below READS it.
+# `direct_registered_creation_hot` does `fs::read(directory.join("dclutch_rent_sbf.so"))`
+# behind an `expect`, so with the link unbuilt the tier reported five failing
+# tests that had never reached an assertion -- a missing PREREQUISITE wearing the
+# shape of a failing gate, which is the one distinction this file's exit codes
+# exist to keep. Found 2026-09-03 by running the whole surface on one ELF set.
+# The rule the omission broke: this list must cover every ELF the suite reads,
+# not every ELF the protocol deploys.
 readonly PROGRAM_MANIFESTS="\
 programs/dclutch-trading-sbf/Cargo.toml
 programs/dclutch-registry-sbf/Cargo.toml
 programs/dclutch-core-sbf/Cargo.toml
 programs/dclutch-claims-sbf/Cargo.toml
 programs/dclutch-custody-sbf/Cargo.toml
+programs/dclutch-rent-sbf/Cargo.toml
 programs/dclutch-trading-sbf/program-test/test-programs/trading-outer/Cargo.toml
 programs/dclutch-trading-sbf/program-test/test-programs/core-caller/Cargo.toml
 programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml"
@@ -785,6 +794,14 @@ tier_programs() {
   # prerequisites exist. If a fourth hostile case is added and not listed here,
   # it fails loudly in this tier rather than passing silently, which is the
   # right way for this list to go stale.
+  #
+  # A lane wanting the WHOLE surface on one ELF set -- all nineteen binaries
+  # including these three, with every prerequisite built beside them -- runs
+  # `programs/dclutch-trading-sbf/program-test/run-direct-surface.sh`. It is not
+  # a tier and deliberately not one: it builds twelve links, three of them
+  # hostile adversaries that exist only to be refused, and the argument above
+  # for keeping the demoted continuation route out of the production tier is
+  # unchanged by its existence.
   local result=0
   (cd "$build_root" && SBF_OUT_DIR="$elf_dir" cargo test \
     --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
@@ -1326,11 +1343,67 @@ tier_root-targets() {
   fi
 }
 
+# EIGHT ROWS WERE ADDED ON 2026-09-03 AND EVERY ONE OF THEM ALREADY HAD A
+# RUNNER. A census of this file against the tree found SIXTY real-ELF
+# integration binaries, of which twenty-eight ran in no tier at all -- eleven of
+# them behind a self-contained `cargo build-sbf` runner that nothing invoked.
+# That is the class this session kept paying for: a suite that COMPILES on every
+# `--all-targets` check and EXECUTES nowhere reads exactly like a suite that
+# passes. `programs/dclutch-claims-sbf/program-test/rational-lifecycle` had been
+# red since 2026-08-29 on a frame builder one account short of a constant that
+# moved, and nothing was told for five days.
+#
+# MEASURED before wiring, on this box, warm, `CARGO_BUILD_JOBS=4`, wall clock
+# including each runner's own SBF builds -- the root-targets tier's discipline
+# of a stated cost per row, applied to a tier whose rows are scripts:
+#
+#   sparse-chain              10s   1 passed
+#   affine-batch               5s   2 passed
+#   signed-delta               6s   4 passed
+#   general                  101s   3 + 2 + 10 + 12 passed (two SBF links)
+#   userposition              56s   1 passed
+#   claims-lifecycle          ~90s  3 passed   } these three need the pinned
+#   claims-position           ~40s  7 passed   } Token-2022 v11 artifact and
+#   claims-fractional        ~120s 29 passed   } report exit 2 without it
+#
+# THE THREE TOKEN-2022 ROWS ARE WIRED BECAUSE THEIR RUNNERS NOW SAY "DID NOT
+# RUN" PROPERLY. They exited 1 on an absent fixture, which this tier reads as a
+# protocol finding about a tree nobody measured; they exit 2 now, and a wrong
+# DIGEST still exits 1, because that is a real finding about what the caller
+# pointed at. So on a host with the artifact they run, and on one without, the
+# row says so by name. They also are not Linux-only any more: the fixture
+# builder short-circuits its host check for a prepared canonical ELF and still
+# verifies digest and length, so `TOKEN_2022_V11_ELF` beside
+# `TOKEN_2022_V11_CRATE` runs all three on Darwin. Measured 2026-09-03: 46
+# passed / 0 failed across the six Claims suites.
+#
+# STILL EXCLUDED, BY REASON, and named here so the exclusion is a decision
+# rather than an oversight:
+#
+#   * `dclutch-direct-aot-sbf`, `dclutch-product-runtime-v2-sbf`,
+#     `tools/gauntlet/general-hot` and `crates/dclutch-token-svm/program-test`
+#     -- cheap, but each needs a runner WRITTEN first. Wiring a bare `cargo
+#     test` here would put this file back in the business of restating other
+#     lanes' prerequisites, which is exactly what `PROGRAM_MANIFESTS` got wrong.
+#   * the nine `dclutch-svm-harness` targets -- they need provenance-pinned Pyth
+#     router and receiver ELFs and captured provider accounts, or they fold into
+#     a gauntlet census ledger whose ordering is the campaign runner's job.
+#   * `tools/gauntlet/aot-cu`'s two harness targets -- that workspace refuses a
+#     featureless build by its own `compile_error!`; the evaluator choice
+#     belongs to the crate, not to this file.
 readonly SUITE_RUNNERS="\
 custody|programs/dclutch-custody-sbf/run-program-test.sh|Custody vault routes against a real caller link
 core|programs/dclutch-core-sbf/run-open-market-program-test.sh|every core program-test target, discovered from tests/
 claims|programs/dclutch-claims-sbf/run-rational-representation-v2-program-test.sh|the rational representation V2 lowering
+claims-lifecycle|programs/dclutch-claims-sbf/program-test/rational-lifecycle/run-program-test.sh|the Token-2022 receipt and coordinate lifecycle, on the pinned v11 artifact
+claims-position|programs/dclutch-claims-sbf/program-test/protocol-position/run-program-test.sh|the ordered Fractional retirement walk closing a real shard Mint
+claims-fractional|programs/dclutch-claims-sbf/program-test/fractional-atomic/run-program-test.sh|four Fractional campaigns: atomicity, the permissioned burn wall, compaction, escrow PDA handover
+sparse-chain|programs/dclutch-claims-sbf/program-test/sparse-chain/run-program-test.sh|the sparse native transfer chain
+affine-batch|programs/dclutch-claims-sbf/program-test/affine-batch/run-program-test.sh|the affine batch V2 lowering
+signed-delta|programs/dclutch-claims-sbf/program-test/fractional-signed-delta/run-program-test.sh|the fractional signed-delta route
 dealer|programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh|the dealer accelerator link and its family tests
+general|programs/dclutch-general-accelerator-sbf/program-test/run-program-test.sh|the general accelerator link, its freeze wall and its hot instruction
+userposition|programs/dclutch-trading-sbf/program-test/user-position-admission/run-program-test.sh|user position admission across the lifecycle
 registry|programs/dclutch-registry-sbf/run-lineage-program-test.sh|the release-set successor declaration and the walk that follows the hop
 fee2tx|programs/dclutch-trading-sbf/program-test/run-fee-second-transaction.sh|the Direct fee leg in a transaction of its own, against real Custody
 postjoin|programs/dclutch-trading-sbf/program-test/run-postjoin-hostiles.sh|Trading refuses three isolated child adversaries and rolls the whole transaction back"
@@ -2118,6 +2191,16 @@ fmt       ~10s         cargo, rustfmt     rustfmt disagreeing with a file that
                                           or a baseline line that is no longer
                                           true. Root workspace only; the 56
                                           nested ones are owed
+locks     seconds      cargo              every tracked Cargo.lock still
+                                          resolves under `--locked --offline`.
+                                          A named-path commit makes it easy to
+                                          land a manifest change without its
+                                          lock, and nothing else in day-to-day
+                                          work runs --locked at all. Every
+                                          workspace is checked and every stale
+                                          one reported; a member resolves
+                                          through its root, so a listed '.' may
+                                          be the cause of the rest
 seam      ~20s         ast-grep           six structural seam defect classes,
                                           new findings against a triaged baseline
 runbooks  seconds      python3            every command README.md, docs/guides
@@ -2194,18 +2277,31 @@ programs  minutes      cargo-build-sbf    the programs build with no SBF stack-
                                           frame diagnostic, and the public
                                           Direct route holds its compute margin
                                           across 32 pinned seeds
-suites    ~15 min      cargo-build-sbf    the other SBF program-test suites:
-                                          custody, core, claims, dealer, plus the
-                                          fee2tx and postjoin probes, which own
-                                          the cases the programs tier cannot
-                                          stage. Each row runs the runner its
-                                          owning lane maintains, never a copy of
-                                          its ELF list
+suites    ~25 min      cargo-build-sbf    every other SBF program-test suite
+                                          that has a runner. Each row runs the
+                                          runner its owning lane maintains,
+                                          never a copy of its ELF list, and a
+                                          row whose prerequisite is absent
+                                          reports DID NOT RUN rather than
+                                          failing. The rows are NOT restated
+                                          here -- they are printed from
+                                          SUITE_RUNNERS below, because this
+                                          table named seven of them while the
+                                          dispatch ran fifteen
 workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           from an archived revision. The general
                                           form of the journey break. Cut tier --
                                           fresh target dir per workspace, so it
                                           is not in `all`
+
+EOF
+  # Printed from SUITE_RUNNERS rather than restated, which is the repair this
+  # file's own header argues for and which its `suites` line had lost: the table
+  # named seven rows while the dispatch ran fifteen. One definition, two
+  # callers.
+  printf '\nsuites rows (printed from SUITE_RUNNERS, not restated):\n'
+  printf '%s\n' "$SUITE_RUNNERS" | awk -F'|' 'NF>1 {printf "  %-18s %s\n", $1, $3}'
+  cat <<'EOF'
 
 aliases:  cheap = census fmt locks seam runbooks release
           all   = census fmt locks seam runbooks release clippy sbom sbfcontracts web

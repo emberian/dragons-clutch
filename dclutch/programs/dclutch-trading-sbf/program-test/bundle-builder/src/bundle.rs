@@ -234,38 +234,59 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
 /// `create_program_address` whose result is compared with the account the frame
 /// supplies, so a wrong byte names a different address and refuses at an
 /// equality that was always there.
-fn mine_bump_hints_v1(input: &BundleInputV1<'_>) -> Result<HotBumpHintsV1, BuilderError> {
-    let market = CoreState::decode(&input.fixed.market.account.data)
-        .map_err(|_| BuilderError::Binding(line!()))?;
-    let market_bump = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
-        &input.waist.core_program,
-    )
-    .1;
-    let root = CapabilityRootHeaderV1::decode(
-        input
-            .fixed
-            .root
-            .account
-            .data
-            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
-            .ok_or(BuilderError::Binding(line!()))?,
-    )
-    .map_err(|_| BuilderError::Binding(line!()))?;
-    let root_bump =
-        Pubkey::find_program_address(&root.seeds().as_slices(), &input.waist.trading_program).1;
+///
+/// # This function is TOTAL, and that is a correction
+///
+/// It was fallible in all three of its reads, and every one of them refused the
+/// WHOLE BUNDLE on a corpus it could not decode. That inverts the block's
+/// contract: `HotBumpHintsV1`'s own doc says an unset hint is zero and the
+/// reader searches, so a producer that cannot mine a slot owes a zero, not a
+/// refusal -- exactly as `derive_hinted` is total in all three programs that
+/// consume these bytes.
+///
+/// The cost of the inversion was measured on 2026-09-03.
+/// `series_pre_market_expiry_program_test` stages a Series Expire that lands
+/// BEFORE the future Market exists, so `fixed.market` is not a `CoreState`, and
+/// `82465e00b`'s `CoreState::decode` turned that into `Binding(239)` on all
+/// three rows -- a refusal wearing the shape of an unrelated defect. It masked
+/// the real one, which is still there: `Projection("borrowed-range-resolve")`.
+/// A bundle that would merely have been slower was reported as unbuildable.
+fn mine_bump_hints_v1(input: &BundleInputV1<'_>) -> HotBumpHintsV1 {
+    let market_bump = CoreState::decode(&input.fixed.market.account.data)
+        .ok()
+        .map(|market| {
+            Pubkey::find_program_address(
+                &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
+                &input.waist.core_program,
+            )
+            .1
+        })
+        .unwrap_or_default();
+    let root_bump = input
+        .fixed
+        .root
+        .account
+        .data
+        .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+        .and_then(|header| CapabilityRootHeaderV1::decode(header).ok())
+        .map(|root| {
+            Pubkey::find_program_address(&root.seeds().as_slices(), &input.waist.trading_program).1
+        })
+        .unwrap_or_default();
+    // Always derivable: its seeds are the Market ADDRESS and the release set,
+    // neither of which is read out of an account body.
     let transfer_authority = Pubkey::find_program_address(
         &CustodyAuthoritySeedsV1::new(input.fixed.market.key.to_bytes(), input.waist.release_set)
             .as_slices(),
         &input.waist.custody_program,
     )
     .1;
-    Ok(HotBumpHintsV1 {
+    HotBumpHintsV1 {
         market: market_bump,
         root: root_bump,
         child_relay: [0, transfer_authority],
         ..HotBumpHintsV1::ABSENT
-    })
+    }
 }
 
 fn decode_execution_account_profile<'a>(
@@ -371,7 +392,7 @@ fn build_bundle_with_admitted_candidate(
         digest32(&input.fixed.root.account.data),
     )
     .map_err(|_| BuilderError::Binding(line!()))?
-    .with_bump_hints(mine_bump_hints_v1(input)?);
+    .with_bump_hints(mine_bump_hints_v1(input));
     let mut instruction_data =
         Vec::with_capacity(HOT_EXECUTION_ENVELOPE_BYTES_V3 + input.scenario.family_request.len());
     instruction_data.extend_from_slice(&envelope.to_bytes());
