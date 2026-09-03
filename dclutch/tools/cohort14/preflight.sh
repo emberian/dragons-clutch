@@ -128,47 +128,97 @@ echo
 # oracle by exact (ProgramData, deployment_slot, upgrade_authority) equality --
 # `authenticate_provider_program_pin` -- because rehashing 1.64 MiB on every
 # capture is not a transaction path, so Loader-v3's monotonic slot is the proxy
-# and any byte-changing upgrade fails closed as `ReleaseSuperseded`.
+# and any deployment movement fails closed as `ReleaseSuperseded`. A THIRD
+# conjunct wears the same code: `hash(receiver_config) != receiver_config_digest`
+# is also `0x8014`, and cohort-14's first reading named only the slot.
 #
-# Pyth redeployed their devnet Receiver at slot 491,006,444. Cohort-13 was
-# founded 4.36 days after that and cohort-14 5.64 days after it, both against a
-# release pinning 487,855,452, and BOTH markets are permanently uncapturable
-# because a market pins its provider release AT FOUNDING. Cohort-14 found it by
-# running a capture at a time it was guaranteed to refuse and reading WHICH
-# refusal came back: 0x8014, not ProviderWindow.
+# Pyth redeployed their devnet Receiver at slot 491,006,444 and changed the
+# Receiver Config body. Cohort-13 was founded 4.36 days after that redeploy and
+# cohort-14 5.64 days after it, both against the typed constant, and BOTH
+# markets are permanently uncapturable because a market pins its provider
+# release AT FOUNDING.
 #
-# This is two u64 comparisons and one RPC read. It would have refused cohort-13's
-# founding, cohort-14's founding, and cohort-14's capture.
+# WHAT THIS SECTION ASKS HAS CHANGED, and the change is the fix. A market no
+# longer pins `devnet_sponsored_sol_usd_release_v1`; it pins what
+# `sponsored_release_observation` reads off the chain at plan time, with the
+# constant as the DECLARATION each observed field is compared against. So the
+# drift below is reported and is not a failure. What IS a failure is a chain a
+# founding could not mint an honest release against: a silent endpoint, a
+# ProgramData address that moved (a different program, not a newer release), a
+# deployment slot BELOW the declared one (no monotonic loader produced both
+# numbers), or a Receiver Config that is not a canonical 370-byte V2 body.
 echo "the Pyth provider release a sponsored market would pin"
 pinned_receiver_slot="$(sed -n 's/.*receiver_deployment_slot: \([0-9_]*\),.*/\1/p' \
     crates/dclutch-pyth-svm/src/sponsored_push.rs | tr -d '_' | head -1)"
 pinned_push_slot="$(sed -n 's/.*push_oracle_deployment_slot: \([0-9_]*\),.*/\1/p' \
     crates/dclutch-pyth-svm/src/sponsored_push.rs | tr -d '_' | head -1)"
-say "release pins receiver slot" "${pinned_receiver_slot:-<not found>}"
-say "release pins push oracle slot" "${pinned_push_slot:-<not found>}"
+say "release DECLARES receiver slot" "${pinned_receiver_slot:-<not found>}"
+say "release DECLARES push oracle slot" "${pinned_push_slot:-<not found>}"
 if [ -n "$rpc_url" ]; then
-    live_slot() {
+    # One read per account, each a dataSlice or an exact body -- never the
+    # 1.6 MiB image, for the same reason the on-chain pin exists at all.
+    rpc_account() {
         curl -sS -X POST -H 'content-type: application/json' \
-            -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$1\",{\"encoding\":\"base64\",\"commitment\":\"finalized\",\"dataSlice\":{\"offset\":4,\"length\":8}}]}" \
-            "$rpc_url" 2>/dev/null |
+            -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$1\",{\"encoding\":\"base64\",\"commitment\":\"finalized\"$2}]}" \
+            "$rpc_url" 2>/dev/null
+    }
+    live_header() {
+        rpc_account "$1" ',"dataSlice":{"offset":0,"length":45}' |
             python3 -c 'import base64,json,struct,sys
 value=json.load(sys.stdin).get("result",{}).get("value")
-print(struct.unpack("<Q", base64.b64decode(value["data"][0]))[0] if value else "")' 2>/dev/null
+if not value:
+    raise SystemExit(0)
+raw=base64.b64decode(value["data"][0])
+print(struct.unpack("<Q", raw[4:12])[0], "authority" if raw[12] == 1 else "IMMUTABLE")' 2>/dev/null
     }
     for entry in "receiver 96QrNCjmh32H9quY9DX4NEH81nECVsbkATBDZeoVbvLV $pinned_receiver_slot" \
                  "push-oracle 8xAeURaAWExxyHUXJSgjsg5r96Ydr3G4cek2if7imQmz $pinned_push_slot"; do
         set -- $entry
-        observed="$(live_slot "$2")"
+        header="$(live_header "$2")"
+        observed="${header%% *}"
+        authority="${header##* }"
         if [ -z "$observed" ]; then
             fail "pyth $1 slot" "the endpoint did not answer; NOT CHECKED is not a pass"
+        elif [ "$authority" = "IMMUTABLE" ]; then
+            fail "pyth $1" "carries no Loader-v3 upgrade authority; a sponsored release has no encoding for an immutable provider"
+        elif [ "$observed" -lt "$3" ]; then
+            fail "pyth $1" "slot ROLLBACK -- declared $3, live $observed; no monotonic loader produced both numbers"
         elif [ "$observed" = "$3" ]; then
-            pass "pyth $1 deployment slot" "$observed"
+            pass "pyth $1 deployment slot" "$observed (declared, unmoved)"
         else
-            fail "pyth $1" "SUPERSEDED -- pinned $3, live $observed; every capture refuses 0x8014 ReleaseSuperseded"
+            pass "pyth $1 deployment slot" "$observed (declared $3; the market pins the OBSERVED value)"
         fi
     done
+    # The Receiver Config: the second `0x8014` conjunct, and the one nothing
+    # in this tree looked at until cohort-14b read it.
+    config_state="$(rpc_account DaWUKXCyXsnzcvLUyeJRWou8KTn7XtadgTsdhJ6RHS7b '' |
+        python3 -c 'import base64,hashlib,json,sys
+value=json.load(sys.stdin).get("result",{}).get("value")
+if not value:
+    raise SystemExit(0)
+raw=base64.b64decode(value["data"][0])
+print(len(raw), raw[:8].hex(), hashlib.sha256(raw).hexdigest())' 2>/dev/null)"
+    set -- $config_state
+    declared_config=$(python3 - <<'DECLARED_CONFIG'
+import re
+source = open("crates/dclutch-pyth-svm/src/sponsored_push.rs").read()
+# Scope to the CONSTANT, not the struct field of the same name declared above it.
+source = source.split("pub fn devnet_sponsored_sol_usd_release_v1", 1)[1]
+body = source.split("receiver_config_digest: [", 1)[1].split("],", 1)[0]
+print("".join("%02x" % int(value, 16) for value in re.findall(r"0x[0-9a-fA-F]{2}", body)))
+DECLARED_CONFIG
+)
+    if [ -z "$1" ]; then
+        fail "pyth receiver config" "the endpoint did not answer; NOT CHECKED is not a pass"
+    elif [ "$1" != "370" ] || [ "$2" != "9b0caae01efacc82" ]; then
+        fail "pyth receiver config" "not a canonical 370-byte V2 Config: $1 bytes, discriminator $2"
+    elif [ "$3" = "$declared_config" ]; then
+        pass "pyth receiver config digest" "$3 (declared, unmoved)"
+    else
+        pass "pyth receiver config digest" "$3 (declared ${declared_config:-<not found>}; the market pins the OBSERVED value)"
+    fi
 else
-    say "pyth deployment slots" "not checked (pass --rpc-url to make two reads)"
+    say "pyth deployment slots" "not checked (pass --rpc-url to make three reads)"
 fi
 echo
 

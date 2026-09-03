@@ -1031,8 +1031,13 @@ fn prepare(
     prepay_for: Option<ExteriorActionV1>,
 ) -> Result<PreparedV1> {
     let keys = InputKeysV1::parse(input)?;
+    // THE CHAIN IS ASKED FIRST. If Pyth has moved since this Market was
+    // founded, every action below refuses `0x8014 ReleaseSuperseded` on chain;
+    // reading it here refuses by name and spends nothing.
+    let admitted_release =
+        crate::sponsored_release_observation::observed_devnet_sponsored_release_v1(rpc, 0)?.release;
     let release_account = rpc.required_account(keys.sponsored_release.0, "sponsored release")?;
-    let release = authenticate_release(input, &keys, &release_account)?;
+    let release = authenticate_release(input, &keys, &release_account, admitted_release)?;
     let release_id = hash(&release.to_bytes()).to_bytes();
     let generation = input.generation.to_le_bytes();
     let head = Pubkey::find_program_address(
@@ -1292,16 +1297,22 @@ impl InputKeysV1 {
     }
 }
 
+/// Authenticate the sponsored release record this Market selected.
+///
+/// `expected` is the release the CHAIN currently admits, observed once by the
+/// caller. It used to be `devnet_sponsored_sol_usd_release_v1()`, which agreed
+/// with the constant and with nothing else: after Pyth redeployed, this
+/// comparison stayed green and the chain refused `0x8014 ReleaseSuperseded`
+/// after 101,787 CU.
 fn authenticate_release(
     input: &SponsoredInputV1,
     keys: &InputKeysV1,
     account: &RpcAccount,
+    expected: PythSponsoredPushReleaseV1,
 ) -> Result<PythSponsoredPushReleaseV1> {
     let release = PythSponsoredPushReleaseV1::decode(&account.data)
         .map_err(|error| Error::new(format!("sponsored release: {error:?}")))?;
-    let compiled = devnet_sponsored_sol_usd_release_v1()
-        .map_err(|error| Error::new(format!("compiled sponsored release: {error:?}")))?;
-    if release.to_bytes() != compiled.to_bytes()
+    if release.to_bytes() != expected.to_bytes()
         || account.owner != keys.registry_program
         || input.release_set.len() != 64
     {
@@ -1396,6 +1407,7 @@ fn authenticate_final_coordinates(
         input,
         keys,
         snapshot.required(keys.sponsored_release.0, "sponsored release")?,
+        initial_release,
     )?;
     if final_release.to_bytes() != initial_release.to_bytes()
         || hash(&final_release.to_bytes()).to_bytes() != coordinates.release_id
@@ -2312,13 +2324,12 @@ fn run_input(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> 
     }
     let release = PythSponsoredPushReleaseV1::decode(&sponsored_account.data)
         .map_err(|error| Error::new(format!("sponsored release: {error:?}")))?;
-    let compiled = devnet_sponsored_sol_usd_release_v1()
-        .map_err(|error| Error::new(format!("compiled sponsored release: {error:?}")))?;
-    if release.to_bytes() != compiled.to_bytes() {
-        return Err(Error::new(
-            "the Market's sponsored release is not the compiled devnet SOL/USD release",
-        ));
-    }
+    // Against the CHAIN, never against the constant: this document is the
+    // input a capture will be built from, and a release the chain no longer
+    // admits produces a document whose only outcome is `0x8014`.
+    crate::sponsored_release_observation::authenticate_market_release_against_chain_v1(
+        &mut rpc, release,
+    )?;
     let receiver_program = Pubkey::new_from_array(release.receiver_program());
     let push_oracle_program = Pubkey::new_from_array(release.push_oracle_program());
 

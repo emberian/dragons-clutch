@@ -66,6 +66,7 @@ mod selected_capability;
 mod source_abort_exterior;
 mod spline_product;
 mod sponsored_push;
+mod sponsored_release_observation;
 mod sponsored_schedule;
 mod structured_market;
 mod terminal_exterior_pyth;
@@ -1066,8 +1067,39 @@ fn run_devnet_pyth_market(arguments: Vec<String>, family: DevnetMarketFamilyV1) 
             Some(value) => decimal::<u64>(Some(value), "--generation")?,
         },
     };
+    // THE PROVIDER RELEASE IS OBSERVED, NOT TYPED. A market pins its provider
+    // release at founding and `authenticate_provider_program_pin` compares it to
+    // the chain by exact equality, so a constant that has fallen behind founds a
+    // market whose every capture refuses `0x8014 ReleaseSuperseded` -- which is
+    // what happened to cohort-13 and cohort-14, four and five days after Pyth
+    // redeployed their devnet Receiver. The observation is made BEFORE the
+    // family's own compiler runs, so a provider that moved refuses here, free,
+    // instead of after a founding has spent its lamports.
+    let sponsored_release = match family {
+        DevnetMarketFamilyV1::Direct => None,
+        DevnetMarketFamilyV1::SponsoredDirect | DevnetMarketFamilyV1::SponsoredGeneral => {
+            let (url, acknowledgment) = match family {
+                DevnetMarketFamilyV1::SponsoredGeneral => {
+                    (general.rpc_url.clone(), general.acknowledgment.clone())
+                }
+                _ => (direct.rpc_url.clone(), direct.acknowledgment.clone()),
+            };
+            let origin = cluster::ClusterOriginV1::parse(
+                &required(url, "--rpc-url")?,
+                acknowledgment.as_deref(),
+            )?;
+            let mut rpc = rpc::Rpc::connect_cluster(&origin, rpc::WritePolicyV1::ReadsOnly)?;
+            let observed =
+                sponsored_release_observation::observed_devnet_sponsored_release_v1(&mut rpc, 0)?;
+            eprintln!("{}", observed.report());
+            Some(observed.release)
+        }
+    };
     let input = match family {
         DevnetMarketFamilyV1::SponsoredGeneral => {
+            let release = sponsored_release.ok_or_else(|| {
+                Error::new("a sponsored General market compiled without observing its provider")
+            })?;
             let (plan, rpc_url, acknowledgment, general) = general.load()?;
             general_devnet_market::devnet_general_market_input(
                 &plan,
@@ -1076,11 +1108,15 @@ fn run_devnet_pyth_market(arguments: Vec<String>, family: DevnetMarketFamilyV1) 
                 registry,
                 spec,
                 &general,
+                release,
             )?
         }
         DevnetMarketFamilyV1::SponsoredDirect => {
+            let release = sponsored_release.ok_or_else(|| {
+                Error::new("a sponsored Direct market compiled without observing its provider")
+            })?;
             let direct = direct.load(registry)?;
-            market::devnet_sponsored_market_input(spec, direct.compiler())?
+            market::devnet_sponsored_market_input(spec, direct.compiler(), release)?
         }
         DevnetMarketFamilyV1::Direct => {
             let direct = direct.load(registry)?;

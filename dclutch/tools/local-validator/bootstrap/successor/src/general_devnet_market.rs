@@ -548,6 +548,7 @@ pub(crate) fn devnet_general_market_input(
     registry: Pubkey,
     spec: crate::market::DevnetPythMarketSpecV1<'_>,
     arguments: &GeneralDevnetCompilerArgumentsV1,
+    sponsored_release: dclutch_pyth_svm::PythSponsoredPushReleaseV1,
 ) -> Result<crate::model::MarketRunInput> {
     let (plan, mut rpc, observation) = crate::direct_market::observe_devnet_market_policy_v1(
         plan_path,
@@ -556,7 +557,11 @@ pub(crate) fn devnet_general_market_input(
         registry,
     )?;
     let resolution_release = crate::direct_market::authenticated_resolution_release_v1(&plan)?;
-    let mut input = crate::market::devnet_sponsored_market_input_base(spec, resolution_release)?;
+    let mut input = crate::market::devnet_sponsored_market_input_base(
+        spec,
+        resolution_release,
+        sponsored_release,
+    )?;
 
     // The accelerator is observed against the SAME finalized floor the market
     // policy snapshot was taken at, so the deployment this market's
@@ -932,6 +937,7 @@ mod tests {
         let mut input = crate::market::devnet_sponsored_market_input_base(
             devnet_spec(registry, &price, &update),
             dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            release,
         )
         .expect("the capability-free devnet flagship graph");
 
@@ -982,6 +988,7 @@ mod tests {
         let mut rival = crate::market::devnet_sponsored_market_input_base(
             devnet_spec(registry, &price, &update),
             dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            release,
         )
         .expect("a second capability-free graph");
         attach_devnet_general_capability_v1(&mut rival, &observation, other, &arguments)

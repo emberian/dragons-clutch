@@ -13203,8 +13203,9 @@ pub(crate) fn devnet_market_input(
 pub(crate) fn devnet_sponsored_market_input(
     spec: DevnetPythMarketSpecV1<'_>,
     direct: DirectMarketCompilerInputV1<'_>,
+    release: PythSponsoredPushReleaseV1,
 ) -> Result<MarketRunInput> {
-    let mut input = devnet_sponsored_market_input_base(spec, direct.resolution_release)?;
+    let mut input = devnet_sponsored_market_input_base(spec, direct.resolution_release, release)?;
     attach_direct_market_capability_v1(&mut input, direct)?;
     validate_market_input(&input)?;
     Ok(input)
@@ -13219,13 +13220,19 @@ pub(crate) fn devnet_sponsored_market_input(
 /// closure through the selection seam instead. Without this the only way to
 /// reach the devnet Pyth graph was through a Direct compiler, which is why
 /// the second family could be founded on a local validator and nowhere else.
+///
+/// **The release is a PARAMETER and not the constant**, because Pyth redeployed
+/// their devnet Receiver and changed their Receiver `Config` after the constant
+/// was typed, and a market pins its provider release at founding. Its author is
+/// `sponsored_release_observation`, which reads the chain-owned half off a
+/// finalized snapshot; the constant remains the declaration every observed
+/// field is compared against.
 pub(crate) fn devnet_sponsored_market_input_base(
     spec: DevnetPythMarketSpecV1<'_>,
     resolution_release: [u8; 32],
+    release: PythSponsoredPushReleaseV1,
 ) -> Result<MarketRunInput> {
     let window_end = devnet_window_end_v1(&spec)?;
-    let release = dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
-        .map_err(|error| Error::new(format!("devnet sponsored Pyth release row: {error:?}")))?;
     pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: spec.founding_band.clone(),
@@ -14601,6 +14608,8 @@ mod tests {
                 generation: 1,
             },
             direct.compiler(),
+            dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
+                .expect("the declared devnet sponsored release"),
         )
         .expect("sponsored market input")
     }

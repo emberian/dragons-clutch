@@ -101,6 +101,51 @@ pub(crate) mod role {
     pub(crate) const SUBSTITUTED_FOUNDER: &str = "substituted-founder";
 }
 
+/// Domain separator for a persisted role's PER-MARKET key.
+///
+/// # The defect this closes
+///
+/// `KeyOriginV1::Persisted` returns the operator's file key VERBATIM at index 0,
+/// which is exactly right for a role the operator has to FUND out of band --
+/// `solana transfer` to the address `solana address -k` prints. It is exactly
+/// wrong for a role the campaign CREATES AN ACCOUNT AT, because the address is
+/// then a per-market coordinate wearing a campaign identity's clothes.
+///
+/// Measured 2026-09-03, cohort-14: a General market founded from the same key
+/// files as the Direct market ran 530 transactions and refused
+/// `Create Account: account G2dfBofa... already in use` -- a System `Custom(0)`,
+/// below `0x1000` and therefore not ours -- because `founding-source-funder` is
+/// an identity the founding creates a 165-byte Token-2022 account at, and the
+/// Direct founding had created it four hours earlier. The projection witness
+/// held 3,141,168 lamports from the same founding and was the next collision.
+/// The refusal landed AFTER the collateral mint, wallet, Realm record and
+/// Found31 Market were on chain and BEFORE the DCLTPCB2 checkpoint, so a fresh
+/// evidence path refused "this founding has STARTED" and a resume refused "no
+/// compatible durable DCLTPCB2 checkpoint": both doors shut, 0.812936971 SOL
+/// spent, and the market never created.
+///
+/// So the two roles in [`PER_MARKET_ROLES`] derive from the operator's secret
+/// AND the market their founding is for. One key file founds any number of
+/// markets, each at its own funder, and a resume of the SAME market lands on the
+/// same address because the market address is what the derivation reads.
+pub(crate) const PER_MARKET_KEY_DOMAIN_V1: &[u8] =
+    b"dclutch/local-successor-bootstrap/per-market-key/v1";
+
+/// The roles whose address is a PER-MARKET coordinate rather than a campaign
+/// identity, because the founding creates an account at each of them.
+///
+/// Membership is decided by one question -- does the founding CREATE an account
+/// at this address -- and not by whether the role looks like a campaign one.
+/// `collateral-mint` and `collateral-wallet` are also created by the founding
+/// and are absent here for a different reason: the driver already takes a
+/// separate `--keypair-` flag per market for them, so the operator states them
+/// per market by hand. `campaign-payer` and `core-upgrade-authority` are FUNDED
+/// out of band and must stay the file's own key.
+pub(crate) const PER_MARKET_ROLES: &[&str] = &[
+    role::FOUNDING_SOURCE_FUNDER,
+    role::FOUNDING_PROJECTION_WITNESS,
+];
+
 /// Domain separator for a persisted per-role key's higher indices.
 ///
 /// Distinct from [`KEYPAIR_SEED_DOMAIN_V1`] so that a persisted campaign and a
@@ -173,6 +218,11 @@ pub(crate) fn fresh_probe_address() -> Pubkey {
 pub(crate) struct KeyForge {
     origin: KeyOriginV1,
     issued: RefCell<BTreeMap<&'static str, u32>>,
+    /// The market every [`PER_MARKET_ROLES`] key is derived for, under a
+    /// persisted origin. `None` until [`KeyForge::bind_market_v1`] is called,
+    /// and a per-market role drawn while it is `None` is a REFUSAL rather than
+    /// a fallback to the file's key -- the fallback is the collision.
+    market: RefCell<Option<[u8; 32]>>,
 }
 
 impl KeyForge {
@@ -181,6 +231,7 @@ impl KeyForge {
         Self {
             origin: KeyOriginV1::Random,
             issued: RefCell::new(BTreeMap::new()),
+            market: RefCell::new(None),
         }
     }
 
@@ -221,6 +272,7 @@ impl KeyForge {
         Ok(Self {
             origin: KeyOriginV1::Seeded(seed),
             issued: RefCell::new(BTreeMap::new()),
+            market: RefCell::new(None),
         })
     }
 
@@ -251,7 +303,77 @@ impl KeyForge {
         Ok(Self {
             origin: KeyOriginV1::Persisted(secrets),
             issued: RefCell::new(BTreeMap::new()),
+            market: RefCell::new(None),
         })
+    }
+
+    /// Bind the market every per-market role's key is derived for.
+    ///
+    /// Called once, by the founding path, as soon as the market's own address
+    /// has been derived and BEFORE any per-market role is drawn. It refuses a
+    /// rebind and refuses a bind that arrives after a per-market key was already
+    /// issued, because either one silently moves an address the campaign has
+    /// already used -- the drift `peek_pubkey`'s docstring records from the
+    /// other direction.
+    pub(crate) fn bind_market_v1(&self, market: [u8; 32]) -> Result<()> {
+        let mut bound = self.market.borrow_mut();
+        if let Some(existing) = *bound {
+            if existing == market {
+                return Ok(());
+            }
+            return Err(Error::new(
+                "the campaign's per-market founding identities are already bound to a different \
+                 market; one campaign founds one market",
+            ));
+        }
+        // There is deliberately no "already issued" guard here. A per-market
+        // role cannot have been issued while unbound: `keypair` hard-stops on
+        // that path, so the only way to move an address the campaign has used is
+        // a rebind, which the branch above refuses.
+        *bound = Some(market);
+        Ok(())
+    }
+
+    /// The secret a persisted `role` derives from, and whether it is per-market.
+    ///
+    /// One owner for the question, so `keypair` and `peek_pubkey` cannot answer
+    /// it two ways -- which is how a detector and an executor end up on
+    /// different addresses.
+    fn persisted_material_v1(
+        &self,
+        secrets: &BTreeMap<String, [u8; 32]>,
+        role: &'static str,
+        index: u32,
+    ) -> Result<Option<[u8; 32]>> {
+        let Some(secret) = secrets.get(role) else {
+            return Ok(None);
+        };
+        if !PER_MARKET_ROLES.contains(&role) {
+            return Ok(Some(if index == 0 {
+                *secret
+            } else {
+                derive(PERSISTED_KEY_DOMAIN_V1, secret, role, index)
+            }));
+        }
+        let market = self.market.borrow().ok_or_else(|| {
+            Error::new(format!(
+                "{role} is a PER-MARKET identity -- the founding creates an account at it -- and \
+                 no market is bound. Two markets founded from one key file would collide on \
+                 CreateAccount seven hundred transactions into a founding, which is what happened \
+                 to cohort-14's General market"
+            ))
+        })?;
+        let mut material = Sha256::new();
+        material.update(PER_MARKET_KEY_DOMAIN_V1);
+        material.update([0]);
+        material.update(secret);
+        material.update([0]);
+        material.update(market);
+        material.update([0]);
+        material.update(role.as_bytes());
+        material.update([0]);
+        material.update(index.to_le_bytes());
+        Ok(Some(material.finalize().into()))
     }
 
     /// Issue the next keypair for `role`.
@@ -275,19 +397,26 @@ impl KeyForge {
             KeyOriginV1::Seeded(seed) => {
                 Keypair::new_from_array(derive(KEYPAIR_SEED_DOMAIN_V1, seed, role, index))
             }
-            KeyOriginV1::Persisted(secrets) => match secrets.get(role) {
-                // Unreachable for any role in the caller's required list, which
-                // `persisted` checked. A role outside that list is a campaign
-                // path the driver has not been taught to fund, and a fresh
-                // unfunded key is the honest answer: every transaction it signs
-                // for fails visibly at the cluster rather than being paid for
-                // by somebody else's balance.
-                None => Keypair::new(),
-                Some(secret) if index == 0 => Keypair::new_from_array(*secret),
-                Some(secret) => {
-                    Keypair::new_from_array(derive(PERSISTED_KEY_DOMAIN_V1, secret, role, index))
+            KeyOriginV1::Persisted(secrets) => {
+                match self.persisted_material_v1(secrets, role, index) {
+                    // A role outside the caller's required list is a campaign
+                    // path the driver has not been taught to fund, and a fresh
+                    // unfunded key is the honest answer: every transaction it
+                    // signs for fails visibly at the cluster rather than being
+                    // paid for by somebody else's balance.
+                    Ok(None) => Keypair::new(),
+                    Ok(Some(material)) => Keypair::new_from_array(material),
+                    // An unbound per-market role. This is a PROGRAMMING error,
+                    // not an operator one -- the founding path binds the market
+                    // before it draws -- and it is a hard stop rather than a
+                    // fresh key, because a fresh key here would SUCCEED: the
+                    // campaign funds the funder itself, so the founding would
+                    // complete at an address whose private key dies with the
+                    // process, and the market's principal supplier would be
+                    // unrecoverable. A collision is loud; that is silent.
+                    Err(refusal) => panic!("{refusal}"),
                 }
-            },
+            }
         }
     }
 
@@ -320,20 +449,15 @@ impl KeyForge {
                         .pubkey(),
                 )
             }
-            KeyOriginV1::Persisted(secrets) => match secrets.get(role) {
-                None => Err(Error::new(format!(
-                    "peek_pubkey({role}) outside the persisted role set: the campaign has not \
-                     been handed a keypair file for it"
-                ))),
-                Some(secret) if index == 0 => Ok(Keypair::new_from_array(*secret).pubkey()),
-                Some(secret) => Ok(Keypair::new_from_array(derive(
-                    PERSISTED_KEY_DOMAIN_V1,
-                    secret,
-                    role,
-                    index,
-                ))
-                .pubkey()),
-            },
+            KeyOriginV1::Persisted(secrets) => {
+                match self.persisted_material_v1(secrets, role, index)? {
+                    None => Err(Error::new(format!(
+                        "peek_pubkey({role}) outside the persisted role set: the campaign has not \
+                         been handed a keypair file for it"
+                    ))),
+                    Some(material) => Ok(Keypair::new_from_array(material).pubkey()),
+                }
+            }
         }
     }
 
@@ -394,6 +518,142 @@ mod tests {
 
     fn seeded() -> KeyForge {
         KeyForge::parse(Some(SEED), LOOPBACK).expect("loopback seed")
+    }
+
+    /// Every role a founding signs for, with one distinct secret each.
+    fn founding_secrets() -> BTreeMap<String, [u8; 32]> {
+        crate::campaign::FOUNDING_REQUIRED_ROLES
+            .iter()
+            .enumerate()
+            .map(|(index, role)| {
+                let mut secret = [0_u8; 32];
+                secret[0] = u8::try_from(index + 1).expect("role index");
+                ((*role).to_owned(), secret)
+            })
+            .collect()
+    }
+
+    fn founding_forge() -> KeyForge {
+        KeyForge::persisted(founding_secrets(), crate::campaign::FOUNDING_REQUIRED_ROLES)
+            .expect("persisted founding forge")
+    }
+
+    /// The roles cohort-14's founding was OBSERVED to create an account at,
+    /// stated here independently of `PER_MARKET_ROLES` so the test below cannot
+    /// agree with the constant it is testing.
+    ///
+    /// `founding-source-funder` was read back off chain as a 165-byte
+    /// Token-2022 account at `G2dfBofa...` created by the Direct founding;
+    /// `founding-projection-witness` held 3,141,168 lamports from the same
+    /// founding at `AkSjTgMK...`. Both are addresses the founding CREATES, and
+    /// that -- not whether the name sounds like a campaign identity -- is what
+    /// makes an address a per-market coordinate.
+    const ROLES_THE_FOUNDING_CREATES_AN_ACCOUNT_AT_V1: &[&str] =
+        &["founding-source-funder", "founding-projection-witness"];
+
+    /// THE COHORT-14 COLLISION, as a test. Two markets founded from ONE key
+    /// file must land on distinct funders and distinct projection witnesses --
+    /// and on the SAME payer, mint, wallet and beneficiary, because those are
+    /// funded or supplied per market by the operator and moving them would be a
+    /// different bug.
+    ///
+    /// The partition is asserted against an INDEPENDENT property -- does the
+    /// founding create an account at this address -- rather than against
+    /// `PER_MARKET_ROLES`. Stated the other way round the test is vacuous:
+    /// emptying the constant makes every role "a campaign identity", every
+    /// equality holds, and the pre-fix behaviour passes. Measured, on this test,
+    /// before it was written this way.
+    #[test]
+    fn two_markets_from_one_key_file_get_distinct_founding_identities() {
+        let alpha = founding_forge();
+        let beta = founding_forge();
+        alpha.bind_market_v1([0xa1; 32]).expect("bind alpha");
+        beta.bind_market_v1([0xb2; 32]).expect("bind beta");
+        for role in crate::campaign::FOUNDING_REQUIRED_ROLES {
+            let left = alpha.peek_pubkey(role).expect("alpha");
+            let right = beta.peek_pubkey(role).expect("beta");
+            if ROLES_THE_FOUNDING_CREATES_AN_ACCOUNT_AT_V1.contains(role) {
+                assert_ne!(
+                    left, right,
+                    "the founding creates an account at {role} and two markets share its address"
+                );
+            } else {
+                assert_eq!(
+                    left, right,
+                    "{role} is a campaign identity the operator funds and it moved between markets"
+                );
+            }
+        }
+        // And the constant matches the independent statement, so a role added to
+        // `PER_MARKET_ROLES` that the founding does not create an account at --
+        // or an account-creating role left out of it -- goes red by name.
+        let mut declared = PER_MARKET_ROLES.to_vec();
+        declared.sort_unstable();
+        let mut observed = ROLES_THE_FOUNDING_CREATES_AN_ACCOUNT_AT_V1.to_vec();
+        observed.sort_unstable();
+        assert_eq!(declared, observed);
+    }
+
+    /// A RESUME must land where the founding left off. The market address is
+    /// what the derivation reads, so re-binding the same market from the same
+    /// files reproduces every address -- which is why the salt is the market and
+    /// not a nonce.
+    #[test]
+    fn the_same_market_reproduces_the_same_founding_identities() {
+        let first = founding_forge();
+        let second = founding_forge();
+        first.bind_market_v1([0xa1; 32]).expect("bind");
+        second.bind_market_v1([0xa1; 32]).expect("bind again");
+        for role in crate::campaign::FOUNDING_REQUIRED_ROLES {
+            assert_eq!(
+                first.peek_pubkey(role).expect("first"),
+                second.peek_pubkey(role).expect("second"),
+                "role {role}"
+            );
+        }
+        // A rebind to the SAME market is idempotent; to a different one it is a
+        // refusal, because one campaign founds one market.
+        first.bind_market_v1([0xa1; 32]).expect("idempotent rebind");
+        assert!(first.bind_market_v1([0xb2; 32]).is_err());
+    }
+
+    /// An unbound per-market role is a REFUSAL and not the file's key. The
+    /// fallback to the file's key IS the collision, so it must not exist.
+    #[test]
+    fn an_unbound_persisted_forge_refuses_exactly_the_per_market_roles() {
+        let forge = founding_forge();
+        for role in crate::campaign::FOUNDING_REQUIRED_ROLES {
+            let peeked = forge.peek_pubkey(role);
+            if PER_MARKET_ROLES.contains(role) {
+                let refusal = peeked.expect_err("an unbound per-market role must refuse");
+                assert!(refusal.to_string().contains("PER-MARKET"), "{refusal}");
+            } else {
+                peeked.expect("a campaign identity is available before any bind");
+            }
+        }
+    }
+
+    /// A rebind to a DIFFERENT market refuses even after keys have been drawn,
+    /// because it would move an address the campaign has already used. One
+    /// campaign founds one market.
+    #[test]
+    fn a_rebind_to_a_different_market_refuses_after_keys_are_drawn() {
+        let forge = founding_forge();
+        forge.bind_market_v1([0xa1; 32]).expect("bind");
+        let drawn = forge.keypair(role::FOUNDING_SOURCE_FUNDER).pubkey();
+        let refusal = forge
+            .bind_market_v1([0xb2; 32])
+            .expect_err("a rebind to another market must refuse");
+        assert!(
+            refusal
+                .to_string()
+                .contains("one campaign founds one market"),
+            "{refusal}"
+        );
+        // The drawn address is still the one this market's founding used.
+        let again = founding_forge();
+        again.bind_market_v1([0xa1; 32]).expect("bind");
+        assert_eq!(again.keypair(role::FOUNDING_SOURCE_FUNDER).pubkey(), drawn);
     }
 
     #[test]

@@ -4422,6 +4422,14 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let founding_targets = match (&market, founding_keys) {
         (Some(input), Some((mint, wallet))) => {
             let (state, targets) = founding_state(&mut rpc, &plan, input, mint, wallet)?;
+            // THE PER-MARKET IDENTITIES ARE BOUND HERE, before any of them is
+            // peeked or drawn. The Open Market address is the exact per-market
+            // coordinate: it moves when and only when the market moves, so one
+            // key file founds any number of markets at distinct funders and a
+            // RESUME of the same market lands on the same addresses. Cohort-14's
+            // General founding died on `Create Account: already in use` because
+            // this did not exist.
+            forge.bind_market_v1(targets.open_market.to_bytes())?;
             states.push((StageV1::Founding, state));
             Some(targets)
         }
