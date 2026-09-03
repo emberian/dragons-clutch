@@ -393,6 +393,7 @@ pub fn process_instruction(
         .map_err(|_| CustodySbfError::Release)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
         .map_err(|_| CustodySbfError::Release)?;
+    custody_cu_checkpoint!("cf-cache-decode");
     authenticate_activation_cache_identity_v1(
         registry,
         cache_account,
@@ -400,6 +401,7 @@ pub fn process_instruction(
         activated,
     )
     .map_err(CustodySbfError::from)?;
+    custody_cu_checkpoint!("cf-cache-identity");
     let market = authenticate_series_aware_common_frame(
         program_id,
         accounts,

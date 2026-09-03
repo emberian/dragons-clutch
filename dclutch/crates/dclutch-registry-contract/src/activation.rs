@@ -200,24 +200,64 @@ impl<'a> ActivatedExecutionReleaseSetViewV1<'a> {
 
     /// Reconstruct the exact release-set projection cached by this state.
     pub fn release_set_projection(self) -> Result<ExecutionReleaseSetV1> {
-        ExecutionReleaseSetV1::new(
+        projection_from_bindings(self.role_bindings()?)
+    }
+
+    /// Decode every role exactly once and keep only its projection binding.
+    ///
+    /// A binding is a program identity and an artifact-release identity -- 64
+    /// bytes -- so all five fit in one SBF frame, which is what lets the
+    /// aliasing scan below run over values instead of over the account.
+    fn role_bindings(self) -> Result<[ExecutionRoleBindingV1; EXECUTION_ROLE_COUNT_V1]> {
+        Ok([
             projection_binding(self.role(ExecutionRoleV1::Core)?),
             projection_binding(self.role(ExecutionRoleV1::Claims)?),
             projection_binding(self.role(ExecutionRoleV1::Trading)?),
             projection_binding(self.role(ExecutionRoleV1::Resolution)?),
             projection_binding(self.role(ExecutionRoleV1::Custody)?),
-        )
-        .map_err(Error::from)
+        ])
     }
 
+    /// Validate the complete five-role projection and every aliasing pair with
+    /// ONE `decode_role` per role.
+    ///
+    /// # Twenty-five decodes for five values
+    ///
+    /// This scan used to call `self.role(..)` twenty-five times over an account
+    /// that holds five roles: five in `release_set_projection`, then two more
+    /// inside each of the ten pair iterations, every one of them re-running
+    /// `ArtifactReleaseIdV1::decode` and `ArtifactReleaseV1::decode` over bytes
+    /// a previous iteration had already decoded and accepted. Measured
+    /// 2026-09-03 on real Custody ELFs, `decode` was **21,984 CU** of the
+    /// 23,694 the Dealer partial equity Remove spends on its activation-cache
+    /// authentication per leg, and this one function was all of it.
+    ///
+    /// # Why the lazy pair decode is not a weakening
+    ///
+    /// The pair test is `binding equal ==> the whole ActivatedRoleV1 equal`,
+    /// and a binding is decided by the two identities this loop already holds.
+    /// So a pair whose bindings differ can never raise
+    /// [`Error::AliasedRoleActivationMismatch`], and decoding it to discover
+    /// that was always dead work: a live release set binds five distinct
+    /// programs, so on every accepted cache in this tree the inner decode never
+    /// runs at all. The pairs that DO alias -- the case the check exists for --
+    /// still decode both sides and still compare every field.
+    ///
+    /// Nothing moves in front of anything else. All five roles are decoded
+    /// before the first pair is examined, exactly as when
+    /// `release_set_projection` ran first, so a cache with an undecodable role
+    /// still refuses with that role's own error and never reaches the aliasing
+    /// scan. A re-decode of bytes that already decoded cannot fail, which is
+    /// why removing it removes no refusal.
     fn validate_projection(self) -> Result<()> {
-        self.release_set_projection()?;
-        for (left_index, left) in ALL_ROLES.into_iter().enumerate() {
-            for right in ALL_ROLES.into_iter().skip(left_index + 1) {
-                let left_role = self.role(left)?;
-                let right_role = self.role(right)?;
-                let same_pair = projection_binding(left_role) == projection_binding(right_role);
-                if same_pair && left_role != right_role {
+        let bindings = self.role_bindings()?;
+        projection_from_bindings(bindings)?;
+        for (left_index, (left, left_binding)) in ALL_ROLES.into_iter().zip(bindings).enumerate() {
+            for (right, right_binding) in ALL_ROLES.into_iter().zip(bindings).skip(left_index + 1) {
+                if left_binding != right_binding {
+                    continue;
+                }
+                if self.role(left)? != self.role(right)? {
                     return Err(Error::AliasedRoleActivationMismatch);
                 }
             }
@@ -590,6 +630,15 @@ const fn activated(input: &ArtifactActivationInputV1) -> ActivatedRoleV1 {
 
 fn projection_binding(activated: ActivatedRoleV1) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(activated.release.program(), activated.artifact_release_id)
+}
+
+/// The one spelling of the five-binding release-set projection, so the view's
+/// public projection and its own validation cannot drift apart.
+fn projection_from_bindings(
+    bindings: [ExecutionRoleBindingV1; EXECUTION_ROLE_COUNT_V1],
+) -> Result<ExecutionReleaseSetV1> {
+    let [core, claims, trading, resolution, custody] = bindings;
+    ExecutionReleaseSetV1::new(core, claims, trading, resolution, custody).map_err(Error::from)
 }
 
 fn role_offset(role: ExecutionRoleV1) -> usize {

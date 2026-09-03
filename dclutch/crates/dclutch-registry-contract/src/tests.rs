@@ -784,6 +784,53 @@ fn aliased_roles_must_share_one_complete_activation() {
     );
 }
 
+/// The BORROWED view is the decoder every adapter actually runs, and its
+/// aliasing scan is a separate implementation from the owned decoder's.
+///
+/// `aliased_roles_must_share_one_complete_activation` above has always pinned
+/// the owned `ActivatedExecutionReleaseSetV1::decode`. Nothing pinned the view,
+/// whose scan reads the same pairs out of borrowed bytes -- so this states the
+/// same accusation against the code that Trading, Claims, Custody, Core and the
+/// Registry's own `Reauthenticate` handler all reach.
+///
+/// Both arms are here because the refusal is only attributable with the accept
+/// beside it: an aliased pair that agrees in every field is a LEGAL cache and
+/// must decode, and only the one flipped deployment-slot byte may refuse.
+#[test]
+fn the_borrowed_view_refuses_an_aliased_role_that_disagrees_in_one_byte() {
+    let fixture = Fixture::distinct();
+    let mut artifact_ids = fixture.artifact_ids;
+    let mut releases = fixture.releases;
+    artifact_ids[2] = artifact_ids[1];
+    releases[2] = releases[1];
+    let aliased_set = release_set(artifact_ids, releases);
+    let aliased_inputs = activation_inputs(artifact_ids, releases);
+    let activated =
+        activate_execution_release_set_v1(fixture.release_set_id, &aliased_set, &aliased_inputs)
+            .expect("identical alias activates");
+
+    let legal_cache = activated.to_bytes();
+    let view = ActivatedExecutionReleaseSetViewV1::decode(&legal_cache)
+        .expect("an aliased pair that agrees in every field is a legal cache");
+    assert_eq!(
+        view.role(ExecutionRoleV1::Claims).expect("claims decodes"),
+        view.role(ExecutionRoleV1::Trading)
+            .expect("trading decodes"),
+    );
+
+    let mut hostile_cache = legal_cache;
+    let trading_slot_offset =
+        ROLE_CACHE_HEADER_BYTES + 2 * ROLE_CACHE_BYTES + 32 + ARTIFACT_DEPLOYMENT_SLOT_OFFSET;
+    let slot_byte = hostile_cache
+        .get_mut(trading_slot_offset)
+        .expect("trading deployment slot is in bounds");
+    *slot_byte ^= 1;
+    assert_eq!(
+        ActivatedExecutionReleaseSetViewV1::decode(&hostile_cache).map(|_| ()),
+        Err(Error::AliasedRoleActivationMismatch)
+    );
+}
+
 #[test]
 fn activation_cache_decoder_refuses_malformed_headers_and_role_identities() {
     let encoded = Fixture::distinct().activate().to_bytes();
