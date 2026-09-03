@@ -59,6 +59,15 @@ MIXED_GATE_AUTHENTICATOR_RELATIVE_PATH = Path(
 CHAOS_CONTRACT_RELATIVE_PATH = Path(
     "tools/release/private-validator-lifecycle/chaos.py"
 )
+# The shipped link set is defined ONCE, in artifact_provenance. This module used
+# to restate its SIZE as the literal 13 in three places, and `e6b7bf1a` deleted
+# `dclutch-dealer-sbf` and took the set to twelve: from that commit until this
+# one, every checked release built here refused at `checked_gate` with "does not
+# carry the exact thirteen-link closure", which is the whole private-validator
+# lifecycle -- the only path in this tree that drives a founding through to
+# retirement. Nothing went red, because nothing runs it on a schedule. Count the
+# set from the set.
+SHIPPED_LINKS_RELATIVE_PATH = Path("tools/release/artifact_provenance.py")
 SEED_DOMAIN = b"dclutch/private-validator-lifecycle/named-seed/v1\0"
 CHAOS_SEED_DOMAIN = b"dclutch/private-validator-lifecycle/chaos-seed/v2\0"
 FOUNDING_PARTICIPANT_COMMANDS = (
@@ -931,6 +940,32 @@ def load_chaos_contract(paths: Paths) -> Any:
     return module
 
 
+def load_shipped_links(paths: Paths) -> tuple[Any, ...]:
+    """The exact shipped SBF link set, read from its single semantic owner."""
+    module_path = canonical_file(
+        paths.repo / SHIPPED_LINKS_RELATIVE_PATH, "shipped link set owner"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "dclutch_private_shipped_links", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise Refusal("shipped link set owner could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    inserted = str(module_path.parent)
+    sys.path.insert(0, inserted)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if sys.path[0] == inserted:
+            sys.path.pop(0)
+        else:
+            sys.path.remove(inserted)
+    links = getattr(module, "SHIPPED_LINKS", None)
+    if not isinstance(links, tuple) or not links:
+        raise Refusal("shipped link set owner omitted its SHIPPED_LINKS tuple")
+    return links
+
+
 def checked_gate(paths: Paths, commit: str) -> tuple[Path, dict[str, Any], str]:
     gate_path = canonical_file(
         paths.release_root / "CHECKED_UPGRADE_GATE.json", "checked release gate"
@@ -1007,12 +1042,13 @@ def checked_gate(paths: Paths, commit: str) -> tuple[Path, dict[str, Any], str]:
             )
     else:
         raise Refusal("checked release gate schema is neither admitted v1 nor v2")
-    if gate.get("link_count") != 13 or len(gate.get("links", [])) != 13:
+    shipped = len(load_shipped_links(paths))
+    if gate.get("link_count") != shipped or len(gate.get("links", [])) != shipped:
         raise Refusal(
-            "checked release gate does not carry the exact thirteen-link closure"
+            f"checked release gate does not carry the exact {shipped}-link closure"
         )
     labels = [link.get("label") for link in gate["links"]]
-    if len(set(labels)) != 13:
+    if len(set(labels)) != shipped:
         raise Refusal("checked release gate link labels are not unique")
     canonical_resolution_link(gate)
     for link in gate["links"]:

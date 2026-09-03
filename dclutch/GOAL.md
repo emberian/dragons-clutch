@@ -3993,3 +3993,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   17 NEW, 1 UNREASONED), adjudication not bookkeeping** → SEAM **`(spawned)`**; and core-sbf's
   `exact_loader_authority_initializes_once_and_cannot_update` (Custom 12289 AccountFrame) unlocalized → PROGRAMS's queue.
 - Cuts: `04300b5cc`.
+- PROGRAMS closed (`63476c7b2` **the retirement griefing vector is closed** — `RetireReceipt`'s five vacancy slots ran through
+  one loop of resource predicates and slot 2 is an identity; `VACANCY_SLOT_KINDS_V2` derives the partition the frame spec
+  already draws; 4/1 → 5/0 red-then-green, the cheapest landable donation is minimum_balance(0) not one lamport;
+  `a54890177` **the continuation heap wall: 21/5 → 26/0** — the grant was missing, not the admission (`HeapFrame 0x4008`);
+  the Direct surface 79/10 → 85/4; the M-38 hostile reached its subject for the first time and the program was right;
+  `6f258cf5e` the Series expiry DECIDED by reading — `proof_height(1) = 0`, so a borrowed range cannot express an empty proof:
+  route 4 must not declare one, the V1 profile at 128 is right, and a second author sits at hot_v3.rs:12251 — not repaired
+  (moves shipped digests; multi-occurrence Series expiry is unreachable as shipped, consume_artifacts_v4 the same with no
+  test) → waits on D7's Series ruling; `0344be66f` the heap-frame floor over twelve draws; rows `b576b735a`). Owed: the claims
+  suite 47/2 — the Rational outer builders do not mine bump hints → HINTS **`(spawned)`**; the four RetireReceipt RESOURCE
+  slots keep the zero-lamport predicate pending D1's donation ruling.
+- POSTERS done: ~/src/dregg-posters/2026-09-03-typst posters 19–23 (two bilingual), 111 claims / 108 verified at HEAD;
+  the maker corrected six items in the orchestrator's brief (market B's fill never completed; market C paid the mis-scaled
+  cell on an honest certificate; the ATA release is cohort-14's). Committed unsigned, not pushed, not tweeted.
+- Cuts: `6e242deca`, `445e60a91`.

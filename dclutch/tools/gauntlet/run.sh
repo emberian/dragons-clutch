@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# The dClutch functional gauntlet's census entry point and parked tier-1 runner.
+# The dClutch functional gauntlet's census entry point and tier-1 runner.
 #
-#   census (supported)
-#   build -> deploy -> tier-1 campaign -> census (parked; refuses before build)
+#   census (seconds, no chain)
+#   build -> deploy -> tier-1 campaign -> census (full)
 #
-# Census mode produces no chain evidence. The parked campaign code below is
-# limited to LOCAL-VALIDATOR EVIDENCE: never devnet or mainnet evidence, and
-# never a persisted signer, external account, publication, or remote deploy.
+# Census mode produces no chain evidence. The campaign is limited to
+# LOCAL-VALIDATOR EVIDENCE: never devnet or mainnet evidence, and never a
+# persisted signer, external account, publication, or remote deploy.
 #
 # Read tools/gauntlet/DESIGN.md before changing anything here, and TIERS.md
 # before adding a tier.
@@ -21,31 +21,35 @@ usage: tools/gauntlet/run.sh [options]
   --commit REV     source revision to archive and build (default: HEAD)
   --mode MODE      census | full   (default: full)
                      census  static enumeration + report only, seconds, no chain
-                     full    unavailable: refuses before creating --work or
-                             starting a build. The tier-1 producer is parked at
-                             the retired demo-market boundary.
+                     full    build seven ELFs, launch a localhost validator, run
+                             the tier-1 campaign, fold it into the census. Budget
+                             ~25 min cold on an M-series laptop: about six of SBF
+                             builds and the rest campaign.
   --from STAGE     force a restart at a stage: archive|elf|tool|inventory|
                    campaign|census  (later stages always re-run)
-  --keep-runs      parked full-mode option; accepted but not used
+  --keep-runs      keep every campaign run directory (default: newest three)
   --rpc-port PORT|auto
-                   parked full-mode option; accepted but not used
+                   validator RPC base; `auto` takes a free 42-port block.
                    Also readable from $DCLUTCH_GAUNTLET_RPC_PORT.
   --record-publication genesis|transaction
-                   parked full-mode option; accepted but not used
+                   where the infrastructure record bodies come from
   --allow-stale-fixture-pins
-                   parked full-mode option; accepted but not used
+                   proceed when a fixture pin no longer matches the tree
   -h, --help       show this message
 
 Stages are stamped by their exact inputs under --work/stamps. A re-run skips a
 stage whose stamp matches and re-runs everything downstream of the first stage
 that does not.
 
-The former tier-1 full campaign has no supported Market input at HEAD.
-`demo-market` is deliberately retired, while `devnet-market` and
-`graduation-market` require acknowledged inputs that this localhost runner does
-not own. `--mode full` therefore exits 1 before any build. Use `--mode census`
-here; supported validator campaigns have their own family runners under
-tools/gauntlet/.
+Tier 1 has no external Market producer and does not borrow one. `demo-market`
+is retired, `devnet-market` and `graduation-market` require acknowledged
+external facts and a fee policy this runner does not own, and the successor's
+loopback planner authenticates a checked-MUTABLE plan while tier 1 is the
+immutable release set -- it refuses immutable-Core semantics by name. So the
+spec this script assembles OMITS `market`, and the supervisor compiles a
+fixture input from the plan it builds (`SuccessorRunSpec::market`). That path
+is loopback-only by construction and its one invented fact, a zero-basis-point
+Direct fee to the Registry address, is declared where it is made.
 
 Tier 1 cannot be made available by substituting ProgramTest: it depends on
 genesis Loader-v3 ProgramData spans, a real Loader SetAuthority(Some -> None),
@@ -82,17 +86,6 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$MODE" in census|full) ;; *) echo "--mode must be census or full" >&2; exit 2 ;; esac
-
-# Tier 1's only localhost Market producer was `demo-market`. It is retired
-# because a standalone Registry address cannot authenticate the current Direct
-# facts. The acknowledged `devnet-market` and `graduation-market` planners are
-# not interchangeable replacements: they require externally supplied facts and
-# fee-policy choices this runner does not own. Until a supported tier-1 Market
-# input is designed, refuse before resolving a revision, creating --work,
-# checking build tools, or compiling seven ELFs.
-if [ "$MODE" = "full" ]; then
-    die "--mode full is unavailable: the tier-1 campaign is parked at the retired demo-market boundary. No build or campaign was started; use --mode census or a supported family runner under tools/gauntlet/."
-fi
 
 if [ -z "$REPO" ]; then
     REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -626,16 +619,15 @@ PY
             fi
         }
 
-        REGISTRY_ID="$(program_id_for registry)"
-        DEMO_MARKET_REFUSAL="$RUN/demo-market.refusal.txt"
-        if "$BOOTSTRAP_BIN" demo-market --registry-program-id "$REGISTRY_ID" \
-            > "$RUN/market.json" 2> "$DEMO_MARKET_REFUSAL"; then
-            die "retired demo-market unexpectedly produced a market"
+        # `demo-market` is retired and this script no longer calls it. The
+        # spec below omits `market` entirely, and the supervisor compiles the
+        # input from the plan it builds -- see the note in the usage text and
+        # `SuccessorRunSpec::market`. Asserted here rather than assumed,
+        # because a bootstrap that quietly reintroduced a Market default would
+        # found a market this script never described:
+        if "$BOOTSTRAP_BIN" demo-market > /dev/null 2>&1; then
+            die "the retired demo-market planner produced a market; the tier-1 spec omits market on the belief that it cannot"
         fi
-        grep -F "demo-market is a retired local-only fixture" "$DEMO_MARKET_REFUSAL" \
-            > /dev/null || die "demo-market did not emit its exact local-only refusal"
-        die "successor local campaign is parked at the retired demo-market boundary; use the \
-acknowledged devnet-market or graduation-market planner with explicit fee policy"
 
         # Assemble the run spec. Output paths must not exist yet: the runner
         # refuses to overwrite prior evidence, which is exactly right.
@@ -664,10 +656,8 @@ acknowledged devnet-market or graduation-market planner with explicit fee policy
                 printf '    "attestation": "%s"\n' "$RUN/attestation/$role.json"
                 printf '  },\n'
             done
-            printf '  "record_publication": "%s",\n' "$RECORD_PUBLICATION"
-            printf '  "market": '
-            cat "$RUN/market.json"
-            printf '\n}\n'
+            printf '  "record_publication": "%s"\n' "$RECORD_PUBLICATION"
+            printf '}\n'
         } > "$SPEC.raw"
         jq . "$SPEC.raw" > "$SPEC" || die "assembled run spec is not valid JSON"
 

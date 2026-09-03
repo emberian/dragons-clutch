@@ -121,9 +121,11 @@ const PACKET_LIMIT: usize = 1_232;
 /// HEAPRED measured **35,127** at `3dde1b9c`; it was then 36,713 for two
 /// reasons that were neither of them the outer: `30574297` taught the gate
 /// fixture to stage the bumps a real founding writes, so both routes stopped
-/// searching for the Market, and `HotBumpHintsV1` added a hint arm that this
-/// route pays for and never uses -- its wire mines nothing. Both shift the
-/// floor without changing what the outer composition is. Re-measured over
+/// searching for the Market, and `HotBumpHintsV1` added a hint arm this route
+/// paid for. (That clause used to end "and never uses -- its wire mines
+/// nothing", which stopped being true at `82465e00b` when the builder learned
+/// to fill the block; it is a cost both routes now pay and it cancels.) Both
+/// shift the floor without changing what the outer composition is. Re-measured over
 /// twelve seeds at every move rather than carried forward, because a constant
 /// inherited across a fixture change is a constant nobody is checking.
 ///
@@ -171,7 +173,31 @@ const PACKET_LIMIT: usize = 1_232;
 /// of its own across the wave (the fifth ProgramSet entry rides the outer's
 /// derivation, ~282 CU by the direct-route measurement, plus the shared-path
 /// growth the margin gates absorbed reaching this route's outer once more).
-const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 104_366;
+///
+/// # Why it is now 91,593, and why this took two commits to move
+///
+/// It went DOWN by 12,773, and the subtrahend is what moved: decision 0017's
+/// option B and the Structured landing kept making the TOP-LEVEL route cheaper
+/// relative to the outer, and this floor did not follow. `8a691ee57` reached a
+/// real reading of 91,848 -- 12,518 below the floor, off-rung by 518 -- and
+/// LEFT IT RED rather than move a measured constant on one draw, which is what
+/// this doc had told it to do. That was the right call and this is the other
+/// half of it.
+///
+/// Re-measured over TWELVE seeds on this tree, at `6f258cf5e` plus the
+/// continuation's own heap grant: **91,593 ten times and 94,593 twice**.
+/// Residuals 0 and 3,000 exactly, nothing in between, zero seed-to-seed
+/// jitter -- the same clean `ADMISSION_ATTEMPT_CU_V1` grid every previous
+/// measurement of this delta has found, which is what makes it a floor rather
+/// than a draw.
+///
+/// The 255 CU between `8a691ee57`'s reading and this one is the interval's own
+/// code motion, an order of magnitude inside the rung and above the jitter bar,
+/// and it includes this commit's own contribution to BOTH legs: the
+/// continuation frame gained a `RequestHeapFrame` and the continuation arm
+/// gained the heap comparison its top-level sibling always had. Both routes
+/// moved; what did not cancel is here.
+const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 91_593;
 
 /// How far the floor may drift before this gate calls it a change.
 ///

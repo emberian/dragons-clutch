@@ -50,7 +50,30 @@ pub(crate) struct SuccessorRunSpec {
     pub(crate) resolution: RunProgramInput,
     pub(crate) custody: RunProgramInput,
     pub(crate) rent_credit: RunProgramInput,
-    pub(crate) market: MarketRunInput,
+    /// The market the run founds, or ABSENT to compile one from the plan.
+    ///
+    /// Absent is the LOOPBACK-ONLY fixture path, and it exists because tier 1
+    /// had no supported Market producer at all: its only one was the
+    /// `demo-market` subcommand, retired because it cannot authenticate the
+    /// permanent devnet Direct deployment, and the successor's loopback
+    /// planner (`local-private-validator-market-v1`) is not a replacement
+    /// because it authenticates a checked-MUTABLE plan and refuses
+    /// immutable-Core semantics -- which is precisely what tier 1 is. Twenty-five
+    /// routes had no other witness and the tier could not be re-run.
+    ///
+    /// So the supervisor compiles the input from the plan it just built,
+    /// through the exact path this file's own real-SBF test already drives:
+    /// `DirectMarketCompilerOwnedV1::for_test_plan` (deployment widths and
+    /// Resolution release read out of the plan) into
+    /// `market::demo_market_input`. That is not a devnet planner and must
+    /// never become one: the compiled input is a FIXTURE, with a 0-basis-point
+    /// Direct fee paid to the Registry address and an unbounded activation
+    /// deadline. It describes a market that exercises the infrastructure
+    /// floor's routes, not one anyone would trade. The supervisor already
+    /// refuses every non-loopback origin (`rpc_origin`), so this path cannot
+    /// reach a real cluster.
+    #[serde(default)]
+    pub(crate) market: Option<MarketRunInput>,
     /// Additive and optional: absent means `"genesis"`, which is exactly the
     /// behaviour every v2 spec written before this field had. `"transaction"`
     /// removes the nine infrastructure record bodies from genesis and makes

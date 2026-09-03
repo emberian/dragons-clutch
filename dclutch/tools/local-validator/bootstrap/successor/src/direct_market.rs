@@ -974,6 +974,50 @@ impl DirectMarketCompilerOwnedV1 {
         }
     }
 
+    /// The Direct compiler for a LOOPBACK infrastructure-floor run, whose
+    /// Market input is compiled from the run's own plan.
+    ///
+    /// Tier 1 has no external Market producer and cannot borrow one: its only
+    /// producer was `demo-market`, retired because it cannot authenticate the
+    /// permanent devnet Direct deployment, and the successor's loopback
+    /// planner authenticates a checked-MUTABLE plan and refuses immutable-Core
+    /// semantics -- which is what an infrastructure-floor run is. So the run
+    /// compiles its own.
+    ///
+    /// Everything that can be read is read: the deployment widths and the
+    /// Resolution release come out of the authenticated plan, and the
+    /// activation deadline and the capability-root Rent minimum come out of
+    /// the chain this run launched. ONE fact is a fixture and is named as one:
+    /// the Direct fee policy is zero basis points paid to the Registry
+    /// address, because an infrastructure-floor run has no fee recipient and
+    /// inventing an economic one would be worse than declaring none. This is
+    /// deliberately NOT `for_test`'s `u64::MAX` deadline and NOT its hardcoded
+    /// widths; the only thing the two share is the fee choice.
+    ///
+    /// It cannot reach a real cluster: `runtime::rpc_origin` refuses every
+    /// origin the supervisor does not launch itself, and this is called from
+    /// nowhere else.
+    pub(crate) fn for_loopback_plan_fixture(
+        registry: Pubkey,
+        plan: &SuccessorPlan,
+        finalized_slot: u64,
+        root_rent_minimum_lamports: u64,
+    ) -> Result<Self> {
+        if root_rent_minimum_lamports == 0 {
+            return Err(Error::new(
+                "chain-quoted Direct capability-root Rent minimum was zero",
+            ));
+        }
+        Ok(Self {
+            deployment: DirectDeploymentWidthsV1::from_plan(plan)?,
+            fee: DirectFeeSelectionV1::explicit(Some(0), Some(registry))?,
+            resolution_release: authenticated_resolution_release_v1(plan)?,
+            activation_deadline_slot: activation_deadline_v1(finalized_slot)?,
+            root_rent_minimum_lamports,
+            lifetime: (),
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(registry: Pubkey, deployment: DirectDeploymentWidthsV1) -> Self {
         Self {

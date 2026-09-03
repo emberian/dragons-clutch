@@ -40,8 +40,58 @@
 //! `SEMANTIC_RANGE_ROUTE_V4` rather than to a child route, so nothing resolves
 //! it per invocation and nothing refuses.
 //!
-//! Whoever owns Series decides. Until then these three rows are a red that
-//! names a real defect, which is worth more than a green that hides it.
+//! # DECIDED, 2026-09-03, BY THE KERNEL RATHER THAN BY A PREFERENCE
+//!
+//! "Whoever owns Series decides" stood here, and it turns out the Series kernel
+//! had already decided. Three lines settle it, and none of them is in this
+//! file:
+//!
+//! * `dclutch-series-v3-kernel/src/lib.rs:868` refuses unless
+//!   `proof_count == proof_height(template.occurrence_count)`. An EQUALITY, not
+//!   a floor.
+//! * `:1140` makes `proof_height(count)` **zero** for `count <= 1`.
+//! * so for a single-occurrence Series -- which is what this campaign stages,
+//!   and `support/series_premarket_expiry_chain_v1.rs:2343` admits its
+//!   occurrence with a literally EMPTY proof and succeeds -- `proof_count = 0`
+//!   is not merely permitted. It is the only value the kernel admits.
+//!
+//! `SeriesActionRequestV3::decode` agrees from the other side: it pins
+//! `proof_count == 0` for `Retire` and `Close` and constrains `Expire` not at
+//! all, which is exactly the line that would say so if a nonempty proof were
+//! meant.
+//!
+//! THAT ELIMINATES THE FIRST REPAIR, including the shape one would reach for
+//! first. A V3 borrowed-witness profile cannot express an empty proof either:
+//! `BorrowedWitnessPolicyV3::validate`
+//! (`crates/dclutch-request-profile-contract/src/v3.rs:90`) refuses
+//! `minimum_bytes == 0`, for the same reason
+//! `BorrowedRangeV4::resolve` (`crates/dclutch-effect-kernel/src/v4.rs:334`)
+//! refuses a zero length. Both spellings of "a borrowed thing is here" are
+//! canonically nonempty, and the canonical Series Expire has nothing to borrow.
+//!
+//! So the repair is the SECOND one: **route 4 must not declare a borrowed
+//! range**, and the V1 profile fixed at 128 is already right for the case this
+//! route serves. It is still not taken here, and now for a stated reason rather
+//! than for indecision -- it has TWO authors and the second is not in the
+//! artifact file:
+//!
+//! * `series/expire_funding_artifacts_v5.rs:766-782`, the range itself, plus
+//!   the module's own `range_count() == 1` pin at `:1282` and the fixed
+//!   `SERIES_EXPIRE_EFFECT_V4_BYTES_V5` width;
+//! * `hot_v3.rs:12251`, which selects the Series expiry local replay overlap
+//!   ONLY when `ranges.count() == 1 && ranges.range(0) == family.proof_bytes()`.
+//!   Withdrawing the range makes that read zero and silently returns
+//!   `AllowedLocalOverlapV3::None`, so the conjunct has to be rewritten to
+//!   admit "no range, and no proof to borrow" in the same commit or the
+//!   replay overlap disappears without a word.
+//!
+//! AND A SECOND DEFECT IS EXPOSED BY THE SAME READING, larger than this one and
+//! not this test's: a MULTI-occurrence Series expiry needs `proof_count >= 1`
+//! and therefore a 128 + 32n family request, which the V1 profile's
+//! `item_request_bytes = 0` forbids at every tail count. Withdrawing the range
+//! does not fix that; it makes it visible. Multi-occurrence Series expiry is
+//! unreachable as shipped, and `consume_artifacts_v4` is in the same position
+//! with no real-ELF program-test to report it.
 
 #[path = "support/series_premarket_expiry_chain_v1.rs"]
 mod series_premarket_expiry_chain_v1;

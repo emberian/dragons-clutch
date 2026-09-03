@@ -8,6 +8,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -123,8 +124,13 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             tree = root / "source-tree.txt"
             tree.write_bytes(b"candidate source tree\n")
             tree_sha256 = MODULE.sha256_file(tree)
+            shipped = len(
+                MODULE.load_shipped_links(
+                    types.SimpleNamespace(repo=MODULE_PATH.parents[3])
+                )
+            )
             labels = [MODULE.CANONICAL_RESOLUTION_GATE_LABEL] + [
-                f"other-{index}" for index in range(12)
+                f"other-{index}" for index in range(shipped - 1)
             ]
             links = []
             for label in labels:
@@ -164,7 +170,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     "canonical_path": tree.name,
                     "sha256": tree_sha256,
                 },
-                "link_count": 13,
+                "link_count": shipped,
                 "links": links,
             }
             gate_path = root / "CHECKED_UPGRADE_GATE.json"

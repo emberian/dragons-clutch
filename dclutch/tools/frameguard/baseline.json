@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "29e07b83a833c1e6c57dd01ded40aca95509404f",
+  "commit": "6f258cf5e4274ace43ea86111f0989ef781b1559",
   "link_count": 12,
   "links": [
     {
@@ -848,7 +848,7 @@
         },
         {
           "frames_bytes": [
-            1984
+            1664
           ],
           "symbol": "_ZN18dclutch_claims_sbf21rational_lifecycle_v229authenticate_complete_vacancy17h<hash>E"
         },

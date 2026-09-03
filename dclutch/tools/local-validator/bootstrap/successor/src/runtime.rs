@@ -494,10 +494,35 @@ pub(crate) fn found_through_open(
     verify_core_programdata(&mut rpc, &plan)?;
     verify_activation(&mut rpc, &plan)?;
 
+    // A spec that carries no market gets a fixture compiled from its own plan.
+    // `market: None` is loopback-only by construction -- `rpc_origin` above
+    // already refused every origin this process does not launch itself -- and
+    // it is the same two calls this file's `real_sbf_*` test makes, so the
+    // path was exercised before it was supported. See `SuccessorRunSpec::market`.
+    let compiled;
+    let market_input = match spec.market.as_ref() {
+        Some(input) => input,
+        None => {
+            let registry = pubkey(&plan.registry.program_id)?;
+            let finalized_slot = rpc.finalized_slot()?;
+            let root_rent =
+                rpc.minimum_balance(crate::direct_market::DIRECT_CAPABILITY_ROOT_BYTES_V1)?;
+            let direct =
+                crate::direct_market::DirectMarketCompilerOwnedV1::for_loopback_plan_fixture(
+                    registry,
+                    &plan,
+                    finalized_slot,
+                    root_rent,
+                )?;
+            compiled = crate::market::demo_market_input(registry, direct.compiler())?;
+            crate::market::validate_market_input(&compiled)?;
+            &compiled
+        }
+    };
     let market = crate::market::execute_found_market(
         &mut rpc,
         &plan,
-        &spec.market,
+        market_input,
         &authority,
         &forge,
         &mut transactions,
@@ -1702,7 +1727,11 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
     if spec.schema != RUN_SPEC_SCHEMA_V2 {
         return Err(Error::new("unsupported successor run-spec schema"));
     }
-    crate::market::validate_market_input(&spec.market)?;
+    // An ABSENT market is validated after it is compiled from the plan, which
+    // cannot happen here: the plan does not exist until the run builds it.
+    if let Some(market) = spec.market.as_ref() {
+        crate::market::validate_market_input(market)?;
+    }
     let _ = rpc_origin(&spec.rpc_url)?;
     validate_existing_canonical_file(Path::new(&spec.launcher), "launcher")?;
     for (label, input) in [
