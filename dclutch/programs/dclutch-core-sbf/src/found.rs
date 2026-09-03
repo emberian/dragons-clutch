@@ -54,11 +54,30 @@ struct References {
     realm_record_bumps: RecordPdaBumpsV1,
     /// The Product graph walk's own eight bumps, in the reader's order.
     ///
-    /// This founding walks three of the four records -- Product, ResultDomain
-    /// and Portfolio -- so the first six are derived here and the linked-basis
-    /// pair stays unrecorded. Core never sees that record: its content digest
-    /// is `hash` of the basis body, which arrives with the Trading frame and
-    /// not with the founding, so its reader searches exactly as it used to.
+    /// **HOW MANY OF THEM ARE FILLED DEPENDS ON WHICH PRODUCER RAN, AND THE
+    /// TWO DISAGREE BY DESIGN.** This field has exactly two authors and they
+    /// are handed different account frames:
+    ///
+    /// * [`authenticate_references`], the ordinary `Found`, has the
+    ///   linked-basis record in its frame and walks all four -- Product,
+    ///   ResultDomain, Portfolio, basis -- so all eight are derived.
+    /// * [`authenticate_projected_references`], the generic founding's
+    ///   projected `Found`, does not. That record's content digest is `hash` of
+    ///   the basis body, which arrives with the Trading frame and not with the
+    ///   founding; Core never sees the record, walks three, and the
+    ///   linked-basis pair stays unrecorded so its reader searches as it used
+    ///   to.
+    ///
+    /// So a Market's persisted tail says which route founded it, and anyone
+    /// PREDICTING that tail has to know the route. This paragraph used to
+    /// describe only the second producer, in the singular ("this founding
+    /// walks three of the four records"), which reads as a fact about the field
+    /// rather than about one of its authors -- and on 2026-09-03 the local
+    /// validator's supervisor predicted the four-record tail for both. That is
+    /// one byte of `CoreState`, it is hashed into the projected Realize
+    /// receipt, the receipt's digest is a coordinate of `FoundingIntentV5`, and
+    /// tier 1 refused its last transaction on `0x518D PermitBody` for as long
+    /// as the belief stood.
     product_record_bumps: [u8; PRODUCT_GRAPH_BUMP_COUNT],
     collateral_mint: [u8; 32],
     token_program: [u8; 32],

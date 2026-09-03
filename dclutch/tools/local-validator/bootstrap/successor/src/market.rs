@@ -9677,6 +9677,10 @@ fn derive_founding_outer_v1(
             coordinates.identity,
             records,
             core_product_graph_projection_v1(&plan.core, plan.checked_local_mutable_set.as_ref())?,
+            // This Market is founded by Core's PROJECTED Found, whose frame
+            // carries no linked-basis record. Naming the ordinary walk here is
+            // the defect this argument exists to make unspellable.
+            CoreProductGraphWalkV1::ProjectedFounding,
         )?,
     };
     let market_state_bytes = market_state
@@ -9927,12 +9931,52 @@ fn derive_founding_outer_v1(
 /// answers which build that is, and refuses at campaign start rather than here
 /// when it cannot. Assuming the answer is what cohort-14c paid 0.139 SOL and a
 /// live Found37 Market to disprove.
+/// Which of Core's two Product-graph walks founded the Market being predicted.
+///
+/// `found.rs` has two producers of `References::product_record_bumps` and they
+/// reach different numbers of records, because they are handed different
+/// account frames:
+///
+/// * `authenticate_references`, the ordinary `Found`, has the linked-basis
+///   record in its frame and walks all four -- Product, ResultDomain,
+///   Portfolio, basis -- so all eight nibbles are recorded.
+/// * `authenticate_projected_references`, the generic founding's projected
+///   `Found`, does NOT: the basis record's content digest arrives with the
+///   Trading frame, Core never sees the record, and its walk reaches three.
+///   The basis pair stays zero, which is `ProductGraphBumpsV1`'s encoding of
+///   "not mined; this reader searches".
+///
+/// MEASURED 2026-09-03, and this argument exists because of it. This driver
+/// predicted the four-record tail for BOTH, so the generic founding committed
+/// to a `sha256(CoreState)` whose last packed byte was `0x12` where Core wrote
+/// `0x00` -- one byte, in the pair Core cannot reach. It cost the whole
+/// campaign: the projected Realize receipt hashes that digest, the receipt's
+/// digest is a coordinate of the founding intent, and Claims refused the
+/// founding on `0x518D PermitBody`, "intent digest is not the request's
+/// founding_intent_digest", 195 transactions in, naming no field. Every one of
+/// the twenty-nine joins that route runs passed; the only intent coordinate
+/// nothing on that route can compare is the one that moved.
+///
+/// The reason the driver believed the wrong thing is worth keeping: its one
+/// cross-check, `authenticate_core_state_encoding_v1`, proves the prediction
+/// against the Found37 Market -- which is founded by the ORDINARY walk. It was
+/// a positive control for the wrong walk, and it passed on every run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CoreProductGraphWalkV1 {
+    /// `found::authenticate_references`: four records, eight nibbles.
+    OrdinaryFound,
+    /// `found::authenticate_projected_references`: three records, and the
+    /// linked-basis pair left unrecorded.
+    ProjectedFounding,
+}
+
 fn predicted_state_bumps_v1(
     core: Pubkey,
     registry: Pubkey,
     identity: MarketIdentity,
     records: &MarketRecords,
     projection: CoreProductGraphProjectionV1,
+    walk: CoreProductGraphWalkV1,
 ) -> Result<StateBumpsV1> {
     let market_bump =
         Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(identity).as_slices(), &core).1;
@@ -9986,6 +10030,16 @@ fn predicted_state_bumps_v1(
         }
         if let Some(cell) = product_graph.get_mut(slot * 2 + 1) {
             *cell = staging;
+        }
+    }
+    // The basis pair is slot 3 of the walk, which is bytes 6 and 7 of the bank.
+    // The projected founding's Core never derives it, so predicting it is
+    // predicting a byte Core does not write. Cleared here rather than skipped
+    // above, so the derivation that `require_predicted_bump_coordinates_v1`
+    // checks the founding's coordinates against still runs in full.
+    if walk == CoreProductGraphWalkV1::ProjectedFounding {
+        if let Some(pair) = product_graph.get_mut(6..8) {
+            pair.fill(0);
         }
     }
     let bumps = StateBumpsV1 {
@@ -10103,12 +10157,55 @@ fn authenticate_core_state_encoding_v1(
             "CoreState re-encoding did not reproduce the Market bytes the chain holds",
         ));
     }
-    let predicted = predicted_state_bumps_v1(core, registry, state.identity, records, projection)?;
+    let predicted = predicted_state_bumps_v1(
+        core,
+        registry,
+        state.identity,
+        records,
+        projection,
+        // This Market was created by Core's ORDINARY Found, which walks all
+        // four Product-graph records.
+        CoreProductGraphWalkV1::OrdinaryFound,
+    )?;
     if predicted != state.bumps {
         return Err(Error::new(format!(
             "the Market the chain holds carries bump tail {:?}, and this driver predicts \
              {predicted:?}; a founding projected from this driver's CoreState would commit to a \
              digest Core never writes",
+            state.bumps
+        )));
+    }
+    // AND THE WALK THE FOUNDING ACTUALLY USES, against the same chain bytes.
+    //
+    // The check above is a positive control for the ORDINARY walk only, and
+    // that is exactly how a four-record prediction rode into a three-record
+    // founding for as long as the tier has been red: it passed on every run
+    // while the tail the founding committed to was wrong in one byte. So the
+    // projected walk is stated too, and its expected value is derived from the
+    // tail the CHAIN holds -- Core's own bytes with the pair Core's projected
+    // frame cannot reach cleared -- rather than from a second call to the same
+    // predictor agreeing with the first.
+    let projected = predicted_state_bumps_v1(
+        core,
+        registry,
+        state.identity,
+        records,
+        projection,
+        CoreProductGraphWalkV1::ProjectedFounding,
+    )?;
+    let mut without_linked_basis = state.bumps.product_graph.bumps();
+    if let Some(pair) = without_linked_basis.get_mut(6..8) {
+        pair.fill(0);
+    }
+    let expected = StateBumpsV1 {
+        product_graph: ProductGraphBumpsV1::record(without_linked_basis),
+        ..state.bumps
+    };
+    if projected != expected {
+        return Err(Error::new(format!(
+            "the projected founding's bump tail is not the chain's tail without its linked-basis \
+             pair: the chain holds {:?}, so a projected founding must commit to {expected:?}, and \
+             this driver predicts {projected:?}",
             state.bumps
         )));
     }
@@ -15547,6 +15644,7 @@ mod tests {
                 fixture.coordinates.identity,
                 &fixture.records,
                 core_product_graph_projection_v1(pin, None).expect("a Core this driver can model"),
+                CoreProductGraphWalkV1::OrdinaryFound,
             )
             .expect("the fixture's derivations carry")
         };
@@ -15578,6 +15676,102 @@ mod tests {
             this_tree.realm_staging_record
         );
         assert_ne!(cohort_14, this_tree);
+    }
+
+    /// The two Core walks differ in exactly one packed byte, and that byte
+    /// moves the digest the founding commits to.
+    ///
+    /// This is the defect that kept tier 1 red, written as a test so it cannot
+    /// come back quietly. `found::authenticate_projected_references` walks
+    /// three Product-graph records; `found::authenticate_references` walks four.
+    /// Predicting the four-record tail for a projected founding moves ONE BYTE
+    /// of `CoreState` -- packed byte 3, the linked-basis pair -- and that byte
+    /// is hashed into the projected Realize receipt, whose digest is a
+    /// coordinate of `FoundingIntentV5`, which Claims compares as one SHA-256.
+    ///
+    /// So the assertions are: the two walks agree everywhere Core's frames
+    /// agree, they differ in exactly the basis pair, and a one-byte difference
+    /// in that pair is a different founding intent. The last one is what makes
+    /// the first two worth checking rather than trivia about a bump.
+    #[test]
+    fn the_projected_founding_walk_is_the_ordinary_walk_without_its_basis_pair() {
+        let fixture = split_founding_fixture_v1();
+        let core = pubkey(&fixture.plan.core.program_id).expect("core id");
+        let registry = pubkey(&fixture.plan.registry.program_id).expect("registry id");
+        let projection =
+            core_product_graph_projection_v1(&fixture.plan.core, None).expect("modelled Core");
+        let predict = |walk| {
+            predicted_state_bumps_v1(
+                core,
+                registry,
+                fixture.coordinates.identity,
+                &fixture.records,
+                projection,
+                walk,
+            )
+            .expect("the fixture's derivations carry")
+        };
+        let ordinary = predict(CoreProductGraphWalkV1::OrdinaryFound);
+        let projected = predict(CoreProductGraphWalkV1::ProjectedFounding);
+
+        assert_eq!(ordinary.market, projected.market);
+        assert_eq!(ordinary.realm_raw_record, projected.realm_raw_record);
+        assert_eq!(
+            ordinary.realm_staging_record,
+            projected.realm_staging_record
+        );
+
+        let ordinary_bumps = ordinary.product_graph.bumps();
+        let projected_bumps = projected.product_graph.bumps();
+        assert_eq!(
+            ordinary_bumps.get(..6),
+            projected_bumps.get(..6),
+            "the Product, ResultDomain and Portfolio pairs are in both Core frames",
+        );
+        assert_eq!(
+            projected_bumps.get(6..8),
+            Some([0_u8, 0].as_slice()),
+            "Core's projected Found never sees the linked-basis record, so its pair is unrecorded",
+        );
+        assert_ne!(
+            ordinary_bumps.get(6..8),
+            Some([0_u8, 0].as_slice()),
+            "the ordinary Found does see it; a fixture where it did not would make this vacuous",
+        );
+
+        // ONE BYTE, AND IT IS A DIFFERENT FOUNDING. The two tails are encoded
+        // into otherwise identical candidate states and hashed the way
+        // `derive_founding_outer_v1` hashes the one it commits to.
+        let state_with = |bumps| CoreState {
+            phase: Phase::Founding,
+            readiness: Readiness::Prepaid,
+            terminal_winner: 0,
+            identity: fixture.coordinates.identity,
+            outstanding_capabilities: 0,
+            principal_cap_sets: fixture.coordinates.principal_cap_sets,
+            rent_beneficiary: identity_of(fixture.coordinates.credit.to_bytes())
+                .expect("rent credit identity"),
+            terminal_receipt: None,
+            bumps,
+        };
+        let ordinary_bytes = state_with(ordinary).encode().expect("ordinary state");
+        let projected_bytes = state_with(projected).encode().expect("projected state");
+        let differing: Vec<usize> = ordinary_bytes
+            .iter()
+            .zip(projected_bytes.iter())
+            .enumerate()
+            .filter_map(|(index, (left, right))| (left != right).then_some(index))
+            .collect();
+        assert_eq!(
+            differing.len(),
+            1,
+            "exactly one CoreState byte separates the two walks, and it was {differing:?}",
+        );
+        assert_ne!(
+            Sha256::digest(ordinary_bytes).to_vec(),
+            Sha256::digest(projected_bytes).to_vec(),
+            "that byte is what the founding intent commits to three stages early",
+        );
     }
 
     #[test]

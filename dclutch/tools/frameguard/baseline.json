@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "e7a25b3b6822472f10828f7fa263f1658d370f1b",
+  "commit": "0b5e862ea180cf08fc9f0a103030c497abfd7866",
   "link_count": 12,
   "links": [
     {
@@ -2379,7 +2379,7 @@
         },
         {
           "frames_bytes": [
-            1152
+            1536
           ],
           "symbol": "_ZN16dclutch_core_sbf19generic_founding_v117digest_core_state17h<hash>E"
         },
@@ -5502,7 +5502,7 @@
         },
         {
           "frames_bytes": [
-            1984
+            2240
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v122consume_source_records17h<hash>E"
         },
@@ -5538,7 +5538,7 @@
         },
         {
           "frames_bytes": [
-            2240
+            2624
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v128boxed_consume_source_records17h<hash>E"
         },
