@@ -947,7 +947,7 @@ fn authenticate_permit_and_projection(
         )
     })?;
     drop(permit_data);
-    let intent = authenticate_permit_body(permit, request, request_digest)?;
+    let intent = authenticate_permit_body(permit, request)?;
     let permit_seeds = permit.seeds();
     let seed_slices = permit_seeds.as_slices();
     let (expected_permit, expected_bump) =
@@ -991,6 +991,7 @@ fn authenticate_permit_and_projection(
         projected_receipt_digest,
         core_digest,
     )?;
+    authenticate_permit_authorization(permit, intent, request, request_digest)?;
     // The Market's Custody namespace, and the only authenticated statement of
     // it this instruction has. It comes from the Core-owned permit's intent,
     // is cross-checked against the Lock receipt, the realization receipt, and
@@ -998,6 +999,66 @@ fn authenticate_permit_and_projection(
     // `context`. `authenticate_product_core` persists it; nothing downstream
     // may assume it.
     Ok(projected_context)
+}
+
+/// Join the permit's authorization against this intent and these request bytes.
+///
+/// SPLIT FROM `authenticate_permit_body`, AND RUN AFTER THE RECEIPTS, because
+/// these two comparisons bind whole bodies in single digests and therefore
+/// subsume every named conjunct anywhere in this route. While they ran first,
+/// the coordinate joins in `authenticate_permit_body` and the four
+/// intent-versus-receipt joins in `authenticate_projected_receipt` -- which are
+/// this route's ONLY reachable statement about the intent coordinates the
+/// request does not carry -- could never fire on the input they were written
+/// for. Measured 2026-09-03 on the tier-1 campaign: the founding refused
+/// `PermitBody`, "intent digest is not the request's founding_intent_digest",
+/// which says the intents differ and says nothing about which coordinate.
+///
+/// Nothing is ADMITTED that was not admitted before: every conjunct still runs
+/// and still runs before `allocate_all`, which is the first statement in this
+/// instruction that writes anything. What moved is that the general join is
+/// asked last, so a reader is told the specific thing first.
+#[inline(never)]
+fn authenticate_permit_authorization(
+    permit: SeriesFoundingPermitV1,
+    intent: FoundingIntentV5,
+    request: &ClaimsFoundingRequestV5,
+    request_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let body = ClaimsFoundingSbfErrorV5::PermitBody;
+    let intent_bytes = intent
+        .encode()
+        .map_err(|_| refuse(body, "the permit's own intent did not re-encode"))?;
+    let intent_digest = hash(&intent_bytes).to_bytes();
+    require(
+        intent_digest == request.founding_intent_digest(),
+        body,
+        "intent digest is not the request's founding_intent_digest",
+    )?;
+    permit
+        .join_for_intent_and_request(
+            intent,
+            Identity::new(intent_digest)
+                .map_err(|_| refuse(body, "the intent's own digest is the zero identity"))?,
+            Identity::new(request_digest)
+                .map_err(|_| refuse(body, "the founding request digest is the zero identity"))?,
+        )
+        .map_err(|mismatch| {
+            refuse(
+                body,
+                match mismatch {
+                    SeriesPermitJoinMismatchV1::Intent => {
+                        "the permit was issued for a different founding intent"
+                    }
+                    SeriesPermitJoinMismatchV1::IntentDigest => {
+                        "the permit records a different intent digest than its own intent hashes to"
+                    }
+                    SeriesPermitJoinMismatchV1::RequestDigest => {
+                        "the permit records a different request digest than these request bytes hash to; the request Core compiled is not the request this founding was handed"
+                    }
+                },
+            )
+        })
 }
 
 #[inline(never)]
@@ -1009,21 +1070,63 @@ fn authenticate_lock_receipt(
     lock_receipt_digest: [u8; 32],
     projected_receipt: &ProjectedCustodyReceiptV1,
 ) -> Result<(), ProgramError> {
-    if lock_receipt.market != request.market()
-        || lock_receipt.release_set != request.release_set()
-        || lock_receipt.context_digest != projected_context
-        || lock_receipt.source_vault != request.funding_source()
-        || lock_receipt.hoard_vault != request.hoard()
-        || lock_receipt.rent_credit != request.rent_credit()
-        || lock_receipt.request_digest != request.custody_request_digest()
-        || lock_receipt_digest != request.custody_receipt_digest()
-        || lock_receipt.amount != request.collateral_transferred()
-        || lock_receipt.resulting_revision.checked_add(1)
-            != Some(intent.projected_resulting_revision())
-        || projected_receipt.resulting_revision != intent.projected_resulting_revision()
-    {
-        return Err(ClaimsFoundingSbfErrorV5::Custody.into());
-    }
+    let body = ClaimsFoundingSbfErrorV5::Custody;
+    require(
+        lock_receipt.market == request.market(),
+        body,
+        "lock receipt market",
+    )?;
+    require(
+        lock_receipt.release_set == request.release_set(),
+        body,
+        "lock receipt release set",
+    )?;
+    require(
+        lock_receipt.context_digest == projected_context,
+        body,
+        "lock receipt custody context",
+    )?;
+    require(
+        lock_receipt.source_vault == request.funding_source(),
+        body,
+        "lock receipt source vault",
+    )?;
+    require(
+        lock_receipt.hoard_vault == request.hoard(),
+        body,
+        "lock receipt hoard vault",
+    )?;
+    require(
+        lock_receipt.rent_credit == request.rent_credit(),
+        body,
+        "lock receipt rent credit",
+    )?;
+    require(
+        lock_receipt.request_digest == request.custody_request_digest(),
+        body,
+        "lock receipt names another Lock request than the one the founding request carries",
+    )?;
+    require(
+        lock_receipt_digest == request.custody_receipt_digest(),
+        body,
+        "the Lock receipt handed here is not the one the founding request commits to",
+    )?;
+    require(
+        lock_receipt.amount == request.collateral_transferred(),
+        body,
+        "lock receipt collateral amount",
+    )?;
+    require(
+        lock_receipt.resulting_revision.checked_add(1)
+            == Some(intent.projected_resulting_revision()),
+        body,
+        "the Lock revision does not step to the intent's projected resulting revision",
+    )?;
+    require(
+        projected_receipt.resulting_revision == intent.projected_resulting_revision(),
+        body,
+        "the realization receipt's revision is not the intent's projected resulting revision",
+    )?;
     Ok(())
 }
 
@@ -1031,16 +1134,8 @@ fn authenticate_lock_receipt(
 fn authenticate_permit_body(
     permit: SeriesFoundingPermitV1,
     request: &ClaimsFoundingRequestV5,
-    request_digest: [u8; 32],
 ) -> Result<FoundingIntentV5, ProgramError> {
     let intent = permit.intent();
-    let intent_bytes = intent.encode().map_err(|_| {
-        refuse(
-            ClaimsFoundingSbfErrorV5::PermitBody,
-            "the permit's own intent did not re-encode",
-        )
-    })?;
-    let intent_digest = hash(&intent_bytes).to_bytes();
     // Eighteen named conjuncts, not one `||` chain, AND THEY RUN FIRST. Every
     // founding digest in the tree converges here: a byte moved anywhere
     // upstream -- a Core bump written where the projection had no field for
@@ -1146,42 +1241,6 @@ fn authenticate_permit_body(
         body,
         "pre-custody revision does not step to the intent's normal replay revision",
     )?;
-
-    // Then the intent as a whole, then the permit's authorization of the
-    // (intent, request) pair. `join_for_intent_and_request` is the codec's own
-    // join with its three causes kept rather than collapsed, so this names the
-    // conjunct without keeping a second copy of what the join admits.
-    require(
-        intent_digest == request.founding_intent_digest(),
-        body,
-        "intent digest is not the request's founding_intent_digest",
-    )?;
-    permit
-        .join_for_intent_and_request(
-            intent,
-            Identity::new(intent_digest).map_err(|_| {
-                refuse(body, "the intent's own digest is the zero identity")
-            })?,
-            Identity::new(request_digest).map_err(|_| {
-                refuse(body, "the founding request digest is the zero identity")
-            })?,
-        )
-        .map_err(|mismatch| {
-            refuse(
-                body,
-                match mismatch {
-                    SeriesPermitJoinMismatchV1::Intent => {
-                        "the permit was issued for a different founding intent"
-                    }
-                    SeriesPermitJoinMismatchV1::IntentDigest => {
-                        "the permit records a different intent digest than its own intent hashes to"
-                    }
-                    SeriesPermitJoinMismatchV1::RequestDigest => {
-                        "the permit records a different request digest than these request bytes hash to; the request Core compiled is not the request this founding was handed"
-                    }
-                },
-            )
-        })?;
     Ok(intent)
 }
 
@@ -1194,22 +1253,80 @@ fn authenticate_projected_receipt(
     projected_receipt_digest: [u8; 32],
     core_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
-    if !projected_receipt.realized
-        || projected_receipt.aborted_open
-        || projected_receipt.market != request.market()
-        || projected_receipt.release_set != request.release_set()
-        || projected_receipt.parent_capability_root != intent.parent_root().to_bytes()
-        || projected_receipt.context_digest != projected_context
-        || projected_receipt.hoard_vault != request.hoard()
-        || projected_receipt.amount != request.collateral_transferred()
-        || projected_receipt.request_digest != intent.projected_request_digest().to_bytes()
-        || projected_receipt.market_state_digest != core_digest
-        || projected_receipt.rent_credit != request.rent_credit()
-        || projected_receipt.resulting_revision != intent.projected_resulting_revision()
-        || projected_receipt_digest != intent.projected_receipt_digest().to_bytes()
-    {
-        return Err(ClaimsFoundingSbfErrorV5::Custody.into());
-    }
+    // Thirteen conjuncts, and four of them are the only reachable statement
+    // this route has about intent coordinates the founding REQUEST does not
+    // carry: the parent capability root, the projected Realize request digest,
+    // the projected resulting revision, and the projected Realize receipt
+    // digest. A `||` chain over them publishes one code for all thirteen, so a
+    // Core-compiled intent that disagrees with the host's by one of those four
+    // arrives as `Custody` and nothing else -- which is the same defect the
+    // permit body had one level up.
+    let body = ClaimsFoundingSbfErrorV5::Custody;
+    require(
+        projected_receipt.realized,
+        body,
+        "the realization receipt is not realized",
+    )?;
+    require(
+        !projected_receipt.aborted_open,
+        body,
+        "the realization receipt aborted its open",
+    )?;
+    require(
+        projected_receipt.market == request.market(),
+        body,
+        "realization receipt market",
+    )?;
+    require(
+        projected_receipt.release_set == request.release_set(),
+        body,
+        "realization receipt release set",
+    )?;
+    require(
+        projected_receipt.parent_capability_root == intent.parent_root().to_bytes(),
+        body,
+        "the intent's parent capability root is not the realization receipt's",
+    )?;
+    require(
+        projected_receipt.context_digest == projected_context,
+        body,
+        "realization receipt custody context",
+    )?;
+    require(
+        projected_receipt.hoard_vault == request.hoard(),
+        body,
+        "realization receipt hoard vault",
+    )?;
+    require(
+        projected_receipt.amount == request.collateral_transferred(),
+        body,
+        "realization receipt collateral amount",
+    )?;
+    require(
+        projected_receipt.request_digest == intent.projected_request_digest().to_bytes(),
+        body,
+        "the intent's projected Realize request digest is not the receipt's",
+    )?;
+    require(
+        projected_receipt.market_state_digest == core_digest,
+        body,
+        "the realization receipt names a Market state digest that is not this Market account's",
+    )?;
+    require(
+        projected_receipt.rent_credit == request.rent_credit(),
+        body,
+        "realization receipt rent credit",
+    )?;
+    require(
+        projected_receipt.resulting_revision == intent.projected_resulting_revision(),
+        body,
+        "the intent's projected resulting revision is not the receipt's",
+    )?;
+    require(
+        projected_receipt_digest == intent.projected_receipt_digest().to_bytes(),
+        body,
+        "the intent's projected Realize receipt digest is not this receipt's",
+    )?;
     Ok(())
 }
 
@@ -1966,8 +2083,9 @@ mod tests {
             fixture();
         let request_bytes = request.to_bytes();
         let request_digest = hash(&request_bytes).to_bytes();
-        let intent = authenticate_permit_body(permit, &request, request_digest)
-            .expect("permit binds request");
+        let intent = authenticate_permit_body(permit, &request).expect("permit binds request");
+        authenticate_permit_authorization(permit, intent, &request, request_digest)
+            .expect("permit authorizes this intent and request");
         let context = hashv(&[
             PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
             intent.ticket_context().to_bytes().as_slice(),
@@ -2005,12 +2123,15 @@ mod tests {
             )
             .expect("canonical reconstruction");
         assert_eq!(reconstructed, request);
-        authenticate_permit_body(
+        let reconstructed_intent = authenticate_permit_body(permit, &reconstructed)
+            .expect("permit binds reconstructed request");
+        authenticate_permit_authorization(
             permit,
+            reconstructed_intent,
             &reconstructed,
             hash(&reconstructed.to_bytes()).to_bytes(),
         )
-        .expect("permit binds reconstructed request");
+        .expect("permit authorizes the reconstructed request");
         let short = instruction
             .get(..instruction.len().saturating_sub(1))
             .expect("short instruction slice");
@@ -2031,7 +2152,7 @@ mod tests {
         let hostile_request =
             ClaimsFoundingRequestV5::new(hostile_input).expect("same-shape hostile request");
         assert_eq!(
-            authenticate_permit_body(permit, &hostile_request, request_digest).unwrap_err(),
+            authenticate_permit_body(permit, &hostile_request).unwrap_err(),
             ProgramError::Custom(ClaimsFoundingSbfErrorV5::PermitBody as u32),
         );
 
@@ -2045,21 +2166,29 @@ mod tests {
         let uncovered_request =
             ClaimsFoundingRequestV5::new(uncovered_input).expect("same-shape hostile request");
         let uncovered_digest = hash(&uncovered_request.to_bytes()).to_bytes();
+        let intent = authenticate_permit_body(permit, &uncovered_request)
+            .expect("no named coordinate join covers claim_count");
         assert_eq!(
-            authenticate_permit_body(permit, &uncovered_request, uncovered_digest).unwrap_err(),
+            authenticate_permit_authorization(permit, intent, &uncovered_request, uncovered_digest)
+                .unwrap_err(),
             ProgramError::Custom(ClaimsFoundingSbfErrorV5::PermitBody as u32),
         );
 
-        let intent = authenticate_permit_body(permit, &request, request_digest)
-            .expect("permit binds request");
+        let intent = authenticate_permit_body(permit, &request).expect("permit binds request");
+        authenticate_permit_authorization(permit, intent, &request, request_digest)
+            .expect("permit authorizes this intent and request");
         let context = hashv(&[
             PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
             intent.ticket_context().to_bytes().as_slice(),
         ])
         .to_bytes();
+        // Both receipt hostiles reach their subject and now name the code they
+        // find there. `parent_capability_root` is one of the four coordinates
+        // the founding request cannot carry, so this join is the only thing in
+        // the route that can refuse it at all.
         let mut hostile_projected = projected;
         hostile_projected.parent_capability_root = id(98);
-        assert!(
+        assert_eq!(
             authenticate_projected_receipt(
                 intent,
                 &request,
@@ -2068,11 +2197,12 @@ mod tests {
                 projected_digest,
                 core_digest,
             )
-            .is_err()
+            .unwrap_err(),
+            ProgramError::Custom(ClaimsFoundingSbfErrorV5::Custody as u32),
         );
         let mut hostile_lock = lock;
         hostile_lock.source_vault = id(97);
-        assert!(
+        assert_eq!(
             authenticate_lock_receipt(
                 intent,
                 &request,
@@ -2081,7 +2211,8 @@ mod tests {
                 lock_digest,
                 &projected,
             )
-            .is_err()
+            .unwrap_err(),
+            ProgramError::Custom(ClaimsFoundingSbfErrorV5::Custody as u32),
         );
         let mut obsolete = request.to_bytes();
         obsolete[..8]
