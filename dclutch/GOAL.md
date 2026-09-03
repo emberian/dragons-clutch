@@ -3942,3 +3942,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   ~/src/dregg-posters/2026-09-03-typst; Playwright now lives at ~/tools/playwright; the cut's public commits carry the live
   subjects; the wrapper's red CI has a lane.
 - Cuts: `acf5a0c14`.
+
+### 2026-09-03 11:30 EDT — the docket for ember
+- The rulings context (40 items, every fact cited) is at the session scratchpad's RULINGS_CONTEXT.md and the decision
+  brief for ember is published as an artifact ("dClutch Rulings Docket"): D1 economics (five knobs at provable defaults),
+  D2 the failure selector pays the founder, D3 C-15 already ruled out at 5a371810 with three authority docs stale (a tidy
+  lane; a decision record 0018), D4 mainnet's place, D5 recovery ontology, D6 decision 0003's output page, D7 the product
+  list (Series A/B, curvature, Custody carrying the accelerator's candidate, width-2 band, split/merge, materialize, K=2,
+  the two `dclutch` binaries, provider breadth); M1–M5 the orchestrator's rulings with their cost of reversal. Swarmcycle 3:
+  cohort-15 as the spine (every landed fix + the 17 never-executed routes + retirement on devnet), eight spokes (Series,
+  Structured K>3, economics after D1, cold machine, release readiness, an EARLY C-16 rehearsal, instruments, the failure
+  escrow if D2 takes it), the gates as convergence.
+- An API 529 storm killed four lanes mid-turn; RELAY-C, PROGRAMS and CI-WRAPPER resumed in place; the poster fork (a
+  700k-token fork of the coordinator — the wrong shape, recorded in memory) was not resumed; a fresh Fable maker carries
+  the orchestrator's own POSTER_BRIEF.md for ~/src/dregg-posters/2026-09-03-typst. Playwright lives at ~/tools/playwright.
+- Cuts: `fd78d9eba`.
