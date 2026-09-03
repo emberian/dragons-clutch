@@ -113,7 +113,9 @@ if [ -z "$MSGFILE" ]; then
   # at <sha>"), so the range this cut carries is recoverable from the public
   # history alone; the subject and body are the live commits' own subjects,
   # so the public log reads like the work rather than like a counter.
-  PREV_LIVE="$(git -C "$PUB" log -1 --format=%B "$BASE" \
+  # Search the last twenty public commits, not only the tip: a workflow merge
+  # or a hand commit on the wrapper's main carries no marker of its own.
+  PREV_LIVE="$(git -C "$PUB" log -20 --format=%B "$BASE" \
     | sed -n 's/.*live tree at \([0-9a-f]\{40\}\).*/\1/p' | head -1)"
   if [ -n "$PREV_LIVE" ] && git -C "$LIVE" cat-file -e "$PREV_LIVE^{commit}" 2>/dev/null; then
     RANGE="$PREV_LIVE..$LIVE_COMMIT"
