@@ -33,7 +33,6 @@ use dclutch_product_payoff_v2_codec::price_gate_v1::{
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -51,7 +50,7 @@ use dclutch_token_svm::{
 
 use crate::narrow_fixture::{
     NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, NarrowRecordV2,
-    NarrowSplineBasisInputV3, compile_narrow_fixture_v3,
+    NarrowSplineBasisInputV3, compile_narrow_fixture_v3, finalized,
 };
 
 /// Program identities, matched to the ProgramTest campaign so a refusal seen in
@@ -209,22 +208,6 @@ pub struct Staged {
     pub sleeper_owner: Pubkey,
     /// Exact outstanding shard atoms carried into compaction.
     pub sleeper_shards: u64,
-}
-
-fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
-    let digest = hash(&bytes).to_bytes();
-    NarrowRecordV2 {
-        owner,
-        schema,
-        digest,
-        raw: Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner).0,
-        staging: Pubkey::find_program_address(
-            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
-            &owner,
-        )
-        .0,
-        bytes,
-    }
 }
 
 fn selection_config_digest(terms: &NarrowRecordV2) -> [u8; 32] {

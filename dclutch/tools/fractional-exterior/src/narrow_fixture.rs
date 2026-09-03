@@ -663,7 +663,11 @@ fn compile_product(
     Ok((product, domain, portfolio))
 }
 
-fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
+/// Finalize a raw body into the record the fixture and the genesis staging
+/// both plant: both PDAs and, since `b312ce3c4`, the bumps those derivations
+/// found. One producer, because `stage.rs` carried a second copy that the
+/// widening did not reach and the crate stopped compiling.
+pub(crate) fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
     let digest = hash(&bytes).to_bytes();
     let (raw, raw_bump) =
         Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner);
