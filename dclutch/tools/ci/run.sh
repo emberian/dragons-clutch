@@ -998,11 +998,21 @@ tier_journey() {
   # caught up with the dependencies 8a64178a added, and by 2026-09-02 it did not
   # build at all. Nothing was red, because nothing built it.
   #
-  # DISCOVERED, NEVER LISTED. `find` locates every Cargo.toml under
-  # tools/gauntlet and tools/local-validator that carries its own `[workspace]`
-  # table, minus the journey checked above. A workspace added tomorrow is
-  # checked tomorrow; a hardcoded row here would be this file's signature
-  # defect, a value duplicated instead of read.
+  # DISCOVERED, NEVER LISTED. `find` locates every Cargo.toml under `tools`
+  # that carries its own `[workspace]` table, minus the journey checked above.
+  # A workspace added tomorrow is checked tomorrow; a hardcoded row here would
+  # be this file's signature defect, a value duplicated instead of read.
+  #
+  # The root is `tools`, and it was `tools/gauntlet tools/local-validator`
+  # until 2026-09-03. Two named roots is a list wearing a `find`'s clothes:
+  # tools/fractional-exterior is a workspace under neither, and it stopped
+  # compiling at b312ce3c4 -- a struct one edge down gained two fields and one
+  # of its two record producers was not updated -- and stayed red to nobody for
+  # twelve hours. Seven workspaces join the sweep with this root
+  # (dclutch-cli, devnet-scenarios, direct-translation-validator,
+  # fractional-exterior, lineage-loopback, relayer, ticket-board); all seven
+  # check clean at 65c4026d4, so widening the root costs this tier nothing it
+  # was not already owed.
   #
   # `cargo check`, not `cargo test`: this is the compiles-at-all gate the
   # journey row already is, extended to its siblings. What each campaign
@@ -1033,7 +1043,7 @@ tier_journey() {
         code=1
       fi
     fi
-  done < <(cd "$root" && find tools/gauntlet tools/local-validator \
+  done < <(cd "$root" && find tools \
     -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort |
     while IFS= read -r candidate; do
       grep -q '^\[workspace\]' "$candidate" && printf '%s\n' "$candidate"
