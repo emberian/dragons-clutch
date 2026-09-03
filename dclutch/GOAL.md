@@ -3763,3 +3763,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   crate suites. → DEALER **`(spawned)`**: the evaluator's bump bank (three consecutive commits), the strategy walk's mined
   tail, the reader-less span bank's deletion.
 - Cuts: `7e158a1b2`, `26424a852`.
+
+### 2026-09-03 04:00 EDT — C-06 CLOSES: THE DEALER CAMPAIGN IS 31 OF 31
+- DEALER (`3c42f0ece` the equity evaluator's eleven searches and the planner's four hinted through the request's four
+  reserved bytes; `40427e0f1` **the witness section nothing read deleted, Custody's common frame legible, the campaign
+  31/31**; note `40c60d6f7` — "the ELF digest was 45,000 of it"; rows `eb0f16ada`, `6fe2e8ada`). LP Open → hostile Add →
+  honest Add → LP Open #2 → Add #2 → the selector-9 trade → its delivery → the partial equity Remove → both LP final Removes:
+  every action of the Dealer family executes and commits on real ELFs. The lane's turn was cut by a transient API 403 after
+  landing; resumed in place for its report.
+- Cuts: `4c6123e95`, `8607dc10b`, `53d24df8e`.
