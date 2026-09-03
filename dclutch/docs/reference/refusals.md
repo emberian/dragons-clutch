@@ -23,7 +23,7 @@ from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**74 of 350** codes have been observed refusing a real
+**75 of 350** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -48,7 +48,7 @@ ledgers are ever checked in, this column should read them instead and gain the
 citation.
 
 It also counts only codes credited to a program's own taxonomy. A further
-15 bindings record a refusal the chain really did report but which is
+16 bindings record a refusal the chain really did report but which is
 credited to no enumerated code -- a child's code propagated verbatim through the
 frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
@@ -79,7 +79,7 @@ The 22 campaigns contributing:
 | `0x5005` | `ClaimsSbfError::Economic` | Claims economic transition refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:221` |
 | `0x5006` | `ClaimsSbfError::CustodyRequired` | This action requires the canonical Custody child composition. | -- | `programs/dclutch-claims-sbf/src/lib.rs:223` |
 | `0x5007` | `ClaimsSbfError::Receipt` | Receipt construction or post-state commitment failed. | -- | `programs/dclutch-claims-sbf/src/lib.rs:225` |
-| `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:227` |
+| `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | claims-family-programtest; claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:227` |
 | `0x5009` | `ClaimsSbfError::Token` | Token-2022 mint/account profile or CPI refused. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:229` |
 | `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-claims-sbf/src/lib.rs:237` |
 | `0x500B` | `ClaimsSbfError::SelectionConfig` | The execution terms disagree with the Market-selected config. | -- | `programs/dclutch-claims-sbf/src/lib.rs:248` |
@@ -96,7 +96,7 @@ The 22 campaigns contributing:
 | `0x5145` | `ProtocolPositionSbfErrorV2::Position` | Position/admission PDA vacancy, shape, owner, or balance refused. | claims-family-programtest | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:121` |
 | `0x5146` | `ProtocolPositionSbfErrorV2::Rent` | Prepaid rent or authenticated RentCredit facts refused. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:123` |
 | `0x5147` | `ProtocolPositionSbfErrorV2::Allocation` | System allocation or assignment refused. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:125` |
-| `0x5148` | `ProtocolPositionSbfErrorV2::Admission` | Persisted admission did not join the requested terminal close. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:127` |
+| `0x5148` | `ProtocolPositionSbfErrorV2::Admission` | Persisted admission did not join the requested terminal close. | claims-family-programtest | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:127` |
 | `0x5149` | `ProtocolPositionSbfErrorV2::Commit` | Complete candidate state or rent-credit reclamation did not commit. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:129` |
 | `0x514A` | `ProtocolPositionSbfErrorV2::Receipt` | Immediate receipt construction or poststate commitment refused. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:131` |
 | `0x5160` | `AffineBatchSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical public ABI. | -- | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:102` |

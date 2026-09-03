@@ -20,9 +20,9 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | --- | ---: | --- |
 | **devnet** | **22** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
 | **local validator** | 29 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
-| **ProgramTest only** | 52 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
-| **blocked** | 44 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
-| **never-executed** | 15 | no campaign and no reason recorded |
+| **ProgramTest only** | 56 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
+| **blocked** | 45 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
+| **never-executed** | 10 | no campaign and no reason recorded |
 
 **A real Agave runtime drives 51 of the
 162.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
@@ -74,7 +74,7 @@ all fails this generator rather than rendering as `unknown`.
 | --- | --- | --- | ---: | --- | --- |
 | `claims-affine-batch-programtest` | program-test | yes | 2 | **none** -- driven by hand | `de722348146d272e` |
 | `claims-claim-check-programtest` | program-test | yes | 7 | `tools/gauntlet/claims-claim-check/run-claims-claim-check.sh` | `5c905e34ad2659bd` |
-| `claims-family-programtest` | program-test | yes | 3 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `a224d7dd73b5c7ec` |
+| `claims-family-programtest` | program-test | yes | 7 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `1d5d6a755f54166f` |
 | `custody-family-programtest` | program-test | yes | 2 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `df26e8f1354d48f2` |
 | `claims-fractional-atomic-programtest` | program-test | yes | 6 | `tools/gauntlet/claims-fractional-atomic/run-fractional-atomic.sh` | `583038631ca2aea1` |
 | `claims-fractional-signed-delta-programtest` | program-test | yes | 2 | **none** -- driven by hand | `17991f1458ea334a` |
@@ -88,7 +88,7 @@ all fails this generator rather than rendering as `unknown`.
 | `relayed-vertical` | local-validator | yes | 5 | `tools/gauntlet/relayed-vertical/run-relayed-vertical.sh` | `7602376cb7809e06` |
 | `resolution-core-v3-programtest` | program-test | yes | 12 | `tools/gauntlet/resolution-core-v3/run-resolution-core-v3.sh` | `3fe2abd2f49064e3` |
 | `resolution-pre-market-funding-programtest` | program-test | yes | 3 | `tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.sh` | `8d301707583822e4` |
-| `resolution-relayed-programtest` | program-test | yes | 8 | `tools/gauntlet/resolution-relayed/run-resolution-relayed.sh` | `40373a66bb1d2fc6` |
+| `resolution-relayed-programtest` | program-test | yes | 8 | `tools/gauntlet/resolution-relayed/run-resolution-relayed.sh` | `582bfeddcc7b7613` |
 | `resolution-sponsored-programtest` | program-test | yes | 7 | `tools/gauntlet/resolution-sponsored/run-resolution-sponsored.sh` | `161ab1a8e200521a` |
 | `retirement-checkpoint-programtest` | program-test | yes | 7 | `tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh` | `516e9705ccd6aaff` |
 | `retirement-replay-handoff-programtest` | program-test | yes | 2 | `tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh` | `950b33db1915d0c0` |
@@ -154,18 +154,18 @@ route now executes.
 | `claims/fractional_atomic_v3::process` | blocked | blocked by rule `claims/fractional_atomic_v3::process` | `tools/gauntlet/blocked.json` |
 | `claims/fractional_claim_check_v1::process_fractional_compaction` | program-test | `claims-fractional-atomic-programtest` | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/fractional_claim_check_v1::process_fractional_redemption` | program-test | `claims-fractional-atomic-programtest` | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
-| `claims/fractional_retirement_v3::process` | never-executed | no campaign, no reason recorded | -- |
+| `claims/fractional_retirement_v3::process` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/market_closure_v1::process` | blocked | blocked by rule `claims/market_closure_v1::process` | `tools/gauntlet/blocked.json` |
 | `claims/market_closure_v1::process_checkpoint_handoff` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
-| `claims/process_begin#Begin` | never-executed | no campaign, no reason recorded | -- |
-| `claims/process_coordinate#RetireCoordinate` | never-executed | no campaign, no reason recorded | -- |
+| `claims/process_begin#Begin` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
+| `claims/process_coordinate#RetireCoordinate` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/process_core_effect` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
 | `claims/process_core_effect#(CoreEffectActionV1::InitializeClaims,ClaimsAction::InitializeCompleteSet)` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
 | `claims/process_core_effect#(CoreEffectActionV1::RedeemClaims,ClaimsAction::RedeemNativeTerminal)` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
 | `claims/process_core_effect#(CoreEffectActionV1::SplitClaims,ClaimsAction::MintCompleteSet)` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
 | `claims/process_core_effect#RedeemClaims` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
 | `claims/process_core_effect#SplitClaims` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
-| `claims/process_finish#Finish` | never-executed | no campaign, no reason recorded | -- |
+| `claims/process_finish#Finish` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/process_instruction` | devnet | cohort 13 `DCLCCR01` slot 492,151,322; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLCCR01` slot 492,550,558; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; also bound by `claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `structured-v2-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json` |
 | `claims/process_open#WholeUnwrap` | blocked | blocked by rule `claims/process_open#WholeUnwrap` | `tools/gauntlet/blocked.json` |
 | `claims/process_terminal#TerminalZeroBurn` | blocked | blocked by rule `claims/process_terminal#TerminalZeroBurn` | `tools/gauntlet/blocked.json` |
@@ -173,7 +173,7 @@ route now executes.
 | `claims/rational_lifecycle_v2::process` | program-test | `claims-rational-lifecycle-programtest` | `tools/gauntlet/claims-rational-lifecycle/bindings.json` |
 | `claims/rational_representation_v2::process` | program-test | `claims-rational-representation-v2-programtest`, `structured-v2-programtest` | `tools/gauntlet/claims-rational-representation-v2/bindings.json`<br>`tools/gauntlet/structured/bindings.json` |
 | `claims/rational_representation_v2::process_replay_close` | program-test | `claims-rational-representation-v2-programtest` | `tools/gauntlet/claims-rational-representation-v2/bindings.json` |
-| `claims/series_founding_transport_v1::process` | never-executed | no campaign, no reason recorded | -- |
+| `claims/series_founding_transport_v1::process` | blocked | blocked by rule `claims/series_founding_transport_v1::process` | `tools/gauntlet/blocked.json` |
 | `claims/signed_delta_v3::process` | program-test | `claims-fractional-signed-delta-programtest` | `tools/gauntlet/claims-fractional-signed-delta/bindings.json` |
 | `claims/sparse_native_transfer_v1::process` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/terminal_settlement_v3::process` | devnet | cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; also bound by `claims-claim-check-programtest`, `claims-rational-representation-v2-programtest` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json` |

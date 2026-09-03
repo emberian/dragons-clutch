@@ -4071,3 +4071,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   StatisticSpecV1 layout, the relayed route's statistic slot, the browser fetching the record), HINTS-2 **`a45a44acc9ce739e3`**
   (the nine builders still writing a zero bump block; the registered hand fixture compared; slot names from one owner).
 - Cuts: `b8dd2fd0b`, `0e0340c2c`.
+- STRUCTURED closed (`a8bf28665` … `4d3c0fe5f`, seven commits): **only K = 3 exists on the shipping route — the first K that
+  does not fit is 4, and the wall is the PACKET on common Hot (1,269 against 1,232, over by 37)**, derived from two frames
+  the campaign builds (slope 4 + (K−1)·72 measured); not the RequestProfile (admits 6), not the Claims-direct frame, not the
+  1.4 M ceiling (max 770,422 CU at K=3 — unreachable by construction on this route). The landing's "wall gone at K=6" derived
+  its ceiling from the test caller's wrapper, which no wallet sends; the full-width Hot frame had no packet assertion at all —
+  it is an equality now and `STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2 = 3` is the asserted ceiling, not a placeholder. K=3 CU
+  cheaper than the landing (688,318 / 605,888 / 770,422). Shard-Mint hostiles: duplicated → Identity at 202k (reaches its
+  subject), missing → Accounts at 56k (the width gate). **The four Claims retirement routes are driven on real ELFs** —
+  sixteen binding rows had been missing (five pre-existing unbound labels made the runner exit non-zero, so the register
+  showed nothing); `series_founding_transport_v1` blocked with reason. **never-executed 15 → 10**, exercised 101 → 105.
+  Owed: decision 0011 §3b and the docket's D7 line "K=3 with the packet wall gone" are WRONG — the packet wall bounds K at 3
+  on the shipping route (amendment to 0011 owed); the wrong-authority shard hostile needs a fixture knob.
+- Cuts: `ed9d07a03`, `2ad588366`, `ced32f083`.

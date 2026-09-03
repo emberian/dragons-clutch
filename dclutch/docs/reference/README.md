@@ -27,7 +27,7 @@ these pages always match the source they describe. Regenerate with
   widths and offsets, account tables.
 
 Current totals: **12 programs**, **162 routes**
-(101 exercised by the test campaigns), **350 refusal
+(105 exercised by the test campaigns), **350 refusal
 codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)
