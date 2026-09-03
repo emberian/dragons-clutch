@@ -1986,3 +1986,204 @@ every live route, so this is a wire shape change worth under a hundred CU.
   planted body after the round trip, when its revision advances once per
   SignedDeltaV3 commit. It now re-encodes the planted Position at the terminal
   revision and compares every byte.
+
+## Ninth addendum, 2026-09-03: the 23,694 was the DECODER, not the identity check; the campaign mined no bump hints at all; and the worst draw is now 74,637
+
+*Measured at `98113142b` (the control, in this lane's own worktree), `5709672aa`
+(the decoder repair) and `82465e00b` (the mined hints), tree root
+`/Users/ember/dev/dclutch`, real SBF ELFs built in that worktree with its own
+target directory, zero SBF stack-frame-overwrite diagnostics on every link
+built in this lane, including both frameguard captures' twelve. Eight filtered
+runs per column. The second comparison is
+the first one in this note taken **within one ELF set**, because its change is
+host-side and rebuilds nothing.*
+
+### The eighth addendum named the wrong term, and two checkpoints say so
+
+It reported `cf-accounts` — 23,694 CU twice per partial equity Remove — as
+`authenticate_activation_cache_identity_v1`, and called it "the largest single
+decomposed term in this note that nobody has tried to cut". Splitting it:
+
+| span | CU | what it holds |
+|---|---:|---|
+| `cf-cache-decode` | **21,984** | `require_cache_account`, the borrow, and `ActivatedExecutionReleaseSetViewV1::decode` |
+| `cf-cache-identity` | 3,366 | the identity conjunction itself |
+| `cf-accounts` | 258 | three account lookups and one key equality |
+
+The identity check is 3,366 and was never the cost. **Ninety-three per cent of
+that span is one call to `decode`.**
+
+### And the ruling had already been spent, so the enumeration comes out empty
+
+`9b5de611e` gave this route the Claims shape from `0aa70478e` exactly: ONE
+borrow and ONE decode per invocation, every role read out of that view. There
+was no second re-authentication of the cache left to drop. Stated in full, since
+a unit sent to apply a ruling owes the enumeration even when the answer is none:
+
+* the seeds pin the release set, the Market, the caller's execution role, the
+  replay context and `hash(request_bytes)`, with the SIGNER bit required at
+  coordinate 0 by `require_account_count`'s privilege scan and the address
+  reproduced in `authenticate_common_frame_tail`;
+* **which program** holds `caller_role` in that release set is not among them —
+  the seeds name a role, not a key;
+* **the cache's own coordinate** is not among them — the seeds name a release
+  set, the ACCOUNT comes from the transaction, and 3,366 CU is the whole of what
+  binds the two;
+* **the cache's completeness** is not among them. A Registry-owned cache
+  legitimately holds a strict subset of its five roles between activation
+  transactions (`ActivationCacheProgressV1`), and it is the full five-role
+  decode that makes a partial one inert for every reader. A signature over a
+  release-set id cannot carry that.
+
+So nothing came out under the ruling, and what was left was not a ruling
+question at all.
+
+### Twenty-five `decode_role` calls for five values
+
+`ActivatedExecutionReleaseSetViewV1::validate_projection` ran
+`release_set_projection` — five decodes — then a ten-pair aliasing scan that
+decoded BOTH SIDES INSIDE THE LOOP: twenty more, each re-running
+`ArtifactReleaseIdV1::decode` and `ArtifactReleaseV1::decode` over bytes an
+earlier iteration had already accepted. This is the sole hostile decoder for the
+activation cache and it is reached about six times per top-level Direct
+transaction.
+
+It now decodes each role once, keeps the five 64-byte projection bindings, and
+tests the pairs over those. The pair test is `binding equal ⟹ the whole
+ActivatedRoleV1 equal`, and a binding is decided by the two identities the loop
+already holds — so a pair whose bindings differ could never raise
+`AliasedRoleActivationMismatch`, and decoding it to find that out was dead work.
+All five roles are still decoded before the first pair is examined, and a
+re-decode of bytes that already decoded cannot fail, so no refusal moves.
+
+`cf-cache-decode` contains no `create_program_address` at all — owner, width,
+borrow and byte validation only — so unlike almost every figure in this note it
+is comparable ACROSS ELF sets:
+
+| span | control | `5709672aa` | |
+|---|---:|---:|---|
+| `cf-cache-decode` | 21,984 | **8,464** | one activation-cache decode |
+| `sd-releases` (Claims) | 26,334 | 14,313 | its decode, identity and three roles |
+| `acc-activation` (Trading) | 29,235 | 17,214 | its decode and identity |
+
+12,021 in Claims and 12,021 in Trading, to the digit, from the same call; twice
+per Remove in Custody. About 51,000 CU across the transaction.
+
+**The borrowed view's aliasing scan had no test.**
+`aliased_roles_must_share_one_complete_activation` has always pinned the OWNED
+decoder; nothing named the view, which is the decoder every adapter runs.
+`the_borrowed_view_refuses_an_aliased_role_that_disagrees_in_one_byte` now does,
+with both arms — an aliased pair agreeing in every field is a LEGAL cache and
+must decode; one flipped deployment-slot byte must refuse — and it was proved
+red before it was trusted green.
+
+### The campaign was the last producer in the tree that mined no bump hints
+
+`HotBumpHintsV1` has been read by Trading, the Dealer accelerator and Custody
+since it was added, and `dclutch-operator`'s producers fill it — `direct_inline_v3`
+four slots, `dealer_lp_hot_v4` three. **`dclutch-chain-bundle-builder`, which is
+what every figure in this note was measured over, filled none.** Every packet the
+campaign has ever emitted carried the all-zero block and every reader walked down
+from 255. That is the pre-hint route, not a neutral default — the same defect
+`3c42f0ece` repaired one account over when the campaign left
+`liability_basis_market_bump_v2` zero.
+
+Three slots now come out of the fixed corpus the builder already binds:
+`market`, `root`, and `child_relay[1]` (Custody's transfer authority, whose
+seeds are the Market and the release set — one slot correct for both legs).
+`child_relay[0]` needs the child projection this builder does not do;
+`child_caller` cannot be mined off chain at all; `lifecycle` is not projected
+here. A zero slot is correct and merely slower.
+
+### Where the Remove is now
+
+| action | worst headroom, `98113142b` | `5709672aa` | `82465e00b` |
+|---|---:|---:|---:|
+| partial equity Remove | 20,024 | 64,175 | **74,637** |
+| first LP final Remove | 3,562, and **one overrun** | 43,209 | **76,165** |
+| second LP final Remove | 14,072 | 61,217 | **74,647** |
+
+`accepted` is 31 passed / 0 failed on three consecutive full runs at each of the
+two later columns.
+
+**The control is not eight of eight, and that is this note's caveat about itself
+coming true.** On the ELF set built at `98113142b` in this lane's worktree, run
+3 of 8 died at `exceeded CUs meter` on the first LP final Remove, with the
+partial Remove ahead of it finishing on **8 CU** of headroom. The eighth
+addendum said "the Remove commits" was a claim about one artifact set and eight
+payer draws; the next build redrew every depth, and this is what that looks like.
+
+### What remains draw, priced
+
+Per-span spread over the eight runs at `82465e00b`, which is where the worst case
+now comes from:
+
+| term | spread | can it be mined? |
+|---|---:|---|
+| `cx-accelerator-frame` + `acc-caller-authority` | 7,500 + 7,500 | Trading's half yes, from the bump `derive_admitted_authorities_v1` already computes and discards — but `HotBumpHintsV1` has no slot for the accelerator's own caller authority, and its slots are ROLES, not free space. The accelerator's half is a process-local relay Trading could carry, and the witness's reserved word at offset 16 is now unowned. |
+| `cx-accelerator-returned` | 9,000 | not located |
+| `cu-transfer-validated`, twice | 6,000 + 6,000 | `validate_vault_key` searches for the source and destination vaults. **No carrier**: `CustodyBumpRelayV1` is three bytes and all three are spoken for, and a token account cannot carry its own bump. |
+| `cu-common-frame`, twice | 4,500 + 4,500 | the replay cursor — needs the child projection the campaign builder does not do |
+| `pf-invocation-preflighted` | 6,000 + 3,000 | the child caller authorities, unminable for the same reason |
+| `cx-claims-frame` + `sd-authority` | 3,000 + 3,000 | Claims' half is the three-byte relay `split_caller_authority_bump_v1` already has one program over |
+
+Filling the hint block **redrew** `cx-accelerator-frame` and
+`acc-caller-authority` — the block is inside the envelope, which is inside the
+digest those seeds end in — so their spread went from 1,500 to 7,500 on this
+draw and will move again on the next. That is the same unminable lottery at a new
+seed, which is why the table above is worst-of-eight rather than a difference.
+
+### The chain fixture seam is not "no caller"; it is that no submittable admitted selector-9 instruction exists
+
+Three addenda have recorded the three rejoin hostiles as blocked on
+`project_dealer_scenario_unsplit_chain_topology_v4` having no caller, without
+naming what a caller would buy. Read against the code, the block is structural
+and one level further down:
+
+1. `split_scenario_from_admitted_trade` already computes every input that
+   constructor takes — the three observation slices, the semantic state and the
+   family request — and hands them to the OPERATOR's
+   `project_dealer_scenario_unsplit_topology_v4` instead. A caller is one line
+   away. What the program-test wrapper adds is the installable-account list and
+   the rollback classification, i.e. the ability to seed a fresh ProgramTest.
+2. But its own `unique_account_lock_count` is asserted, in that same function,
+   to **exceed `SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1`**. The unsplit admitted
+   instruction is 121 locks against a 64-lock ceiling, so whatever is installed,
+   the topology is evidence and never a transaction.
+3. And the split route the scenario family takes never enters the accelerator
+   ELF. `split_scenario_from_admitted_trade` builds the admitted bundle IN
+   PROCESS, installs it, and submits a Custody delivery through
+   `submit_activation`; nothing on that path CPIs
+   `dclutch-dealer-accelerator-sbf`. Checked in the profile rather than assumed:
+   `acc-enter` appears in eight of this test's twenty-two ≥1M-budget
+   transactions and all eight are top-level Trading Hot transactions, while the
+   delivery transactions carry an address-lookup table, a different top-level
+   program, and no accelerator span at all.
+4. The hostiles sit behind `acc-witness` and `acc-seal`, which come AFTER
+   `acc-product-runtime` in `authenticate_accelerator_invocation_v4` — and
+   `frontier.rs`, the only stage-attributing instrument, stops in
+   `authenticate_product_runtime_v3` for want of the four finalized Registry
+   records.
+
+So the unit is not "call the constructor". It is either (a) the durable
+preparation/commit split for the scenario family, so an admitted selector-9 leg
+can be a transaction at all, or (b) the Product record graph staged into
+`frontier.rs`, so the in-process probe reaches the witness. (b) is much the
+smaller, and `accepted.rs` already builds those four record bodies.
+
+### What this lane owes
+
+- **`execution_strategy_v2`'s record walk**, 82,308 CU and now flat to 6 across
+  eight runs — still the largest single draw-free span on the route, still
+  without a carrier, and still not priced by doubling.
+- **The accelerator's caller authority**, 15,000 of draw across the two halves,
+  with the carrier for each half named in the table above.
+- **Custody's two vault derivations**, 12,000 of draw, with no carrier at all —
+  which makes it a design question (where does a token vault's canonical bump
+  live?) rather than a lane-sized fix.
+- **Claims' `sd-authority`** three-byte relay, unchanged; its blocker is that
+  `packet_digest` is taken over the WHOLE instruction data, so a suffix byte has
+  no fixed point until that digest is narrowed to the prefix the way Custody's
+  `the_caller_authority_digest_covers_the_request_prefix_only` pins.
+- **The three rejoin hostiles and the selector-9 leg**, with the blocker restated
+  above as a structural fact rather than a missing caller.

@@ -23,9 +23,14 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
     HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
     HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-    HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+    HOT_TRANSITION_STAGING_ACCOUNT_V3, HotBumpHintsV1, HotExecutionEnvelopeV3,
 };
 use dclutch_capability_program_contract::v4::CapabilityProgramV4;
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+};
+use dclutch_custody_contract::CustodyAuthoritySeedsV1;
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_program::{
@@ -189,6 +194,80 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+/// Mine the bumps this bundle's readers would otherwise search for on chain.
+///
+/// # Why a campaign builder owes this at all
+///
+/// `HotBumpHintsV1` has been read by Trading, the Dealer accelerator and
+/// Custody since it was added, and `dclutch-operator`'s own producers --
+/// `direct_inline_v3` and `dealer_lp_hot_v4` -- have filled it since. THIS
+/// builder never did, so every packet the campaign has ever emitted carried the
+/// all-zero block and every reader on the route searched. That is not a neutral
+/// default: it is the pre-hint route, and it is the one the campaign's compute
+/// figures were being read off. `live_claims_graph` was the same defect one
+/// account over, and it was repaired the same way -- by recording what a real
+/// producer would have written.
+///
+/// Each search removed is a `find_program_address` walking down from 255 at
+/// 1,500 CU per rejected candidate, on a depth drawn from the fixture keys, so
+/// what it takes out of the measurement is DRAW: the worst case, not the mean.
+///
+/// # Which slots are filled, and which are deliberately left searching
+///
+/// * `market` and `root` come out of the fixed corpus this builder already
+///   binds and validates, so both are exact.
+/// * `child_relay[1]` is Custody's transfer authority, whose seeds are the
+///   Market and the release set -- the same pair for every Custody leg of every
+///   family, which is what makes ONE slot correct for a route with two of them.
+/// * `child_relay[0]` is Custody's own replay cursor, whose seeds end in the
+///   projected child request's replay CONTEXT. This builder is handed the
+///   family request and does not project the children, so the slot stays zero
+///   and Custody searches -- exactly as `dealer_lp_hot_v4` leaves it, and for
+///   the same reason.
+/// * `child_caller` cannot be mined at all: those seeds end in a digest over a
+///   request projected on chain, so nothing off chain holds their preimage.
+/// * `lifecycle` is the family's created accounts in materialization order and
+///   is likewise not projected here.
+///
+/// A slot left zero is correct and merely slower; that is the whole contract of
+/// the block. No conjunct moves either way: every hint is fed to a
+/// `create_program_address` whose result is compared with the account the frame
+/// supplies, so a wrong byte names a different address and refuses at an
+/// equality that was always there.
+fn mine_bump_hints_v1(input: &BundleInputV1<'_>) -> Result<HotBumpHintsV1, BuilderError> {
+    let market = CoreState::decode(&input.fixed.market.account.data)
+        .map_err(|_| BuilderError::Binding(line!()))?;
+    let market_bump = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
+        &input.waist.core_program,
+    )
+    .1;
+    let root = CapabilityRootHeaderV1::decode(
+        input
+            .fixed
+            .root
+            .account
+            .data
+            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok_or(BuilderError::Binding(line!()))?,
+    )
+    .map_err(|_| BuilderError::Binding(line!()))?;
+    let root_bump =
+        Pubkey::find_program_address(&root.seeds().as_slices(), &input.waist.trading_program).1;
+    let transfer_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(input.fixed.market.key.to_bytes(), input.waist.release_set)
+            .as_slices(),
+        &input.waist.custody_program,
+    )
+    .1;
+    Ok(HotBumpHintsV1 {
+        market: market_bump,
+        root: root_bump,
+        child_relay: [0, transfer_authority],
+        ..HotBumpHintsV1::ABSENT
+    })
+}
+
 fn decode_execution_account_profile<'a>(
     schema: [u8; 32],
     bytes: &'a [u8],
@@ -291,7 +370,8 @@ fn build_bundle_with_admitted_candidate(
         input.scenario.generation,
         digest32(&input.fixed.root.account.data),
     )
-    .map_err(|_| BuilderError::Binding(line!()))?;
+    .map_err(|_| BuilderError::Binding(line!()))?
+    .with_bump_hints(mine_bump_hints_v1(input)?);
     let mut instruction_data =
         Vec::with_capacity(HOT_EXECUTION_ENVELOPE_BYTES_V3 + input.scenario.family_request.len());
     instruction_data.extend_from_slice(&envelope.to_bytes());

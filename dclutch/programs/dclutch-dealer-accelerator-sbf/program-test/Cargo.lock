@@ -1608,6 +1608,7 @@ dependencies = [
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
+ "dclutch-market-core-codec",
  "dclutch-rational-representation-v2-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",

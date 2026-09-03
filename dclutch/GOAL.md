@@ -3799,3 +3799,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - DEALER (`5709672aa`): the Registry activation cache decoded five roles twenty-five times — 93% of Custody's per-leg
   authentication.
 - Cuts: `0c5a3c784`, `fc8f99151`.
+- DEALER closed (`5709672aa` rows `4b47978f5`; `82465e00b`; ninth addendum `7cfe27d9b`): the eighth addendum attributed the
+  wrong term — 93% of Custody's `cf-accounts` was the DECODER, the ruling already spent at 9b5de611e; the redundancy was
+  `validate_projection`'s twenty-five `decode_role` calls over five roles (21,984 → 8,464 per leg, 12,021 each in Claims
+  and Trading, ~51,000 per transaction, draw-free); **the campaign's own bundle builder had never filled HotBumpHintsV1**
+  (three slots mined from the fixed corpus). **Worst headroom over eight runs: partial Remove 20,024 → 74,637; first final
+  Remove 3,562 (+one overrun) → 76,165; second 14,072 → 74,647.** 31/0 on three consecutive full runs; the 12-link manifest
+  byte-identical. The selector-9 seam is structurally blocked (121 locks against 64 on the unsplit topology; the split route
+  never enters the accelerator ELF). Owed with carriers ruled out: the strategy walk (82,308, no carrier), Custody's two
+  vault-key searches (a token account cannot hold its own bump), Claims' relay. **C-06 rests here.**
+- Cuts: `cc28fa7d5`, `5dc81980a`.

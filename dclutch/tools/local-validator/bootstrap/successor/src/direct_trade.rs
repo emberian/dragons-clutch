@@ -3266,6 +3266,11 @@ fn execute_direct_action_v1(
         write_direct_journal_v1(&path, &journal, true, None)?;
         return stdout_json_v1(&journal);
     }
+    if next.stage == DirectTradeStageV1::CapabilitySeal && planning.seal.already_materialized {
+        let journal = adopted_capability_seal_journal_v1(rpc, validated, planning, next)?;
+        write_direct_journal_v1(&path, &journal, true, None)?;
+        return stdout_json_v1(&journal);
+    }
 
     let mut journal = build_direct_transaction_journal_v1(rpc, validated, planning, next)?;
     write_direct_journal_v1(&path, &journal, true, None)?;
@@ -3279,6 +3284,159 @@ fn execute_direct_action_v1(
         evidence_path,
     )?;
     stdout_json_v1(&journal)
+}
+
+/// The single poststate a capability-seal stage is about, stated once.
+///
+/// Both seal paths -- the transaction that writes the seal and the adoption
+/// that observes one already written -- name the identical account, owner,
+/// lamports and body, so they are built here rather than twice.
+fn expected_capability_seal_poststate_v1(
+    planning: &DirectTradePlanningV1,
+) -> DirectTradeExpectedPoststateV1 {
+    DirectTradeExpectedPoststateV1 {
+        address: planning.seal.seal.to_string(),
+        owner: planning.seal.instruction.program_id.to_string(),
+        lamports: planning.seal.expected_final_lamports,
+        executable: false,
+        data_base64: BASE64.encode(&planning.seal.expected_body),
+        data_sha256: sha256_hex(&planning.seal.expected_body),
+    }
+}
+
+/// Why one capability-seal journal is NOT an exact adopted-seal record.
+///
+/// `None` is the adopted shape. Each conjunct names itself rather than sharing
+/// one refusal over eleven causes: a reader who gets "carries a signed packet"
+/// knows where to look, and a reader who gets one undifferentiated code has to
+/// rediscover which of eleven fields the writer already knew about.
+///
+/// The chain half of the judgement is deliberately NOT here. Whether the seal
+/// is still materialized in its exact body is a live observation the caller
+/// holds; this is the shape of the durable record alone, so it is a total
+/// function of the journal and the expected poststate and can be tested
+/// without an RPC.
+fn refusing_adopted_seal_journal_clause_v1(
+    journal: &DirectTradeJournalV1,
+    expected: &DirectTradeExpectedPoststateV1,
+) -> Option<&'static str> {
+    if journal.stage != DirectTradeStageV1::CapabilitySeal {
+        return Some("is not a capability-seal stage");
+    }
+    if journal.phase != DirectTradeJournalPhaseV1::Finalized {
+        return Some("is not finalized");
+    }
+    if journal.message_base64.is_some() || journal.message_sha256.is_some() {
+        return Some("carries a message an adoption never built");
+    }
+    if journal.last_valid_block_height.is_some()
+        || journal.exact_fee_lamports.is_some()
+        || journal.expected_wire_bytes.is_some()
+        || journal.unique_message_account_count.is_some()
+    {
+        return Some("carries a durable transaction intent an adoption never had");
+    }
+    if journal.signed_packet_base64.is_some() || journal.expected_signature.is_some() {
+        return Some("carries a signed packet or signature an adoption never made");
+    }
+    if journal.expected_return_data_producer.is_some()
+        || journal.expected_return_data_base64.is_some()
+        || !journal.expected_prestates.is_empty()
+    {
+        return Some("carries Hot expectations that belong to no seal stage");
+    }
+    if journal.transaction_sha256.is_some()
+        || journal.fee_lamports.is_some()
+        || journal.compute_units_consumed.is_some()
+        || journal.return_data_producer.is_some()
+        || journal.return_data_base64.is_some()
+        || journal.return_data_was_null.is_some()
+    {
+        return Some("carries finalized transaction evidence for a transaction it never sent");
+    }
+    if journal.expected_poststates.len() != 1
+        || journal.expected_poststates.first() != Some(expected)
+    {
+        return Some("does not expect exactly this session's own sealed closure");
+    }
+    if journal.finalized_poststates.len() != 1 {
+        return Some("does not carry exactly one finalized seal observation");
+    }
+    if journal.finalized_poststates.first().is_none_or(|observed| {
+        observed.address != expected.address
+            || observed.owner != expected.owner
+            || observed.lamports != expected.lamports
+            || observed.executable
+            || observed.data_sha256 != expected.data_sha256
+    }) {
+        return Some("observed a seal that is not the expected sealed closure");
+    }
+    if journal
+        .finalized_slot
+        .is_none_or(|slot| slot <= journal.lookup_creation_slot)
+    {
+        return Some("was not observed strictly later than its own lookup table");
+    }
+    None
+}
+
+/// Record an ALREADY-MATERIALIZED capability seal as a finalized observation.
+///
+/// Decision 0005 puts no Market in a seal's key and makes the sealing act
+/// permissionless, so the second Market on one release set legitimately finds
+/// its own `(descriptor, action)` already sealed. The seal is still a
+/// precondition of a hot execution and still owes this ladder a finalized
+/// journal stage; what it does not owe is a transaction, because the account
+/// is write-once and re-submitting `SealDescriptorClosure` against it refuses.
+///
+/// This is the `LookupActivation` shape -- a finalized stage with no message,
+/// no signature, no fee and no compute -- with the one difference that it
+/// carries evidence: the expected poststate and the finalized poststate the
+/// chain actually holds, so `finalized_capability_seal_digest_v1` reads the
+/// same digest from an adopted seal as from a written one.
+///
+/// The adoption is not a courtesy. `verify_direct_inline_capability_seal_v3`
+/// re-checks, against a FRESH finalized read at or after the planning
+/// observation, that the account is the exact canonical PDA, Trading-owned,
+/// non-executable, holding exactly the expected lamports and BYTE-IDENTICAL to
+/// the body this session would itself have written, and that the decoded
+/// closure's key equals this session's own key. A seal that differs anywhere
+/// refuses here rather than being adopted.
+fn adopted_capability_seal_journal_v1(
+    rpc: &mut Rpc,
+    validated: &ValidatedManifestV1,
+    planning: &DirectTradePlanningV1,
+    next: &NextActionV1,
+) -> Result<DirectTradeJournalV1> {
+    authenticate_frozen_lookup_v1(planning)?;
+    let account = finalized_observed_accounts_v1(
+        rpc,
+        &[planning.seal.seal],
+        planning.seal.observation.slot,
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| refusal("Direct adopted capability seal disappeared"))?;
+    verify_direct_inline_capability_seal_v3(&planning.seal, &account).map_err(|error| {
+        refusal(format!(
+            "Direct capability seal was materialized by another session but is not this session's exact sealed closure: {error:?}"
+        ))
+    })?;
+    let expected = expected_capability_seal_poststate_v1(planning);
+    let mut journal = base_direct_journal_v1(validated, planning, next)?;
+    journal.phase = DirectTradeJournalPhaseV1::Finalized;
+    journal.finalized_slot = Some(account.observation.slot);
+    journal.expected_poststates = vec![expected.clone()];
+    journal.finalized_poststates = vec![observed_poststate_v1(&account)];
+    refresh_direct_journal_digest_v1(&mut journal)?;
+    // The writer is held to the reader's own predicate, so the two can never
+    // drift into a record this session writes and its next run refuses.
+    if let Some(clause) = refusing_adopted_seal_journal_clause_v1(&journal, &expected) {
+        return Err(refusal(format!(
+            "Direct adopted capability seal record {clause}"
+        )));
+    }
+    Ok(journal)
 }
 
 fn direct_journal_path_v1(validated: &ValidatedManifestV1, next: &NextActionV1) -> Result<PathBuf> {
@@ -3470,14 +3628,7 @@ fn build_direct_transaction_journal_v1(
         journal.expected_prestates = planning.hot_prestates.clone();
         journal.expected_poststates = expected_hot_poststates_v1(planning);
     } else if next.stage == DirectTradeStageV1::CapabilitySeal {
-        journal.expected_poststates = vec![DirectTradeExpectedPoststateV1 {
-            address: planning.seal.seal.to_string(),
-            owner: planning.seal.instruction.program_id.to_string(),
-            lamports: planning.seal.expected_final_lamports,
-            executable: false,
-            data_base64: BASE64.encode(&planning.seal.expected_body),
-            data_sha256: sha256_hex(&planning.seal.expected_body),
-        }];
+        journal.expected_poststates = vec![expected_capability_seal_poststate_v1(planning)];
     }
     refresh_direct_journal_digest_v1(&mut journal)?;
     Ok(journal)
@@ -3596,6 +3747,30 @@ fn direct_finalized_mutations_v1(
                 lookup_table: journal.lookup_table,
                 lookup_addresses_sha256: journal.lookup_addresses_sha256,
             });
+            continue;
+        }
+        // An ADOPTED seal made no transaction, so it is not a mutation and must
+        // not be written into the evidence as one. Its absence from `mutations`
+        // is what a reader reads: a session that WROTE its seal carries a
+        // `capability-seal` row with a signature, a fee and a CU count, and a
+        // session that adopted one carries none while `capabilitySealSha256`
+        // still names the exact on-chain body. The two histories are therefore
+        // distinguishable from the evidence alone, by a transaction record
+        // rather than by an assertion.
+        if journal.stage == DirectTradeStageV1::CapabilitySeal
+            && journal.expected_signature.is_none()
+        {
+            if journal.fee_lamports.is_some()
+                || journal.compute_units_consumed.is_some()
+                || journal.transaction_sha256.is_some()
+                || journal.message_base64.is_some()
+                || journal.finalized_poststates.len() != 1
+                || journal.finalized_slot.is_none()
+            {
+                return Err(refusal(
+                    "Direct adopted capability seal was fabricated as a mutation",
+                ));
+            }
             continue;
         }
         let kind = match journal.stage {
@@ -6379,11 +6554,14 @@ fn next_action_v1(
 ) -> Result<NextActionV1> {
     let journals = journal_entries_v1(validated)?;
     if journals.is_empty() {
-        if planning.seal.already_materialized {
-            return Err(refusal(
-                "Direct seal exists but the request-specific ALT journal is absent",
-            ));
-        }
+        // An already-materialized seal carries NO information about this
+        // session's journal, so it cannot be read as a lost one. Decision 0005:
+        // the seal is keyed by (descriptor schema, descriptor digest, action,
+        // Trading semantic release, Registry program) with no Market in the
+        // key, the sealing act is permissionless, and "a seal outlives every
+        // Market that used it and remains correct". The SECOND Market on one
+        // release set therefore finds its own action already sealed, by design,
+        // and this is its ordinary first step.
         return Ok(NextActionV1 {
             stage: DirectTradeStageV1::LookupCreate,
             action_index: 0,
@@ -6425,11 +6603,15 @@ fn next_action_v1(
     ) {
         authenticate_frozen_lookup_v1(planning)?;
     }
-    if planning.seal.already_materialized && last.stage != DirectTradeStageV1::CapabilitySeal {
-        return Err(refusal(
-            "Direct capability seal exists without its exact finalized journal stage",
-        ));
-    }
+    // There is deliberately no refusal for "the seal is materialized and this
+    // journal has not reached its seal stage". Under decision 0005 a seal that
+    // already exists at a pre-seal stage is the normal state of every Market
+    // after the first, and `already_materialized` is itself the strong reading:
+    // `direct_inline_route_v3` sets it only when the account is Trading-owned,
+    // rent-exempt, and its bytes equal `expected_body` BYTE FOR BYTE. What the
+    // deleted guard actually asserted -- that this session wrote the seal -- is
+    // not a fact the chain can be asked, and adopting a byte-identical seal is
+    // indistinguishable in outcome from having written it.
     if last.stage == DirectTradeStageV1::CapabilitySeal && !planning.seal.already_materialized {
         return Err(refusal(
             "Direct finalized seal journal has no exact materialized chain poststate",
@@ -6568,6 +6750,30 @@ fn validate_journal(
             return Err(refusal(
                 "Direct lookup activation journal is not an exact later finalized observation",
             ));
+        }
+        return Ok(());
+    }
+    // The ADOPTED seal: a capability-seal stage with no message is the record
+    // that this session found its `(descriptor, action)` already sealed and
+    // wrote no transaction. Decision 0005 makes that the ordinary state of the
+    // second Market on one release set. It is admitted only while the chain
+    // still agrees -- `already_materialized` is re-derived from a finalized
+    // read every run and requires Trading ownership, rent exemption, and a body
+    // byte-identical to the one this session would have written -- so the
+    // journal can never outlive the fact it records.
+    if journal.stage == DirectTradeStageV1::CapabilitySeal && journal.message_base64.is_none() {
+        if !planning.seal.already_materialized {
+            return Err(refusal(
+                "Direct adopted capability seal journal records a seal the chain no longer holds in its exact sealed body",
+            ));
+        }
+        if let Some(clause) = refusing_adopted_seal_journal_clause_v1(
+            journal,
+            &expected_capability_seal_poststate_v1(planning),
+        ) {
+            return Err(refusal(format!(
+                "Direct adopted capability seal journal {clause}"
+            )));
         }
         return Ok(());
     }
@@ -6941,6 +7147,7 @@ mod tests {
         authenticate_direct_claim_schedule_v1, authenticate_direct_history_v1,
         authenticate_embedded_direct_evidence_identity_v1,
         authenticate_lookup_activation_slot_order_v1, direct_chaos_mutation_v1,
+        refusing_adopted_seal_journal_clause_v1,
         direct_evidence_digest_v1, direct_evidence_schema_v1, direct_journal_schema_v1,
         direct_private_schema_v1, direct_public_schema_v1, expected_stage_v1, hex32,
         journal_intent_sha256_v1, journal_state_sha256, parse_direct_return_data_v1,
@@ -7455,6 +7662,178 @@ mod tests {
         );
         assert!(direct_journal_schema_v1("mainnet-beta").is_err());
         Ok(())
+    }
+
+    /// One exact adopted-seal record, and the eleven ways it stops being one.
+    ///
+    /// Decision 0005 keys a seal by `(descriptor schema, descriptor digest,
+    /// action, Trading semantic release, Registry program)` and puts NO Market
+    /// in it, so the second Market on one release set finds its own action
+    /// already sealed. The adoption is how that session still owes the ladder a
+    /// finalized seal stage without sending a write-once instruction that would
+    /// refuse. Its whole risk is that "no transaction" becomes a hole an
+    /// arbitrary journal fits through, so every field a real transaction would
+    /// have set is named here and each one is proved to refuse ON ITS OWN.
+    #[test]
+    fn an_adopted_seal_record_is_exact_and_every_transaction_field_refuses_it() {
+        let expected = DirectTradeExpectedPoststateV1 {
+            address: "So11111111111111111111111111111111111111112".into(),
+            owner: "11111111111111111111111111111111".into(),
+            lamports: 6_940_968,
+            executable: false,
+            data_base64: "AA==".into(),
+            data_sha256: "55".repeat(32),
+        };
+        let observed = DirectTradeObservedPoststateV1 {
+            address: expected.address.clone(),
+            owner: expected.owner.clone(),
+            lamports: expected.lamports,
+            executable: false,
+            data_len: 968,
+            data_sha256: expected.data_sha256.clone(),
+        };
+        let adopted = || {
+            let mut journal = journal();
+            journal.stage = DirectTradeStageV1::CapabilitySeal;
+            journal.action_index = 4;
+            journal.phase = DirectTradeJournalPhaseV1::Finalized;
+            journal.message_base64 = None;
+            journal.message_sha256 = None;
+            journal.last_valid_block_height = None;
+            journal.exact_fee_lamports = None;
+            journal.expected_wire_bytes = None;
+            journal.unique_message_account_count = None;
+            journal.expected_poststates = vec![expected.clone()];
+            journal.finalized_poststates = vec![observed.clone()];
+            journal.finalized_slot = Some(journal.lookup_creation_slot + 1);
+            journal
+        };
+        assert_eq!(
+            refusing_adopted_seal_journal_clause_v1(&adopted(), &expected),
+            None,
+            "the exact adopted-seal record must be admitted"
+        );
+
+        // Each row moves ONE field of the admitted record and must refuse. A
+        // suite that only proved the whole shape green would pass with any of
+        // these conjuncts deleted.
+        let mutate: Vec<(&str, Box<dyn Fn(&mut DirectTradeJournalV1)>)> = vec![
+            (
+                "stage",
+                Box::new(|j: &mut DirectTradeJournalV1| j.stage = DirectTradeStageV1::Hot),
+            ),
+            (
+                "phase",
+                Box::new(|j: &mut DirectTradeJournalV1| {
+                    j.phase = DirectTradeJournalPhaseV1::Submitted
+                }),
+            ),
+            (
+                "message",
+                Box::new(|j: &mut DirectTradeJournalV1| j.message_base64 = Some("AA==".into())),
+            ),
+            (
+                "message digest",
+                Box::new(|j: &mut DirectTradeJournalV1| j.message_sha256 = Some("44".repeat(32))),
+            ),
+            (
+                "block height",
+                Box::new(|j: &mut DirectTradeJournalV1| j.last_valid_block_height = Some(99)),
+            ),
+            (
+                "exact fee",
+                Box::new(|j: &mut DirectTradeJournalV1| j.exact_fee_lamports = Some(5_000)),
+            ),
+            (
+                "wire bytes",
+                Box::new(|j: &mut DirectTradeJournalV1| j.expected_wire_bytes = Some(1_225)),
+            ),
+            (
+                "account count",
+                Box::new(|j: &mut DirectTradeJournalV1| j.unique_message_account_count = Some(41)),
+            ),
+            (
+                "signed packet",
+                Box::new(|j: &mut DirectTradeJournalV1| {
+                    j.signed_packet_base64 = Some("AA==".into())
+                }),
+            ),
+            (
+                "signature",
+                Box::new(|j: &mut DirectTradeJournalV1| {
+                    j.expected_signature = Some("fixture".into())
+                }),
+            ),
+            (
+                "Hot return data",
+                Box::new(|j: &mut DirectTradeJournalV1| {
+                    j.expected_return_data_base64 = Some("AA==".into())
+                }),
+            ),
+            (
+                "Hot prestates",
+                Box::new(|j: &mut DirectTradeJournalV1| {
+                    j.expected_prestates = vec![expected.clone()]
+                }),
+            ),
+            (
+                "finalized transaction digest",
+                Box::new(|j: &mut DirectTradeJournalV1| {
+                    j.transaction_sha256 = Some("66".repeat(32))
+                }),
+            ),
+            (
+                "finalized fee",
+                Box::new(|j: &mut DirectTradeJournalV1| j.fee_lamports = Some(5_000)),
+            ),
+            (
+                "finalized CU",
+                Box::new(|j: &mut DirectTradeJournalV1| j.compute_units_consumed = Some(150_000)),
+            ),
+            (
+                "absent expected poststate",
+                Box::new(|j: &mut DirectTradeJournalV1| j.expected_poststates.clear()),
+            ),
+            (
+                "absent finalized poststate",
+                Box::new(|j: &mut DirectTradeJournalV1| j.finalized_poststates.clear()),
+            ),
+            (
+                "absent finalized slot",
+                Box::new(|j: &mut DirectTradeJournalV1| j.finalized_slot = None),
+            ),
+            (
+                "a finalized slot no later than the table",
+                Box::new(|j: &mut DirectTradeJournalV1| {
+                    j.finalized_slot = Some(j.lookup_creation_slot)
+                }),
+            ),
+        ];
+        for (name, apply) in mutate {
+            let mut journal = adopted();
+            apply(&mut journal);
+            assert!(
+                refusing_adopted_seal_journal_clause_v1(&journal, &expected).is_some(),
+                "an adopted-seal record carrying {name} must refuse"
+            );
+        }
+
+        // And the seal it names must be THIS session's seal: a byte-identical
+        // body at another address, and the right address carrying another body,
+        // each refuse. This is the conjunct that stops one Market adopting a
+        // different Market's differently-keyed closure.
+        let mut elsewhere = adopted();
+        elsewhere.finalized_poststates[0].address = "11111111111111111111111111111111".into();
+        assert!(
+            refusing_adopted_seal_journal_clause_v1(&elsewhere, &expected).is_some(),
+            "a seal observed at another address must refuse"
+        );
+        let mut other_body = adopted();
+        other_body.finalized_poststates[0].data_sha256 = "77".repeat(32);
+        assert!(
+            refusing_adopted_seal_journal_clause_v1(&other_body, &expected).is_some(),
+            "a seal whose observed body is not the expected closure must refuse"
+        );
     }
 
     #[test]
