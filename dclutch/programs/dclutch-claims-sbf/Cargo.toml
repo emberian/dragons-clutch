@@ -27,6 +27,22 @@ custom-panic = []
 # have. Today this instruments the SignedDelta route only.
 claims-cu-profile = ["dep:dclutch-cu-checkpoint"]
 
+# Diagnostic-only dump of the permit's own founding-intent PREIMAGE.
+#
+# OFF in every shipped build, and the canonical Claims executable is never
+# built with it. It exists because `authenticate_permit_authorization` can only
+# say that two SHA-256 digests differ, and a digest names no field: when every
+# named coordinate join above it has already passed, the only thing left that
+# can convict a coordinate is the 480 bytes that were hashed. This emits them
+# beside the digest the request carried, on the refusing path and nowhere else,
+# so the supervisor's own encoding can be diffed against Core's byte for byte.
+#
+# It is a separate feature from `claims-cu-profile` because it measures a
+# different thing and takes no dependency: `claims-cu-profile` needs
+# `dclutch-cu-checkpoint`, and a lane that wants the preimage should not have to
+# link a compute-unit instrument to get it.
+claims-founding-probe = []
+
 [dependencies]
 dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }

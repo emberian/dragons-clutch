@@ -5696,6 +5696,12 @@ struct FoundingFundingLedgerV2 {
     required_lamports: u64,
 }
 
+/// Lowercase hexadecimal, for the diagnostic lines this module writes to the
+/// run's own evidence. Not a wire encoding and not a parser's inverse.
+fn lower_hex_v1(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
     if entry_count == 0 || entry_count > u16::BITS as u16 {
         return Err(Error::new(
@@ -9737,6 +9743,22 @@ fn derive_founding_outer_v1(
         .encode()
         .map_err(|error| Error::new(format!("founding intent encoding: {error:?}")))?;
     let intent_digest: [u8; 32] = Sha256::digest(intent_bytes).into();
+    // The supervisor's half of the founding-intent byte diff.
+    //
+    // Claims can only report that its permit's intent hashes to something the
+    // request does not carry; it cannot report which coordinate moved, because
+    // every coordinate it can compare has already been compared by the time it
+    // refuses. So the side that COMPILED the request states its preimage where
+    // the run's own evidence keeps it -- this goes to stderr, which the
+    // gauntlet captures verbatim as `<run>/campaign.stderr` beside the ledger
+    // and the accounts -- and the diff against the permit's bytes names the
+    // field. One line per founding derivation, and this is a local-validator
+    // harness: nothing here reaches a program.
+    eprintln!(
+        "campaign: founding intent preimage {} digest {}",
+        lower_hex_v1(&intent_bytes),
+        lower_hex_v1(&intent_digest)
+    );
 
     // Exactly the request Core compiles inside the Found stage and commits to
     // in the permit. Every observed lamport figure below is what the runner

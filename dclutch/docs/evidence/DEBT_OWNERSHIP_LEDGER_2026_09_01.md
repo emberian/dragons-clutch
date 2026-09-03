@@ -771,6 +771,16 @@ does not re-discover it as an orphan. → §10 row R-7.
 
 ## 8. C-15 — the privacy/FHE/MPC/energy horizon
 
+> **SUPERSEDED 2026-09-01 12:47 — HISTORICAL FRAMING.** Ember ruled: the
+> privacy/FHE/MPC/energy objective is **ruled OUT** of this Clutch
+> (`GOAL.md:2071`, commit `5a371810`; record
+> [`decisions/0018-privacy-horizon-not-this-clutch.md`](../decisions/0018-privacy-horizon-not-this-clutch.md)).
+> This section describes the question as it stood before that, and is retained
+> as the evidence the ruling was made on. **It is not an open charter, and
+> nothing here may be reported as deferred or future work** (`GOAL.md:2093`).
+> One thing it must NOT be read as licensing: closing `O-019`. The ruling makes
+> that row load-bearing — see `docs/OMISSION_INDEX.md:59`.
+
 Framed for a one-line ruling, as the letter requires. **I do not rule on this.**
 
 **What exists in code: nothing.** `ASPIRATION_LEDGER.md:162` records the
@@ -884,7 +894,7 @@ One line each. These are the rows this lane cannot close by engineering.
 | **R-5** | **Withdrawn as a ruling — it is engineering with a working precedent.** Claims already solved this class inside this repo: 1,489 raise sites over 141 codes, 15.2% maximum, via the decision-0007 sub-band convention, against Trading's 2,086 on one code at 25.0%. A policy whose template is already in the tree and already load-bearing does not need Ember to choose it; it needs a lane to apply it and a census predicate to hold it. Re-routed. | protocol-wide lane + decision 0007 |
 | **R-6** | U-001's "explicit deletion/non-authoritative-AOT ruling for standalone family artifacts" — Ember owns whether standalone family AOT artifacts are authoritative. Separately, V3 AOT has never compiled for `target_os = "solana"` and needs an owner. | Direct / AOT |
 | **R-7** | `TicketAuthorship`'s payer and RentCredit arms are unreachable defense-in-depth after `73ffb010`. Document in place, or fold? *(small; listed so it is not re-discovered)* | Series |
-| **R-8** | **C-15, the actual question:** does the accepted final public project include the original FHE/MPC/specialized-batch/energy objective? The 2026-08-27 horizon ruling is explicitly not this answer. If retained → a from-zero capability charter (no foundation exists). If ruled out → a dated ruling plus removal of contradictory claims. | Ember |
+| ~~**R-8**~~ | **CLOSED — RULED OUT 2026-09-01 by ember**, the second branch of this row's own disjunction (`GOAL.md:2071`, commit `5a371810`; record [`docs/decisions/0018-privacy-horizon-not-this-clutch.md`](../decisions/0018-privacy-horizon-not-this-clutch.md)). Verbatim: *"privacy/FHE is a 'not yet' for sure for sure, that would be a much later version of Clutch, solana isn't ready for that kinda awesomeness onchain yet (we'd want to use minidregg, which isn't ready yet)."* The dated ruling exists and the contradictory claims are removed in the same commit as the record. §8 of this file (`:772-829`, which now carries the same marker) is therefore **historical framing**, superseded: it describes the state of the question before 2026-09-01 12:47 and must not be read as an open charter. `O-019` is NOT closed by this — the ruling makes it load-bearing (`docs/OMISSION_INDEX.md:59`). | done |
 | ~~**R-9**~~ | **DONE (`eaa4a1fa`) — it was transcription, not a ruling.** `docs/OMISSION_INDEX.md` **O-019**: widening the batch relation toward a general encrypted-exchange computer is now a named `hard invariant, narrowly stated`, carrying Ember's own reason verbatim and `INTENT.md:118-120`'s consequence — a door that closes permanently. Explicitly independent of C-15: if the ambition is retained it is a prerequisite, and if it is ruled out the row is what stops the option being lost on the way. | done |
 | **R-11** | **Eight magic collisions remain, gate red (`7bf75057`).** Ten found; `DCLTDRS1` fixed at `b64ecbb5`, `DCLTRIX1` promoted to R-13. The other eight are cross-ELF or non-dispatch — real wire-reading ambiguity, no mis-dispatch path. Adjudicate each: fixtures import the canonical constant; genuine sharers renumber under a decision record while the deploy window makes it free. **Do not re-letter to make the gate green.** | Claims fixtures, Dealer/Direct codecs, Registry/Record/Relay |
 | ~~**R-13**~~ | **CLOSED (`a19d93b1`), both halves, before the cohort deploys.** `RecordActionV1::Begin` moved `1` → `5`, so the documented partition is true by construction; `RECORD_FIRST_ACTION_V1` and `REGISTRY_ACTION_CEILING_V1` are published and bound disjoint by `const _: () = assert!` in `programs/dclutch-registry-sbf/src/lib.rs`, alongside a second assertion pinning the two widths distinct so the length clause cannot quietly become load-bearing again. The dispatcher's bare literal `2` now derives from the constant, and `record_v1.rs`'s `Some(1)` arm is `Some(5)`. `crates/dclutch-registry-svm/src/tests.rs` proves the ceiling is what `decode` actually admits, over all 256 action bytes. **Proved red first:** setting the ceiling to `2` fails the build with *"the Registry and record action ranges overlap"*. | done |

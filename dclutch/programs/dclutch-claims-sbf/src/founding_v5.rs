@@ -1030,8 +1030,25 @@ fn authenticate_permit_authorization(
         .encode()
         .map_err(|_| refuse(body, "the permit's own intent did not re-encode"))?;
     let intent_digest = hash(&intent_bytes).to_bytes();
+    let intent_digest_joins = intent_digest == request.founding_intent_digest();
+    // THE PREIMAGE, NOT THE DIGEST, IS THE DIAGNOSTIC HERE.
+    //
+    // Every named coordinate join in this route runs before this one, so by
+    // the time it can refuse, the two intents are known to agree on every
+    // field either the request or the realization receipt can speak for. A
+    // SHA-256 digest names no field, and the coordinates left over are exactly
+    // the ones nothing on this route compares. So the refusing path -- and
+    // only the refusing path, and only under a feature no shipped build sets
+    // -- emits the 480 bytes that were hashed, beside the digest the request
+    // carried. The supervisor writes its own encoding of the same intent, and
+    // the byte that differs names the field.
+    #[cfg(feature = "claims-founding-probe")]
+    if !intent_digest_joins {
+        sol_log("claims founding v5: probe, permit intent preimage then request digest");
+        solana_program::log::sol_log_data(&[&intent_bytes, &request.founding_intent_digest()]);
+    }
     require(
-        intent_digest == request.founding_intent_digest(),
+        intent_digest_joins,
         body,
         "intent digest is not the request's founding_intent_digest",
     )?;

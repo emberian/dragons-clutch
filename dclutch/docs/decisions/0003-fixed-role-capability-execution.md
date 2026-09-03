@@ -1,8 +1,11 @@
 # Decision 0003: fixed-role capability execution
 
-Status: accepted as the safe V1 convergence profile on 2026-08-25 and reopened
-for principled generalization on 2026-08-25. This is an architecture and wire
-decision, not release or deployment evidence. It fixes canonical state/effect
+Status: accepted as the safe V1 convergence profile on 2026-08-25, reopened for
+principled generalization on 2026-08-25, and **AMENDED 2026-09-03 by the
+amendment note at the end of this record — bookkeeping only, recording what the
+tree already treats as given and marking the output-page switch-on as an OPEN
+QUESTION for ember**. This is an architecture and wire decision, not release or
+deployment evidence. It fixes canonical state/effect
 authority for the current vertical; it is not a permanent claim that every
 future execution strategy must be interpreted or that no separately admitted
 accelerator can execute the same semantic descriptor.
@@ -353,3 +356,77 @@ example because the runtime gives that Program an exclusive syscall or token
 authority—the result requires a new measured architecture decision and a new
 release-set profile. It is not smuggled into `CapabilityEntryV1.release_id` or
 the V1 Registry cache.
+
+## Amendment note, 2026-09-03: what the tree treats as given, and the one question that is not
+
+**This note rules nothing.** It exists because two lines of `GOAL.md` cite
+*"ember's 0003 ruling"* as already given while this record carries no 2026-09
+text at all, and a reader who greps this file for `scratch`, `output page` or
+`2026-09` finds nothing. It records the gap rather than closing it.
+
+### What the tree treats as given
+
+`GOAL.md:3004-3006` and `:3059` both attribute the output-page transport's
+current disposition to this record:
+
+> the output-page transport is built for both accelerators, **inert until a
+> Strategy record names it** (ember's 0003 ruling)
+> — `GOAL.md:3005-3006`
+
+> End state: inline input + the output page (ember's 0003).
+> — `GOAL.md:3059`
+
+Built and inert is the whole of it. Commits `93bd4f603` (contract only),
+`4f30d4ce8` (dealer), `0f53b668a` and `a4c5add46` (General), all 2026-09-02.
+Nothing flips on devnet until a Strategy record names the transport, and because
+*"the request/ack pair IS the transport identity"*
+(`docs/design/ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:130`,
+`v2.rs:139-146`), naming it is **a new Strategy record content, not a flag** —
+so the switch-on re-digests the cohort's Strategy, Certificate and Admission
+records.
+
+The design note also states honestly what the shape costs against this record's
+§Decision, and it is the sentence the question turns on
+(`ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:83-93`):
+
+> A self-owned page is a weaker invariant, and it is honest to say so: the
+> accelerator now holds one account. It is not a weaker AUTHORITY: the page's
+> bytes are read by exactly one party inside exactly one CPI window and bound by
+> a digest the runtime attributes to the writer; no route reads it later, it
+> names no semantic owner, and it can move no lamports.
+
+This record's own wording is *"may not create a second state, claim, custody, or
+release authority"* (the status preamble, `:17-18`; the design note cites it as
+`:12-16`, from before this amendment shifted it); both accelerator programs
+currently state the stricter form in their own source — *"never writes an
+account, invokes a child, or owns protocol state"* (dealer `lib.rs:12`, General
+`lib.rs:10-11`).
+
+### The open question — docket D6, ember's
+
+Put to ember at `GOAL.md:2863-2867`, and put identically by the design note at
+`ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:273-279`, which calls it *"the only
+judgment call in the design; the rest is measured or derived"*:
+
+> is an admitted accelerator that owns exactly one client-provisioned,
+> digest-bound scratch page — written only inside its CPI, read only by Trading
+> in that window, never read by any route — still the "stateless accelerator"
+> 0003 admits, or does 0003 need an amendment saying so?
+
+**That question is OPEN.** The recommendation `GOAL.md:2866` made was *"amend
+0003 to say so"*, and no such amendment exists in this file — which is the
+condition this note records, not repairs. A ruling on it is a real amendment to
+§Decision, made by ember, and it is the precondition for the transport being
+switched on for cohort-15.
+
+What is measured and not in question, for whoever rules it: General OpenBatch
+N=2 runs its whole bank in ONE CPI at 51,404 CU against four chunks of which one
+was 50,201; the Dealer equity Add runs its whole route in one CPI at 455,790 and
+exceeds the budget in the tail with 3,773 left — *"the route's own weight, not
+the transport"* (`GOAL.md:3006-3009`). The census gets **stronger**, not weaker:
+every runtime observation unchanged, plus page bytes equal to the digest
+preimage (`ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:93-95`). The page is
+client-provisioned by a plain `SystemProgram::CreateAccount`, rent paid once and
+reused; rent reclamation needs a Close route the accelerator does not have,
+*"a named debt, not a precondition, because a pooled page is created once"*
+(`:114-124`). The blast radius is enumerated by file at `:126-140`.

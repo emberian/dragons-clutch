@@ -39,6 +39,14 @@ usage: tools/gauntlet/run.sh [options]
                    where the infrastructure record bodies come from
   --allow-stale-fixture-pins
                    proceed when a fixture pin no longer matches the tree
+  --sbf-features ROLE=FEATURE[,FEATURE]
+                   DIAGNOSTIC ONLY, repeatable: build that role's ELF with
+                   `cargo build-sbf --features`. The campaign then runs on an
+                   artifact that is NOT the shipped link, so a run that uses it
+                   is a diagnostic and not release evidence; the banner and the
+                   stage stamp both say so. Exists because a profile-only
+                   feature that no runner can turn on is an instrument nobody
+                   can reach.
   -h, --help       show this message
 
 Stages are stamped by their exact inputs under --work/stamps. A re-run skips a
@@ -71,6 +79,7 @@ MODE="full"
 FROM=""
 KEEP_RUNS="false"
 ALLOW_STALE_PINS="false"
+SBF_FEATURES=""
 RECORD_PUBLICATION="genesis"
 RPC_PORT="${DCLUTCH_GAUNTLET_RPC_PORT:-20890}"
 while [ "$#" -gt 0 ]; do
@@ -82,6 +91,7 @@ while [ "$#" -gt 0 ]; do
         --from) FROM="${2:?--from needs a value}"; shift 2 ;;
         --keep-runs) KEEP_RUNS="true"; shift ;;
         --allow-stale-fixture-pins) ALLOW_STALE_PINS="true"; shift ;;
+        --sbf-features) SBF_FEATURES="$SBF_FEATURES${SBF_FEATURES:+ }${2:?--sbf-features needs ROLE=FEATURE}"; shift 2 ;;
         --record-publication) RECORD_PUBLICATION="${2:?--record-publication needs a value}"; shift 2 ;;
         --rpc-port) RPC_PORT="${2:?--rpc-port needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -90,6 +100,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$MODE" in census|full) ;; *) echo "--mode must be census or full" >&2; exit 2 ;; esac
+for pair in $SBF_FEATURES; do
+    case "$pair" in
+        *=*) ;;
+        *) echo "--sbf-features must be ROLE=FEATURE[,FEATURE]" >&2; exit 2 ;;
+    esac
+done
 
 if [ -z "$REPO" ]; then
     REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -323,8 +339,37 @@ rent:dclutch-rent-sbf:dclutch_rent_sbf"
 # potentially-undefined has no business entering a campaign unnoticed.
 DIAGNOSTIC_PATTERN='overwrites values in the frame'
 
+# The features a role's ELF is built with, or empty. Validated against $ROLES
+# rather than trusted: a misspelt role would otherwise build every ELF shipped
+# and report a diagnostic run that instrumented nothing -- silent success, which
+# is the failure mode this tree pays for most.
+features_for() {
+    local role="$1" pair
+    for pair in $SBF_FEATURES; do
+        if [ "${pair%%=*}" = "$role" ]; then printf '%s' "${pair#*=}"; fi
+    done
+    # A role with no features is the ordinary case, and a function whose last
+    # command is a failed test returns 1. Under `set -e` that killed the run
+    # inside the command substitution that calls it -- after `stage elf` had
+    # printed and before anything said why. Say zero out loud.
+    return 0
+}
+if [ -n "$SBF_FEATURES" ]; then
+    for pair in $SBF_FEATURES; do
+        role="${pair%%=*}"
+        printf '%s' "$ROLES" | grep -q "^$role:" \
+            || die "--sbf-features names no gauntlet role: $role"
+    done
+    cat >&2 <<BANNER
+gauntlet: DIAGNOSTIC BUILD. --sbf-features $SBF_FEATURES
+gauntlet: the campaign will run on ELFs that are NOT the shipped links. Whatever
+gauntlet: it measures is a diagnostic, not release or reproducibility evidence.
+BANNER
+fi
+
 if [ "$MODE" = "full" ]; then
-    if stage_needed elf "$SOURCE_DIGEST"; then
+    ELF_STAMP="$SOURCE_DIGEST${SBF_FEATURES:+ +features:$SBF_FEATURES}"
+    if stage_needed elf "$ELF_STAMP"; then
         say "stage elf"
         command -v cargo-build-sbf >/dev/null 2>&1 || die "cargo-build-sbf not found"
         mkdir -p "$ELF_DIR"
@@ -332,11 +377,13 @@ if [ "$MODE" = "full" ]; then
         for entry in $ROLES; do
             role="${entry%%:*}"; rest="${entry#*:}"
             package="${rest%%:*}"; stem="${rest#*:}"
-            echo "build: $role ($package)"
+            role_features="$(features_for "$role")"
+            echo "build: $role ($package)${role_features:+ --features $role_features}"
             (
                 cd "$SOURCE"
                 CARGO_TARGET_DIR="$BUILD_TARGET" \
-                    run_build cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
+                    run_build cargo build-sbf --manifest-path "programs/$package/Cargo.toml" \
+                        ${role_features:+--features "$role_features"}
             ) > "$LOGS/build-$role.log" 2>&1 \
                 || { tail -n 40 "$LOGS/build-$role.log" >&2; die "SBF build failed: $role"; }
             cp "$BUILD_TARGET/deploy/$stem.so" "$ELF_DIR/$role.so"
@@ -352,7 +399,7 @@ if [ "$MODE" = "full" ]; then
             printf '  %s  %s (%s frame diagnostics, %s)\n' \
                 "$(sha256 "$ELF_DIR/$role.so")" "$role" "$count" "$fresh"
         done
-        stage_done elf "$SOURCE_DIGEST"
+        stage_done elf "$ELF_STAMP"
     else
         echo "stage elf: up to date"
     fi
