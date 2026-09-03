@@ -1397,3 +1397,221 @@ commit, verified rather than guessed:
 The new record-bump bank is deliberately the third shape and neither of those
 two: it is a hint whose whole check is the derivation that consumes it, so it
 needs no binding at all, and reading it cannot refuse.
+
+---
+
+## Sixth addendum, 2026-09-03: the second wall was the page PARTITION, the Market carries the Product graph, and the span bank has a consumer after all
+
+*Measured at `cee27ff16` (page hints and the balanced split) and `b312ce3c4`
+(the Market's Product-graph bumps), tree root `/Users/ember/dev/dclutch`, real
+SBF ELFs built in this lane's own worktree with its own target directory, zero
+SBF stack-frame-overwrite diagnostics on every one of the twenty-four links
+built for the figures below. Dealer accelerator campaign 30 passed / 1 failed
+throughout, the failure the partial Remove. Frame rows landed with both
+commits; the ratchet was red at `c81c94d91` and is green at every commit since.*
+
+### The second wall is not the one the fifth addendum named
+
+That addendum said of the scenario-checkpoint page: *"The page's cost is
+dominated by hashing every observation account's complete data, on top of two
+unhinted `find_program_address` calls whose depth is drawn... Hinting those two
+is what would make this test's outcome reproducible at all."* The first clause
+is right. The second is wrong by two orders of magnitude, and the measurement
+that separates them is three runs on ONE ELF set.
+
+**The two hints are real and they are worth 1,500 CU each.** The page
+instruction grows a two-byte mined tail — the checkpoint PDA's bump under
+Trading and the membership manifest's under its producer — and 409 wire bytes
+on the widest page become 411.
+
+| six-page total, one ELF set, three runs | | | | spread |
+|---|---:|---:|---:|---:|
+| unhinted | 2,901,035 | 2,910,035 | 2,910,035 | **9,000** |
+| hinted | 2,883,290 | 2,883,296 | 2,883,290 | **6** |
+
+The 9,000 is exactly six `create_program_address` iterations over the twelve
+sites a scenario pays, and the residual 6 is not a search at all.
+
+**And the page's outcome still depended on the draw, by 688,860 CU.** The same
+three hinted runs, per page:
+
+| page | run 1 | run 2 | run 3 | |
+|---|---:|---:|---:|---|
+| 0 | 1,192,491 | 1,192,569 | 1,192,161 | |
+| 1 | **1,305,100** | **616,240** | **1,304,470** | spread 688,860 |
+| 2 | 26,868 | 714,918 | 26,764 | spread 688,154 |
+| 3 | 22,801 | 22,920 | 22,683 | |
+| 4 | 313,206 | 313,172 | 314,193 | |
+| 5 | 22,824 | 23,477 | 23,019 | |
+| total | 2,883,290 | 2,883,296 | 2,883,290 | **spread 6** |
+
+The same total work, distributed differently. The canonical membership split
+was EQUAL-COUNT over a key sort, and the observations differ in width by four
+orders of magnitude — a loader ProgramData body against a 368-byte Market
+header — so which page a megabyte-wide account lands on is decided by a keypair
+the campaign draws fresh. At 1,305,100 of a 1,399,850 ceiling, one more account
+on the wrong side of a boundary is a failed page and a campaign that dies
+without ever reaching the action under test. **That is the failure the
+predecessor lane observed and attributed to the bump draw.**
+
+### So the split balances hashed BYTES, and the widest page stopped moving
+
+An account costs a page its data plus the 81 bytes the receipt digest hashes
+beside it. The producer now minimizes the widest page — binary search over
+capacities with a greedy feasibility walk — keeping the partition contiguous in
+key order, which is the route's only ordering conjunct, and every page nonempty
+and inside the manifest's 48-account ceiling. **Nothing on chain changes:**
+`page_account_counts` has always been per-page data in the producer-owned
+manifest, and an equal-count manifest is still one this route accepts.
+
+Three more runs on the SAME ELF set — the change is host-side, so the
+executables and every draw are unmoved and the comparison is exact:
+
+| page | run 1 | run 2 | run 3 |
+|---|---:|---:|---:|
+| 0 | 20,075 | 19,615 | 21,137 |
+| 1 | **1,182,094** | **1,182,094** | **1,182,094** |
+| 2 | 619,344 | 619,158 | 617,478 |
+| 3 | 724,734 | 725,223 | 724,646 |
+| 4 | 323,627 | 323,440 | 323,667 |
+| 5 | 14,860 | 15,198 | 15,626 |
+| total | 2,884,734 | 2,884,728 | 2,884,648 |
+
+The widest page fell from 1,305,100 to 1,182,094 and is identical to the digit
+across three runs. Headroom on it is 217,756 of 1,399,850 — 15.6 per cent,
+against 6.8. The residual on the other five is 227 to 1,866 CU, and it is the
+boundary shifting by a small account rather than a search: the six-page total
+holds to within 86. **1,182,094 is the FLOOR of this shape**, the widest single
+observation; no partition puts less than one account on a page, and getting
+under it means the page route not hashing complete account data, which is a
+different design.
+
+### The Market carries the Product graph, in four bytes it already had
+
+`c81c94d91` retired the ACCELERATOR's Product-graph walk with a witness relay
+and said Trading's own copy had no carrier, because `HotBumpHintsV1` is full
+and the Market's `StateBumpsV1` was "one record family short". It is four
+record families short — eight bumps, two per record — and five reserved bytes
+do not hold eight.
+
+**They hold eight nibbles.** A recorded nibble `v` is the bump `256 - v`,
+carrying 255 down to 241; zero is unrecorded and its reader searches; a bump
+below 241 is recorded as unrecorded, which costs a search on about one
+derivation in 32,768 and can never cost a refusal. `STATE_BYTES` stays 368, so
+**there is no migration to make**: an account written before the field existed
+holds zeros, decodes, works, and keeps the search. The alternative — appending
+eight bytes — is what `tools/release/README.md` already prices: Core's only
+`resize` is `resize(0)`, so every market already written would be refused by
+length forever.
+
+| Trading `start` -> `root-product`, one byte-identical ELF set | |
+|---|---|
+| Market records nothing | 104,040 / 105,540 / 105,540 / 104,040 / 104,040 / 107,040 |
+| Market records the graph | 89,139 / 86,139 / 87,639 |
+
+**A saving of 14,901 to 20,901, centre about 17,900**, which is the fifth
+addendum's predicted ~18,000. The 12,000 it keeps is eight
+`create_program_address` calls at 1,500, this design's floor.
+
+**The producer half is where the work actually was.** Three separate producers
+had to learn to record, and one of them turned the whole change into a no-op
+until it did: with the reader landed and the campaign's fixture still writing
+`StateBumpsV1::UNRECORDED`, `root-product` was 104,040 before and 104,040
+after, to the digit, and a probe on the campaign's own Market read eight zeros.
+`AuthenticatedProductRuntimeV2` also had to start CARRYING the six bumps its
+walk derives rather than writing them into a caller's out-parameter the
+unhinted entry points threw away — without that, Core's founding would have
+persisted six zeros beside two bumps and nothing would have gone red. And the
+local-validator founding driver predicts `sha256(CoreState)` two stages before
+Core writes one, so it predicts the new tail too; its own doc records that a
+tail left zero moves the permit digest and refuses three legs later naming
+nothing.
+
+### Where the Remove's wall is, and what this does not claim
+
+On this ELF set the partial equity Remove does **not** commit, on any of three
+draws. What the hint moved is the wall: without the Market's bumps it dies
+before `commit-lifecycle-closes`; with them it reaches the commit tail with
+26,684 / 34,174 / 44,684 CU remaining against the 85,568 that tail needs, so it
+is short by **40,884 to 58,884**.
+
+`c81c94d91` saw it commit with 1,970 CU left on a favourable draw and said so.
+The distance between "commits with 1,970" and "short by 51,000" IS the draw,
+and that is the honest reading of a margin smaller than one
+`create_program_address` iteration: **it was never headroom.** Every remaining
+candidate in the fifth addendum's table is still owed, and the Remove needs
+about 50,000 of them before "commits" stops meaning "on a favourable draw".
+
+### The span-width bank HAS a consumer, and the route that consumes it is dead
+
+The fifth addendum said the span bank "HAS NO CONSUMER, and the route refuses it
+nonempty... the producer side is dead weight and should be read as such." That
+reading was taken over the equity and LP families, which do assert
+`span_widths().is_empty()`. **There is a third family, and it needs nine.**
+
+    programs/dclutch-trading-sbf/src/dealer/v3_accelerator_accounts.rs:138
+        let spans: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4] = invocation
+            .span_widths()
+            .try_into()
+            .map_err(|_| DealerScenarioAcceleratorErrorV4::Invocation)?;
+
+`DEALER_SCENARIO_PROFILE_SPANS_V4` is 9. The chain is four links and every one
+of them is unconditional:
+
+1. `dclutch-dealer-accelerator-sbf/src/lib.rs:409` dispatches the selector-9
+   Dealer scenario family to `evaluate_authenticated_dealer_scenario_v4`;
+2. that evaluator's first substantive act is the nine-width `try_into` above;
+3. `invocation.span_widths()` is the `Vec<u32>` built in
+   `authenticate_accelerator_invocation_v4`, whose sole constructor is
+   `hot_v3.rs:1277`;
+4. it is filled by `authenticate_accelerator_witness_v4`, which refuses
+   `witness.span_count() != 0` and then loops `0..span_count()` — so it is
+   **always empty**, and the `try_into` into `[u32; 9]` **always fails**.
+
+**The selector-9 Dealer scenario family is unconditionally refused by the
+admitted accelerator, with `DealerScenarioAcceleratorErrorV4::Invocation`, on
+every input.** Nothing is red because nothing exercises that route through the
+accelerator: `accepted.rs` runs the equity and LP families over the split
+checkpoint routes, and `physical.rs` refuses on the frame long before the
+witness. This is the producer-missing shape one turn around — reader, schema
+and refusal all built, and a blanket refusal on the carrier that the third
+family's reader depends on.
+
+**So the bank is not removed, and the binding it needs is not a digest.** The
+obvious repair — commit the span bank in `context.runtime_observations_digest`,
+the way the representative bank is committed — is exactly what the fourth
+addendum forbids by name: *"A request field that carried an evaluation INPUT
+rather than an authentication RESULT would make the accelerator a mirror of its
+caller."* Span widths shape the account frame the transition evaluates over;
+they are an evaluation input. A caller-signed commitment to them is the caller's
+word, not a fact about an account the accelerator reads.
+
+The binding therefore has to be a DERIVATION on the accelerator's side:
+`authenticate_dynamic_span_widths_v3` already computes widths from the
+AccountProfile's dynamic span rules and the runtime scalars, which is the same
+shape as `acc-product-runtime` staying at 39,217 because it decides the
+arithmetic. If the accelerator derives them, the witness's span bank is
+redundant and should go with the refusal; if it cannot (the profile moved into
+the witness at `742d7b7be`), then the widths are the first value on this route
+that needs an authenticated carrier of its own.
+
+**Author:** the Dealer accelerator's owner jointly with `hot_v3`'s. It is a
+route-liveness question, not a compute one, and it is the first thing the next
+lane should read.
+
+### What this lane owes
+
+- **The three rejoin hostiles have no home yet, and that is a finding rather
+  than a deferral.** `accepted.rs` runs the real Trading ELF, which composes the
+  witness on chain, so there is no seam to inject a tampered one; the only
+  injection seam is the test caller's verbatim request account, which
+  `physical.rs` uses and which sits behind a prelude no complete chain fixture
+  has ever been staged for. `dealer_chain`'s only constructor,
+  `project_dealer_scenario_unsplit_chain_topology_v4`, still has no caller in
+  the tree. The hostiles are blocked on that fixture, which is a unit of its
+  own and not a hostile-sized one.
+- The scenario route's span widths, above.
+- `capability_funding_header_v2`'s generator-freshness test needs a local
+  `.lake/build` and fails here for want of one; the market-core emitter this
+  work does change was run and its output matches the checked-in file byte for
+  byte.

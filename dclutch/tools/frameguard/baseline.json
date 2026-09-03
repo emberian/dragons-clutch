@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "cee27ff16408a826a04e762e2687c7d08f840a43",
+  "commit": "b312ce3c4b356bafbf4f914fe94be17a115522c9",
   "link_count": 12,
   "links": [
     {
@@ -254,7 +254,7 @@
         },
         {
           "frames_bytes": [
-            1664
+            1728
           ],
           "symbol": "_ZN18dclutch_claims_sbf15affine_batch_v252authenticate_runtime_product_basis_core_with_rent_v317h<hash>E"
         },
@@ -482,7 +482,7 @@
         },
         {
           "frames_bytes": [
-            1024
+            1088
           ],
           "symbol": "_ZN18dclutch_claims_sbf19rational_product_v317authenticate_core17h<hash>E"
         },
@@ -908,7 +908,7 @@
         },
         {
           "frames_bytes": [
-            3520
+            3584
           ],
           "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v324authenticate_and_prepare17h<hash>E"
         },
@@ -962,7 +962,7 @@
         },
         {
           "frames_bytes": [
-            1088
+            1152
           ],
           "symbol": "_ZN18dclutch_claims_sbf24authenticate_core_market17h<hash>E"
         },
@@ -1436,7 +1436,7 @@
         },
         {
           "frames_bytes": [
-            832
+            896
           ],
           "symbol": "_ZN18dclutch_claims_sbf30authenticate_economic_accounts17h<hash>E"
         },
@@ -1725,7 +1725,7 @@
         },
         {
           "frames_bytes": [
-            3776
+            3840
           ],
           "symbol": "_ZN16dclutch_core_sbf10capability7process17h<hash>E"
         },
@@ -1899,7 +1899,7 @@
         },
         {
           "frames_bytes": [
-            2688
+            2752
           ],
           "symbol": "_ZN16dclutch_core_sbf11open_market17authenticate_open17h<hash>E"
         },
@@ -2325,7 +2325,7 @@
         },
         {
           "frames_bytes": [
-            3712
+            3776
           ],
           "symbol": "_ZN16dclutch_core_sbf19generic_founding_v112process_open17h<hash>E"
         },
@@ -2637,7 +2637,7 @@
         },
         {
           "frames_bytes": [
-            3200
+            3264
           ],
           "symbol": "_ZN16dclutch_core_sbf5found10plan_found17h<hash>E"
         },
@@ -2679,7 +2679,7 @@
         },
         {
           "frames_bytes": [
-            3776
+            3840
           ],
           "symbol": "_ZN16dclutch_core_sbf5found23authenticate_references17h<hash>E"
         },
@@ -2711,7 +2711,7 @@
         },
         {
           "frames_bytes": [
-            704
+            768
           ],
           "symbol": "_ZN16dclutch_core_sbf5found28authenticate_prepare_context17h<hash>E"
         },
@@ -3331,7 +3331,7 @@
         },
         {
           "frames_bytes": [
-            1024
+            1088
           ],
           "symbol": "_ZN19dclutch_custody_sbf19authenticate_market17h<hash>E"
         },
@@ -3409,7 +3409,7 @@
         },
         {
           "frames_bytes": [
-            2560
+            2624
           ],
           "symbol": "_ZN19dclutch_custody_sbf21dealer_reservation_v119authenticate_effect17h<hash>E"
         },
@@ -5214,7 +5214,7 @@
         },
         {
           "frames_bytes": [
-            3200
+            3264
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect36process_direct_funding_activation_v117h<hash>E"
         },
@@ -6130,7 +6130,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 905,
+      "frame_count": 903,
       "functions": [
         {
           "frames_bytes": [
@@ -6662,7 +6662,7 @@
         },
         {
           "frames_bytes": [
-            2304
+            2368
           ],
           "symbol": "_ZN19dclutch_trading_sbf21direct_close_maker_v119authenticate_market17h<hash>E"
         },
@@ -9014,7 +9014,7 @@
         },
         {
           "frames_bytes": [
-            896
+            960
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer30v4_equity_accelerator_accounts24authenticate_core_market17h<hash>E"
         },
@@ -9657,7 +9657,7 @@
         },
         {
           "frames_bytes": [
-            2496
+            2560
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v328authenticate_market_boxed_v317h<hash>E"
         },
@@ -9945,7 +9945,7 @@
         },
         {
           "frames_bytes": [
-            128
+            0
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v337authenticate_product_runtime_boxed_v317h<hash>E"
         },
@@ -10119,7 +10119,7 @@
         },
         {
           "frames_bytes": [
-            1024
+            1152
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v344authenticate_product_runtime_hinted_boxed_v317h<hash>E"
         },
@@ -10140,12 +10140,6 @@
             576
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v347authenticate_top_level_root_roles_from_cache_v317h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            960
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6hot_v348authenticate_product_runtime_for_record_boxed_v317h<hash>E"
         },
         {
           "frames_bytes": [
@@ -10992,12 +10986,6 @@
             0
           ],
           "symbol": "_ZN25dclutch_market_core_codec9generated8Identity3new17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN26dclutch_product_runtime_v29ContentId3new17h<hash>E"
         },
         {
           "frames_bytes": [

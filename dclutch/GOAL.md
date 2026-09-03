@@ -3735,3 +3735,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Credential check: the Helius key is absent from the repo, its history and the cut; two local job-dir files that captured
   it (a founding log; cohort-13's sim-config) redacted in place; the staging generator now refuses to emit it (674a7873e).
 - Cuts: `1d3deeb80`, `29cd4639c`, `ac1e1b655`.
+- DEALER closed (`7f77a1085` rows; `cee27ff16` the page route's two searches hinted AND the membership split balances hashed
+  BYTES — page 1 had swung 616,240 ↔ 1,305,100 across runs from an equal-count split over observations four orders of
+  magnitude apart; widest page **1,182,094 to the digit in three runs**, headroom 217,756; `b312ce3c4` **StateBumpsV1 carries
+  the Product graph's eight bumps as nibbles in four reserved bytes — no migration; Trading start → root-product 104,040 →
+  ~87,000**, the fixture half load-bearing; `7ef3c82c0` sixth addendum). **The Remove reaches the commit tail short by
+  41–59k; it committed once on a favourable draw.** Route-liveness finding: the selector-9 family is refused by the ADMITTED
+  accelerator on every input (the witness keeps span widths empty; the bank has a consumer) — needs an accelerator-side
+  derivation. `v2_generator_fresh` green on hbox's tmpfs. → DEALER **`(spawned)`**: the inter-child frame builds and the
+  permission bank (the Remove on three consecutive runs), selector 9 through the admitted accelerator, the rejoin hostiles'
+  seam.
+- hbox's root filesystem was at 0 bytes free: 11.5 GB of my lanes' build outputs removed (sources, evidence, the warm .lake
+  kept); 12 GB free now. ember: the rest of the disk is yours (~/dev 27G, ~/h1-ghost 23G, ~/snap 9.7G, ~/tmp 9.4G).
+- Cuts: `bcf42759f`, `131b8131e`, `e4672668b`.
