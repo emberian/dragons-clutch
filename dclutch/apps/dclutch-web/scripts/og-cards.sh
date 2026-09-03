@@ -47,24 +47,16 @@ magick "$WORK/scrimmed.png" "$WORK/block.png" -gravity East -geometry +56+0 \
   -compose over -composite -quality 88 "$OUT/site-card-v1.jpg"
 
 # One card per registered market, titled from the registry itself so the
-# cards can never drift from the words the pages render. Titles split on
-# " — " into a large first line and a quieter second.
+# cards can never drift from the words the pages render.
 #
-# A LIVE MARKET'S ROW CARRIES NO TITLE any more: the page derives a better one
-# off the market's own partition, and this script has no chain read. So the card
-# falls back to the COORDINATE's common name, which is the same fallback the
-# page metadata takes and the one editorial field that survives a re-founding.
-# Without it this loop threw on the first titleless row and produced no cards at
-# all -- and it is a shell script nothing in `npm test` runs, so the first
-# notice would have been an empty share card on the live site.
-node -e '
-const registry = require("./fixtures/market-registry.devnet.json");
-for (const [address, entry] of Object.entries(registry.markets)) {
-  const named = entry.title ?? entry.coordinate?.label ?? null;
-  if (named === null) continue;
-  const [lead, rest] = named.split(" — ");
-  console.log([address, lead, rest ?? ""].join("\t"));
-}' | while IFS="$(printf '\t')" read -r ADDRESS LEAD REST; do
+# THE ROWS ARE DERIVED IN A MODULE `npm test` RUNS: scripts/og-cards.mjs. They
+# used to be derived inside a `node -e` string, and when the registry stopped
+# writing titles for live markets that string threw on the first titleless row
+# and this loop produced NO cards at all -- not a bad card, none -- because it
+# is a shell script nothing in the suite runs. `lib/ogCards.test.ts` now runs
+# the derivation against the shipped registry, and asserts that this file still
+# calls it.
+node scripts/og-cards.mjs --rows | while IFS="$(printf '\t')" read -r ADDRESS LEAD REST; do
   magick -background none -font "$GB" -pointsize 40 -fill '#b9ff64' label:'dC' "$WORK/mwm1.png"
   magick -background none -font "$GB" -pointsize 40 -fill '#e9eee9' label:'lutch' "$WORK/mwm2.png"
   magick "$WORK/mwm1.png" "$WORK/mwm2.png" +append -background none "$WORK/mwordmark.png"

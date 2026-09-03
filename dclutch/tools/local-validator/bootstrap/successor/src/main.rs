@@ -35,6 +35,7 @@ mod funding_readiness;
 mod general_capability_activation;
 mod general_devnet_market;
 mod general_market;
+mod general_session;
 mod general_settlement_fixture;
 mod general_successor_plan;
 mod infrastructure_succession;
@@ -211,6 +212,9 @@ fn run() -> Result<()> {
             evidence_refresh::run_owned_loopback(arguments.collect())
         }
         Some("devnet-direct-trade-v1") => direct_trade::run_devnet(arguments.collect()),
+        Some(general_session::DEVNET_GENERAL_SESSION_COMMAND_V1) => {
+            general_session::run_devnet(arguments.collect())
+        }
         Some(command) if command == family_hot_campaign::GENERAL_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::General)
         }

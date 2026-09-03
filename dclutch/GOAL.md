@@ -3861,3 +3861,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1`** (empty today) or the first founding refuses fail-closed; put it in
   tools/cohort14's successor runbook and preflight.
 - Cuts: `c4255934e`.
+
+### Lane map delta — 2026-09-03 07:15 EDT
+- GENERAL-SESSION closed (`d2d342573` the read-only `devnet-general-session` driver; `7a18a2272`): the account table by author
+  — 55 top-level, every coordinate authored by founding, ladder, activation, loader or runtime EXCEPT the capability seal
+  (producible, unproduced — the route is permissionless and only Direct has a builder) and **the four caller authorities,
+  which are unstateable: seeded from `sha256(request header ‖ inline bank)` while the bank carries `CURRENT_SLOT` from
+  `Clock::get()` every execution — the address is a function of the executing slot and the account list is fixed at
+  signing** (0x4001 at the family's entrance; the tree's own window law already killed this shape for scratch pages). The
+  previous addendum's laws (b)/(c) were about the local harness, not the route. Also: the General market was founded with a
+  48-byte RentCredit width (the unit fixture; the chain's is 128) — re-found with observed widths. No SOL spent.
+- **RULING (under the standing goal; ember may reverse): a caller authority's address is a function of the signed
+  instruction alone, never of the executing slot** — `role_request_digest` becomes a slot-free digest
+  (`sha256(parent_request_digest ‖ chunk_index)`); no trusted-environment scalar enters any address seed. A Trading change
+  → rides to chain with cohort-15. → GENERAL **`(spawned)`**: the seed, the two-slot proof, observed widths, a family-neutral
+  seal builder, the cohort-15 runbook (incl. the recorded Core digest).
+- WEB (`e45eaaa0b`): /pulse's last-boundary rule per phase; the paid market published.
+- Cuts: `37a55887d`, `f19ebd789`.

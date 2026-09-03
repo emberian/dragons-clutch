@@ -1,0 +1,26 @@
+{
+  "schema": "dclutch-og-card-facts-v1",
+  "cluster": "devnet",
+  "markets": {
+    "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A": {
+      "phase": "Terminal",
+      "settledAtUnixSeconds": "1788415399",
+      "windowEndUnixSeconds": "1788417096"
+    },
+    "FgzbVSWVp36R5AVPchneyz9AKCMzdjpRfsekUsY4tT6i": {
+      "phase": "Open",
+      "settledAtUnixSeconds": null,
+      "windowEndUnixSeconds": "1788417666"
+    },
+    "8ExdC1RwbyuJweEqT1F6Gk9rgN87uuVaLwtaY2wmr5x": {
+      "phase": "Open",
+      "settledAtUnixSeconds": null,
+      "windowEndUnixSeconds": "1788417096"
+    },
+    "BL8zsFokbz7aEdo3wjtcNffd5P1D8a9wVxwKq3mcMsMN": {
+      "phase": "Open",
+      "settledAtUnixSeconds": null,
+      "windowEndUnixSeconds": "1788439083"
+    }
+  }
+}

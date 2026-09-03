@@ -1751,3 +1751,162 @@ instruction, which is a program change.
 market**, against a 0.4 budget. The deployer was not touched.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: OPENBATCH HAS AN AUTHOR FOR EVERY ACCOUNT NOW, AND TWO OF THEM CANNOT EXIST
+
+The previous addendum said `--market` was not what is missing and named three
+laws. Two of them are now discharged and the third is narrowed to a sentence.
+`devnet-general-session` (`d2d342573`, read-only: no keypair, no signature, no
+write RPC) derives the complete `OpenBatch` frame from
+`8ExdC1RwbyuJweEqT1F6Gk9rgN87uuVaLwtaY2wmr5x`'s own records and reports each
+account's producer.
+
+**Law (a) is discharged.** `authenticate_top_level` wants the top-level program
+to be Trading, and `build_general_hot_instruction_v3` builds exactly that
+instruction. Nothing about it needed a deployed test caller: the caller is
+cohort-14's Trading `DcsWHSjPTTpYzXScmB5xYh3iEsM9fx4YFC1BPvQggEtu`.
+
+**Law (b) is discharged and was a statement about the harness.** The genesis
+fixtures belong to `local-private-validator-general-hot-campaign-v1`, whose
+test caller reads the accelerator request out of an account. Real Trading
+BUILDS the `AdmittedAcceleratorRequestV2` and passes it as CPI instruction
+data (`admitted_composition_v3.rs`); the runtime coordinates are the
+AccountProfile's own accounts. There is no request account on the real route
+and nothing was owed a producer there.
+
+**Law (c) is discharged.** `general_envelope_v1`'s `0xd1`/`0xd2` fixtures are
+that same harness's. `build_general_hot_instruction_decoded_v3` builds the
+envelope from `state.release_set`, the fixed frame's own Market, and
+`state.generation` — chain values, not constants.
+
+### THE FRAME, MEASURED
+
+Finalized slot **492,454,423**. Two independent authors agree on the capability
+root: this command derives `JDsNG7Tdj55pq81AVbcgymuXY763tDy7mHWsPyePJy9j` from
+the Market's own header, and §"THE GENERAL MARKET IS FOUNDED AND ACTIVATED"
+recorded it from the activation.
+
+| | |
+| --- | --- |
+| fixed accounts | 39 (Hot38 + capability seal) |
+| strategy accounts | 12 = 8 evidence + 4 caller authorities |
+| runtime suffix accounts | 4 |
+| **top-level accounts** | **55** |
+| accelerator CPI accounts | 57 = 48 + `general_account_profile_fixed_count_v3(OpenBatch)` = 9 |
+| inline bank | 2,648 bytes = 8·151 scalars + 32·45 identities |
+| transport | `ChunkedBankV2` input-inline, **4 accelerator invocations** |
+| Product outcomes | 4 |
+| release set / generation / entry | `398e51c0…` / 2 / 3 |
+
+The bank width does not vary with N on this action: `OpenBatch`'s item scalar
+stride is zero, so `a4c5add4`'s "N=2, bank=2648" is this market's number too,
+at four outcomes.
+
+The runtime vector, nine coordinates: root, config raw, Product raw, portfolio
+raw and linked-basis raw are injected from the fixed frame; the General batch
+state is created by this instruction's own lifecycle plan; then the lifecycle
+payer, the RentCredit, and the System program.
+
+### WALL ONE: THE MARKET PUBLISHES A RENTCREDIT WIDTH NO ACCOUNT HAS
+
+**Recovered from the chain, not read from `policy.json`.** Two encodings of the
+`OpenBatch` AccountProfile differing in exactly one external width locate that
+width's little-endian offset; the value is then read out of the finalized
+record `HyHg2de3J3PBAev5pg8Av8rrk7biDLDnU4h9yQTsxjuH`, and the recovered set
+must re-encode to those exact 576 bytes or the command refuses. It publishes
+`rent_credit = 48` and `linked_basis_prefix = 256`.
+
+48 is the width in `account_rules_v3.rs`'s own `#[cfg(test)]` fixture, and the
+whole devnet `external_widths` block is that fixture transcribed — which the
+runbook admitted (*"they are an input and not a measurement"*) without saying
+which ones were wrong. The prestate is `Exact`, and the only RentCredit this
+protocol produces is `LIFECYCLE_RENT_CREDIT_BYTES_V2` = **128**. This market's
+own lifecycle RentCredit `7FtTqxsy5888L8V9KSqvZj867UwD6PtRKeDtxeh92p21` reads
+128 bytes `DCLRNTL2` on chain.
+
+Two more of the transcribed widths are wrong against this cohort and do not
+reach `OpenBatch`'s coordinates: `activation_cache: 160` against 1,288
+observed at `F66BhQey…`, and `core_market: 320` against the Market's own 368.
+`realm_record: 112`, `rent_sysvar: 17`, `upgradeable_program: 36` and the three
+`*_programdata_prefix: 45` all hold.
+
+**This is a founding input, not a protocol gap**: fixed by re-founding with
+observed widths. And nothing on the `OpenBatch` commit path decodes the
+RentCredit — `apply_lifecycle_creates_v3` touches only the state, the payer and
+System — so on this action the coordinate binds no authority at all. Its only
+effect is to refuse.
+
+### WALL TWO: THE CALLER AUTHORITY'S ADDRESS IS A FUNCTION OF THE SLOT
+
+Each of the four admitted caller authorities, at top-level coordinates 47..50,
+is `find_program_address([dclutch:role-authority:v1, release_set, market,
+Trading, root, role_request_digest], Trading)`, and `role_request_digest` is
+`sha256(accelerator request header ‖ inline bank)`. `OpenBatch`'s AccountProfile
+declares `TrustedEnvironmentV2::CurrentSlot`, so Trading seeds
+`scalar::CURRENT_SLOT` from `Clock::get()` into that bank on every execution.
+
+Each address therefore differs in every slot, and the top-level account list is
+fixed when the transaction is signed. Trading refuses `TradingSbfError::Release`
+**`0x4001`** at `admitted_composition_v3.rs`. Nothing needs producing — a PDA
+signer need not exist — so this is not a missing producer; it is an address no
+caller can state.
+
+**The tree already states the law and applied it to something else.**
+`the_window_gated_actions_declare_the_current_slot_in_their_bank` says
+*"Anything outside the executing instruction that has to STATE that bank is
+therefore valid for exactly one slot, which no caller can deliver into"*, and
+that sentence deleted the input scratch-page transport (`1fee82fa`,
+`a517d27c`). The caller-authority address is the same kind of object and
+survived the cut, because the cut reasoned about page ACCOUNTS and this is a
+page-less ADDRESS.
+
+Seven actions declare `CurrentSlot`: `OpenBatch`, `CloseBatch`, `PlaceOrder`,
+`CancelOrder`, `ReleaseOrder`, `SubmitCandidate`, `CloseCandidate`. The
+settlement seven declare `None` and are, in principle, stateable — and every
+one of them is downstream of a batch `OpenBatch` has to open. So the wall is at
+the family's entrance.
+
+Design note, with the fix and whose decision it is:
+`docs/design/GENERAL_CALLER_AUTHORITY_SLOT_BINDING_2026_09_03.md`. The shape is
+to seed the authority with `sha256(parent_request_digest ‖ chunk_index)` — the
+caller-stated family request Trading already carries at
+`HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3` — instead of the trusted-environment
+bank. It moves every admitted caller-authority address, which costs nothing
+today because no admitted-AOT execution has ever run outside `ProgramTest`, and
+will not be free later.
+
+**Both walls are reported, never just the first.** They have different remedies,
+and an ordering that printed only the earliest is how the activation lane's two
+cluster checks became one (`a34bfb7b`).
+
+### THE GENERAL CAPABILITY SEAL EXISTS AS AN ADDRESS AND NOT AS AN ACCOUNT
+
+Fixed coordinate 38 derives to `D9fMTT1wYzxvaKiEdtJRr6wn3bFVmduhr3w74au6L5TG`
+and is **vacant**. Its route exists and is permissionless — Trading's own
+`DCLTSEL1` `process_capability_seal_v1`, which is family-neutral — and the only
+host builder for that request is Direct's
+`build_direct_inline_capability_seal_v3`. So this is a producer that CAN be
+written, unlike the two walls above. It was not written here: a seal is keyed by
+the descriptor digest, and wall one is fixed by re-founding, which mints a new
+descriptor and would strand it.
+
+### ONE DERIVATION THIS LANE GOT WRONG, AND THE CHAIN SAID SO
+
+The graded liability-basis record is not keyed by the semantic
+`liability_basis_id` the Product graph joins on. Deriving it that way lands on a
+vacant PDA — which is what this command reported on its first run, as a missing
+account rather than as a wrong address. Its raw address is now an untrusted
+hint admitted only by reproducing it from the bytes found at it, and it
+resolves to the founding's own `JBpYRqC929AxdgeK8uaZBSe4XXpqXwt5ENUt1fGrMw21`,
+256 bytes, which is exactly the published `linked_basis_prefix`.
+
+### COST
+
+**Zero.** This lane spent no SOL and signed nothing; the campaign payer is
+unchanged at 2.927095270. The two remaining acts a driver could have paid for —
+a 48-byte placeholder at the RentCredit coordinate, and a General capability
+seal — would both be stranded by the re-founding wall one requires.
+
+Devnet evidence. Not mainnet evidence.
