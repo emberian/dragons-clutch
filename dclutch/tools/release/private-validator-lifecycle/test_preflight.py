@@ -37,6 +37,7 @@ def required_paths() -> set[str]:
         f"{preflight.SUCCESSOR}/terminal_sequence.rs",
         f"{preflight.SUCCESSOR}/aggregate_retirement_exterior.rs",
         "crates/dclutch-operator/src/wallet_terminal_payout_v3.rs",
+        preflight.ZERO_CLAIMS_OWNER,
     }
     paths.update(preflight.modeled_source_paths())
     return {path for path in paths if path is not None}
@@ -61,8 +62,16 @@ class OfflinePreflightTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def git(self, *arguments: str) -> None:
+        # THE FIXTURE REPO IS NOT SIGNED, and this suite's own header is the
+        # reason: "no network, no build, no key". A commit signature IS a key.
+        # Inherited `commit.gpgsign` sent every fixture commit to the developer's
+        # 1Password ssh agent, which on 2026-09-03 turned all 27 tests into
+        # errors on a `git commit` exit 128 after 36 seconds each -- a wall that
+        # says nothing about this tree, and which does not exist on the hosted
+        # runner, so the two hosts disagreed about a suite that is meant to be
+        # hermetic. `lane.sh commit` passes the same flag for the same reason.
         subprocess.run(
-            ["git", *arguments],
+            ["git", "-c", "commit.gpgsign=false", *arguments],
             cwd=self.repo,
             check=True,
             capture_output=True,

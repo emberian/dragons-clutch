@@ -487,7 +487,10 @@ mod immutable_owner_tests {
     fn the_real_devnet_ata_is_admitted_and_its_base_fields_survive_the_suffix() {
         assert_eq!(DEVNET_FOUNDER_ATA_V1.len(), 170);
         // The three bytes that made it unpayable, named rather than implied.
-        assert_eq!(DEVNET_FOUNDER_ATA_V1[ACCOUNT_TYPE_OFFSET], ACCOUNT_ACCOUNT_TYPE);
+        assert_eq!(
+            DEVNET_FOUNDER_ATA_V1[ACCOUNT_TYPE_OFFSET],
+            ACCOUNT_ACCOUNT_TYPE
+        );
         assert_eq!(
             u16::from_le_bytes([DEVNET_FOUNDER_ATA_V1[166], DEVNET_FOUNDER_ATA_V1[167]]),
             IMMUTABLE_OWNER_EXTENSION,
@@ -552,12 +555,12 @@ mod immutable_owner_tests {
         // width `ImmutableOwner` occupies where their own value is empty. Only
         // the type distinguishes them, so only the type check can refuse them.
         for extension_type in [
-            1_u16,  // TransferFeeConfig
-            5,      // NonTransferable
-            11,     // CpiGuard
-            14,     // TransferHookAccount
-            6,      // ImmutableOwner is 7; 6 is its neighbour and is not it
-            8,      // MemoTransfer
+            1_u16, // TransferFeeConfig
+            5,     // NonTransferable
+            11,    // CpiGuard
+            14,    // TransferHookAccount
+            6,     // ImmutableOwner is 7; 6 is its neighbour and is not it
+            8,     // MemoTransfer
         ] {
             let bytes = suffixed(ACCOUNT_ACCOUNT_TYPE, extension_type, &[]);
             assert_eq!(bytes.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
@@ -573,7 +576,11 @@ mod immutable_owner_tests {
     fn the_admission_is_pinned_to_one_width_one_account_type_and_one_entry() {
         // A Mint's account-type discriminant with ImmutableOwner's bytes.
         assert_eq!(
-            TokenAccount::parse_base_or_immutable_owner(&suffixed(1, IMMUTABLE_OWNER_EXTENSION, &[])),
+            TokenAccount::parse_base_or_immutable_owner(&suffixed(
+                1,
+                IMMUTABLE_OWNER_EXTENSION,
+                &[]
+            )),
             Err(Error::InvalidExtensionLayout),
         );
         // ImmutableOwner with a nonempty value: the right type at the wrong width.

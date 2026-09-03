@@ -120,6 +120,62 @@ const VACANCY_CUSTODY_OWNER: usize = 2;
 const VACANCY_POSITION: usize = 3;
 const VACANCY_ADMISSION: usize = 4;
 
+/// What a `RetireReceipt` vacancy slot is, and therefore which predicates it
+/// may carry.
+///
+/// THE PARTITION IS NOT INVENTED HERE. `ClaimsFrameDataV1`
+/// (`crates/dclutch-claims-svm/src/frame_spec_v1.rs`) already draws it for
+/// every data-defined Claims frame, and `claims_data_rule`
+/// (`crates/dclutch-general-adapter-contract/src/account_rules_v3.rs`) is
+/// where it becomes two different rules: `Exact(bytes)` -- "including
+/// canonical vacant accounts at zero" -- carries a width and a prestate, while
+/// `PositionOwnerIdentity` carries `opaque_rule(privileges)`, which is
+/// privileges and nothing else. This array is that same partition applied to
+/// the one frame in this program that states its slots by hand.
+///
+/// WHY IT HAD TO BE DRAWN. `e78fa027d` inserted the Claims custody owner at
+/// `VACANCY_CUSTODY_OWNER` so the vacancy group would match the coordinate
+/// group field for field, and the loop beneath it was written for RESOURCES:
+/// system-owned, empty, and holding zero lamports. The custody owner is none
+/// of those things -- it is an off-curve `find_program_address` PDA that no
+/// route allocates, funds or closes, which `protocol_position_v2`'s own
+/// `authenticate_owner` already treats as a pure name, requiring key equality
+/// of its `ClaimsCapability` arm and nothing else.
+///
+/// Applying a resource's zero-lamport predicate to that name handed the
+/// network a griefing verb of exactly the shape census row R13 describes:
+/// the address is derived and keyless, so ANYONE may send it one lamport, and
+/// `RetireReceipt` would then refuse `Accounts` for that (descriptor, outcome)
+/// permanently -- with no drain, no retry that wins, and retirement being the
+/// only path that reclaims the prepaid rent. Measured by the fixture that
+/// pre-funded this slot with one lamport and refused `0x5211`.
+///
+/// The relaxation removes nothing an identity was ever asked to prove. The
+/// key equality below is the whole admission -- it is the same re-derivation
+/// that produced the Position and admission coordinates -- and this route
+/// neither reads the slot's bytes nor moves its lamports: `post_resource_digest`
+/// observes no coordinate account on a `RetireReceipt`, so the receipt this
+/// route emits is byte-identical whether or not a donation arrived.
+const VACANCY_SLOT_KINDS_V2: [VacancySlotKindV2; RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2] = {
+    let mut kinds = [VacancySlotKindV2::Resource; RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2];
+    kinds[VACANCY_CUSTODY_OWNER] = VacancySlotKindV2::Identity;
+    kinds
+};
+
+/// The two predicate classes [`VACANCY_SLOT_KINDS_V2`] selects between.
+#[derive(Clone, Copy)]
+enum VacancySlotKindV2 {
+    /// A resource this program allocates, funds, and closes. Its vacancy is a
+    /// STATE claim -- system-owned, empty, and holding nothing -- and a
+    /// nonzero balance there means the retirement that should have swept it
+    /// did not happen.
+    Resource,
+    /// A derived name no route ever allocates. Its "vacancy" is not a state at
+    /// all, and the only fact about it that can be true or false is whether it
+    /// is the address this program re-derives.
+    Identity,
+}
+
 const POST_RESOURCE_DOMAIN_V2: &[u8] = b"dclutch/rational-lifecycle/post/v2";
 
 /// Stable physical lifecycle refusal.
@@ -1393,17 +1449,23 @@ fn authenticate_complete_vacancy(
         // The supplied owner is checked against the SAME re-derivation that
         // already produced the Position and admission coordinates, so naming a
         // different one refuses here rather than propagating.
-        for (resource, expected) in [shard, structured, owner_account, position, admission]
+        for ((resource, expected), kind) in [shard, structured, owner_account, position, admission]
             .into_iter()
             .zip(expected)
+            .zip(VACANCY_SLOT_KINDS_V2)
         {
+            // Every slot, whatever its kind, is a readonly non-signing name.
             if resource.key != &expected
-                || resource.owner != &system_program::ID
-                || !resource.data_is_empty()
-                || resource.lamports() != 0
                 || resource.is_writable
                 || resource.is_signer
                 || resource.executable
+            {
+                return Err(RationalLifecycleSbfErrorV2::Accounts.into());
+            }
+            if matches!(kind, VacancySlotKindV2::Resource)
+                && (resource.owner != &system_program::ID
+                    || !resource.data_is_empty()
+                    || resource.lamports() != 0)
             {
                 return Err(RationalLifecycleSbfErrorV2::Accounts.into());
             }

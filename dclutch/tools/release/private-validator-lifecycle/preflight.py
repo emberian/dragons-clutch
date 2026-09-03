@@ -83,6 +83,12 @@ class StageContract:
 RUNNER = "tools/release/private-validator-lifecycle/run.py"
 MAIN = "tools/local-validator/bootstrap/successor/src/main.rs"
 SUCCESSOR = "tools/local-validator/bootstrap/successor/src"
+# The retirement supply-zero gate's semantic owner. Named here rather than
+# spelled at its one call site because `test_preflight.py` stages the exact set
+# of files this module reads, and a path spelled twice is a path that goes stale
+# on one side -- which is how the reader below came to be pointed at a file the
+# gate had left.
+ZERO_CLAIMS_OWNER = "crates/dclutch-wallet-terminal-input-operator/src/lib.rs"
 
 
 EXPOSURES: tuple[CommandExposure, ...] = (
@@ -506,6 +512,7 @@ def modeled_source_paths() -> set[str]:
         f"{SUCCESSOR}/terminal_lifecycle.rs",
         f"{SUCCESSOR}/user_position_admission.rs",
         "crates/dclutch-operator/src/wallet_terminal_payout_v3.rs",
+        ZERO_CLAIMS_OWNER,
     }
 
 
@@ -1211,10 +1218,24 @@ def validate_geometry_and_state(repo: Path) -> dict[str, Any]:
     )
     terminal_lifecycle = read_source(repo, f"{SUCCESSOR}/terminal_lifecycle.rs")
     payout_operator = read_source(repo, "crates/dclutch-operator/src/wallet_terminal_payout_v3.rs")
+    # THE GATE MOVED, AND THIS READER DID NOT. `d376896db` made
+    # `authenticate_zero_claims_v1` a workspace crate so the browser could reach
+    # it, and left `terminal_lifecycle.rs` holding a `use` of it. Reading the
+    # predicate where it no longer lives refused EVERY preflight before any
+    # other gate ran, so twelve of this suite's cases -- nine of which assert a
+    # different refusal entirely -- reported this one. So: read it at its owner,
+    # and keep a second predicate on the successor's delegation, because a
+    # re-fork of the gate is exactly what the first predicate stopped catching.
+    zero_claims_owner = read_source(repo, ZERO_CLAIMS_OWNER)
     require_fragments(
-        terminal_lifecycle,
+        zero_claims_owner,
         ("Claims supply at index {claim_index} is {supply}", "produce and execute wallet terminal payouts first"),
         "retirement supply-zero gate",
+    )
+    require_fragments(
+        terminal_lifecycle,
+        ("dclutch_wallet_terminal_input_operator::authenticate_zero_claims_v1",),
+        "retirement supply-zero delegation",
     )
     require_fragments(
         payout_operator,

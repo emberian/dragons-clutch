@@ -26,16 +26,11 @@
 # now and this is a handoff, not an exemption.
 
 # --- Structured lane -------------------------------------------------------
-crates/dclutch-bearer-v2-operator/src/open_lifecycle_policy_v5.rs
-crates/dclutch-bearer-v2-operator/src/open_release_v1.rs
 crates/dclutch-product-payoff-v2-codec/tests/basis_corpus_v3.rs
-crates/dclutch-rational-lifecycle-hot-v3/src/compact_artifacts_v4.rs
 crates/dclutch-rational-lifecycle-hot-v3/src/compact_operator_v4.rs
 crates/dclutch-rational-lifecycle-hot-v3/src/lifecycle_policy_v5.rs
 crates/dclutch-rational-lifecycle-hot-v3/src/release_v1.rs
-crates/dclutch-rational-lifecycle-hot-v3/src/selected_set_v6.rs
 crates/dclutch-rational-open-wasm/src/wire.rs
-crates/dclutch-structured-v2-operator/tests/artifacts.rs
 
 # --- Dealer lane -----------------------------------------------------------
 # dclutch-dealer-codec is the ONE package that declares edition 2021, so these
@@ -47,8 +42,6 @@ crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs
 crates/dclutch-dealer-codec/src/trading_request.rs
 
 # --- Direct lane -----------------------------------------------------------
-programs/dclutch-trading-sbf/program-test/direct-hot/src/fixture.rs
-programs/dclutch-trading-sbf/src/hot_v3.rs
 
 # --- Redemption lane -------------------------------------------------------
 crates/dclutch-wallet-terminal-payout-operator/src/wire.rs

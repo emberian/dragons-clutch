@@ -40,9 +40,8 @@ use dclutch_product_runtime_v2_svm_reader::{
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, RATIONAL_REPLAY_BYTES_V2,
     RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
-    RationalReplayV2, RepresentationActionV2, RepresentationRequestHeaderV2,
-    RepresentationRequestV2,
+    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReplayV2,
+    RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
     DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,

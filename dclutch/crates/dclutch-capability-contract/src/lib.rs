@@ -86,9 +86,11 @@ pub const MANIFEST_SCHEMA_VERSION: u16 = generated_abi::CAPABILITY_MANIFEST_SCHE
 /// The SVM adapter and offchain operators share this semantic owner when they
 /// derive finalized raw-record addresses. It is not a deployed-program or ELF
 /// identity.
-pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] = generated_abi::CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1;
+pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    generated_abi::CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1;
 /// SHA-256 identity of [`CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1`].
-pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] = generated_abi::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] =
+    generated_abi::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 /// Implemented provisional artifact profile.
 pub const ARTIFACT_PROFILE_V1: u16 = generated_abi::CAPABILITY_MANIFEST_ARTIFACT_PROFILE_V1;
 /// Canonical transient Market-opening readiness magic.

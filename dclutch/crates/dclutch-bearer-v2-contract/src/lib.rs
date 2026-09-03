@@ -12,9 +12,9 @@
 //! other outcomes.
 
 use dclutch_rational_representation_v2_contract::{
-    CoordinateIdentitiesV3, ResolvedRequestV2,
-    AssetV2, Error as RepresentationError, PreparedRepresentationV2, RepresentationActionV2,
-    RepresentationRequestV2, prepare as prepare_representation,
+    AssetV2, CoordinateIdentitiesV3, Error as RepresentationError, PreparedRepresentationV2,
+    RepresentationActionV2, RepresentationRequestV2, ResolvedRequestV2,
+    prepare as prepare_representation,
 };
 use dclutch_rational_representation_v2_kernel::{
     Coalescing, Error as KernelError, RepresentationDescriptorV2, ShardCoordinateSuccessor,
@@ -309,8 +309,7 @@ fn authenticate_asset(
     identity: BearerAssetIdentityV2,
     denominator: u64,
 ) -> Result<()> {
-    if asset.actor_shard_account != identity.actor_shard_account
-        || asset.coefficient != denominator
+    if asset.actor_shard_account != identity.actor_shard_account || asset.coefficient != denominator
     {
         return Err(Error::AssetMismatch);
     }

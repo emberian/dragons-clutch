@@ -47,7 +47,8 @@ use dclutch_product_payoff_v2_codec::runtime_v3::{
 use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3,
     OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
-    PHYSICAL_ABI_VERSION_V3, REQUEST_SELECTED_HEADER_BYTES_V3, REQUEST_MAGIC_V2, RepresentationActionV2,
+    PHYSICAL_ABI_VERSION_V3, REQUEST_MAGIC_V2, REQUEST_SELECTED_HEADER_BYTES_V3,
+    RepresentationActionV2,
 };
 use dclutch_rational_representation_v2_request_contract::generated as wire;
 use dclutch_request_profile_contract::{
@@ -559,10 +560,7 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
         // zero collateral recipient and an asset count of one. The selected
         // header class carries none of them in v3, so each is unrepresentable
         // rather than checked.
-        RequestInstructionV1::require_zero(
-            req(wire::SELECTED_REQUEST_RESERVED_TAIL_OFFSET_V3)?,
-            4,
-        ),
+        RequestInstructionV1::require_zero(req(wire::SELECTED_REQUEST_RESERVED_TAIL_OFFSET_V3)?, 4),
     ]);
     for (offset, register) in [
         (wire::REQUEST_RELEASE_SET_OFFSET_V3, ID_RELEASE),
@@ -571,7 +569,10 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
         (wire::REQUEST_DESCRIPTOR_ID_OFFSET_V3, ID_DESCRIPTOR),
         (wire::REQUEST_ACTOR_OFFSET_V3, ID_ACTOR),
         (wire::REQUEST_RECEIPT_MINT_OFFSET_V3, ID_RECEIPT_MINT),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (
+            wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3,
+            ID_AUTHORITY,
+        ),
         (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
         (
             wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
@@ -620,7 +621,8 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
             SCALAR_ACTOR_SHARDS,
         ),
         (
-            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3
+                + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
             SCALAR_STRUCTURED_SHARDS,
         ),
     ] {
@@ -722,13 +724,21 @@ fn encode_transition() -> Result<Vec<u8>> {
 
 fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
     let mut template = vec![0_u8; REQUEST_BYTES];
-    put(&mut template, wire::REQUEST_MAGIC_OFFSET_V3, &REQUEST_MAGIC_V2)?;
+    put(
+        &mut template,
+        wire::REQUEST_MAGIC_OFFSET_V3,
+        &REQUEST_MAGIC_V2,
+    )?;
     put(
         &mut template,
         wire::REQUEST_VERSION_OFFSET_V3,
         &PHYSICAL_ABI_VERSION_V3.to_le_bytes(),
     )?;
-    put(&mut template, wire::REQUEST_ACTION_OFFSET_V3, &[action as u8])?;
+    put(
+        &mut template,
+        wire::REQUEST_ACTION_OFFSET_V3,
+        &[action as u8],
+    )?;
     put(
         &mut template,
         wire::REQUEST_CALLER_ROLE_OFFSET_V3,
@@ -756,7 +766,10 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
         (wire::REQUEST_PARENT_CONTEXT_OFFSET_V3, ID_PARENT),
         (wire::REQUEST_ACTOR_OFFSET_V3, ID_ACTOR),
         (wire::REQUEST_RECEIPT_MINT_OFFSET_V3, ID_RECEIPT_MINT),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (
+            wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3,
+            ID_AUTHORITY,
+        ),
         (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
         (
             wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
@@ -807,7 +820,8 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
             SCALAR_ACTOR_SHARDS,
         ),
         (
-            wire::REQUEST_SELECTED_HEADER_BYTES_V3 + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
+            wire::REQUEST_SELECTED_HEADER_BYTES_V3
+                + wire::ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET_V3,
             SCALAR_STRUCTURED_SHARDS,
         ),
     ] {

@@ -314,13 +314,22 @@ pub fn authenticate_product_runtime_v2<'accounts, 'info>(
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV2<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV2> {
+    // A NAMED SINK, not `&mut ProductRecordBumpsV3::ABSENT`. Every use of a
+    // `const` item materialises a fresh temporary, so the old spelling had the
+    // callee writing into an anonymous copy that `const_item_mutation` warned
+    // about on every SBF build -- and a reader could not tell whether that was
+    // the intent or a lost write. It is the intent: this arm searches for every
+    // bump instead of relaying one, so it has nothing to hand back to a caller.
+    // The bank still reaches the RESULT, because the callee returns it inside
+    // `AuthenticatedProductRuntimeV2`.
+    let mut derived = ProductRecordBumpsV3::ABSENT;
     authenticate_product_runtime_v2_hinted(
         registry_program,
         rent,
         expected_product_digest,
         frame,
         ProductRecordBumpsV3::ABSENT,
-        &mut ProductRecordBumpsV3::ABSENT,
+        &mut derived,
     )
 }
 
@@ -459,8 +468,10 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
     )
 }
 
-/// The same complete walk, at mined bumps where `hints` supplies them, writing
-/// into `derived` every bump it used so one caller can relay them to another.
+/// The same complete walk, at mined bumps where `hints` supplies them,
+/// returning in the projection's `record_bumps` every bump it used so one
+/// caller can relay them to another. It names no `derived` out-parameter --
+/// its doc used to, describing an argument this signature has never had.
 ///
 /// The Dealer family runs this walk TWICE in one instruction -- Trading's own
 /// prelude and, independently, the accelerator's -- and the second one is the
@@ -475,7 +486,15 @@ pub fn authenticate_product_runtime_v3_hinted<'accounts, 'info>(
     frame: ProductRuntimeFrameV3<'accounts, 'info>,
     hints: ProductRecordBumpsV3,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
-    let derived = &mut ProductRecordBumpsV3::ABSENT;
+    // Named for the same reason as in `authenticate_product_runtime_v2`, and
+    // this one is load-bearing rather than a sink: the V2 walk fills routes
+    // 0-2 of this bank and the basis walk below fills route 3, and it is
+    // `*derived` that becomes the returned `record_bumps`. Under the old
+    // `&mut` on a `const` item that worked only by the temporary's lifetime
+    // being extended to this block -- correct, and one edit away from silently
+    // not being.
+    let mut bank = ProductRecordBumpsV3::ABSENT;
+    let derived = &mut bank;
     let runtime = authenticate_product_runtime_v2_hinted(
         registry_program,
         rent,

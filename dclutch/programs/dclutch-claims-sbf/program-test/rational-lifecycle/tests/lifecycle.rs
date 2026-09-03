@@ -8,7 +8,7 @@ use dclutch_claims_affine_batch_program_test::fixture::{
 };
 use dclutch_claims_sbf::rational_lifecycle_v2::{
     RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
-    RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
+    RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, RationalLifecycleSbfErrorV2,
 };
 use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
 use dclutch_claims_svm::protocol_position_v2::{
@@ -68,8 +68,8 @@ use solana_program::{
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
-use solana_system_interface::instruction::transfer;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::transfer;
 use solana_transaction::versioned::VersionedTransaction;
 
 const CLAIMS: Pubkey = Pubkey::new_from_array([0xc1; 32]);
@@ -529,10 +529,15 @@ fn fixture() -> (ProgramTest, Fixture) {
     // The Claims custody owner is deliberately NOT added. It is a keyless
     // derived identity, not a resource: no route allocates it, funds it or
     // closes it, so its production state is system-owned, empty and zero
-    // lamports -- which is exactly what an unadded address reads as. The
-    // RetireReceipt vacancy row (slot `VACANCY_CUSTODY_OWNER`) requires that
-    // state, so pre-funding this address would refuse the retirement at
-    // `RationalLifecycleSbfErrorV2::Accounts` rather than model anything.
+    // lamports -- which is exactly what an unadded address reads as.
+    //
+    // Its funded state is no longer unmodellable, and that is a program repair
+    // rather than a fixture one. `RetireReceipt`'s vacancy row used to run this
+    // slot through the four RESOURCE predicates beside it and refuse
+    // `Accounts` on any balance at all, which handed the network a permanent
+    // block on a derived address anybody may fund;
+    // `a_strangers_donation_to_the_custody_owner_identity_cannot_block_a_retirement`
+    // executes that attack and the retirement now survives it.
 
     let rent = Rent::default();
     let receipt_rent = rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2);
@@ -1525,7 +1530,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
 }
 
 /// Refusal code for `RationalLifecycleSbfErrorV2::Rent`.
-const RENT_REFUSAL: u32 = 0x5215;
+///
+/// Read off the enum rather than restated. `0x5215` was written here as a bare
+/// literal, which AGENTS.md forbids for exactly the reason this file cares
+/// about: a hostile naming a number agrees with the program right up until the
+/// program's discriminant moves, and then it asserts a code nothing raises.
+const RENT_REFUSAL: u32 = RationalLifecycleSbfErrorV2::Rent as u32;
+
+/// Refusal code for `RationalLifecycleSbfErrorV2::Accounts`.
+const ACCOUNTS_REFUSAL: u32 = RationalLifecycleSbfErrorV2::Accounts as u32;
 
 /// Assert a refusal carried an exact program error code.
 ///
@@ -1558,7 +1571,11 @@ async fn a_strangers_lamport_cannot_block_a_prepaid_receipt_activation() {
 
     let activate = wrapped(
         &f,
-        request(&f, LifecycleActionV2::ActivateReceipt, f.rent_credit_initial),
+        request(
+            &f,
+            LifecycleActionV2::ActivateReceipt,
+            f.rent_credit_initial,
+        ),
         false,
         false,
     );
@@ -1674,5 +1691,303 @@ async fn a_strangers_lamport_cannot_block_a_prepaid_receipt_activation() {
             .expect("activated receipt")
             .lamports,
         f.receipt_lamports + 1
+    );
+}
+
+/// Run the whole lifecycle up to the receipt retirement and hand back the
+/// context, the fixture, and everything the retirement needs to be submitted.
+///
+/// Two hostiles below need the SAME prestate -- a descriptor whose coordinate
+/// is retired and whose receipt is not -- and they need it reached by the real
+/// route rather than staged, because the vacancy admission they attack only
+/// runs on the last step. Neither can be a phase of the other: the first
+/// commits the retirement it is named after, and there is no second retirement
+/// after that.
+async fn retired_coordinate_awaiting_its_receipt(
+    label: &str,
+) -> (
+    ProgramTestContext,
+    Fixture,
+    Instruction,
+    Pubkey,
+    Vec<Pubkey>,
+) {
+    let (test, f) = fixture();
+    let mut context = test.start_with_context().await;
+    let coordinate_credit = f
+        .shard_lamports
+        .checked_add(f.structured_lamports)
+        .and_then(|value| value.checked_add(f.position_lamports))
+        .and_then(|value| value.checked_add(f.admission_lamports))
+        .expect("coordinate credit");
+    let after_coordinate_close = f.rent_credit_initial + coordinate_credit;
+    let ladder = [
+        (
+            wrapped(
+                &f,
+                request(
+                    &f,
+                    LifecycleActionV2::ActivateReceipt,
+                    f.rent_credit_initial,
+                ),
+                false,
+                false,
+            ),
+            "ActivateReceipt",
+        ),
+        (
+            wrapped(
+                &f,
+                request(
+                    &f,
+                    LifecycleActionV2::ActivateCoordinate,
+                    f.rent_credit_initial,
+                ),
+                false,
+                false,
+            ),
+            "ActivateCoordinate",
+        ),
+        (
+            wrapped(
+                &f,
+                request(
+                    &f,
+                    LifecycleActionV2::RetireCoordinate,
+                    f.rent_credit_initial,
+                ),
+                false,
+                false,
+            ),
+            "RetireCoordinate",
+        ),
+    ];
+    let retire_receipt = wrapped(
+        &f,
+        request(&f, LifecycleActionV2::RetireReceipt, after_coordinate_close),
+        false,
+        false,
+    );
+    let mut instructions: Vec<Instruction> = ladder.iter().map(|(step, _)| step.clone()).collect();
+    instructions.push(retire_receipt.clone());
+    let addresses = lookup_addresses(context.payer.pubkey(), &instructions);
+    let table = create_lookup_table(&mut context, &addresses, label).await;
+    for (instruction, step) in ladder {
+        // Retirement is admissible only against a Core Market that has left
+        // Open, exactly as the canonical lifecycle case stages it. Without this
+        // the ladder refuses `Market` 0x5214 at `RetireCoordinate` and every
+        // hostile beneath it would be testing the phase guard instead of the
+        // thing it is named after.
+        if step == "RetireCoordinate" {
+            let open_core = account(&mut context, f.graph.core_market)
+                .await
+                .expect("Core Market");
+            make_core_retiring(&mut context, &f, open_core);
+        }
+        let (accepted, logs, _, _) = submit(
+            &mut context,
+            instruction,
+            table,
+            &addresses,
+            &format!("{label}: {step}"),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{step}: {error:?}"));
+        assert!(
+            accepted,
+            "{step} must commit, or the retirement below attacks nothing:\n{}",
+            logs.join("\n")
+        );
+    }
+    for key in [f.shard_mint, f.structured_custody, f.position, f.admission] {
+        assert!(
+            account(&mut context, key).await.is_none(),
+            "RetireCoordinate must have closed every coordinate resource"
+        );
+    }
+    assert!(
+        account(&mut context, f.claims_owner).await.is_none(),
+        "no route allocates the custody owner, so it must still be nothing"
+    );
+    (context, f, retire_receipt, table, addresses)
+}
+
+/// Fund a stranger and have it put the smallest possible balance on `target`.
+///
+/// NOT one lamport, and the difference is measured rather than assumed: the
+/// custody owner does not exist, and a transfer that would CREATE a
+/// rent-paying account refuses `InsufficientFundsForRent` before it reaches
+/// the runtime's account store. So the cheapest donation anyone can actually
+/// land on a vacant derived address is `minimum_balance(0)` -- about 0.0009
+/// SOL, once, forever, against a receipt whose own prepaid rent is larger and
+/// whose only reclaim path this used to block.
+///
+/// The griefer is a fresh keypair holding nothing but that and a fee. It needs
+/// no permission of any kind: every address it attacks is keyless, derived and
+/// system-owned.
+async fn a_stranger_funds(context: &mut ProgramTestContext, target: Pubkey, label: &str) -> u64 {
+    let griefer = Keypair::new();
+    let funder = context.payer.pubkey();
+    process_legacy(
+        context,
+        transfer(
+            &funder,
+            &griefer.pubkey(),
+            Rent::default()
+                .minimum_balance(0)
+                .checked_mul(64)
+                .expect("griefer funding"),
+        ),
+        &format!("{label}: fund a stranger"),
+    )
+    .await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let donation = Rent::default().minimum_balance(0);
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[transfer(&griefer.pubkey(), &target, donation)],
+            Some(&griefer.pubkey()),
+            &[&griefer],
+            blockhash,
+        ))
+        .await
+        .expect("a donation, from anybody, needs nobody's permission");
+    assert_eq!(
+        account(context, target)
+            .await
+            .expect("the attacked address exists now")
+            .lamports,
+        donation,
+        "the attack must have landed, or nothing below is a test"
+    );
+    donation
+}
+
+/// A STRANGER'S DONATION NO LONGER BLOCKS A RECEIPT RETIREMENT.
+///
+/// `e78fa027d` inserted the Claims custody owner into the `RetireReceipt`
+/// vacancy group at slot 2 so the group would match the coordinate group field
+/// for field, and the loop it landed in was written for RESOURCES: system
+/// owner, empty data, and a balance of exactly zero. The custody owner is not a
+/// resource. It is an off-curve `find_program_address` PDA that no route
+/// allocates, funds or closes -- `protocol_position_v2::authenticate_owner`
+/// requires nothing of its `ClaimsCapability` arm but key equality -- so the
+/// zero-lamport predicate was a claim about a state nobody establishes.
+///
+/// That made the address a hostage of the census-row-R13 shape, and worse than
+/// R13's own instance: anybody may put lamports on a derived keyless address,
+/// there is no drain, and `RetireReceipt` is the ONLY path that reclaims the
+/// receipt's prepaid rent. One rent-exempt minimum plus a fee -- see
+/// `a_stranger_funds` for why it is not one lamport -- stranded it forever.
+///
+/// The attack is executed here rather than described, and against the real
+/// prestate: the coordinate is activated and retired through the real route
+/// first, so the vacancy admission this hostile attacks is the one that runs.
+#[tokio::test]
+async fn a_strangers_donation_to_the_custody_owner_identity_cannot_block_a_retirement() {
+    let label = "claims rational-lifecycle: a stranger funds the custody owner identity";
+    let (mut context, f, retire_receipt, table, addresses) =
+        retired_coordinate_awaiting_its_receipt(label).await;
+    let rent_before = account(&mut context, f.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+
+    let donation = a_stranger_funds(&mut context, f.claims_owner, label).await;
+
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        retire_receipt,
+        table,
+        &addresses,
+        &format!("{label}: RetireReceipt survives it"),
+    )
+    .await
+    .expect("retire receipt");
+    assert!(
+        accepted,
+        "a stranger's donation to a derived identity must not strand a receipt's rent:\n{}",
+        logs.join("\n")
+    );
+    assert!(
+        account(&mut context, f.receipt_mint).await.is_none(),
+        "the receipt Mint must be closed"
+    );
+    // The donation is not swept and not double-counted. The retirement credits
+    // exactly the receipt Mint's own balance, as it did before the attack.
+    assert_eq!(
+        account(&mut context, f.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        rent_before + f.receipt_lamports
+    );
+    assert_eq!(
+        account(&mut context, f.claims_owner)
+            .await
+            .expect("the donation")
+            .lamports,
+        donation,
+        "the identity is not a resource, so this route must not touch its balance"
+    );
+}
+
+/// THE CONTROL, and the proof that the relaxation above removed nothing.
+///
+/// Key equality is now the WHOLE of what the custody owner slot must satisfy,
+/// so it has to be shown still refusing. A stranger's address is substituted
+/// into that one account meta -- and only the meta, so the request still
+/// declares the owner the program re-derives, and every conjunct before this
+/// one still passes. It refuses at `Accounts`, from inside the same vacancy
+/// loop the hostile above walks through, which is also what proves that loop is
+/// reached on this route at all.
+#[tokio::test]
+async fn a_substituted_custody_owner_identity_still_refuses_the_retirement() {
+    let label = "claims rational-lifecycle: a substituted custody owner identity";
+    let (mut context, f, mut hostile, table, addresses) =
+        retired_coordinate_awaiting_its_receipt(label).await;
+    // It attacks the SAME prestate the weld does, and it has to. Submitted
+    // against a fresh fixture this refuses `Market` 0x5214 at the Core phase,
+    // hundreds of lines before the vacancy loop -- measured, on the way to
+    // writing this -- which is ledger M-38's universal donor wearing a
+    // hostile's name.
+    //
+    // The substitution is found by identity rather than counted to: the custody
+    // owner occurs exactly once in a RetireReceipt frame, so this cannot
+    // silently start attacking a different slot the day the frame grows.
+    let stranger = Pubkey::new_from_array([0xa7; 32]);
+    assert_eq!(
+        hostile
+            .accounts
+            .iter()
+            .filter(|meta| meta.pubkey == f.claims_owner)
+            .count(),
+        1,
+        "the substitution must be unambiguous"
+    );
+    let slot = hostile
+        .accounts
+        .iter()
+        .position(|meta| meta.pubkey == f.claims_owner)
+        .expect("the custody owner is in the frame");
+    hostile.accounts[slot].pubkey = stranger;
+    // A second table, because the substituted address is in no earlier one and
+    // a v0 message can only name what its table holds.
+    let _ = (table, addresses);
+    let addresses = lookup_addresses(context.payer.pubkey(), &[hostile.clone()]);
+    let table = create_lookup_table(&mut context, &addresses, label).await;
+    let (accepted, logs, _, _) = submit(&mut context, hostile, table, &addresses, label)
+        .await
+        .expect("substituted custody owner");
+    assert!(!accepted, "a substituted identity must never be admissible");
+    assert!(
+        refused_with(&logs, ACCOUNTS_REFUSAL),
+        "the substitution must refuse at {ACCOUNTS_REFUSAL:#x}, not merely fail:\n{}",
+        logs.join("\n")
     );
 }

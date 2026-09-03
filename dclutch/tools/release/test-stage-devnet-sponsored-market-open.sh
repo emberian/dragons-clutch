@@ -31,6 +31,16 @@ printf '%s\n' '#!/usr/bin/env bash' 'echo "cargo stub: $*"' > "$WORK/bin/cargo"
 printf '%s\n' '#!/usr/bin/env bash' '[ "$1" = pubkey ] || { echo "unexpected solana-keygen $*" >&2; exit 3; }' 'head -n 1 "$2"' > "$WORK/bin/solana-keygen"
 chmod +x "$WORK/bin"/*
 printf '{}\n' > "$WORK/plan.json"
+# THE DRIVER IS STUBBED TOO, and until 2026-09-03 it was not -- so case 10
+# below, "the held identity is what reaches the driver", could not reach it.
+# The wrapper invokes `$BOOT/target/debug/dclutch-local-successor-bootstrap` by
+# absolute path, so no PATH stub substitutes for it: the case exited 127 on a
+# missing file, which is a test of nothing. It was invisible because the RPC
+# origin defect above fired four cases earlier.
+mkdir -p "$WORK/target/debug"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "driver stub: $*"' \
+  > "$WORK/target/debug/dclutch-local-successor-bootstrap"
+chmod +x "$WORK/target/debug/dclutch-local-successor-bootstrap"
 FOUNDER=FounderPub1111111111111111111111111111111111
 OTHER=OtherPub111111111111111111111111111111111111
 printf '%s\n' "$FOUNDER" > "$WORK/founder.json"
@@ -108,13 +118,27 @@ else
     echo 'note: no pre-guard revision of the stager is reachable; red controls skipped'
 fi
 
-# The emitted wrapper. Extract the heredoc body and unescape the one level of
-# quoting the stager applies, so the guards run exactly as an operator meets them.
-sed -n '/^cat > "\$WORK\/open-market.execute.sh" <<EOF$/,/^EOF$/p' "$STAGER" \
-  | sed '1d;$d' | sed -e 's/\\\$/$/g' -e 's/\\\\$/\\/' > "$WORK/wrapper.sh"
-grep -q 'DCLUTCH_FOUNDING_FOUNDER_KEYPAIR' "$WORK/wrapper.sh" || fail 'wrapper extraction found no founder guard'
-bash -n "$WORK/wrapper.sh" || fail 'extracted wrapper is not valid bash'
+# THE WRAPPER IS EMITTED BY THE STAGER'S OWN EMITTER, not by a second reading of
+# it. This used to `sed` the heredoc body out and unescape one level of quoting,
+# which is a second interpreter of the stager's escaping -- and it broke the
+# moment the stager gained a line the heredoc INTERPOLATES rather than escapes:
+# `$RPC_ORIGIN_LINE`, chosen by the `case` above the heredoc so a credential-
+# bearing endpoint is never written to disk. The unescape cannot evaluate a
+# choice, so it produced a wrapper whose line 3 was the literal text
+# `$RPC_ORIGIN_LINE` -- unbound under the wrapper's own `set -u`, so every guard
+# below reported that instead of what it tests. Running the stager's own two
+# blocks costs nothing and has no second author.
 export BOOT="$WORK" PLAN="$WORK/plan.json" DEVNET_RPC=https://example.invalid DEVNET_GENESIS=G
+{
+    sed -n '/^# THE ENDPOINT IS NOT WRITTEN TO DISK/,/^esac$/p' "$STAGER"
+    sed -n '/^cat > "\$WORK\/open-market.execute.sh" <<EOF$/,/^EOF$/p' "$STAGER"
+} > "$WORK/emit-wrapper.sh"
+grep -q '^ *RPC_ORIGIN_LINE=' "$WORK/emit-wrapper.sh" || fail 'wrapper emitter extraction found no RPC origin choice'
+grep -q 'DCLUTCH_FOUNDING_FOUNDER_KEYPAIR' "$WORK/emit-wrapper.sh" || fail 'wrapper emitter extraction found no founder guard'
+WORK="$WORK" bash "$WORK/emit-wrapper.sh" || fail 'the stager emitter did not run'
+mv "$WORK/open-market.execute.sh" "$WORK/wrapper.sh"
+bash -n "$WORK/wrapper.sh" || fail 'emitted wrapper is not valid bash'
+grep -q 'DCLUTCH_FOUNDING_FOUNDER_KEYPAIR' "$WORK/wrapper.sh" || fail 'emitted wrapper carries no founder guard'
 
 run_wrapper() {
     local want_status="$1" want_text="$2"; shift 3

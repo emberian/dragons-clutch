@@ -529,8 +529,14 @@ fn issue_and_unwrap_move_custody_in_opposite_directions() {
     for row in 0..u32::try_from(WIDTH).expect("width") {
         let index = usize::try_from(row).expect("row");
         let moved = plan.get(index).expect("movement").shard_atoms;
-        let issued = issue.asset_row(row).expect("asset").expected_structured_shards;
-        let unwrapped = unwrap.asset_row(row).expect("asset").expected_structured_shards;
+        let issued = issue
+            .asset_row(row)
+            .expect("asset")
+            .expected_structured_shards;
+        let unwrapped = unwrap
+            .asset_row(row)
+            .expect("asset")
+            .expected_structured_shards;
         // Same plan, opposite sign: locking starts below the post-action
         // backing by exactly what it locks, releasing starts above it by
         // exactly what it releases.
