@@ -656,11 +656,13 @@ fn authenticate_series_aware_common_frame(
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
+    custody_cu_checkpoint!("cf-accounts");
     let market = if try_authenticate_premarket_market(accounts, request)? {
         AuthenticatedMarketAdmissionV1::Premarket
     } else {
         AuthenticatedMarketAdmissionV1::Live(authenticate_market(accounts, request, activated)?)
     };
+    custody_cu_checkpoint!("cf-market");
     authenticate_common_frame_tail(
         program_id,
         accounts,
@@ -716,7 +718,9 @@ fn authenticate_common_frame_tail(
     if caller_authority.key != &expected_caller {
         return Err(CustodySbfError::CallerAuthority.into());
     }
+    custody_cu_checkpoint!("cf-caller-authority");
     authenticate_calling_release(program_id, accounts, request, continuation, activated)?;
+    custody_cu_checkpoint!("cf-calling-release");
     authenticate_replay_identity(program_id, replay, request, relay.replay)?;
     Ok(())
 }

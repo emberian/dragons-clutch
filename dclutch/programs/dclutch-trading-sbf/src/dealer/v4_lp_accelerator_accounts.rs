@@ -102,7 +102,6 @@ pub fn evaluate_authenticated_dealer_lp_v4(
         || invocation.request().scalar_count() != u32::from(DEALER_LP_SCALAR_COUNT_V3)
         || invocation.request().identity_count() != u32::from(DEALER_LP_IDENTITY_COUNT_V3)
         || runtime.len() != usize::from(dealer_lp_account_count_v3(request.action))
-        || !invocation.span_widths().is_empty()
         || invocation.input_bank().len() != candidate_bank.len()
         || runtime
             .iter()

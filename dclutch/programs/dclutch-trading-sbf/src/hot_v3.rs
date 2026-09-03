@@ -785,7 +785,6 @@ pub struct AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
     product_runtime: Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>,
     claims_program: ContentId,
     custody_program: ContentId,
-    span_widths: Vec<u32>,
     input_bank: Vec<u8>,
     scalars: Vec<u64>,
     identities: Vec<[u8; 32]>,
@@ -924,11 +923,6 @@ impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 
     /// Current Registry-selected Custody program identity.
     pub const fn custody_program(&self) -> ContentId {
         self.custody_program
-    }
-
-    /// Exact protected Profile13 span widths in descriptor order.
-    pub fn span_widths(&self) -> &[u32] {
-        &self.span_widths
     }
 
     /// Exact complete pre-Transition register bank committed by the request.
@@ -1255,7 +1249,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     // frame went to 5,248 and the SBF linker emitted thirty-four
     // frame-overwrite diagnostics. The two boxed callees this move deleted were
     // load-bearing as FRAMES, not only as code.
-    let span_widths = authenticate_accelerator_witness_v4(AcceleratorWitnessJoinV4 {
+    authenticate_accelerator_witness_v4(AcceleratorWitnessJoinV4 {
         accelerator_program,
         root: frame.root.key,
         registry: frame.registry.key,
@@ -1284,7 +1278,6 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         product_runtime,
         claims_program,
         custody_program,
-        span_widths,
         input_bank,
         scalars,
         identities,
@@ -1417,7 +1410,7 @@ fn decode_accelerator_prelude_context_v4(
 #[inline(never)]
 fn authenticate_accelerator_witness_v4(
     join: AcceleratorWitnessJoinV4<'_, '_, '_>,
-) -> Result<Vec<u32>, ProgramError> {
+) -> Result<(), ProgramError> {
     let context = join.context;
     let request = join.request;
     if admitted_invocation_context_digest_v3(*context)
@@ -1497,41 +1490,19 @@ fn authenticate_accelerator_witness_v4(
     // this frame is refused by the decoder before it can be indexed with.
     let witness = AdmittedPreludeWitnessV1::decode(request.witness())
         .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
-    // THE SPAN BANK IS THE ONE WITNESS SECTION NOTHING BINDS, and this route
-    // refuses it rather than believing it. The context preimage is committed by
-    // the request's `invocation_context`; the representative bank is committed
-    // by the context's `runtime_observations_digest`, which the digest below is
-    // taken against; the span widths are committed by neither. Every family
-    // this accelerator serves requires an EMPTY bank in its own words -- the
-    // equity, LP and scenario evaluators all assert `span_widths().is_empty()`
-    // -- so refusing a nonempty one costs no honest traffic and closes the one
-    // section a caller could otherwise state freely. A dynamic-span profile on
-    // this path is owed a binding before it is admitted, and that is a design
-    // note's job, not a silent acceptance here.
-    //
-    // THAT SENTENCE WAS TRUE OF TWO FAMILIES AND FALSE OF THE THIRD, and the
-    // difference cost the selector-9 Dealer scenario family every input it was
-    // ever handed. Its evaluator did not assert `is_empty()`; it read the bank,
-    // `try_into::<[u32; 9]>`, and the refusal above guarantees the conversion
-    // fails -- so the admitted accelerator refused that whole family
-    // unconditionally and nothing was red because nothing exercised the route
-    // through it. It now derives its nine widths on its own side of the
-    // boundary (`dealer_scenario_span_widths_v4`) and asserts `is_empty()` like
-    // the other two, so this comment describes the tree it is written in.
-    // WITH THAT, NO READER READS A WIDTH OUT OF THIS BANK AT ALL: the producer
-    // side is a section every consumer requires to be zero-length, and its
-    // deletion from `AdmittedPreludeWitnessV1` is owed.
-    if witness.span_count() != 0 {
-        return Err(TradingSbfError::AcceleratorRuntimeView.into());
-    }
-    let mut span_widths = Vec::with_capacity(witness.span_count());
-    for index in 0..witness.span_count() {
-        span_widths.push(
-            witness
-                .span_width(index)
-                .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        );
-    }
+    // THE SPAN BANK WAS THE ONE WITNESS SECTION NOTHING BOUND, and it is gone.
+    // The context preimage is committed by the request's `invocation_context`
+    // and the representative bank by the context's
+    // `runtime_observations_digest`, which the digest below is taken against;
+    // the span widths were committed by neither, so this route refused a
+    // nonempty bank rather than believing it. That refusal is now the codec's:
+    // all three families require the bank empty in their own words, and the one
+    // that used to READ it -- the selector-9 Dealer scenario evaluator, which
+    // `try_into::<[u32; 9]>`d a vector this route guaranteed was empty and so
+    // refused that whole family on every input -- derives its nine widths on
+    // its own side of the boundary now. A section every consumer requires to be
+    // zero-length is not a channel; `AdmittedPreludeWitnessV1` keeps the header
+    // word as a canonical zero and carries no widths at all.
     let mut representatives = Vec::with_capacity(join.runtime_accounts.len());
     for index in 0..join.runtime_accounts.len() {
         representatives.push(
@@ -1560,7 +1531,7 @@ fn authenticate_accelerator_witness_v4(
     {
         return Err(TradingSbfError::AcceleratorRuntimeView.into());
     }
-    Ok(span_widths)
+    Ok(())
 }
 
 /// Bind the accelerator's read-only frame to the top-level Hot instruction.
@@ -4264,7 +4235,6 @@ fn execute_authenticated_hot_v3(
             tail_count,
             scalars: &replan_output_scalars,
             identities: &replan_output_identities,
-            span_widths: &dynamic_spans.widths,
             representatives: &aliases,
         })?
     } else {
@@ -5570,8 +5540,6 @@ struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     tail_count: u32,
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
-    /// Exact dynamic fixed-span widths this execution carved the frame at.
-    span_widths: &'a [u32],
     /// Exact representative coordinate of every logical runtime coordinate.
     representatives: &'a [usize],
 }
@@ -7249,26 +7217,21 @@ fn execute_admitted_candidate_v3(
             .map_err(|_| TradingSbfError::AdmittedContext)?,
     };
     // THE PRELUDE'S OUTPUTS TRAVEL IN THE REQUEST. Everything this program has
-    // just derived -- the complete invocation-context preimage, the dynamic
-    // span widths, the representative coordinates -- is a value the callee's
+    // just derived -- the complete invocation-context preimage and the
+    // representative coordinates -- is a value the callee's
     // own prelude would otherwise re-derive from twelve accounts, and the
     // caller-authority PDA that authorizes the CPI already pins
     // `hash(request_bytes)`. So the request is a channel that costs nothing to
     // widen, and widening it is a MOVE rather than a deletion: the callee still
     // re-derives every field it holds an independent source for and refuses on
     // the first disagreement. See `authenticate_accelerator_invocation_v4`.
-    let mut witness =
-        vec![
-            0_u8;
-            admitted_prelude_witness_bytes_v1(view.representatives.len(), view.span_widths.len())
-        ];
+    let mut witness = vec![0_u8; admitted_prelude_witness_bytes_v1(view.representatives.len())];
     AdmittedPreludeWitnessV1::encode_into(
         admitted_context,
         // The eight Product graph record bumps THIS program's prelude already
         // derived, relayed so the callee's independent walk over the same four
         // records reproduces each address instead of searching for it.
         view.product_runtime_v3.record_bumps.0,
-        view.span_widths,
         view.representatives,
         &mut witness,
     )

@@ -1830,3 +1830,159 @@ test and should carry its own measurement.
   `dclutch-resolution-proof-sbf`'s synthetic provider fixture was left behind by
   `b312ce3c4`'s widening of `AuthenticatedProductRuntimeV2`, which had made
   `cargo check --workspace --tests` red.
+
+## Eighth addendum, 2026-09-03: the Remove commits, both final Removes commit, the campaign is 31 of 31 — and about 45,000 CU of that is the ELF digest, not the code
+
+*Measured at `2fbd6adf3` (the control, taken in its OWN worktree so the host
+tree and the executables match), `3c42f0ece` (the hints) and `40427e0f1` (the
+witness cut), tree root `/Users/ember/dev/dclutch`, real SBF ELFs built in this
+lane's own worktree with its own target directory, zero SBF
+stack-frame-overwrite diagnostics on any of the twenty-four links built for the
+figures below. Eight runs per ELF set rather than three, because three samples
+could not separate a spread of 34,496 from a shift of 18,781.*
+
+### The campaign passes
+
+`accepted` is **31 passed / 0 failed on three consecutive full runs**, and the
+action that has been this note's subject since its first paragraph — the
+partial equity Remove — commits, together with both LP final Removes behind it,
+on **eight consecutive filtered runs of one ELF set**:
+
+| action | headroom over eight draws | worst |
+|---|---|---:|
+| partial equity Remove | 29,026 / 44,038 / 26,038 / 39,526 / 18,540 / 38,026 / 32,038 / 24,538 | **18,540** |
+| first LP final Remove | 36,558 / 35,070 / 21,570 / 44,058 / 5,072 / 30,558 / 38,070 / 32,070 | **5,072** |
+| second LP final Remove | 33,570 / 18,558 / 35,070 / 36,564 / 36,558 / 41,058 / 30,570 / 33,572 | **18,558** |
+
+The control, eight runs at `2fbd6adf3`, reached `commit-lifecycle-closes` with
+19,692 / 48,180 / 1,672 / — / 21,194 / — / 30,182 / 24,182 against the 85,568
+its tail needs, and **two of the eight never reached that checkpoint at all.**
+
+### Three walks over one set of addresses, in one invocation
+
+The evaluator authenticates eleven PDAs. It then hands its result to
+`prepare_multi_lp_v3`, **which searches for four of them again**. That third
+walk was invisible until the first two were hinted, and it was most of the
+remaining draw:
+
+| ELF set | what is hinted | `cx-accelerator-returned` | spread |
+|---|---|---|---:|
+| control | nothing | 127,669 … 162,165 | 34,496 |
+| intermediate | the evaluator's eleven | 111,378 … 144,382 | **33,004** |
+| `3c42f0ece` | and the planner's four | 108,888 … 114,888 | **6,000** |
+
+The carriers are three, each the one that fits. Three of the eleven already
+persist their own bump (`liability_basis_market_bump_v2`,
+`liability_basis_position_bump_v2`, `DealerLpPositionV3::pda_bump`) and needed
+only a fixture that records what a founding would have. Eight ride as nibbles in
+the four bytes `DealerEquityRequestV3` already reserved at 476..480, which is
+`b312ce3c4`'s encoding one family over. The planner's three are a process-local
+relay in `MultiLpContextV3`, not a wire field at all.
+
+Claims reads the same three persisted bytes: `signed_delta_v3` searched for the
+aggregate and both Positions on every child invocation, over accounts whose
+bodies already carried the answer for `sparse_native_transfer_v1`.
+
+| span | control | `3c42f0ece` |
+|---|---|---|
+| `sd-candidates` | 5,323 … 15,824, spread 10,501 | 5,542 … 5,543, spread **1** |
+| `sd-market` | 2,138 flat | 2,241 flat |
+| whole measured span sum | 1,327,347 … 1,373,855 | 1,311,710 … 1,343,212 |
+
+### And now the part this note has to say against itself
+
+**The campaign's `ArtifactRelease` records hash the ELFs they name.** A Registry
+record lives at `[RAW_RECORD_PDA_SEED_V1, schema, hash(content)]`, and this
+fixture's release content carries `hash(elf)` for every program it deploys. So
+**rebuilding any program moves several content digests and every
+Registry-record search depth with them.** Between `3c42f0ece`'s ELF set and
+`40427e0f1`'s, draw-free spans moved by whole `create_program_address`
+iterations in both directions with no code between them that could explain it:
+
+| span | before | after | |
+|---|---:|---:|---|
+| `root-product` | 96,899 | 81,899 | −10 iterations |
+| `acc-activation` | 38,235 | 29,235 | −6 |
+| `acc-market` | 9,918 | 3,918 | −4 |
+| `artifacts-strategy-effect` | 73,308 | 82,308 | **+6** |
+| Custody's common frame, per leg, twice | 48,037 | 36,861 | −7 |
+
+That is about **45,000 CU of the distance between "short by 22,000 on the best
+of eight draws" and "31 of 31", and none of it is engineering.** Two
+consequences:
+
+- **A doubling probe on a walk whose seeds include an ELF digest is not a
+  probe.** It rebuilds the program, redraws the addresses, and reports the sum
+  of one extra search and an unrelated depth change. This note's own **37,640
+  for `execution_strategy_v2`'s record walk was obtained that way**; re-run at
+  `3c42f0ece` the same probe reported 78,204 for a span that was 73,308 in
+  total, which is impossible and is the proof. Read that row as an order of
+  magnitude, and price the walk by HINTING it, not by doubling it.
+- **Draw-free is not fixed.** These depths are a property of one deployed
+  artifact set. "The Remove commits" is a claim about this ELF set and eight
+  payer draws; the next build redraws every one of them.
+
+### Where the draw is now, and what it is made of
+
+Total spread across four runs of `3c42f0ece`'s set: **31,502**, every term a
+whole number of iterations.
+
+| term | spread | can it be mined? |
+|---|---:|---|
+| `cx-accelerator-frame` + `acc-caller-authority` | 6,000 + 6,000 | **no** — the seeds end in a digest over a request projected on chain |
+| `cx-claims-frame` + `sd-authority` | 6,000 + 6,000 | the Trading half no; **Claims' own second search for the authority Trading just derived is a three-byte relay** |
+| `cx-accelerator-returned` residual | 4,497 | not yet located |
+| `cu-common-frame`, twice | 3,000 + 3,000 | inside the activation-cache authentication |
+| `cu-transfer-validated`, twice | 1,500 + 1,500 | |
+| `pf-invocation-preflighted`, `root-product`, `acc-release-waist` | 3,000 + 1,500 + 1,500 | |
+
+### Custody's common frame, decomposed for the first time
+
+48,037 CU twice per Remove, never split. Four profile-only checkpoints:
+
+| span | CU | what it is |
+|---|---:|---|
+| **`cf-accounts`** | **23,694** | `authenticate_activation_cache_identity_v1` |
+| `cf-market` | 5,031 | premarket selection and the live Market |
+| `cf-caller-authority` | 2,080 | the relayed caller-authority derivation |
+| `cf-calling-release` | 1,158 | the calling program's release |
+| `cu-common-frame` | 4,898 | the replay identity |
+
+**Sixty per cent of it is the release activation cache**, authenticated once per
+leg over a cache the caller authenticated a few thousand instructions earlier.
+That is the duplicate `0aa70478e` repaired in Claims, one program over, and it
+is 47,000 CU per Remove.
+
+### The witness's span bank is deleted
+
+`07184fa82` left it with no reader: all three admitted families require it empty
+and the one that used to read it derives its nine widths on the accelerator's
+own side. `AdmittedPreludeWitnessV1` no longer carries widths;
+`admitted_prelude_witness_bytes_v1` takes one argument; the header word at 16
+stays a canonical zero, because moving `ADMITTED_PRELUDE_RECORD_BUMP_OFFSET_V1`
+would move every offset after it for a field nothing reads, and the DECODER
+refuses a nonzero. The route's `span_count() != 0` refusal and three evaluators'
+`span_widths().is_empty()` assertions go with it. The body is byte-identical on
+every live route, so this is a wire shape change worth under a hundred CU.
+
+### What this lane owes
+
+- **`execution_strategy_v2`'s own record walk**, still the largest draw-free
+  candidate and still without a carrier: `HotBumpHintsV1` is full and its own
+  doc records why the envelope cannot grow, `StateBumpsV1` has one byte left,
+  `SelectedRecordBumpsV1` fills the capability root's four reserved bytes, and
+  the seal is keyed by descriptor. It is also **no longer priced**, per the
+  probe finding above.
+- **Custody's activation-cache authentication**, 23,694 CU twice per Remove,
+  which is the largest single decomposed term in this note that nobody has
+  tried to cut.
+- **Claims' `sd-authority`**, a three-byte relay in the shape
+  `split_caller_authority_bump_v1` already has.
+- The three rejoin hostiles and the selector-9 chain fixture, unchanged: still
+  blocked on `project_dealer_scenario_unsplit_chain_topology_v4` having no
+  caller.
+- An assertion that had never run was wrong, and reaching it is what found it:
+  `accepted.rs` required the Dealer Claims Position to be byte-identical to the
+  planted body after the round trip, when its revision advances once per
+  SignedDeltaV3 commit. It now re-encodes the planted Position at the terminal
+  revision and compares every byte.

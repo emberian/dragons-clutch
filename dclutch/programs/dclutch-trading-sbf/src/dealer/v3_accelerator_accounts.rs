@@ -149,9 +149,6 @@ pub fn evaluate_authenticated_dealer_scenario_v4(
         request.claims_position_count,
         request.evidence_span_count,
     );
-    if !invocation.span_widths().is_empty() {
-        return Err(DealerScenarioAcceleratorErrorV4::Invocation);
-    }
     let frame = dealer_scenario_logical_frame_v4(spans)
         .map_err(|_| DealerScenarioAcceleratorErrorV4::Invocation)?;
     if invocation.selected_action() != u32::from(DEALER_SCENARIO_TRADE_ACTION_V3)

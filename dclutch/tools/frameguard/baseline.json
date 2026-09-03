@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "3c42f0ece33d96419de611545cae336f4bf8f5ef",
+  "commit": "40427e0f19b346282d19ad702dda4f0154e5cf32",
   "link_count": 12,
   "links": [
     {
@@ -6136,7 +6136,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 912,
+      "frame_count": 911,
       "functions": [
         {
           "frames_bytes": [
@@ -11194,7 +11194,6 @@
             128,
             128,
             128,
-            64,
             64,
             64,
             64,

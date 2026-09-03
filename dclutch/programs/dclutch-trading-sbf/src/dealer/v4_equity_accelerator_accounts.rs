@@ -326,7 +326,6 @@ fn authenticate_invocation_geometry(
     // truth instead of to a contradiction.
     if invocation.selected_action() != u32::from(request.selector())
         || invocation.product_runtime().runtime.outcome_count != request.width
-        || !invocation.span_widths().is_empty()
         || runtime.len() != frame.logical_account_count
         || invocation.request().scalar_count()
             != u32::try_from(expected_scalars)

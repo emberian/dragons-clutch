@@ -396,7 +396,7 @@ mod tests {
     /// asserts the digest, not merely the fields.
     #[test]
     fn the_prelude_witness_round_trips_and_names_every_hostile() {
-        const WIDTH: usize = admitted_prelude_witness_bytes_v1(3, 1);
+        const WIDTH: usize = admitted_prelude_witness_bytes_v1(3);
         let canonical = AdmittedInvocationContextV3 {
             account_count: 3,
             ..context()
@@ -407,7 +407,6 @@ mod tests {
         AdmittedPreludeWitnessV1::encode_into(
             canonical,
             record_bumps,
-            &[7],
             &representatives,
             &mut bytes,
         )
@@ -424,8 +423,15 @@ mod tests {
         // feeds them to. What the codec owes is that they round-trip in
         // canonical order and are not confused with the banks around them.
         assert_eq!(witness.record_bumps(), record_bumps);
-        assert_eq!(witness.span_count(), 1);
-        assert_eq!(witness.span_width(0).expect("span width"), 7);
+        // The word at 16 introduced a span-width section no consumer read.
+        // It is reserved now, and a caller that states a count is refused by
+        // the decoder rather than by a route that remembered to check.
+        let mut stated_span_count = bytes;
+        stated_span_count[16] = 1;
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&stated_span_count),
+            Err(AdmittedTranscriptErrorV3::NonCanonicalReserved)
+        );
         for (index, expected) in representatives.iter().enumerate() {
             assert_eq!(
                 witness.representative(index).expect("representative"),
@@ -491,25 +497,18 @@ mod tests {
                 .representative(2),
             Err(AdmittedTranscriptErrorV3::InvalidLength)
         );
-        let mut narrow = [0_u8; admitted_prelude_witness_bytes_v1(3, 0)];
+        let mut narrow = [0_u8; admitted_prelude_witness_bytes_v1(3)];
         assert_eq!(
-            AdmittedPreludeWitnessV1::encode_into(
-                canonical,
-                record_bumps,
-                &[],
-                &[0, 0, 3],
-                &mut narrow
-            ),
+            AdmittedPreludeWitnessV1::encode_into(canonical, record_bumps, &[0, 0, 3], &mut narrow),
             Err(AdmittedTranscriptErrorV3::InvalidLength)
         );
         // And the encoder refuses a context whose account count is not the
         // width of the representative bank it is being asked to carry.
-        let mut mismatched = [0_u8; admitted_prelude_witness_bytes_v1(2, 0)];
+        let mut mismatched = [0_u8; admitted_prelude_witness_bytes_v1(2)];
         assert_eq!(
             AdmittedPreludeWitnessV1::encode_into(
                 canonical,
                 record_bumps,
-                &[],
                 &[0, 0],
                 &mut mismatched
             ),
@@ -632,9 +631,16 @@ pub const ADMITTED_PRELUDE_WITNESS_SCHEMA_V1: u16 = 1;
 
 /// Fixed header bytes before one witness's context preimage.
 ///
-/// Twenty of these are the magic, schema, reserved word and the two bank
-/// counts; the last eight are [`ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1`] Product
-/// graph record bumps, in [`AdmittedPreludeWitnessV1::record_bump`] order.
+/// Twenty of these are the magic, schema, reserved word, the representative
+/// bank's count and a second reserved word; the last eight are
+/// [`ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1`] Product graph record bumps, in
+/// [`AdmittedPreludeWitnessV1::record_bumps`] order.
+///
+/// The second reserved word at 16 carried a dynamic fixed-span width count
+/// until the section it introduced was withdrawn. It stays a reserved word
+/// rather than closing up, because moving
+/// [`ADMITTED_PRELUDE_RECORD_BUMP_OFFSET_V1`] would move every offset after it
+/// for a field nothing reads.
 pub const ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1: usize = 28;
 
 /// Offset of the Product graph record-bump bank inside the header.
@@ -651,12 +657,9 @@ pub const ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1: usize = 8;
 /// Exact bytes of one `AdmittedInvocationContextV3` preimage.
 pub const ADMITTED_INVOCATION_CONTEXT_BYTES_V3: usize = 23 * 32 + 5 * 4;
 
-/// Exact bytes of one witness carrying `accounts` coordinates and `spans` widths.
-pub const fn admitted_prelude_witness_bytes_v1(accounts: usize, spans: usize) -> usize {
-    ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1
-        + ADMITTED_INVOCATION_CONTEXT_BYTES_V3
-        + spans * 4
-        + accounts * 2
+/// Exact bytes of one witness carrying `accounts` representative coordinates.
+pub const fn admitted_prelude_witness_bytes_v1(accounts: usize) -> usize {
+    ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1 + ADMITTED_INVOCATION_CONTEXT_BYTES_V3 + accounts * 2
 }
 
 /// Borrowed exact caller-composed prelude witness.
@@ -681,7 +684,6 @@ pub const fn admitted_prelude_witness_bytes_v1(accounts: usize, spans: usize) ->
 pub struct AdmittedPreludeWitnessV1<'a> {
     context: AdmittedInvocationContextV3,
     record_bumps: [u8; ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1],
-    span_widths: &'a [u8],
     representatives: &'a [u8],
 }
 
@@ -698,8 +700,16 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
             return Err(AdmittedTranscriptErrorV3::NonCanonicalReserved);
         }
         let accounts = usize_from(read_u32(bytes, 12)?)?;
-        let spans = usize_from(read_u32(bytes, 16)?)?;
-        if bytes.len() != admitted_prelude_witness_bytes_v1(accounts, spans) {
+        // The span-width section this word once introduced had no reader: all
+        // three admitted families require it empty and the one that read it
+        // derives its nine widths on this side of the boundary. The word stays
+        // a canonical zero so a caller that still states a count is refused
+        // here, by the decoder that owns the layout, rather than by a route
+        // that has to remember to look.
+        if read_u32(bytes, 16)? != 0 {
+            return Err(AdmittedTranscriptErrorV3::NonCanonicalReserved);
+        }
+        if bytes.len() != admitted_prelude_witness_bytes_v1(accounts) {
             return Err(AdmittedTranscriptErrorV3::InvalidLength);
         }
         let context = decode_invocation_context_v3(slice(
@@ -714,7 +724,7 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
         if usize_from(context.account_count)? != accounts {
             return Err(AdmittedTranscriptErrorV3::InvalidLength);
         }
-        let spans_offset =
+        let representatives_offset =
             ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1 + ADMITTED_INVOCATION_CONTEXT_BYTES_V3;
         let record_bumps: [u8; ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1] = slice(
             bytes,
@@ -726,8 +736,7 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
         Ok(Self {
             context,
             record_bumps,
-            span_widths: slice(bytes, spans_offset, spans * 4)?,
-            representatives: slice(bytes, spans_offset + spans * 4, accounts * 2)?,
+            representatives: slice(bytes, representatives_offset, accounts * 2)?,
         })
     }
 
@@ -763,16 +772,6 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
         self.record_bumps
     }
 
-    /// Number of dynamic fixed-span widths this witness carries.
-    pub const fn span_count(self) -> usize {
-        self.span_widths.len() / 4
-    }
-
-    /// One dynamic fixed-span width, in descriptor order.
-    pub fn span_width(self, index: usize) -> Result<u32, AdmittedTranscriptErrorV3> {
-        read_u32(self.span_widths, index * 4)
-    }
-
     /// One logical coordinate's representative coordinate.
     pub fn representative(self, index: usize) -> Result<usize, AdmittedTranscriptErrorV3> {
         let value = usize::from(read_u16(self.representatives, index * 2)?);
@@ -785,17 +784,16 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
         Ok(value)
     }
 
-    /// Encode one exact witness body for `context` and its two geometry banks.
+    /// Encode one exact witness body for `context` and its representative bank.
     pub fn encode_into(
         context: AdmittedInvocationContextV3,
         record_bumps: [u8; ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1],
-        span_widths: &[u32],
         representatives: &[usize],
         output: &mut [u8],
     ) -> Result<(), AdmittedTranscriptErrorV3> {
         let accounts = representatives.len();
         if usize_from(context.account_count)? != accounts
-            || output.len() != admitted_prelude_witness_bytes_v1(accounts, span_widths.len())
+            || output.len() != admitted_prelude_witness_bytes_v1(accounts)
         {
             return Err(AdmittedTranscriptErrorV3::InvalidLength);
         }
@@ -814,13 +812,6 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
                 .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?
                 .to_le_bytes(),
         )?;
-        put(
-            output,
-            16,
-            &u32::try_from(span_widths.len())
-                .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?
-                .to_le_bytes(),
-        )?;
         encode_invocation_context_v3(
             context,
             output
@@ -831,12 +822,8 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
                 )
                 .ok_or(AdmittedTranscriptErrorV3::InvalidLength)?,
         )?;
-        let spans_offset =
+        let representatives_offset =
             ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1 + ADMITTED_INVOCATION_CONTEXT_BYTES_V3;
-        for (index, width) in span_widths.iter().enumerate() {
-            put(output, spans_offset + index * 4, &width.to_le_bytes())?;
-        }
-        let representatives_offset = spans_offset + span_widths.len() * 4;
         for (index, coordinate) in representatives.iter().enumerate() {
             let value =
                 u16::try_from(*coordinate).map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?;

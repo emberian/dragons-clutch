@@ -28,8 +28,10 @@ use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_claims_svm::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2,
-    LiabilityBasisPositionViewV2, encode_liability_basis_market_into_v2,
-    put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
+    LiabilityBasisPositionInputV2, LiabilityBasisPositionViewV2,
+    encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
+    liability_basis_position_bump_v2, put_liability_basis_market_bump_v2,
+    put_liability_basis_position_bump_v2,
 };
 use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
 use dclutch_claims_svm::signed_delta_v3::SignedDeltaPlanV3;
@@ -9606,11 +9608,48 @@ mod lp_lifecycle {
             .total_equity_shares(),
             0
         );
+        // THIS ASSERTION HAD NEVER RUN. Every earlier run of this test died at
+        // the partial Remove's compute ceiling, and it required the Dealer
+        // Position to be BYTE-IDENTICAL to the body the fixture planted. It
+        // returns to that body in every field but one: a Position revision is
+        // a monotone counter, and four SignedDeltaV3 commits reached this one
+        // here -- the P2 contribution, the partial P2 Remove and the two final
+        // P2 Removes -- so it stands exactly four higher. The balances, which
+        // are what "returns to where it started" means economically, are
+        // asserted below and by `terminal_first.dealer_balances`.
+        const DEALER_POSITION_CLAIMS_COMMITS: u64 = 4;
+        let planted = LiabilityBasisPositionViewV2::decode(&live.dealer_position)
+            .expect("planted Dealer Position");
+        let planted_balances = (0..planted.claim_count)
+            .map(|claim| {
+                planted
+                    .balance(&live.dealer_position, claim)
+                    .expect("planted balance")
+            })
+            .collect::<Vec<_>>();
+        let mut expected_dealer_position = vec![0_u8; live.dealer_position.len()];
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: LIVE_POSITION_REVISION + DEALER_POSITION_CLAIMS_COMMITS,
+                market_account: planted.market_account,
+                owner: planted.owner,
+                basis_id: planted.basis_id,
+            },
+            &planted_balances,
+            &mut expected_dealer_position,
+        )
+        .expect("terminal Dealer Position re-encodes");
+        if let Some(bump) =
+            liability_basis_position_bump_v2(&live.dealer_position).expect("planted bump")
+        {
+            put_liability_basis_position_bump_v2(&mut expected_dealer_position, bump)
+                .expect("terminal Dealer Position keeps its own bump");
+        }
         assert_eq!(
             chain_account(&mut context, fixture.actor_position.account)
                 .await
                 .data,
-            live.dealer_position
+            expected_dealer_position
         );
         let terminal_first = current_equity_claims(&mut context, &fixture).await;
         let terminal_second = current_equity_claims(&mut context, &second_fixture).await;
