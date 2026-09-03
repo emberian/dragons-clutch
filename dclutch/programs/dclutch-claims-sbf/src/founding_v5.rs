@@ -34,6 +34,7 @@ use dclutch_market_core_codec::{
     SeriesFoundingPermitV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
+use dclutch_registry_activation_auth_v1::ActivationAuthErrorV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_source_contract::MarketPrincipalCapSetsV1;
@@ -42,6 +43,7 @@ use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
     instruction::Instruction,
+    log::sol_log,
     program::{invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
@@ -52,6 +54,7 @@ use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
 use super::affine_batch_v2::authenticate_runtime_product_basis_core_with_rent_v3;
+use crate::claims_cu_checkpoint;
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2, MarketViewV2,
@@ -109,7 +112,14 @@ pub enum ClaimsFoundingSbfErrorV5 {
     Instruction = 0x5180,
     /// Account count, privileges, executable flags, or aliases refused.
     Accounts = 0x5181,
-    /// Core caller authority or current release selection refused.
+    /// An activated role's own receipt names a different release set than the
+    /// one this request executes under.
+    ///
+    /// Narrow on purpose. This code used to mean "Core caller authority or
+    /// current release selection refused" and was raised at nineteen sites
+    /// covering four unrelated subsystems, nine of them `map_err(|_| ..)`
+    /// wrappers that threw away a cause the callee had already computed. The
+    /// other eighteen now have their own names below.
     Release = 0x5182,
     /// Custody source, Hoard, or replay post-observations refused.
     Custody = 0x5183,
@@ -135,6 +145,60 @@ pub enum ClaimsFoundingSbfErrorV5 {
     /// Source can be manipulated for. A reader of a validator log that cannot
     /// tell those two apart cannot tell a broken founding from a refused one.
     PrincipalCapacity = 0x518A,
+    /// The Trading-signed caller-authority PDA did not reproduce.
+    ///
+    /// The seeds are the request's own release set, Market, execution role,
+    /// founding intent and request digest, and the program they are derived
+    /// under is the request's Trading program. A refusal here says the account
+    /// presented as the authority is not the one those seeds address, or that
+    /// one of the coordinates was the zero identity.
+    CallerAuthority = 0x518B,
+    /// The Core-owned Series founding permit account, its canonical address, or
+    /// the bump its intent carries for that address refused.
+    ///
+    /// About the ACCOUNT, not its content: owner, exact width, hostile decode,
+    /// the PDA the permit's own seeds address, and the bump byte the intent
+    /// states for it. [`Self::PermitBody`] is the content.
+    Permit = 0x518C,
+    /// The permit's authorization of this intent and request, or the intent's
+    /// own agreement with the request it authorizes, refused.
+    ///
+    /// This is the eighteen-conjunct join, and it is where the founding's
+    /// digests meet: a single byte moved anywhere upstream of the projected
+    /// Custody receipt reaches this comparison as two unequal digests and
+    /// nothing else. It carries a named conjunct on the refusing path for
+    /// exactly that reason.
+    PermitBody = 0x518D,
+    /// The account handed as the Registry activation cache is not the canonical
+    /// cache for this request's release set, or its body did not decode.
+    ///
+    /// Surfaced from [`ActivationAuthErrorV1::ActivationCache`].
+    ActivationCache = 0x518E,
+    /// An activated role's observed on-chain deployment is not the one its
+    /// activation admitted.
+    ///
+    /// Surfaced from [`ActivationAuthErrorV1::Deployment`]. Distinct from
+    /// [`Self::ReleaseSuperseded`]: this one says the program, ProgramData,
+    /// loader or ELF digest disagrees with the activation record, which is a
+    /// wrong-account or stale-plan answer rather than an upgrade.
+    RoleDeployment = 0x518F,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
+    ///
+    /// WORD-FOR-WORD the sentence the other seven bands register, and it has to
+    /// be. Decision 0012 gave this one event a name in every program that can
+    /// observe it, `apps/dclutch-web/lib/refusals.ts::releaseSupersededMeaningV1`
+    /// reads the meaning out of the generated registry rather than writing its
+    /// own, and it THROWS if the rows disagree. An eighth row phrased in this
+    /// author's own words is a second authority on what a supersession means,
+    /// which is exactly the defect that check exists to refuse -- it caught this
+    /// variant's first draft on 2026-09-03.
+    ///
+    /// Surfaced here from [`ActivationAuthErrorV1::ReleaseSuperseded`]: the
+    /// remedy is a re-release, not an investigation, and folding it into a
+    /// generic release refusal was what made it unsayable on this route.
+    ReleaseSuperseded = 0x5190,
 }
 
 impl ClaimsFoundingSbfErrorV5 {
@@ -144,7 +208,7 @@ impl ClaimsFoundingSbfErrorV5 {
     /// [`ClaimsFoundingSbfErrorV5::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only arm that satisfies
     /// the assertions is its own index in this array.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 17] = [
         Self::Instruction,
         Self::Accounts,
         Self::Release,
@@ -156,6 +220,12 @@ impl ClaimsFoundingSbfErrorV5 {
         Self::Receipt,
         Self::Commit,
         Self::PrincipalCapacity,
+        Self::CallerAuthority,
+        Self::Permit,
+        Self::PermitBody,
+        Self::ActivationCache,
+        Self::RoleDeployment,
+        Self::ReleaseSuperseded,
     ];
 
     /// This refusal's position in [`ClaimsFoundingSbfErrorV5::ALL`].
@@ -175,8 +245,120 @@ impl ClaimsFoundingSbfErrorV5 {
             Self::Receipt => 8,
             Self::Commit => 9,
             Self::PrincipalCapacity => 10,
+            Self::CallerAuthority => 11,
+            Self::Permit => 12,
+            Self::PermitBody => 13,
+            Self::ActivationCache => 14,
+            Self::RoleDeployment => 15,
+            Self::ReleaseSuperseded => 16,
         }
     }
+
+    /// The exact line this refusal writes to the validator log.
+    ///
+    /// A `&'static str` per variant rather than a `{:?}` format: `sol_log` takes
+    /// a `&str` with no allocation, and this program's refusing paths run inside
+    /// a founding whose compute margin is already the binding constraint. The
+    /// match is exhaustive, so an eighteenth variant does not compile until its
+    /// author says what a reader of a validator log should see.
+    const fn log_line(self) -> &'static str {
+        match self {
+            Self::Instruction => "claims founding v5: refused, instruction bytes",
+            Self::Accounts => "claims founding v5: refused, account frame",
+            Self::Release => "claims founding v5: refused, role names another release set",
+            Self::Custody => "claims founding v5: refused, custody post-observations",
+            Self::ProductBasis => "claims founding v5: refused, product/basis graph",
+            Self::ClaimsState => "claims founding v5: refused, claims PDA or vacancy",
+            Self::Rent => "claims founding v5: refused, rent",
+            Self::Allocation => "claims founding v5: refused, allocation",
+            Self::Receipt => "claims founding v5: refused, receipt",
+            Self::Commit => "claims founding v5: refused, commit postcondition",
+            Self::PrincipalCapacity => "claims founding v5: refused, principal capacity cap",
+            Self::CallerAuthority => "claims founding v5: refused, caller-authority PDA",
+            Self::Permit => "claims founding v5: refused, permit account",
+            Self::PermitBody => "claims founding v5: refused, permit body join",
+            Self::ActivationCache => "claims founding v5: refused, activation cache",
+            Self::RoleDeployment => "claims founding v5: refused, role deployment",
+            Self::ReleaseSuperseded => "claims founding v5: refused, release superseded",
+        }
+    }
+}
+
+/// Name an activation-cache refusal, keeping the callee's own distinction.
+///
+/// `authenticate_activated_role_and_bump_v1` already computed WHICH conjunct
+/// failed. Until this impl existed the four sites that call it wrote
+/// `map_err(|_| Release)`, so a frame the caller built wrong, a cache belonging
+/// to another release set, a deployment the activation never admitted, and an
+/// upgraded substrate all published one code — and the reader who had to tell
+/// them apart had to bisect a route with no diagnostic in it.
+///
+/// `AccountFrame` folds into [`ClaimsFoundingSbfErrorV5::Accounts`] rather than
+/// taking a new discriminant because it is exactly that code's stated
+/// accusation: privileges and executable flags on the three-account read-only
+/// frame this adapter itself assembled.
+impl From<ActivationAuthErrorV1> for ClaimsFoundingSbfErrorV5 {
+    fn from(value: ActivationAuthErrorV1) -> Self {
+        match value {
+            ActivationAuthErrorV1::AccountFrame => Self::Accounts,
+            ActivationAuthErrorV1::ActivationCache => Self::ActivationCache,
+            ActivationAuthErrorV1::Deployment => Self::RoleDeployment,
+            ActivationAuthErrorV1::ReleaseSuperseded => Self::ReleaseSuperseded,
+        }
+    }
+}
+
+/// Refuse with a named conjunct, on the refusing path only.
+///
+/// The wire carries one `u32`, so the code names the accusation and these two
+/// static lines name the conjunct inside it. `#[cold]` and `#[inline(never)]`
+/// keep both the branch and the strings off the accepting path, which is why a
+/// named refusal costs the founding nothing it was not already paying.
+#[cold]
+#[inline(never)]
+fn refuse(error: ClaimsFoundingSbfErrorV5, conjunct: &'static str) -> ProgramError {
+    sol_log(error.log_line());
+    sol_log(conjunct);
+    error.into()
+}
+
+/// Require one named conjunct of a joined authentication.
+///
+/// Sequential `require`s evaluate exactly what a `||` chain evaluates and stop
+/// at exactly the same place; what changes is that the one that stopped it can
+/// say so.
+#[inline(always)]
+fn require(
+    holds: bool,
+    error: ClaimsFoundingSbfErrorV5,
+    conjunct: &'static str,
+) -> Result<(), ProgramError> {
+    if holds {
+        Ok(())
+    } else {
+        Err(refuse(error, conjunct))
+    }
+}
+
+/// The line naming which execution role a founding refusal is about.
+///
+/// Which of the four roles the activation loop was on cannot ride a `u32` that
+/// is already spent naming the cause, so it rides a static string instead.
+const fn role_log_line(role: ExecutionRoleV1) -> &'static str {
+    match role {
+        ExecutionRoleV1::Core => "claims founding v5: role core",
+        ExecutionRoleV1::Claims => "claims founding v5: role claims",
+        ExecutionRoleV1::Trading => "claims founding v5: role trading",
+        ExecutionRoleV1::Resolution => "claims founding v5: role resolution",
+        ExecutionRoleV1::Custody => "claims founding v5: role custody",
+    }
+}
+
+/// Refuse one role's activation under the cache's own cause and this role's name.
+#[cold]
+#[inline(never)]
+fn refuse_activated_role(role: ExecutionRoleV1, error: ActivationAuthErrorV1) -> ProgramError {
+    refuse(ClaimsFoundingSbfErrorV5::from(error), role_log_line(role))
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -313,11 +495,14 @@ pub fn process(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
+    claims_cu_checkpoint!("found-enter");
     let decoded = decode_instruction(instruction_data)?;
     let accounts = FoundingAccounts::parse(account_infos)?;
     let rent = Rent::get().map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
     authenticate_privileges(program_id, accounts, &decoded.request)?;
+    claims_cu_checkpoint!("found-frame");
     authenticate_authority(accounts, &decoded.request, decoded.request_digest)?;
+    claims_cu_checkpoint!("found-authority");
     process_authenticated(program_id, accounts, decoded, rent)
 }
 
@@ -331,7 +516,10 @@ pub(crate) fn process_series_transport(
     let transient = decode_series_transport_instruction(instruction_data)?;
     let accounts = FoundingAccounts::parse(account_infos)?;
     if transient.transport.permit() != accounts.permit.key.to_bytes() {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::Permit,
+            "transport names a different permit than the account presented",
+        ));
     }
     authenticate_series_transport_authority(accounts, &transient.transport, transient.digest)?;
     let permit = decode_permit_account(accounts)?;
@@ -372,7 +560,16 @@ fn process_authenticated(
     let request_digest = decoded.request_digest;
     let lock_receipt_digest = decoded.lock_receipt_digest;
     let projected_receipt_digest = decoded.projected_receipt_digest;
+    // The four-role activation loop. It is the FIRST thing this route does and
+    // the reason these marks exist: a Claims child is one `consumed` line in
+    // its caller's log, and one number cannot say whether it was spent on work
+    // only Claims can do or on re-establishing a release set its caller had
+    // already established. `found-releases` minus `found-authority` is that
+    // question's answer for this route, and the open question in
+    // `docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md` is asked about
+    // exactly this quantity on the SignedDelta route next door.
     authenticate_releases(accounts, &request)?;
+    claims_cu_checkpoint!("found-releases");
     let custody_context = authenticate_permit_and_projection(
         accounts,
         &request,
@@ -382,22 +579,29 @@ fn process_authenticated(
         &projected_receipt,
         projected_receipt_digest,
     )?;
+    claims_cu_checkpoint!("found-permit");
     authenticate_custody_poststate(
         accounts,
         &request,
         &projected_receipt,
         projected_receipt_digest,
     )?;
+    claims_cu_checkpoint!("found-custody");
     let market = authenticate_product_core(program_id, accounts, &request, custody_context, &rent)?;
+    claims_cu_checkpoint!("found-product-core");
     authenticate_rent_and_vacancy(program_id, accounts, &request, market, &rent)?;
+    claims_cu_checkpoint!("found-rent-vacancy");
 
     let candidates =
         build_candidates_boxed(program_id, accounts, &request, market, request_digest)?;
     let receipt = build_receipt(&request, request_digest, &candidates)?;
+    claims_cu_checkpoint!("found-candidates");
 
     allocate_all(program_id, accounts, &request, &candidates)?;
+    claims_cu_checkpoint!("found-allocate");
     commit_candidates(accounts, &candidates)?;
     set_return_data(receipt.as_slice());
+    claims_cu_checkpoint!("found-commit");
     Ok(())
 }
 
@@ -634,10 +838,18 @@ fn authenticate_authority(
         request.founding_intent_digest(),
         request_digest,
     )
-    .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+    .map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::CallerAuthority,
+            "a caller-authority seed coordinate is zero or malformed",
+        )
+    })?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), accounts.trading_program.key).0;
     if accounts.authority.key != &expected {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::CallerAuthority,
+            "authority is not the PDA these seeds address under the trading program",
+        ));
     }
     Ok(())
 }
@@ -654,7 +866,10 @@ fn authenticate_series_transport_authority(
         || accounts.trading_program.key.to_bytes() != transport.trading_program()
         || !accounts.trading_program.executable
     {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::CallerAuthority,
+            "transport authority privileges, or the trading program it names",
+        ));
     }
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         transport.release_set(),
@@ -663,10 +878,18 @@ fn authenticate_series_transport_authority(
         transport.permit(),
         transport_digest,
     )
-    .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+    .map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::CallerAuthority,
+            "a transport caller-authority seed coordinate is zero or malformed",
+        )
+    })?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), accounts.trading_program.key).0;
     if accounts.authority.key != &expected {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::CallerAuthority,
+            "transport authority is not the PDA these seeds address",
+        ));
     }
     Ok(())
 }
@@ -678,14 +901,21 @@ fn decode_permit_account(
     if accounts.permit.owner != accounts.core_program.key
         || accounts.permit.data_len() != SERIES_FOUNDING_PERMIT_BYTES_V1
     {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::Permit,
+            "permit account is not Core-owned at the exact permit width",
+        ));
     }
     let permit_data = accounts
         .permit
         .try_borrow_data()
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
-    SeriesFoundingPermitV1::decode(&permit_data)
-        .map_err(|_| ClaimsFoundingSbfErrorV5::Release.into())
+    SeriesFoundingPermitV1::decode(&permit_data).map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::Permit,
+            "permit account body did not hostile-decode",
+        )
+    })
 }
 
 #[inline(never)]
@@ -701,22 +931,38 @@ fn authenticate_permit_and_projection(
     if accounts.permit.owner != accounts.core_program.key
         || accounts.permit.data_len() != SERIES_FOUNDING_PERMIT_BYTES_V1
     {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::Permit,
+            "permit account is not Core-owned at the exact permit width",
+        ));
     }
     let permit_data = accounts
         .permit
         .try_borrow_data()
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
-    let permit = SeriesFoundingPermitV1::decode(&permit_data)
-        .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+    let permit = SeriesFoundingPermitV1::decode(&permit_data).map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::Permit,
+            "permit account body did not hostile-decode",
+        )
+    })?;
     drop(permit_data);
     let intent = authenticate_permit_body(permit, request, request_digest)?;
     let permit_seeds = permit.seeds();
     let seed_slices = permit_seeds.as_slices();
     let (expected_permit, expected_bump) =
         Pubkey::find_program_address(&seed_slices, accounts.core_program.key);
-    if expected_permit != *accounts.permit.key || expected_bump != intent.bump() {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
+    if expected_permit != *accounts.permit.key {
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::Permit,
+            "permit is not the PDA its own seeds address under the core program",
+        ));
+    }
+    if expected_bump != intent.bump() {
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::Permit,
+            "the intent states a different bump for the permit than the canonical search found",
+        ));
     }
     let projected_context = hashv(&[
         PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
@@ -788,38 +1034,135 @@ fn authenticate_permit_body(
     request_digest: [u8; 32],
 ) -> Result<FoundingIntentV5, ProgramError> {
     let intent = permit.intent();
-    let intent_bytes = intent
-        .encode()
-        .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+    let intent_bytes = intent.encode().map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::PermitBody,
+            "the permit's own intent did not re-encode",
+        )
+    })?;
     let intent_digest = hash(&intent_bytes).to_bytes();
     permit
         .verify_for_intent_and_request(
             intent,
-            Identity::new(intent_digest).map_err(|_| ClaimsFoundingSbfErrorV5::Release)?,
-            Identity::new(request_digest).map_err(|_| ClaimsFoundingSbfErrorV5::Release)?,
+            Identity::new(intent_digest).map_err(|_| {
+                refuse(
+                    ClaimsFoundingSbfErrorV5::PermitBody,
+                    "the intent's own digest is the zero identity",
+                )
+            })?,
+            Identity::new(request_digest).map_err(|_| {
+                refuse(
+                    ClaimsFoundingSbfErrorV5::PermitBody,
+                    "the founding request digest is the zero identity",
+                )
+            })?,
         )
-        .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
-    if intent_digest != request.founding_intent_digest()
-        || intent.release_set().to_bytes() != request.release_set()
-        || intent.market().to_bytes() != request.market()
-        || intent.product_record().to_bytes() != request.product_record_digest()
-        || intent.founder().to_bytes() != request.founder()
-        || intent.projected_replay().to_bytes() != request.custody_replay()
-        || intent.funding_source().to_bytes() != request.funding_source()
-        || intent.hoard().to_bytes() != request.hoard()
-        || intent.projected_request_digest().to_bytes() == request.custody_request_digest()
-        || intent.projected_receipt_digest().to_bytes() == request.custody_receipt_digest()
-        || intent.trading_program().to_bytes() != request.trading_program()
-        || intent.claims_program().to_bytes() != request.claims_program()
-        || intent.rent_credit().to_bytes() != request.rent_credit()
-        || intent.generation() != request.generation()
-        || intent.quantity() != request.quantity()
-        || intent.basis_scale() != request.basis_scale()
-        || intent.normal_replay_revision() != request.post_custody_revision()
-        || request.pre_custody_revision().checked_add(1) != Some(intent.normal_replay_revision())
-    {
-        return Err(ClaimsFoundingSbfErrorV5::Release.into());
-    }
+        .map_err(|_| {
+            refuse(
+                ClaimsFoundingSbfErrorV5::PermitBody,
+                "the permit does not authorize this intent and request pair",
+            )
+        })?;
+    // Eighteen named conjuncts, not one `||` chain. Every founding digest in
+    // the tree converges here: a byte moved anywhere upstream -- a Core bump
+    // written where the projection had no field for it, a revision off by one,
+    // a stale release id -- arrives as two unequal 32-byte strings and nothing
+    // else. Naming the one that disagreed is the difference between reading a
+    // log line and bisecting five programs.
+    let body = ClaimsFoundingSbfErrorV5::PermitBody;
+    require(
+        intent_digest == request.founding_intent_digest(),
+        body,
+        "intent digest is not the request's founding_intent_digest",
+    )?;
+    require(
+        intent.release_set().to_bytes() == request.release_set(),
+        body,
+        "intent release set",
+    )?;
+    require(
+        intent.market().to_bytes() == request.market(),
+        body,
+        "intent market",
+    )?;
+    require(
+        intent.product_record().to_bytes() == request.product_record_digest(),
+        body,
+        "intent product record digest",
+    )?;
+    require(
+        intent.founder().to_bytes() == request.founder(),
+        body,
+        "intent founder",
+    )?;
+    require(
+        intent.projected_replay().to_bytes() == request.custody_replay(),
+        body,
+        "intent projected custody replay",
+    )?;
+    require(
+        intent.funding_source().to_bytes() == request.funding_source(),
+        body,
+        "intent funding source",
+    )?;
+    require(
+        intent.hoard().to_bytes() == request.hoard(),
+        body,
+        "intent hoard",
+    )?;
+    // Deliberately an INEQUALITY: the request carries the REALIZED custody
+    // digests and the intent the PROJECTED ones, so equality here would mean
+    // the realization never happened.
+    require(
+        intent.projected_request_digest().to_bytes() != request.custody_request_digest(),
+        body,
+        "realized custody request digest equals the projected one",
+    )?;
+    require(
+        intent.projected_receipt_digest().to_bytes() != request.custody_receipt_digest(),
+        body,
+        "realized custody receipt digest equals the projected one",
+    )?;
+    require(
+        intent.trading_program().to_bytes() == request.trading_program(),
+        body,
+        "intent trading program",
+    )?;
+    require(
+        intent.claims_program().to_bytes() == request.claims_program(),
+        body,
+        "intent claims program",
+    )?;
+    require(
+        intent.rent_credit().to_bytes() == request.rent_credit(),
+        body,
+        "intent rent credit",
+    )?;
+    require(
+        intent.generation() == request.generation(),
+        body,
+        "intent generation",
+    )?;
+    require(
+        intent.quantity() == request.quantity(),
+        body,
+        "intent quantity",
+    )?;
+    require(
+        intent.basis_scale() == request.basis_scale(),
+        body,
+        "intent basis scale",
+    )?;
+    require(
+        intent.normal_replay_revision() == request.post_custody_revision(),
+        body,
+        "intent normal replay revision is not the request's post-custody revision",
+    )?;
+    require(
+        request.pre_custody_revision().checked_add(1) == Some(intent.normal_replay_revision()),
+        body,
+        "pre-custody revision does not step to the intent's normal replay revision",
+    )?;
     Ok(intent)
 }
 
@@ -894,7 +1237,7 @@ fn authenticate_releases(
                         program,
                         programdata,
                     )
-                    .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+                    .map_err(|error| refuse_activated_role(role, error))?;
                 bump = Some(witness);
                 receipt
             }
@@ -908,11 +1251,14 @@ fn authenticate_releases(
                     program,
                     programdata,
                 )
-                .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?
+                .map_err(|error| refuse_activated_role(role, error))?
             }
         };
         if receipt.execution_release_set_id().as_bytes() != &request.release_set() {
-            return Err(ClaimsFoundingSbfErrorV5::Release.into());
+            return Err(refuse(
+                ClaimsFoundingSbfErrorV5::Release,
+                role_log_line(role),
+            ));
         }
     }
     Ok(())

@@ -1300,6 +1300,26 @@ _AUTHORITY_OWNER_CHECK = re.compile(
     r"\.owner\s*(==|!=)|owner\s*(==|!=)\s*program_id|require_owned|assert_owned"
 )
 
+# ...and the one-hop resolution below is only allowed to clear a function when
+# the callee it resolves to authenticated THE CACHE.  Without this the hop is
+# account-blind: Custody's `authenticate_market` derives the Market address and
+# owner-checks the Market account, satisfies both halves, and therefore cleared
+# every caller that merely called it -- including one that had lost its
+# activation-cache delegation entirely.  Measured 2026-09-03, by the class's own
+# synthetic control, which had gone quiet for exactly this reason.
+#
+# The tokens are the cache's own coordinates -- its PDA domain, its exact width,
+# its carried bump -- and not `ActivatedExecutionReleaseSetViewV1`, which is in
+# the SIGNATURE of every function that takes an already-decoded view and would
+# put `authenticate_market` straight back.  Both legitimate one-hop
+# authenticators the README names still qualify: the Registry's
+# `authenticate_cache_identity` and Trading's
+# `require_activation_cache_account_v3`.
+_AUTHORITY_CACHE_SUBJECT = re.compile(
+    r"ACTIVATION_PDA_DOMAIN_V1|ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1"
+    r"|ACTIVATION_CACHE_BUMP_OFFSET_V1|cache_bump"
+)
+
 # A called function name.  Deliberately loose on the left (any path prefix is
 # stripped by taking the last segment) and anchored on `(` so a type name or a
 # field read is not mistaken for a call.
@@ -1371,9 +1391,11 @@ def class_authority(survey: Survey) -> list[Finding]:
     bodies = [_code_only(candidate.text) for candidate in survey.functions]
     authenticators: dict[tuple[str, str], bool] = {}
     for candidate, body in zip(survey.functions, bodies):
-        authenticators[(candidate.crate, candidate.name)] = bool(
-            _AUTHORITY_DERIVES.search(body)
-        ) and bool(_AUTHORITY_OWNER_CHECK.search(body))
+        authenticators[(candidate.crate, candidate.name)] = (
+            bool(_AUTHORITY_DERIVES.search(body))
+            and bool(_AUTHORITY_OWNER_CHECK.search(body))
+            and bool(_AUTHORITY_CACHE_SUBJECT.search(body))
+        )
 
     def delegates_to_authenticator(function: Function, body: str) -> bool:
         for call in _CALL_SITE.finditer(body):

@@ -155,6 +155,12 @@ band 0 is never allocated, so a code below `0x1000` is not ours.
   measured 2026-09-01, it silently deleted another lane's landed refusal rows.
   Regenerate from a detached worktree at HEAD; `--allow-dirty` only when you have
   read the diff and mean it. The convergence owner runs it; lanes do not.
+  **When you do run it, run `--converge`, not `generate.sh` twice.** The reference
+  and the client mirrors emitted from it close a cycle, so one pass leaves
+  `abi/refusalRegistryV1.md` a pass behind; `--converge` settles the loop, bounds
+  it at three passes, and REFUSES a tree that still moves on the third. Nobody
+  needs to remember the two-pass rule any more. `tools/ci/run.sh genref` asks the
+  same question of a committed revision.
 
 ## A `map_err` that discards its cause converts a located defect into a search
 

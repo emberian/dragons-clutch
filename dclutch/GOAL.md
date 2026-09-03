@@ -4021,3 +4021,31 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   → CLAIMS-FOUNDING **`(spawned)`**. genref --check red on ten reference files from landed codes → GENREF **`(spawned)`**
   (the two-pass rule becomes `--converge`).
 - Cuts: `0e3e4034f`, `65a17ef05`.
+
+### 2026-09-03 13:30 EDT — harness restart; four closes and two lanes lost mid-flight
+- HINTS closed (`e503d5e2a`): the Rational outer builders mine hints through ONE new host crate `dclutch-hot-bump-miner-v1`
+  (the derivation had three hand copies; now four call sites, byte-identical); claims row 47/2 → 49/0; the sweep: nine real
+  routes' builders still emit the all-zero block (Dealer equity/scenario, General, Series, four Rational lifecycle) — the
+  five in dclutch-operator already hold the corpus. Owed: frame rows (path-based owed; not recaptured because SEAM's rows
+  were in range).
+- SEAM closed (`d8a679168`, `4a8b87f3e`): **all 45 adjudicated, `run.sh seam` PASS, zero untriaged** — five fixed at the
+  author (Custody's three `*_from_cache` wrappers collapsed to one: three five-role cache decodes per reservation route
+  become one; two seed bounds now Lean-emitted beside each domain; the DOMAIN_BYTES_COLLIDE was a fixture-local second
+  author of a Lean-emitted seed); the reader extended by name three times (prose matching; the other side of a privilege
+  pin; `derive_hinted` had blinded it — two live restatements came back); two negative controls had gone stale and
+  retargeting one found the one-hop call resolution was account-blind. Owed: frame rows (an SBF link moved);
+  `tools/fractional-exterior` does not build (b312ce3c4 widened a record).
+- COLD-MACHINE closed (`6eb4123cc` … `ed9f53887`; docs/runbooks/COLD_MACHINE_2026_09_03.md; /tank/dclutch-cold-1788448080
+  14 GB kept): **the cross-host digest pair C-14 never had — nine of ten roles DIFFER between hbox and the laptop, one is
+  identical**; the build path is not an input (two roots on one host: all ten identical); the cause is platform-tools
+  embedding Anza's CI build path in stdlib panic locations (`/home/runner` vs `/Users/runner`) — series-shadow has zero
+  such copies and is the one that reproduces; frame ceilings and the Product handoff DO reproduce, the release-set id does
+  not. **C-13 not met**: the loopback lifecycle stops at `AlreadySucceeded` — succession conjunct 6 needs the V2 PDA vacant
+  and initialize fills it since c60b25e8 (an architectural contradiction, owner c60b25e8's). Eleven runbook defects, six
+  fixed; e6b7bf1a deleted a program and left the literal `13` in four consumers.
+- WITNESS: final counts unchanged; its `pgrep` waiters were self-matching (never exit) — the memory's rule holds.
+- Lost with the harness (state gone; commits kept): GENREF (`4af1c02d3` --converge and a tier; `2c60ccf86` fixpoint at
+  1258dd0a3; `a637bb47e`) and CLAIMS-FOUNDING (`1b4e5d310` one Release refusal → eighteen named accusations; `7d8f66e21`
+  register; `1258dd0a3` the founding route measurable; `354c201e8`; `7083a0bc2` the Core infrastructure test one account
+  short). A dirty refusal-registry regeneration is being verified against a fresh converge at HEAD.
+- Cuts: `f65584df2`.

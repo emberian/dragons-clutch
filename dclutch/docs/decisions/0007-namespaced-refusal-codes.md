@@ -132,7 +132,7 @@ ones, so the family structure now reads straight off the code.
 | `LiabilityBasisSbfErrorV2` | 100–110 | `0x5100`–`0x510A` |
 | `ProtocolPositionSbfErrorV2` | 140–150 | `0x5140`–`0x514A` |
 | `AffineBatchSbfErrorV2` | 160–167 | `0x5160`–`0x5167` |
-| `ClaimsFoundingSbfErrorV5` | 180–189 | `0x5180`–`0x5189` |
+| `ClaimsFoundingSbfErrorV5` | 180–189 | `0x5180`–`0x5190` |
 | `SignedDeltaSbfErrorV3` | 200–207 | `0x5200`–`0x5207` |
 | `RationalLifecycleSbfErrorV2` | 210–218 | `0x5210`–`0x5218` |
 | `SparseNativeTransferSbfErrorV1` | 260–267 | `0x5260`–`0x5267` |

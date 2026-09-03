@@ -1736,9 +1736,15 @@ def reproduction_projection(pack: Mapping[str, Any]) -> dict[str, Any]:
             "checked_execution_release_set_sha256": release[
                 "checked_execution_release_set"
             ]["sha256"],
-            "predecessor_infrastructure_profile_sha256": release[
+            # A genesis pack succeeds nothing and carries no predecessor digest.
+            # Indexing it raised KeyError here exactly as it did in
+            # `verify_pack`, so `compare-packs` -- the ONLY producer of a
+            # supported-builder reproduction -- crashed on the one candidate
+            # shape a cold machine can build. Both sides project None and the
+            # comparison stays exact.
+            "predecessor_infrastructure_profile_sha256": release.get(
                 "predecessor_infrastructure_profile_sha256"
-            ],
+            ),
             "infrastructure_profile_sha256": release[
                 "infrastructure_profile_sha256"
             ],

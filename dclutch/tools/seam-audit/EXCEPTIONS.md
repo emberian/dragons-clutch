@@ -1299,3 +1299,57 @@ And `tools/fractional-exterior` does not build at `HEAD` and did not before this
 run: `src/stage.rs:216` omits `raw_bump` and `staging_bump` from a
 `NarrowRecordV2` that `b312ce3c4` widened. Neither is this lane's, and neither
 is hidden by it.
+
+### Addendum, same day — two negative controls had gone stale, and one of them was hiding a reader hole
+
+**A checker that has never caught a known defect is decoration**, so the three
+readers this run changed were held to their own controls. Two of the twelve were
+already failing at HEAD, both because the tree moved under them, and neither
+failure was caused by this run's changes. (Twelve, not the eleven the README
+said — the count went stale when `AUTHORITY` was added on 2026-09-01, and the
+whole suite is nearer nine minutes than four on this machine. Both corrected.)
+
+**`DOMAIN_BYTES_COLLIDE` was a `live` control on a defect that had been fixed.**
+It required the reader to name the `CLAIMS_FOUNDING_AGGREGATE_SEED_V4`/`_V5`
+collision at HEAD, and `b209be565` answered it in the source. Re-filed as
+**historical** against `b209be565`, which is a *stronger* bar than the live one
+it replaces: it now requires the reader to fire at the parent **and** to be
+silent on the fix.
+
+**`AUTHORITY_CACHE_UNDERIVED`'s synthetic control had stopped mutating
+anything.** It replaced
+`authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)`
+in Custody's `authenticate_market`, and `5709672aa` deleted that call when it
+made the route decode the cache once. A string replace that matches nothing
+leaves the tree untouched, so the control read `0 before, 0 after` — the exact
+shape of *distrust silent success*. The mutation now deletes the
+`authenticate_activation_cache_identity_v1` delegation where it actually lives,
+and **raises rather than skips** if that spelling ever stops matching.
+
+**Retargeting it exposed a hole in the reader, which is repaired here.** With
+the delegation deleted, the class stayed silent — because its one level of call
+resolution was **account-blind**. It cleared any function that called a local
+callee which derived an address and checked an owner, and Custody's
+`authenticate_market` derives the *Market* address and owner-checks the *Market*
+account. So a function that had lost its cache authentication entirely was
+cleared by a callee that had never looked at the cache. The one-hop clearance
+now also requires the callee to name the cache's own coordinates —
+`ACTIVATION_PDA_DOMAIN_V1`, `ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1`,
+`ACTIVATION_CACHE_BUMP_OFFSET_V1`, `cache_bump`.
+
+Deliberately **not** `ActivatedExecutionReleaseSetViewV1`: that name is in the
+signature of every function taking an already-decoded view, `authenticate_market`
+included, so keying on it would put the hole straight back. Both legitimate
+one-hop authenticators the README names still qualify — the Registry's
+`authenticate_cache_identity` and Trading's
+`require_activation_cache_account_v3`, each of which reproduces the cache
+address from its carried bump.
+
+Measured: silent at HEAD before and after the tightening (the gate does not
+move), and the synthetic mutation now produces exactly two findings —
+`authenticate_reservation_frame_v1` and `process_instruction`, the two functions
+whose delegation it deleted.
+
+12 controls, 12 PASS — the eight non-`PRIVILEGE` rows and the four
+`PRIVILEGE` ones measured in two runs, because the suite outruns a ten-minute
+budget in one.

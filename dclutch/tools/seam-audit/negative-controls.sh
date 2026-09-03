@@ -44,9 +44,9 @@ CONTROLS=(
   "historical|3b98ea3a|PIN_CENSUS|CENSUS_ARMS_DISAGREE|capability|ActivateCapability ran a blanket no-duplicate census over a frame structurally requiring seven repeats (SEAM_AUDIT #12)"
   "historical|16351a13|PRIVILEGE|PRIVILEGE_PIN_UNEXEMPTED|dealer_reservation_v1.rs.require_frame$|Custody pinned the checkpoint readonly while its atomic partner instruction must take it writable"
   "live|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|projected_custody_bootstrap_v1.rs.authenticate_expired_checkpoint_v1|SEAM_AUDIT #13b, unfixed: a blanket signer refusal over a frame the builder puts the fee payer in, so an expired founding can never be unwound"
-  "live|HEAD|DOMAIN_DUP|DOMAIN_BYTES_COLLIDE|CLAIMS_FOUNDING_AGGREGATE_SEED_V4|unfixed: the V4 and V5 founding aggregate domains are byte-identical, so the version bump lives in the name and not in the address"
+  "historical|b209be565|DOMAIN_DUP|DOMAIN_BYTES_COLLIDE|CLAIMS_FOUNDING_AGGREGATE_SEED_V4|the V4 and V5 founding aggregate domains were byte-identical, so the version bump lived in the name and not in the address; b209be565 made both ALIASES of the owner constant, which is one author for the bytes -- was a live row until 2026-09-03 and is a stronger bar as a historical one, because silence on the fix is half of it"
   "synthetic|HEAD|UNSET_PIN|UNSET_GUARD_PRESENT|series/kernel_adapter.rs|no 2026-08-29 defect exists for this class; the bar is that deleting a live unset-pubkey guard is noticed"
-  "synthetic|HEAD|AUTHORITY|AUTHORITY_CACHE_UNDERIVED|lib.rs.authenticate_market|no historical defect exists for this class either; the bar is that deleting Custody delegation to the blessed activation authenticator turns a derived cache read into an asserted one, and is noticed"
+  "synthetic|HEAD|AUTHORITY|AUTHORITY_CACHE_UNDERIVED|lib.rs.authenticate_reservation_frame_v1|no historical defect exists for this class either; the bar is that deleting Custody delegation to the blessed activation authenticator turns a derived cache read into an asserted one, and is noticed"
   "silent|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|terminal_sequence.rs.authenticate_lookup_infrastructure_planned_journal_v1|not a refusal at all: both is_signer reads classify the coordinate into TerminalAddressClassV1::InlineSigner and no Err is reachable, so reporting it as an always-refuses frame was the reader mistaking a read for a rejection"
   "silent|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|direct_hot_route_manifest.rs.project_manifest_document_v3|refuses the fee payer being named in the frame at all, one line below the census, so the harm this class states -- dead for any builder that pays with an account it also names -- is refused in place by its own error code"
 )
@@ -134,13 +134,34 @@ for control in "${CONTROLS[@]}"; do
     before="$(report "${tree}" "${class}" | grep -cE "^${code}.*${needle}" || true)"
     python3 - "${victim}" <<'AUTHPY'
 import pathlib, sys
+
+# The delegation moved on 2026-09-03. Custody used to authenticate the cache
+# inside `authenticate_market` through `authenticate_activation_cache_bump_v1`;
+# `5709672aa` and the SEAM consolidation after it made every route decode the
+# cache ONCE and hand the view down, so the delegation now lives in
+# `process_instruction` and in `authenticate_reservation_frame_v1`, and the
+# functions that read a role take an already-authenticated view as a parameter.
+# The mutation follows it: delete the identity call and the same wrapper is
+# reading a cached role out of an account whose provenance it never
+# established. If this string ever stops matching the control FAILS LOUDLY --
+# 0 before and 0 after -- rather than passing on a mutation it did not make,
+# which is how the previous spelling was caught.
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
-text = text.replace(
-    "authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)",
-    "unauthenticated_cache_bump_stub(registry, cache, &request.release_set)",
-)
-path.write_text(text)
+delegation = """    authenticate_activation_cache_identity_v1(
+        registry,
+        cache_account,
+        &request.release_set,
+        activated,
+    )
+    .map_err(CustodySbfError::from)?;
+"""
+if delegation not in text:
+    raise SystemExit(
+        "negative control: the activation-cache delegation is not spelled the "
+        "way this mutation expects; retarget it rather than skipping it"
+    )
+path.write_text(text.replace(delegation, ""))
 AUTHPY
     after="$(report "${tree}" "${class}" | grep -cE "^${code}.*${needle}" || true)"
     git -C "${ROOT}" worktree remove --force "${tree}" 2>/dev/null

@@ -8,7 +8,12 @@ templates.
 ```sh
 tools/genref/generate.sh            # regenerate docs/reference/
 tools/genref/generate.sh --check    # byte-compare, write nothing, exit 1 on drift
-tools/genref/test.sh                # self-test the dirty-tree gate, seconds, no build
+tools/genref/generate.sh --converge # regenerate the reference AND the client mirrors
+                                    #   that read it, to a fixpoint. THE ONE TO USE.
+tools/genref/generate.sh --converge --check
+                                    # is the COMMITTED tree already that fixpoint?
+tools/genref/test.sh                # self-test the gates, seconds, no build
+tools/ci/run.sh genref              # the tier: the self-test, then --converge --check
 ```
 
 It refuses a dirty tree. `--allow-dirty` and `GENREF_ALLOW_DIRTY=1` are the same
@@ -27,6 +32,52 @@ reaches `generate.mjs` -- which is what `test.sh` pins.
 | `decisions.md` | `docs/decisions/*.md` |
 | `abi/*.md` | `apps/dclutch-web/lib/generated/*.ts` — themselves emitted, each byte-gated by its own `abi:*:verify` |
 
+## Convergence: use `--converge`, not two passes by hand
+
+The reference and its client mirrors close a **cycle**:
+
+```
+docs/reference/refusals.md  ->  {web,sdk}/lib/generated/refusalRegistryV1.ts
+                            ->  docs/reference/abi/refusalRegistryV1.md
+```
+
+`generate.mjs` on its own is a pure function of sources it never writes, so
+running it twice is byte-identical and its fixpoint is trivial. The cycle is
+one layer out: `generate-refusal-registry.mjs` takes its per-code names and
+meanings **from** `refusals.md`, and this generator mirrors the module that
+script emits back **into** the reference. So a newly landed refusal code reaches
+`refusals.md` on pass one and `abi/refusalRegistryV1.md` only on pass two. The
+same is true of any other reference-coupled emitter -- `generate-route-census.mjs`
+emits a module this page mirrors, so moving it also costs a second pass.
+
+That rule was learned by hand, written into a commit message, and then had to be
+re-learned by whoever read the reference next. `--converge` is the rule made
+mechanical: it runs `generate.mjs` and then every reference-coupled emitter,
+repeating until a pass moves nothing, **bounded at three** -- two productive
+passes and one that proves the fixpoint. A third pass that still moves a file is
+**refused** (exit 4), never accepted as close enough.
+
+| exit | meaning |
+|---|---|
+| 0 | a fixpoint, and nothing moved -- the tree was already converged |
+| 1 | a fixpoint, reached by writing -- commit what it wrote |
+| 3 | the working tree is dirty (as for every other mode) |
+| 4 | no fixpoint within three passes -- refused, moving files named |
+
+The list of reference-coupled emitters is **declared** in `generate.sh` and then
+**checked against discovery** on every run: a script under
+`apps/dclutch-web/scripts` or `packages/dclutch-sdk/scripts` that reads
+`docs/reference` and is not in the list fails the run by name. A hardcoded list
+that silently missed a new emitter would reproduce the exact defect `--converge`
+removes.
+
+`--converge --check` answers the same question about a **committed** revision:
+it archives it (`git archive`, so it touches no repository state and cannot
+contend on `.git` locks) and settles it there, writing nothing into this
+checkout. That is the form `tools/ci/run.sh genref` runs, because convergence is
+a property of what a commit holds and this checkout is a dozen lanes'
+half-written files.
+
 ## Discipline
 
 - **This generator runs BEFORE the `abi:*` TypeScript ones, not after.**
@@ -35,7 +86,8 @@ reaches `generate.mjs` -- which is what `test.sh` pins.
   from the crate while this page still lists its codes makes that script throw
   "sits in no registered band" (found deleting band 0x7 on 2026-09-02); and
   because `abi/*.md` here mirrors those emitted `.ts` modules, correcting one of
-  them takes two genref passes with a commit between.
+  them takes two genref passes. `--converge` does both in the right order; run
+  it rather than sequencing them by hand.
 - The generator owns the whole directory: `--check` fails on stale, missing,
   **or stray** files; regeneration removes strays. The directory cannot drift
   or grow by hand.

@@ -14,7 +14,7 @@ Source module: `apps/dclutch-web/lib/generated/walletTerminalPayoutV3.ts`, whose
 Authorities: dclutch-claims-svm/src/{terminal_settlement_v3,signed_delta_v3}.rs,
 dclutch-custody-contract/src/generated.rs,
 dclutch-claims-svm/src/{generated_liability_basis_state_v2,liability_basis_state_v2}.rs,
-dclutch-token-svm/src/state.rs.
+dclutch-token-svm/src/{state,tlv}.rs.
 ```
 
 ## String constants
@@ -145,3 +145,13 @@ dclutch-token-svm/src/state.rs.
 | `TOKEN_ACCOUNT_OWNER_OFFSET_V1` | 32 |
 | `TOKEN_ACCOUNT_AMOUNT_OFFSET_V1` | 64 |
 | `TOKEN_ACCOUNT_STATE_OFFSET_V1` | 108 |
+| `TOKEN_ACCOUNT_IMMUTABLE_OWNER_BYTES_V1` | 170 |
+
+## Unrendered exports (verbatim)
+
+The renderer did not recognize these statement shapes, so they are
+shown verbatim rather than dropped.
+
+```ts
+export const TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1 = Uint8Array.of(2, 7, 0, 0, 0);
+```

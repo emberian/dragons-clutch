@@ -92,7 +92,7 @@ reports them as live. Gate on `~/dev/dclutch`.
 ## Negative controls
 
 ```
-tools/seam-audit/negative-controls.sh          # all 11, ~4 min
+tools/seam-audit/negative-controls.sh          # all 12, ~9 min
 tools/seam-audit/negative-controls.sh SEED_LEN # one class
 ```
 

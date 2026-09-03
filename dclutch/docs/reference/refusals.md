@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **341** codes, with meanings taken
+The tables below carry all **350** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**74 of 341** codes have been observed refusing a real
+**74 of 350** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-341 codes belonging to the programs the route census enumerates.
+350 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -108,17 +108,23 @@ The 22 campaigns contributing:
 | `0x5166` | `AffineBatchSbfErrorV2::Commit` | Complete candidate buffers could not all be borrowed and committed last. | -- | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:114` |
 | `0x5167` | `AffineBatchSbfErrorV2::Receipt` | The canonical success receipt could not be constructed. | -- | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:116` |
 | `0x5168` | `AffineBatchSbfErrorV2::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:124` |
-| `0x5180` | `ClaimsFoundingSbfErrorV5::Instruction` | Instruction bytes did not decode as the sole FoundingV5 ABI. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:109` |
-| `0x5181` | `ClaimsFoundingSbfErrorV5::Accounts` | Account count, privileges, executable flags, or aliases refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:111` |
-| `0x5182` | `ClaimsFoundingSbfErrorV5::Release` | Core caller authority or current release selection refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:113` |
-| `0x5183` | `ClaimsFoundingSbfErrorV5::Custody` | Custody source, Hoard, or replay post-observations refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:115` |
-| `0x5184` | `ClaimsFoundingSbfErrorV5::ProductBasis` | Product graph, linked basis, or Founding Core Market refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:117` |
-| `0x5185` | `ClaimsFoundingSbfErrorV5::ClaimsState` | Claims aggregate, Position, or admission PDA/vacancy refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:119` |
-| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:121` |
-| `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:123` |
-| `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:125` |
-| `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:127` |
-| `0x518A` | `ClaimsFoundingSbfErrorV5::PrincipalCapacity` | The founding principal exceeded the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:137` |
+| `0x5180` | `ClaimsFoundingSbfErrorV5::Instruction` | Instruction bytes did not decode as the sole FoundingV5 ABI. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:112` |
+| `0x5181` | `ClaimsFoundingSbfErrorV5::Accounts` | Account count, privileges, executable flags, or aliases refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:114` |
+| `0x5182` | `ClaimsFoundingSbfErrorV5::Release` | An activated role's own receipt names a different release set than the one this request executes under. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:123` |
+| `0x5183` | `ClaimsFoundingSbfErrorV5::Custody` | Custody source, Hoard, or replay post-observations refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:125` |
+| `0x5184` | `ClaimsFoundingSbfErrorV5::ProductBasis` | Product graph, linked basis, or Founding Core Market refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:127` |
+| `0x5185` | `ClaimsFoundingSbfErrorV5::ClaimsState` | Claims aggregate, Position, or admission PDA/vacancy refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:129` |
+| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:131` |
+| `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:133` |
+| `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:135` |
+| `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:137` |
+| `0x518A` | `ClaimsFoundingSbfErrorV5::PrincipalCapacity` | The founding principal exceeded the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:147` |
+| `0x518B` | `ClaimsFoundingSbfErrorV5::CallerAuthority` | The Trading-signed caller-authority PDA did not reproduce. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:155` |
+| `0x518C` | `ClaimsFoundingSbfErrorV5::Permit` | The Core-owned Series founding permit account, its canonical address, or the bump its intent carries for that address refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:162` |
+| `0x518D` | `ClaimsFoundingSbfErrorV5::PermitBody` | The permit's authorization of this intent and request, or the intent's own agreement with the request it authorizes, refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:171` |
+| `0x518E` | `ClaimsFoundingSbfErrorV5::ActivationCache` | The account handed as the Registry activation cache is not the canonical cache for this request's release set, or its body did not decode. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:176` |
+| `0x518F` | `ClaimsFoundingSbfErrorV5::RoleDeployment` | An activated role's observed on-chain deployment is not the one its activation admitted. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:184` |
+| `0x5190` | `ClaimsFoundingSbfErrorV5::ReleaseSuperseded` | The activated release generation was superseded: the observed program's pinned deployment slot moved, so the substrate was upgraded. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:193` |
 | `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:130` |
 | `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:132` |
 | `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:134` |
@@ -128,15 +134,15 @@ The 22 campaigns contributing:
 | `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:142` |
 | `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:144` |
 | `0x5208` | `SignedDeltaSbfErrorV3::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:152` |
-| `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:130` |
-| `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:132` |
-| `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:134` |
-| `0x5213` | `RationalLifecycleSbfErrorV2::Descriptor` | Finalized descriptor or a derived resource identity refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:136` |
-| `0x5214` | `RationalLifecycleSbfErrorV2::Market` | Core Market or canonical Claims aggregate refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:138` |
-| `0x5215` | `RationalLifecycleSbfErrorV2::Rent` | Prepaid or reclaimed native rent accounting refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:140` |
-| `0x5216` | `RationalLifecycleSbfErrorV2::Token` | Token-2022 resource state or effect refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:142` |
-| `0x5217` | `RationalLifecycleSbfErrorV2::Position` | Canonical protocol Position lifecycle refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:144` |
-| `0x5218` | `RationalLifecycleSbfErrorV2::Receipt` | Final resource observation or typed receipt refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:146` |
+| `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:186` |
+| `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:188` |
+| `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:190` |
+| `0x5213` | `RationalLifecycleSbfErrorV2::Descriptor` | Finalized descriptor or a derived resource identity refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:192` |
+| `0x5214` | `RationalLifecycleSbfErrorV2::Market` | Core Market or canonical Claims aggregate refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:194` |
+| `0x5215` | `RationalLifecycleSbfErrorV2::Rent` | Prepaid or reclaimed native rent accounting refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:196` |
+| `0x5216` | `RationalLifecycleSbfErrorV2::Token` | Token-2022 resource state or effect refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:198` |
+| `0x5217` | `RationalLifecycleSbfErrorV2::Position` | Canonical protocol Position lifecycle refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:200` |
+| `0x5218` | `RationalLifecycleSbfErrorV2::Receipt` | Final resource observation or typed receipt refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:202` |
 | `0x5260` | `SparseNativeTransferSbfErrorV1::Instruction` | Request bytes refused the canonical fixed codec. | claims-family-programtest | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:80` |
 | `0x5261` | `SparseNativeTransferSbfErrorV1::Accounts` | Account count, privilege, owner, or alias refused. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:82` |
 | `0x5262` | `SparseNativeTransferSbfErrorV1::Release` | Registry current-role or caller authority refused. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:84` |
@@ -204,10 +210,10 @@ The 22 campaigns contributing:
 | `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:429` |
 | `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:436` |
 | `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:438` |
-| `0x5680` | `RationalReplayCloseSbfErrorV1::Accounts` | The fixed two-account frame, ownership, writability or length refused. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:285` |
-| `0x5681` | `RationalReplayCloseSbfErrorV1::Authority` | The actor named by the cursor did not sign, or a second signer appeared. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:287` |
-| `0x5682` | `RationalReplayCloseSbfErrorV1::Identity` | The cursor address did not derive from the coordinates the request named. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:289` |
-| `0x5683` | `RationalReplayCloseSbfErrorV1::Replay` | The cursor did not decode, or named another descriptor or actor. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:291` |
+| `0x5680` | `RationalReplayCloseSbfErrorV1::Accounts` | The fixed two-account frame, ownership, writability or length refused. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:284` |
+| `0x5681` | `RationalReplayCloseSbfErrorV1::Authority` | The actor named by the cursor did not sign, or a second signer appeared. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:286` |
+| `0x5682` | `RationalReplayCloseSbfErrorV1::Identity` | The cursor address did not derive from the coordinates the request named. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:288` |
+| `0x5683` | `RationalReplayCloseSbfErrorV1::Replay` | The cursor did not decode, or named another descriptor or actor. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:290` |
 
 ## core
 
@@ -408,6 +414,7 @@ The 22 campaigns contributing:
 | `0x8019` | `ResolutionError::ActivatedRole` | The activation is canonical, and the program brought for a role OTHER than Resolution is not the one that activation selected for it. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:177` |
 | `0x801A` | `ResolutionError::CallerAuthority` | The calling role's authority PDA is not the one the frame's own seeds derive. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:185` |
 | `0x801B` | `ResolutionError::InfrastructureProfile` | The Core-owned protocol infrastructure profile, or the Registry release it names, did not authenticate. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:194` |
+| `0x801C` | `ResolutionError::ProviderScale` | This market's own StatisticSpec and adapter configuration disagree about the source-to-result decimal scale. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:204` |
 
 ## series-shadow
 
@@ -462,6 +469,8 @@ The 22 campaigns contributing:
 | `0x4024` | `TradingSbfError::SuccessorCoverage` | The effect's successor ranges do not cover the family request it was given. | -- | `programs/dclutch-trading-sbf/src/lib.rs:464` |
 | `0x4025` | `TradingSbfError::BorrowedWitnessRoute` | The effect's witness-borrowing route is not the one the request profile admits. | -- | `programs/dclutch-trading-sbf/src/lib.rs:476` |
 | `0x4026` | `TradingSbfError::BorrowedWitnessBytes` | The witness the borrowing route would pass is not the one the request declared. | -- | `programs/dclutch-trading-sbf/src/lib.rs:488` |
+| `0x4027` | `TradingSbfError::HeapExhausted` | The upward end of the program heap could not serve an exactly-sized bank. | -- | `programs/dclutch-trading-sbf/src/lib.rs:511` |
+| `0x4028` | `TradingSbfError::ShadowTrustedEnvironment` | A `ShadowAot` strategy was paired with a slot-declaring AccountProfile. | -- | `programs/dclutch-trading-sbf/src/lib.rs:530` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:47` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:49` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:51` |

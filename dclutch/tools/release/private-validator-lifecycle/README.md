@@ -24,6 +24,18 @@ bytes and Git identity after work, and rechecks them again before writing a
 create-new report outside the repository. Dirty, untracked, uncommitted,
 mid-run, and output-induced source substitutions refuse.
 
+**As of 2026-09-03 no mode of this runner reaches a founded market**, and the
+wall is not in this directory. The campaign executes twenty-four finalized
+transactions and then the chain refuses
+`the succession was refused before it was built: AlreadySucceeded`:
+`infrastructure_succession_v1.rs` conjunct 6 requires the V2 profile PDA to be
+vacant, and since `c60b25e8` one `InitializeProtocolInfrastructureV1` fills that
+exact PDA with the genesis V2 body. The two are mutually exclusive, so the
+succession this profile plants a Buffer for cannot execute on any cohort this
+tool plans. Full diagnosis, and the twenty-four transactions,
+in `docs/runbooks/COLD_MACHINE_2026_09_03.md` §6. Do not read a green
+`--through participant` claim below as current.
+
 `run.py` is the release-level localhost supervisor for one exact checked
 dClutch source commit. It is not devnet evidence and it never accepts a
 caller-supplied RPC URL.

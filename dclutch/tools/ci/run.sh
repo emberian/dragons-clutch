@@ -495,6 +495,65 @@ tier_emission() {
 }
 
 # ---------------------------------------------------------------------------
+# genref -- the generated protocol reference, at its FIXPOINT.
+#
+# `docs/reference/` is emitted from the census and the registry, and the client
+# mirrors under `{apps/dclutch-web,packages/dclutch-sdk}/lib/generated/` are
+# emitted FROM the reference and then mirrored back INTO it. That cycle means a
+# single regeneration pass is not enough, and the two-pass rule lived only in a
+# commit message (b0d3978c4) until `--converge` made it mechanical. No tier ran
+# genref at all before this one, so a landed refusal code could -- and did --
+# sit unlisted in the reference for days with nothing red.
+#
+# It measures a COMMITTED revision, never this working tree: convergence is a
+# property of what a commit holds, and on this shared checkout the working tree
+# is a dozen lanes' half-written files. `generate.sh --converge --check` does
+# the archiving itself, so this tier passes no --commit machinery of its own --
+# it only says which revision, and reads the answer.
+#
+# COST, measured 2026-09-03 rather than estimated: 2m31s and 2m36s on two
+# consecutive runs. The archive is a fresh tree, so the census workspace builds
+# cold once; the three passes after that are node and a warm census.
+#
+# Exit 1 here means the reference is STALE at that commit, and the fix is one
+# command: `tools/genref/generate.sh --converge` from a detached worktree, then
+# commit the reference and the client mirrors together.
+# ---------------------------------------------------------------------------
+tier_genref() {
+  say "genref -- docs/reference and its client mirrors are at a fixpoint"
+  local tool="$repo_root/tools/genref/generate.sh"
+  if [ ! -x "$tool" ]; then
+    record genref $EXIT_PREREQ_MISSING "tools/genref/generate.sh absent from this tree"
+    return
+  fi
+  if ! have cargo || ! have node; then
+    record genref $EXIT_PREREQ_MISSING "cargo and node are both required"
+    return
+  fi
+  # The gate's own self-test first: it costs seconds, needs no build, and it is
+  # what proves the convergence loop REFUSES a tree that never settles. A
+  # fixpoint reported by a loop whose refusal path is broken is not evidence,
+  # and that path was broken when it was written (a `diff` exit under
+  # `pipefail` aborted the loop and reported success).
+  if ! (cd "$repo_root" && ./tools/genref/test.sh >/dev/null 2>&1); then
+    note "tools/genref/test.sh is RED -- the convergence loop's own gate is"
+    note "broken, so its verdict below would not be evidence either way."
+    record genref $EXIT_GATE_FAILED "tools/genref/test.sh failed"
+    return
+  fi
+  note "tools/genref/test.sh green"
+  local revision="${commit_rev:-HEAD}"
+  local code=0
+  (cd "$repo_root" && GENREF_CONVERGE_REV="$revision" "$tool" --converge --check) || code=$?
+  case "$code" in
+  0) record genref $EXIT_PASS ;;
+  1) record genref $EXIT_GATE_FAILED "docs/reference is stale at $revision" ;;
+  4) record genref $EXIT_GATE_FAILED "the reference and its mirrors do not converge" ;;
+  *) record genref $EXIT_GATE_FAILED "generate.sh --converge --check exited $code" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # programs -- the SBF tier. Minutes, and the only tier that builds a program.
 #
 # This is where the Direct Hot compute margin gate lives, and that gate is the
@@ -2261,6 +2320,18 @@ release   ~5s          python3            the four release-tooling REFUSAL
                                           wrappers, the sponsored-market-open
                                           stager. All hermetic -- stub binaries
                                           and an invalid RPC, never a chain
+genref    ~3 min       cargo, node        docs/reference and the client mirrors
+                                          emitted from it are at a FIXPOINT at
+                                          the measured commit. The reference,
+                                          the refusal registry mirrors and the
+                                          route census close a CYCLE, so one
+                                          regeneration pass is not enough; this
+                                          runs `generate.sh --converge --check`,
+                                          which archives the revision and
+                                          settles it there. Red means a landed
+                                          refusal code is missing from the
+                                          reference. No tier ran genref at all
+                                          before this one
 sbfcontracts
           minutes      cargo-build-sbf    every non-program first-party crate
                                           compiled for target_os=solana, the
@@ -2350,8 +2421,9 @@ EOF
   cat <<'EOF'
 
 aliases:  cheap = census fmt locks seam runbooks release
-          all   = census fmt locks seam runbooks release clippy sbom sbfcontracts web
-                  emission frameguard journey root-targets programs suites
+          all   = census fmt locks seam runbooks release genref clippy sbom
+                  sbfcontracts web emission frameguard journey root-targets
+                  programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
 environment:
@@ -2411,8 +2483,8 @@ main() {
       exit 0
       ;;
     cheap) tiers+=(census fmt locks seam runbooks release) ;;
-    all) tiers+=(census fmt locks seam runbooks release clippy sbom sbfcontracts web emission frameguard journey root-targets programs suites) ;;
-    census | fmt | locks | seam | runbooks | release | clippy | sbom | sbfcontracts | web | emission | frameguard | journey | root-targets | programs | suites | workspaces)
+    all) tiers+=(census fmt locks seam runbooks release genref clippy sbom sbfcontracts web emission frameguard journey root-targets programs suites) ;;
+    census | fmt | locks | seam | runbooks | release | genref | clippy | sbom | sbfcontracts | web | emission | frameguard | journey | root-targets | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)
