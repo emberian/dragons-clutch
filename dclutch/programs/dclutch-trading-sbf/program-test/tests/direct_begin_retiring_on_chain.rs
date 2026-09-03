@@ -502,6 +502,7 @@ fn build_case(
             market: StateBumpsV1::record(market_bump),
             realm_raw_record: None,
             realm_staging_record: None,
+            ..StateBumpsV1::UNRECORDED
         },
     }
     .encode()

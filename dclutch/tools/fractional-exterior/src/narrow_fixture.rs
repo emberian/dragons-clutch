@@ -23,8 +23,8 @@
 
 use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
 use dclutch_market_core_codec::{
-    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, STATE_BYTES,
-    StateBumpsV1,
+    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, ProductGraphBumpsV1,
+    Readiness, STATE_BYTES, StateBumpsV1,
 };
 
 use dclutch_product_payoff_v2_codec::{
@@ -143,6 +143,16 @@ pub struct NarrowRecordV2 {
     pub raw: Pubkey,
     /// Canonical vacant staging PDA.
     pub staging: Pubkey,
+    /// Bumps the two derivations above found, kept rather than discarded.
+    ///
+    /// A founded Market records the Product graph's four record pairs in its
+    /// `StateBumpsV1`, and its readers reproduce each address from the recorded
+    /// bump instead of searching. A fixture that leaves the tail unrecorded is
+    /// not staging a neutral default -- it is staging a market no founding
+    /// produces, and every compute measurement taken on it measures the search.
+    pub raw_bump: u8,
+    /// See [`NarrowRecordV2::raw_bump`].
+    pub staging_bump: u8,
     /// Complete raw body.
     pub bytes: Vec<u8>,
 }
@@ -468,7 +478,25 @@ pub fn compile_narrow_fixture_v3(
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(input.rent_beneficiary.to_bytes())?,
         terminal_receipt,
-        bumps: StateBumpsV1::UNRECORDED,
+        // What a founded Market's account actually holds. The Market and Realm
+        // pair are not derivable here -- this fixture installs its Market
+        // directly rather than founding one -- but the Product graph's four
+        // record pairs are exactly the four `finalized` calls above, and Core's
+        // founding records them. Leaving them zero would measure the search on
+        // every instruction that reads this graph.
+        bumps: StateBumpsV1 {
+            product_graph: ProductGraphBumpsV1::record([
+                product.raw_bump,
+                product.staging_bump,
+                result_domain.raw_bump,
+                result_domain.staging_bump,
+                portfolio.raw_bump,
+                portfolio.staging_bump,
+                linked_basis.raw_bump,
+                linked_basis.staging_bump,
+            ]),
+            ..StateBumpsV1::UNRECORDED
+        },
     }
     .encode()
     .map_err(|_| NarrowFixtureError::State)?;
@@ -633,15 +661,18 @@ fn compile_product(
 
 fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
     let digest = hash(&bytes).to_bytes();
-    let raw = Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner).0;
-    let staging =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &owner).0;
+    let (raw, raw_bump) =
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner);
+    let (staging, staging_bump) =
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &owner);
     NarrowRecordV2 {
         owner,
         schema,
         digest,
         raw,
         staging,
+        raw_bump,
+        staging_bump,
         bytes,
     }
 }

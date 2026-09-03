@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "c81c94d91fb94e986c65a8852baec2ecad686e26",
+  "commit": "cee27ff16408a826a04e762e2687c7d08f840a43",
   "link_count": 12,
   "links": [
     {
@@ -7496,12 +7496,6 @@
         },
         {
           "frames_bytes": [
-            512
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v122require_checkpoint_pda17h<hash>E"
-        },
-        {
-          "frames_bytes": [
             1280
           ],
           "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v127prepare_claims_authority_v117h<hash>E"
@@ -7526,6 +7520,12 @@
         },
         {
           "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v129require_checkpoint_pda_hinted17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             64
           ],
           "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v130strictly_increasing_membership17h<hash>E"
@@ -7538,7 +7538,7 @@
         },
         {
           "frames_bytes": [
-            1728
+            1792
           ],
           "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v131authenticate_membership_page_v117h<hash>E"
         },
@@ -7574,7 +7574,7 @@
         },
         {
           "frames_bytes": [
-            2432
+            2368
           ],
           "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v133prepare_dealer_scenario_commit_v117h<hash>E"
         },
@@ -7670,7 +7670,7 @@
         },
         {
           "frames_bytes": [
-            2048
+            2112
           ],
           "symbol": "_ZN19dclutch_trading_sbf29dealer_scenario_checkpoint_v145process_dealer_scenario_checkpoint_cleanup_v117h<hash>E"
         },

@@ -413,6 +413,7 @@ fn state_corpus(
             market: StateBumpsV1::record(market_bump),
             realm_raw_record: StateBumpsV1::record(realm_bumps.0),
             realm_staging_record: StateBumpsV1::record(realm_bumps.1),
+            ..StateBumpsV1::UNRECORDED
         },
     }
     .encode()

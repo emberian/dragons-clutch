@@ -218,6 +218,16 @@ pub struct AuthenticatedProductRuntimeV2 {
     pub mapping_release_id: ContentId,
     /// Runtime native outcome count including explicit failure.
     pub outcome_count: u32,
+    /// The six record PDA bumps THIS walk used, in the eight-slot bank's
+    /// positions 0 through 5; the linked-basis pair is zero until
+    /// [`authenticate_product_basis_v3`] fills it.
+    ///
+    /// A COORDINATE CACHE, exactly like [`AuthenticatedRecordV2::coordinate`]:
+    /// a fact about addresses this walk already reproduced and compared, never
+    /// a substitute for repeating the authentication. Core's founding persists
+    /// it in the Market's `StateBumpsV1` so that every later reader of the same
+    /// graph reproduces each address instead of searching for it.
+    pub record_bumps: ProductRecordBumpsV3,
 }
 
 /// Ephemeral authenticated Product Runtime V3 projection.
@@ -392,6 +402,7 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
         return Err(Error::Composition);
     }
     Ok(AuthenticatedProductRuntimeV2 {
+        record_bumps: *derived,
         product_record,
         result_domain_record,
         portfolio_record,
@@ -506,6 +517,11 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
     runtime: AuthenticatedProductRuntimeV2,
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
+    // Seeded from the walk that already ran, so the returned bank is the
+    // COMPLETE eight and not just the pair this call derives. A caller that
+    // records these -- Core's founding does -- would otherwise persist six
+    // zeros beside two bumps and never know it.
+    let mut derived = runtime.record_bumps;
     authenticate_product_basis_v3_with_admission(
         registry_program,
         rent,
@@ -513,7 +529,7 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
         linked_basis,
         PreviouslyAdmittedBasisV3,
         ProductRecordBumpsV3::ABSENT,
-        &mut ProductRecordBumpsV3::ABSENT,
+        &mut derived,
     )
 }
 
@@ -533,6 +549,10 @@ pub fn authenticate_founding_product_basis_v3<'accounts, 'info>(
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
     price_gate: Option<FinalizedRecordFrameV2<'accounts, 'info>>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
+    // The same seeding as `authenticate_product_basis_v3`: this is the call
+    // Core's founding makes, and the eight bumps it returns are what the
+    // Market records so that every later reader of this graph stops searching.
+    let mut derived = runtime.record_bumps;
     authenticate_product_basis_v3_with_admission(
         registry_program,
         rent,
@@ -540,7 +560,7 @@ pub fn authenticate_founding_product_basis_v3<'accounts, 'info>(
         linked_basis,
         FoundingBasisAdmissionV3 { price_gate },
         ProductRecordBumpsV3::ABSENT,
-        &mut ProductRecordBumpsV3::ABSENT,
+        &mut derived,
     )
 }
 

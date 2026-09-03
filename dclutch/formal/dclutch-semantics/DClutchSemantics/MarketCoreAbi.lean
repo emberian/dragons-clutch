@@ -28,6 +28,29 @@ The reserved bytes are slack for the bumps not yet carried. They exist because
 the census that motivated this tail found every other carrier on the route
 already full, and widening this account costs a re-founding rather than a
 patch.
+
+## Four of those five reserved bytes are now the Product graph, packed
+
+The Trading prelude and the Dealer accelerator each walk the same four Registry
+records — Product, ResultDomain, Portfolio, linked basis — and
+`authenticate_record` searches for TWO addresses per record, the raw body and
+its staging cursor.  Measured 2026-09-03 on real SBF ELFs, those eight searches
+are 30,172 of the accelerator's 39,217-CU walk, and a hinted walk keeps 12,000
+of it: the saving is 17,467 per walk and Trading pays a second one.
+
+Eight bumps do not fit in five bytes, and the alternative — appending eight and
+moving `STATE_BYTES` to 376 — costs exactly what this doc's last paragraph
+says: a re-founding, because Core's only `resize` is `resize(0)` and every
+market already written would be refused by length forever.  So the eight ride
+as NIBBLES in four of the five reserved bytes and the width does not move.
+
+The nibble encoding is the byte encoding's own idiom one level down.  Zero is
+unrecorded and its reader searches, exactly as a zero byte is; a recorded
+nibble `v` in `1..=15` is the bump `256 - v`, so it carries 255 down to 241.  A
+bump below 241 is not representable and is recorded as unrecorded, which costs
+a search on roughly one derivation in 32,768 and can never cost a refusal.
+An account written before this field existed holds five zero bytes and reads
+as eight unrecorded bumps, so every market founded before it keeps the search.
 -/
 
 namespace DClutch.MarketCoreAbi
@@ -46,7 +69,8 @@ inductive StateField where
   | principalCapSets
   | rentBeneficiary
   | terminalReceipt
-  | marketBump | realmRawRecordBump | realmStagingRecordBump | reservedBumps
+  | marketBump | realmRawRecordBump | realmStagingRecordBump
+  | productGraphBumps | reservedBumps
   deriving DecidableEq, Repr
 
 def stateSchema : List (FieldSpec StateField) := [
@@ -64,7 +88,8 @@ def stateSchema : List (FieldSpec StateField) := [
   ⟨.terminalReceipt, .bytes 32⟩,
   ⟨.marketBump, .u8⟩,
   ⟨.realmRawRecordBump, .u8⟩, ⟨.realmStagingRecordBump, .u8⟩,
-  ⟨.reservedBumps, .reserved 5⟩
+  ⟨.productGraphBumps, .bytes 4⟩,
+  ⟨.reservedBumps, .reserved 1⟩
 ]
 
 def stateLayout : List (PlacedField StateField) := specialize stateSchema
@@ -90,6 +115,7 @@ def rustName : StateField → String
   | .marketBump => "STATE_MARKET_BUMP_OFFSET"
   | .realmRawRecordBump => "STATE_REALM_RAW_RECORD_BUMP_OFFSET"
   | .realmStagingRecordBump => "STATE_REALM_STAGING_RECORD_BUMP_OFFSET"
+  | .productGraphBumps => "STATE_PRODUCT_GRAPH_BUMPS_OFFSET"
   | .reservedBumps => "STATE_RESERVED_BUMPS_OFFSET"
 
 end StateField
@@ -124,7 +150,8 @@ theorem state_coordinates : coordinates stateLayout = [
     (.marketBump, 360, 1),
     (.realmRawRecordBump, 361, 1),
     (.realmStagingRecordBump, 362, 1),
-    (.reservedBumps, 363, 5)
+    (.productGraphBumps, 363, 4),
+    (.reservedBumps, 367, 1)
   ] := by native_decide
 theorem state_fields_disjoint : stateLayout.Pairwise Before := specializeFrom_pairwise 0 stateSchema
 theorem state_fields_bounded (placed : PlacedField StateField) (member : placed ∈ stateLayout) :

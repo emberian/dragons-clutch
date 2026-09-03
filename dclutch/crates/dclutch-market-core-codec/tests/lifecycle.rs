@@ -5,10 +5,11 @@ use dclutch_market_core_codec::{
     ACTION_VERIFY_READINESS_TAG, AccountCreation, Action, Admission, Binding,
     CapabilityChildObservation, ChildEffectObservation, ClaimsEffectObservation,
     CollateralObservation, CoreState, Error, FoundingAccounts, FoundingFrame, FoundingQuote,
-    Holder, Identity, MarketIdentity, Phase, Product, REQUEST_BYTES, Readiness, Realm,
-    ReleaseReceipt, ReleaseSet, Representation, Request, RetirementAdmissions, Role, STATE_BYTES,
-    SeriesOpenObservation, StateBumpsV1, TerminalReceipt, VacantAccount, activate_capability_child,
-    admit_terminal, begin_retiring, close_capability_child, found, open_market, open_series_market,
+    Holder, Identity, MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, Phase, Product,
+    ProductGraphBumpsV1, REQUEST_BYTES, Readiness, Realm, ReleaseReceipt, ReleaseSet,
+    Representation, Request, RetirementAdmissions, Role, STATE_BYTES, SeriesOpenObservation,
+    StateBumpsV1, TerminalReceipt, VacantAccount, activate_capability_child, admit_terminal,
+    begin_retiring, close_capability_child, found, open_market, open_series_market,
     redeem_terminal, retire, split_complete_set, verify_readiness,
 };
 
@@ -798,6 +799,7 @@ fn the_bump_tail_is_an_append_whose_zero_is_a_search() {
         market: Some(254),
         realm_raw_record: Some(253),
         realm_staging_record: Some(251),
+        product_graph: ProductGraphBumpsV1::record([255, 254, 253, 252, 251, 250, 249, 248]),
     };
     let mut frame = founding_frame(3, 7);
     frame.bumps = recorded;
@@ -817,9 +819,35 @@ fn the_bump_tail_is_an_append_whose_zero_is_a_search() {
     let carried_bytes = carried.encode().expect("state encodes");
     let searching_bytes = searching.encode().expect("state encodes");
     assert_eq!(carried_bytes[..360], searching_bytes[..360]);
-    assert_eq!(carried_bytes[360..], [254, 253, 251, 0, 0, 0, 0, 0]);
+    // Three whole bytes, then the Product graph's eight bumps as eight nibbles
+    // in four bytes, then the last reserved byte. A recorded nibble is
+    // `256 - bump`, low nibble first: 255 and 254 pack as 0x21, 253 and 252 as
+    // 0x43, 251 and 250 as 0x65, 249 and 248 as 0x87.
+    assert_eq!(
+        carried_bytes[360..],
+        [254, 253, 251, 0x21, 0x43, 0x65, 0x87, 0]
+    );
     assert_eq!(searching_bytes[360..], [0; 8]);
     assert_eq!(CoreState::decode(&carried_bytes), Ok(carried));
+
+    // The nibble bank round-trips through the account bytes, which is the only
+    // property a reader depends on.
+    assert_eq!(
+        CoreState::decode(&carried_bytes)
+            .expect("carried decodes")
+            .bumps
+            .product_graph
+            .bumps(),
+        [255, 254, 253, 252, 251, 250, 249, 248]
+    );
+    // A bump a nibble cannot carry is recorded as unrecorded, never refused:
+    // its reader searches, which is what every reader did before this field.
+    assert_eq!(
+        ProductGraphBumpsV1::record([255, 240, 0, 241, 128, 255, 255, 255]).bumps(),
+        [255, 0, 0, 241, 0, 255, 255, 255]
+    );
+    assert!(ProductGraphBumpsV1::ABSENT.is_absent());
+    assert!(ProductGraphBumpsV1::record([240; PRODUCT_GRAPH_BUMP_COUNT]).is_absent());
 
     // A zeroed tail is what a founding that recorded nothing writes, and it
     // decodes to the search rather than to a refusal.

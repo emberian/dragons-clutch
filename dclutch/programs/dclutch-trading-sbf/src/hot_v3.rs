@@ -5307,17 +5307,29 @@ fn authenticate_continuation_root_roles_v3(
     ))
 }
 
+/// The prelude's own Product graph walk, at the bumps THIS MARKET recorded.
+///
+/// The founding is the only party that derives these addresses from a graph it
+/// has already authenticated, and since 2026-09-03 it writes them into the
+/// Market's `StateBumpsV1`. Every reader here was searching for four Registry
+/// record pairs whose seeds are a PDA domain, a canonical schema id and a
+/// content digest -- none of which moves with the release set, so the search
+/// depth is fixed and paid on every instruction.
+///
+/// Reading the bank cannot refuse. A market founded before the field existed
+/// carries eight zeros, `ProductRecordBumpsV3::ABSENT` is what that means, and
+/// this walk searches exactly as it used to.
 #[inline(never)]
 fn authenticate_product_runtime_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
     rent: &Rent,
     market: &CoreState,
 ) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
-    authenticate_product_runtime_for_record_boxed_v3(
+    authenticate_product_runtime_hinted_boxed_v3(
         frame,
         rent,
-        ProductContentId::new(market.identity.product_record.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
+        market,
+        ProductRecordBumpsV3(market.bumps.product_graph.bumps()),
     )
 }
 

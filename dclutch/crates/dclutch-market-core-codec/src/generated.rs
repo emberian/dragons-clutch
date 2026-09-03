@@ -54,7 +54,8 @@ const STATE_TERMINAL_RECEIPT_OFFSET: usize = 328;
 const STATE_MARKET_BUMP_OFFSET: usize = 360;
 const STATE_REALM_RAW_RECORD_BUMP_OFFSET: usize = 361;
 const STATE_REALM_STAGING_RECORD_BUMP_OFFSET: usize = 362;
-const STATE_RESERVED_BUMPS_OFFSET: usize = 363;
+const STATE_PRODUCT_GRAPH_BUMPS_OFFSET: usize = 363;
+const STATE_RESERVED_BUMPS_OFFSET: usize = 367;
 const REQUEST_MAGIC_OFFSET: usize = 0;
 const REQUEST_VERSION_OFFSET: usize = 8;
 const REQUEST_ACTION_OFFSET: usize = 10;
@@ -354,6 +355,91 @@ pub enum Readiness {
     Consumed,
 }
 
+/// The eight Product-graph record bumps, packed one per nibble into four
+/// bytes, in the order the walk visits them.
+///
+/// Product raw, Product staging, ResultDomain raw, ResultDomain staging,
+/// Portfolio raw, Portfolio staging, linked-basis raw, linked-basis staging --
+/// which is `dclutch_product_runtime_v2_svm_reader::ProductRecordBumpsV3`'s
+/// order, because that is the reader these exist to feed.
+///
+/// # Why nibbles
+///
+/// The state header reserved five bytes for the bumps it did not yet carry and
+/// eight do not fit in five. Appending eight would move `STATE_BYTES`, and
+/// Core's only `resize` is `resize(0)`: every market already written would be
+/// refused by length, forever. So the eight ride in four of those five bytes.
+///
+/// Zero is unrecorded and its reader searches, exactly as a zero byte is one
+/// level up. A recorded nibble `value` is the bump `256 - value`, carrying 255
+/// down to 241. A bump below 241 is not representable, is recorded as
+/// unrecorded, and costs a search on about one derivation in 32,768 -- it can
+/// never cost a refusal, because a hint reader that can refuse reports a
+/// conjunct it does not own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProductGraphBumpsV1([u8; PRODUCT_GRAPH_BUMP_COUNT]);
+
+impl ProductGraphBumpsV1 {
+    /// Nothing mined: every derivation on the walk searches.
+    pub const ABSENT: Self = Self([0; PRODUCT_GRAPH_BUMP_COUNT]);
+
+    /// Carry the bumps a walk derived, dropping any this encoding cannot hold.
+    #[must_use]
+    pub fn record(bumps: [u8; PRODUCT_GRAPH_BUMP_COUNT]) -> Self {
+        let mut carried = [0_u8; PRODUCT_GRAPH_BUMP_COUNT];
+        for (slot, bump) in carried.iter_mut().zip(bumps) {
+            *slot = if bump >= PRODUCT_GRAPH_LOWEST_CARRIED_BUMP {
+                bump
+            } else {
+                0
+            };
+        }
+        Self(carried)
+    }
+
+    /// The bumps, in walk order. Zero is unrecorded.
+    #[must_use]
+    pub const fn bumps(self) -> [u8; PRODUCT_GRAPH_BUMP_COUNT] {
+        self.0
+    }
+
+    /// Whether any bump is carried at all.
+    #[must_use]
+    pub fn is_absent(self) -> bool {
+        self.0.iter().all(|bump| *bump == 0)
+    }
+
+    fn to_packed(self) -> [u8; PRODUCT_GRAPH_BUMP_BYTES] {
+        let mut packed = [0_u8; PRODUCT_GRAPH_BUMP_BYTES];
+        for (index, bump) in self.0.iter().enumerate() {
+            let nibble = if *bump >= PRODUCT_GRAPH_LOWEST_CARRIED_BUMP {
+                u8::try_from(256_u16 - u16::from(*bump)).unwrap_or(0)
+            } else {
+                0
+            };
+            let byte = index / 2;
+            if let Some(slot) = packed.get_mut(byte) {
+                *slot |= if index % 2 == 0 { nibble } else { nibble << 4 };
+            }
+        }
+        packed
+    }
+
+    fn from_packed(packed: [u8; PRODUCT_GRAPH_BUMP_BYTES]) -> Self {
+        let mut bumps = [0_u8; PRODUCT_GRAPH_BUMP_COUNT];
+        for (index, bump) in bumps.iter_mut().enumerate() {
+            let byte = packed.get(index / 2).copied().unwrap_or(0);
+            let nibble = if index % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            *bump = if nibble == 0 {
+                0
+            } else {
+                u8::try_from(256_u16 - u16::from(nibble)).unwrap_or(0)
+            };
+        }
+        Self(bumps)
+    }
+}
+
 /// Canonical PDA bumps the founding recorded for this Market.
 ///
 /// The founding is the only party that derives these addresses from seeds it
@@ -372,6 +458,8 @@ pub struct StateBumpsV1 {
     pub realm_raw_record: Option<u8>,
     /// Bump of that record's Registry staging cursor.
     pub realm_staging_record: Option<u8>,
+    /// The Product graph's four record pairs, packed.
+    pub product_graph: ProductGraphBumpsV1,
 }
 
 impl StateBumpsV1 {
@@ -380,6 +468,7 @@ impl StateBumpsV1 {
         market: None,
         realm_raw_record: None,
         realm_staging_record: None,
+        product_graph: ProductGraphBumpsV1::ABSENT,
     };
 
     /// Carry one derived bump. Zero is the unrecorded encoding and cannot be
@@ -412,6 +501,13 @@ pub struct CoreState {
     /// Canonical PDA bumps recorded at founding.
     pub bumps: StateBumpsV1,
 }
+
+/// Bumps one Product graph walk derives: four records, raw and staging each.
+pub const PRODUCT_GRAPH_BUMP_COUNT: usize = 8;
+/// Bytes those eight occupy, one nibble each.
+pub const PRODUCT_GRAPH_BUMP_BYTES: usize = 4;
+/// Lowest bump a nibble can carry; anything below it is recorded unrecorded.
+pub const PRODUCT_GRAPH_LOWEST_CARRIED_BUMP: u8 = 241;
 
 impl CoreState {
     fn valid_static(self) -> bool {
@@ -483,6 +579,11 @@ impl CoreState {
             STATE_REALM_STAGING_RECORD_BUMP_OFFSET,
             self.bumps.realm_staging_record,
         )?;
+        put(
+            &mut output,
+            STATE_PRODUCT_GRAPH_BUMPS_OFFSET,
+            &self.bumps.product_graph.to_packed(),
+        )?;
         Ok(output)
     }
 
@@ -495,7 +596,7 @@ impl CoreState {
         if read_u16(input, STATE_VERSION_OFFSET)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }
-        require_zero(input, STATE_RESERVED_BUMPS_OFFSET, 5)?;
+        require_zero(input, STATE_RESERVED_BUMPS_OFFSET, 1)?;
         let phase = decode_phase(read_byte(input, STATE_PHASE_OFFSET)?)?;
         let readiness = decode_readiness(read_byte(input, STATE_READINESS_OFFSET)?)?;
         let receipt_bytes = read_array(input, STATE_TERMINAL_RECEIPT_OFFSET)?;
@@ -527,6 +628,10 @@ impl CoreState {
                 market: read_bump(input, STATE_MARKET_BUMP_OFFSET)?,
                 realm_raw_record: read_bump(input, STATE_REALM_RAW_RECORD_BUMP_OFFSET)?,
                 realm_staging_record: read_bump(input, STATE_REALM_STAGING_RECORD_BUMP_OFFSET)?,
+                product_graph: ProductGraphBumpsV1::from_packed(read_array(
+                    input,
+                    STATE_PRODUCT_GRAPH_BUMPS_OFFSET,
+                )?),
             },
         };
         if !state.valid_static() {

@@ -290,6 +290,7 @@ mod tests {
                 market: Some(252),
                 realm_raw_record: Some(254),
                 realm_staging_record: Some(253),
+                ..StateBumpsV1::UNRECORDED
             },
         }
     }

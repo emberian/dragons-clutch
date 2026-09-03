@@ -50,10 +50,10 @@ use dclutch_market_core_codec::{
     Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     FOUND_PRICE_GATE_ACCOUNT_COUNT_V3, FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5,
     GenericFoundingRequestV1, GenericFoundingStageV1, Identity, MarketCoreStateSeedsV2,
-    MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2, PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2,
-    Phase, ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness, Request,
-    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1, StateBumpsV1,
-    generic_founding_funding_list_id_v1,
+    MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, PROJECT_FOUND_ACCOUNT_COUNT_V2,
+    PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2, Phase, ProductGraphBumpsV1, ProjectFoundReceiptV2,
+    ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
+    SeriesFoundingPermitSeedsV1, StateBumpsV1, generic_founding_funding_list_id_v1,
 };
 use dclutch_market_founding_v1_operator::{
     authenticate_generic_market_founding_artifact_v1, construct_generic_founding_root_selection_v1,
@@ -70,7 +70,10 @@ use dclutch_product_payoff_v2_codec::{
 use dclutch_product_runtime_v2::{
     ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, FinalizedRecordObservationV2, FoundingBandV1,
     FoundingBeliefV1, ProductCompilationInputV2, StatedPropositionV1,
@@ -9656,7 +9659,7 @@ fn derive_founding_outer_v1(
         principal_cap_sets: coordinates.principal_cap_sets,
         rent_beneficiary: identity_of(coordinates.credit.to_bytes())?,
         terminal_receipt: None,
-        bumps: predicted_state_bumps_v1(core, registry, coordinates.identity)?,
+        bumps: predicted_state_bumps_v1(core, registry, coordinates.identity, records)?,
     };
     let market_state_bytes = market_state
         .encode()
@@ -9875,6 +9878,7 @@ fn predicted_state_bumps_v1(
     core: Pubkey,
     registry: Pubkey,
     identity: MarketIdentity,
+    records: &MarketRecords,
 ) -> Result<StateBumpsV1> {
     let market_bump =
         Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(identity).as_slices(), &core).1;
@@ -9897,10 +9901,44 @@ fn predicted_state_bumps_v1(
         &registry,
     )
     .1;
+    // The Product graph pair-by-pair, in the reader's walk order. Core fills
+    // these from `authenticate_founding_product_basis_v3`, whose four record
+    // derivations are the RAW/STAGING pair under the Registry at each canonical
+    // schema id and the record's own content digest -- and the four digests are
+    // exactly what `publish_record` returned for the records this campaign put
+    // on chain. A pair this side leaves zero moves the same permit digest the
+    // realm pair does.
+    let mut product_graph = [0_u8; PRODUCT_GRAPH_BUMP_COUNT];
+    for (slot, (schema, digest)) in [
+        (PRODUCT_RECORD_SCHEMA_ID_V2, records.product.digest),
+        (RESULT_DOMAIN_SCHEMA_ID_V2, records.domain.digest),
+        (PORTFOLIO_SCHEMA_ID_V2, records.portfolio.digest),
+        (GRADED_BASIS_RECORD_SCHEMA_ID_V3, records.basis.digest),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let seeds: [&[u8]; 2] = [schema.as_slice(), digest.as_slice()];
+        let raw =
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, seeds[0], seeds[1]], &registry)
+                .1;
+        let staging = Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, seeds[0], seeds[1]],
+            &registry,
+        )
+        .1;
+        if let Some(cell) = product_graph.get_mut(slot * 2) {
+            *cell = raw;
+        }
+        if let Some(cell) = product_graph.get_mut(slot * 2 + 1) {
+            *cell = staging;
+        }
+    }
     let bumps = StateBumpsV1 {
         market: StateBumpsV1::record(market_bump),
         realm_raw_record: StateBumpsV1::record(raw_bump),
         realm_staging_record: StateBumpsV1::record(staging_bump),
+        product_graph: ProductGraphBumpsV1::record(product_graph),
     };
     if bumps.market.is_none()
         || bumps.realm_raw_record.is_none()
@@ -9989,6 +10027,7 @@ fn authenticate_core_state_encoding_v1(
     market: Pubkey,
     core: Pubkey,
     registry: Pubkey,
+    records: &MarketRecords,
 ) -> Result<()> {
     let account = rpc.required_account(market, "Found37 Market")?;
     let state = CoreState::decode(&account.data)
@@ -10001,7 +10040,7 @@ fn authenticate_core_state_encoding_v1(
             "CoreState re-encoding did not reproduce the Market bytes the chain holds",
         ));
     }
-    let predicted = predicted_state_bumps_v1(core, registry, state.identity)?;
+    let predicted = predicted_state_bumps_v1(core, registry, state.identity, records)?;
     if predicted != state.bumps {
         return Err(Error::new(format!(
             "the Market the chain holds carries bump tail {:?}, and this driver predicts \
@@ -11626,7 +11665,7 @@ fn execute_generic_market_founding(
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
-    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry)?;
+    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry, records)?;
     let outer = derive_founding_outer_v1(
         rpc,
         plan,
@@ -12041,7 +12080,7 @@ fn execute_split_market_founding(
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
-    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry)?;
+    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry, records)?;
     let outer = derive_founding_outer_v1(
         rpc,
         plan,

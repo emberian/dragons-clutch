@@ -4,8 +4,8 @@ use alloc::boxed::Box;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_market_core_codec::{
     Action, Admission, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote,
-    MarketCoreStateSeedsV2, MarketIdentity, Product, ProjectFoundReceiptV2, Realm, Request, Role,
-    STATE_BYTES, StateBumpsV1, VacantAccount, found,
+    MarketCoreStateSeedsV2, MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, Product, ProductGraphBumpsV1,
+    ProjectFoundReceiptV2, Realm, Request, Role, STATE_BYTES, StateBumpsV1, VacantAccount, found,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     AuthenticatedProductRuntimeV2, Error as ProductRuntimeReaderError, FinalizedRecordFrameV2,
@@ -52,6 +52,14 @@ struct References {
     /// Canonical bumps of the Registry record pair naming `realm_id`. Custody
     /// re-derives that pair on every transfer; persisting them lets it stop.
     realm_record_bumps: RecordPdaBumpsV1,
+    /// The Product graph walk's own eight bumps, in the reader's order.
+    ///
+    /// This founding walks three of the four records -- Product, ResultDomain
+    /// and Portfolio -- so the first six are derived here and the linked-basis
+    /// pair stays unrecorded. Core never sees that record: its content digest
+    /// is `hash` of the basis body, which arrives with the Trading frame and
+    /// not with the founding, so its reader searches exactly as it used to.
+    product_record_bumps: [u8; PRODUCT_GRAPH_BUMP_COUNT],
     collateral_mint: [u8; 32],
     token_program: [u8; 32],
     collateral_release: [u8; 32],
@@ -444,6 +452,7 @@ fn plan_found(
             market: StateBumpsV1::record(bump),
             realm_raw_record: StateBumpsV1::record(references.realm_record_bumps.raw),
             realm_staging_record: StateBumpsV1::record(references.realm_record_bumps.staging),
+            product_graph: ProductGraphBumpsV1::record(references.product_record_bumps),
         },
     };
     let result = found(request, semantic_frame).map_err(|_| CoreSbfError::Transition)?;
@@ -639,6 +648,9 @@ fn authenticate_references(
         References {
             realm_id,
             realm_record_bumps,
+            // This path authenticated the linked basis too, so all four record
+            // pairs are here; the projected path below has three.
+            product_record_bumps: basis.record_bumps.0,
             collateral_mint: *realm.collateral_mint(),
             token_program: *realm.token_program(),
             collateral_release: *realm.collateral_adapter_release_id(),
@@ -710,6 +722,7 @@ fn authenticate_projected_references(
         References {
             realm_id: authority.realm_id,
             realm_record_bumps,
+            product_record_bumps: runtime.record_bumps.0,
             collateral_mint: authority.collateral_mint,
             token_program: authority.token_program,
             collateral_release: authority.collateral_release,

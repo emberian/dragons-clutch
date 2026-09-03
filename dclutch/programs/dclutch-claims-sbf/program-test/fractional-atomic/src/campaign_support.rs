@@ -284,15 +284,18 @@ pub fn activation_cache(input: &ReleaseSetInputV1<'_>) -> ([u8; 32], Vec<u8>) {
 #[must_use]
 pub fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
     let digest = hash(&bytes).to_bytes();
-    let raw = Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner).0;
-    let staging =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &owner).0;
+    let (raw, raw_bump) =
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner);
+    let (staging, staging_bump) =
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &owner);
     NarrowRecordV2 {
         owner,
         schema,
         digest,
         raw,
         staging,
+        raw_bump,
+        staging_bump,
         bytes,
     }
 }

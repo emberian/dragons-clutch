@@ -100,8 +100,8 @@ use dclutch_direct_codec::{
     },
 };
 use dclutch_market_core_codec::{
-    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
-    StateBumpsV1,
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
+    PRODUCT_GRAPH_BUMP_COUNT, Phase, ProductGraphBumpsV1, Readiness, StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_product_payoff_v2_codec::runtime_v3::{
@@ -1407,6 +1407,32 @@ fn market_and_claims(
     // `record_bumps_v1` is that derivation, and `realm_id` is that hash.
     let realm_record_bumps =
         record_bumps_v1(input.registry_program, REALM_SCHEMA_RELEASE_ID_V1, realm_id);
+    // The Product graph's four record pairs, in the reader's walk order, which
+    // is what `authenticate_founding_product_basis_v3` hands `plan_found` and
+    // `ProductGraphBumpsV1::record` carries. Same rule as the realm pair above:
+    // an unrecorded tail is the pre-hint route, so a fixture that leaves it
+    // absent measures a market no founding produces.
+    let product_graph_bumps = {
+        let mut bumps = [0_u8; PRODUCT_GRAPH_BUMP_COUNT];
+        for (slot, (schema, digest)) in [
+            (PRODUCT_RECORD_SCHEMA_ID_V2, product.product.digest),
+            (RESULT_DOMAIN_SCHEMA_ID_V2, product.domain.digest),
+            (PORTFOLIO_SCHEMA_ID_V2, product.portfolio.digest),
+            (GRADED_BASIS_RECORD_SCHEMA_ID_V3, product.basis.digest),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (raw, staging) = record_bumps_v1(input.registry_program, schema, digest);
+            if let Some(cell) = bumps.get_mut(slot * 2) {
+                *cell = raw;
+            }
+            if let Some(cell) = bumps.get_mut(slot * 2 + 1) {
+                *cell = staging;
+            }
+        }
+        bumps
+    };
     // One credit per Market lifecycle, and the Market is its own PDA seed.
     let rent_credit =
         lifecycle_rent_credit(input.rent_program, market, input.release_set, input.payer)?;
@@ -1438,6 +1464,7 @@ fn market_and_claims(
             market: StateBumpsV1::record(market_bump),
             realm_raw_record: StateBumpsV1::record(realm_record_bumps.0),
             realm_staging_record: StateBumpsV1::record(realm_record_bumps.1),
+            product_graph: ProductGraphBumpsV1::record(product_graph_bumps),
         },
     }
     .encode()
