@@ -6869,7 +6869,7 @@ mod tests {
     }
 
     fn crate_sources_v1() -> Vec<String> {
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let directory = crate::model::successor_src_v1();
         let mut sources = Vec::new();
         for entry in std::fs::read_dir(&directory).expect("successor src directory") {
             let path = entry.expect("successor source entry").path();
@@ -6882,10 +6882,8 @@ mod tests {
 
     #[test]
     fn every_campaign_report_boolean_a_reader_declares_has_a_producer_that_computes_it() {
-        let schema = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/campaign.rs"),
-        )
-        .expect("campaign schema source");
+        let schema = std::fs::read_to_string(crate::model::successor_src_v1().join("campaign.rs"))
+            .expect("campaign schema source");
         let exempt = LITERAL_ONLY_BY_DESIGN_V1
             .iter()
             .map(|(field, _)| *field)

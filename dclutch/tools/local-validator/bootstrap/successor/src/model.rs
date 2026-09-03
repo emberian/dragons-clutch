@@ -1249,3 +1249,43 @@ mod already_current_closure_tests {
         );
     }
 }
+
+/// The repository root, found by walking up from the CONSUMING crate.
+///
+/// These modules are compiled VERBATIM into other crates by `#[path]`, so
+/// `env!("CARGO_MANIFEST_DIR")` names whoever linked them and never this
+/// directory: the successor sits four segments below the repository root and
+/// `tools/gauntlet/journey` sits three, and `src/campaign.rs` does not exist
+/// under the journey at all. Three host tests asserted against that difference
+/// and panicked with `No such file or directory` the moment anything built the
+/// journey's tests -- and a fourth, `crate_sources_v1`, did something worse: it
+/// found a real `src` under the journey and silently enumerated the WRONG
+/// source set, so a producer census over the successor passed by reading a
+/// different crate.
+///
+/// So the anchor is a directory that exists exactly once in this repository,
+/// searched for rather than counted to.
+#[cfg(test)]
+pub(crate) fn repository_root_v1() -> std::path::PathBuf {
+    let mut directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        if directory
+            .join("tools/local-validator/bootstrap/successor/src")
+            .is_dir()
+        {
+            return directory.to_path_buf();
+        }
+        directory = directory.parent().unwrap_or_else(|| {
+            panic!(
+                "no ancestor of {} holds tools/local-validator/bootstrap/successor/src",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        });
+    }
+}
+
+/// The successor's own `src/`, wherever this file was linked from.
+#[cfg(test)]
+pub(crate) fn successor_src_v1() -> std::path::PathBuf {
+    repository_root_v1().join("tools/local-validator/bootstrap/successor/src")
+}

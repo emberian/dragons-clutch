@@ -17233,10 +17233,8 @@ mod historical_boundary_reads {
     }
 
     fn market_source_v1() -> String {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/market.rs"),
-        )
-        .expect("market source")
+        std::fs::read_to_string(crate::model::successor_src_v1().join("market.rs"))
+            .expect("market source")
     }
 
     #[test]

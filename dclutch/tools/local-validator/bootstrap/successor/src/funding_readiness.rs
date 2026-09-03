@@ -272,8 +272,8 @@ mod tests {
     /// become a hole if that file is renamed away.
     #[test]
     fn the_funding_readiness_planner_has_no_observation_clock_consumer_v1() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../crates/dclutch-source-readiness-operator/src");
+        let root = crate::model::repository_root_v1()
+            .join("crates/dclutch-source-readiness-operator/src");
         let mut sources = Vec::new();
         let mut pending = vec![root.clone()];
         while let Some(directory) = pending.pop() {

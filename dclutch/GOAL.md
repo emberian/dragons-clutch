@@ -3971,3 +3971,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Swarmcycle 3 begins without waiting on rulings where it can: C-16 REHEARSAL **`(spawned, read-only)`** and
   COLD-MACHINE **`(spawned; hbox under /tank)`** — the cross-host digest pair C-14 never had.
 - Cuts: `6678dcafe`.
+- C-16 REHEARSAL closed (`9235efe0c` docs/evidence/C16_REHEARSAL_2026_09_03.md): **not met, all six categories non-empty, two
+  larger than the last measurement could see because the instruments improved** — never-executed 16 with no reason (50 of
+  162 honestly; **0 routes have a devnet witness in the register, 25 rest solely on parked tier 1, 54 are ProgramTest-only**);
+  user-inaccessible capabilities 65 of 78 strict; 47 stale claims confirmed; 12 of 80 lamport sites unowned; 121
+  unadjudicated authority candidates; 13 of 17 rows carry a material gap. Reframing findings: routes.md names a
+  corroboration artifact that has never been in git; tier 1 is parked on the retired demo-market boundary; a mis-scaled
+  selection took a stranger's money on a public chain (market C) with the repair landed and unshipped; C-11 has no artifact
+  (LivenessVault has never moved an atom); nothing has ever been retired (13 markets, none at phase 3). Three of its own
+  conclusions refuted mid-review and recorded. Ranked twenty leads with the scale repair shipped, tier 1 unparked, a
+  tracked corroboration artifact, OpenBatch on chain, and D1. → WITNESS **`(spawned)`** for the two instrument gaps.
+- Cuts: `cdd9f022a`, `e3cb88002`.
