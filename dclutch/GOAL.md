@@ -4008,3 +4008,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the maker corrected six items in the orchestrator's brief (market B's fill never completed; market C paid the mis-scaled
   cell on an honest certificate; the ATA release is cohort-14's). Committed unsigned, not pushed, not tweeted.
 - Cuts: `6e242deca`, `445e60a91`.
+- WITNESS closed (eleven commits, `58783f739` … `87c2a8d23`): **docs/reference/route-witnesses.md is tracked** (a genref page):
+  over 162 routes — devnet 22, local-validator 29, ProgramTest-only 52, blocked 44, never-executed 15; a real runtime
+  drives 51 (the rehearsal's 19 was an undercount); `substrates.json` declares each campaign's substrate and genref CHECKS
+  it (a "local-validator" campaign whose runner spawns none fails); `devnet-witness/corroborate.py --discover` builds a
+  witness document from a cohort's evidence with zero authored route claims (the chain's bytes resolved against the census's
+  selectors, same-program guard — it refused a mirror and two tier-1 bindings the chain never invoked); cohort-15 writes its
+  own witnesses (`a96872400`); six blocked.json entries their own routes have falsified are printed. **Tier 1 unparked**:
+  the loopback plan cannot drive it (immutable-Core semantics), so the supervisor compiles a fixture from the plan — 195
+  transactions in 18 min through the infrastructure floor; two stale things fixed (invented semantic ids; a genesis pin four
+  short) and one open: **the last transaction refuses Claims `0x5182 Release` behind nine map_err sites and zero msg! lines**
+  → CLAIMS-FOUNDING **`(spawned)`**. genref --check red on ten reference files from landed codes → GENREF **`(spawned)`**
+  (the two-pass rule becomes `--converge`).
+- Cuts: `0e3e4034f`, `65a17ef05`.

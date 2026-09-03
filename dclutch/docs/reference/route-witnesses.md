@@ -70,34 +70,56 @@ says `local-validator` must have a runner that starts one, a campaign that
 says `program-test` must not, and a campaign that binds a route with no row at
 all fails this generator rather than rendering as `unknown`.
 
-| campaign | substrate | routes | runner | artifact sha256 |
-| --- | --- | ---: | --- | --- |
-| `claims-affine-batch-programtest` | program-test | 2 | **none** -- driven by hand | `de722348146d272e` |
-| `claims-claim-check-programtest` | program-test | 7 | `tools/gauntlet/claims-claim-check/run-claims-claim-check.sh` | `5c905e34ad2659bd` |
-| `claims-family-programtest` | program-test | 3 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `a224d7dd73b5c7ec` |
-| `custody-family-programtest` | program-test | 2 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `df26e8f1354d48f2` |
-| `claims-fractional-atomic-programtest` | program-test | 6 | `tools/gauntlet/claims-fractional-atomic/run-fractional-atomic.sh` | `583038631ca2aea1` |
-| `claims-fractional-signed-delta-programtest` | program-test | 2 | **none** -- driven by hand | `17991f1458ea334a` |
-| `claims-rational-lifecycle-programtest` | program-test | 2 | **none** -- driven by hand | `11c0278d3778e105` |
-| `claims-rational-representation-v2-programtest` | program-test | 9 | **none** -- driven by hand | `92a50bd7f597fc98` |
-| `dealer-checkpoint-programtest` | program-test | 9 | `tools/gauntlet/dealer-checkpoint/run-dealer-checkpoint.sh` | `df6363466d66a4fa` |
-| `direct-aot-programtest` | program-test | 1 | `tools/gauntlet/direct/run-direct.sh` | `e11f7c58e8f1c116` |
-| `direct-fee-pair-programtest` | program-test | 2 | `tools/gauntlet/direct-fee-pair/run-direct-fee-pair.sh` | `48d33f9f96ca0dc0` |
-| `general-accelerator-programtest` | program-test | 1 | `tools/gauntlet/general/run-general.sh` | `a257248cdbe48b23` |
-| `journey` | local-validator | 15 | `tools/gauntlet/journey/run-journey.sh` | `cc0af7e4821413e1` |
-| `relayed-vertical` | local-validator | 5 | `tools/gauntlet/relayed-vertical/run-relayed-vertical.sh` | `7602376cb7809e06` |
-| `resolution-core-v3-programtest` | program-test | 12 | `tools/gauntlet/resolution-core-v3/run-resolution-core-v3.sh` | `3fe2abd2f49064e3` |
-| `resolution-pre-market-funding-programtest` | program-test | 3 | `tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.sh` | `8d301707583822e4` |
-| `resolution-relayed-programtest` | program-test | 8 | `tools/gauntlet/resolution-relayed/run-resolution-relayed.sh` | `40373a66bb1d2fc6` |
-| `resolution-sponsored-programtest` | program-test | 7 | `tools/gauntlet/resolution-sponsored/run-resolution-sponsored.sh` | `161ab1a8e200521a` |
-| `retirement-checkpoint-programtest` | program-test | 7 | `tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh` | `516e9705ccd6aaff` |
-| `retirement-replay-handoff-programtest` | program-test | 2 | `tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh` | `950b33db1915d0c0` |
-| `structured-v2-programtest` | program-test | 2 | `tools/gauntlet/structured/run-structured.sh` | `98937647cc92d70f` |
-| `tier1` | local-validator | 30 | `tools/gauntlet/run.sh` | `a69aaa5db4d64e94` |
-| `tier4-series-occurrence-programtest` | program-test | 1 | `tools/gauntlet/tier4/run-campaign.sh` | `eccd05c0e5ba3d38` |
-| cohort 13 (devnet) | devnet | 10 | `tools/gauntlet/devnet-witness/corroborate.py` | `9f18f7c5d9e1a57e` |
-| cohort 13 (devnet) | devnet | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `9909b0b59ab4e9b3` |
-| cohort 14 (devnet) | devnet | 4 | `tools/gauntlet/devnet-witness/corroborate.py` | `a08c5c64298bc6a2` |
+| campaign | substrate | reproduces | routes | runner | artifact sha256 |
+| --- | --- | --- | ---: | --- | --- |
+| `claims-affine-batch-programtest` | program-test | yes | 2 | **none** -- driven by hand | `de722348146d272e` |
+| `claims-claim-check-programtest` | program-test | yes | 7 | `tools/gauntlet/claims-claim-check/run-claims-claim-check.sh` | `5c905e34ad2659bd` |
+| `claims-family-programtest` | program-test | yes | 3 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `a224d7dd73b5c7ec` |
+| `custody-family-programtest` | program-test | yes | 2 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `df26e8f1354d48f2` |
+| `claims-fractional-atomic-programtest` | program-test | yes | 6 | `tools/gauntlet/claims-fractional-atomic/run-fractional-atomic.sh` | `583038631ca2aea1` |
+| `claims-fractional-signed-delta-programtest` | program-test | yes | 2 | **none** -- driven by hand | `17991f1458ea334a` |
+| `claims-rational-lifecycle-programtest` | program-test | yes | 2 | **none** -- driven by hand | `11c0278d3778e105` |
+| `claims-rational-representation-v2-programtest` | program-test | yes | 9 | **none** -- driven by hand | `92a50bd7f597fc98` |
+| `dealer-checkpoint-programtest` | program-test | yes | 9 | `tools/gauntlet/dealer-checkpoint/run-dealer-checkpoint.sh` | `df6363466d66a4fa` |
+| `direct-aot-programtest` | program-test | yes | 1 | `tools/gauntlet/direct/run-direct.sh` | `e11f7c58e8f1c116` |
+| `direct-fee-pair-programtest` | program-test | yes | 2 | `tools/gauntlet/direct-fee-pair/run-direct-fee-pair.sh` | `48d33f9f96ca0dc0` |
+| `general-accelerator-programtest` | program-test | yes | 1 | `tools/gauntlet/general/run-general.sh` | `a257248cdbe48b23` |
+| `journey` | local-validator | yes | 15 | `tools/gauntlet/journey/run-journey.sh` | `cc0af7e4821413e1` |
+| `relayed-vertical` | local-validator | yes | 5 | `tools/gauntlet/relayed-vertical/run-relayed-vertical.sh` | `7602376cb7809e06` |
+| `resolution-core-v3-programtest` | program-test | yes | 12 | `tools/gauntlet/resolution-core-v3/run-resolution-core-v3.sh` | `3fe2abd2f49064e3` |
+| `resolution-pre-market-funding-programtest` | program-test | yes | 3 | `tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.sh` | `8d301707583822e4` |
+| `resolution-relayed-programtest` | program-test | yes | 8 | `tools/gauntlet/resolution-relayed/run-resolution-relayed.sh` | `40373a66bb1d2fc6` |
+| `resolution-sponsored-programtest` | program-test | yes | 7 | `tools/gauntlet/resolution-sponsored/run-resolution-sponsored.sh` | `161ab1a8e200521a` |
+| `retirement-checkpoint-programtest` | program-test | yes | 7 | `tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh` | `516e9705ccd6aaff` |
+| `retirement-replay-handoff-programtest` | program-test | yes | 2 | `tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh` | `950b33db1915d0c0` |
+| `structured-v2-programtest` | program-test | yes | 2 | `tools/gauntlet/structured/run-structured.sh` | `98937647cc92d70f` |
+| `tier1` | local-validator | **NO** | 30 | `tools/gauntlet/run.sh` | `a69aaa5db4d64e94` |
+| `tier4-series-occurrence-programtest` | program-test | yes | 1 | `tools/gauntlet/tier4/run-campaign.sh` | `eccd05c0e5ba3d38` |
+| cohort 13 (devnet) | devnet | yes | 10 | `tools/gauntlet/devnet-witness/corroborate.py` | `9f18f7c5d9e1a57e` |
+| cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `9909b0b59ab4e9b3` |
+| cohort 14 (devnet) | devnet | yes | 4 | `tools/gauntlet/devnet-witness/corroborate.py` | `a08c5c64298bc6a2` |
+
+## Routes whose only witness is a campaign that does not reproduce
+
+A binding is a claim about a run that happened. A claim whose run cannot be
+repeated is not corroboration, and `tools/gauntlet/substrates.json` now carries
+a `reproduces` field per campaign so a campaign that stops completing has
+somewhere to say so. These are the routes left standing on one.
+
+| route | class | the campaign(s) |
+| --- | --- | --- |
+| `core/found::process#Found` | local-validator | `tier1` |
+| `core/infrastructure::process_initialize` | local-validator | `tier1` |
+| `custody/abort_source_and_close#AbortSourceAndClose` | local-validator | `tier1` |
+| `registry/process_activate_role#ActivateRole` | local-validator | `tier1` |
+| `registry/process_append#2` | local-validator | `tier1` |
+| `registry/process_begin#5` | local-validator | `tier1` |
+| `registry/process_finalize#3` | local-validator | `tier1` |
+| `registry/process_instruction` | local-validator | `tier1` |
+| `registry/process_reauthenticate#Reauthenticate` | local-validator | `tier1` |
+| `registry/record_v1::dispatch` | local-validator | `tier1` |
+| `rent/process_create_v2#Create` | local-validator | `tier1` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | local-validator | `tier1` |
 
 ## Blocks their own route has already falsified
 

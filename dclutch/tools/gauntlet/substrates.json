@@ -1,11 +1,12 @@
 {
   "schema": "dclutch-gauntlet-campaign-substrates-v1",
-  "note": "Which SUBSTRATE each gauntlet campaign's transactions actually ran on. `bindings.json` says a campaign drove a route; it does not say whether the thing that executed the route was Solana devnet, a `solana-test-validator`, or an in-process `solana-program-test` bank. Those are three different evidence levels (AGENTS.md, 'Correctness vocabulary'; tools/gauntlet/DESIGN.md admits ProgramTest only as a labelled fast lane) and until this file existed the register could not print the difference, so 53% of the witnessed rows read exactly like the 19 that reach a validator. One file, one owner (lane WITNESS), because a substrate declared inside each campaign's own bindings.json would be the campaign grading its own evidence. Every declaration here is CHECKED against its producer by tools/genref/generate.mjs: `local-validator` must spawn one, `program-test` must not, and a campaign with no row is a hard error rather than a silent `unknown`.",
+  "note": "Which SUBSTRATE each gauntlet campaign's transactions actually ran on. `bindings.json` says a campaign drove a route; it does not say whether the thing that executed the route was Solana devnet, a `solana-test-validator`, or an in-process `solana-program-test` bank. Those are three different evidence levels (AGENTS.md, 'Correctness vocabulary'; tools/gauntlet/DESIGN.md admits ProgramTest only as a labelled fast lane) and until this file existed the register could not print the difference, so 53% of the witnessed rows read exactly like the 19 that reach a validator. One file, one owner (lane WITNESS), because a substrate declared inside each campaign's own bindings.json would be the campaign grading its own evidence. Every declaration here is CHECKED against its producer by tools/genref/generate.mjs: `local-validator` must spawn one, `program-test` must not, and a campaign with no row is a hard error rather than a silent `unknown`. Each row also states whether the campaign REPRODUCES: `reproducible` is true, or a sentence saying what stops it. A binding is a claim about a run that happened, and a claim whose run cannot be repeated is not corroboration -- the C-16 rehearsal's finding (b), that 25 routes' sole witness was a campaign refusing at HEAD, was only findable by trying to run it. Now the register prints it.",
   "classes": {
     "devnet": "A finalized transaction on Solana devnet, named by signature and slot. The only class that is chain evidence outside this machine. Contract item 5 (docs/MASTER_COMPLETION_CONTRACT.md:52-53) is met by this or by `local-validator`.",
     "local-validator": "A `solana-test-validator` process: a real Agave runtime, a real ledger, real slots and finalization, on localhost.",
     "program-test": "An in-process `solana-program-test` bank. It executes REAL SBF ELFs, which is why these campaigns are evidence at all, but it is not a validator: no packet limit, no leader schedule, no finalization, and no fee market. A route whose only witness is this class has never been exercised by a runtime that could refuse it for size or for time.",
-    "none": "No campaign binds this route."
+    "none": "No campaign binds this route.",
+    "reproducible": "Whether the campaign completes at HEAD. `true` means it was observed to run end to end; a sentence means it does not, and says where it stops. Not a claim that anyone ran it today: it is an authored field, and it goes stale the same way every authored field does. What it is for is that a campaign which STOPS reproducing has somewhere to say so, which it did not before."
   },
   "campaigns": [
     {
@@ -13,161 +14,184 @@
       "substrate": "program-test",
       "runner": null,
       "producer": "programs/dclutch-claims-sbf/program-test/affine-batch",
-      "note": "No family runner: the campaign is driven by hand through `cargo test` in the producer directory, and its bindings were folded from a run nobody can name a command for. That is the weakest position any campaign in this file is in."
+      "note": "No family runner: the campaign is driven by hand through `cargo test` in the producer directory, and its bindings were folded from a run nobody can name a command for. That is the weakest position any campaign in this file is in.",
+      "reproducible": true
     },
     {
       "campaign": "claims-claim-check-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/claims-claim-check/run-claims-claim-check.sh",
       "producer": "programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs",
-      "note": "Claim-check compaction over the Rational Representation V2 program-test."
+      "note": "Claim-check compaction over the Rational Representation V2 program-test.",
+      "reproducible": true
     },
     {
       "campaign": "claims-family-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/claims-custody/run-claims-custody.sh",
       "producer": "programs/dclutch-claims-sbf/program-test",
-      "note": "The Claims half of the shared claims/custody family runner."
+      "note": "The Claims half of the shared claims/custody family runner.",
+      "reproducible": true
     },
     {
       "campaign": "custody-family-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/claims-custody/run-claims-custody.sh",
       "producer": "programs/dclutch-custody-sbf",
-      "note": "The Custody half of the shared claims/custody family runner."
+      "note": "The Custody half of the shared claims/custody family runner.",
+      "reproducible": true
     },
     {
       "campaign": "claims-fractional-atomic-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/claims-fractional-atomic/run-fractional-atomic.sh",
       "producer": "programs/dclutch-claims-sbf/program-test/fractional-atomic",
-      "note": "Atomic fractional wrap/unwrap."
+      "note": "Atomic fractional wrap/unwrap.",
+      "reproducible": true
     },
     {
       "campaign": "claims-fractional-signed-delta-programtest",
       "substrate": "program-test",
       "runner": null,
       "producer": "programs/dclutch-claims-sbf/program-test/fractional-signed-delta",
-      "note": "No family runner. N=258 through the Claims SignedDeltaV3 route -- a width that would not fit a Solana packet, which is exactly the refusal a ProgramTest bank cannot make."
+      "note": "No family runner. N=258 through the Claims SignedDeltaV3 route -- a width that would not fit a Solana packet, which is exactly the refusal a ProgramTest bank cannot make.",
+      "reproducible": true
     },
     {
       "campaign": "claims-rational-lifecycle-programtest",
       "substrate": "program-test",
       "runner": null,
       "producer": "programs/dclutch-claims-sbf/program-test/rational-lifecycle",
-      "note": "No family runner."
+      "note": "No family runner.",
+      "reproducible": true
     },
     {
       "campaign": "claims-rational-representation-v2-programtest",
       "substrate": "program-test",
       "runner": null,
       "producer": "programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs",
-      "note": "No family runner. 121 bindings, the second-largest campaign in the tree."
+      "note": "No family runner. 121 bindings, the second-largest campaign in the tree.",
+      "reproducible": true
     },
     {
       "campaign": "dealer-checkpoint-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/dealer-checkpoint/run-dealer-checkpoint.sh",
       "producer": "programs/dclutch-dealer-accelerator-sbf/program-test",
-      "note": "The only campaign of the twenty-three whose binding notes carry a mechanically-derived observation string rather than authored prose."
+      "note": "The only campaign of the twenty-three whose binding notes carry a mechanically-derived observation string rather than authored prose.",
+      "reproducible": true
     },
     {
       "campaign": "direct-fee-pair-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/direct-fee-pair/run-direct-fee-pair.sh",
       "producer": "programs/dclutch-trading-sbf/program-test",
-      "note": "The fee-bearing second transaction of the Direct pair."
+      "note": "The fee-bearing second transaction of the Direct pair.",
+      "reproducible": true
     },
     {
       "campaign": "direct-aot-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/direct/run-direct.sh",
       "producer": "tools/gauntlet/direct/producer",
-      "note": "Ahead-of-time compiled Direct entry."
+      "note": "Ahead-of-time compiled Direct entry.",
+      "reproducible": true
     },
     {
       "campaign": "general-accelerator-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/general/run-general.sh",
       "producer": "programs/dclutch-general-accelerator-sbf/program-test",
-      "note": "A declared fast lane restricted to runtime width 1: at N=258 six of its seven actions do not fit a Solana packet and the bank does not notice. The four fast-lane clauses ride the evidence document (tools/gauntlet/general/fast-lane.json)."
+      "note": "A declared fast lane restricted to runtime width 1: at N=258 six of its seven actions do not fit a Solana packet and the bank does not notice. The four fast-lane clauses ride the evidence document (tools/gauntlet/general/fast-lane.json).",
+      "reproducible": true
     },
     {
       "campaign": "journey",
       "substrate": "local-validator",
       "runner": "tools/gauntlet/journey/run-journey.sh",
       "producer": "tools/gauntlet/journey/src/main.rs",
-      "note": "One of the two campaigns that reach a real Agave runtime, and the larger of them."
+      "note": "One of the two campaigns that reach a real Agave runtime, and the larger of them.",
+      "reproducible": true
     },
     {
       "campaign": "relayed-vertical",
       "substrate": "local-validator",
       "runner": "tools/gauntlet/relayed-vertical/run-relayed-vertical.sh",
       "producer": "tools/gauntlet/relayed-vertical/src/main.rs",
-      "note": "The relayed vertical against a localhost validator."
+      "note": "The relayed vertical against a localhost validator.",
+      "reproducible": true
     },
     {
       "campaign": "resolution-core-v3-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/resolution-core-v3/run-resolution-core-v3.sh",
       "producer": "crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs",
-      "note": "Core V3 resolution lifecycle."
+      "note": "Core V3 resolution lifecycle.",
+      "reproducible": true
     },
     {
       "campaign": "resolution-pre-market-funding-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.sh",
       "producer": "crates/dclutch-svm-harness/tests/pre_market_resolution_funding.rs",
-      "note": "Pre-market resolution funding."
+      "note": "Pre-market resolution funding.",
+      "reproducible": true
     },
     {
       "campaign": "resolution-relayed-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/resolution-relayed/run-resolution-relayed.sh",
       "producer": "crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs",
-      "note": "Relayed mainnet state under the SVM harness. Its validator sibling is the `relayed-vertical` campaign."
+      "note": "Relayed mainnet state under the SVM harness. Its validator sibling is the `relayed-vertical` campaign.",
+      "reproducible": true
     },
     {
       "campaign": "resolution-sponsored-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/resolution-sponsored/run-resolution-sponsored.sh",
       "producer": "crates/dclutch-svm-harness/tests/sponsored_push_lifecycle.rs",
-      "note": "Sponsored push lifecycle."
+      "note": "Sponsored push lifecycle.",
+      "reproducible": true
     },
     {
       "campaign": "retirement-checkpoint-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh",
       "producer": "crates/dclutch-svm-harness/tests/market_retirement_v1_lifecycle.rs",
-      "note": "Market retirement checkpoint lifecycle."
+      "note": "Market retirement checkpoint lifecycle.",
+      "reproducible": true
     },
     {
       "campaign": "retirement-replay-handoff-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh",
       "producer": "programs/dclutch-core-sbf/tests/retirement_replay_handoff_program_test.rs",
-      "note": "Retirement replay handoff."
+      "note": "Retirement replay handoff.",
+      "reproducible": true
     },
     {
       "campaign": "structured-v2-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/structured/run-structured.sh",
       "producer": "programs/dclutch-trading-sbf/program-test",
-      "note": "Structured V2 issuance."
+      "note": "Structured V2 issuance.",
+      "reproducible": true
     },
     {
       "campaign": "tier1",
       "substrate": "local-validator",
       "runner": "tools/gauntlet/run.sh",
       "producer": "tools/local-validator/bootstrap/successor/src/main.rs",
-      "note": "The infrastructure floor: a transaction-only bootstrap of the seven successor artifacts on a fresh localhost ledger. Twenty-five routes have no other witness."
+      "note": "The infrastructure floor: a transaction-only bootstrap of the seven successor artifacts on a fresh localhost ledger. Twenty-five routes have no other witness. Unparked 2026-09-03 (58783f739); the campaign's own last transaction is the only thing between it and evidence again.",
+      "reproducible": "NO, as of 2026-09-03. The tier is no longer parked -- it builds seven ELFs, launches a validator and submits 195 transactions in 18 minutes, through every infrastructure-floor route and hostile, the Found37 Market, the funding prepare (DCLTCFQ1) and the DCLTGMF3 hostile -- and its LAST transaction, the atomic founding 'found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)', fails simulation with Claims 0x5182 ClaimsFoundingSbfErrorV5::Release after 58,112 CU in Claims and 602,835 CU in Trading. The campaign writes its evidence document only on completion, so nothing folds and none of the 30 bound routes is corroborated by a run anyone can repeat. `Release` is raised at NINE map_err(|_| ..) sites in programs/dclutch-claims-sbf/src/founding_v5.rs (:637, :666, :711, :793, :798, :799, :801, :897, :911) and that file contains ZERO msg! calls, so the conjunct is not recoverable from the validator log. The CU cost points at the four-role loop at :884-914 (authenticate_activated_role_and_bump_v1 over Core/Claims/Trading/Custody against the Registry activation cache) rather than at the cheap authority PDA check at :637. Owner: PROGRAMS. This was invisible while the tier was parked, as were two other stale things the same run found (c9eac1738)."
     },
     {
       "campaign": "tier4-series-occurrence-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/tier4/run-campaign.sh",
       "producer": "programs/dclutch-series-shadow-sbf",
-      "note": "Series occurrence shadow."
+      "note": "Series occurrence shadow.",
+      "reproducible": true
     }
   ]
 }

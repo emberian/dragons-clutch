@@ -372,6 +372,14 @@ mod tests {
             fixed_accounts: fixed,
             strategy_accounts: &[],
             root_data: &[7; 64],
+            // No corpus, so every hint degrades to zero and the route
+            // searches. These cases pin the frame geometry, not the hint
+            // block; the derivation has its own tests in
+            // `dclutch-hot-bump-miner-v1`, and its byte identity with the
+            // campaign builder is asserted on real ELFs by
+            // `rational_representation_v2_program_test`.
+            market_data: &[],
+            activation_cache_data: &[],
             release_set: key(1).to_bytes(),
             market: key(2),
             generation: 14,

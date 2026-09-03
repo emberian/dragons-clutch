@@ -13,6 +13,7 @@ dclutch-capability-program-contract = { path = "../dclutch-capability-program-co
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
+dclutch-hot-bump-miner-v1 = { path = "../dclutch-hot-bump-miner-v1" }
 dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }

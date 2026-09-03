@@ -629,6 +629,7 @@ mod common_hot_open {
         bundle::{BuiltBundleV1, BundleInputV1, FixedCorpusV1, ScenarioV1, build_bundle},
         frame::BuiltAccountV1,
     };
+    use dclutch_hot_bump_miner_v1::hot_bump_hint_slot_name_v1;
     use dclutch_rational_representation_v2_contract::{
         RepresentationCoordinateV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
@@ -1614,9 +1615,19 @@ mod common_hot_open {
         }
     }
 
+    /// The same-finalized projection a browser would hold before it builds.
+    ///
+    /// The Market state and the activation cache are here for the same reason
+    /// the root bytes are: they are coordinates of the frame this caller
+    /// already fetched, and they are the preimages of three PDA bumps the route
+    /// would otherwise search for. Handing the builder metas alone is what made
+    /// it emit `HotBumpHintsV1::ABSENT` while the campaign builder beside it
+    /// mined three bytes.
     fn hot_state<'a>(
         fixture: &Fixture,
         root_data: &'a [u8],
+        market_data: &'a [u8],
+        activation_cache_data: &'a [u8],
         fixed_accounts: &'a [AccountMeta],
     ) -> dclutch_bearer_v2_operator::RationalTerminalHotStateV3<'a> {
         let trading = trading_artifact();
@@ -1625,6 +1636,8 @@ mod common_hot_open {
             fixed_accounts,
             strategy_accounts: &[],
             root_data,
+            market_data,
+            activation_cache_data,
             release_set: fixture.release_set,
             market: fixture.market,
             generation: GENERATION,
@@ -1645,6 +1658,84 @@ mod common_hot_open {
         }
     }
 
+    /// The public outer builder's instruction is the bundle builder's, and when
+    /// it is not, WHERE.
+    ///
+    /// # Why this is not one `assert_eq!`
+    ///
+    /// It was, and the cost was measured on 2026-09-03. These instructions
+    /// carry seventy-odd account metas and 704 bytes of data, so a three-byte
+    /// disagreement printed two twelve-kilobyte `Debug` renderings and left the
+    /// reader to diff them by eye -- `map_err(|_| Coarse)` wearing an
+    /// assertion's clothes. The comparison knew exactly which offsets moved and
+    /// threw the fact away, and what it was hiding was the whole finding: three
+    /// bytes, all of them inside `HotBumpHintsV1`, because the public builders
+    /// mined nothing while the bundle builder beside them mined three slots.
+    ///
+    /// So: report the first disagreement in the terms of the thing that
+    /// disagreed -- a meta index, or a list of byte offsets with both values,
+    /// with the hint slot NAMED from `dclutch_hot_bump_miner_v1`'s own list
+    /// when the offset lands in that block.
+    ///
+    /// # Why the comparison is evidence at all
+    ///
+    /// Two authors. The outer builder walks the operator's declared frame and
+    /// mines from the account bodies it was handed; the bundle builder runs the
+    /// campaign's adoption loop over a corpus it binds itself. Making one side
+    /// copy the other's bytes would turn every row green and prove nothing.
+    pub(super) fn assert_outer_reproduces_bundle(outer: &Instruction, bundle: &Instruction) {
+        assert_eq!(
+            outer.program_id, bundle.program_id,
+            "public outer and bundle builder name different programs"
+        );
+        assert_eq!(
+            outer.accounts.len(),
+            bundle.accounts.len(),
+            "public outer has {} account metas, bundle builder has {}",
+            outer.accounts.len(),
+            bundle.accounts.len()
+        );
+        for (index, (left, right)) in outer
+            .accounts
+            .iter()
+            .zip(bundle.accounts.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                left, right,
+                "public outer and bundle builder differ at account meta {index}: \
+                 outer {left:?}, bundle {right:?}"
+            );
+        }
+        assert_eq!(
+            outer.data.len(),
+            bundle.data.len(),
+            "public outer Hot request is {} bytes, bundle builder's is {}",
+            outer.data.len(),
+            bundle.data.len()
+        );
+        let differing = outer
+            .data
+            .iter()
+            .zip(bundle.data.iter())
+            .enumerate()
+            .filter(|(_, (left, right))| left != right)
+            .map(|(offset, (left, right))| {
+                let slot = hot_bump_hint_slot_name_v1(offset)
+                    .map(|name| format!(" (HotBumpHintsV1::{name})"))
+                    .unwrap_or_default();
+                format!("{offset}{slot} outer {left} bundle {right}")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            differing.is_empty(),
+            "public outer and bundle builder Hot request data differ in {} of {} bytes: {}",
+            differing.len(),
+            outer.data.len(),
+            differing.join("; ")
+        );
+    }
+
     pub(super) async fn assert_public_issue_outer(
         context: &mut ProgramTestContext,
         fixture: &Fixture,
@@ -1652,12 +1743,15 @@ mod common_hot_open {
         built: &BuiltBundleV1,
     ) {
         let root = account(context, fixture.capability_root.expect("root")).await;
+        let market = account(context, fixture.market).await;
+        let activation = account(context, fixture.activation_cache).await;
         let fixed = built
             .hot_instruction
             .accounts
             .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
             .expect("Hot fixed prefix");
-        let state: RationalOpenStructuredHotStateV3<'_> = hot_state(fixture, &root.data, fixed);
+        let state: RationalOpenStructuredHotStateV3<'_> =
+            hot_state(fixture, &root.data, &market.data, &activation.data, fixed);
         let behavior = token_behavior(context, fixture).await;
         let release = fixture.hot_release.as_ref().expect("Hot release");
         let public = build_rational_open_structured_hot_instruction_v3(
@@ -1668,7 +1762,7 @@ mod common_hot_open {
             behavior,
         )
         .expect("public complete IssueStructured outer");
-        assert_eq!(public.instruction, built.hot_instruction);
+        assert_outer_reproduces_bundle(&public.instruction, &built.hot_instruction);
         assert_eq!(public.required_wallet_signers, vec![fixture.actor.pubkey()]);
     }
 
@@ -1679,12 +1773,14 @@ mod common_hot_open {
         built: &BuiltBundleV1,
     ) {
         let root = account(context, fixture.capability_root.expect("root")).await;
+        let market = account(context, fixture.market).await;
+        let activation = account(context, fixture.activation_cache).await;
         let fixed = built
             .hot_instruction
             .accounts
             .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
             .expect("Hot fixed prefix");
-        let state = hot_state(fixture, &root.data, fixed);
+        let state = hot_state(fixture, &root.data, &market.data, &activation.data, fixed);
         let behavior = token_behavior(context, fixture).await;
         let release = fixture.hot_release.as_ref().expect("Hot release");
         let public = build_rational_terminal_hot_instruction_v3(
@@ -1695,7 +1791,7 @@ mod common_hot_open {
             behavior,
         )
         .expect("public complete RedeemTerminal outer");
-        assert_eq!(public.instruction, built.hot_instruction);
+        assert_outer_reproduces_bundle(&public.instruction, &built.hot_instruction);
         assert_eq!(public.required_wallet_signers, vec![fixture.actor.pubkey()]);
     }
 
@@ -1706,12 +1802,15 @@ mod common_hot_open {
         built: &BuiltBundleV1,
     ) {
         let root = account(context, fixture.capability_root.expect("root")).await;
+        let market = account(context, fixture.market).await;
+        let activation = account(context, fixture.activation_cache).await;
         let fixed = built
             .hot_instruction
             .accounts
             .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
             .expect("Hot fixed prefix");
-        let state: RationalOpenSelectedHotStateV3<'_> = hot_state(fixture, &root.data, fixed);
+        let state: RationalOpenSelectedHotStateV3<'_> =
+            hot_state(fixture, &root.data, &market.data, &activation.data, fixed);
         let behavior = token_behavior(context, fixture).await;
         let release = fixture.hot_release.as_ref().expect("Hot release");
         let public = build_rational_open_selected_hot_instruction_v3(
@@ -1722,7 +1821,7 @@ mod common_hot_open {
             behavior,
         )
         .expect("public complete Denominate outer");
-        assert_eq!(public.instruction, built.hot_instruction);
+        assert_outer_reproduces_bundle(&public.instruction, &built.hot_instruction);
         assert_eq!(public.required_wallet_signers, vec![fixture.actor.pubkey()]);
     }
 }

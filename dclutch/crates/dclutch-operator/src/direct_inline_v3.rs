@@ -67,6 +67,9 @@ use dclutch_direct_codec::{
     },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
+use dclutch_hot_bump_miner_v1::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+};
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -103,39 +106,37 @@ pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES
 /// reproduces each address with `create_program_address` and refuses unless it
 /// reproduces the account it was handed. See `HotBumpHintsV1`.
 ///
+/// The DERIVATION is `dclutch_hot_bump_miner_v1`'s and not this file's, because
+/// it is the same walk the Dealer LP builder, the campaign's bundle builder and
+/// the Rational public outer builders all make. What this function owns is the
+/// CORPUS: which coordinate of the Direct hot frame is the Market, which is the
+/// root, and which program key each is derived under.
+///
 /// The two child caller-authority slots are NOT filled here. Their seeds end in
 /// a digest over each child's projected request, which this builder does not
 /// compute; `derive_direct_inline_child_authorities_v3` does, and reports them
 /// on `DirectInlineChildAuthoritiesV3`. A slot left zero searches, so a caller
-/// that has not projected its children is correct and merely slower.
+/// that has not projected its children is correct and merely slower. The
+/// Custody transfer authority is left zero for the narrower reason that this
+/// function serves every Direct action, including the ones with no Custody leg
+/// to spend the hint on; `direct_inline_hot_bump_hints_v1` mines it below for
+/// the action that has one.
 fn direct_hot_bump_hints_v1(
     state: &DirectInlineHotStateV3,
     trading_program: &Pubkey,
 ) -> Result<HotBumpHintsV1, Error> {
-    let market_account = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
-    let core_program = fixed_account(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?
-        .account
-        .key;
-    let market = CoreState::decode(&market_account.data).map_err(|_| Error::ArtifactMismatch)?;
-    let market_bump = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
-        &core_program,
-    )
-    .1;
-    let root_account = &fixed_account(state, HOT_ROOT_ACCOUNT_V3)?.account;
-    let root = CapabilityRootHeaderV1::decode(
-        root_account
-            .data
-            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
-            .ok_or(Error::ArtifactMismatch)?,
-    )
-    .map_err(|_| Error::ArtifactMismatch)?;
-    let root_bump = Pubkey::find_program_address(&root.seeds().as_slices(), trading_program).1;
-    Ok(HotBumpHintsV1 {
-        market: market_bump,
-        root: root_bump,
-        ..HotBumpHintsV1::ABSENT
-    })
+    let market = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
+    Ok(mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+        market_key: market.key,
+        market_data: &market.data,
+        root_data: &fixed_account(state, HOT_ROOT_ACCOUNT_V3)?.account.data,
+        core_program: fixed_account(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?
+            .account
+            .key,
+        trading_program: *trading_program,
+        custody_program: None,
+        release_set: state.release_set,
+    }))
 }
 
 /// Add the two maker-replay bumps an InlineOrdinary lifecycle creates.
@@ -172,15 +173,8 @@ fn direct_inline_hot_bump_hints_v1(
     // Custody is not in the hot fixed frame; the Market's activation cache is,
     // and it names the release set's Custody deployment.
     let activation = &fixed_account(state, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
-    let custody_program = Pubkey::new_from_array(
-        ActivatedExecutionReleaseSetViewV1::decode(&activation.data)
-            .map_err(|_| Error::ArtifactMismatch)?
-            .role(ExecutionRoleV1::Custody)
-            .map_err(|_| Error::ArtifactMismatch)?
-            .release()
-            .program()
-            .to_bytes(),
-    );
+    let custody_program =
+        activated_custody_program_v1(&activation.data).ok_or(Error::ArtifactMismatch)?;
     let child_relay = [
         Pubkey::find_program_address(
             &CustodyReplaySeedsV1::new(

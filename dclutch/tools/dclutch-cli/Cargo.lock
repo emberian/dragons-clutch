@@ -372,6 +372,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
+ "dclutch-hot-bump-miner-v1",
  "dclutch-product-payoff-v2-codec",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
@@ -671,6 +672,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-hot-bump-miner-v1"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-custody-contract",
+ "dclutch-market-core-codec",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
@@ -718,6 +731,7 @@ dependencies = [
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
+ "dclutch-hot-bump-miner-v1",
  "dclutch-market-core-codec",
  "dclutch-market-open-v1-operator",
  "dclutch-product-payoff-v2-codec",

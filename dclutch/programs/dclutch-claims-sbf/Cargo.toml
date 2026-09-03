@@ -69,6 +69,7 @@ dclutch-bearer-v2-operator = { path = "../../crates/dclutch-bearer-v2-operator" 
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
 dclutch-chain-bundle-builder = { path = "../dclutch-trading-sbf/program-test/bundle-builder" }
+dclutch-hot-bump-miner-v1 = { path = "../../crates/dclutch-hot-bump-miner-v1" }
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
 # The claim-check CLIENT. `claim_check_v1`'s builders are the tree's only

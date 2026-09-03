@@ -2,11 +2,14 @@
 
 use dclutch_account_profile_contract::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
-    HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
-    HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-    HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-    HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
+    HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+    HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+    HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
+    HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
+};
+use dclutch_hot_bump_miner_v1::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, RationalTerminalHotRequestV3, RepresentationActionV2,
@@ -55,6 +58,22 @@ pub struct RationalTerminalHotStateV3<'a> {
     pub strategy_accounts: &'a [AccountMeta],
     /// Current complete capability-root bytes used for optimistic concurrency.
     pub root_data: &'a [u8],
+    /// Current complete Core Market state bytes for the frame's Market.
+    ///
+    /// Coordinate `HOT_MARKET_ACCOUNT_V3` of the same fixed frame, so a caller
+    /// that assembled `fixed_accounts` has already fetched it. It is here for
+    /// one reason: the Market's immutable identity is the preimage of its own
+    /// PDA, and mining that bump is what stops the route searching for it. A
+    /// caller that cannot supply the body may pass an empty slice and the
+    /// route searches, exactly as it did before hints existed.
+    pub market_data: &'a [u8],
+    /// Current complete Market activation-cache bytes.
+    ///
+    /// Coordinate `HOT_ACTIVATION_CACHE_ACCOUNT_V3` of the same fixed frame.
+    /// Custody is not in the frame; this account is what names the release
+    /// set's Custody deployment, which is the program the transfer-authority
+    /// hint is derived under. Empty degrades to a search, as above.
+    pub activation_cache_data: &'a [u8],
     /// Immutable execution release set selected by Market.
     pub release_set: [u8; 32],
     /// Logical Core Market selected by the fixed frame.
@@ -231,7 +250,16 @@ fn build_hot_instruction_from_claims_child_inner_v3(
         state.generation,
         hash(state.root_data).to_bytes(),
     )
-    .map_err(|_| Error::HotInstruction)?;
+    .map_err(|_| Error::HotInstruction)?
+    .with_bump_hints(mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+        market_key: state.market,
+        market_data: state.market_data,
+        root_data: state.root_data,
+        core_program: fixed_key(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?,
+        trading_program: checked.trading_program,
+        custody_program: activated_custody_program_v1(state.activation_cache_data),
+        release_set: state.release_set,
+    }));
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(family_request.len())
@@ -438,6 +466,19 @@ fn injected_meta_v3<'a>(
         .ok_or(Error::HotInstruction)
 }
 
+/// One fixed-frame coordinate's key, named rather than indexed.
+///
+/// `validate_fixed_frame` has already required the frame's exact width, so this
+/// cannot be absent on any path that reaches it; it returns a `Result` so that
+/// a future caller placed BEFORE that check cannot silently read a default key.
+fn fixed_key(state: &RationalTerminalHotStateV3<'_>, coordinate: usize) -> Result<Pubkey> {
+    Ok(state
+        .fixed_accounts
+        .get(coordinate)
+        .ok_or(Error::HotInstruction)?
+        .pubkey)
+}
+
 fn validate_fixed_frame(
     state: &RationalTerminalHotStateV3<'_>,
     checked: CheckedRationalHotOuterReleaseV3,
@@ -631,6 +672,14 @@ mod tests {
             fixed_accounts: fixed,
             strategy_accounts: &[],
             root_data: root,
+            // No corpus, so every hint degrades to zero and the route
+            // searches. These cases pin the frame geometry, not the hint
+            // block; the derivation has its own tests in
+            // `dclutch-hot-bump-miner-v1`, and its byte identity with the
+            // campaign builder is asserted on real ELFs by
+            // `rational_representation_v2_program_test`.
+            market_data: &[],
+            activation_cache_data: &[],
             release_set: key(1).to_bytes(),
             market: key(2),
             generation: 14,

@@ -2446,8 +2446,11 @@ pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
     let v2_address =
         Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], &core).0;
     let v2_account = rpc.account(v2_address)?;
+    let genesis_v2_body = runtime::decode_hex(&plan.genesis_infrastructure_profile.body_hex)?;
+    let v2_is_genesis_body =
+        v2_profile_is_the_genesis_body_v1(core, &genesis_v2_body, v2_account.as_ref());
     if view.deployment_slot() == plan.registry.deployment_slot {
-        if v2_account.is_some() {
+        if v2_account.is_some() && !v2_is_genesis_body {
             return Ok(StageStateV1::Conflict(
                 "V2 profile exists although Registry never moved from V1's slot".into(),
             ));
@@ -2522,7 +2525,7 @@ pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
         }
     };
     if !record_complete {
-        return Ok(if v2_account.is_some() {
+        return Ok(if v2_account.is_some() && !v2_is_genesis_body {
             StageStateV1::Conflict(
                 "V2 profile exists before the successor Registry record is finalized".into(),
             )
@@ -2543,12 +2546,45 @@ pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
             && v2_account.data == projection.profile.to_bytes()
         {
             StageStateV1::Complete
+        } else if v2_is_genesis_body {
+            // The ceremony has not rewritten it yet. That is progress, not a
+            // conflict: the born-at-V2 body is exactly what Initialize left.
+            StageStateV1::Partial(
+                "Registry upgrade and successor record landed; the V2 profile is still the \
+                 genesis body this cohort was born with"
+                    .into(),
+            )
         } else {
             StageStateV1::Conflict(
                 "V2 profile exists but is not the exact chain-derived succession selection".into(),
             )
         },
     )
+}
+
+/// Is the account at the V2 domain the GENESIS V2 body, not a successor's.
+///
+/// Since `c60b25e8` one `InitializeProtocolInfrastructureV1` commits BOTH
+/// profiles -- the V1 at the V1 domain and a genesis V2 at the V2 domain, as
+/// `runtime::initialize_instruction`'s fifteenth account says in its own
+/// comment -- and `model.rs` states it plainly: "every cohort this tool plans
+/// is born at V2". The succession detector below predates that and reads mere
+/// EXISTENCE at the V2 domain as proof the ceremony already committed a
+/// successor profile. So from `c60b25e8` onward, any campaign that runs
+/// Initialize and Succession in one pass reported
+/// `Conflict("V2 profile exists before the successor Registry record is
+/// finalized")` the instant Initialize landed -- measured 2026-09-03 on a cold
+/// machine, twenty-four transactions into a loopback run, which is the only
+/// place both stages execute together.
+///
+/// Existence is not the question. WHOSE BYTES is the question, and the plan
+/// names them.
+fn v2_profile_is_the_genesis_body_v1(
+    core: Pubkey,
+    genesis_body: &[u8],
+    account: Option<&crate::rpc::RpcAccount>,
+) -> bool {
+    account.is_some_and(|account| account.owner == core && account.data == genesis_body)
 }
 
 fn infrastructure_role_label_v1(role: ExecutionRoleV1) -> &'static str {
@@ -5151,6 +5187,50 @@ pub(crate) fn acknowledgment_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn v2_profile_account(owner: Pubkey, data: Vec<u8>) -> crate::rpc::RpcAccount {
+        crate::rpc::RpcAccount {
+            lamports: 1_000_000,
+            owner,
+            executable: false,
+            rent_epoch: 0,
+            data,
+        }
+    }
+
+    /// EXISTENCE AT THE V2 DOMAIN IS NOT A SUCCESSOR PROFILE. Since `c60b25e8`
+    /// one initialize commits the genesis V2 there, so the succession detector
+    /// has to ask whose bytes those are.
+    #[test]
+    fn the_genesis_v2_body_is_recognized_as_the_body_initialize_committed() {
+        let core = Pubkey::new_unique();
+        let genesis = vec![7u8; PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2];
+        assert!(v2_profile_is_the_genesis_body_v1(
+            core,
+            &genesis,
+            Some(&v2_profile_account(core, genesis.clone()))
+        ));
+    }
+
+    /// AND A STRANGER'S V2 IS STILL A STRANGER: other bytes, or the right bytes
+    /// under the wrong owner, are not the genesis body and still conflict.
+    #[test]
+    fn other_bytes_or_another_owner_are_not_the_genesis_body() {
+        let core = Pubkey::new_unique();
+        let genesis = vec![7u8; PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2];
+        let other = vec![9u8; PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2];
+        assert!(!v2_profile_is_the_genesis_body_v1(
+            core,
+            &genesis,
+            Some(&v2_profile_account(core, other))
+        ));
+        assert!(!v2_profile_is_the_genesis_body_v1(
+            core,
+            &genesis,
+            Some(&v2_profile_account(Pubkey::new_unique(), genesis.clone()))
+        ));
+        assert!(!v2_profile_is_the_genesis_body_v1(core, &genesis, None));
+    }
 
     use dclutch_core_contract::ContentId;
     use dclutch_registry_contract::{

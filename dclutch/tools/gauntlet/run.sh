@@ -22,9 +22,13 @@ usage: tools/gauntlet/run.sh [options]
   --mode MODE      census | full   (default: full)
                      census  static enumeration + report only, seconds, no chain
                      full    build seven ELFs, launch a localhost validator, run
-                             the tier-1 campaign, fold it into the census. Budget
-                             ~25 min cold on an M-series laptop: about six of SBF
-                             builds and the rest campaign.
+                             the tier-1 campaign, fold it into the census.
+                             MEASURED 2026-09-03 on an M-series laptop: 18m01s of
+                             campaign (195 transactions) after 7m of archive,
+                             build, tool and inventory with a warm --work; a cold
+                             --work adds ~6m of SBF builds. Budget 25-31 minutes,
+                             and read TIERS.md before treating a run as evidence:
+                             the campaign does not currently complete.
   --from STAGE     force a restart at a stage: archive|elf|tool|inventory|
                    campaign|census  (later stages always re-run)
   --keep-runs      keep every campaign run directory (default: newest three)

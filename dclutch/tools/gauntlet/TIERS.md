@@ -34,6 +34,21 @@ supervisor compiles a fixture input from the plan it builds
 (`SuccessorRunSpec::market`). Named family runners still own their own build,
 evidence, witnesses, and validator lifecycle.
 
+**Budget, measured 2026-09-03**: 18m01s of campaign (195 transactions) after 7m
+of archive, build, tool and inventory against a warm `--work`; a cold `--work`
+adds about 6m of SBF builds. 25-31 minutes end to end.
+
+**It does not complete yet, and that is now a printed fact rather than a
+discovery.** The last transaction -- the atomic founding, `DCLTGMF3` -- fails
+simulation with Claims `0x5182 ClaimsFoundingSbfErrorV5::Release`. The campaign
+writes its evidence document only on completion, so nothing folds, and the
+thirty routes tier 1 binds have no reproducible corroboration.
+`tools/gauntlet/substrates.json` states this per campaign and
+`docs/reference/route-witnesses.md` prints the twelve routes left standing on it
+alone. Unparking found two other stale things first (`c9eac1738`): five
+invented semantic release ids and a genesis-account pin four short, both
+invisible while nothing executed them.
+
 ## The three files a tier needs
 
 ### 1. A transaction producer

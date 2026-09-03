@@ -250,6 +250,12 @@ for (const row of substrates.campaigns) {
     if (!(row.substrate in SUBSTRATE_RANK) || row.substrate === "none") {
       problems.push(`\`${campaign}\`: substrate \`${row.substrate}\` is not one of the declared classes`);
     }
+    if (row.reproducible !== true && typeof row.reproducible !== "string") {
+      problems.push(
+        `\`${campaign}\`: \`reproducible\` must be true or a sentence saying what stops the ` +
+          `campaign completing. A campaign that no longer runs has to have somewhere to say so.`,
+      );
+    }
     for (const key of ["runner", "producer"]) {
       const rel = row[key];
       if (rel !== null && !fs.existsSync(path.join(REPO, rel))) {
@@ -827,6 +833,7 @@ ${noMachine}
   // this answers "and what ran, and can I check it without running anything".
   const rows = [];
   const falsifiedBlocks = [];
+  const unreproducible = [];
   const klassOf = (substrate) =>
     substrate === "program-test" ? "ProgramTest only" : substrate;
   const counts = {
@@ -913,6 +920,18 @@ ${noMachine}
         detail = campaigns.map((c) => `\`${c}\``).join(", ");
       }
       counts[klass] += 1;
+      // A route whose ONLY evidence comes from campaigns that do not complete
+      // at HEAD. Its bindings are claims about a run nobody can repeat, which
+      // is a different thing from never having been driven and a different
+      // thing again from being driven today.
+      if (
+        best !== "none" &&
+        campaigns.length > 0 &&
+        devnet.length === 0 &&
+        campaigns.every((c) => substrateFor.get(c).reproducible !== true)
+      ) {
+        unreproducible.push([`\`${route.id}\``, klassOf(best), campaigns.map((c) => `\`${c}\``).join(", ")]);
+      }
       rows.push([
         `\`${route.id}\``,
         klass,
@@ -932,6 +951,7 @@ ${noMachine}
     artifactRows.push([
       `\`${campaign}\``,
       row.substrate,
+      row.reproducible === true ? "yes" : "**NO**",
       num((perCampaign.get(campaign) ?? new Set()).size),
       row.runner ? `\`${row.runner}\`` : "**none** -- driven by hand",
       `\`${sha256(file).slice(0, 16)}\``,
@@ -941,6 +961,7 @@ ${noMachine}
     artifactRows.push([
       `cohort ${document.cohort} (${document.cluster})`,
       "devnet",
+      "yes",
       num(
         new Set(
           document.records.flatMap((r) => r.routes_corroborated ?? []),
@@ -1039,11 +1060,24 @@ all fails this generator rather than rendering as \`unknown\`.
 
 ` +
       table(
-        ["campaign", "substrate", "routes", "runner", "artifact sha256"],
+        ["campaign", "substrate", "reproduces", "routes", "runner", "artifact sha256"],
         artifactRows,
-        [null, null, "r", null, null],
+        [null, null, null, "r", null, null],
       ) +
       `
+
+## Routes whose only witness is a campaign that does not reproduce
+
+A binding is a claim about a run that happened. A claim whose run cannot be
+repeated is not corroboration, and \`tools/gauntlet/substrates.json\` now carries
+a \`reproduces\` field per campaign so a campaign that stops completing has
+somewhere to say so. These are the routes left standing on one.
+
+${
+  unreproducible.length > 0
+    ? table(["route", "class", "the campaign(s)"], unreproducible)
+    : "*None: every witnessed route has at least one campaign that completes.*"
+}
 
 ## Blocks their own route has already falsified
 

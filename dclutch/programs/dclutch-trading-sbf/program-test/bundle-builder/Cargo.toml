@@ -18,7 +18,7 @@ dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execu
 dclutch-general-adapter-contract = { path = "../../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-codec = { path = "../../../../crates/dclutch-general-codec" }
 dclutch-general-config-contract = { path = "../../../../crates/dclutch-general-config-contract" }
-dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
+dclutch-hot-bump-miner-v1 = { path = "../../../../crates/dclutch-hot-bump-miner-v1" }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-rational-representation-v2-contract = { path = "../../../../crates/dclutch-rational-representation-v2-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }

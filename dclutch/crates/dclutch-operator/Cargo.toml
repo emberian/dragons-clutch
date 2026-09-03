@@ -28,6 +28,7 @@ dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
 dclutch-bearer-v2-operator = { path = "../dclutch-bearer-v2-operator" }
+dclutch-hot-bump-miner-v1 = { path = "../dclutch-hot-bump-miner-v1" }
 dclutch-claims-conservation-contract = { path = "../dclutch-claims-conservation-contract" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }

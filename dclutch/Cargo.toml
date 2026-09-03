@@ -24,6 +24,7 @@ members = [
     "crates/dclutch-general-adapter-contract",
     "crates/dclutch-general-codec",
     "crates/dclutch-general-successor-operator",
+    "crates/dclutch-hot-bump-miner-v1",
     "crates/dclutch-liability-basis-v2-kernel",
     "crates/dclutch-market-core-codec",
     "crates/dclutch-market-founding-v1-operator",
