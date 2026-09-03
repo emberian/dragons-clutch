@@ -11,6 +11,7 @@ use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecord
 use dclutch_claims_affine_batch_program_test::fixture::{
     FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, compile_product_lbv2_fixture_v2,
 };
+use dclutch_claims_sbf::ClaimsSbfError;
 use dclutch_claims_sbf::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2,
     PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2, ProtocolPositionActionV2,
@@ -1558,9 +1559,15 @@ fn refused_with(logs: &[String], code: u32) -> bool {
 
 /// Refusal code for `ProtocolPositionSbfErrorV2::Position`.
 ///
-/// Written literally so a code read out of a validator log is greppable to
-/// here; the program's own `const _: () = assert!` band pins the enum.
-const POSITION_REFUSAL: u32 = 0x5145;
+/// DERIVED, not written. It used to be a hexadecimal literal, justified by
+/// greppability -- a code read out of a validator log should lead a reader
+/// here. That justification survives the derivation, because every message
+/// using this constant still renders it as `{POSITION_REFUSAL:#x}`; what does
+/// not survive is a second author for a number the enum already owns
+/// (AGENTS.md: never write a refusal code as a bare number, not even in a
+/// test). Twenty lines down, `ProtocolPositionSbfErrorV2::Admission as u32`
+/// was already spelled this way, so the file disagreed with itself.
+const POSITION_REFUSAL: u32 = ProtocolPositionSbfErrorV2::Position as u32;
 
 /// A STRANGER'S ONE LAMPORT CANNOT BLOCK ADMISSION OR CLOSE, AND UNDERFUNDING STILL REFUSES.
 ///
@@ -2202,7 +2209,7 @@ async fn an_incomplete_walk_cannot_be_finished_and_the_cursor_survives_the_attem
     assert!(!accepted, "an incomplete walk must not finish");
     assert_eq!(
         refusal_code(&logs),
-        Some(0x5008),
+        Some(ClaimsSbfError::Representation as u32),
         "the completeness gate is a Representation refusal: {logs:#?}"
     );
     assert_eq!(
@@ -2258,7 +2265,7 @@ async fn a_second_begin_refuses_on_the_cursors_own_existence() {
     assert!(!accepted, "a cursor that exists is a walk already begun");
     assert_eq!(
         refusal_code(&logs),
-        Some(0x5008),
+        Some(ClaimsSbfError::Representation as u32),
         "anti-replay is the account's own existence: {logs:#?}"
     );
     assert_eq!(

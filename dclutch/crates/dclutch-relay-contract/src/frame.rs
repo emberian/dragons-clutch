@@ -45,6 +45,10 @@ pub enum RelayAccountNameV1 {
     WindowSpec,
     /// The finalized staging vacancy proving the window record is immutable.
     WindowSpecStagingVacancy,
+    /// The raw immutable `StatisticSpecV1` record the material names.
+    StatisticSpec,
+    /// The finalized staging vacancy proving the statistic record is immutable.
+    StatisticSpecStagingVacancy,
     /// The raw immutable `RelayerKeySetV1` record.
     RelayerKeySet,
     /// The finalized staging vacancy proving the key set is immutable.
@@ -145,6 +149,12 @@ const PROVIDER_STAGE: RelayAccountRoleV1 = role(
 const WINDOW: RelayAccountRoleV1 = role(RelayAccountNameV1::WindowSpec, false, false);
 const WINDOW_STAGE: RelayAccountRoleV1 =
     role(RelayAccountNameV1::WindowSpecStagingVacancy, false, false);
+const STATISTIC: RelayAccountRoleV1 = role(RelayAccountNameV1::StatisticSpec, false, false);
+const STATISTIC_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::StatisticSpecStagingVacancy,
+    false,
+    false,
+);
 const KEY_SET: RelayAccountRoleV1 = role(RelayAccountNameV1::RelayerKeySet, false, false);
 const KEY_SET_STAGE: RelayAccountRoleV1 = role(
     RelayAccountNameV1::RelayerKeySetStagingVacancy,
@@ -288,7 +298,23 @@ pub const RETIRE_RECORD_FRAME_V1: [RelayAccountRoleV1; 4] =
 /// The venue's `ArtifactReleaseV1` is the position that carries P-B.  It is
 /// named by the Source spec, so which third-party deployment a market is pinned
 /// to is a founding-time content identity rather than a caller's choice.
-pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 28] = [
+///
+/// # The statistic, and why it was not here
+///
+/// This frame had no `StatisticSpecV1` position because the family's own
+/// reasoning said it needed none: a terminal window over a terminal sample has
+/// one observation and one atom, so the statistic was the identity map and the
+/// route compared the Source's own unit against the Product's result unit
+/// directly.  That reasoning survived exactly until `4cd2b9cb5` gave the
+/// statistic a `source_scale_exponent`, which made it the only record entitled
+/// to say how those two units relate -- and a record not in the frame is a
+/// record no route can read.  A market whose statistic declared a conversion
+/// was consumed here at the identity, which is cohort-14 market B's failure
+/// with a different provider family in front of it.
+///
+/// So the statistic rides with its staging vacancy like every other raw record,
+/// and both are read-only.  Two positions is what closing it cost.
+pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 30] = [
     WORKER,
     MARKET_READ,
     CORE_PROGRAM,
@@ -304,6 +330,8 @@ pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 28] = [
     PROVIDER_STAGE,
     WINDOW,
     WINDOW_STAGE,
+    STATISTIC,
+    STATISTIC_STAGE,
     CONFIG,
     CONFIG_STAGE,
     VENUE_RELEASE,
@@ -442,15 +470,15 @@ pub fn validate_relay_frame_v1(
 mod tests {
     use super::*;
 
-    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 28] {
+    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 30] {
         let roles = relay_frame_roles_v1(kind);
         let mut built = [RelayAccountPrivilegeV1 {
             key: [0; 32],
             is_signer: false,
             is_writable: false,
-        }; 28];
+        }; 30];
         for (index, expected) in roles.iter().enumerate() {
-            let slot = built.get_mut(index).expect("within twenty-eight");
+            let slot = built.get_mut(index).expect("within thirty");
             let mut key = [0u8; 32];
             let first = key.get_mut(0).expect("first byte");
             *first = u8::try_from(index).expect("small") + 1;

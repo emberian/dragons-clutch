@@ -55,7 +55,7 @@
       ],
       "program": "resolution",
       "outcome": "executed",
-      "note": "One sealed record interpreted, under the CHAIN_STATE_SOURCES decoding rules, into a terminal SourceResolutionStateV2 and a ResolutionSuccess ResolutionCertificateV2. The Product -- not the venue table -- decides which outcome the decoded MigrationProgress discriminant selects. NOTE: this transaction serialises to 1,534 bytes, over Solana's 1,232-byte legacy packet maximum; see the packet witnesses."
+      "note": "One sealed record interpreted, under the CHAIN_STATE_SOURCES decoding rules, into a terminal SourceResolutionStateV2 and a ResolutionSuccess ResolutionCertificateV2. The Product -- not the venue table -- decides which outcome the decoded MigrationProgress discriminant selects. NOTE: this transaction serialises to 1,600 bytes, over Solana's 1,232-byte legacy packet maximum; see the packet witnesses. It was 1,534 over a 28-account frame; the StatisticSpecV1 pair the consumption now reads is the other 66."
     },
     {
       "label": "relayed liveness: a silent market walks to its pre-disclosed failure",

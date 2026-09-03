@@ -78,6 +78,7 @@ pub(crate) struct RelayAddressBookV1 {
     pub(crate) spec: RecordPairV1,
     pub(crate) provider: RecordPairV1,
     pub(crate) window: RecordPairV1,
+    pub(crate) statistic: RecordPairV1,
     pub(crate) key_set: RecordPairV1,
     pub(crate) config: RecordPairV1,
     pub(crate) venue: RecordPairV1,
@@ -140,6 +141,8 @@ impl RelayAddressBookV1 {
             RelayAccountNameV1::ProviderReleaseStagingVacancy => self.provider.staging,
             RelayAccountNameV1::WindowSpec => self.window.raw,
             RelayAccountNameV1::WindowSpecStagingVacancy => self.window.staging,
+            RelayAccountNameV1::StatisticSpec => self.statistic.raw,
+            RelayAccountNameV1::StatisticSpecStagingVacancy => self.statistic.staging,
             RelayAccountNameV1::RelayerKeySet => self.key_set.raw,
             RelayAccountNameV1::RelayerKeySetStagingVacancy => self.key_set.staging,
             RelayAccountNameV1::AdapterConfig => self.config.raw,
@@ -224,7 +227,7 @@ pub(crate) fn create_record_instruction(
     })
 }
 
-/// Build the 28-account consumption, carrying the pinned entries inline.
+/// Build the 30-account consumption, carrying the pinned entries inline.
 pub(crate) fn consume_record_instruction(
     book: &RelayAddressBookV1,
     generation: u64,

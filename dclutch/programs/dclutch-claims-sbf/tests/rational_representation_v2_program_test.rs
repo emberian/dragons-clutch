@@ -5766,6 +5766,115 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
         denominated.wire_bytes <= PACKET_LIMIT,
         "the common-Hot Denominate frame is submittable at the K = 3 campaign basis",
     );
+
+    // THE PACKET CEILING ON THE ROUTE A WALLET ACTUALLY SUBMITS.
+    //
+    // `the_full_width_structured_frame_now_fits_a_packet_at_k_three` derives a
+    // full-width ceiling of SIX coordinates, and it is right about the frame it
+    // measures: the Claims-direct wrapper. Nothing a wallet sends looks like
+    // that. What a wallet sends is this frame -- common Hot, the Trading
+    // envelope and its own account frame carried on top of the same Claims
+    // child -- and until now nothing had derived a ceiling from it, so the
+    // island's published answer to "how wide can a Structured Product be"
+    // came from a frame with no submitter.
+    //
+    // The two frames measured in THIS test are the instrument, and they are the
+    // right one because they differ in exactly two things: the
+    // action-conditional class header, and the `K - 1` coordinates a selected
+    // action does not carry. So their difference IS the per-coordinate cost on
+    // this route, and it is asserted rather than assumed -- which is what makes
+    // the ceiling below a measurement and not an extrapolation.
+    assert_eq!(
+        issued.wire_bytes - denominated.wire_bytes,
+        CLASS_HEADER_DELTA + (K - 1) * PER_COORDINATE_WIRE_BYTES,
+        "a common-Hot full-width frame costs its class header delta plus one coordinate for \
+         each outcome past the first, exactly as the Claims-direct frame does; if this moves, \
+         the ceiling derived below is derived from the wrong slope",
+    );
+    // THE FULL-WIDTH HOT FRAME, as an equality against the limit rather than a
+    // bare `<=`, for the reason the Denominate assertion beside it already
+    // gives: a bound that only says the route works cannot report the day it
+    // stops. This assertion did not exist. The frame was measured by a commit
+    // message and by nothing that could go red.
+    assert_eq!(
+        (issued.wire_bytes, PACKET_LIMIT),
+        (1197, 1232),
+        "the Trading common-Hot IssueStructured frame moved",
+    );
+    // A STRUCTURED common-Hot frame at K = 1, which is the right zero: the
+    // selected frame is a different header class and is wrong by exactly
+    // `CLASS_HEADER_DELTA`.
+    let hot_structured_k1_bytes = denominated.wire_bytes + CLASS_HEADER_DELTA;
+    let hot_executable_full_width_k =
+        1 + (PACKET_LIMIT - hot_structured_k1_bytes) / PER_COORDINATE_WIRE_BYTES;
+    // THREE. The campaign basis is standing exactly on the ceiling, with 35
+    // bytes to spare and a coordinate costing 72.
+    assert_eq!(
+        hot_executable_full_width_k, K,
+        "the common-Hot packet ceiling on full-width Structured issuance moved",
+    );
+    // AND THE FIRST K THAT DOES NOT FIT, stated in bytes rather than as a
+    // conclusion. A ceiling asserted as a number says nothing about how far
+    // over the next coordinate is, and 37 bytes is the difference between "wire
+    // work" and "a different route".
+    let first_k_that_does_not_fit = hot_executable_full_width_k + 1;
+    let first_over_width =
+        hot_structured_k1_bytes + (first_k_that_does_not_fit - 1) * PER_COORDINATE_WIRE_BYTES;
+    assert_eq!(
+        (first_k_that_does_not_fit, first_over_width, PACKET_LIMIT),
+        (4, 1269, 1232),
+        "the width of the first Structured Product common Hot cannot issue",
+    );
+    // WHICH OF THE THREE WALLS IS THE ONE. The RequestProfile artifact admits
+    // six coordinates and the Claims-direct frame admits six; this route admits
+    // three. So the PROVISIONAL `STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2` is not a
+    // placeholder sitting below a derived ceiling of six -- it is exactly where
+    // the packet stops the route that ships, and lifting it would publish
+    // descriptors that can be founded, denominated, reconstituted and redeemed
+    // and never issued or unwrapped by any wallet.
+    let artifact_ceiling_k = usize::try_from(
+        dclutch_bearer_v2_operator::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+    )
+    .expect("artifact ceiling");
+    let child_ceiling_k =
+        usize::try_from(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2).expect("child ceiling");
+    assert!(
+        hot_executable_full_width_k < artifact_ceiling_k,
+        "the artifact ceiling ({artifact_ceiling_k}) is not the binding wall; the common-Hot \
+         packet ({hot_executable_full_width_k}) is",
+    );
+    assert_eq!(
+        child_ceiling_k, hot_executable_full_width_k,
+        "the provisional Structured child ceiling and the common-Hot packet ceiling have \
+         separated. Whichever moved, they have to be reconciled together: a child ceiling \
+         above the packet ceiling admits a descriptor no wallet can issue, and one below it \
+         leaves width on the table",
+    );
+    // AND THE COMPUTE CEILING CANNOT BE THE FIRST WALL ON THIS ROUTE, which is
+    // the other half of the lifting plan and is settled by the arithmetic above
+    // rather than by a measurement nobody can take.
+    //
+    // The plan reads: "fitting the packet and the RequestProfile is necessary
+    // and not sufficient, because a wider K also costs compute units that only
+    // a run can measure." There is no run. Every K at which compute could
+    // become the binding wall is a K whose transaction the packet refuses
+    // before a validator schedules it, so on this route the 1,400,000-unit
+    // maximum is unreachable by construction. The figure at the basis is
+    // printed below and folded into the campaign's own evidence, where
+    // `structured-v2-fits-the-compute-maximum` is the assertion that owns it;
+    // a second copy here would be a bound with nothing behind it.
+    eprintln!(
+        "common-Hot Structured packet ceiling: K={K} full-width={} bytes, selected={} bytes, \
+limit={PACKET_LIMIT}, under-by={}, per-coordinate={PER_COORDINATE_WIRE_BYTES}, \
+hot-K1={hot_structured_k1_bytes}, hot-executable-full-width-K={hot_executable_full_width_k}, \
+first-K-that-does-not-fit={first_k_that_does_not_fit} at {first_over_width} bytes, \
+claims-direct-executable-full-width-K=6, request-profile-ceiling-K={artifact_ceiling_k}, \
+child-ceiling-K={child_ceiling_k}, full-width-CU={}",
+        issued.wire_bytes,
+        denominated.wire_bytes,
+        PACKET_LIMIT - issued.wire_bytes,
+        issued.compute_units,
+    );
     let after_denominate = snapshot(&mut context, &fixture).await;
     assert_eq!(replay_revision(&after_denominate.replay), 2);
     assert_eq!(lbv2_revision(&after_denominate.aggregate.data), 1);
@@ -5961,6 +6070,22 @@ async fn account_of(context: &mut ProgramTestContext, key: Pubkey) -> Account {
 /// message's lookup list. Nothing compresses either.
 const PER_COORDINATE_WIRE_BYTES: usize = ASSET_BYTES_V3 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2;
 
+/// What a full-width frame pays for its header class, over a selected one.
+///
+/// Physical ABI v3 made the request header action-conditional, so the two
+/// classes are no longer the same width: the structured class carries a 32-byte
+/// receipt Account where the selected class carries three revisions and an
+/// outcome. Reading the difference between a full-width frame and a selected
+/// one as ONE term -- `(K - 1)` coordinates -- made a coordinate look like it
+/// cost 74 bytes when it costs 72.
+///
+/// Module scope, and that is the point: BOTH the Claims-direct frame and the
+/// common-Hot frame pay this delta, they are measured by two different tests,
+/// and a second copy of the term is how the two ceilings would drift apart
+/// again.
+const CLASS_HEADER_DELTA: usize =
+    REQUEST_STRUCTURED_HEADER_BYTES_V3 - REQUEST_SELECTED_HEADER_BYTES_V3;
+
 /// THE PACKET WALL, measured on the executing route, and it is not §3b's wall.
 ///
 /// Decision 0011 §3b measured the executable ceiling at `K = 3` and called it
@@ -6040,8 +6165,6 @@ fn the_full_width_structured_frame_now_fits_a_packet_at_k_three() {
     // class carries three revisions and an outcome, and it is four bytes wider.
     // The difference is now a SUM of two terms, and reading it as one term made
     // a coordinate look like it cost 74 bytes when it costs 72.
-    const CLASS_HEADER_DELTA: usize =
-        REQUEST_STRUCTURED_HEADER_BYTES_V3 - REQUEST_SELECTED_HEADER_BYTES_V3;
     assert_eq!(
         full_bytes - selected_bytes,
         CLASS_HEADER_DELTA + (K - 1) * PER_COORDINATE_WIRE_BYTES,
@@ -6056,36 +6179,50 @@ fn the_full_width_structured_frame_now_fits_a_packet_at_k_three() {
         full_bytes <= PACKET_LIMIT,
         "the K = {K} full-width frame is measured at {full_bytes} bytes, over the packet limit"
     );
-    // The largest full-width K a cluster could actually carry.
+    // The largest full-width K a cluster could carry ON THIS FRAME, and the
+    // qualifier is not decoration: this is the CLAIMS-DIRECT frame, the test
+    // caller's wrapper around the Claims child, and no wallet sends it.
+    // `current_common_hot_executes_issue_and_selected_denominate_through_real_elves`
+    // measures the frame a wallet does send and derives the ceiling that binds;
+    // it is LOWER than this one, by the whole width of the Trading envelope.
     //
     // The baseline is a STRUCTURED frame at K = 1, not the selected frame: the
     // selected frame is a different header class and is the wrong zero for this
     // arithmetic by exactly `CLASS_HEADER_DELTA`.
     let structured_k1_bytes = selected_bytes + CLASS_HEADER_DELTA;
-    let executable_full_width_k =
+    let claims_direct_executable_full_width_k =
         1 + (PACKET_LIMIT - structured_k1_bytes) / PER_COORDINATE_WIRE_BYTES;
     // SIX, and it was TWO. Every term of that move is named: the base fell from
     // 34 operations to 22 and the row from six to five when the header became
     // action-conditional and the three re-derived keys left the asset row, and
     // the frame fell from 1,397 bytes to under the limit with them.
     assert_eq!(
-        executable_full_width_k, 6,
-        "the packet ceiling on IssueStructured/UnwrapStructured moved"
+        claims_direct_executable_full_width_k, 6,
+        "the Claims-direct packet ceiling on IssueStructured/UnwrapStructured moved"
     );
-    // WHICH WALL BINDS, as a checked fact rather than a sentence.
+    // WHICH WALL BINDS -- and the answer is in the OTHER test, which is the
+    // correction this comment carries.
     //
-    // It used to be the packet, one coordinate BELOW the RequestProfile ceiling
-    // decision 0011 s3b called hard, and that is why widening the artifact bound
-    // did not pay: it would have admitted descriptors that could be published
-    // and denominated but never issued. THAT IS NO LONGER TRUE. The packet now
-    // admits six coordinates, the artifact admits six, and the binding number is
-    // the Structured child ceiling of three -- which is neither of them, and is
-    // PROVISIONAL rather than derived.
+    // What stood here said: the packet admits six coordinates, the artifact
+    // admits six, and the binding number is the Structured child ceiling of
+    // three, "which is neither of them, and is PROVISIONAL rather than
+    // derived". The first clause is true only of the frame measured HERE. The
+    // common-Hot route -- the one a wallet submits, the one the Trading
+    // envelope and its own account frame ride on top of this same Claims
+    // child -- measures 1,197 bytes at K = 3 with 35 to spare, so its ceiling
+    // is THREE and a fourth coordinate is 1,269 bytes against 1,232.
     //
-    // So the lift the cliff doctrine chartered is now worth costing, and what it
-    // costs is a campaign run at K = 4 and K = 5, not a constant edit: fitting
-    // the packet and the RequestProfile is necessary and not sufficient, because
-    // a wider K also costs compute units that only a run can measure.
+    // So the provisional three is not a placeholder below a ceiling of six. It
+    // is exactly where the packet stops the route that ships, and the lift the
+    // cliff doctrine chartered cannot be bought with a campaign run at K = 4:
+    // there is no K = 4 transaction to run on common Hot. It has to be bought
+    // with wire bytes.
+    //
+    // The distinction is one this file already paid for once, on the SELECTED
+    // action: "the 1,061 figure recorded for a selected action elsewhere is the
+    // CLAIMS-DIRECT frame; the Hot route carries the Trading envelope and its
+    // own account frame on top of it, and nothing had measured that." Nothing
+    // had applied it to the STRUCTURED ceiling either.
     let artifact_ceiling_k = usize::try_from(
         dclutch_bearer_v2_operator::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     )
@@ -6093,20 +6230,23 @@ fn the_full_width_structured_frame_now_fits_a_packet_at_k_three() {
     let child_ceiling_k =
         usize::try_from(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2).expect("child ceiling");
     assert_eq!(
-        executable_full_width_k, artifact_ceiling_k,
-        "the packet and the artifact now cap full-width issuance at the same K; if they \
-         diverge again, whichever is lower is the one a lift has to move first"
+        claims_direct_executable_full_width_k, artifact_ceiling_k,
+        "the Claims-direct packet and the artifact cap full-width issuance at the same K; if \
+         they diverge, whichever is lower is the one a lift has to move first"
     );
     assert!(
-        child_ceiling_k < executable_full_width_k,
-        "the Structured child ceiling ({child_ceiling_k}) is the binding one against a packet \
-         and artifact that both admit {executable_full_width_k}; it is PROVISIONAL, and the \
-         plan for lifting it is a K = 4 and K = 5 campaign run"
+        child_ceiling_k < claims_direct_executable_full_width_k,
+        "the Structured child ceiling ({child_ceiling_k}) is below what this frame and the \
+         artifact both admit ({claims_direct_executable_full_width_k}); it is the common-Hot \
+         packet ceiling that explains the gap, and \
+         current_common_hot_executes_issue_and_selected_denominate_through_real_elves \
+         is where that is measured"
     );
     eprintln!(
         "Rational V2 K={K} packet wall: full-width-v0-live-ALT={full_bytes}, \
 selected-v0-live-ALT={selected_bytes}, limit={PACKET_LIMIT}, under-by={}, \
-per-coordinate={PER_COORDINATE_WIRE_BYTES}, executable-full-width-K={executable_full_width_k}, \
+per-coordinate={PER_COORDINATE_WIRE_BYTES}, \
+claims-direct-executable-full-width-K={claims_direct_executable_full_width_k}, \
 request-profile-ceiling-K={artifact_ceiling_k}",
         PACKET_LIMIT - full_bytes,
     );
@@ -6197,6 +6337,112 @@ fn receipt_backed_by_receipt_request(fixture: &Fixture) -> Vec<u8> {
     request_bytes(fixture, RepresentationActionV2::IssueStructured, 0)
 }
 
+/// TWO COORDINATES, ONE SHARD MINT: a duplicated shard in the account frame.
+///
+/// The request cannot express this any more. Physical ABI v3 derives every
+/// coordinate's shard Mint from `(program_id, descriptor_id, outcome)`, and
+/// `find_program_address` over two distinct outcomes does not collide -- which
+/// is also why `expected_pre_mint_supply`'s "this Mint matched two asset rows"
+/// arm (`rational_representation_v2.rs:1336-1339`) is unreachable from the
+/// wire. So the duplicate has to be presented where the accounts arrive, the
+/// same migration the receipt-alias hostile made when the shard Mint left the
+/// request: this property lives in the ACCOUNT FRAME now.
+///
+/// It must refuse `ClaimsSbfError::Identity` and NOT `ReceiptAlias`, and the
+/// difference is the reason both hostiles exist. The substituted account is a
+/// legitimate shard Mint OF THIS VERY DESCRIPTOR -- just the wrong
+/// coordinate's -- so the receipt-pair scan sees nothing and the refusal is the
+/// derived-key equality at coordinate one.
+fn duplicated_shard_mint_instruction(fixture: &Fixture) -> Instruction {
+    let mut instruction = wrapper_instruction(
+        fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        None,
+        None,
+    );
+    let donor = fixture.assets.first().expect("coordinate 0").mint;
+    let victim = fixture.assets.get(1).expect("coordinate 1").mint;
+    assert_ne!(
+        donor, victim,
+        "the fixture's coordinates must not already alias"
+    );
+    let mut substituted = 0_usize;
+    for meta in &mut instruction.accounts {
+        if meta.pubkey == victim {
+            meta.pubkey = donor;
+            substituted += 1;
+        }
+    }
+    // A hostile that substituted nothing is an honest transaction wearing a
+    // hostile label, and it would COMMIT while this builder reported success.
+    assert_eq!(
+        substituted, 1,
+        "coordinate one's Mint appears exactly once in the Claims frame"
+    );
+    instruction
+}
+
+/// A SHARD MISSING: the frame carries `K - 1` coordinate quadruples for a
+/// request that declares `K`.
+///
+/// This is the shallowest hostile in the family and it is here on purpose. The
+/// account frame's width is `32 + 4K` and `authenticate_base` checks it before
+/// it reads any state (`rational_representation_v2.rs:658-671`), so a caller
+/// that simply omits a coordinate is refused by ARITHMETIC on the declared
+/// asset count -- `ClaimsSbfError::Accounts` -- and never reaches an identity.
+/// Naming that code rather than asserting `is_err` is the entire point: a
+/// width refusal is the universal donor of this family (AGENTS.md, ledger
+/// `M-38`), so an unnamed hostile anywhere near it proves nothing, and the one
+/// hostile whose subject IS the width has to say so.
+///
+/// The last coordinate is the one dropped, so the surviving prefix is a
+/// perfectly well-formed `K - 1` frame; nothing about the omission is
+/// malformed except its disagreement with the request.
+fn missing_shard_instruction(fixture: &Fixture) -> Instruction {
+    let mut instruction = wrapper_instruction(
+        fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        None,
+        None,
+    );
+    let dropped = *fixture.assets.last().expect("last coordinate");
+    let quadruple = [
+        dropped.position,
+        dropped.mint,
+        dropped.actor_token,
+        dropped.structured_token,
+    ];
+    let start = instruction
+        .accounts
+        .iter()
+        .position(|meta| meta.pubkey == quadruple[0])
+        .expect("the last coordinate's Position is in the frame");
+    let observed: Vec<Pubkey> = instruction
+        .accounts
+        .get(start..start + RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+        .expect("a whole coordinate quadruple")
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect();
+    // Drain by ADDRESS rather than by index arithmetic, and prove the four
+    // addresses removed are the four this coordinate owns: an off-by-four here
+    // would remove someone else's accounts and refuse for a reason the label
+    // does not claim.
+    assert_eq!(
+        observed,
+        quadruple.to_vec(),
+        "the four accounts dropped must be exactly the last coordinate's"
+    );
+    instruction
+        .accounts
+        .drain(start..start + RATIONAL_ASSET_ACCOUNT_COUNT_V2);
+    instruction
+}
+
 /// THE STRUCTURED FAMILY HOSTILES, every one of them through the real wire.
 ///
 /// Each is submitted as a real transaction against the real ELFs, must refuse,
@@ -6285,6 +6531,8 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
         );
         instruction
     };
+    let duplicated_shard = duplicated_shard_mint_instruction(&fixture);
+    let missing_shard = missing_shard_instruction(&fixture);
     let skews: Vec<Instruction> = (0..K)
         .map(|coordinate| {
             wrapper_instruction_from_request(
@@ -6302,6 +6550,8 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
         descriptor_as_exposure.clone(),
         permuted_recipe.clone(),
         receipt_backed.clone(),
+        duplicated_shard.clone(),
+        missing_shard.clone(),
     ];
     instructions.extend(skews.iter().cloned());
     let addresses = lookup_addresses(payer, fixture.actor.pubkey(), &instructions);
@@ -6341,6 +6591,18 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
             "receipt backed by receipt",
             ClaimsSbfError::ReceiptAlias,
             receipt_backed,
+        ),
+        (
+            "two coordinates presenting one shard Mint",
+            "duplicated shard Mint in the account frame",
+            ClaimsSbfError::Identity,
+            duplicated_shard,
+        ),
+        (
+            "a frame one coordinate short of the width its request declares",
+            "a shard missing from the account frame",
+            ClaimsSbfError::Accounts,
+            missing_shard,
         ),
     ];
     for (coordinate, instruction) in skews.into_iter().enumerate() {

@@ -108,8 +108,9 @@ use dclutch_source_contract::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1,
-    SourceAccessProfile, SourceMaterialV3, SourceResolutionStateV2, SourceSpecV1,
-    WINDOW_SPEC_BYTES, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
+    STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile, SourceMaterialV3,
+    SourceResolutionStateV2, SourceSpecV1, StatisticSpecV1, WINDOW_SPEC_BYTES,
+    WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
@@ -906,9 +907,9 @@ fn process_consume(
     let record_account = account(accounts, 4)?;
     let source_state_account = account(accounts, 5)?;
     let certificate_account = account(accounts, 6)?;
-    let clock_account = account(accounts, 25)?;
-    let rent_sysvar = account(accounts, 26)?;
-    let system = account(accounts, 27)?;
+    let clock_account = account(accounts, 27)?;
+    let rent_sysvar = account(accounts, 28)?;
+    let system = account(accounts, 29)?;
     require_system(system)?;
     let _ = worker;
     let rent = authenticate_rent(rent_sysvar)?;
@@ -935,16 +936,16 @@ fn process_consume(
         ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
-                raw: account(accounts, 19)?,
-                staging: account(accounts, 20)?,
-            },
-            result_domain: FinalizedRecordFrameV2 {
                 raw: account(accounts, 21)?,
                 staging: account(accounts, 22)?,
             },
-            portfolio: FinalizedRecordFrameV2 {
+            result_domain: FinalizedRecordFrameV2 {
                 raw: account(accounts, 23)?,
                 staging: account(accounts, 24)?,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: account(accounts, 25)?,
+                staging: account(accounts, 26)?,
             },
         },
     )?;
@@ -969,7 +970,7 @@ fn process_consume(
         .ok_or(ResolutionError::Instruction)?;
     let recomputed_account_set_id = recompute_account_set_id(entries)?;
 
-    let domain_data = account(accounts, 21)?
+    let domain_data = account(accounts, 23)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::ProductDomain)?;
     let result_domain =
@@ -1534,6 +1535,10 @@ const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
         RelayJoinErrorV1::Record => ResolutionError::RelayedRecord,
         RelayJoinErrorV1::Observation => ResolutionError::ProviderObservation,
         RelayJoinErrorV1::Window => ResolutionError::RelayedWindow,
+        // The same code the Direct route publishes for the same disagreement.
+        // Two provider families, one accusation: this market's own records do
+        // not agree about the factor between its two units.
+        RelayJoinErrorV1::Scale => ResolutionError::ProviderScale,
         RelayJoinErrorV1::Transition => ResolutionError::Transition,
     }
 }
@@ -1661,13 +1666,35 @@ fn consume_source_records(
     let window = WindowSpecV1::decode(&window_data).map_err(|_| ResolutionError::SourceMaterial)?;
     drop(window_data);
 
-    let config_data = account(accounts, 15)?
+    // Named by the material, exactly like the window above, and authenticated
+    // the same way. It is the record that says how the observation's unit and
+    // the Product's result unit relate; without it in this walk the route had
+    // to guess that they were the same one.
+    let statistic_spec_id = material.statistic_spec().to_bytes();
+    let statistic_data = account(accounts, 15)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
         account(accounts, 15)?,
         account(accounts, 16)?,
+        rent,
+        STATISTIC_SPEC_SCHEMA_ID_V1,
+        statistic_spec_id,
+        &statistic_data,
+        STATISTIC_SPEC_BYTES,
+    )?;
+    let statistic =
+        StatisticSpecV1::decode(&statistic_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    drop(statistic_data);
+
+    let config_data = account(accounts, 17)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 17)?,
+        account(accounts, 18)?,
         rent,
         RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
         decoding_rules_id,
@@ -1681,13 +1708,13 @@ fn consume_source_records(
         .map_err(|_| ResolutionError::Transition)?;
     drop(config_data);
 
-    let venue_data = account(accounts, 17)?
+    let venue_data = account(accounts, 19)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
-        account(accounts, 17)?,
-        account(accounts, 18)?,
+        account(accounts, 19)?,
+        account(accounts, 20)?,
         rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         venue_release_id,
@@ -1712,6 +1739,8 @@ fn consume_source_records(
         config,
         window_spec_id: id(window_spec_id)?,
         window,
+        statistic_spec_id: id(statistic_spec_id)?,
+        statistic,
         venue_release_id: id(venue_release_id)?,
         venue_release,
     })

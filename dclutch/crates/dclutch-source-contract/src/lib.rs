@@ -700,14 +700,7 @@ impl PythAdapterConfigV1 {
         // statistic and its adapter config disagree with each other. Checked
         // first, the same code would also fire for a lying feed and an
         // operator could not tell the two apart.
-        let admitted_scale = if statistic.declares_conversion() {
-            self.expected_exponent
-        } else {
-            0
-        };
-        if statistic.source_scale_exponent() != admitted_scale {
-            return Err(Error::SourceScaleMismatch);
-        }
+        statistic.require_admitted_scale(self.expected_exponent)?;
         Ok(i128::from(price))
     }
 }
@@ -1503,7 +1496,11 @@ impl StatisticSpecV1 {
     pub fn to_bytes(self) -> [u8; STATISTIC_SPEC_BYTES] {
         let mut out = base::<STATISTIC_SPEC_BYTES>(STATISTIC_SPEC_MAGIC);
         put(&mut out, STATISTIC_SPEC_KIND_OFFSET_V1, &[self.kind.byte()]);
-        put(&mut out, STATISTIC_SPEC_ROUNDING_OFFSET_V1, &[self.rounding.byte()]);
+        put(
+            &mut out,
+            STATISTIC_SPEC_ROUNDING_OFFSET_V1,
+            &[self.rounding.byte()],
+        );
         put(
             &mut out,
             STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
@@ -1595,6 +1592,38 @@ impl StatisticSpecV1 {
     /// with nothing between them.
     pub fn declares_conversion(self) -> bool {
         self.source_unit_id != self.result_unit_id
+    }
+
+    /// Refuse a declared factor the publishing source does not admit.
+    ///
+    /// `published_exponent` is the decimal scale the source itself states:
+    /// `PythAdapterConfigV1::expected_exponent` for the Pyth family, the
+    /// selected row's `raw_exponent` for the relayed one. The rule is the same
+    /// for both because it is a property of the two unit identities and not of
+    /// any one adapter -- two identities declare a conversion and the only
+    /// conversion this release performs is the source's own published scale;
+    /// one identity on both sides declares none and admits only zero.
+    ///
+    /// It lives here, on the record, because it was stated once per adapter
+    /// family the first time and one of those statements would have been the
+    /// authority for a route nobody reread. The relayed route is the second
+    /// family, and it calls this rather than restating it.
+    ///
+    /// **Call it after admitting the publication.** Reaching it means the
+    /// source published exactly what this market pinned, so `SourceScaleMismatch`
+    /// in a log can only mean the founding's own two records disagree -- a
+    /// fault no resubmission can fix. Checked first, the same code would also
+    /// fire for a lying source and an operator could not tell the two apart.
+    pub fn require_admitted_scale(self, published_exponent: i32) -> Result<()> {
+        let admitted = if self.declares_conversion() {
+            published_exponent
+        } else {
+            0
+        };
+        if self.source_scale_exponent() != admitted {
+            return Err(Error::SourceScaleMismatch);
+        }
+        Ok(())
     }
 
     /// Refuse a shift the selector cannot apply, or one between equal units.

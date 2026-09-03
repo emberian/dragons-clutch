@@ -884,6 +884,37 @@ struct SourceGraph {
     spec_id: [u8; 32],
     provider: RecordPair,
     window: RecordPair,
+    statistic: RecordPair,
+}
+
+/// Which shape this world's `StatisticSpecV1` declares.
+///
+/// The record is a founding-time fact and the three shapes below are the three
+/// things a founder can say about the relation between the observation's unit
+/// and the Product's result unit. Only the first is a market anyone should
+/// found; the other two exist because until the statistic was in the
+/// consumption frame, one of them RESOLVED.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatisticShapeV1 {
+    /// One unit identity on both sides and the identity shift: the observation
+    /// is already counted in the unit the cuts are authored in. Every relayed
+    /// market this repository founds is this shape.
+    NoConversion,
+    /// A conversion declared with the SOURCE spec on the far side: statistic
+    /// `source = B`, `result = A`, spec unit `B`, result domain unit `A`, and a
+    /// shift the selected row does not publish. Every identity joins; only the
+    /// number is wrong, which is what makes this the scale refusal's own case.
+    ConversionAtAnUnpublishedShift,
+    /// A conversion declared with the RESULT on the far side: statistic
+    /// `source = A`, `result = B`, spec unit `A`, result domain unit `A`.
+    ///
+    /// This is the shape that used to resolve. The route compared the SOURCE
+    /// spec's unit against the Product's result unit -- the wrong end of the
+    /// map -- and `A == A` passed, while the market's own statistic said the
+    /// observation had to be shifted into `B` before it meant anything. The
+    /// selector was taken at the identity and a terminal certificate was
+    /// written.
+    ConversionHiddenBehindTheSourceUnit,
 }
 
 /// Build and install the whole V2 Source record graph this family needs.
@@ -898,6 +929,7 @@ fn source_graph(
     adapter_config_digest: [u8; 32],
     product: &ProductGraph,
     venue_release_digest: [u8; 32],
+    shape: StatisticShapeV1,
 ) -> SourceGraph {
     let capacity = SourceCapacityProfileV1::new(
         SourceCapacityEnvelope::Measured,
@@ -929,9 +961,22 @@ fn source_graph(
     // consumer checks it, so the spec's coordinate domain and unit are the
     // Product domain's own rather than two more fixture constants.
     let unit = source_id(product.result_unit_id);
+    // The second unit identity the two conversion shapes need. It is not the
+    // Product's, deliberately: a declared conversion is exactly the claim that
+    // the observation is counted in something the result domain is not.
+    let other_unit = source_id([0xb2; 32]);
+    // Which unit the SOURCE SPEC declares. The scale case puts the far unit
+    // here, so the statistic's two identities each join their own end and the
+    // only thing left wrong is the number.
+    let spec_unit = match shape {
+        StatisticShapeV1::NoConversion | StatisticShapeV1::ConversionHiddenBehindTheSourceUnit => {
+            unit
+        }
+        StatisticShapeV1::ConversionAtAnUnpublishedShift => other_unit,
+    };
     let spec_value = SourceSpecV1::new(
         source_id(product.coordinate_domain_id),
-        unit,
+        spec_unit,
         source_id(provider_digest),
         SourceAccessProfile::RelayedObservationRecord,
         // The V1 material carried an inline Pyth-typed adapter-config slot and
@@ -963,10 +1008,22 @@ fn source_graph(
         window_value.to_bytes().to_vec(),
     );
 
+    // A shift no row of this release's decoding-rules table publishes. Both
+    // rows are at exponent zero -- a `MigrationProgress` discriminant and a
+    // renunciation flag are not quantities anything scales -- so any nonzero
+    // number here is a founding that disagrees with the source it reads.
+    const UNPUBLISHED_SHIFT: i32 = -8;
+    let (statistic_source_unit, statistic_result_unit, statistic_shift) = match shape {
+        StatisticShapeV1::NoConversion => (unit, unit, 0),
+        StatisticShapeV1::ConversionAtAnUnpublishedShift => (other_unit, unit, UNPUBLISHED_SHIFT),
+        StatisticShapeV1::ConversionHiddenBehindTheSourceUnit => {
+            (unit, other_unit, UNPUBLISHED_SHIFT)
+        }
+    };
     let statistic_value = StatisticSpecV1::new(
-        unit,
-        unit,
-        0,
+        statistic_source_unit,
+        statistic_result_unit,
+        statistic_shift,
         StatisticKind::TerminalSample,
         RoundingBoundary::ExactRational,
         1,
@@ -976,7 +1033,7 @@ fn source_graph(
         capacity,
     )
     .expect("canonical terminal statistic");
-    let (_, statistic_digest) = add_record(
+    let (statistic, statistic_digest) = add_record(
         test,
         STATISTIC_SPEC_SCHEMA_ID_V1,
         statistic_value.to_bytes().to_vec(),
@@ -1017,6 +1074,7 @@ fn source_graph(
         spec_id: spec_digest,
         provider,
         window,
+        statistic,
     }
 }
 
@@ -1066,6 +1124,15 @@ fn fixture_for_row(row: RowFixtureV1, seal_threshold: u8) -> Fixture {
     fixture_with_venue(row, seal_threshold, &[], DEPLOYMENT_SLOT, ELF_DIGEST)
 }
 
+/// Any row's world, founded with a chosen statistic shape.
+fn fixture_with_statistic(
+    row: RowFixtureV1,
+    seal_threshold: u8,
+    shape: StatisticShapeV1,
+) -> Fixture {
+    fixture_full(row, seal_threshold, &[], DEPLOYMENT_SLOT, ELF_DIGEST, shape)
+}
+
 /// Build the whole world, with the venue's pinned deployment as a parameter.
 ///
 /// A pinned release that disagrees with the attested bodies is the executable
@@ -1077,6 +1144,24 @@ fn fixture_with_venue(
     extra_keys: &[[u8; 32]],
     pinned_deployment_slot: u64,
     pinned_elf_digest: [u8; 32],
+) -> Fixture {
+    fixture_full(
+        row,
+        seal_threshold,
+        extra_keys,
+        pinned_deployment_slot,
+        pinned_elf_digest,
+        StatisticShapeV1::NoConversion,
+    )
+}
+
+fn fixture_full(
+    row: RowFixtureV1,
+    seal_threshold: u8,
+    extra_keys: &[[u8; 32]],
+    pinned_deployment_slot: u64,
+    pinned_elf_digest: [u8; 32],
+    statistic_shape: StatisticShapeV1,
 ) -> Fixture {
     let elves = artifacts();
     let relayer = Keypair::new();
@@ -1145,6 +1230,7 @@ fn fixture_with_venue(
         config_digest,
         &product,
         venue_digest,
+        statistic_shape,
     );
 
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
@@ -1579,6 +1665,8 @@ impl Fixture {
                 AccountMeta::new_readonly(self.graph.provider.staging, false),
                 AccountMeta::new_readonly(self.graph.window.raw, false),
                 AccountMeta::new_readonly(self.graph.window.staging, false),
+                AccountMeta::new_readonly(self.graph.statistic.raw, false),
+                AccountMeta::new_readonly(self.graph.statistic.staging, false),
                 AccountMeta::new_readonly(substitution.config.unwrap_or(self.config.raw), false),
                 AccountMeta::new_readonly(self.config.staging, false),
                 AccountMeta::new_readonly(self.venue.raw, false),
@@ -1843,12 +1931,20 @@ const APPEND_EXTENTS: [PacketExtentV1; 4] = [
     },
 ];
 
-/// Both consumptions carry the same 28-account frame, so they have one extent.
+/// Both consumptions carry the same 30-account frame, so they have one extent.
+///
+/// It was a 28-account frame until the `StatisticSpecV1` pair joined it, and
+/// what those two positions cost on the wire is the whole reason to state the
+/// number twice: legacy `1_534 -> 1_600`, which is two thirty-two-byte keys
+/// plus their two index bytes exactly, and v0 `733 -> 737`, which is two
+/// lookup-table indices plus the two-byte length growth. The lookup envelope
+/// absorbs sixty-two of the sixty-six bytes, which is what the two extents are
+/// here to show: the same route, measured both ways.
 const CONSUME_EXTENT: PacketExtentV1 = PacketExtentV1 {
-    legacy_bytes: 1_534,
-    v0_bytes: 733,
+    legacy_bytes: 1_600,
+    v0_bytes: 737,
     static_keys: 3,
-    loaded_addresses: 27,
+    loaded_addresses: 29,
 };
 
 /// What one route costs on the wire, measured both ways.
@@ -2828,6 +2924,9 @@ const REFUSAL_RELAYED_RECORD: u32 = ResolutionError::RelayedRecord as u32;
 const REFUSAL_RELAYED_WINDOW: u32 = ResolutionError::RelayedWindow as u32;
 const REFUSAL_TRANSITION_LIVENESS: u32 = ResolutionError::Transition as u32;
 const REFUSAL_FUNDING: u32 = ResolutionError::Funding as u32;
+/// The code the Direct route already publishes for the same accusation: this
+/// market's own records do not agree about the factor between its two units.
+const REFUSAL_PROVIDER_SCALE: u32 = ResolutionError::ProviderScale as u32;
 
 /// Pin the devnet clock so both time bounds are exact.
 ///
@@ -2977,6 +3076,106 @@ async fn a_sealed_graduation_resolves_the_market_through_the_products_own_domain
         .await,
         REFUSAL_RELAYED_RECORD,
     );
+}
+
+/// **The founding that used to resolve.**
+///
+/// `4cd2b9cb5` gave `StatisticSpecV1` a `source_scale_exponent` and said in its
+/// own OWED list that this route could not see it: the record was not in the
+/// consumption frame, so `relay_v1` passed the identity and "a relayed market
+/// founded with a declared conversion would be selected here at the identity
+/// and mis-paid exactly as cohort-14 market B was."
+///
+/// This is that market. Its statistic says the observation is counted in one
+/// unit and the Product's result is counted in another, related by a shift; the
+/// Source spec's unit is the Product's. The route compared the SPEC's unit
+/// against the Product's result unit -- the wrong end of the map -- so `A == A`
+/// passed and a terminal certificate was written on an observation the market's
+/// own records said had not been converted yet.
+///
+/// **PROVEN RED**: against the Resolution ELF built without the statistic in
+/// the frame, this exact founding CONSUMES. The record reaches `Consumed`, the
+/// Source reaches `Resolved`, and a `ResolutionSuccess` certificate exists. It
+/// is green here because the statistic's own two identities are now compared,
+/// one to each end, and this market's second one belongs to neither.
+#[tokio::test]
+async fn a_conversion_hidden_behind_the_source_unit_no_longer_resolves() {
+    let mut fixture = fixture_with_statistic(
+        dbc_row(),
+        1,
+        StatisticShapeV1::ConversionHiddenBehindTheSourceUnit,
+    );
+    let mut context = start(&mut fixture).await;
+    seal_record(&mut context, &fixture).await;
+
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.consume_instruction(ConsumeSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_PRODUCT_DOMAIN,
+    );
+
+    // Nothing moved. A refusal that had already spent the record or advanced
+    // the Source would be a worse outcome than the mis-payment it replaced.
+    let data = record_bytes(&mut context, fixture.record).await;
+    let view = RelayedObservationRecordViewV1::decode(&data).expect("record decodes");
+    assert_eq!(view.phase(), Ok(RelayedRecordPhaseV1::Sealed));
+    let source_data = record_bytes(&mut context, fixture.source_state).await;
+    let source = SourceResolutionStateV2::decode(&source_data).expect("Source state decodes");
+    assert_ne!(source.phase(), SourceResolutionPhaseV1::Resolved);
+}
+
+/// **A conversion at a shift no row of this release publishes.**
+///
+/// Every identity joins here: the statistic's source unit is the Source spec's,
+/// its result unit is the Product's, and the Product agrees with its own
+/// domain. The only thing wrong is the number, which is what makes this the
+/// scale refusal's own case rather than a graph refusal wearing its name.
+///
+/// The rule is `StatisticSpecV1::require_admitted_scale`, one author for both
+/// provider families: two unit identities declare a conversion and the only
+/// conversion this release performs is the SOURCE's own published scale, which
+/// for the relayed family is the selected decoding-rules row's `raw_exponent`.
+/// Both rows of this release are at exponent zero -- a `MigrationProgress`
+/// discriminant and a renunciation flag are not quantities anything scales --
+/// so `-8` is a founding that disagrees with the source it reads.
+///
+/// `ProviderScale` rather than `SourceMaterial`, and checked AFTER the
+/// publication is admitted, for the reason `4cd2b9cb5` split the code: reaching
+/// it means the record was sealed, quorate, bound to this market, read under
+/// the row the configuration selected and inside the window the Product sold.
+/// So it can only mean the market's own two records disagree -- a fault no
+/// relayer, no resubmission and no later observation can fix. Reported as a
+/// graph or configuration problem, a founder would retry forever.
+#[tokio::test]
+async fn a_declared_conversion_at_an_unpublished_shift_refuses_by_name() {
+    let mut fixture = fixture_with_statistic(
+        dbc_row(),
+        1,
+        StatisticShapeV1::ConversionAtAnUnpublishedShift,
+    );
+    let mut context = start(&mut fixture).await;
+    seal_record(&mut context, &fixture).await;
+
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.consume_instruction(ConsumeSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_PROVIDER_SCALE,
+    );
+
+    let data = record_bytes(&mut context, fixture.record).await;
+    let view = RelayedObservationRecordViewV1::decode(&data).expect("record decodes");
+    assert_eq!(view.phase(), Ok(RelayedRecordPhaseV1::Sealed));
+    let source_data = record_bytes(&mut context, fixture.source_state).await;
+    let source = SourceResolutionStateV2::decode(&source_data).expect("Source state decodes");
+    assert_ne!(source.phase(), SourceResolutionPhaseV1::Resolved);
 }
 
 /// ROW 1, THE SAME VERTICAL. Create, four attestations, seal, consume,

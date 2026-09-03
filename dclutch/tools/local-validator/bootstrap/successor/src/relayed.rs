@@ -220,6 +220,9 @@ pub(crate) struct RelayedMarketFactsV1 {
     pub(crate) source_spec_digest: [u8; 32],
     pub(crate) window: WindowSpecV1,
     pub(crate) window_digest: [u8; 32],
+    /// The statistic the consumption frame now names. It was already founded
+    /// and already named by the material; nothing could read it.
+    pub(crate) statistic_digest: [u8; 32],
     pub(crate) material_digest: [u8; 32],
     pub(crate) product_record_digest: [u8; 32],
     pub(crate) result_domain_bytes: Vec<u8>,
@@ -729,6 +732,7 @@ pub(crate) fn relayed_market_input(
         source_spec_digest,
         window,
         window_digest,
+        statistic_digest,
         material_digest,
         product_record_digest,
         result_domain_bytes: domain,

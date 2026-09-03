@@ -32,8 +32,8 @@ use dclutch_resolution_core_v3_operator::{
 use dclutch_source_contract::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-    SOURCE_SPEC_SCHEMA_ID_V1, SourceMaterialV3, SourcePrincipalPolicyV1, SourceResolutionPhaseV1,
-    WINDOW_SPEC_SCHEMA_ID_V1,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3,
+    SourcePrincipalPolicyV1, SourceResolutionPhaseV1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -754,6 +754,11 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             registry_program,
             WINDOW_SPEC_SCHEMA_ID_V1,
             facts.window_digest,
+        ),
+        statistic: RecordPairV1::derive(
+            registry_program,
+            STATISTIC_SPEC_SCHEMA_ID_V1,
+            facts.statistic_digest,
         ),
         key_set: RecordPairV1 {
             raw: key_set_record.raw,

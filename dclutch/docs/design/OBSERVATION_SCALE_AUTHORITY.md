@@ -317,3 +317,83 @@ two scales.
    which is correct for every cohort-14 market and wrong for the first scaled
    one it meets. It needs the market's `StatisticSpecV1` in its join and the
    factor in its comparison. Owner: the WEB lane, whose file it is.
+
+---
+
+# The three debts, closed — 2026-09-03
+
+**Devnet evidence. Not mainnet evidence.** Written by the STATISTIC lane.
+
+## 2, the layout
+
+`DClutchSemantics.SourceStatisticSpecV1Abi` owns the twelve fields;
+`EmitSourceStatisticSpecV1Rust.lean` prints them to
+`crates/dclutch-source-contract/src/generated_statistic_spec_v1.rs`, and
+`decode`/`to_bytes` read the emitted names. `check-generated.sh` pins the width,
+the shift's coordinate and width, and the two identity offsets before the byte
+compare. The emission census moves 95 → 96, still 96 guarded.
+
+The theorem worth naming is `the_factor_fills_the_span_that_was_reserved`: the
+shift begins where the rounding tag ends and ends where the first unit identity
+begins, so the four bytes it occupies are exactly the four `decode` used to
+require canonically zero. That is the migration statement, as a placement rather
+than as a comment beside a `zero` call.
+
+## 1, the relayed route
+
+`CONSUME_RECORD_FRAME_V1` grows from 28 positions to 30: the raw
+`StatisticSpecV1` and its staging vacancy, both read-only, beside the window's
+pair. `consume_source_records` authenticates it against
+`SourceMaterialV3::statistic_spec` by content identity like every other link.
+
+The route then does two things it could not do before, and the FIRST is the one
+that was mis-paying:
+
+* **It compares the statistic's own two identities, one to each end.** The route
+  used to compare the *Source spec's* unit against the Product's result unit,
+  and said so in a comment: "there is no statistic record to interpose because a
+  terminal sample is the identity map." That is the wrong end of the map. A
+  market could satisfy it — Source unit `A`, result domain unit `A` — while its
+  own statistic said `A` maps to `B` by a factor, and be selected at the
+  identity with nothing red.
+* **It applies the declared shift**, admitted against the selected
+  decoding-rules row's published `raw_exponent` through
+  `StatisticSpecV1::require_admitted_scale` — which is now the single author of
+  that rule for both provider families, called by `PythAdapterConfigV1::validate_update`
+  as well. A shift the row does not publish refuses `ResolutionError::ProviderScale`
+  `0x801C`, the same code the Direct route publishes for the same accusation,
+  and checked after the publication is admitted for the same reason.
+
+**PROVEN RED**, against a Resolution ELF rebuilt with the frame in place and the
+two authorities removed:
+
+| founding | pre-fix | with the fix |
+| --- | --- | --- |
+| statistic `{A, B, −8}`, spec unit `A`, domain unit `A` | **consumes** — record `Consumed`, Source `Resolved`, a `ResolutionSuccess` certificate written on an unconverted observation | refuses `ProductDomain`; record still `Sealed`, Source not `Resolved` |
+| statistic `{B, A, −8}`, spec unit `B`, domain unit `A` | refuses `ProductDomain` `0x8008` — the right answer for the wrong reason | refuses `ProviderScale` `0x801C` |
+
+The whole 26-case `relayed_mainnet_state` campaign is green, including both
+identity-shape consumptions, whose certificates are unchanged: the atom is still
+the venue's own discriminant and the selector is still `0`.
+
+**What is NOT executable, and why.** A relayed founding with a declared
+conversion that *moves a cell* cannot exist on this release. Both rows of the
+decoding-rules table publish `raw_exponent = 0` — a `MigrationProgress`
+discriminant and a renunciation flag are not quantities anything scales — so the
+only admissible shift is the identity and the arithmetic cannot move. The
+positive scaled case becomes reachable when a row publishes a nonzero exponent,
+and inventing one to make a test green would be inventing a venue. What the two
+cases above prove is that the record is read, joined and admitted; what they
+cannot prove is a cell moving.
+
+## 3, the browser
+
+Below, with the live case.
+
+## Wire cost
+
+The consumption's two new read-only keys: legacy `1,534 → 1,600`, v0 over its
+frozen table `733 → 737`. Sixty-six bytes legacy, four over the table, which is
+the ratio that route's ALT exists for. `resolution-relayed`'s packet witness,
+its README table, `PACKET_LIMIT_2026_09_01.md`'s two rows and the harness's own
+`CONSUME_EXTENT` all carry the new pair.

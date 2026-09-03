@@ -65,13 +65,19 @@ them together is how a reader ends up believing the strongest one.
 ## Two transactions did not fit a legacy packet, and the fix is not the same fix
 
 Measured 2026-08-27, the first time this family's wire extents were measured at
-all; converted 2026-09-02. Packet maximum 1,232 bytes.
+all; converted 2026-09-02; consumption remeasured 2026-09-03, when the
+`StatisticSpecV1` pair joined its frame. Packet maximum 1,232 bytes.
 
 | transaction | legacy | over | v0 over its frozen table | static / looked up |
 |---|---:|---:|---:|---:|
-| `relayed consumption` (both markets) | 1,534 | +302 | **733** | 3 / 27 |
+| `relayed consumption` (both markets) | 1,600 | +368 | **737** | 3 / 29 |
 | `relayed transport: append observation 2` | 1,377 | +145 | **1,196** | 4 / 7 |
 | `append observation 0 / 1 / 3` | 989 / 998 / 993 | fit | 808 / 817 / 812 | 4 / 7 |
+
+Consumption was 1,534 / 733 over a twenty-eight-account frame until
+2026-09-03. Two more read-only keys cost 66 bytes legacy and 4 over the table,
+which is the same statement the row makes twice: this route is key-heavy, so
+the table is what it is for.
 
 Neither could be submitted by a real relayer on a legacy message. Both now
 execute as v0 messages over a table frozen for the route, whose addresses are

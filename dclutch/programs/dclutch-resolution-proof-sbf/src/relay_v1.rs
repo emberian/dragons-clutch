@@ -37,7 +37,7 @@ use dclutch_relay_contract::{
 use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
 use dclutch_source_contract::{
     ContentId as SourceContentId, ProviderReleaseV1, SourceMaterialV3, SourceResolutionStateV2,
-    SourceSpecV1, WindowKind, WindowSpecV1,
+    SourceSpecV1, StatisticSpecV1, WindowKind, WindowSpecV1,
 };
 use solana_program::hash::hashv;
 
@@ -60,15 +60,31 @@ pub enum RelayJoinErrorV1 {
     /// The observation was well formed but did not satisfy the window's own
     /// proposition, or fell outside the window's time bounds.
     Window,
+    /// The market's statistic declared a source-to-result factor the selected
+    /// decoding-rules row does not publish.
+    ///
+    /// Split from [`Self::Source`] rather than folded into it for the reason
+    /// `ResolutionError::ProviderScale` was split from `ProviderConfiguration`:
+    /// a graph refusal is something a founder can restate, and this is not.
+    /// Two records of one market disagree about the factor between two units,
+    /// and no relayer, no resubmission and no later observation can make them
+    /// agree.
+    Scale,
     /// Source terminal transition or certificate construction refused.
     Transition,
 }
 
 /// Independently authenticated Source record values for the relayed family.
 ///
-/// There is no statistic slot. A terminal window over a terminal sample has one
-/// observation and one atom; a scheduled statistic over this family would need a
-/// shared-observation child and is a different access profile.
+/// The statistic slot is here even though a terminal window over a terminal
+/// sample has one observation and one atom, and the reason the slot exists is
+/// not the sample count. A statistic names two unit identities and, since
+/// `4cd2b9cb5`, the decimal shift between them; a route that cannot read it
+/// cannot tell a market whose observation is already in the result unit from
+/// one whose observation must be shifted to get there, and selects both at the
+/// identity. A scheduled statistic over this family would still need a
+/// shared-observation child and would still be a different access profile --
+/// `required_samples` is not what this slot is for.
 #[derive(Clone, Copy)]
 pub struct AuthenticatedRelaySourceRecordsV1 {
     /// `SourceMaterialV3` content identity, from the Market's own policy.
@@ -91,6 +107,10 @@ pub struct AuthenticatedRelaySourceRecordsV1 {
     pub window_spec_id: SourceContentId,
     /// The authenticated window.
     pub window: WindowSpecV1,
+    /// `StatisticSpecV1` content identity, from the material.
+    pub statistic_spec_id: SourceContentId,
+    /// The authenticated statistic.
+    pub statistic: StatisticSpecV1,
     /// The venue's pinned deployment, named by `SourceSpecV1.adapter_config_id`.
     pub venue_release_id: SourceContentId,
     /// The authenticated venue artifact release.
@@ -137,6 +157,7 @@ pub struct RelayResolutionPlanV1 {
 fn authenticate_graph(records: &AuthenticatedRelaySourceRecordsV1) -> Result<(), RelayJoinErrorV1> {
     if records.material.primary_source_spec() != records.source_spec_id
         || records.material.window_spec() != records.window_spec_id
+        || records.material.statistic_spec() != records.statistic_spec_id
         || records.source.provider_release_id() != records.provider_release_id
         || records.source.adapter_config_id() != records.venue_release_id
         || records.provider_release.decoding_rules_id() != records.decoding_rules_id
@@ -235,11 +256,22 @@ pub fn plan_relayed_resolution_v1(
         // The Source and the Product must be about the same thing. Without this
         // a market on one coordinate could be resolved by a well-formed
         // observation of another, and every other check in this function would
-        // pass while doing it. There is no statistic record to interpose because
-        // a terminal sample is the identity map, so the Source's own unit must
-        // equal the Product's result unit rather than map onto it.
+        // pass while doing it.
         || records.source.domain_id().to_bytes() != result_domain.coordinate_domain_id().to_bytes()
-        || records.source.unit_id().to_bytes() != result_domain.result_unit_id().to_bytes()
+        // The statistic is what joins the two ends, and this route used to
+        // compare `records.source.unit_id()` against the Product's result unit
+        // directly because the record was not in the frame. That is the wrong
+        // end of the map whenever the two differ: it says the observation is
+        // already counted in the unit the cuts are authored in, which is the
+        // very assumption a declared conversion denies. A market could satisfy
+        // it -- Source unit A, result domain unit A -- while its own statistic
+        // said A maps to B by a factor, and be selected at the identity with
+        // nothing red. So the statistic's OWN two identities are compared, one
+        // to each end, exactly as `provider_v3` compares them on the Direct
+        // route.
+        || records.statistic.source_unit_id().to_bytes() != records.source.unit_id().to_bytes()
+        || records.statistic.result_unit_id().to_bytes()
+            != result_domain.result_unit_id().to_bytes()
     {
         return Err(RelayJoinErrorV1::Product);
     }
@@ -289,6 +321,24 @@ pub fn plan_relayed_resolution_v1(
     })?;
     require_window_admits(records.window, observation.observed_unix_seconds())?;
 
+    // The declared factor is admitted AFTER the publication is, and the order is
+    // the point. Reaching this line means the record was sealed, quorate, bound
+    // to this market, read under the row the configuration selected, and inside
+    // the window the Product sold -- so `Scale` here can only mean the market's
+    // own statistic and the row it reads disagree about the shift between two
+    // units. Checked earlier, the same refusal would also fire for evidence
+    // problems and a founder could not tell the two apart.
+    //
+    // The authority is the ROW's published scale rather than the adapter
+    // configuration's echo of it. `interpret_sealed_record_v1` has already
+    // refused a configuration whose `raw_exponent` disagrees with the row it
+    // selects, so the two are equal here; asking the row is asking the record
+    // that decides, and asking the config would be asking a copy.
+    records
+        .statistic
+        .require_admitted_scale(observation.observable().raw_exponent())
+        .map_err(|_| RelayJoinErrorV1::Scale)?;
+
     // The evidence identity binds every input that could have moved the result:
     // which Source, which trust root, which rules, which slot, and the exact
     // certified fold over the observed bodies. Two different observations can
@@ -317,18 +367,13 @@ pub fn plan_relayed_resolution_v1(
             evidence,
             observation.atoms(),
             1,
-            // The relayed family has no statistic slot (see the frame note
-            // above), so this route cannot read a declared factor and passes
-            // the identity. That is what the relayed founding writes -- its
-            // StatisticSpec names one unit identity on both sides, which
-            // `StatisticSpecV1::validate_scale` now refuses to pair with any
-            // nonzero shift -- but nothing on THIS route checks it, because
-            // the record is not in the frame. A relayed market founded with a
-            // declared conversion would be selected here at the identity and
-            // mis-paid exactly as cohort-14 market B was. Closing it needs the
-            // statistic in the account frame; that is owed, and it is a frame
-            // change, not a line change.
-            0,
+            // The market's own declared shift, from the record in the frame,
+            // admitted against the row above. This argument was the literal
+            // `0` until the statistic had a slot here, and the whole defect was
+            // that the literal is indistinguishable from a market that means
+            // it: a route that omits the number has not chosen the identity,
+            // it has failed to state a choice.
+            records.statistic.source_scale_exponent(),
             request.generation,
             request.current_unix_seconds,
             request.terminal_sequence,

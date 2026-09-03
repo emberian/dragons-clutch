@@ -2008,11 +2008,22 @@ For one real DBC graduation market, in dependency order:
 4. `ProviderReleaseV1` binding family, extension, key set, `decoding_rules_id`,
    and the record transport profile.
 5. `SourceSpecV1` with `access_profile = RelayedObservationRecord`, `domain_id`
-   and `unit_id` **equal to the Product domain's** coordinate and result unit, and
-   `adapter_config_id` = the venue release digest (§12.4).
+   **equal to the Product domain's** coordinate, `unit_id` equal to the
+   statistic's SOURCE unit, and `adapter_config_id` = the venue release digest
+   (§12.4). The spec's unit was required to equal the Product's *result* unit
+   until 2026-09-03; that is the wrong end of the map whenever a statistic
+   declares a conversion, and the statistic's own two identities are now
+   compared, one to each end.
 6. `WindowSpecV1`, `Terminal`, `start = end =` the market deadline, `max_age`
    equal to the configuration's staleness bound (§12.3).
-7. `StatisticSpecV1`, `TerminalSample`, one sample, `ExactRational`.
+7. `StatisticSpecV1`, `TerminalSample`, one sample, `ExactRational`, and a
+   `source_scale_exponent` the selected decoding-rules row publishes. Both rows
+   of this release are at `raw_exponent = 0` -- a `MigrationProgress`
+   discriminant and a renunciation flag are not quantities anything scales --
+   so today a relayed founding declares one unit identity on both sides and the
+   identity shift. A row publishing a nonzero exponent is what would make a
+   real conversion foundable here; until one exists, `ProviderScale` `0x801C`
+   is what a nonzero declaration gets.
 8. `SourceMaterialV2` naming the Product record, the spec, the window, the
    statistic, **no recovery policy**, and the V2 failure-policy release.
 9. Product Runtime V2: a `ResultDomainV2` with **zero cuts**, a two-coefficient

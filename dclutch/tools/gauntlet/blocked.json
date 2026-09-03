@@ -127,6 +127,11 @@
       "owner": "cycle-2 tranche A (WAVE.md), Series"
     },
     {
+      "route": "claims/series_founding_transport_v1::process",
+      "reason": "The Claims half of Series founding, and it is blocked for exactly the reason its sibling core/series_open::process is: it needs the Series family tier. Nothing has ever built a DCLSFTR1 instruction. Its magic, SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1, has one construction site in the whole tree -- its own definition in crates/dclutch-claims-svm/src/series_founding_transport_v1.rs -- and the route is reached only as a route template of a Series consume effect inside dclutch-trading-sbf (claims_composition_v3.rs, series/consume_artifacts_v4.rs). No bootstrap, no operator and no CLI emits one, so no campaign can drive it without the tier that founds a Series Market first. THIS ROW IS A CORRECTION, NOT A NEW JUDGEMENT: the C-16 rehearsal (docs/evidence/C16_REHEARSAL_2026_09_03.md, residue row 5) found this route reading NEVER-EXECUTED with no reason recorded beside a sibling carrying the same owner and the same blocker, and called the asymmetry 'an inconsistency, not a judgement'. The register was reporting a missing sentence as a missing campaign.",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
       "route": "core/series_permit_expiry::process",
       "reason": "Series permit expiry; needs an open Series Market.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"

@@ -93,7 +93,7 @@ keys from the frame; **split** = two instructions; **none** = fits.
 | `resolution/process_commit_failure#CommitFailure` | resolution | 1,222 legacy ×4 | 29 metas | fits by 10 — **no room for the 12-B price instruction** | none today; the first added key or a priority fee puts it over. A *failure* route should not depend on a table; if it grows, CDI on its frame, not ALT | none |
 | `resolution/process_close_candidate`, `process_close_head` | resolution | 333 legacy | 4 | fits | none | none |
 | `resolution/process_append#AppendObservation` | resolution | **1,377** legacy (`tools/gauntlet/resolution-relayed/witnesses.json:23`) | carries the 424-B VirtualPool chunk inline | **+145** | ALT, or a smaller chunk: the append *is* the CDI chunk (`APPEND_OBSERVATION_PREFIX_BYTES = 40`, `crates/dclutch-relay-contract/src/instruction.rs:26`); both keep the sealed digest | none |
-| `resolution/process_consume#ConsumeRecord` | resolution | **1,534** legacy | 28 | **+302** | ALT (key-heavy) | none |
+| `resolution/process_consume#ConsumeRecord` | resolution | **1,600** legacy (1,534 until 2026-09-03; `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs` `CONSUME_EXTENT`) | 30 (28 until the `StatisticSpecV1` pair joined the frame) | **+368** | ALT (key-heavy) | none |
 | `resolution/process_commit_deadline_failure` (liveness walk) | resolution | 991 legacy | 22 | fits by 241 | none — **must never need a table** (`witnesses.json:30`; `packages/dclutch-sdk/lib/failureWalk.ts:77-81`) | none |
 | `resolution/process_create_record`, `seal`, `retire` | resolution | measured, fit (witness asserts exactly the two above are over) | — | fits | none | none |
 | `resolution/provider_transport_v3::…` (submit) | resolution | validator (journey), v0; legacy impossible: 38 keys + 416-B request ≥ 1,632 | 38 (`provider_transport_v3.rs:58`) | n/a legacy | ALT (in place) | journey |
@@ -284,7 +284,7 @@ says to delete in the same convergence cycle; Direct owns the file.
 | Structured ABI lift (the lever, not yet built) | −288 → 1,109; K=5 at −352 | 0 (the accounts stay; only inline copies go) | ≤ 0: the derivation already runs, three equality checks go | `ARCHITECT_SCHOLAR_2026_09_01.md:1266-1279` |
 | Dealer checkpoint: six page receipts, then commit | pages 806–871 legacy each; commit 1,366 legacy / v0 unmeasured | not recorded | pages 23,961–37,974 each (×6 ≈ 144k–228k); commit 461,933–476,876 (dealer fold, `ledger.json`) | vs the unsplit 122-meta scenario that no cluster can lock |
 | General register bank in scratch pages (N=1 → N=258) | v0 +56 B (608 → 664 Consider); legacy +462 | +2 per page (+28 at N=258) | Consider 36,113 → 74,877; InitializeSettlement 61,753 → 164,970 | `GENERAL_ALT_PACKET_WITNESS:80-98`, `GENERAL_ACCELERATOR_CAMPAIGN:380-400` |
-| Relay chunked record (append chunks, seal, consume) | append 1,377 with a 424-B chunk; consume 1,534 | consume 28 | — | `resolution-relayed/witnesses.json:23` |
+| Relay chunked record (append chunks, seal, consume) | append 1,377 with a 424-B chunk; consume 1,600 (1,534 until 2026-09-03) | consume 30 | — | `resolution-relayed/witnesses.json:23` |
 | Claims composed chain (derive the third request from the two it binds) | 1,261 → 973 (−288) | 0 | unmeasured | `claims-custody/README.md:74-80` |
 | Aggregate retirement (one 2,152-B payload → four transactions) | v0 1,071–1,191 each, data 744–864 | 35 metas each | — | `AGGREGATE_RETIREMENT_CHECKPOINT_SPLIT:65-80`, `CU_ARCHITECTURE_CHANGE_MATRIX:82` |
 

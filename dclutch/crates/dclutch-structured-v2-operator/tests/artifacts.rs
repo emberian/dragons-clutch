@@ -393,9 +393,24 @@ fn records_migrate_cliff_a_seventh_coordinate_costs_1400_bytes_against_1312() {
         .map(|bundle| bundle.request_profile.len())
     };
 
-    // POSITIVE CONTROL: the sixth coordinate has an executable RequestProfile,
-    // and it is exactly the width the arithmetic above predicts.
-    assert_eq!(bundle_at(6), Ok(profile_bytes(6)));
+    // POSITIVE CONTROL AT EVERY ADMITTED WIDTH, not only at the last one.
+    //
+    // This was two points: `bundle_at(6)` and `bundle_at(7)`. Six as the
+    // control is the right EDGE case and it is not a sweep -- a builder that
+    // refused, or mis-sized, a descriptor at four or five would have passed
+    // both assertions, and four and five are the widths the Structured lifting
+    // plan is about. So every admitted width is built here, and each is
+    // compared against the same `22 + 5K` arithmetic rather than against a
+    // recorded number, which is what makes the ceiling below the FIRST refusal
+    // rather than merely a refusal.
+    for outcomes in 1..=RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3 as usize {
+        assert_eq!(
+            bundle_at(outcomes),
+            Ok(profile_bytes(outcomes)),
+            "K = {outcomes} is inside the coordinate ceiling and must build"
+        );
+        assert!(profile_bytes(outcomes) <= REQUEST_PROFILE_MAX_BYTES);
+    }
     // And the seventh does not.
     // And the seventh does not -- refused by the CEILING, named as such. The
     // predecessor of this assertion was a bare `is_err()`, which would have
