@@ -71,22 +71,22 @@ The 22 campaigns contributing:
 
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
-| `0x5000` | `ClaimsSbfError::Instruction` | Instruction bytes were hostile or selected no supported family. | -- | `programs/dclutch-claims-sbf/src/lib.rs:172` |
-| `0x5001` | `ClaimsSbfError::Accounts` | Account count, privileges, owners, or executable flags were wrong. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:174` |
-| `0x5002` | `ClaimsSbfError::Identity` | Market or Position semantic identities did not join the packet. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:176` |
-| `0x5003` | `ClaimsSbfError::Release` | Registry receipt or current deployment authentication failed. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:178` |
-| `0x5004` | `ClaimsSbfError::Authority` | Caller PDA authority did not authenticate the packet. | -- | `programs/dclutch-claims-sbf/src/lib.rs:180` |
-| `0x5005` | `ClaimsSbfError::Economic` | Claims economic transition refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:182` |
-| `0x5006` | `ClaimsSbfError::CustodyRequired` | This action requires the canonical Custody child composition. | -- | `programs/dclutch-claims-sbf/src/lib.rs:184` |
-| `0x5007` | `ClaimsSbfError::Receipt` | Receipt construction or post-state commitment failed. | -- | `programs/dclutch-claims-sbf/src/lib.rs:186` |
-| `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:188` |
-| `0x5009` | `ClaimsSbfError::Token` | Token-2022 mint/account profile or CPI refused. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:190` |
-| `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-claims-sbf/src/lib.rs:198` |
-| `0x500B` | `ClaimsSbfError::SelectionConfig` | The execution terms disagree with the Market-selected config. | -- | `programs/dclutch-claims-sbf/src/lib.rs:209` |
-| `0x500C` | `ClaimsSbfError::BasisEvaluatorAbsent` | The Market's basis names the degree-2-to-3 spline family, for which this deployment carries no evaluator. | -- | `programs/dclutch-claims-sbf/src/lib.rs:223` |
-| `0x500D` | `ClaimsSbfError::PrincipalCapacity` | Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/lib.rs:233` |
-| `0x500E` | `ClaimsSbfError::ExposureNotIdentity` | The supplied Product-to-Claims exposure is not the identity embedding. | -- | `programs/dclutch-claims-sbf/src/lib.rs:256` |
-| `0x500F` | `ClaimsSbfError::ReceiptAlias` | An account presented at a representation coordinate is the receipt's own Mint or Account: a receipt backed by itself. | -- | `programs/dclutch-claims-sbf/src/lib.rs:277` |
+| `0x5000` | `ClaimsSbfError::Instruction` | Instruction bytes were hostile or selected no supported family. | -- | `programs/dclutch-claims-sbf/src/lib.rs:211` |
+| `0x5001` | `ClaimsSbfError::Accounts` | Account count, privileges, owners, or executable flags were wrong. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:213` |
+| `0x5002` | `ClaimsSbfError::Identity` | Market or Position semantic identities did not join the packet. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:215` |
+| `0x5003` | `ClaimsSbfError::Release` | Registry receipt or current deployment authentication failed. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:217` |
+| `0x5004` | `ClaimsSbfError::Authority` | Caller PDA authority did not authenticate the packet. | -- | `programs/dclutch-claims-sbf/src/lib.rs:219` |
+| `0x5005` | `ClaimsSbfError::Economic` | Claims economic transition refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:221` |
+| `0x5006` | `ClaimsSbfError::CustodyRequired` | This action requires the canonical Custody child composition. | -- | `programs/dclutch-claims-sbf/src/lib.rs:223` |
+| `0x5007` | `ClaimsSbfError::Receipt` | Receipt construction or post-state commitment failed. | -- | `programs/dclutch-claims-sbf/src/lib.rs:225` |
+| `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:227` |
+| `0x5009` | `ClaimsSbfError::Token` | Token-2022 mint/account profile or CPI refused. | claims-rational-representation-v2-programtest; structured-v2-programtest | `programs/dclutch-claims-sbf/src/lib.rs:229` |
+| `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-claims-sbf/src/lib.rs:237` |
+| `0x500B` | `ClaimsSbfError::SelectionConfig` | The execution terms disagree with the Market-selected config. | -- | `programs/dclutch-claims-sbf/src/lib.rs:248` |
+| `0x500C` | `ClaimsSbfError::BasisEvaluatorAbsent` | The Market's basis names the degree-2-to-3 spline family, for which this deployment carries no evaluator. | -- | `programs/dclutch-claims-sbf/src/lib.rs:262` |
+| `0x500D` | `ClaimsSbfError::PrincipalCapacity` | Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/lib.rs:272` |
+| `0x500E` | `ClaimsSbfError::ExposureNotIdentity` | The supplied Product-to-Claims exposure is not the identity embedding. | -- | `programs/dclutch-claims-sbf/src/lib.rs:295` |
+| `0x500F` | `ClaimsSbfError::ReceiptAlias` | An account presented at a representation coordinate is the receipt's own Mint or Account: a receipt backed by itself. | -- | `programs/dclutch-claims-sbf/src/lib.rs:316` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | -- | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:83` |
 | `0x5140` | `ProtocolPositionSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical lifecycle ABI. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:111` |
 | `0x5141` | `ProtocolPositionSbfErrorV2::Accounts` | Account count, privilege, executable, or alias facts refused. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:113` |
@@ -119,15 +119,15 @@ The 22 campaigns contributing:
 | `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:125` |
 | `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:127` |
 | `0x518A` | `ClaimsFoundingSbfErrorV5::PrincipalCapacity` | The founding principal exceeded the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:137` |
-| `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:127` |
-| `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:129` |
-| `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:131` |
-| `0x5203` | `SignedDeltaSbfErrorV3::ProductBasis` | Product graph, linked basis, semantic identity, or Core join refused. | claims-fractional-signed-delta-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:133` |
-| `0x5204` | `SignedDeltaSbfErrorV3::ClaimsState` | Aggregate or Position PDA, width, identity, or revision refused. | dealer-checkpoint-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:135` |
-| `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:137` |
-| `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:139` |
-| `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:141` |
-| `0x5208` | `SignedDeltaSbfErrorV3::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:149` |
+| `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:130` |
+| `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:132` |
+| `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:134` |
+| `0x5203` | `SignedDeltaSbfErrorV3::ProductBasis` | Product graph, linked basis, semantic identity, or Core join refused. | claims-fractional-signed-delta-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:136` |
+| `0x5204` | `SignedDeltaSbfErrorV3::ClaimsState` | Aggregate or Position PDA, width, identity, or revision refused. | dealer-checkpoint-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:138` |
+| `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:140` |
+| `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:142` |
+| `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:144` |
+| `0x5208` | `SignedDeltaSbfErrorV3::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:152` |
 | `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:130` |
 | `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:132` |
 | `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:134` |
@@ -197,13 +197,13 @@ The 22 campaigns contributing:
 | `0x565A` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaReceipt` | The canonical SignedDelta success receipt could not be constructed. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:173` |
 | `0x565B` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaPrincipalCapacity` | A positive SignedDelta would exceed the Market's principal-capacity cap. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:175` |
 | `0x565C` | `FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig` | The exposure terms are not the terms the founded Market's capability manifest selected. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:186` |
-| `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:416` |
-| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:421` |
-| `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:423` |
-| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:425` |
-| `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:427` |
-| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:434` |
-| `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:436` |
+| `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:418` |
+| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:423` |
+| `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:425` |
+| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:427` |
+| `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:429` |
+| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:436` |
+| `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:438` |
 | `0x5680` | `RationalReplayCloseSbfErrorV1::Accounts` | The fixed two-account frame, ownership, writability or length refused. | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:285` |
 | `0x5681` | `RationalReplayCloseSbfErrorV1::Authority` | The actor named by the cursor did not sign, or a second signer appeared. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:287` |
 | `0x5682` | `RationalReplayCloseSbfErrorV1::Identity` | The cursor address did not derive from the coordinates the request named. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:289` |
@@ -247,23 +247,23 @@ The 22 campaigns contributing:
 
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
-| `0x6000` | `CustodySbfError::Instruction` | Instruction bytes did not decode as the one generated request. | custody-family-programtest | `programs/dclutch-custody-sbf/src/lib.rs:94` |
-| `0x6001` | `CustodySbfError::AccountFrame` | Account count, order, privileges, or aliases were not exact. | -- | `programs/dclutch-custody-sbf/src/lib.rs:96` |
-| `0x6002` | `CustodySbfError::Release` | Registry CPI, producer, receipt, release, role, or caller refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:98` |
-| `0x6003` | `CustodySbfError::CallerAuthority` | Caller authority was not the release-pinned role PDA signer. | -- | `programs/dclutch-custody-sbf/src/lib.rs:100` |
-| `0x6004` | `CustodySbfError::Realm` | Realm content, PDA, owner, Mint, token program, or adapter release refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:102` |
-| `0x6005` | `CustodySbfError::Replay` | Replay PDA, owner, bytes, or revision refused. | custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:104` |
-| `0x6006` | `CustodySbfError::TokenState` | Vault PDA, token state, or authority policy refused. | custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:106` |
-| `0x6007` | `CustodySbfError::Create` | Rent, payer, System program, or account creation refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:108` |
-| `0x6008` | `CustodySbfError::TokenCpi` | Exact token or close-account CPI refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:110` |
-| `0x6009` | `CustodySbfError::Postcondition` | Exact CPI postcondition or checked balance arithmetic refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:112` |
-| `0x600A` | `CustodySbfError::Commit` | Replay state could not be committed after all effects succeeded. | -- | `programs/dclutch-custody-sbf/src/lib.rs:114` |
-| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | dealer-checkpoint-programtest; tier1 | `programs/dclutch-custody-sbf/src/lib.rs:123` |
-| `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-custody-sbf/src/lib.rs:131` |
-| `0x600D` | `CustodySbfError::ReservationRecord` | The account at the reservation coordinate is not an activatable reservation. | -- | `programs/dclutch-custody-sbf/src/lib.rs:144` |
-| `0x600E` | `CustodySbfError::ReservationIdentity` | The reservation is a valid one, but not the one this effect names. | -- | `programs/dclutch-custody-sbf/src/lib.rs:153` |
-| `0x600F` | `CustodySbfError::ReservationFrame` | The accounts handed in are not the ones the reservation recorded. | -- | `programs/dclutch-custody-sbf/src/lib.rs:160` |
-| `0x6010` | `CustodySbfError::ReservationEscrowPrestate` | The escrow the chain holds is not the poststate the reservation published. | -- | `programs/dclutch-custody-sbf/src/lib.rs:171` |
+| `0x6000` | `CustodySbfError::Instruction` | Instruction bytes did not decode as the one generated request. | custody-family-programtest | `programs/dclutch-custody-sbf/src/lib.rs:119` |
+| `0x6001` | `CustodySbfError::AccountFrame` | Account count, order, privileges, or aliases were not exact. | -- | `programs/dclutch-custody-sbf/src/lib.rs:121` |
+| `0x6002` | `CustodySbfError::Release` | Registry CPI, producer, receipt, release, role, or caller refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:123` |
+| `0x6003` | `CustodySbfError::CallerAuthority` | Caller authority was not the release-pinned role PDA signer. | -- | `programs/dclutch-custody-sbf/src/lib.rs:125` |
+| `0x6004` | `CustodySbfError::Realm` | Realm content, PDA, owner, Mint, token program, or adapter release refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:127` |
+| `0x6005` | `CustodySbfError::Replay` | Replay PDA, owner, bytes, or revision refused. | custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:129` |
+| `0x6006` | `CustodySbfError::TokenState` | Vault PDA, token state, or authority policy refused. | claims-rational-representation-v2-programtest; custody-family-programtest; dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:131` |
+| `0x6007` | `CustodySbfError::Create` | Rent, payer, System program, or account creation refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:133` |
+| `0x6008` | `CustodySbfError::TokenCpi` | Exact token or close-account CPI refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:135` |
+| `0x6009` | `CustodySbfError::Postcondition` | Exact CPI postcondition or checked balance arithmetic refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:137` |
+| `0x600A` | `CustodySbfError::Commit` | Replay state could not be committed after all effects succeeded. | -- | `programs/dclutch-custody-sbf/src/lib.rs:139` |
+| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | dealer-checkpoint-programtest; tier1 | `programs/dclutch-custody-sbf/src/lib.rs:148` |
+| `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-custody-sbf/src/lib.rs:156` |
+| `0x600D` | `CustodySbfError::ReservationRecord` | The account at the reservation coordinate is not an activatable reservation. | -- | `programs/dclutch-custody-sbf/src/lib.rs:169` |
+| `0x600E` | `CustodySbfError::ReservationIdentity` | The reservation is a valid one, but not the one this effect names. | -- | `programs/dclutch-custody-sbf/src/lib.rs:178` |
+| `0x600F` | `CustodySbfError::ReservationFrame` | The accounts handed in are not the ones the reservation recorded. | -- | `programs/dclutch-custody-sbf/src/lib.rs:185` |
+| `0x6010` | `CustodySbfError::ReservationEscrowPrestate` | The escrow the chain holds is not the poststate the reservation published. | -- | `programs/dclutch-custody-sbf/src/lib.rs:196` |
 
 ## dealer-accelerator
 

@@ -7,8 +7,8 @@
 use dclutch_account_profile_contract::AccountProfileV1;
 use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
-    CapabilityManifestV1, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2, FundingLedgerV2,
-    capability_dependency_closure_mask_v1, manifest_entry_for_ledger_row_v2,
+    CapabilityManifestV1, FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FundingLedgerCloseCustodyV2,
+    FundingLedgerV2, capability_dependency_closure_mask_v1, manifest_entry_for_ledger_row_v2,
     validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{
@@ -1315,7 +1315,7 @@ fn authenticate_close_funding(
             let slot = authenticated
                 .slot(entry_index)
                 .map_err(|_| TerminalRetirementErrorV1::Projection)?;
-            if slot.status() != FundingLedgerStatusV2::Active {
+            if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status()) {
                 return Err(TerminalRetirementErrorV1::Projection);
             }
             row_index = row_index

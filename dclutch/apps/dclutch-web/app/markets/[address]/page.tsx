@@ -19,14 +19,23 @@ export async function generateMetadata({ params }: Readonly<{ params: Promise<Re
   const decoded = decodeURIComponent(address);
   const editorial = marketEditorialV1(decoded);
   // Static metadata is built at export time with no chain read available, so
-  // it can only ever carry the editorial half. A row that names a market but
-  // not its title has nothing to put in a share card, and an empty card beats
-  // a wrong one.
-  if (editorial === null || editorial.title === null) return {};
-  const title = `${editorial.title} · dClutch`;
+  // it can only ever carry the editorial half. A row that names a market by no
+  // name at all has nothing to put in a share card, and an empty card beats a
+  // wrong one.
+  //
+  // A LIVE market's row now carries no title on purpose -- the page derives a
+  // better one off the market's own partition, which this build cannot read --
+  // so the card falls back to the COORDINATE's common name. That is the one
+  // editorial field that survives a re-founding, so it is the one that can be
+  // baked into a static artifact without going stale.
+  const named = editorial === null ? null : editorial.title ?? editorial.coordinate?.label ?? null;
+  if (named === null) return {};
+  const title = `${named} · dClutch`;
   // The question is the description: it is what the market IS, and it is the
-  // sentence a pasted link should lead with.
-  const description = editorial.question ?? undefined;
+  // sentence a pasted link should lead with. A live market leaves it to the
+  // page, which derives it, so a static card carries the story instead --
+  // still this site's own words, and still not a boundary restated.
+  const description = editorial?.question ?? editorial?.story ?? undefined;
   const card = `https://clutch.dregg.pro/og/market-${decoded}.jpg`;
   return {
     title,
@@ -36,7 +45,7 @@ export async function generateMetadata({ params }: Readonly<{ params: Promise<Re
       description,
       siteName: 'dClutch',
       type: 'website',
-      images: [{ url: card, width: 1200, height: 630, alt: `${editorial.title} — a dClutch market on Solana devnet.` }],
+      images: [{ url: card, width: 1200, height: 630, alt: `${named} — a dClutch market on Solana devnet.` }],
     },
     twitter: { card: 'summary_large_image', title, description, images: [card] },
   };

@@ -1,7 +1,7 @@
 {
   "schema": "dclutch-public-cut-v1",
   "cluster": "devnet",
-  "market": "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15",
+  "market": "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A",
   "activity": {
     "found": null,
     "trade": null,
@@ -9,9 +9,9 @@
     "redeem": null
   },
   "checkedReleases": {
-    "82a969ddbcd1782aab65016632742e4dd956978dc5e3a8f0ba0f853e0c13c62c": {
-      "gateDigest": "f360ef2f0bc254b0d550dc58d5e1dfe0267bbc5ce45179e893d74e93ec69128c",
-      "sealedSet": "e6829ff9adbe74d80bb7cf6c701570b89146d130168d606ca49b735ea3ce72a4"
+    "398e51c008cc5f592f3252f0c1f2246e019ace000b04b74766a41cb45a8a3e09": {
+      "gateDigest": "afee5f070c7388d8622203873d6c550f32ea5188a2f3d2912ad6a06d01a3ba61",
+      "sealedSet": "f53575526c0a46309e0ea476264d46e905145fdf011e256a06e5e656a2e26b20"
     }
   }
 }

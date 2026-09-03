@@ -20,7 +20,7 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 169 as const;
+export const ROUTE_COUNT_V1 = 162 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
@@ -94,18 +94,24 @@ export interface RouteOtherMachineGateV1 {
 }
 
 export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachineGateV1> = [
+  { route: "core/activate_capability_child#ActivateCapability", machines: ["funding-ledger"] },
+  { route: "core/capability::process#ActivateCapability", machines: ["funding-ledger"] },
+  { route: "core/capability::process#CloseCapability", machines: ["funding-ledger"] },
+  { route: "core/close_capability_child#CloseCapability", machines: ["funding-ledger"] },
   { route: "core/process_found#FoundAndPermit", machines: ["projected-custody"] },
-  { route: "core/series_consume::process", machines: ["projected-custody"] },
+  { route: "core/series_consume::process", machines: ["projected-custody", "series-ticket"] },
+  { route: "core/series_open::process", machines: ["series-ticket"] },
+  { route: "core/series_permit_expiry::process", machines: ["series-ticket"] },
+  { route: "core/series_permit_expiry_precommit_v1::process", machines: ["series-ticket"] },
   { route: "custody/abort_open_and_close#AbortOpenAndClose", machines: ["projected-custody"] },
   { route: "custody/abort_source_and_close#AbortSourceAndClose", machines: ["projected-custody"] },
+  { route: "custody/dealer_reservation_v1::process", machines: ["dealer-checkpoint"] },
   { route: "custody/lock_hoard#LockHoard", machines: ["projected-custody"] },
   { route: "custody/lock_hoard_and_close_source#LockHoardAndCloseSource", machines: ["projected-custody"] },
   { route: "custody/open_hoard#OpenHoard", machines: ["projected-custody"] },
   { route: "custody/open_source_compartment#OpenSourceCompartment", machines: ["projected-custody"] },
   { route: "custody/realize_and_close#RealizeAndClose", machines: ["projected-custody"] },
   { route: "custody/refund_and_close#RefundAndClose", machines: ["projected-custody"] },
-  { route: "custody/reserve#Reserve", machines: ["dealer-checkpoint"] },
-  { route: "custody/rollback#Rollback", machines: ["dealer-checkpoint", "dealer-reservation"] },
   { route: "resolution/process_abandon#magic", machines: ["source"] },
   { route: "resolution/process_capture#Capture", machines: ["source"] },
   { route: "resolution/process_commit_failure#CommitFailure", machines: ["source"] },
@@ -114,6 +120,11 @@ export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachine
   { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", machines: ["dealer-checkpoint"] },
   { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", machines: ["dealer-checkpoint"] },
   { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1", machines: ["dealer-checkpoint"] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1", machines: ["dealer-checkpoint"] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1", machines: ["dealer-checkpoint"] },
+  { route: "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1", machines: ["direct-root"] },
+  { route: "trading/direct_close_maker_v1::process_direct_close_maker_v1", machines: ["direct-root"] },
+  { route: "trading/direct_token_setup_v1::process_direct_token_setup_v1", machines: ["direct-root"] },
 ];
 
 /** The machines gating one route that this table cannot state, if any. */

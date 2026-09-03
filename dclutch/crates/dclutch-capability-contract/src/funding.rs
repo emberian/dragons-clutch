@@ -9,6 +9,10 @@ use crate::{
     read_u64, require_nonzero_identifier, require_zero, subslice,
 };
 
+use crate::funding_admission_v2::{
+    FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_MARKET_OPEN_ADMISSIBLE_STATES_V2,
+    FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2,
+};
 use crate::generated_abi;
 
 /// Exact width of one typed compartment allocation.
@@ -1467,7 +1471,12 @@ pub enum FundingLedgerStatusV2 {
 }
 
 impl FundingLedgerStatusV2 {
-    fn decode(value: u8) -> Result<Self> {
+    /// Hostile-decode one persisted status byte.
+    ///
+    /// `pub(crate)` for `funding_admission_v2`'s
+    /// `the_bit_index_is_the_wire_encoding`, which pins the admission bit
+    /// index against this pair rather than against a second numbering.
+    pub(crate) fn decode(value: u8) -> Result<Self> {
         match value {
             0 => Ok(Self::Pending),
             1 => Ok(Self::Active),
@@ -1476,7 +1485,8 @@ impl FundingLedgerStatusV2 {
         }
     }
 
-    const fn byte(self) -> u8 {
+    /// The byte this status is persisted as.
+    pub(crate) const fn byte(self) -> u8 {
         self as u8
     }
 }
@@ -1753,7 +1763,7 @@ impl<'ledger> FundingLedgerV2<'ledger> {
             let authenticated =
                 decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
             let slot = authenticated.slot(entry_index)?;
-            if slot.status != FundingLedgerStatusV2::Pending {
+            if !FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2.admits(slot.status) {
                 return Err(Error::InvalidFundingStatus);
             }
             let entry = manifest.entry(entry_index)?;
@@ -1805,7 +1815,7 @@ impl<'ledger> FundingLedgerV2<'ledger> {
             let authenticated =
                 decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
             let slot = authenticated.slot(entry_index)?;
-            if slot.status != FundingLedgerStatusV2::Active {
+            if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status) {
                 return Err(Error::InvalidFundingStatus);
             }
             let compartment_index = funding_compartment_index(compartment);
@@ -1850,7 +1860,7 @@ impl<'ledger> FundingLedgerV2<'ledger> {
             let authenticated =
                 decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
             let slot = authenticated.slot(entry_index)?;
-            if slot.status != FundingLedgerStatusV2::Active {
+            if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status) {
                 return Err(Error::InvalidFundingStatus);
             }
             (
@@ -1978,6 +1988,13 @@ impl<'ledger, 'manifest> AuthenticatedFundingLedgerV2<'ledger, 'manifest> {
     pub fn validate_market_open(self, entry_index: u16, current_slot: u64) -> Result<()> {
         let slot = self.slot(entry_index)?;
         let entry = self.manifest.entry(entry_index)?;
+        // The set stands BESIDE the match rather than swallowing it: only one
+        // conjunct of this refusal is over the ledger machine, and it is the
+        // one that holds whatever the policy says. What remains is two policy
+        // cases with their own refusals.
+        if !FUNDING_LEDGER_MARKET_OPEN_ADMISSIBLE_STATES_V2.admits(slot.status()) {
+            return Err(Error::InvalidFundingStatus);
+        }
         match (entry.activation_policy(), slot.status()) {
             (ActivationPolicy::RequiredAtFounding, FundingLedgerStatusV2::Pending) => {
                 Err(Error::FoundingCapabilityInactive)
@@ -1987,7 +2004,6 @@ impl<'ledger, 'manifest> AuthenticatedFundingLedgerV2<'ledger, 'manifest> {
             {
                 Err(Error::ActivationDeadlineElapsed)
             }
-            (_, FundingLedgerStatusV2::Closed) => Err(Error::InvalidFundingStatus),
             _ => Ok(()),
         }
     }

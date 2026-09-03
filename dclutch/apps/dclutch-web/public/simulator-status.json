@@ -1,15 +1,5 @@
 {
-  "census_retention": {
-    "bytes_bound": 4588800,
-    "bytes_on_disk": 23469,
-    "bytes_per_observation": 4780,
-    "dropped_observations": 0,
-    "files": 2,
-    "keep_files": 2,
-    "observations": 3,
-    "removed_files": 0,
-    "window": 480
-  },
+  "census_retention": null,
   "cluster": {
     "label": "devnet",
     "rpc_url": "https://devnet.helius-rpc.com/?<redacted>"
@@ -24,41 +14,14 @@
     "backoff_seconds": 0.0,
     "budget_seconds": 325.0,
     "cadence_seconds": 20.0,
-    "expected_next_update_by": "2026-09-02T17:56:36+00:00",
+    "expected_next_update_by": "2026-09-03T06:13:25+00:00",
     "grace_seconds": 300.0,
     "jitter_fraction": 0.25,
     "note": "A living run rewrites this file every cycle. If your clock is past expected_next_update_by, no process is writing here any more -- read that and not the halted flag, which a run killed outright never gets to set. EXIT.json records how a run ended when it was able to; its absence past this instant means the run could not say."
   },
-  "last_reconciliation": {
-    "checked_at": "2026-09-02T17:51:11+00:00",
-    "declared": {
-      "accounts": {
-        "direct_seller_token": 199,
-        "direct_venue_fee_token": 2,
-        "participant-2_delegated_collateral": -201
-      },
-      "accounts_the_census_does_not_name": [],
-      "class_deltas": {
-        "HoardPrincipal": 0,
-        "unclassified": 0
-      },
-      "collateral_delta": 0,
-      "hoard_delta": 0,
-      "terms": {
-        "execution_price": 1000000,
-        "fee_atoms_per_side": 1,
-        "fee_basis_points_per_side": 50,
-        "fill_atoms": 200,
-        "gross_atoms": 200,
-        "outcome_index": 0,
-        "price_scale": 1000000
-      }
-    },
-    "ok": true,
-    "output": "/Users/ember/jobs/dclutch-cohort13-20260902/sim-trade/census/cycle-000001.json"
-  },
+  "last_reconciliation": null,
   "market": {
-    "address": "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15"
+    "address": "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A"
   },
   "mode": "finite",
   "schema": "dclutch-load-simulator-status-v1",
@@ -66,29 +29,17 @@
     "bounded": true,
     "credited_lamports": 0,
     "max_lamports_spent": 500000000,
-    "observations": 1,
-    "payers": {
-      "7j8RHenZxcdrfGkqxei3RsJqJUgdwYuB16LbX8d7uUzw": 1524491622
-    },
+    "observations": 0,
+    "payers": {},
     "spent_lamports": 0
   },
-  "started_at": "2026-09-02T17:51:05+00:00",
+  "started_at": "2026-09-03T06:07:45+00:00",
   "stopping": false,
   "trades": {
-    "landed": 1,
-    "signatures": [
-      "4gBoKbbQE2CFHVgM228DBC1RQHKmFQGT4Tnk64s26phRg13dudTR8SPB847xLF26mcCmfZT4xgRf1CFRnRfsgR1u",
-      "4ekfpH6tuonx7wnfwQqy7ZjMqJw77AAwoVMB1HFrQGfxLAZn89Y9Lz2MHz8cezjAmYh9LqzAfX8GPRgVKroi9SD2",
-      "Yw4QP62va8YQ1XttquRsJpavv1DaMTWxAHgxjsTKWrC8usnMQ5oUM5aB9cDvHQwDoEsAYEAp3Z94mJthnqYxSyF",
-      "5pB6yGEni6m4veTQC1vnma2ehQqhijQRyhpWU7EdreaJJ6SsqtAUxmLnv41zcPxd2cLpdJqw3a8JyQFJxWqckhD8",
-      "3EemkrmwuwuVwRtpU32CjAMosWRAW2Ye22dzh1sVcvjSpvWUetEHcB6j9A5yDz7aazFnxyx4KLKcJTYrrJgsyvGo",
-      "4EpvmiiS7UkMWeKvLLG5vQZesfyxcarxeFc5suuboSmCT8XpwWmxyaorn2T4LnM9k7weVAKkEqUKxyfuuPTxnNg3",
-      "43bNZSWK8EoAGx1aswvSvK8Nb4x8rqyjy2deLZg61YgpYZD5b9TbhagAp61fHo1LWhRv5T7LotKnNyYbnVPubMFx",
-      "4Yi8YHmYd7MceNAZPqGyGJ9SgjYsdZJwnpLf4go9yGAaj8VgdgeuTKcG1gWfBQhU55pAxzp8hyMGNDgyodr7cqN8",
-      "3FpQ2fSEph8WXovyYeoSG36ZwNGqenpVi3pEW4t2Xn64PQyCNhP5Cv4NCkuPxPcd4DxXqKyRtbtuc6HChYB1P2eJ"
-    ]
+    "landed": 0,
+    "signatures": []
   },
-  "trades_attempted": true,
-  "updated_at": "2026-09-02T17:51:11+00:00",
+  "trades_attempted": false,
+  "updated_at": "2026-09-03T06:08:00+00:00",
   "wallets": []
 }

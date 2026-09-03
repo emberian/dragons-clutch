@@ -189,10 +189,11 @@ use dclutch_series_v3_kernel::{
     admit_occurrence_bytes, future_market_projection,
     plan::{ReplayCandidateV3, SeriesReplayActionV3, evaluate_replay_v3},
     replay::{
-        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketPhaseV3,
-        TicketStateSeedsV3, TicketStateV3,
+        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketStateSeedsV3,
+        TicketStateV3,
     },
     request::{SeriesActionRequestV3, SeriesActionV3, admit_series_action_v3},
+    ticket_admission_v1::SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1,
 };
 use dclutch_token_svm::{COption as TokenCOption, TokenAccount};
 use dclutch_transition_vm::v3::{
@@ -3231,7 +3232,7 @@ fn authenticate_series_expiry_replay_from_records_v1(
         || !series.current_ticket_prepared()
         || series.revision() != family.expected_series_revision()
         || ticket_state.ticket_record_id() != ticket.content_id()
-        || ticket_state.phase() != TicketPhaseV3::Prepared
+        || !SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1.admits(ticket_state.phase())
         || ticket_state.revision() != family.expected_ticket_revision()
     {
         return Err(TradingSbfError::Root.into());

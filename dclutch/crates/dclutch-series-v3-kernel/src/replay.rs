@@ -7,6 +7,8 @@
 
 use dclutch_core_contract::ContentId;
 
+use crate::ticket_admission_v1::SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1;
+
 use crate::generated::{
     SERIES_OCCURRENCE_MAGIC_V3, SERIES_STATE_MAGIC_V3, SERIES_TEMPLATE_MAGIC_V3,
     SERIES_TICKET_MAGIC_V3, SERIES_TICKET_STATE_MAGIC_V3,
@@ -296,7 +298,12 @@ pub enum TicketPhaseV3 {
 }
 
 impl TicketPhaseV3 {
-    fn decode(value: u8) -> Result<Self, SeriesStateError> {
+    /// Hostile-decode one persisted phase byte.
+    ///
+    /// `pub(crate)` for `ticket_admission_v1`'s `the_bit_index_is_the_wire_tag`,
+    /// which pins the admission bit index against the decoder rather than
+    /// against a second hand-written numbering.
+    pub(crate) fn decode(value: u8) -> Result<Self, SeriesStateError> {
         match value {
             0 => Ok(Self::Prepared),
             1 => Ok(Self::Consumed),
@@ -399,7 +406,7 @@ impl TicketStateV3 {
         expected_revision: u64,
         terminal: TicketPhaseV3,
     ) -> Result<Self, SeriesStateError> {
-        if self.phase != TicketPhaseV3::Prepared
+        if !SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1.admits(self.phase)
             || self.revision != expected_revision
             || !terminal.terminal()
         {

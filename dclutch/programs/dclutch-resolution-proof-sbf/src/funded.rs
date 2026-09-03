@@ -58,9 +58,9 @@
 //! returns a plan.
 
 use dclutch_capability_contract::{
-    CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
-    FUNDING_LEDGER_SLOT_BYTES_V2, FundingAssetClassV1, FundingCompartment, FundingLedgerStatusV2,
-    FundingLedgerV2,
+    CapabilityManifestV1, ContentId as CapabilityContentId,
+    FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_HEADER_BYTES_V2,
+    FUNDING_LEDGER_SLOT_BYTES_V2, FundingAssetClassV1, FundingCompartment, FundingLedgerV2,
 };
 
 /// Exact width of the three-row Resolution controller subset ledger.
@@ -191,7 +191,7 @@ fn plan_funding_release(
     let failure_slot = authenticated
         .slot(escrow.entry_index)
         .map_err(|_| FundedWalkErrorV1::Funding)?;
-    if failure_slot.status() != FundingLedgerStatusV2::Active {
+    if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(failure_slot.status()) {
         return Err(FundedWalkErrorV1::Funding);
     }
     authenticated

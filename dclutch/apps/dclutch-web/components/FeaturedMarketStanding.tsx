@@ -71,7 +71,14 @@ export default function FeaturedMarketStanding() {
     return () => { cancelled = true; };
   }, [deployment, market]);
 
-  const title = market === null ? null : marketEditorialV1(market)?.title ?? null;
+  // The registry stopped writing titles for live markets, because
+  // `derivedTitleV1` writes a better one off the market's own partition -- and
+  // this component has no chain read for that and should not grow one for a
+  // link label. So the link takes the COORDINATE's common name, which is the
+  // one editorial field that survives a re-founding, and falls back to the
+  // generic phrase only when the registry knows the market by no name at all.
+  const editorial = market === null ? null : marketEditorialV1(market);
+  const title = editorial?.title ?? editorial?.coordinate?.label ?? null;
   if (market === null) {
     return <>and the first markets are being set up.</>;
   }

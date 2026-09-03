@@ -21,6 +21,7 @@ use dclutch_series_v3_kernel::{
         SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketPhaseV3,
         TicketStateSeedsV3, TicketStateV3,
     },
+    ticket_admission_v1::SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1,
 };
 use solana_program::{
     account_info::AccountInfo, clock::Clock, hash::hash, program_error::ProgramError,
@@ -248,7 +249,7 @@ fn authenticate_prestate(
         Pubkey::find_program_address(&seeds.as_slices(), frame.trading_program.key).0;
     if frame.ticket_state.key != &expected_ticket
         || ticket.ticket_record_id() != admitted_ticket.content_id()
-        || ticket.phase() != TicketPhaseV3::Prepared
+        || !SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1.admits(ticket.phase())
         || ticket.revision() != expected_ticket_revision
     {
         return Err(CoreSbfError::Reference);

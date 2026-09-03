@@ -37,6 +37,8 @@ pub mod request;
 pub mod shadow;
 /// Terminal Ticket/root retirement into the lifecycle-scoped Rent V2 sink.
 pub mod terminal;
+/// Named admissible states for one occurrence ticket's replay phase.
+pub mod ticket_admission_v1;
 
 pub use generated::{
     SERIES_MAXIMUM_MERKLE_HEIGHT_V3, SERIES_OCCURRENCE_BYTES_V3,

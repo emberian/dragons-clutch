@@ -56,9 +56,27 @@ const READINESS = ['Prepaid', 'Ready', 'Consumed'];
 // rather than being skipped: a parser that silently drops rows would report an
 // empty table as a clean one, which is the failure this whole chain exists to
 // remove.
+//
+// WHICH TABLE, though. This scanned every line in the file that began with a
+// backticked cell, which was every route row for as long as the route tables
+// were the only such table. On 2026-09-03 routes.md grew a second one --
+// "Campaign records naming routes the code does not", three cells wide,
+// emitted the moment a lane deleted a route a stale binding still names -- and
+// this generator stopped being runnable at all: it threw on the first orphan
+// row, correctly refusing to guess, with nothing wrong in the page it was
+// reading. So the section is part of the format now. A `## <label>` heading
+// with one lowercase word is a program; anything else ends the route tables,
+// and the six-cell refusal applies only inside them, where a wrong width still
+// means the format moved.
+const PROGRAM_HEADING = /^## [a-z0-9-]+$/;
 const routes = [];
+let inProgramSection = false;
 for (const line of referenceSource.split('\n')) {
-  if (!line.startsWith('| `')) continue;
+  if (line.startsWith('## ')) {
+    inProgramSection = PROGRAM_HEADING.test(line);
+    continue;
+  }
+  if (!inProgramSection || !line.startsWith('| `')) continue;
   const cells = line.slice(2, line.length - 2).split(' | ');
   if (cells.length !== 6) throw new Error(`routes.md row has ${cells.length} cells, not 6: ${line.slice(0, 120)}`);
   const route = cells[0].replace(/^`|`$/g, '');

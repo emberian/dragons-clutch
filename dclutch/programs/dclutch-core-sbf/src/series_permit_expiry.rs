@@ -21,9 +21,10 @@ use dclutch_series_v3_kernel::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, admit_occurrence_bytes, admit_ticket,
     replay::{
-        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketPhaseV3,
-        TicketStateSeedsV3, TicketStateV3,
+        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketStateSeedsV3,
+        TicketStateV3,
     },
+    ticket_admission_v1::SERIES_TICKET_EXPIRED_ADMISSIBLE_STATES_V1,
 };
 use solana_program::{
     account_info::AccountInfo, clock::Clock, hash::hash, program::invoke_signed, pubkey::Pubkey,
@@ -358,7 +359,7 @@ fn authenticate_replay(
     let expected = Pubkey::find_program_address(&seeds.as_slices(), frame.trading_program.key).0;
     if frame.ticket_state.key != &expected
         || state.ticket_record_id() != ticket.content_id()
-        || state.phase() != TicketPhaseV3::Expired
+        || !SERIES_TICKET_EXPIRED_ADMISSIBLE_STATES_V1.admits(state.phase())
     {
         return Err(CoreSbfError::Reference);
     }

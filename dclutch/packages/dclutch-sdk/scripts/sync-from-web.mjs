@@ -53,6 +53,7 @@ const SDK_OWNED_REEXPORTS = new Set([
   'lib/capabilityModel.ts',
   'lib/founding/principalCapacity.ts',
   'lib/marketDiscovery.ts',
+  'lib/marketResolution.ts',
   'lib/rationalTerminalChainV4.ts',
   'lib/directOfferAuthoring.ts',
   'lib/directMakerReplay.ts',

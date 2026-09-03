@@ -3814,3 +3814,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   market A's stale pin stated only if derivable) and PHASE-CENSUS (4th) **`a79c37de40747d3bc`** (DirectRoot / Ticket /
   FundingLedger / the Dealer RootTail machines; two-arm `match` as a selection; derive instead of needs-chain where the
   surface decodes the machine).
+
+### Lane map delta — 2026-09-03 06:15 EDT
+- COHORT-14C closed (`f7b9ccb28`, `a217c3fe2`, `5156c66bc`, `b6504b4e2`): **the seal is BY DESIGN** (decision 0005: "never
+  persisted per Market" — five release-scoped fields; every conjunct of the closure content-addressed) — the driver's two
+  inference refusals deleted, an `adopted_capability_seal_journal_v1` stage with nineteen hostiles; market B's fill refused
+  by phase (correct); **market C BL8zsFok… founded, activated, filled on the adopted seal at 1,281,582 CU** (three markets
+  share one seal; no seal transaction); the 3,693,136 residue was two errors summing to one number (a DCLTSPR1 record the
+  settle created, minus a fee overstatement); **the census watches Token-2022 accounts, L4 retires at Terminal — all seven
+  applicable laws HOLD on market B**; `cargo run` echoed the credential at BOTH scripts — binaries now. **OpenBatch is not
+  reachable and --market is not what is missing** (three laws: the General hot instruction must be Trading's top-level and
+  `build_general_hot_instruction_v3` has zero callers; every accelerator-read account is a genesis fixture with no on-chain
+  producer; the envelope's market/release set are literal fixtures). **New wall: b312ce3c4's bump projection refuses a
+  founding from HEAD against cohort-14's Core AFTER spending.** Market C's relay armed: capture 12:09:03Z (08:09 EDT),
+  settle 14:38:33Z (10:38 EDT). → HOST-SKEW **`(spawned)`** (the projection gated on the deployed Core; journey's missing
+  #[path]; the simulator's File-exists exit) and GENERAL-SESSION **`(spawned)`** (the account table by author; a devnet
+  General session driver; OpenBatch on 8ExdC1Rwb…).
+- Cuts: `722c8591c`, `ff2af5f93`, `d68224ad7`.

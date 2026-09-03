@@ -1496,3 +1496,258 @@ VIOLATED L8: unclassified moved -500000000 and the stage declared +0
   because a note that names no account is what L7 exists to refuse.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: THE SHARED SEAL IS BY DESIGN, A THIRD MARKET ADOPTED IT, AND THE FILL LANDED AT 1,281,582 CU
+
+**Devnet evidence. Not mainnet evidence.** 2026-09-03, COHORT-14C lane. The
+previous addendum recorded the shared Direct capability seal as a wall and asked
+whether it was a defect. It is not. Decision 0005 designed it that way, in those
+words, and this lane read every conjunct rather than the summary.
+
+### The verdict: BY DESIGN, and the preimage says so in five fields
+
+> "Validated-artifact evidence is persisted once per `(descriptor schema,
+> descriptor content digest, action selector, Trading interpreter semantic
+> release, Registry program)` in one Trading-owned, content-addressed,
+> write-once seal account. **It is never persisted per Market** ... The Market is
+> not a free variable in that predicate. Persisting one copy of it per Market
+> would store M copies of one fact, which is exactly what `AGENTS.md` forbids."
+> — decision 0005
+
+`CapabilitySealKeyV1` (`crates/dclutch-capability-seal-contract/src/lib.rs:364`)
+carries exactly those five fields and no Market. The previous addendum named
+`CapabilitySealRequestV1::new(action, descriptor_digest)`, which is the
+INSTRUCTION DATA, not the key — its own docstring says the other three
+coordinates "are all supplied by the executing Program from facts it
+authenticates, and none of them appears here". The Market enters
+`process_capability_seal_v1` only to produce two of the seeds,
+`root.trading_semantic_release` and `frame.registry.key`.
+
+**Every conjunct of the sealed verdict is release-scoped, read one at a time**
+out of `programs/dclutch-trading-sbf/src/hot_v3/seal.rs::validate_descriptor_closure_v1`:
+six `borrow_finalized_record` calls whose inputs are `(registry, rent, schema id,
+content digest)`; the two schema pins; the `derivation_policy ==
+lifecycle.program` equality; five decodes (`StateLifecyclePolicyV5::decode_selected`,
+`AccountProfileV2::decode`, `decode_request_profile`,
+`TransitionProgramV3::decode`, `decode_selected_effect_v4`); and two joins,
+`validate_account_profile_join_for_action(profile, action)` and
+`require_static_register_ownership_v5{profile, policy, action, request,
+transition}`. Every input is content-addressed bytes or `action`, which is a
+seed. No market, no generation, no slot, no clock, no request. The seal's own
+close route states the consequence independently: *"a seal is not per-Market, so
+paying one Market's funding would make it pay for every other Market's
+executions."*
+
+**So the defect was the driver's, and it was an inference.** `next_action_v1` had
+two refusals that both read a materialized seal as evidence about THIS session's
+journal. Neither is a fact the chain can be asked. What can be asked was already
+asked: `direct_inline_route_v3` sets `already_materialized` only for a
+Trading-owned, rent-exempt account whose bytes equal `expected_body` BYTE FOR
+BYTE. Both refusals are deleted in `f7b9ccb28`, which adds the missing case as a
+STAGE rather than a skip — `adopted_capability_seal_journal_v1` takes the
+`LookupActivation` shape (finalized, no message, no signature, no fee, no
+compute) and adds a fresh finalized read put through
+`verify_direct_inline_capability_seal_v3`. Nineteen single-field hostiles, each
+proved to refuse on its own; proved red before green.
+
+### MARKET B'S FILL IS REFUSED BY PHASE, and the refusal is upstream of the seal
+
+Market B `DUVcCGfjXzp1…` is Terminal and PAID, so `f7b9ccb28` cannot be exercised
+on it. Re-run against it, the driver refuses
+
+    Direct replay setup derivation did not match its canonical Market/request
+
+and that is **one code over eight conjuncts, two of which are true**, measured:
+
+| conjunct | declared | observed |
+| --- | --- | --- |
+| `market.phase != CorePhase::Open` | Open | **phase byte @10 = 2, Terminal** |
+| `request.expected_market_digest != hash(market_bytes)` | `167984948dcb6534e8ca0e7f6e9717d993b38eaccf03cf5f297d142bfac3e15a` | **`2f1355eee3f4909a711dbd595fa12744e14f9bf73265bfcdd1036174de3d309a`** |
+
+Both hold because settlement rewrote the Market. This is the correct result and
+it is recorded rather than worked around. It is also `AGENTS.md`'s `map_err`
+shape met from the reader's side: `derive_direct_replay_setup_accounts_v1`
+already knows which of eight it was.
+
+### MARKET C, founded fresh, and THE FIRST ADOPTED SEAL
+
+| | |
+| --- | --- |
+| Open Market | `BL8zsFokbz7aEdo3wjtcNffd5P1D8a9wVxwKq3mcMsMN` — 368 B `DCLTCOR3`, phase `0x01` Open, readiness `0x02` Consumed |
+| Found37 Market | `7UwM3LAbE4r4bPg7UfY7M8xtDPm4to4fepRgWNTgJj4e` |
+| collateral mint / wallet | `41aK1jNeLtWcS9WHzbG51551TigCSasDLzCYtns62mbj` / `5eEH4SK9Go5T7kVzSUDfndADD5mafgL7h6ZGahdm9yjM` |
+| Claims aggregate / Hoard | `5Bi85mJQo2w8aBP9sPiV235MM21pRcHnMe9pyJwVFixy` / `Cjzv4FZBB56K9wPNXeHk3QWcbrxRNhq9sUZcBSVoCzXP` |
+| activation root | `3GGubATR1TtPA6asxvtGhfLp8m9bJVdv8BccEBpQdV2z`, verdict `ACTIVATED`, generation 2, deadline slot 492,641,655 |
+| DCLTGMF3 frozen table | `8k7W2igb3K9iArzSbj866Ze8wbPPRpzc4kDX7VyeT98V`, authority `None`, 62 addresses |
+| cuts / anchor | 9850,10250 over 100, anchor 10052 — spot read off `7UVimffxr9ow…` at 09:02:39Z: $100.520690, conf ±$0.019310, EMA $100.696082, 19 s old |
+
+**The capability-seal stage is FINALIZED with no transaction at all**, at slot
+492,437,155, and its expected and finalized poststates are both
+
+    8xLR5VesJFp9rEBteFEqW8VrQXELSFtNYdDBSPQWZEVE
+    968 bytes, Trading-owned, 6,940,968 lamports, sha256 4aed350f7fce989867ef9590868a8e4600939d65b63f8b8bad7aa8e5ca00dcfc
+
+— **the seal COHORT-14'S MARKET A created**. Three markets now share one seal,
+which is what decision 0005 says a seal is for.
+
+### THE FILL, on a seal this session did not write
+
+| | |
+| --- | --- |
+| signature | `4Pr3tdp9yTPkDyinnjZeT8XAghZDHsGJWhKeCaowmmpSrBLbJMFGKbz3ccunCVF9dXfTj4syq56btHRqtMa13iXE` |
+| slot / **CU** / fee | 492,437,260 / **1,281,582** / 15,000 |
+| geometry | 4 static + 57 loaded = 61 unique, 1,167 wire bytes |
+| ACK producer | Trading `DcsWHSjPTTpYzXScmB5xYh3iEsM9fx4YFC1BPvQggEtu` |
+| fill / price / fee rate | 200 atoms at 1,000,000 / 1,000,000, 50 bps per side |
+
+**1,281,582 against cohort-14's 1,284,573 is −2,991 CU**, on a byte-identical
+route: the difference is the seal stage's absence from this session's own
+history, not a cheaper execution. The setup halves came in at 161,984
+(replay-setup) and 113,919 (token-setup) against 182,983 and 112,415.
+
+**And the evidence distinguishes the two histories without a new field.**
+`direct-trade-finalized.json` carries eight mutation rows — replay-setup,
+token-setup, lookup-create, three lookup-extends, lookup-freeze, hot — and **no
+`capability-seal` row**, while `capabilitySealSha256` names `4aed350f…` exactly.
+A session that WROTE its seal carries that row with a signature, a fee and a CU
+count; a session that adopted one carries none. The distinction is a transaction
+record, not an assertion.
+
+### THE HOST DRIVER AT HEAD CANNOT FOUND A MARKET ON THE DEPLOYED COHORT
+
+The first attempt refused, **after spending 0.139 SOL and after creating the
+canonical Found37 Market**:
+
+    the Market the chain holds carries bump tail StateBumpsV1 { ..., product_graph:
+    ProductGraphBumpsV1([0, 0, 0, 0, 0, 0, 0, 0]) }, and this driver predicts
+    ProductGraphBumpsV1([254, 255, 255, 255, 255, 255, 253, 255])
+
+`b312ce3c4` — *"the Market records the Product graph's eight bumps in four
+reserved bytes"* — landed 2026-09-03 00:51, and the cohort's deployed bytes are
+`8e96ec3f8`, 2026-09-02 19:44. `git merge-base --is-ancestor b312ce3c4
+8e96ec3f8` is FALSE. The deployed Core writes zeros where the host driver at HEAD
+predicts eight bumps, so **every founding from HEAD against this cohort refuses,
+and refuses only after the Market exists.** The check
+(`authenticate_core_state_encoding_v1`) is a pure prediction against a state the
+driver could read before spending a lamport.
+
+Market C was founded by a driver built at **`3ba991025` carrying only
+`f7b9ccb28`'s `direct_trade.rs` patch** — market B's exact vintage plus the seal
+adoption — and it succeeded on the first try, `FOUND_C_EXIT=0`. That is the
+proof of the diagnosis as well as the way past it. **Owed**: either the
+projection moves behind a chain-observed feature gate, or the cohort is
+redeployed; until one of those, a founding must be driven from a pre-`b312ce3c4`
+build and the drift must be said out loud.
+
+### THE STAGING SCRIPT PRINTED THE ENDPOINT CREDENTIAL, in both of its scripts
+
+`674a7873e` stopped the generator baking `--rpc-url` into the script it writes,
+and checks the emitted file. The file is clean; the RUN is not, and the check
+cannot see it: `cargo run` echoes its exec line before it execs. Measured
+tonight — the live Helius key landed on line one of this lane's staging log, and
+the job directory had to be swept. **Both sites had it**, and the second is the
+one worth naming: the emitted `open-market.execute.sh` writes `--rpc-url
+"$DCLUTCH_RPC_URL"` rather than a literal, which is what makes the value test
+pass, and the shell expands that variable before cargo sees it. A file clean at
+rest and loud in flight is worse than one honestly dirty, because the check that
+exists says it is safe. `a217c3fe2` builds once and calls the built binary at
+both sites; re-staging market C with the fix put the key in the log **zero**
+times.
+
+### THE CENSUS: EVERY LAW BY NAME, AND THE 3,693,136 LOCATED
+
+**The residue was two errors summing to one number**, found by reading the
+payer's own finalized history over `(492362693, 492415774]` — nine successful
+transactions — rather than by listing accounts from memory:
+
+* **+3,749,136** — a 464-byte `DCLTSPR1` record, Resolution-owned,
+  `xJAZePghCMx7xwdCc8VZhSSKj5BDWuVAUtBqtfi5Bq4`, created by the SETTLE
+  transaction `3urBdjU5…` at slot 492,412,657. Its balance is `(464 + 128) x
+  6333` **to the lamport**. Cohort-14b's note listed the three accounts the
+  PAYOUT created and missed the one the SETTLE created.
+* **−56,000** — the fee declaration. 316,000 was declared; the measured total
+  across those nine transactions is **260,000**.
+
+3,749,136 − 56,000 = **3,693,136**, exactly.
+
+Three instrument fixes landed in `5156c66bc`:
+
+1. **`ledger-census` can now bind the account a payout PAYS.** The token loops
+   called `TokenAccount::parse`, which refuses every extension suffix by design,
+   and the ATA program under Token-2022 ALWAYS adds `ImmutableOwner` — 170
+   bytes. Both loops now call `parse_base_or_immutable_owner`, the SAME
+   admission the chain (`token_svm/profile.rs`) and the operator
+   (`wallet_terminal_payout_v3.rs`) already share.
+2. **L4 retires at Terminal, by name, on a phase read off the chain.** A new
+   optional `--market` binds the Core Market; the phase decides applicability
+   and the Market is deliberately NOT added to the watched set, because
+   admitting an account to the aperture makes L7 inapplicable at that boundary.
+   `inapplicable`, never `holds`.
+3. Both are proved by a partition test: an under-collateralised OPEN market, a
+   founding one, and a census with no Market bound all still go red.
+
+**The re-run, on market B, chained from `cohort14b-post-token-setup`:**
+
+| stage | verdict |
+| --- | --- |
+| `cohort14c-post-payout-complete` | **L1 HOLDS** — tracked 1,000,000,000 == Mint supply, six accounts; L2/L3/L5/L6/L8 HOLD; **L4 INAPPLICABLE by phase**; L7 INAPPLICABLE, naming the one account the aperture admitted |
+| `cohort14c-terminal-rest` | **all seven applicable laws HOLD, L4 INAPPLICABLE by phase, exit 0** |
+
+`L7 HOLDS: the payer moved -31,957,691 lamports, its transactions paid 755,000 in
+fees, watched accounts gained -11,754,048, and 42,956,739 went outside the
+aperture; debit == credit + fee.` The `-11,754,048` is real and L7 found it: the
+two participant wallets market B watches are the SAME identities that paid
+5,877,024 each of their own PDA rent into market C. The first reading of that
+boundary declared the NET and violated by exactly the 11,754,048 it had folded
+together; both readings are kept.
+
+### OPENBATCH IS STILL NOT REACHABLE, and `--market` is not what is missing
+
+The previous addendum said what is owed is "a devnet General hot caller that
+takes a `--market`". That is true and incomplete, and the incompleteness sent
+this lane looking in the wrong place. Three laws block it, read out of the
+programs:
+
+1. `authenticate_top_level` requires the **top-level instruction's program id to
+   equal the account at `ADMITTED_TRADING_PROGRAM_ACCOUNT_V3`**
+   (`TopLevelProgramNotTrading`). On a real chain that must be a deployed
+   executable. Cohort-14 deployed seven roles plus the accelerator
+   `8pgnyNvgdue7Jc8aw75BGWoghsKGevWJvFom8omUWvQY` at slot 491,959,038;
+   `dclutch-general-accelerator-test-caller-sbf` is **not deployed**, and
+   Trading's own `build_general_hot_instruction_v3` has zero callers (`M-40`).
+2. Every account the accelerator reads — the request account and each runtime
+   coordinate page — is written by `write_genesis_account_v1` as a **validator
+   genesis fixture**. There is no genesis on devnet, a host cannot write into an
+   account it does not own, and neither program has an instruction that writes
+   them. Worth recording precisely because it is NOT an ownership law: the
+   caller checks only `!is_signer && !is_writable && !executable` on the request
+   account and `runtime_accounts` checks nothing at all, so what is missing is a
+   PRODUCER, not a permission. Under `RequestTransportV2::Inline` there are no
+   scratch pages, so the set is exactly one request account plus
+   `general_account_profile_fixed_count_v3(OpenBatch)` runtime accounts.
+3. `general_envelope_v1` builds `HotExecutionEnvelopeV3::new(width, [0xd1; 32],
+   [0xd2; 32], 1, [0xd3; 32])`. The release set, the Market and the root
+   prestate are literal fixtures the accelerator never reads, so a `--market`
+   flag would change three constants and no reachability.
+
+**Not done, and said as owed rather than omitted.** The reachable path is the
+commit half through Trading, which is the Direct fill's machinery rebuilt for
+General; the cheap path is deploying the test caller AND giving it a write
+instruction, which is a program change.
+
+### Balances
+
+| | SOL |
+| --- | ---: |
+| campaign payer at this lane's start | 3.157323272 |
+| after the refused HEAD founding of market C | 3.018204609 |
+| after the vintage founding + activation | 2.961914481 |
+| after two admissions, the delegation and **the fill** | 2.929956790 |
+| after the certificate prepay | **2.927095270** |
+
+**0.230228002 SOL for a founded, activated, filled and relay-armed third Direct
+market**, against a 0.4 budget. The deployer was not touched.
+
+Devnet evidence. Not mainnet evidence.

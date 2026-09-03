@@ -11,8 +11,9 @@ use alloc::vec::Vec;
 
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, FundingLedgerCloseCustodyV2,
-    FundingLedgerStatusV2, FundingLedgerV2, capability_dependency_closure_mask_v1,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
+    FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2,
+    FundingLedgerCloseCustodyV2, FundingLedgerV2, capability_dependency_closure_mask_v1,
     validate_funding_ledger_masks_v2,
 };
 use dclutch_core_contract::ContentId;
@@ -520,7 +521,7 @@ fn validate_ledgers_pre(
                 if entry_index == selected_entry_index {
                     match action {
                         Action::ActivateCapability => {
-                            if slot.status() != FundingLedgerStatusV2::Pending
+                            if !FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2.admits(slot.status())
                                 || entry.activation_policy() != ActivationPolicy::PrepaidLazy
                                 || current_slot > entry.activation_deadline_slot()
                                 || slot.activation_slot() != 0
@@ -529,7 +530,7 @@ fn validate_ledgers_pre(
                             }
                         }
                         Action::CloseCapability => {
-                            if slot.status() != FundingLedgerStatusV2::Active
+                            if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status())
                                 || entry.activation_policy() != ActivationPolicy::PrepaidLazy
                             {
                                 return Err(CoreSbfError::Funding);
@@ -537,7 +538,7 @@ fn validate_ledgers_pre(
                         }
                         _ => return Err(CoreSbfError::Instruction),
                     }
-                } else if slot.status() != FundingLedgerStatusV2::Active {
+                } else if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status()) {
                     return Err(CoreSbfError::Funding);
                 }
             }

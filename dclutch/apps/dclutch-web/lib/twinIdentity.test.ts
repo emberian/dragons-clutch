@@ -77,6 +77,7 @@ const DIVERGED_MODULES: Readonly<Record<string, string>> = Object.freeze({
   'lib/operatorSurface.ts': REEXPORT,
   'lib/founding/principalCapacity.test.ts': DELIBERATE,
   'lib/marketDiscovery.ts': REEXPORT,
+  'lib/marketResolution.ts': REEXPORT,
   'lib/rationalTerminalChainV4.ts': REEXPORT,
   'lib/rationalOpenHotV3.ts': REEXPORT,
   'lib/rationalOpenChainV4.ts': REEXPORT,

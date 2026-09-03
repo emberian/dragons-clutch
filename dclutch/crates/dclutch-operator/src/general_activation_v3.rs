@@ -36,7 +36,8 @@
 
 use dclutch_capability_contract::{
     ActivationPolicy, CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
-    ContentId, FundingLedgerStatusV2, FundingLedgerV2, manifest_entry_for_ledger_row_v2,
+    ContentId, FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2,
+    FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2, FundingLedgerV2, manifest_entry_for_ledger_row_v2,
     validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{
@@ -562,16 +563,17 @@ fn require_funding_ledger_states(
             if is_selected {
                 if observed_selected
                     || (selected_active
-                        && (slot.status() != FundingLedgerStatusV2::Active
+                        && (!FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status())
                             || slot.activation_slot() == 0))
                     || (!selected_active
-                        && (slot.status() != FundingLedgerStatusV2::Pending
+                        && (!FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2.admits(slot.status())
                             || slot.activation_slot() != 0))
                 {
                     return Err(GeneralActivationErrorV3::Funding);
                 }
                 observed_selected = true;
-            } else if slot.status() != FundingLedgerStatusV2::Active || slot.activation_slot() == 0
+            } else if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status())
+                || slot.activation_slot() == 0
             {
                 return Err(GeneralActivationErrorV3::Funding);
             }

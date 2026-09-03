@@ -82,23 +82,43 @@ describe('live devnet Direct trade spine', () => {
       expect(spine.descriptorId).toMatch(/^[0-9a-f]{64}$/);
       expect(spine.outcomeCount).toBeGreaterThan(0);
       expect(spine.priceScale).toBeGreaterThan(0n);
-      // WHAT A CUT OWES A READER IS AN OPEN MARKET, not a tradable one.
+      // WHAT A CUT OWES A READER IS A MARKET THAT IS NOT PRE-OPEN, and this
+      // case pinned `Open` exactly while ITS OWN REASONING said "below Open".
       //
-      // This asserted `rootExists` and no `activation` wall, on the reasoning
-      // that headlining an unactivated market points readers at a stepper they
-      // cannot use. That stopped being true when step 1 moved outside the gate:
-      // the chain admits participants before it admits a fill, so a reader can
-      // connect, read their standing and join a market whose Direct capability
-      // is not switched on -- and cohort-13's is not. What the cut must not do
-      // is headline a market that is not Open, because then even joining is
-      // refused, and that is what this pins.
-      expect(spine.phase).toBe('Open');
-      expect(spine.walls.map((wall) => wall.name)).not.toContain('phase');
+      // The history: it first asserted `rootExists` and no `activation` wall,
+      // on the reasoning that headlining an unactivated market points readers
+      // at a stepper they cannot use -- which stopped being true when step 1
+      // moved outside the gate, because the chain admits participants before it
+      // admits a fill. It was rewritten to pin `Open`, "because below Open even
+      // joining is refused". Founding is below Open. TERMINAL IS ABOVE IT, and
+      // the literal was stronger than the sentence beside it.
+      //
+      // Cohort-14 is where the difference costs something. It has an Open market
+      // whose Pyth Receiver pin was superseded before it was founded -- it can
+      // never be captured, so its only reachable terminal is a failure walk this
+      // project has already shipped once and refuses to ship twice -- and a
+      // Terminal market that was captured inside its window, settled on a
+      // success certificate and paid a real wallet. Headlining the first because
+      // it is Open would point every reader at the market that cannot answer.
+      //
+      // So the rule is stated as the reasoning always meant it: never Founding,
+      // and then each phase is held to what it actually owes.
+      expect(spine.phase).not.toBe('Founding');
+      const answered = spine.phase === 'Terminal' || spine.phase === 'Retiring' || spine.phase === 'Retired';
+      // A market that has answered MUST carry the phase wall -- a spine that
+      // reported a resolved market as joinable would be the same lie in the
+      // other direction -- and it must not be tradable.
+      if (answered) {
+        expect(spine.walls.map((wall) => wall.name)).toContain('phase');
+        expect(spine.tradable).toBe(false);
+      } else {
+        expect(spine.walls.map((wall) => wall.name)).not.toContain('phase');
+      }
       // Every remaining wall is reported rather than assumed away, and each
       // must be one this browser has a card for: an unnamed wall would reach a
       // reader as a blank gate.
       for (const wall of spine.walls) {
-        expect(['activation', 'release', 'prestate', 'packet']).toContain(wall.name);
+        expect(['phase', 'activation', 'release', 'prestate', 'packet']).toContain(wall.name);
         report(`  wall ${wall.name}: ${wall.detail}`);
       }
       // Activation is the operator's move and has a deadline, so when it

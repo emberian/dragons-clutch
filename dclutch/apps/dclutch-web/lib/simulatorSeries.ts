@@ -1313,11 +1313,20 @@ export function holdingsReadingV1(series: SimulatorSeriesV1): HoldingsReadingV1 
         : 'One position exists on this market, so there is nothing here to rank yet.',
     });
   }
+  // `allComplete` WAS COMPUTED HERE AND NOT SAID, which is the whole shape of
+  // the defect: with one position the reading explained what a complete set is
+  // and with two it silently stopped, so a record where NOBODY is exposed read
+  // as an ordinary ranking. Cohort-14b is the first record with more than one
+  // position and every one of them uniform -- a founder holding one claim of
+  // every outcome and two strangers admitted but holding nothing -- and it is
+  // exactly the record that must not be dressed as a contest.
   return Object.freeze({
     positionCount: positions.length,
-    rankable: true,
+    rankable: !allComplete,
     allComplete,
-    sentence: `${positions.length} positions, ordered by the total claims each holds. That is a count of claims held, not a score and not a return.`,
+    sentence: allComplete
+      ? `${positions.length} positions, and not one of them is exposed to the answer: each holds the same number of claims on every outcome — a complete set, which is worth the same whatever the answer turns out to be. Ordering them ranks nothing.`
+      : `${positions.length} positions, ordered by the total claims each holds. That is a count of claims held, not a score and not a return.`,
   });
 }
 

@@ -18,6 +18,12 @@ import {
 import { marketEditorialV1, marketNarrativeV1, type MarketNarrativeV1 } from '@/lib/marketRegistry';
 import { formatWindowInstantV1, inspectMarketQuestionV1, type MarketQuestionV1 } from '@/lib/marketQuestion';
 import {
+  inspectMarketResolutionV1,
+  marketRedemptionStateV1,
+  type MarketRedemptionStateV1,
+  type MarketResolutionV1,
+} from '@/lib/marketResolution';
+import {
   marketActivationOutlookV1,
   provenanceChipV1,
   shortAddressV1,
@@ -179,6 +185,46 @@ function Realm({ collateral }: Readonly<{ collateral: MarketCollateralV1 }>) {
 type DecodedMarketV1 = Extract<MarketDiscoveryCardV1, Readonly<{ status: 'decoded' }>>;
 type DecisionStatV1 = Readonly<{ label: string; value: string; detail: string }>;
 
+/**
+ * WHAT INDEX `terminal_winner` IS, and what this site may call it.
+ *
+ * The LAST cell is proved: `bindTerminalResolutionCertificateV2` refuses a
+ * failure certificate whose selector is not `outcomeCount - 1` and refuses a
+ * success certificate whose selector is, so "the source failed to report" is a
+ * name the chain itself pins. **Every other cell is not.** The names beside
+ * them are `derivedOutcomeLabelsV1`'s, built from the market's own cut list in
+ * ascending index order -- a reasonable reading of the partition that NOTHING
+ * in this tree has joined to the number the Resolution program commits.
+ *
+ * It stopped being a theoretical gap on 2026-09-03. Cohort-14b resolved with a
+ * success certificate carrying selector 2 and a result of 10062091764 over 1,
+ * against cuts of 9900 and 10300 over a denominator of 100. Those are the
+ * numbers, and THEY ARE NOT ON ONE SCALE: the certificate carries no exponent,
+ * the Pyth quote behind it was about a hundred dollars, and reaching either
+ * "index 2 is where a hundred dollars falls" or "index 2 is where ten billion
+ * falls" requires a rescaling nothing here is entitled to perform. So the page
+ * cannot check the index claim it was making, and a claim that cannot be
+ * checked is not one this site gets to print.
+ * `docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md` reached the same
+ * wall from the other side -- "which range of the partition index 2 labels was
+ * not established here" -- and recorded both facts without a sentence joining
+ * them. This is that refusal, on the reader's side of the same gap.
+ *
+ * So an ordinary cell is named BY ITS INDEX, and `joined` is false to let the
+ * caller say why. A page that prints a wrong name confidently is worse than
+ * one that prints a number and admits what it does not know.
+ */
+export function terminalWinnerNameV1(
+  narrative: MarketNarrativeV1,
+  winner: number,
+  outcomeCount: number,
+): Readonly<{ name: string; joined: boolean }> {
+  if (outcomeCount > 0 && winner === outcomeCount - 1) {
+    return Object.freeze({ name: narrative.outcomes?.[winner] ?? 'the source-failure outcome', joined: true });
+  }
+  return Object.freeze({ name: `claim ${winner}`, joined: false });
+}
+
 export function marketDecisionStatsV1(
   decoded: DecodedMarketV1 | null,
   activation: MarketActivationOutlookV1,
@@ -194,7 +240,7 @@ export function marketDecisionStatsV1(
   }
 
   const winner = decoded.settlement.status === 'terminal'
-    ? narrative.outcomes?.[decoded.settlement.winner] ?? `claim ${decoded.settlement.winner}`
+    ? terminalWinnerNameV1(narrative, decoded.settlement.winner, decoded.liability.status === 'bound' ? decoded.liability.supplyAtoms.length : 0).name
     : null;
   const status: DecisionStatV1 = activation.status === 'never'
     ? Object.freeze({ label: 'Status', value: 'Never traded', detail: activation.reason })
@@ -315,6 +361,15 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
    * exactly as it always did.
    */
   const [derived, setDerived] = useState<MarketQuestionV1 | null>(null);
+  /**
+   * The certificate this market's own terminal-receipt slot names.
+   *
+   * A third read, and it fails alone for the same reason the question read
+   * does: a market whose certificate account cannot be reached must still
+   * render everything else, and `MarketResolutionV1` carries its own refusal
+   * with a reason rather than collapsing to null.
+   */
+  const [resolution, setResolution] = useState<MarketResolutionV1 | null>(null);
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
@@ -342,6 +397,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     setState({ kind: 'loading', message: 'Reading this market…' });
     setClock(null);
     setDerived(null);
+    setResolution(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -354,20 +410,34 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       });
       setState({ kind: 'ready', detail: next, facts, message: next.reason });
       setClock(await readSlotClockV1(client, next.floorSlot));
+      let question: MarketQuestionV1 | null = null;
       if (next.card.status === 'decoded' && next.registryProgramId !== null) {
         try {
-          setDerived(await inspectMarketQuestionV1(client, {
+          question = await inspectMarketQuestionV1(client, {
             registryProgramId: next.registryProgramId,
             address,
             productRecordId: next.card.identity.productRecordId,
             resolutionPolicyId: next.card.identity.resolutionPolicyId,
-          }));
+          });
+          setDerived(question);
         } catch {
           // Left null. The page keeps every other read it made, and each
           // surface below says plainly that this half is not on file rather
           // than pretending the market has no question.
           setDerived(null);
         }
+      }
+      if (next.card.status === 'decoded') {
+        // The window is passed when it read, so the observation's standing can
+        // be `inside` rather than `unwindowed`. Passing null is not a claim
+        // that the market has no window -- the reader has its own word for
+        // that -- so this read is never gated on the question read landing.
+        setResolution(await inspectMarketResolutionV1(client, {
+          card: next.card,
+          resolutionProgramId: deployment.programs.resolution,
+          floorSlot: next.floorSlot,
+          question: question ?? null,
+        }));
       }
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
@@ -428,13 +498,22 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
    * The answer in words, once, from the decoded settlement and the market's own
    * outcome width. Null until there is an answer to speak about.
    */
+  const terminalOutcomeCount = decoded === null || decoded.liability.status !== 'bound' ? 0 : decoded.liability.supplyAtoms.length;
+  const terminalWinner = decoded === null || decoded.settlement.status !== 'terminal'
+    ? null
+    : terminalWinnerNameV1(narrative, decoded.settlement.winner, terminalOutcomeCount);
   const terminalMeaning = decoded === null || decoded.settlement.status !== 'terminal'
     ? null
     : terminalOutcomeMeaningV1({
       winner: decoded.settlement.winner,
-      outcomeCount: decoded.liability.status === 'bound' ? decoded.liability.supplyAtoms.length : 0,
-      outcomeName: narrative.outcomes?.[decoded.settlement.winner],
+      outcomeCount: terminalOutcomeCount,
+      // ONLY A JOINED NAME. `terminalWinnerNameV1` explains why an ordinary
+      // cell's derived label may not be the cell the certificate selected;
+      // handing one to this sentence would put the unchecked join inside the
+      // page's most confident paragraph.
+      outcomeName: terminalWinner?.joined === true ? terminalWinner.name : undefined,
     });
+  const redemption = decoded === null ? null : marketRedemptionStateV1(decoded);
   const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, narrative, detail?.phaseMeaning ?? null, derived, nowMs);
 
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
@@ -470,6 +549,61 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       <p><strong>{terminalMeaning.headline}</strong></p>
       <p>{terminalMeaning.forTheWinners}</p>
       <p>{terminalMeaning.forEveryoneElse}</p>
+    </section>}
+
+
+    {/* WHAT IT RESOLVED ON, which is the question a prediction market exists to
+        answer and which this page could not answer at all until the certificate
+        the Market itself names was followed. Cohort-13 resolved with no
+        observation and cohort-14b resolved on a price read inside its own
+        window; both used to render as the same four words. */}
+    {resolution !== null && resolution.status !== 'not-terminal' && <section className="market-answer-meaning">
+      <h2>How it got that answer</h2>
+      {resolution.status === 'refused'
+        ? <p className="market-refusal">The Market names a resolution certificate{resolution.certificate === null ? '' : ` at ${shortAddressV1(resolution.certificate, 5)}`} and this page could not stand behind it: {resolution.reason}</p>
+        : <>
+          <p><strong>{resolution.sourceReported
+            ? 'A data source reported, and the chain settled on what it said.'
+            : 'No data source ever reported. The chain settled on the fallback outcome this market named and paid for before it opened.'}</strong>{' '}
+            The certificate is <code>{resolution.kind}</code>, read off {shortAddressV1(resolution.certificate, 5)} and joined to this Market&rsquo;s own terminal authority — same market, same generation, same selector, same receipt.</p>
+          {resolution.observation !== null && <dl className="detail-facts">
+            {/* THE CERTIFICATE'S OWN SCALE, said in the label. It carries a
+                ratio and no exponent, so this is not dollars and must not be
+                laid beside the market's cuts as though it were -- see
+                `terminalWinnerNameV1`. Rendering it anyway is right: it is the
+                number the chain committed on, and a reader who has the
+                certificate can check this against it. */}
+            <Fact label="Observed value · the certificate’s own scale" value={resolution.observation.decimal ?? `${resolution.observation.numerator} ÷ ${resolution.observation.denominator}`} title={`exact ratio ${resolution.observation.numerator}/${resolution.observation.denominator}, as the certificate carries it`} />
+            <Fact label="Reported at" value={formatWindowInstantV1(resolution.observation.atUnixSeconds)} title={`${resolution.observation.atUnixSeconds} seconds`} />
+            <Fact
+              label="Against its window"
+              value={resolution.observation.standing === 'inside' ? 'inside it' : resolution.observation.standing === 'unwindowed' ? 'not compared' : `${resolution.observation.standing} it`}
+              title={derived?.window == null ? 'this page did not read the window record' : `${formatWindowInstantV1(derived.window.startUnixSeconds)} to ${formatWindowInstantV1(derived.window.endUnixSeconds)}`}
+            />
+            <Fact label="Attempts" value={String(resolution.attemptIndex + 1)} />
+          </dl>}
+          <p>
+            The chain committed <strong>claim {resolution.selector}</strong>.{' '}
+            {terminalWinner?.joined === true
+              ? 'That is the source-failure cell, which is the one index the certificate itself pins: a failure certificate may carry no other, and a success certificate may not carry this one.'
+              : 'This site names it by NUMBER and not by one of the cells listed above, and that is a gap rather than caution: the cell names on this page are derived from the market\u2019s own cut list in ascending order, and nothing in this tree has joined that order to the number the Resolution program commits \u2014 the value beside it is on the certificate\u2019s own scale, which this page cannot put on the cuts\u2019 scale. Naming the cell would be a sentence nobody checked.'}
+          </p>
+          {resolution.providerEvidenceId !== null && <details className="market-detail-drawer">
+            <summary>The digests this answer is pinned to</summary>
+            <div className="market-detail-drawer-body">
+              <ContentId label="Provider evidence the certificate pins" value={resolution.providerEvidenceId} />
+              <ContentId label="Source material the certificate pins" value={resolution.sourceMaterialId} />
+            </div>
+          </details>}
+        </>}
+      {redemption !== null && redemption.status === 'read' && denomination !== null && <p>
+        {redemption.progress === 'none'
+          ? `Nothing has been cashed in yet: the vault still holds ${formatQuantityV1(redemption.heldAtoms, denomination).display} ${denominationUnitV1(denomination)} against the ${formatQuantityV1(redemption.owedAtoms, denomination).display} the winning claim is owed.`
+          : redemption.progress === 'complete'
+            ? `It has been paid out. The vault holds nothing, against ${formatQuantityV1(redemption.owedAtoms, denomination).display} ${denominationUnitV1(denomination)} the winning claim was owed \u2014 ${redemption.redeemedAtoms} atoms have left it.`
+            : `Partly cashed in: ${redemption.redeemedAtoms} atoms have left the vault and it still holds ${formatQuantityV1(redemption.heldAtoms, denomination).display} ${denominationUnitV1(denomination)}.`}
+        {' '}This is read from the vault against what the Claims aggregate says the winners are owed. The Market records no recipient, so this page names none.
+      </p>}
     </section>}
 
     <section className="trade-v3-card route-card">

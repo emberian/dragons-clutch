@@ -107,6 +107,20 @@ const MACHINES: &[Machine] = &[
         primary_constructor: "states",
         secondary: None,
     },
+    Machine {
+        admission_type: "SeriesTicketAdmissionV1",
+        label: "series-ticket",
+        primary: "TicketPhaseV3",
+        primary_constructor: "states",
+        secondary: None,
+    },
+    Machine {
+        admission_type: "FundingLedgerAdmissionV2",
+        label: "funding-ledger",
+        primary: "FundingLedgerStatusV2",
+        primary_constructor: "states",
+        secondary: None,
+    },
 ];
 
 /// Programs whose routes consult NO persisted state machine at all.

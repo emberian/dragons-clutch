@@ -1,16 +1,52 @@
 {
   "schema": "dclutch-market-registry-v1",
   "cluster": "devnet",
-  "provenance": "Coordinate names and stories are site-side editorial, because the chain carries no words for them. Titles, questions and outcome names are DERIVED from each market's own result-domain record wherever a row leaves them out, and every number, phase, address and settlement time beside them is read from the chain.",
+  "provenance": "Coordinate names and stories are site-side editorial, because the chain carries no words for them. A LIVE market's row carries nothing else: its title, question, outcome names and boundaries are derived from its own records, and every number, phase, address and settlement time beside them is read from the chain — a title written here would restate boundaries the records already carry and would go stale the moment the market was re-founded on different cuts, while a coordinate's common name never does. The rows for markets whose programs have been CLOSED keep their words, because those records can no longer be read and nothing would derive in their place.",
   "markets": {
-    "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15": {
-      "title": "SOL/USD — the first sealed market",
+    "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A": {
+      "title": null,
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
+      "resolution": "Settled from the sponsored devnet Pyth SOL/USD feed over the window its own source records stamp. Had the feed been unable to answer, it would have resolved to the source-failure outcome.",
+      "story": "The first market here to get a real answer. A price was read inside its window, its settlement certificate says the source reported, and the winner was paid into the token account their own wallet already had."
+    },
+    "FgzbVSWVp36R5AVPchneyz9AKCMzdjpRfsekUsY4tT6i": {
+      "title": null,
       "coordinate": {
         "label": "SOL/USD",
         "unitPrefix": "$"
       },
       "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "The first market here whose founding and its checked execution release share one identity by construction, at exactly 50 basis points a side. Whether trading is switched on is a chain fact this page reads live."
+      "story": "It took a trade and it can never be answered. Pyth moved its devnet price program to a new slot before this market existed, and the release this market pins names the old one, so no reading it takes can be trusted."
+    },
+    "8ExdC1RwbyuJweEqT1F6Gk9rgN87uuVaLwtaY2wmr5x": {
+      "title": null,
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
+      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
+      "story": "The first market here whose trades are chosen in batches rather than one at a time: participants submit candidates and the best valid one wins, with no claim that it is optimal. Nothing has run against it yet."
+    },
+    "BL8zsFokbz7aEdo3wjtcNffd5P1D8a9wVxwKq3mcMsMN": {
+      "title": null,
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
+      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
+      "story": "Open, and it has already taken a trade. Its price release was re-read from the live chain the same way its resolved sibling's was, so unlike the first market here it can still be answered."
+    },
+    "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15": {
+      "title": null,
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
+      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
+      "story": "It never got a price. The release it pinned was already stale when it was founded, so it settled on its source-failure outcome and the founder kept the pot. The programs that ran it are closed; it stays readable."
     },
     "EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1": {
       "title": "SOL/USD — which side of $98 and $102",

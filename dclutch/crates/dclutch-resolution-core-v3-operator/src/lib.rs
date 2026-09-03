@@ -18,7 +18,8 @@ pub mod provider_finalized_projection_v3;
 use dclutch_capability_contract::{
     CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerCloseCustodyV2, FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
+    FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2,
+    FundingLedgerCloseCustodyV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
@@ -2650,11 +2651,12 @@ fn authenticate_pending_funding(
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     for entry_index in 0_u16..manifest.entry_count() {
         if selected_mask & (1_u16 << entry_index) != 0
-            && authenticated
-                .slot(entry_index)
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
-                .status()
-                != FundingLedgerStatusV2::Pending
+            && !FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2.admits(
+                authenticated
+                    .slot(entry_index)
+                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+                    .status(),
+            )
         {
             return Err(ResolutionCoreOperatorErrorV3::Funding);
         }
@@ -3488,12 +3490,12 @@ fn authenticate_active_funding_ledger(
         .authenticate(manifest_id, manifest)
         .map_err(|_| refuse("manifest binding"))?;
     for entry_index in entries {
-        if authenticated
-            .slot(entry_index)
-            .map_err(|_| refuse("slot read"))?
-            .status()
-            != FundingLedgerStatusV2::Active
-        {
+        if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(
+            authenticated
+                .slot(entry_index)
+                .map_err(|_| refuse("slot read"))?
+                .status(),
+        ) {
             return Err(refuse("entry not Active"));
         }
         if manifest

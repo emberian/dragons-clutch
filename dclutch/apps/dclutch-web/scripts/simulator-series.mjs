@@ -1,7 +1,20 @@
 #!/usr/bin/env node
 // Capture the load simulator's own record as two files this site can serve.
 //
-//   node scripts/simulator-series.mjs [--work <dir>] [--points <n>] [--check]
+//   node scripts/simulator-series.mjs [--work <dir>] [--census <file>] \
+//                                      [--points <n>] [--check]
+//
+// `--census` NAMES THE OBSERVATION ARRAY INSTEAD OF FINDING IT. The default is
+// the newest `<work>/census/cycle-NNN.json`, which is right for a poller that
+// numbers its own cycles. A cohort's resolution chain is censused by
+// `ledger-census` directly, at boundaries a poller never drove -- `--prior`
+// makes each file reload its predecessor and append, exactly as the poller's
+// does -- so those files are the same `ObservationV1` array under a different
+// name, and this flag is the only thing that stood between them and a chart.
+// Everything downstream already handled a named boundary: `cycle` has been the
+// census's own order rather than a number parsed out of a stage name since the
+// chained-census fix, and `recorded_at` is null for any stage no journal
+// covers.
 //
 // WHY THIS EXISTS AT ALL. The simulator writes its status and its journals into
 // a work directory outside the repository, and the publish path is
@@ -80,11 +93,12 @@ function usage(message) {
 }
 
 function args(argv) {
-  const out = { work: DEFAULT_WORK, points: DEFAULT_POINTS, check: false };
+  const out = { work: DEFAULT_WORK, census: null, points: DEFAULT_POINTS, check: false };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--check') out.check = true;
     else if (flag === '--work') out.work = argv[i += 1] ?? usage('--work needs a directory');
+    else if (flag === '--census') out.census = argv[i += 1] ?? usage('--census needs a file');
     else if (flag === '--points') out.points = Number(argv[i += 1]);
     else usage(`unknown argument ${flag}`);
   }
@@ -145,7 +159,7 @@ function journalInstants(workDir) {
 }
 
 function main() {
-  const { work, points: keep, check } = args(process.argv.slice(2));
+  const { work, census, points: keep, check } = args(process.argv.slice(2));
 
   const statusPath = path.join(work, 'status.json');
   if (!fs.existsSync(statusPath)) throw new Error(`no status artifact at ${statusPath}`);
@@ -153,7 +167,10 @@ function main() {
   const status = JSON.parse(statusBytes.toString('utf8'));
   if (status.schema !== STATUS_SCHEMA) throw new Error(`status artifact has another schema: ${status.schema}`);
 
-  const censusPath = newestCensus(work);
+  // A named census must still be a census: the flag chooses which file, never
+  // what shape it has to be, and the array check below is the same one.
+  const censusPath = census === null ? newestCensus(work) : path.resolve(census);
+  if (!fs.existsSync(censusPath)) throw new Error(`no census artifact at ${censusPath}`);
   const observations = readJson(censusPath);
   if (!Array.isArray(observations) || observations.length === 0) {
     throw new Error(`${censusPath} is not a non-empty observation array`);

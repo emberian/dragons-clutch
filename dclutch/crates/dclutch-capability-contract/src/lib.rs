@@ -26,6 +26,8 @@ pub mod controller_funding_cleanup_receipt;
 mod generated_funding_activation_corpus;
 
 pub mod funding;
+/// Named admissible states for one funding-ledger slot's lifecycle.
+pub mod funding_admission_v2;
 /// Lean-emitted byte coordinates for the `DCLTCAP1` manifest, the `DCLTFQ01`
 /// typed funding quote, the `DCLTCFS1` funding state, and the `DCLTMOR1`
 /// opening-readiness record.
@@ -45,6 +47,7 @@ pub mod template;
 pub use controller_funding_checkpoint::*;
 pub use controller_funding_cleanup_receipt::*;
 pub use funding::*;
+pub use funding_admission_v2::*;
 pub use template::*;
 
 pub use dclutch_core_contract::ContentId;

@@ -1,6 +1,6 @@
 {
   "schema": "dclutch-simulator-series-v2",
-  "captured_at": "2026-09-02T19:11:58+00:00",
+  "captured_at": "2026-09-03T09:16:53+00:00",
   "law_ids": [
     "L1",
     "L2",
@@ -20,7 +20,7 @@
     {
       "id": "L2",
       "status": "holds",
-      "detail": "the Hoard moved 0 atoms since `load-sim-cycle-000001`, exactly as declared; it holds 500000000"
+      "detail": "the Hoard moved 0 atoms since `cohort14b-pre-fill`, exactly as declared; it holds 500000000"
     },
     {
       "id": "L3",
@@ -35,7 +35,7 @@
     {
       "id": "L5",
       "status": "holds",
-      "detail": "tracked collateral moved 0 atoms since `load-sim-cycle-000001`, exactly as declared"
+      "detail": "tracked collateral moved 0 atoms since `cohort14b-pre-fill`, exactly as declared"
     },
     {
       "id": "L6",
@@ -45,42 +45,42 @@
     {
       "id": "L8",
       "status": "holds",
-      "detail": "every compartment moved exactly as declared since `load-sim-cycle-000001`: unclassified +0"
+      "detail": "every compartment moved exactly as declared since `cohort14b-pre-fill`: unclassified +0"
     },
     {
       "id": "L7",
       "status": "holds",
-      "detail": "the payer moved -75000 lamports since `load-sim-cycle-000001`, its transactions paid 75000 in fees, watched accounts gained 0, and 0 went to nothing unwatched; debit == credit + fee"
+      "detail": "the payer moved -6495666 lamports since `cohort14b-pre-fill`, its transactions paid 150000 in fees, watched accounts gained 3711138, and 2634528 went to the 288-byte DCLCUSS1 maker custody replay HhD37zPCkqVR35np851L7AxmCzXLf2ngH6XcMNAXzCds the replay-setup step created, owned by Custody 8mWrLG2sjfzSKA3fEVBfY3RkGLTLuZZjKqDXWDuTpLbk; the two Direct token PDAs are watched and their 3711138 is already differenced; debit == credit + fee"
     }
   ],
   "positions": [
     {
       "label": "founder",
-      "address": "HKw5UzhNYxv2i4BHuGh4cuWpEjE6Nkncc5g3dpLeZYNZ",
+      "address": "4m7nwa5DSeunfweUAq6g5f1WPw9fkFrrgkj9wVueh3E2",
       "lamports": "1823904",
       "claims": [
-        "499999800",
+        "500000000",
         "500000000",
         "500000000",
         "500000000"
       ],
-      "total_claims": "1999999800"
+      "total_claims": "2000000000"
     },
     {
-      "label": "participant-2",
-      "address": "7stzBgPXpTd8mqszHfAKsGAZ9VY14Yuth5aNmmk91wAs",
+      "label": "participant-1",
+      "address": "EXR2DrEE4BFtGuCMzWs8Ye446VWD2FRwubkaGxPPXQeW",
       "lamports": "1823904",
       "claims": [
-        "200",
+        "0",
         "0",
         "0",
         "0"
       ],
-      "total_claims": "200"
+      "total_claims": "0"
     },
     {
-      "label": "participant-1",
-      "address": "EeE6FETMrrizu9oBtdMYAv4oo4YfHTsYb1LeEd1BqLye",
+      "label": "participant-2",
+      "address": "9Sv8LTYhUavEsx6A6UHxfTDEDhHKuxZypPAMkmTv2dG6",
       "lamports": "1823904",
       "claims": [
         "0",
@@ -94,42 +94,42 @@
   "collateral_holders": [
     {
       "label": "hoard",
-      "address": "8PMHP6cweSPjqpQmQurstNXKcBB855t6hXELePzdibY3",
+      "address": "BrLJBohX4W6sLe3N9z21KqRuiDKdyG7XWnRuv4sVNQFr",
       "atoms": "500000000"
     },
     {
       "label": "founder_collateral_wallet",
-      "address": "AWWxWQ2xUm86FkKcT8gXkSDiezwrAw9rJm6ED3xdeArq",
+      "address": "H3Ck3Nu35QzQxrUDtjQeif4su3xn5BXjxczUNXPZbtzH",
       "atoms": "499999799"
     },
     {
-      "label": "direct_seller_token",
-      "address": "3ir66Yi6LsLdoJD68msEeBh7xaVJ5zWUPMMRgmcRVqFU",
-      "atoms": "199"
-    },
-    {
-      "label": "direct_venue_fee_token",
-      "address": "2o8RqauePumkdm8yuEgd3aBm81xyr2XLBxarMgn1BVCs",
-      "atoms": "2"
-    },
-    {
       "label": "participant-2_delegated_collateral",
-      "address": "HJBvqz8qoUPemqDBwucnK7UgLYKsF978YNUxhqrNKkku",
+      "address": "3aEyWH1BLSRwzf4ypqNKZsDcay8xWjmDvTdrhALvu67g",
+      "atoms": "201"
+    },
+    {
+      "label": "seller_direct_token",
+      "address": "D8MrZggKwtnBXBVRwfvxPHETk2VojifT2rSpn9HudDVQ",
+      "atoms": "0"
+    },
+    {
+      "label": "venue_fee_direct_token",
+      "address": "CJ4iFMbKjCXkgvxmCemcLHonHDDuFGuHHSnHj14EKMik",
       "atoms": "0"
     }
   ],
   "cluster": "devnet",
-  "market": "6t3ZnmRuxVKsB4NGrpiQurEwK52xSKVyNqY3tF1ner15",
+  "market": "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A",
   "mode": "finite",
   "outcome_count": 4,
   "cycles_recorded": 4,
   "points_omitted_before": 0,
-  "census_file": "cycle-000002.json",
+  "census_file": "cohort14b-post-token-setup.json",
   "points": [
     {
-      "law_statuses": "vihhiiii",
-      "stage": "load-sim-cycle-000001",
-      "slot": "492089576",
+      "law_statuses": "hihhiiii",
+      "stage": "cohort14b-pre-capture",
+      "slot": "492316234",
       "recorded_at": null,
       "supply": [
         "500000000",
@@ -144,18 +144,18 @@
         "500000000"
       ],
       "hoard_atoms": "500000000",
-      "tracked_collateral": "999999799",
+      "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
-      "payer_lamports": "1554337728",
-      "checks_held": 2,
-      "checks_broken": 1,
+      "payer_lamports": "3188628317",
+      "checks_held": 3,
+      "checks_broken": 0,
       "checks_inapplicable": 5,
       "cycle": 1
     },
     {
-      "law_statuses": "hhhhvhii",
-      "stage": "load-sim-cycle-000002",
-      "slot": "492090355",
+      "law_statuses": "hhhhhhhh",
+      "stage": "cohort14b-post-capture",
+      "slot": "492359275",
       "recorded_at": null,
       "supply": [
         "500000000",
@@ -172,16 +172,16 @@
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
-      "payer_lamports": "1554337728",
-      "checks_held": 5,
-      "checks_broken": 1,
-      "checks_inapplicable": 2,
+      "payer_lamports": "3182068325",
+      "checks_held": 8,
+      "checks_broken": 0,
+      "checks_inapplicable": 0,
       "cycle": 2
     },
     {
       "law_statuses": "hhhhhhhi",
-      "stage": "load-sim-cycle-000001",
-      "slot": "492093581",
+      "stage": "cohort14b-pre-fill",
+      "slot": "492361122",
       "recorded_at": null,
       "supply": [
         "500000000",
@@ -198,7 +198,7 @@
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
-      "payer_lamports": "1524491622",
+      "payer_lamports": "3180202756",
       "checks_held": 7,
       "checks_broken": 0,
       "checks_inapplicable": 1,
@@ -206,8 +206,8 @@
     },
     {
       "law_statuses": "hhhhhhhh",
-      "stage": "cohort13-post-fee-settlement",
-      "slot": "492094312",
+      "stage": "cohort14b-post-token-setup",
+      "slot": "492362693",
       "recorded_at": null,
       "supply": [
         "500000000",
@@ -224,7 +224,7 @@
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
-      "payer_lamports": "1524416622",
+      "payer_lamports": "3173707090",
       "checks_held": 8,
       "checks_broken": 0,
       "checks_inapplicable": 0,

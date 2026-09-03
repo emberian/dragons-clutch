@@ -54,11 +54,15 @@ describe('the shipped devnet market registry', () => {
    * meets a tradeable market in this site's own words, so it has to promise
    * exactly what happened and nothing that has not.
    *
-   * It is also the row that proves the registry stopped being the only author.
-   * It names a TITLE, a COORDINATE and a story -- three things the chain has no
-   * word for -- and deliberately no question and no outcome list, because those
-   * restate boundaries the market's own result-domain record carries and were
-   * exactly what went stale on every market above it.
+   * It is also the row that proves the registry stopped being the only author,
+   * and cohort-14 took that one field further: it names a COORDINATE, a story
+   * and how it settles -- three things the chain has no word for -- and
+   * deliberately no TITLE, no question and no outcome list. The title went last
+   * because `derivedTitleV1` already writes a better one than a person does:
+   * "SOL/USD -- 3 ways past $99.00 and $103.00" is the market's own partition,
+   * where a hand-written title restates those boundaries and goes stale the
+   * moment the market is re-founded on different cuts. Every dead row above
+   * this one went stale in exactly that way.
    */
   it('names the market the public cut headlines, and leaves the derivable fields to the chain', () => {
     // THE ADDRESS COMES FROM THE CUT, not from a literal beside it. This case
@@ -70,14 +74,16 @@ describe('the shipped devnet market registry', () => {
     expect(featured, 'the public cut names no market to headline').not.toBeNull();
     const open = MARKET_REGISTRY_V1.markets[featured!];
     expect(open, `the cut headlines ${featured} and the registry does not name it`).toBeDefined();
-    // A coordinate name and a story: the two things the chain has no word for.
+    // A coordinate name, a story, and how it settles: what the chain has no
+    // word for.
     expect(open.coordinate?.label).toBeTruthy();
     expect(open.story).toBeTruthy();
     expect(open.resolution).toContain('Pyth');
     expect(open.resolution).toContain('source-failure outcome');
-    // And deliberately NOT a question or an outcome list: those restate
-    // boundaries the market's own result-domain record carries, and restating
-    // them is exactly what went stale on every dead row in this file.
+    // And deliberately NOT a title, a question or an outcome list: all three
+    // restate boundaries the market's own result-domain record carries, and
+    // restating them is exactly what went stale on every dead row in this file.
+    expect(open.title).toBeNull();
     expect(open.question).toBeNull();
     expect(open.outcomes).toBeNull();
   });
