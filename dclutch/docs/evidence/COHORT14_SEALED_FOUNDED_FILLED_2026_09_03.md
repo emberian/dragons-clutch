@@ -1962,3 +1962,222 @@ at all: it refuses with `ResolutionError::ProviderScale = 0x801C`.
 What this evidence is: a record of two settlements whose outcome the protocol
 could not have noticed was mis-scaled, kept beside the repair that makes the
 next one impossible.
+
+---
+
+## Addendum: MARKET C RELAYED END TO END, AND THE MIS-SCALING FINALLY TOUCHED A STRANGER
+
+**Devnet evidence. Not mainnet evidence.** 2026-09-03, RELAY-C lane. No program
+was redeployed; every deployed byte is still `8e96ec3f8`. The relay ran on the
+VINTAGE driver at `3ba991025` plus `f7b9ccb28`'s `direct_trade.rs` patch, for
+the reason the previous addendum gives: a HEAD driver predicts a Product-graph
+bump tail this cohort does not write.
+
+### The window, the seat and the release pin, checked before a lamport moved
+
+The window was read off market C's own 112-byte `DCLTWIN1` record
+`Bqgn3wJU8GLU9SZAsnoqMgCHdHUrab1c721cpGJXAtMy` — `start@48 = 1788437283`,
+`end@56 = 1788439083`, `max_age@64 = 7200`, kind 1 — never from the handoff
+table, and the schedule was recomputed from the chain's own clock.
+
+The certificate seat `91XTHXWv…` read back as **0 bytes, System-owned, holding
+exactly 2,786,520 lamports**: prepaid and unallocated.
+
+**Both conjuncts of `0x8014` were checked, not one.** The market's 592-byte
+`DCLTPSP1` release `BruLs2Hd3nWfJvFaznBoDDugZwRtR1gTDbHjDmPVVwv` carries
+
+| | pinned | live |
+| --- | ---: | ---: |
+| `receiver_config_digest` @528 | `f8aca67e2ab8d31e9be38bb0434d6e59e06871c80b744e9e0668a16f254c83a4` | `sha256` of the 370-byte Config `DaWUKXCy…` — **identical** |
+| `receiver_deployment_slot` @560 | 491,006,444 | 491,006,444 — **identical** |
+| `push_oracle_deployment_slot` @568 | 293,898,740 | 293,898,740 — identical |
+
+The push oracle is the positive control: the same convention applied to a
+program that did not move reproduces its pin.
+
+### THE CAPTURE, inside the window on attempt 1
+
+| | |
+| --- | --- |
+| signature | `3uBt7JnQHjt7nNSgd1K43PawTnNQZLmeskXMRZnBTUuR21wBd5feHKgDK8fiNxrAFWmnQZ2V8ZKo8mRu3jLMGDng` |
+| slot / CU / fee | 492,491,288 / **140,019** / 75,000 |
+| fired at | 12:09:12 UTC, **1,731 s of window left** |
+| guard | chain clock 1788437346 inside [1788437283, 1788439083], verdict `due` |
+| candidate | `EtYd4x3MKcyc7AdV9hf1v19NZeT12WAWzzAUsTjA5EEV` — 432 B `DCLTSPC1`, Resolution-owned, 3,546,480 lamports |
+| head | `9ZSrUsT5DLFA3fhDgfwSnVVt9BoMPcjENWzuHj1qCHLT` — 336 B `DCLTSPH1`, 2,938,512 lamports |
+| **the verifier** | the candidate's own `publish_time` **1788437299**, sixteen seconds after the window opened, and `snapshot_time` 1788437357 — both inside `[start, end]` |
+| the reading landed | price **10,069,107,908** at exponent −8, confidence 1,892,092 |
+
+The seat was still 0 bytes and still 2,786,520 lamports afterwards.
+
+### THE SETTLE, strictly after `end + max_age`, and the certificate is kind 1
+
+Fired 14:38:41 UTC on attempt 1, chain clock 1788446315 against a primary
+deadline of 1788446283.
+
+| | |
+| --- | --- |
+| signature | `4uxF1vqy7S4ir6gqHD4djgBtFGhH7vEFaiXxYSJGoazqsx1LKqJjDFxX74aLZsbfFVH4cwYR5h4Me6TcfyZD5MHu` |
+| slot / CU / fee | 492,545,402 / **154,152** / 75,000 |
+| certificate | `91XTHXWvXbeebg2LsL3WFVzPLtxmDd5bKconuR9wWfb2` — the prepaid seat, now 312 B `DCSRCER2`, Resolution-owned, **still holding exactly its 2,786,520** |
+| receipt | `EKdRNQzstQkiWUPK3APfexFNV5G2srPzqZke76i4i1fW` — 464 B `DCLTSPR1`, 3,749,136 lamports |
+
+**The certificate's kind byte at offset 10 reads 1**, not the 4 of
+`CERTIFICATE_RESOLUTION_FAILURE_KIND`. Its bytes 48..80 carry
+`394795f32d4ec31bcbc76b38ebddd97334f70b34796d92c43ef16e3ca982f203` — the
+re-minted release's own digest, so the certificate pins what the capture read.
+The receipt commits `selector 2`, `outcome_count 4`,
+`result_numerator 10069107908`, `result_denominator 1`.
+
+### THE CELL THE PROGRAM CHOSE, BESIDE THE CELL THE READING FALLS IN
+
+The RESOLUTION-SCALE lane's section above predicted this table before the fact
+and asked for it to be filled in from market C's own certificate. It is filled
+in, and it is market C's row:
+
+| | |
+| --- | --- |
+| cuts / denominator | `9850, 10250` over `100` — dollars, read off the 272-byte `DCLTPRD2` domain `Dfed5KdS1foQyno1s4j77pggHcEFHY1QR3ATXMxYwB3k` |
+| certificate observation | `10069107908 / 1` — raw Pyth SOL/USD mantissa at exponent **−8** |
+| **committed selector** | **2** — at or above $102.50, as the cuts read |
+| the same observation on the cuts' scale | `10069107908 / 100000000` = **$100.69107908** |
+| **the cell that reading falls in** | **1** — inside `[98.50, 102.50)`, which pays `0` |
+| atoms moved | **500,000,000** |
+
+`RELAYC_PREDICTION.md` in the job dir states this from the fixture at 10:25 UTC,
+one hour and forty-four minutes before the capture and four hours before the
+settle, and names its refutation condition — a committed selector of 1, or a
+denominator other than 1. Neither happened. The prediction was derived
+independently of the WEB lane's, from market B's own receipt
+`xJAZePghCMx7xwdCc8VZhSSKj5BDWuVAUtBqtfi5Bq4`; the two agree, and the analysis
+and repair live in `docs/design/OBSERVATION_SCALE_AUTHORITY.md`.
+
+**What is new here is not the defect. It is who it reached.** Market B's fill
+never landed, so its mis-scaled settlement moved atoms only between the founder
+and the founder. Market C was FILLED: participant-2 `92RrSCo9…` bought 200
+claims at index **1** — the cell the reading falls in — at 1,000,000/1,000,000
+with 50 bps a side. Under the deployed program those 200 claims pay **zero**.
+Under the cuts' own scale they pay 200. This is the first time the two scales
+disagree across a position a stranger paid for.
+
+### TERMINAL, read off the Market at its three offsets
+
+`--action admit-terminal`, signature
+`zrdFbSPFuq8JAvsrnZo4QDKzBBu2M6g86MaJUC3CYf2UgxYLHoTHikPKyoqguNhpXERd5baxcMnUUzow1zUnctu`,
+slot 492,550,245, **91,262 CU**, 75,000 fee.
+
+| field | offset | before | after |
+| --- | ---: | --- | --- |
+| `phase` | 10 | 1 Open | **2 Terminal** |
+| `terminal_winner` | 12 | 0 | **2** |
+| `terminal_receipt` | 328 | 32 zero bytes | **`91XTHXWvXbeebg2LsL3WFVzPLtxmDd5bKconuR9wWfb2`** |
+
+### THE PAYOUT — stated as what the deployed program pays
+
+The program pays claim index 2. **The only position holding index 2 is the
+founder's**, so the founder's `8xbxFdAb…` position is what the payout moved.
+Neither stranger is called a winner here and neither is called a loser: what is
+recorded is which claim the chain retired.
+
+`devnet-claims-custody-replay-v1` first — the payout input refuses without it.
+Replay `9mT1N9cmi9Wz23EPL7k7BYyimFsBsymtHSaLgF7Fm7W5`, signature
+`4aXbeYtXiVkAtjhYRmNSbYYwavvwvAAiaFFUD3qfjwjJo3srnCXpZSAo2A7jG1Hyeh7wFoMig3o86Rpq43H67KdW`,
+slot 492,550,558, **182,377 CU**, read back at revision 1 in the Claims role.
+
+The destination was created with the ATA program against Token-2022, signature
+`3SyjsYgrQe5JBJKiG7gSTiDnRmvRLKCV2wqnbKzCADtzgC5sYSgf4uMmsYGjSBKK1WKjFNyqDorvgmFxFDYDbPxJ`.
+Its address was derived twice — by hand and by `spl-token address` — and the
+hand derivation was validated first against market B's known
+`DsQSGKPbmJcZ89xts1Jgs1P5fprmX64fomqGFsQM1kmU`.
+
+| | |
+| --- | --- |
+| destination | `49ivrwywuf857EykQ6jba4TL1iSnM6A5xUNsQkmgbbmd` |
+| bytes before / after | **170 / 170** |
+| `ImmutableOwner` suffix before / after | `0207000000` / **`0207000000`** — byte-identical |
+| balance before / after | 0 / **500,000,000 atoms** |
+| Hoard `Cjzv4FZB…` after | **0** |
+| founder Position index 2, before / after | 500,000,000 / **0** |
+
+Six durable stages: `lookup-create` (10,469 CU), two `lookup-extend` (11,657 and
+9,601), `lookup-freeze` (1,517), `lookup-activation`, and the payout itself —
+signature
+`fqcRNCVt3bEt688jenrD6GAypewBjJoLn6LGMnuQGsHPbnm9qW3iVJege9kdu9HvPfSUo39JUJkr37KVDn9aDof`,
+**350,878 CU**, 10,000 fee, over the frozen ALT
+`HYpXBwQzF7pPrC6P9jbmjcgrBLGAB2HV1cwJp4kwLJCC` (1,112 B, 7,852,920 lamports).
+
+**Both strangers' zeros are asserted from chain, not inferred.** After the
+payout the census reads `participant-1` `GV11ejGz…` as `[0, 0, 0, 0]` — it was
+admitted and never took a position — and `participant-2` `3AJv6TqF…` as
+`[0, 200, 0, 0]`, whose index-2 entry is 0. Neither was paid, and the reason is
+the claim each holds, stated above.
+
+### THE CENSUS: EVERY LAW BY NAME, AND L1 BINDS THE ACCOUNT MARKET B COULD NOT
+
+Four boundaries, the complete aperture taken BEFORE the first one:
+
+| stage | verdict |
+| --- | --- |
+| `relayc-pre-capture` | L1/L3/L4 HOLD; L2/L5/L6/L7/L8 INAPPLICABLE — no predecessor |
+| `relayc-post-capture-complete` | **all eight HOLD**, L7 naming the candidate and head rents |
+| `relayc-post-payout-complete` | L1/L2/L3/L5/L6/L8 HOLD, **L4 INAPPLICABLE by phase**, L7 declines and names the account |
+| `relayc-terminal-rest` | **all seven applicable HOLD, L4 INAPPLICABLE by phase, L7 HOLDS at zero, exit 0** |
+
+Two findings in that table.
+
+* **`VIOLATED L1` from market B's payout is CLOSED, and market C is the first
+  market to pay into a 170-byte account and still balance.** That addendum
+  reported `ledger-census` could not bind a Token-2022 account carrying
+  `ImmutableOwner` at all — `founder_associated_token is not a token account:
+  InvalidLength` — so 500,000,000 + 500,000,000 = 1,000,000,000 was arithmetic
+  a reader had to do by hand. Here it is the instrument's own sentence:
+  `HOLDS L1: tracked 1000000000 atoms across 6 accounts == Mint supply
+  1000000000`, with the ATA among the six.
+* **L7 now DECLINES where it used to guess**, naming the accounts the aperture
+  gained rather than reporting an unaccounted residue: *"this boundary admitted
+  1 account(s) the previous census did not watch (founder_associated_token), so
+  their balances have no predecessor to difference against; L7 resumes at the
+  next boundary"* — and it does resume, holding at zero across the rest. The
+  arc's arithmetic checks by hand: the payer moved
+  2,920,535,278 → 2,904,151,460 = **16,383,818**, which is 260,000 in fees over
+  nine transactions plus **16,123,818** across the four accounts this arc
+  created (receipt 3,749,136 + custody replay 2,634,528 + ATA 1,887,234 +
+  payout ALT 7,852,920). The certificate seat contributes nothing because it
+  was prepaid: it changed owner and width without changing a lamport.
+
+### THE SCHEDULER'S OWN BOUNDED WAIT WAS DEAD, AND THE SETTLE RAN ON THE FIX
+
+`devnet-sponsored-relay-schedule-v1 --wait capture` refused *"--wait needs a
+live endpoint: a replay's clock is an argument, not a chain"* against a live
+devnet endpoint. `run()` declared `connected = None` above the match on
+`(replay_window, replay_now)` and the live arm never assigned it, so the `Rpc`
+it read the window through was dropped at the end of the arm. The only
+sanctioned bounded wait on this route had never worked.
+
+`ad63dbb72` yields the connection in the match tuple — an arm cannot decline to
+produce a tuple slot — and **splits the refusal**: `wait_admission_v1` accuses
+the caller when the clock really is a replay argument, and accuses the command
+when a live schedule kept no endpoint. One sentence over two causes is what let
+the command blame the caller for its own mistake.
+
+Red to green was measured against the chain, not asserted: after the fix,
+`--wait capture --max-wait-seconds 30` with the target 7,641 s away reaches
+`wait_until_unix_seconds_v1` with a chain clock and refuses on the stated
+ceiling, having slept for nothing. **The settle then ran on it** — the wait log
+records *"the settle step is due; the chain clock reads 1788446314 against a
+planned 1788446313"*. The capture, fired before the fix was built, used a bash
+wait bounded the same way: one ceiling it refuses rather than sleeps for, one
+sleep, one re-read.
+
+### Balances
+
+| | SOL |
+| --- | ---: |
+| campaign payer at this lane's start | 2.927095270 |
+| after the capture | 2.920535278 |
+| after settle, Terminal, custody replay, the ATA and the payout | **2.904151460** |
+
+**0.022943810 SOL for the whole relay**, across eleven transactions. The
+deployer was not touched.
+
+Devnet evidence. Not mainnet evidence.

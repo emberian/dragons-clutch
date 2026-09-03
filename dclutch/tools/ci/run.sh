@@ -1649,29 +1649,75 @@ tier_locks() {
     record locks $EXIT_PREREQ_MISSING "cargo not on PATH"
     return
   fi
-  local stale=() manifest dir
+  local stale=() unproven=() other=() manifest dir checked=0 stderr
+  stderr="$(mktemp "${TMPDIR:-/tmp}/dclutch-ci-locks.XXXXXX")"
   # EVERY row runs and every row is reported; no early stop.
   while IFS= read -r manifest; do
     dir="$(dirname "$manifest")"
     [ -f "$dir/Cargo.toml" ] || continue
-    if ! (cd "$repo_root" && env -u CARGO_TARGET_DIR cargo metadata \
+    checked=$((checked + 1))
+    if (cd "$repo_root" && env -u CARGO_TARGET_DIR cargo metadata \
         --locked --offline --format-version 1 \
-        --manifest-path "$dir/Cargo.toml" >/dev/null 2>&1); then
+        --manifest-path "$dir/Cargo.toml" >/dev/null 2>"$stderr"); then
+      continue
+    fi
+    # WHICH REFUSAL THIS IS, because two of them are different facts and this
+    # tier used to report them as one. `--locked --offline` reads the LOCAL
+    # registry cache, and a fresh hosted runner has none -- so on 2026-09-03 a
+    # GitHub job reported ALL SEVENTY workspaces stale, in a tree where the true
+    # figure was one, and the message told the reader to go regenerate seventy
+    # locks. That is the shape `checks.yml` already learned for the SBOM gate,
+    # in the same repository, three weeks earlier: "the tool's classification
+    # was never wrong, its environment was".
+    #
+    # cargo says which. `because --locked was passed to prevent this` is a lock
+    # that no longer matches its manifest, and that is this tier's subject.
+    # `offline mode (via --offline)` is the registry cache lacking a package,
+    # which proves NOTHING about the lock -- so it is a 2, not a 1, and it names
+    # the one command that fixes it. Anything else is neither, and is failed
+    # loudly with cargo's own first line rather than filed under a guess.
+    if grep -qF -- 'because --locked was passed to prevent this' "$stderr"; then
       stale+=("${dir#"$repo_root"/}")
+    elif grep -qF -- 'offline mode (via ' "$stderr"; then
+      unproven+=("${dir#"$repo_root"/}")
+    else
+      other+=("${dir#"$repo_root"/}	$(head -n 1 "$stderr")")
     fi
   done < <(find "$repo_root" -name Cargo.lock -not -path '*/target/*' | sort)
+  rm -f -- "$stderr"
+
+  local row
+  if [ "${#unproven[@]}" != 0 ]; then
+    note "${#unproven[@]} of $checked workspace(s) could not be resolved OFFLINE at all:"
+    for row in "${unproven[@]}"; do note "    $row"; done
+    note "Their locks were NOT checked -- the local cargo registry cache does not"
+    note "hold the packages the lock names, so \`--offline\` refuses before"
+    note "\`--locked\` is ever consulted. Populate it and re-run:"
+    note "    for m in \$(git ls-files '*Cargo.toml'); do cargo fetch --locked --manifest-path \"\$m\"; done"
+  fi
+  if [ "${#other[@]}" != 0 ]; then
+    note "These workspaces refused for a reason that is neither:"
+    for row in "${other[@]}"; do note "    $row"; done
+  fi
   if [ "${#stale[@]}" != 0 ]; then
     note "These workspaces have a lockfile that no longer resolves:"
-    local row
     for row in "${stale[@]}"; do note "    $row"; done
     note "A member resolves through its workspace ROOT, so if '.' is listed the"
     note "others may be its cascade: fix the root lock and re-run before reading"
     note "this as ${#stale[@]} separate problems."
     note "Each is one \`cargo metadata --offline\` in a clean worktree, committed"
     note "with the manifest change that needed it."
-    record locks $EXIT_GATE_FAILED "${#stale[@]} workspace lockfile(s) do not resolve under --locked"
+  fi
+
+  if [ "${#stale[@]}" != 0 ] || [ "${#other[@]}" != 0 ]; then
+    record locks $EXIT_GATE_FAILED "$(( ${#stale[@]} + ${#other[@]} )) workspace lockfile(s) do not resolve under --locked"
     return
   fi
+  if [ "${#unproven[@]}" != 0 ]; then
+    record locks $EXIT_PREREQ_MISSING "${#unproven[@]} of $checked workspace(s) have no local registry cache to resolve against"
+    return
+  fi
+  note "$checked workspace lockfile(s) resolved"
   record locks $EXIT_PASS
 }
 

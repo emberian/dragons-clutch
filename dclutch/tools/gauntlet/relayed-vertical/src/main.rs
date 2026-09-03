@@ -41,6 +41,13 @@ mod cluster;
 #[path = "../../../local-validator/bootstrap/successor/src/collateral_release.rs"]
 #[allow(dead_code)]
 mod collateral_release;
+// `market.rs` and `campaign.rs` both call `crate::core_bump_projection::`, so
+// the subset that does not link it does not build. The journey linked it when
+// the call sites arrived; this campaign did not, and nothing built it until
+// the journey tier reached CI. Link, never fork.
+#[path = "../../../local-validator/bootstrap/successor/src/core_bump_projection.rs"]
+#[allow(dead_code)]
+mod core_bump_projection;
 #[path = "../../../local-validator/bootstrap/successor/src/direct_market.rs"]
 #[allow(dead_code)]
 mod direct_market;

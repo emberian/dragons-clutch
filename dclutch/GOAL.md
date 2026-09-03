@@ -3957,3 +3957,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   700k-token fork of the coordinator — the wrong shape, recorded in memory) was not resumed; a fresh Fable maker carries
   the orchestrator's own POSTER_BRIEF.md for ~/src/dregg-posters/2026-09-03-typst. Playwright lives at ~/tools/playwright.
 - Cuts: `fd78d9eba`.
+
+### 2026-09-03 11:45 EDT — MARKET C RELAYED END TO END, AND THE TWO SCALES DISAGREE OVER A STRANGER
+- RELAY-C closed (`ad63dbb72` the scheduler's `--wait` had refused "needs a live endpoint" against a live endpoint on every
+  invocation since it shipped — the settle ran on the fixed one; `73fa6f8e9` evidence): window read off DCLTWIN1; both
+  release-pin conjuncts verified against the live receiver; **capture 16 s into the window (140,019 CU), settle strictly
+  after end+max_age (154,152), certificate KIND 1, Terminal winner 2, founder paid 500,000,000 into a 170-byte ATA**
+  (350,878 CU). **The chain chose cell 2 comparing raw mantissa 10,069,107,908 to cuts 9850/10250 over 100; on the cuts'
+  scale the reading is $100.69 → cell 1 — the cell participant-2 bought 200 claims in and was retired at zero** — predicted
+  in writing 1 h 44 m before the capture and confirmed exactly. Census: post-capture all eight HOLD; terminal-rest all seven
+  applicable HOLD; market B's L1 now closes with the Token-2022 account bound. Cost 0.0229 SOL; candidate/head hold
+  6,484,992 recoverable lamports (left for a reader).
+- Swarmcycle 3 begins without waiting on rulings where it can: C-16 REHEARSAL **`(spawned, read-only)`** and
+  COLD-MACHINE **`(spawned; hbox under /tank)`** — the cross-host digest pair C-14 never had.
+- Cuts: `6678dcafe`.
