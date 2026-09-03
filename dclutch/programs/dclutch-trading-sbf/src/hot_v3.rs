@@ -5309,10 +5309,35 @@ fn authenticate_top_level_root_roles_from_cache_v3(
     ))
 }
 
+/// The continuation arm of the same split, and it carries the same heap guard
+/// as its sibling for the same reason.
+///
+/// IT DID NOT, AND THAT IS WHAT AN UNNAMED ABORT LOOKED LIKE.
+/// `reauthenticate_top_level_root_roles_v3` calls
+/// `require_declared_heap_ceiling_above_default_v1` as its first act -- "the
+/// heap check stays first, before anything allocates" -- and this arm, written
+/// when the continuation genuinely fit the 32 KiB default, called nothing. It
+/// stopped fitting: `365304c2d` measured this route's peak at 29,895 of 32,768
+/// on 2026-09-01, and it now needs about 33,020.
+///
+/// The 252 bytes past the default are reached by an INFALLIBLE allocation, so
+/// the run does not refuse, it ABORTS -- Trading logging "memory allocation
+/// failed, out of memory" and the runtime reporting
+/// `ProgramFailedToComplete`, which carries no code at all. Three hostiles in
+/// `registry_hot_continuation` then asserted exact refusals against that and
+/// passed on nothing, which is ledger M-38's universal donor exactly.
+///
+/// `HeapFrame` 0x4008 is the right code and `HeapExhausted` 0x4027 is not: the
+/// enum's own doc splits them on whether a grant ARRIVED. A continuation whose
+/// transaction sent no `RequestHeapFrame` never asked, so this is the "grant
+/// the transaction never asked for" end, and the remedy it names is the one the
+/// caller can act on -- send one. `waist::direct_registry_instructions` is what
+/// sends it on the harness's canonical frame.
 fn authenticate_continuation_root_roles_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<(AuthenticatedRoleReceiptV1, AuthenticatedChildProgramsV3), ProgramError> {
+    crate::entrypoint_adapter::require_declared_heap_ceiling_above_default_v1()?;
     let (trading_receipt, claims, custody) =
         authenticate_accelerator_activation_v4(frame, envelope)?;
     Ok((

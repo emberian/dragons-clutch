@@ -102,18 +102,16 @@ async fn the_hot_tail_is_measurable_on_a_diagnostically_lifted_heap() {
     let addresses = canonical_lookup_addresses(&canonical, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
 
-    let mut instructions = Vec::with_capacity(canonical.len() + 1);
-    instructions.extend(canonical);
-    // APPENDED, never prepended: the Direct native-signature path binds the
-    // ed25519 precompile and the continuation to their exact instruction
-    // indices. The runtime scans the whole message for ComputeBudget
-    // instructions, so trailing position costs nothing.
-    //
-    // ONLY the heap request. The canonical set already carries
-    // `SetComputeUnitLimit(COMPUTE_LIMIT)` at index 0 since `75d13140`, and a
-    // second one is `TransactionError::DuplicateInstruction` -- rejected during
-    // load, so the transaction never executes and `metadata` comes back `None`.
-    instructions.push(request_heap_frame(262_144));
+    // NOTHING IS APPENDED. The canonical set carries BOTH ComputeBudget
+    // instructions itself now -- `SetComputeUnitLimit(COMPUTE_LIMIT)` since
+    // `75d13140` and `RequestHeapFrame(DIRECT_HOT_HEAP_FRAME_BYTES_V1)` since
+    // 2026-09-03 -- and a duplicate of either is
+    // `TransactionError::DuplicateInstruction`, rejected during LOAD, so the
+    // transaction never executes and `metadata` comes back `None`. This file
+    // used to append the heap request and this is exactly how it reported the
+    // day the canonical frame acquired one: `expect("transaction metadata")`
+    // on a `None`, naming nothing.
+    let instructions = canonical.to_vec();
 
     let context = test.start_with_context().await;
     let blockhash = context

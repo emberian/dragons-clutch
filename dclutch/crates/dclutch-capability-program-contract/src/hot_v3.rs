@@ -24,8 +24,13 @@ pub const HOT_EXECUTION_MAGIC_V3: [u8; 8] = *b"DCLTHOT3";
 /// for this many bytes; Trading refuses by name -- not by running out of
 /// memory -- if the grant did not arrive.
 ///
-/// A continuation submission carries NO grant and must not: it fits the
-/// default, and its packet has four spare bytes of the v0 ceiling anyway.
+/// A CONTINUATION SUBMISSION CARRIES ONE TOO, as of 2026-09-03, and both halves
+/// of the sentence that used to stand here have expired. It no longer fits the
+/// default -- `365304c2d` measured its peak at 29,895 of 32,768 and it now needs
+/// about 33,020 -- and its packet no longer has four spare bytes: it has
+/// fifty-seven, because `74e044cf3` moved the System program into the lookup
+/// table and the alias projection dropped six lookup indexes before that. A
+/// `RequestHeapFrame` costs eight.
 ///
 /// The value is a measured requirement plus margin, not a guess, and it must
 /// stay a multiple of 1,024 and at most 262,144 for the runtime to honour it.

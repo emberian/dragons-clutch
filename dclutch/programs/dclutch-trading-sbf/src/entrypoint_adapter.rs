@@ -1009,12 +1009,18 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     // which is how every public caller sends a Direct trade -- makes two
     // Registry reauthentication CPIs that a Registry continuation never makes,
     // and holds their frames and receipts against an allocator that never
-    // frees. The continuation route still fits the 32 KiB default and still
-    // carries no grant; its packet has four spare bytes and could not carry one
-    // anyway. Declaring here is what makes a grant ADMISSIBLE, not required:
+    // frees. THE CONTINUATION ROUTE ASKS FOR ONE TOO now, since 2026-09-03: it
+    // stopped fitting the 32 KiB default (29,895 measured at `365304c2d`,
+    // about 33,020 now) and its packet stopped having four spare bytes (it has
+    // sixty-five, and a `RequestHeapFrame` costs eight). Both halves of the
+    // claim that used to stand here expired independently and nothing said so,
+    // because the row that would have reported it was red for the whole
+    // interval. Declaring here is what makes a grant ADMISSIBLE, not required:
     // the route that needs it asks for it, and asks
     // `require_declared_heap_ceiling_above_default_v1` to refuse by name if it did not
-    // arrive.
+    // arrive -- which BOTH arms of `authenticate_root_against_market_boxed_v3`
+    // now do, the continuation arm having carried no such call until the same
+    // day.
     if instruction_data.get(..HOT_EXECUTION_MAGIC_BYTES_V1)
         == Some(dclutch_capability_program_contract::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
     {

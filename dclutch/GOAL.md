@@ -3982,3 +3982,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   conclusions refuted mid-review and recorded. Ranked twenty leads with the scale repair shipped, tier 1 unparked, a
   tracked corroboration artifact, OpenBatch on chain, and D1. → WITNESS **`(spawned)`** for the two instrument gaps.
 - Cuts: `cdd9f022a`, `e3cb88002`.
+- CI-WRAPPER closed (eight commits: `9e3c4eeff` the release preflight read a moved gate — 12 of 27 cases had reported it;
+  a "hermetic" suite that inherited commit.gpgsign and a case that had never reached its driver; `fbe54720e` route census
+  regenerated at HEAD (both copies stale); `d56569d45` + `22845d396` the locks tier reported all 70 lockfiles stale when
+  one was — cargo's stderr was being discarded and `--offline` on a hosted runner has no registry; `89fd8bc99` fmt;
+  `a649b6168` a runner with no Lean no longer fails like a corpus drift (exit 2, NOT RUN by name); `147f3925d`/`36b6e5517`
+  the `#[path]` tripwire's fifth firing, which unmasked three host tests nobody had reached — `CARGO_MANIFEST_DIR` names the
+  consumer under #[path]). Wrapper workflow branch (+92 lines, caches warmed and the SDK's deps installed, no check
+  weakened) merged to the wrapper's main and pushed (bf5ade379). **Remaining red: the seam audit — 45 findings (27 GONE,
+  17 NEW, 1 UNREASONED), adjudication not bookkeeping** → SEAM **`(spawned)`**; and core-sbf's
+  `exact_loader_authority_initializes_once_and_cannot_update` (Custom 12289 AccountFrame) unlocalized → PROGRAMS's queue.
+- Cuts: `04300b5cc`.

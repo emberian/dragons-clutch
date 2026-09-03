@@ -95,13 +95,9 @@
 
 use dclutch_trading_sbf::TradingSbfError;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
-use solana_program::{
-    instruction::{Instruction, InstructionError},
-    pubkey::Pubkey,
-};
+use solana_program::{instruction::InstructionError, pubkey::Pubkey};
 use solana_program_test::ProgramTest;
 use solana_sdk::{signature::Signer, transaction::TransactionError};
-use solana_sdk_ids::compute_budget;
 use solana_transaction::versioned::VersionedTransaction;
 
 use dclutch_direct_hot_program_test_support::waist::{
@@ -208,26 +204,6 @@ const CONTINUATION_ROUTE_DELTA_JITTER_V1: u64 = 256;
 /// is what makes this a grid rather than a tolerance.
 const ADMISSION_ATTEMPT_CU_V1: u64 = 3_000;
 
-/// `ComputeBudgetInstruction::RequestHeapFrame(bytes)`, hand-encoded.
-///
-/// Built by hand so this evidence adds no dependency to the harness; the
-/// encoding is borsh and the discriminant is the enum's second variant, which
-/// is what `entrypoint_adapter::REQUEST_HEAP_FRAME_DISCRIMINANT` pins.
-fn request_heap_frame(bytes: u32) -> Instruction {
-    compute_budget_instruction(1, &bytes.to_le_bytes())
-}
-
-fn compute_budget_instruction(discriminant: u8, payload: &[u8]) -> Instruction {
-    let mut data = Vec::with_capacity(1 + payload.len());
-    data.push(discriminant);
-    data.extend_from_slice(payload);
-    Instruction {
-        program_id: Pubkey::new_from_array(compute_budget::ID.to_bytes()),
-        accounts: Vec::new(),
-        data,
-    }
-}
-
 /// The release waist WITHOUT `ProgramTest::set_compute_max_units`.
 ///
 /// That helper installs a whole `ComputeBudget` override on the bank, and an
@@ -311,14 +287,20 @@ async fn the_continuation_route_is_unaffected_by_a_heap_grant_and_still_fits_its
     let addresses = canonical_lookup_addresses(&canonical, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
 
-    // APPENDED, never prepended. The Direct native-signature path binds the
-    // ed25519 precompile and the continuation to their exact instruction
-    // indices, so a prepended instruction shifts both and the transaction
-    // refuses for an unrelated reason. The runtime scans the whole message for
-    // ComputeBudget instructions, so trailing position costs nothing.
-    let mut instructions = Vec::with_capacity(canonical.len() + 1);
-    instructions.extend(canonical);
-    instructions.push(request_heap_frame(262_144));
+    // NOTHING IS APPENDED ANY MORE, and that is the whole of what changed here.
+    //
+    // This test used to append `request_heap_frame(262_144)` to a canonical
+    // frame that carried none, because the question it was written to ask was
+    // what a grant BUYS a route that never requested one. The canonical frame
+    // requests one itself now -- `DIRECT_HOT_HEAP_FRAME_BYTES_V1`, at index 1,
+    // see `waist::direct_registry_instructions` -- so appending a second would
+    // not add a grant, it would REMOVE one: `admitted_heap_frame_bytes_from_sysvar_v1`
+    // refuses a second `RequestHeapFrame` outright, `lift_declared_heap_profile_v1`
+    // swallows that refusal by design ("it refuses by leaving the ceiling
+    // alone"), and the route would then run at the protocol default and abort
+    // out of memory. A test measuring that would be measuring its own second
+    // instruction.
+    let instructions = canonical.to_vec();
 
     // Not `test.start_with_context()`: a pinned substrate's programs are not
     // visible at slot 1, and `direct_case` built the maker replays around this
@@ -344,8 +326,8 @@ async fn the_continuation_route_is_unaffected_by_a_heap_grant_and_still_fits_its
     );
     // One signature plus its count byte: this transaction has a single signer.
     let wire = 1 + 64 + message.serialize().len();
-    // THIS PACKET IS THE CANONICAL CONTINUATION PLUS ONE INSTRUCTION, so it is
-    // written that way rather than as a second independent literal.
+    // THIS PACKET IS THE CANONICAL CONTINUATION, exactly, so it reads the
+    // canonical constant and adds nothing to it.
     //
     // It used to be `1_206`, restating the alias arithmetic `submit_v0_observed`
     // already carries; when `74e044cf3` moved the System program out of the
@@ -353,18 +335,13 @@ async fn the_continuation_route_is_unaffected_by_a_heap_grant_and_still_fits_its
     // THIS one did not follow. It read 1,206 against a true 1,175 from
     // 2026-09-02 until 2026-09-03 and went unnoticed, because this row was red
     // for an unrelated reason -- the builder-reproduction assertion -- the whole
-    // time. Deriving removes the second author rather than correcting it.
-    //
-    // The appended instruction is a ComputeBudget `RequestHeapFrame`: a
-    // one-byte program-id index, a one-byte empty account-index vector, and its
-    // five bytes of data behind a one-byte length. Its program id is already a
-    // static key, because the canonical frame's first instruction is a
-    // ComputeBudget `SetComputeUnitLimit`, so it adds no key.
-    const APPENDED_HEAP_FRAME_INSTRUCTION_BYTES: usize = 1 + 1 + 1 + 5;
+    // time. Deriving removed the second author rather than correcting it, and
+    // this is now the same eight bytes seen from the other side: the term this
+    // file used to ADD for its own appended instruction is inside the constant,
+    // because the frame carries that instruction itself.
     assert_eq!(
-        wire,
-        TRANSPARENT_CONTINUATION_WIRE_BYTES_V1 + APPENDED_HEAP_FRAME_INSTRUCTION_BYTES,
-        "compact Hot plus heap-request wire changed"
+        wire, TRANSPARENT_CONTINUATION_WIRE_BYTES_V1,
+        "canonical continuation wire changed"
     );
     assert!(wire <= PACKET_LIMIT);
 

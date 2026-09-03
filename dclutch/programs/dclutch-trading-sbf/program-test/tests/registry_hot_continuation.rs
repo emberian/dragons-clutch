@@ -160,6 +160,9 @@ const REGISTRY_CONTINUATION_REFUSAL_CODE: u32 = RegistryError::Continuation as u
 const TRADING_CONTENT_REFUSAL_CODE: u32 = TradingSbfError::Content as u32;
 /// `TradingSbfError::Transition`: the checked data-defined transition refused.
 const TRADING_TRANSITION_REFUSAL_CODE: u32 = TradingSbfError::Transition as u32;
+/// `TradingSbfError::ChildReceipt`: a child CPI committed and handed back a
+/// receipt that does not answer the request that asked for it.
+const TRADING_CHILD_RECEIPT_REFUSAL_CODE: u32 = TradingSbfError::ChildReceipt as u32;
 /// `TradingSbfError::NativeSignature`: instructions-sysvar or native-signature
 /// evidence was absent or not exact.
 const TRADING_NATIVE_SIGNATURE_REFUSAL_CODE: u32 = TradingSbfError::NativeSignature as u32;
@@ -608,7 +611,7 @@ async fn real_registry_refuses_aliased_ephemeral_admission_atomically() {
 #[tokio::test]
 async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
     let instructions = direct_registry_instructions(releases, &direct);
@@ -884,7 +887,7 @@ async fn assert_postjoin_hostile_rolls_back(
 async fn nonselected_claims_supply_corruption_after_real_child_commit_rolls_back() {
     let mut artifacts = elves();
     artifacts.claims = postjoin_hostile_elf("dclutch_postjoin_claims_hostile_sbf.so");
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
     assert_postjoin_hostile_rolls_back(
@@ -900,7 +903,7 @@ async fn nonselected_claims_supply_corruption_after_real_child_commit_rolls_back
 #[tokio::test]
 async fn omitted_token_close_authority_corruption_after_real_custody_commit_rolls_back() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     install_postjoin_hostile_token(
         &mut test,
         postjoin_hostile_elf("dclutch_postjoin_token_hostile_sbf.so"),
@@ -921,15 +924,31 @@ async fn omitted_token_close_authority_corruption_after_real_custody_commit_roll
 async fn omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls_back() {
     let mut artifacts = elves();
     artifacts.custody = postjoin_hostile_elf("dclutch_postjoin_custody_hostile_sbf.so");
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
+    // `ChildReceipt` 0x4020 and not `Transition`, and the disagreement is this
+    // hostile finally REACHING its subject rather than a code moving. Until the
+    // continuation carried a heap grant this case died out of memory before
+    // Custody ran, and its expectation was never tested against anything (ledger
+    // M-38). The code it names was split out of `Transition` in the interval,
+    // and this hostile is precisely the class it was split for -- its own doc's
+    // precondition is this test's own name: "the child COMMITTED -- this code is
+    // only reachable after its CPI returned success -- and then its receipt
+    // ... decoded and did not `verify_for` the request digest that asked for
+    // it." The adversary corrupts `LAST_POSTSTATE_COMMITMENT` in the replay
+    // account after the genuine Custody ACK, so `verify_custody_receipt_v3`
+    // recomputes a replay digest the receipt does not answer.
+    //
+    // Its two siblings keep `Transition` and pass: they corrupt state the
+    // transition itself reads, which is a refused state change and a different
+    // investigation.
     assert_postjoin_hostile_rolls_back(
         test,
         releases,
         direct,
         CUSTODY_PROGRAM_ID,
-        TRADING_TRANSITION_REFUSAL_CODE,
+        TRADING_CHILD_RECEIPT_REFUSAL_CODE,
     )
     .await;
 }
@@ -1364,7 +1383,7 @@ async fn an_uninitialized_custody_destination_refuses_before_any_child_runs() {
 #[tokio::test]
 async fn corrupt_profile14_root_reserved_byte_refuses_without_mutation() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
     let instructions = direct_registry_instructions(releases, &direct);
@@ -1914,7 +1933,7 @@ const REENTRANT_CHILD_DEPTH: usize = 3;
 #[tokio::test]
 async fn claims_and_custody_execute_as_children_under_a_real_continuation() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
     let instructions = direct_registry_instructions(releases, &direct);

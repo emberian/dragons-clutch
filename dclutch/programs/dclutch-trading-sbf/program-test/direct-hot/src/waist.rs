@@ -1091,7 +1091,59 @@ pub fn legacy_registry_hot_instruction(
     (outer, admission)
 }
 
-pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> [Instruction; 3] {
+/// The canonical continuation transaction: budget, heap, evidence, outer.
+///
+/// # THE HEAP REQUEST, AND WHY IT IS HERE NOW
+///
+/// It was absent, and its absence was the whole of
+/// `registry_hot_continuation`'s five reds. The control died
+/// `InstructionError(2, ProgramFailedToComplete)` with Trading logging
+/// "memory allocation failed, out of memory": this route needs about 33,020
+/// bytes and the protocol default is 32,768, and the allocation that crosses
+/// that line is infallible, so it ABORTS instead of refusing `HeapExhausted`.
+/// Three hostiles then asserted refusals against an abort and proved nothing,
+/// which is ledger M-38 exactly.
+///
+/// Two claims used to stand against putting one here and both have expired:
+///
+/// - "it fits the protocol default". It did, at `365304c2d`'s measured 29,895
+///   of 32,768 on 2026-09-01. It does not now.
+/// - "its packet has four spare bytes and could not carry one anyway". That was
+///   true when the packet was 1,228. `74e044cf3` moved the System program into
+///   the lookup table for 31 bytes and the alias projection took six more
+///   before it, so the packet is 1,167 and the spare is SIXTY-FIVE. A
+///   `RequestHeapFrame` costs eight -- one program-id index, one empty
+///   account-index vector, and five bytes of data behind a length byte -- and
+///   its program id is already a static key because the instruction above it is
+///   a ComputeBudget one. 1,175, with fifty-seven still spare.
+///
+/// Nothing is DECLARED by this that was not already: `DCLTHOT3` has been on
+/// `declares_extended_heap_profile_v1`'s list since `8ee544e4`, and
+/// `registry/hot_continuation_v2::process` forwards the Hot bytes unchanged, so
+/// the declaration cannot tell the two routes apart and never could. What was
+/// missing was the GRANT, which is the thing the adapter reads out of the
+/// instructions sysvar and the thing a route actually spends. Declaring makes a
+/// grant admissible; only asking for one makes it arrive.
+///
+/// # The index, which is not free to move
+///
+/// It goes second, for the same pair of reasons the top-level frame's does. It
+/// cannot go last: the runtime clears return data at the start of every
+/// top-level instruction, so a trailing ComputeBudget instruction erases the
+/// commit-last acknowledgement the Hot execution just produced. It cannot go
+/// silently in front either: the native-signature evidence names the index it
+/// expects the signed Registry bytes at, so the evidence is encoded for 3 here
+/// rather than left at a stale 2.
+///
+/// # A caller must not force the bank's budget
+///
+/// `ProgramTest::set_compute_max_units` installs one fixed budget and makes the
+/// runtime ignore the transaction's own ComputeBudget instructions, this
+/// request included -- while the adapter still reads the sysvar and lifts its
+/// ceiling over a mapping the runtime never widened. Use
+/// `program_test_without_forced_budget`; the `SetComputeUnitLimit` below is
+/// what a real transaction pays with and is carried for exactly that reason.
+pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> [Instruction; 4] {
     let (registry, _) = registry_hot_instruction(releases, direct.chain.hot_instruction.clone());
     let signatures = [
         direct.makers[0]
@@ -1107,7 +1159,7 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
     ];
     let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
     encode_direct_headerless_registry_native_evidence_v4_atomic(
-        2,
+        3,
         &registry.data,
         signatures,
         &mut evidence,
@@ -1124,6 +1176,15 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
                         .expect("compute limit width")
                         .to_le_bytes(),
                 );
+                data
+            },
+        },
+        Instruction {
+            program_id: compute_budget::ID,
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![1];
+                data.extend_from_slice(&DIRECT_HOT_HEAP_FRAME_BYTES_V1.to_le_bytes());
                 data
             },
         },
@@ -1198,8 +1259,10 @@ pub fn direct_top_level_instructions_with_signatures(
     //   moving Hot means re-encoding the evidence for its new index. That is
     //   what this does, rather than leaving a stale 2 behind.
     //
-    // The continuation route carries no such instruction and must not: it fits
-    // the protocol default. This route makes two Registry reauthentication CPIs
+    // The continuation route carries one too, as of 2026-09-03, and used to
+    // carry none because it fit the protocol default. It stopped fitting: see
+    // `direct_registry_instructions`. This route needs its own for a separate
+    // reason that has not changed -- it makes two Registry reauthentication CPIs
     // the other never makes and holds their frames against an allocator that
     // never frees.
     let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
@@ -1434,13 +1497,13 @@ fn record_campaign_transaction(
 /// The canonical budgeted transparent continuation packet, in wire bytes.
 ///
 /// One signature and its count byte plus the serialized v0 message of the
-/// three-instruction canonical frame: SetComputeUnitLimit, the Ed25519
-/// precompile, and the Registry continuation carrying the sealed-execution
-/// aliases. `submit_v0_observed` pins it whenever it recognizes that exact
-/// frame; `tests/hot_heap_frame_is_inert.rs` adds the one instruction it
-/// appends. The derivation of the number is in `submit_v0_observed`, beside the
-/// assertion that reads it.
-pub const TRANSPARENT_CONTINUATION_WIRE_BYTES_V1: usize = 1_167;
+/// FOUR-instruction canonical frame: SetComputeUnitLimit, RequestHeapFrame, the
+/// Ed25519 precompile, and the Registry continuation carrying the
+/// sealed-execution aliases. `submit_v0_observed` pins it whenever it
+/// recognizes that exact frame, and `tests/hot_heap_frame_is_inert.rs` reads it
+/// for the same packet. The derivation of the number is in
+/// `submit_v0_observed`, beside the assertion that reads it.
+pub const TRANSPARENT_CONTINUATION_WIRE_BYTES_V1: usize = 1_175;
 
 /// Submit one canonical v0 transaction and retain exact success metadata.
 pub async fn submit_v0_observed(
@@ -1476,18 +1539,21 @@ pub async fn submit_v0_observed(
         wire <= 1_232,
         "canonical continuation packet overflow: {wire} bytes"
     );
-    if instructions.len() == 3
+    if instructions.len() == 4
         && instructions
             .first()
             .is_some_and(|instruction| instruction.program_id == compute_budget::ID)
         && instructions
             .get(1)
+            .is_some_and(|instruction| instruction.program_id == compute_budget::ID)
+        && instructions
+            .get(2)
             .is_some_and(|instruction| instruction.program_id == ed25519_program::ID)
         && instructions
-            .get(2)
+            .get(3)
             .is_some_and(|instruction| instruction.program_id == REGISTRY_PROGRAM_ID)
         && instructions
-            .get(2)
+            .get(3)
             .is_some_and(has_canonical_sealed_execution_aliases)
     {
         // Compact native evidence references both maker keys from the exact
@@ -1501,6 +1567,14 @@ pub async fn submit_v0_observed(
         // 1,167 since 2026-09-02, and the 31 bytes are ONE key -- the System
         // program -- moving out of the static set and into the table: a static
         // key costs 32 bytes, a lookup index costs 1.
+        //
+        // 1,175 since 2026-09-03: the canonical frame carries its own
+        // `RequestHeapFrame` now, at eight bytes -- a program-id index, an empty
+        // account-index vector, and five bytes of data behind a length byte,
+        // with no key of its own because the instruction above it is already a
+        // ComputeBudget one. Fifty-seven bytes still spare against the ceiling.
+        // See `direct_registry_instructions` for why the continuation stopped
+        // fitting the protocol default heap.
         //
         // The number is a CONSTANT now rather than a literal here, because that
         // 31-byte step was applied to this pin and not to the sibling pin in
