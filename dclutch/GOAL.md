@@ -3708,3 +3708,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   against the live receiver, found a new Direct market and the General market, OpenBatch on chain, the in-window relay, an
   honest resolution, the first ATA payout.
 - Cuts: `1397f512f`, `749e72a33`.
+- DEALER closed (`9b5de611e` Custody decoded the activation cache three times per invocation — 121k → 74–78k per leg, the
+  replay cursor kept entire with reasons; `742d7b7be` **the accelerator's prelude chain rides in the request: 256,650 →
+  165,153, the invocation 399,484 → 329,984** — the design was right about the move and wrong about the channel: a witness
+  inside hash(request_bytes) yields an address no producer can derive (the campaign refused 0x4001 proving it), so it rides
+  after the request bound by `invocation_context` in the signed prefix; `authenticate_accelerator_invocation_v4` 3,904 →
+  3,456; `4bfe5394b` the note). **Every one of the partial Remove's three child routes now executes and commits; it dies
+  in the commit tail short by ~49,000** (next priced: a decode nothing reads 39k; inter-child frame builds ~108k; the
+  permission bank 15–25k). Add headroom 367–374k. **My cleanup at 22:20 destroyed this lane's live scratch** (~700
+  uncommitted lines and a capture pair) — replayed from context, 1.5 h lost; rule recorded in memory.
+  → DEALER **`(spawned)`**: the last 49,000; frontier's real-ELF hostiles; v2_generator_fresh on hbox.
+- Cuts: `a3a0222de`, `59d30010e`.
