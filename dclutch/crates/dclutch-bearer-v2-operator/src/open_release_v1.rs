@@ -67,7 +67,9 @@
 //! surface that carries a Market address, which is what makes the admission
 //! runnable against a release compiled before its Market exists.
 
-use dclutch_account_profile_contract::{lifecycle_v3::StateLifecyclePolicyV5, v2::AccountProfileV2};
+use dclutch_account_profile_contract::{
+    lifecycle_v3::StateLifecyclePolicyV5, v2::AccountProfileV2,
+};
 use dclutch_capability_program_contract::{
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
@@ -172,6 +174,26 @@ pub struct OpenCapabilityJoinedReleaseV1 {
     pub release_set: [u8; 32],
 }
 
+/// The four manifest coordinates every selectable action's descriptor must
+/// agree on.
+///
+/// A manifest entry reads these off ONE descriptor. Five actions that each
+/// carried a different capacity profile would encode, digest and join cleanly
+/// while describing four capabilities the manifest cannot name, so the
+/// coordinates are compared as one value and a disagreement is a refusal rather
+/// than a silent pick of whichever action was read last.
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct AgreedCapabilityCoordinatesV1 {
+    /// `CapabilityProgramV4::capacity_profile`, as bytes.
+    capacity_profile: [u8; 32],
+    /// `CapabilityProgramV4::root_schema`, as bytes.
+    root_schema: [u8; 32],
+    /// `CapabilityProgramV4::derivation_policy`, as bytes.
+    derivation_policy: [u8; 32],
+    /// Mutable root width the descriptor declares.
+    root_state_bytes: u32,
+}
+
 /// Authenticate one complete open-capability release from bytes alone.
 pub fn authenticate_open_capability_release_v1(
     selection: OpenCapabilityArtifactSelectionV1,
@@ -192,7 +214,8 @@ pub fn authenticate_open_capability_release_v1(
     // must be a real one rather than bytes that happen to digest correctly.
     let config = TokenBehaviorSelectionV2::decode(bytes.config).map_err(Error::TokenBehavior)?;
 
-    let set = CapabilityProgramSetV2::decode(bytes.program_set).map_err(Error::CapabilityProgramSet)?;
+    let set =
+        CapabilityProgramSetV2::decode(bytes.program_set).map_err(Error::CapabilityProgramSet)?;
     let selector_offset =
         u32::try_from(REQUEST_ACTION_OFFSET_V3).map_err(|_| Error::ArtifactGeometry)?;
     if set.selector_offset() != selector_offset
@@ -203,7 +226,7 @@ pub fn authenticate_open_capability_release_v1(
     }
 
     let mut descriptors = [[0_u8; 32]; OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1];
-    let mut agreed: Option<(([u8; 32], [u8; 32]), ([u8; 32], u32))> = None;
+    let mut agreed: Option<AgreedCapabilityCoordinatesV1> = None;
     for (ordinal, action) in OPEN_CAPABILITY_SELECTED_ACTIONS_V1.into_iter().enumerate() {
         let supplied = *bytes.actions.get(ordinal).ok_or(Error::ArtifactGeometry)?;
         if supplied.action != action {
@@ -220,8 +243,8 @@ pub fn authenticate_open_capability_release_v1(
             return Err(Error::ArtifactGeometry);
         }
 
-        let descriptor =
-            CapabilityProgramV4::decode(supplied.descriptor).map_err(Error::CapabilityDescriptor)?;
+        let descriptor = CapabilityProgramV4::decode(supplied.descriptor)
+            .map_err(Error::CapabilityDescriptor)?;
         if descriptor.kind().to_bytes() != selection.kind
             || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
             || descriptor.request_schema().to_bytes() != request_schema(action)
@@ -233,23 +256,21 @@ pub fn authenticate_open_capability_release_v1(
 
         // One selectable capability, not five: the coordinates a manifest entry
         // reads off a descriptor must be the same whichever action supplies it.
-        let observed = (
-            (
-                descriptor.capacity_profile().to_bytes(),
-                descriptor.root_schema().to_bytes(),
-            ),
-            (
-                descriptor.derivation_policy().to_bytes(),
-                descriptor.root_state_bytes(),
-            ),
-        );
+        let observed = AgreedCapabilityCoordinatesV1 {
+            capacity_profile: descriptor.capacity_profile().to_bytes(),
+            root_schema: descriptor.root_schema().to_bytes(),
+            derivation_policy: descriptor.derivation_policy().to_bytes(),
+            root_state_bytes: descriptor.root_state_bytes(),
+        };
         match agreed {
             None => agreed = Some(observed),
             Some(expected) if expected == observed => {}
             Some(_) => return Err(Error::ContentIdentity),
         }
 
-        *descriptors.get_mut(ordinal).ok_or(Error::ArtifactGeometry)? = descriptor_id;
+        *descriptors
+            .get_mut(ordinal)
+            .ok_or(Error::ArtifactGeometry)? = descriptor_id;
     }
 
     // Five actions pointing at one descriptor would encode, digest and join
@@ -264,8 +285,12 @@ pub fn authenticate_open_capability_release_v1(
         }
     }
 
-    let ((capacity_profile, root_schema), (derivation_policy, root_state_bytes)) =
-        agreed.ok_or(Error::ArtifactGeometry)?;
+    let AgreedCapabilityCoordinatesV1 {
+        capacity_profile,
+        root_schema,
+        derivation_policy,
+        root_state_bytes,
+    } = agreed.ok_or(Error::ArtifactGeometry)?;
     Ok(OpenCapabilityJoinedReleaseV1 {
         descriptors,
         kind: selection.kind,

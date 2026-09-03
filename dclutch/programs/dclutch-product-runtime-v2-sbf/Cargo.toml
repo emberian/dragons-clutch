@@ -32,17 +32,5 @@ solana-sdk = "=3.0.0"
 solana-transaction = "=4.2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-unexpected_cfgs = { level = "allow", check-cfg = ["cfg(target_os, values(\"solana\"))"] }
-
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true

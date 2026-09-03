@@ -473,6 +473,8 @@ fn short_vec_prefix_bytes(mut value: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic)]
+
     use super::*;
     use solana_address_lookup_table_interface::state::LookupTableMeta;
     use solana_message::legacy;

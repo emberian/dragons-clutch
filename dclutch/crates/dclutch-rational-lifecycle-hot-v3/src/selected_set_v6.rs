@@ -248,7 +248,7 @@ pub(crate) mod tests {
     use dclutch_rational_representation_v2_lifecycle_contract::{
         LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
     };
-    use dclutch_token_svm::{TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2};
+    use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 
     use crate::{
         RationalLifecycleCompactArtifactInputV6, RationalLifecycleCompactBundleInputV6,
@@ -431,7 +431,10 @@ pub(crate) mod tests {
         assert_eq!(decoded.selector_width(), SelectorWidthV2::U8);
 
         let mut seen = Vec::new();
-        for (ordinal, action) in RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6.into_iter().enumerate() {
+        for (ordinal, action) in RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6
+            .into_iter()
+            .enumerate()
+        {
             let entry = decoded
                 .entry(u16::try_from(ordinal).expect("ordinal"))
                 .expect("entry");
@@ -482,10 +485,9 @@ pub(crate) mod tests {
 
         // A config record other than the one the descriptors authenticate to.
         let mut foreign = set.clone();
-        foreign.token_behavior_selection =
-            TokenBehaviorSelectionV2::new(id(88), id(15))
-                .expect("other realm")
-                .to_bytes();
+        foreign.token_behavior_selection = TokenBehaviorSelectionV2::new(id(88), id(15))
+            .expect("other realm")
+            .to_bytes();
         assert_eq!(
             validate_rational_lifecycle_program_set_v6(&foreign, input),
             Err(Error::ContentIdentity)

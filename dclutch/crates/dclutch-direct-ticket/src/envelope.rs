@@ -237,7 +237,7 @@ pub fn canonical_ticket_u64_v1(value: &str, label: &str) -> Result<u64> {
 
 /// Decode canonical lowercase even-width hex.
 pub fn decode_hex_v1(value: &str, label: &str) -> Result<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(refusal(format!(
             "{label} is not canonical lowercase even-width hex"
         )));

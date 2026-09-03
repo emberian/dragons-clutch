@@ -783,6 +783,15 @@ fn registered_creation_protected_v4() -> Result<
     ])
 }
 
+/// Plan index, within one action's plan pair, of the maker-replay plan.
+///
+/// It was written as `base + 0` to say exactly this, which is a comment the
+/// compiler deletes and a lint then reports as an operation with no effect.
+/// Naming it keeps the statement and loses the arithmetic.
+const REPLAY_PLAN_OFFSET_V4: u16 = 0;
+/// Plan index, within one action's plan pair, of the registered-record plan.
+const RECORD_PLAN_OFFSET_V4: u16 = 1;
+
 /// The four bindings, rebased onto one action's plan pair.
 ///
 /// A binding names a PLAN INDEX, so the unified policy repeats them per action
@@ -793,24 +802,30 @@ fn registered_creation_bindings_v4(
     [LifecycleImmutableIdentityBindingInputV4; BINDING_COUNT],
     DirectRegisteredStateArtifactErrorV4,
 > {
+    let replay_plan = base
+        .checked_add(REPLAY_PLAN_OFFSET_V4)
+        .ok_or(DirectRegisteredStateArtifactErrorV4::Coordinate)?;
+    let record_plan = base
+        .checked_add(RECORD_PLAN_OFFSET_V4)
+        .ok_or(DirectRegisteredStateArtifactErrorV4::Coordinate)?;
     Ok([
         binding(
-            base + 0,
+            replay_plan,
             DirectMakerReplayLayoutV1::MARKET,
             REGISTERED_IDENTITY_MARKET_V4,
         )?,
         binding(
-            base + 0,
+            replay_plan,
             DirectMakerReplayLayoutV1::MAKER,
             REGISTERED_IDENTITY_REQUEST_MAKER_V4,
         )?,
         binding(
-            base + 1,
+            record_plan,
             DirectRegisteredRecordLayoutV2::MAKER,
             REGISTERED_IDENTITY_REQUEST_MAKER_V4,
         )?,
         binding(
-            base + 1,
+            record_plan,
             DirectRegisteredRecordLayoutV2::INTENT + intent::COMPACT_INTENT_MARKET_OFFSET_V2,
             REGISTERED_IDENTITY_MARKET_V4,
         )?,

@@ -7,7 +7,10 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, AdmissionStateV2, BandProfileV1, FinalizedRecordObservationV2,
     FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, ProductCompilationInputV2,
-    authoring::{AuthoredIdentitiesV1, MarketQuestionV1, compile_authored_product_records_v2},
+    authoring::{
+        AuthoredCompilationInputV1, AuthoredIdentitiesV1, MarketQuestionV1,
+        compile_authored_product_records_v2,
+    },
     build_admission_instruction_v2, compile_product_records_v2, derive_admission_receipt_v2,
 };
 use dclutch_product_runtime_v2_sbf::{AdmissionSbfErrorV2, process_instruction};
@@ -384,25 +387,27 @@ async fn run_authored_sol_usd_market(prefer_real_elf: bool) {
     let mut portfolio = vec![0_u8; portfolio_record_bytes(outcomes).expect("portfolio width")];
     let (compiled, authored) = compile_authored_product_records_v2(
         REGISTRY_PROGRAM,
-        &FoundingBeliefV1::SpotBand {
-            band,
-            plausible_half_widths: 2,
-        },
-        MAX_CELL_EX_ANTE_SHARE_BPS_V1,
-        MarketQuestionV1::CentredBands {
-            ordinary_cells: 5,
-            profile: BandProfileV1::Uniform,
-            peak_payout: 100,
-        },
-        AuthoredIdentitiesV1 {
-            product_id: id(0x51),
-            coordinate_domain_id: id(2),
-            result_unit_id: id(3),
-            claim_basis_id: id(4),
-            liability_basis_id: id(5),
-            representation_release_id: id(6),
-            mapping_release_id: id(7),
-            portfolio_denominator: 1,
+        AuthoredCompilationInputV1 {
+            belief: &FoundingBeliefV1::SpotBand {
+                band,
+                plausible_half_widths: 2,
+            },
+            ceiling_bps: MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+            question: MarketQuestionV1::CentredBands {
+                ordinary_cells: 5,
+                profile: BandProfileV1::Uniform,
+                peak_payout: 100,
+            },
+            identities: AuthoredIdentitiesV1 {
+                product_id: id(0x51),
+                coordinate_domain_id: id(2),
+                result_unit_id: id(3),
+                claim_basis_id: id(4),
+                liability_basis_id: id(5),
+                representation_release_id: id(6),
+                mapping_release_id: id(7),
+                portfolio_denominator: 1,
+            },
         },
         &mut product,
         &mut domain,

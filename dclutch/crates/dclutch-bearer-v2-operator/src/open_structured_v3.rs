@@ -45,10 +45,10 @@ use dclutch_product_payoff_v2_codec::runtime_v3::{
     BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
 };
 use dclutch_rational_representation_v2_contract::{
-    ASSET_BYTES_V3, AuthenticatedTokenBehaviorV2, CallerRoleV2,
-    OPEN_REPRESENTATION_HOT_MAGIC_V3, OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3,
-    OPEN_REPRESENTATION_HOT_VERSION_V3, PHYSICAL_ABI_VERSION_V3, REQUEST_STRUCTURED_HEADER_BYTES_V3,
-    REQUEST_MAGIC_V2, RepresentationActionV2,
+    ASSET_BYTES_V3, AuthenticatedTokenBehaviorV2, CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3,
+    OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
+    PHYSICAL_ABI_VERSION_V3, REQUEST_MAGIC_V2, REQUEST_STRUCTURED_HEADER_BYTES_V3,
+    RepresentationActionV2,
 };
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
 use dclutch_rational_representation_v2_request_contract::generated as wire;
@@ -797,7 +797,10 @@ fn encode_request_profile(
             wire::STRUCTURED_REQUEST_RECEIPT_ACCOUNT_OFFSET_V3,
             ID_RECEIPT_ACCOUNT,
         ),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (
+            wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3,
+            ID_AUTHORITY,
+        ),
         (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
     ] {
         fixed.push(RequestInstructionV1::project_identity(
@@ -823,12 +826,10 @@ fn encode_request_profile(
             scalar_common(register)?,
         ));
     }
-    for (offset, register) in [(wire::REQUEST_OUTCOME_COUNT_OFFSET_V3, SCALAR_OUTCOME_COUNT)] {
-        fixed.push(RequestInstructionV1::project_u32(
-            req_fixed(offset)?,
-            scalar_common(register)?,
-        ));
-    }
+    fixed.push(RequestInstructionV1::project_u32(
+        req_fixed(wire::REQUEST_OUTCOME_COUNT_OFFSET_V3)?,
+        scalar_common(SCALAR_OUTCOME_COUNT)?,
+    ));
     for row in 0..representation_outcome_count {
         let row_offset = REQUEST_STRUCTURED_HEADER_BYTES_V3
             .checked_add(
@@ -836,17 +837,14 @@ fn encode_request_profile(
                     .ok_or(Error::ArtifactGeometry)?,
             )
             .ok_or(Error::ArtifactGeometry)?;
-        for (offset, register) in [(
-            wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
-            ITEM_ID_ACTOR_SHARDS,
-        )] {
+        {
             fixed.push(RequestInstructionV1::project_identity(
                 req_fixed(
                     row_offset
-                        .checked_add(offset)
+                        .checked_add(wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3)
                         .ok_or(Error::ArtifactGeometry)?,
                 )?,
-                id_common(row_identity(row, register)?)?,
+                id_common(row_identity(row, ITEM_ID_ACTOR_SHARDS)?)?,
             ));
         }
         for (offset, register) in [
@@ -1039,7 +1037,10 @@ fn encode_effect(
             wire::STRUCTURED_REQUEST_RECEIPT_ACCOUNT_OFFSET_V3,
             ID_RECEIPT_ACCOUNT,
         ),
-        (wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3, ID_AUTHORITY),
+        (
+            wire::REQUEST_REPRESENTATION_AUTHORITY_OFFSET_V3,
+            ID_AUTHORITY,
+        ),
         (wire::REQUEST_TOKEN_PROGRAM_OFFSET_V3, ID_TOKEN),
     ] {
         fixed.push(EffectInstructionV3::write_request_identity(
@@ -1069,14 +1070,12 @@ fn encode_effect(
             effect_scalar_common(register)?,
         ));
     }
-    for (offset, register) in [(wire::REQUEST_OUTCOME_COUNT_OFFSET_V3, SCALAR_OUTCOME_COUNT)] {
-        fixed.push(EffectInstructionV3::write_request_u32(
-            0,
-            RequestSpaceV3::Fixed,
-            narrow_u32(offset)?,
-            effect_scalar_common(register)?,
-        ));
-    }
+    fixed.push(EffectInstructionV3::write_request_u32(
+        0,
+        RequestSpaceV3::Fixed,
+        narrow_u32(wire::REQUEST_OUTCOME_COUNT_OFFSET_V3)?,
+        effect_scalar_common(SCALAR_OUTCOME_COUNT)?,
+    ));
     for row in 0..representation_outcome_count {
         let row_offset = REQUEST_STRUCTURED_HEADER_BYTES_V3
             .checked_add(
@@ -1084,19 +1083,16 @@ fn encode_effect(
                     .ok_or(Error::ArtifactGeometry)?,
             )
             .ok_or(Error::ArtifactGeometry)?;
-        for (offset, register) in [(
-            wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
-            ITEM_ID_ACTOR_SHARDS,
-        )] {
+        {
             fixed.push(EffectInstructionV3::write_request_identity(
                 0,
                 RequestSpaceV3::Fixed,
                 narrow_u32(
                     row_offset
-                        .checked_add(offset)
+                        .checked_add(wire::ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3)
                         .ok_or(Error::ArtifactGeometry)?,
                 )?,
-                effect_id_common(row_identity(row, register)?)?,
+                effect_id_common(row_identity(row, ITEM_ID_ACTOR_SHARDS)?)?,
             ));
         }
         for (offset, register) in [
@@ -1310,7 +1306,6 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 
 #[cfg(test)]
 mod tests {
-    use dclutch_rational_representation_v2_contract::ABSENT_REVISION;
     use super::*;
     use dclutch_claims_svm::composition_v3::{
         ClaimsCompositionErrorV3, ClaimsCompositionParentV3, ClaimsCompositionV3,
@@ -1318,6 +1313,7 @@ mod tests {
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BasisInputV3, BasisKindV3, compile_basis_v3,
     };
+    use dclutch_rational_representation_v2_contract::ABSENT_REVISION;
     use dclutch_rational_representation_v2_contract::{
         AssetV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
@@ -1460,7 +1456,10 @@ mod tests {
                     + RATIONAL_OPEN_STRUCTURED_ITEM_IDENTITIES_V3 * 3
             );
             let (fixed, item) = effect.route_template(0).expect("templates");
-            assert_eq!(fixed.len(), REQUEST_STRUCTURED_HEADER_BYTES_V3 + 3 * ASSET_BYTES_V3);
+            assert_eq!(
+                fixed.len(),
+                REQUEST_STRUCTURED_HEADER_BYTES_V3 + 3 * ASSET_BYTES_V3
+            );
             assert!(item.is_empty());
             assert_eq!(
                 fixed

@@ -1581,7 +1581,7 @@ pub fn build_resolution_activate_fund_v1(
     if accounts.len() != expected_count
         || accounts.iter().any(|account| account.is_signer)
         || accounts.iter().enumerate().any(|(index, account)| {
-            account.is_writable != matches!(index, 12 | 13 | 14)
+            account.is_writable != matches!(index, 12..=14)
                 || accounts
                     .iter()
                     .skip(index.saturating_add(1))

@@ -285,8 +285,7 @@ fn require_authenticated_suffix_aliases(
             .enumerate()
             .skip(left_index.saturating_add(1))
         {
-            if left.key == right.key && !pairs.iter().any(|pair| *pair == (left_index, right_index))
-            {
+            if left.key == right.key && !pairs.contains(&(left_index, right_index)) {
                 return Err(CoreSbfError::AccountFrame);
             }
         }

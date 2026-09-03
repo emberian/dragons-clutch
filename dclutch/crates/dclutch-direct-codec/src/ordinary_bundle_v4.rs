@@ -731,7 +731,7 @@ pub(crate) mod tests {
              It embeds dclutch_market_core_codec::STATE_BYTES ({core}) at \
              coordinate 23, so any change to the Lean-emitted Market Core \
              layout restates it.\n\
-             Recomputed: {computed}\n\
+             Recomputed: {computed:02x?}\n\
              Three pinned identities move together and all three belong in \
              one commit:\n\
              - DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3, in this file\n\
@@ -740,7 +740,6 @@ pub(crate) mod tests {
              programs/dclutch-trading-sbf/program-test/direct-hot/src/lib.rs, \
              whose own tests report their recomputed values.",
             core = CORE_STATE_BYTES,
-            computed = std::format!("{computed:02x?}"),
         );
     }
 

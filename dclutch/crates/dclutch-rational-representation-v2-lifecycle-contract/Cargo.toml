@@ -13,15 +13,5 @@ dclutch-token-svm = { path = "../dclutch-token-svm" }
 [dev-dependencies]
 sha2 = { version = "=0.10.9", default-features = false }
 
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true

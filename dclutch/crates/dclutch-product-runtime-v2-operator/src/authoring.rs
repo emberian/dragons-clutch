@@ -218,17 +218,37 @@ pub fn author_product_v1(
     })
 }
 
+/// Everything the authoring step needs, in the shape
+/// [`ProductCompilationInputV2`] already states the compilation step's inputs.
+///
+/// The two steps are one call, so they take one input value; splitting the
+/// belief, the ceiling, the question and the identities back out into loose
+/// positional arguments is how a caller silently transposes two of them.
+pub struct AuthoredCompilationInputV1<'a> {
+    /// The founding belief the payoff is authored from.
+    pub belief: &'a FoundingBeliefV1,
+    /// Ex-ante share ceiling, in basis points, every cell must respect.
+    pub ceiling_bps: u32,
+    /// The question whose partition and payouts are authored.
+    pub question: MarketQuestionV1,
+    /// Canonical identities the compiled record graph is written under.
+    pub identities: AuthoredIdentitiesV1,
+}
+
 /// Author one question and compile its live V2 record graph in one step.
 pub fn compile_authored_product_records_v2(
     registry_program: Pubkey,
-    belief: &FoundingBeliefV1,
-    ceiling_bps: u32,
-    question: MarketQuestionV1,
-    identities: AuthoredIdentitiesV1,
+    input: AuthoredCompilationInputV1<'_>,
     product_output: &mut [u8],
     domain_output: &mut [u8],
     portfolio_output: &mut [u8],
 ) -> Result<(CompiledProductRecordsV2, AuthoredProductV1)> {
+    let AuthoredCompilationInputV1 {
+        belief,
+        ceiling_bps,
+        question,
+        identities,
+    } = input;
     let authored = author_product_v1(belief, ceiling_bps, question)?;
     let compiled = compile_product_records_v2(
         registry_program,
@@ -426,7 +446,7 @@ mod tests {
         }
         // The flag has teeth: the resolution-failure-cover payoff, which is
         // the one legitimate inert shape, reads as inert.
-        let inert = vec![1_u64, 1, 1, 0];
+        let inert = [1_u64, 1, 1, 0];
         let head = inert[0];
         assert!(!inert[..3].iter().any(|payout| *payout != head));
     }

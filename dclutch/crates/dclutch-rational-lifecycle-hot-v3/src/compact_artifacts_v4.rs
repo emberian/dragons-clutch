@@ -57,8 +57,7 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     compact_hot_v4::{
         RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4, RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4,
         RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4,
-        RATIONAL_LIFECYCLE_COMPACT_HOT_VERSION_V4,
-        RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4,
+        RATIONAL_LIFECYCLE_COMPACT_HOT_VERSION_V4, RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4,
         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4,
         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4,
         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_POSITION_V4,
@@ -971,7 +970,10 @@ fn encode_effect(
             write_identity(
                 at(RationalLifecycleHotLayoutV3::ITEM_CUSTODY_OWNER)?,
                 layout
-                    .row_identity(row, RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4)
+                    .row_identity(
+                        row,
+                        RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4,
+                    )
                     .ok_or(Error::InvalidLength)?,
             )?,
             write_identity(
@@ -1262,10 +1264,10 @@ mod tests {
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
+    use dclutch_rational_representation_v2_contract::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2;
     use dclutch_rational_representation_v2_contract::{
         TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
-    use dclutch_rational_representation_v2_contract::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2;
     use dclutch_rational_representation_v2_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_MAGIC_V3, DESCRIPTOR_SCHEMA_VERSION_V3,
         DescriptorAdmissionV2,
@@ -1658,6 +1660,7 @@ mod tests {
     /// value written, since the kernel keeps its offset table private -- each
     /// carrying the descriptor identity its own bytes hash to, which is the
     /// equality `validate_descriptor_admission` enforces on chain.
+    #[test]
     fn the_compact_retire_receipt_artifacts_are_market_neutral() {
         let basis = basis();
         let first_bytes = descriptor_bytes_for_market(&[0, 7, 5, 0, 9], id(71));
@@ -1748,7 +1751,9 @@ mod tests {
     }
 
     fn contains(haystack: &[u8], needle: &[u8; 32]) -> bool {
-        haystack.windows(32).any(|window| window == needle.as_slice())
+        haystack
+            .windows(32)
+            .any(|window| window == needle.as_slice())
     }
 
     #[test]

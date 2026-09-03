@@ -42,6 +42,17 @@ solana-sdk-ids = "=3.1.0"
 solana-transaction = "=4.2.0"
 spl-token-interface = "=3.0.0"
 
+# NOT `[lints] workspace = true`, and the reason is structural rather than a
+# finding about this crate. It belongs to TWO workspaces -- the root one, which
+# claims it as a path dependency of a member, and
+# `programs/dclutch-trading-sbf/program-test`, which lists it -- and only the
+# root defines `[workspace.lints]`. Inheriting therefore breaks
+# `cargo metadata --locked` for the program-test workspace ("failed to load
+# manifest for dependency"), which is the `locks` CI tier. Measured 2026-09-02.
+# The fix is a `[workspace.lints]` table in the program-test workspace root, and
+# whoever adds it must first measure `dclutch-direct-hot-program-test-support`
+# under the deny table -- currently impossible, because it sits behind
+# dealer-codec and trading-sbf in tools/ci/clippy-debt.tsv.
 [lints.rust]
 unsafe_code = "forbid"
 

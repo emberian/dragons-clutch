@@ -122,6 +122,12 @@ solana-message = { version = "=3.1.0", features = ["bincode"] }
 #
 # Every other lint is byte-identical to `[workspace.lints]` in the root
 # Cargo.toml. Keep them in step.
+# NOT `[lints] workspace = true`, for one reason: `unsafe_code` is `deny` here
+# and `forbid` in the workspace table, and `entrypoint_adapter` carries a single
+# `#[allow(unsafe_code)]` on its `mod` declaration (lib.rs:88) for the raw
+# syscall and heap-scratch boundary. `forbid` cannot be overridden, so inheriting
+# would stop this program compiling. Every other line below is the deny table
+# verbatim and must be updated by hand if the root one moves.
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "deny"

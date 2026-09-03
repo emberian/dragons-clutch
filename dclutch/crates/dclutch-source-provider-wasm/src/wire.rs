@@ -1174,6 +1174,8 @@ impl<'de> Visitor<'de> for ExactJsonValueVisitorV1 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use serde_json::json;
 
@@ -1303,7 +1305,9 @@ pub fn read_sponsored_price_update_json_v1(source: &[u8]) -> Result<String, Stri
     let receiver = exact_key(&wire.receiver_program, "receiver program")?;
     let address = exact_key(&wire.price_update.address, "price update")?;
     if exact_key(&wire.price_update.owner, "price update owner")? != receiver {
-        return Err("Source provider price update is not owned by the named receiver program".to_owned());
+        return Err(
+            "Source provider price update is not owned by the named receiver program".to_owned(),
+        );
     }
     if wire.price_update.executable {
         return Err("Source provider price update is executable".to_owned());
@@ -1314,7 +1318,11 @@ pub fn read_sponsored_price_update_json_v1(source: &[u8]) -> Result<String, Stri
     serde_json::to_string(&PriceOutputV1 {
         format: PRICE_FORMAT_V1,
         address: address.to_string(),
-        feed_id: update.feed_id().iter().map(|byte| format!("{byte:02x}")).collect(),
+        feed_id: update
+            .feed_id()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
         price: update.price().to_string(),
         confidence: update.confidence().to_string(),
         exponent: update.exponent(),

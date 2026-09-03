@@ -11264,16 +11264,28 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         feature = "dealer-family"
                     ))]
                     {
-                        let composition = claims_composition.ok_or(TradingSbfError::Content)?;
-                        let selected = claims_program.ok_or(TradingSbfError::Release)?;
-                        // Three conjuncts behind one `Content` is a search, not
-                        // a refusal, and this one cost a wall: the route
-                        // reached here for the first time on 2026-09-01 and
-                        // published the same code as 2,124 other sites. The
-                        // wire still carries one code -- these causes really
-                        // are one accusation, "this is not a child route this
-                        // composition owns" -- so the distinction goes where a
-                        // reader looks first.
+                        // ONE conjunct is this walk's to refuse, and the
+                        // comment here used to promise three. The 2026-09-01
+                        // wall was real: the route reached this arm for the
+                        // first time and published the same `Content` as 2,124
+                        // other sites, so the distinction goes to a validator
+                        // log, which is where a reader looks first and which is
+                        // all the wire's one code leaves room for. But the
+                        // other two conjuncts are not sized here. The role is
+                        // this match arm. "This is not a child route this
+                        // composition owns" belongs to
+                        // `claims_composition_v3::execute_claims_route_v3`,
+                        // which refuses it on the way to the CPI; asking it
+                        // again in the sizing walk would be a second authority
+                        // for one fact, and the two walks already share ONE
+                        // resolution so they cannot disagree about the inputs.
+                        //
+                        // Both resolutions are still REACHED, and that is not
+                        // decoration: an absent composition or role carrier
+                        // refuses in this walk instead of faulting in the
+                        // executing one. Neither value is read.
+                        claims_composition.ok_or(TradingSbfError::Content)?;
+                        claims_program.ok_or(TradingSbfError::Release)?;
                         if invocation_index != 0 {
                             solana_program::log::sol_log(
                                 "dclutch-hot-claims-preflight: nonzero invocation index",
@@ -12588,7 +12600,8 @@ fn require_no_common_projection_child_accounts_v3(
 #[cfg(any(
     feature = "families",
     feature = "series-family",
-    feature = "dealer-family"
+    feature = "dealer-family",
+    feature = "outer-only"
 ))]
 /// Count occurrences of the child program in one invocation frame, resolving
 /// aliases the way every other check in this walk already does.

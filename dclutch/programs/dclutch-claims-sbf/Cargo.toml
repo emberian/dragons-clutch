@@ -92,16 +92,5 @@ solana-transaction = "=4.2.0"
 spl-token-interface = "=3.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true

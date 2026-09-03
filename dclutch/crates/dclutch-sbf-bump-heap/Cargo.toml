@@ -15,6 +15,12 @@ solana-program = { version = "=3.0.0", default-features = false }
 # of the program heap, in one auditable file, so that a second executable that
 # needs the granted frame consumes it instead of writing a second copy. Every
 # other lint the workspace applies to a program applies here.
+# NOT `[lints] workspace = true`, and it never can be. The workspace table at
+# the root Cargo.toml sets `unsafe_code = "forbid"`, which an inner `allow`
+# cannot override -- and this crate IS the tree's `unsafe` surface, the bump
+# allocator every SBF program's entrypoint installs. Inheriting would forbid the
+# one thing it exists to contain. Its clippy table is the deny table verbatim
+# and must be updated by hand if the root one moves.
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "allow"

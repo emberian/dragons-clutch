@@ -24,6 +24,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import tomllib
 
 EXIT_PASS = 0
 EXIT_GATE_FAILED = 1
@@ -101,6 +102,16 @@ def lint_table_optin(root: pathlib.Path) -> tuple[int, int]:
     allow-by-default restriction lints, so `-D warnings` does not reach them
     either.  The tier prints this because a package can be green here for the
     uninteresting reason.
+
+    THE MANIFEST IS PARSED, NOT GREPPED, and that is a correction rather than a
+    preference.  This read used to be `"[lints]" in text and "workspace = true"
+    in text.split("[lints]", 1)[1][:64]`, and on 2026-09-02 a COMMENT defeated
+    it: three manifests that deliberately do NOT inherit gained a comment saying
+    so -- "NOT `[lints] workspace = true` YET, and this is DEBT ..." -- and the
+    substring scan read the sentence, not the table.  The tier then printed
+    105/105 with three members provably outside the deny table.  A ratio nobody
+    can trust is worse than no ratio, and prose that names the thing it is not
+    doing is exactly what a manifest comment is FOR.
     """
     out = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"],
@@ -114,10 +125,11 @@ def lint_table_optin(root: pathlib.Path) -> tuple[int, int]:
         manifest = pathlib.Path(package["manifest_path"])
         total += 1
         try:
-            text = manifest.read_text()
-        except OSError:
+            parsed = tomllib.loads(manifest.read_text())
+        except (OSError, tomllib.TOMLDecodeError):
             continue
-        if "[lints]" in text and "workspace = true" in text.split("[lints]", 1)[1][:64]:
+        lints = parsed.get("lints")
+        if isinstance(lints, dict) and lints.get("workspace") is True:
             optin += 1
     return (optin, total)
 

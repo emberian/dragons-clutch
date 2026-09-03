@@ -1075,7 +1075,7 @@ fn encode_plan(plan: FundingReadinessPlanV1, observed_slot: u64) -> PlanOutputV1
 }
 
 fn encode_terminal_plan(plan: SourceTerminalPlanV1, observed_slot: u64) -> PlanOutputV1 {
-    let value = match plan {
+    match plan {
         SourceTerminalPlanV1::Admit(value) => {
             let mut facts = terminal_facts(&value.report);
             facts.insert("terminal", "false".to_owned());
@@ -1104,8 +1104,7 @@ fn encode_terminal_plan(plan: SourceTerminalPlanV1, observed_slot: u64) -> PlanO
                 facts,
             }
         }
-    };
-    value
+    }
 }
 
 fn encode_close_plan(plan: SourceCloseFundPlanV1, observed_slot: u64) -> PlanOutputV1 {
@@ -1378,11 +1377,19 @@ fn indices(value: [u16; 3]) -> String {
     format!("{},{},{}", value[0], value[1], value[2])
 }
 fn hex(value: [u8; 32]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(64);
     for byte in value {
-        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+        // A shift of a `u8` by four and a mask by `0x0f` are both in `0..=15`,
+        // so `from_digit` in radix 16 is total here and emits the lowercase
+        // digit the canonical form wants. It replaced a lookup table indexed by
+        // the same two expressions: the bound was true and unprovable, and the
+        // replacement character makes a violated one VISIBLE rather than a
+        // panic in a wasm export.
+        for nibble in [byte >> 4, byte & 0x0f] {
+            output.push(
+                char::from_digit(u32::from(nibble), 16).unwrap_or(char::REPLACEMENT_CHARACTER),
+            );
+        }
     }
     output
 }

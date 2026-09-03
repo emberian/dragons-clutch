@@ -11,15 +11,5 @@ dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true

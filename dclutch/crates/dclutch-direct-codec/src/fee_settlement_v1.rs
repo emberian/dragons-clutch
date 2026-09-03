@@ -52,6 +52,12 @@ const IDENTITY_BYTES: usize = 32;
 /// Width of one little-endian u64 field.
 const SCALAR_BYTES: usize = 8;
 
+/// Width of the header every fee-settlement record starts with: magic, version, two
+/// reserved bytes, selector.
+///
+/// Pinned to the first field's coordinate below rather than written twice -- a
+/// header that grew without the fields moving would overwrite the first one.
+const HEADER_BYTES: usize = 16;
 const MARKET_OFFSET: usize = 16;
 const MAKER_OFFSET: usize = 48;
 const GENERATION_OFFSET: usize = 80;
@@ -145,7 +151,7 @@ impl DirectFeeSettlementRequestV1 {
     pub fn to_bytes(self) -> Result<[u8; DIRECT_FEE_SETTLEMENT_REQUEST_BYTES_V1]> {
         Self::new(self)?;
         let mut output = [0_u8; DIRECT_FEE_SETTLEMENT_REQUEST_BYTES_V1];
-        write_header(&mut output, DIRECT_FEE_SETTLEMENT_REQUEST_MAGIC_V1);
+        output[..HEADER_BYTES].copy_from_slice(&header(DIRECT_FEE_SETTLEMENT_REQUEST_MAGIC_V1));
         output[MARKET_OFFSET..MARKET_OFFSET + IDENTITY_BYTES].copy_from_slice(&self.market);
         output[MAKER_OFFSET..MAKER_OFFSET + IDENTITY_BYTES].copy_from_slice(&self.maker);
         output[GENERATION_OFFSET..GENERATION_OFFSET + SCALAR_BYTES]
@@ -263,7 +269,7 @@ impl DirectFeeSettlementReceiptV1 {
     pub fn to_bytes(self) -> Result<[u8; DIRECT_FEE_SETTLEMENT_RECEIPT_BYTES_V1]> {
         Self::new(self)?;
         let mut output = [0_u8; DIRECT_FEE_SETTLEMENT_RECEIPT_BYTES_V1];
-        write_header(&mut output, DIRECT_FEE_SETTLEMENT_RECEIPT_MAGIC_V1);
+        output[..HEADER_BYTES].copy_from_slice(&header(DIRECT_FEE_SETTLEMENT_RECEIPT_MAGIC_V1));
         // Two gapless runs, exactly as `replay_setup_v1`'s receipt is written:
         // ten identities, then three little-endian u64s to the record's end.
         // The debug asserts are what keep `zip`'s truncation loud -- a field
@@ -456,10 +462,22 @@ pub fn project_direct_fee_request_v1(
     Ok(request)
 }
 
-fn write_header(output: &mut [u8], magic: [u8; 8]) {
-    output[..8].copy_from_slice(&magic);
-    output[8..10].copy_from_slice(&DIRECT_FEE_SETTLEMENT_VERSION_V1.to_le_bytes());
-    output[12..16].copy_from_slice(&DIRECT_FEE_SETTLEMENT_SELECTOR_V1.to_le_bytes());
+/// The shared sixteen-byte fee-settlement record header, as a value.
+///
+/// It used to be three fixed-offset writes into a `&mut [u8]` the caller
+/// promised was wide enough. Every caller passes a fixed-width array, so the
+/// promise was always kept -- but the SLICE parameter threw the width away, and
+/// three writes that cannot be checked is what `indexing_slicing` is naming.
+/// Building the header at its own width instead restores the bound: the array
+/// below is exactly as long as the ranges written into it, the compiler sees
+/// that, and each record copies a whole header into a constant range of its own
+/// constant-width buffer.
+fn header(magic: [u8; 8]) -> [u8; HEADER_BYTES] {
+    let mut head = [0_u8; HEADER_BYTES];
+    head[..8].copy_from_slice(&magic);
+    head[8..10].copy_from_slice(&DIRECT_FEE_SETTLEMENT_VERSION_V1.to_le_bytes());
+    head[12..16].copy_from_slice(&DIRECT_FEE_SETTLEMENT_SELECTOR_V1.to_le_bytes());
+    head
 }
 
 fn require_header(input: &[u8], magic: [u8; 8], width: usize) -> Result<()> {

@@ -12,6 +12,15 @@ path = "src/lib.rs"
 [dependencies]
 dclutch-dealer-scenario-kernel = { path = "../dclutch-dealer-scenario-kernel" }
 
+# NOT `[lints] workspace = true` YET, and this is DEBT with a measurement rather
+# than a preference. `all = "deny"` below is broader than the workspace table in
+# one direction and much narrower in the other: it does not carry ANY of the
+# seven allow-by-default restriction lints, so this crate has never been held to
+# `indexing_slicing`, `unwrap_used` or `panic`. Converting it was measured on
+# 2026-09-02 and costs 75 new sites -- 44 indexing, 30 unwrap, 1 panic -- and
+# makes its lib red in a way that hides dclutch-custody-sbf and
+# dclutch-trading-sbf from clippy entirely. That is the DEALER lane's crate and
+# the DEALER lane's commit. See tools/ci/clippy-debt.tsv.
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"

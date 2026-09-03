@@ -43,16 +43,6 @@ solana-sdk-ids = "=3.1.0"
 
 dclutch-sbf-bump-heap = { path = "../../crates/dclutch-sbf-bump-heap", optional = true }
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }
 
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true

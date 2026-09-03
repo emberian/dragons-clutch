@@ -49,6 +49,32 @@ use crate::{
     wire::AccountObservationV1,
 };
 
+/// [`DBC_VENUE_INLINE_BYTES_V1`] as the `u16` an account-set geometry states.
+///
+/// The emitted decoding-rules table states every width in `usize` because it
+/// indexes byte slices with them; a pinned account's inline width is a `u16` on
+/// the wire, and neither `u16::try_from` nor a truncating `as` can narrow one
+/// in a `const fn` under this crate's deny table. So the `u16` is written and
+/// the pin below LICENSES it: an emitter that moved the width would stop this
+/// crate compiling instead of silently disagreeing with a hand-typed number.
+/// Same shape as `HEADER_MAGIC_OFFSET` in `lib.rs`.
+const DBC_VENUE_INLINE_BYTES_U16_V1: u16 = 424;
+const _: () = assert!(
+    DBC_VENUE_INLINE_BYTES_U16_V1 as usize == DBC_VENUE_INLINE_BYTES_V1,
+    "the emitted DBC venue inline width no longer fits the u16 an account-set \
+     geometry states it in"
+);
+
+/// [`MINT_INLINE_BYTES_V1`] as the `u16` an account-set geometry states.
+///
+/// Licensed by the same proof as [`DBC_VENUE_INLINE_BYTES_U16_V1`].
+const MINT_INLINE_BYTES_U16_V1: u16 = 82;
+const _: () = assert!(
+    MINT_INLINE_BYTES_U16_V1 as usize == MINT_INLINE_BYTES_V1,
+    "the emitted Token-2022 Mint inline width no longer fits the u16 an \
+     account-set geometry states it in"
+);
+
 /// Which observable of this adapter release's decoding-rules table one Source
 /// produces.
 ///
@@ -121,8 +147,8 @@ impl RelayedObservableV1 {
     /// number a second time.
     pub const fn state_inline_bytes(self) -> u16 {
         match self {
-            Self::DbcMigrationProgressV1 => DBC_VENUE_INLINE_BYTES_V1 as u16,
-            Self::Token2022MintAuthorityRenouncedV1 => MINT_INLINE_BYTES_V1 as u16,
+            Self::DbcMigrationProgressV1 => DBC_VENUE_INLINE_BYTES_U16_V1,
+            Self::Token2022MintAuthorityRenouncedV1 => MINT_INLINE_BYTES_U16_V1,
         }
     }
 
@@ -200,19 +226,12 @@ impl RelayedSetLayoutV1 {
     /// interpretation boundary instead of two roles silently reading one body.
     fn require_well_formed(self, cardinality: u16) -> Result<()> {
         let positions = self.positions();
-        let mut outer = 0;
-        while outer < positions.len() {
-            if positions[outer] >= cardinality {
+        let mut remaining = positions.as_slice();
+        while let [role, rest @ ..] = remaining {
+            if *role >= cardinality || rest.contains(role) {
                 return Err(Error::InvalidSetGeometry);
             }
-            let mut inner = outer + 1;
-            while inner < positions.len() {
-                if positions[outer] == positions[inner] {
-                    return Err(Error::InvalidSetGeometry);
-                }
-                inner += 1;
-            }
-            outer += 1;
+            remaining = rest;
         }
         Ok(())
     }
@@ -863,9 +882,7 @@ mod tests {
     fn a_token_account_or_multisig_length_is_not_admitted() {
         for foreign_len in [165_u32, 355, 81, 83, 0] {
             assert!(
-                !MINT_ADMITTED_DATA_LENGTHS_V1
-                    .iter()
-                    .any(|admitted| *admitted == foreign_len),
+                !MINT_ADMITTED_DATA_LENGTHS_V1.contains(&foreign_len),
                 "{foreign_len} must not be an admitted Mint length"
             );
         }

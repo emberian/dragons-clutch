@@ -17,6 +17,8 @@
 //! IS the digest of its own preimage, over the campaign's coprime `K = 3`
 //! basis.
 
+#![allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+
 mod support;
 
 use dclutch_account_profile_contract::lifecycle_v3::{
@@ -270,8 +272,10 @@ fn the_structured_ceiling_is_provisionally_below_the_artifact_ceiling_it_cites()
     // units and transaction bytes that only a run can measure. When they
     // execute, this constant rises to the lower of six and what executed; until
     // then it stays at three and this test says why.
-    assert!(
-        STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2 <= RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3
+    const _: () = assert!(
+        STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2 <= RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+        "the Structured child ceiling outgrew the Rational open coordinate \
+         ceiling it must fit inside"
     );
     assert_eq!(RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3, 6);
     assert_eq!(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, 3);
