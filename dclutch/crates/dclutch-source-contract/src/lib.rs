@@ -37,6 +37,8 @@ mod generated_source_recovery_policy_v2;
 #[allow(missing_docs)]
 mod generated_source_resolution_state_v2;
 #[allow(missing_docs)]
+mod generated_statistic_spec_v1;
+#[allow(missing_docs)]
 mod generated_window_spec_v1;
 mod principal_capacity_v1;
 mod provider_join_v2;
@@ -89,6 +91,23 @@ pub use generated_source_recovery_policy_v2::{
     RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAGIC_V2,
     RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
     RECOVERY_POLICY_SCHEMA_PREIMAGE_V2, RECOVERY_POLICY_SCHEMA_VERSION_V2,
+};
+// The whole StatisticSpecV1 preimage, from `DClutch.SourceStatisticSpecV1Abi`.
+// Every coordinate below used to be a bare argument inside `decode` and again
+// inside `to_bytes`, and the two canonical-zero spans were named only as the
+// arguments of two `zero` calls -- so when `source_scale_exponent` took the
+// first of those spans it landed at an offset nothing emitted. The number that
+// decides which cell a market pays is a placement now.
+pub use generated_statistic_spec_v1::{
+    STATISTIC_SPEC_BODY_RESERVED_BYTES_V1, STATISTIC_SPEC_BODY_RESERVED_OFFSET_V1,
+    STATISTIC_SPEC_BYTES, STATISTIC_SPEC_CAPACITY_PROFILE_ID_OFFSET_V1,
+    STATISTIC_SPEC_EVALUATOR_RELEASE_ID_OFFSET_V1, STATISTIC_SPEC_KIND_OFFSET_V1,
+    STATISTIC_SPEC_MAGIC, STATISTIC_SPEC_MAGIC_BYTES_V1, STATISTIC_SPEC_MAGIC_OFFSET_V1,
+    STATISTIC_SPEC_REQUIRED_SAMPLES_OFFSET_V1, STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1,
+    STATISTIC_SPEC_ROUNDING_OFFSET_V1, STATISTIC_SPEC_SCHEMA_VERSION_OFFSET_V1,
+    STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_BYTES_V1, STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
+    STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1, STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1,
+    STATISTIC_SPEC_UNITS_OFFSET_V1,
 };
 // The whole WindowSpecV1 preimage, from `DClutch.SourceWindowSpecV1Abi`. The
 // record used to have two authors that could not see each other: this file
@@ -158,8 +177,6 @@ pub const PYTH_ADAPTER_CONFIG_BYTES: usize = 64;
 pub const SOURCE_CAPACITY_PROFILE_BYTES: usize = 112;
 /// Exact width of a source-specification preimage.
 pub const SOURCE_SPEC_BYTES: usize = 192;
-/// Exact width of a statistic-specification preimage.
-pub const STATISTIC_SPEC_BYTES: usize = 176;
 /// Exact width of a resolution-policy preimage.
 pub const RESOLUTION_POLICY_BYTES: usize = 240;
 /// Maximum attempts in the V1 recovery artifact profile.
@@ -212,8 +229,6 @@ pub const PYTH_ADAPTER_CONFIG_MAGIC: [u8; 8] = *b"DCLTPAC1";
 pub const SOURCE_CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTSCP1";
 /// Canonical source-specification magic.
 pub const SOURCE_SPEC_MAGIC: [u8; 8] = *b"DCLTSRC1";
-/// Canonical statistic-specification magic.
-pub const STATISTIC_SPEC_MAGIC: [u8; 8] = *b"DCLTSTA1";
 /// Canonical resolution-policy magic.
 pub const RESOLUTION_POLICY_MAGIC: [u8; 8] = *b"DCLTRSP1";
 /// Canonical recovery-policy magic.
@@ -1454,17 +1469,30 @@ impl StatisticSpecV1 {
     /// Decode structurally canonical bytes. Call `validate_capacity` before use.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         header(bytes, STATISTIC_SPEC_BYTES, STATISTIC_SPEC_MAGIC)?;
-        zero(bytes, 82, 14)?;
+        zero(
+            bytes,
+            STATISTIC_SPEC_BODY_RESERVED_OFFSET_V1,
+            STATISTIC_SPEC_BODY_RESERVED_BYTES_V1,
+        )?;
         let value = Self {
-            source_unit_id: content(bytes, 16)?,
-            result_unit_id: content(bytes, 48)?,
-            source_scale_exponent: i32::from_le_bytes(read_array(bytes, 12)?),
-            kind: StatisticKind::decode(one(bytes, 10)?)?,
-            rounding: RoundingBoundary::decode(one(bytes, 11)?)?,
-            required_samples: u16::from_le_bytes(read_array(bytes, 80)?),
-            threshold_atoms: i128::from_le_bytes(read_array(bytes, 96)?),
-            capacity_profile_id: content(bytes, 112)?,
-            evaluator_release_id: content(bytes, 144)?,
+            source_unit_id: content(bytes, STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1)?,
+            result_unit_id: content(bytes, STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1)?,
+            source_scale_exponent: i32::from_le_bytes(read_array(
+                bytes,
+                STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
+            )?),
+            kind: StatisticKind::decode(one(bytes, STATISTIC_SPEC_KIND_OFFSET_V1)?)?,
+            rounding: RoundingBoundary::decode(one(bytes, STATISTIC_SPEC_ROUNDING_OFFSET_V1)?)?,
+            required_samples: u16::from_le_bytes(read_array(
+                bytes,
+                STATISTIC_SPEC_REQUIRED_SAMPLES_OFFSET_V1,
+            )?),
+            threshold_atoms: i128::from_le_bytes(read_array(
+                bytes,
+                STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1,
+            )?),
+            capacity_profile_id: content(bytes, STATISTIC_SPEC_CAPACITY_PROFILE_ID_OFFSET_V1)?,
+            evaluator_release_id: content(bytes, STATISTIC_SPEC_EVALUATOR_RELEASE_ID_OFFSET_V1)?,
         };
         value.validate_scale()?;
         value.validate_shape()?;
@@ -1474,14 +1502,43 @@ impl StatisticSpecV1 {
     /// Encode exact canonical statistic bytes.
     pub fn to_bytes(self) -> [u8; STATISTIC_SPEC_BYTES] {
         let mut out = base::<STATISTIC_SPEC_BYTES>(STATISTIC_SPEC_MAGIC);
-        put(&mut out, 10, &[self.kind.byte(), self.rounding.byte()]);
-        put(&mut out, 12, &self.source_scale_exponent.to_le_bytes());
-        put(&mut out, 16, self.source_unit_id.as_bytes());
-        put(&mut out, 48, self.result_unit_id.as_bytes());
-        put(&mut out, 80, &self.required_samples.to_le_bytes());
-        put(&mut out, 96, &self.threshold_atoms.to_le_bytes());
-        put(&mut out, 112, self.capacity_profile_id.as_bytes());
-        put(&mut out, 144, self.evaluator_release_id.as_bytes());
+        put(&mut out, STATISTIC_SPEC_KIND_OFFSET_V1, &[self.kind.byte()]);
+        put(&mut out, STATISTIC_SPEC_ROUNDING_OFFSET_V1, &[self.rounding.byte()]);
+        put(
+            &mut out,
+            STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
+            &self.source_scale_exponent.to_le_bytes(),
+        );
+        put(
+            &mut out,
+            STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1,
+            self.source_unit_id.as_bytes(),
+        );
+        put(
+            &mut out,
+            STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1,
+            self.result_unit_id.as_bytes(),
+        );
+        put(
+            &mut out,
+            STATISTIC_SPEC_REQUIRED_SAMPLES_OFFSET_V1,
+            &self.required_samples.to_le_bytes(),
+        );
+        put(
+            &mut out,
+            STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1,
+            &self.threshold_atoms.to_le_bytes(),
+        );
+        put(
+            &mut out,
+            STATISTIC_SPEC_CAPACITY_PROFILE_ID_OFFSET_V1,
+            self.capacity_profile_id.as_bytes(),
+        );
+        put(
+            &mut out,
+            STATISTIC_SPEC_EVALUATOR_RELEASE_ID_OFFSET_V1,
+            self.evaluator_release_id.as_bytes(),
+        );
         out
     }
 

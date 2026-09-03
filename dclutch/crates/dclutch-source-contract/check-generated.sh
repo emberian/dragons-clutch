@@ -99,3 +99,22 @@ grep -q '^pub const WINDOW_SPEC_BYTES: usize = 112;$' "$candidate"
 grep -q '^pub const WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1: usize = 48;$' "$candidate"
 grep -q '^pub const WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1: usize = 56;$' "$candidate"
 verify EmitSourceWindowSpecV1Rust.lean generated_window_spec_v1.rs 28
+
+# The eighth: the whole StatisticSpecV1 preimage. Its sibling above has been
+# Lean-owned since `SourceWindowSpecV1Abi.lean`; this one was not, and on
+# 2026-09-03 `source_scale_exponent` -- the number that decides which cell a
+# market pays -- landed at byte 12 of a layout nothing emitted. The pins below
+# are the width, the two identities the shift relates, and the shift's own
+# coordinate: a record that silently moved that field would re-mis-pay
+# cohort-14 market B, so it is pinned here rather than only compared.
+(
+  cd "$formal_dir"
+  lake build DClutchSemantics.SourceStatisticSpecV1Abi >/dev/null
+  lake env lean --run EmitSourceStatisticSpecV1Rust.lean >"$candidate"
+)
+grep -q '^pub const STATISTIC_SPEC_BYTES: usize = 176;$' "$candidate"
+grep -q '^pub const STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1: usize = 12;$' "$candidate"
+grep -q '^pub const STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_BYTES_V1: usize = 4;$' "$candidate"
+grep -q '^pub const STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1: usize = 16;$' "$candidate"
+grep -q '^pub const STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1: usize = 48;$' "$candidate"
+verify EmitSourceStatisticSpecV1Rust.lean generated_statistic_spec_v1.rs 34
