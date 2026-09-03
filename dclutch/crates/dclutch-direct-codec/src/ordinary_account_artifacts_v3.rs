@@ -1550,6 +1550,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             )?;
             Ok(output_identities)
         }

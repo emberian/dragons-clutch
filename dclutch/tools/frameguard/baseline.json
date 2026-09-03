@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "b312ce3c4b356bafbf4f914fe94be17a115522c9",
+  "commit": "07184fa8244860f2f4fab90e57ce6eea05b6d3cf",
   "link_count": 12,
   "links": [
     {
@@ -6130,7 +6130,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 903,
+      "frame_count": 905,
       "functions": [
         {
           "frames_bytes": [
@@ -6812,19 +6812,19 @@
         },
         {
           "frames_bytes": [
-            64
+            128
           ],
           "symbol": "_ZN19dclutch_trading_sbf21execution_strategy_v222authenticate_admission17h<hash>E"
         },
         {
           "frames_bytes": [
-            1664
+            1728
           ],
           "symbol": "_ZN19dclutch_trading_sbf21execution_strategy_v223authenticate_shadow_aot17h<hash>E"
         },
         {
           "frames_bytes": [
-            2048
+            2112
           ],
           "symbol": "_ZN19dclutch_trading_sbf21execution_strategy_v225authenticate_admitted_aot17h<hash>E"
         },
@@ -6848,7 +6848,7 @@
         },
         {
           "frames_bytes": [
-            896
+            960
           ],
           "symbol": "_ZN19dclutch_trading_sbf21execution_strategy_v243authenticate_selected_execution_strategy_v217h<hash>E"
         },
@@ -6980,13 +6980,19 @@
         },
         {
           "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v314record_address17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             576
           ],
           "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v319accelerator_request17h<hash>E"
         },
         {
           "frames_bytes": [
-            320
+            448
           ],
           "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v319require_record_pair17h<hash>E"
         },
@@ -8912,7 +8918,7 @@
         },
         {
           "frames_bytes": [
-            1088
+            1152
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer23v3_accelerator_accounts41evaluate_authenticated_dealer_scenario_v417h<hash>E"
         },
@@ -9413,6 +9419,7 @@
         },
         {
           "frames_bytes": [
+            64,
             64,
             64,
             64,
@@ -10053,7 +10060,7 @@
         },
         {
           "frames_bytes": [
-            576
+            640
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v340project_account_and_request_registers_v317h<hash>E"
         },

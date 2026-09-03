@@ -1615,3 +1615,218 @@ lane should read.
   `.lake/build` and fails here for want of one; the market-core emitter this
   work does change was run and its output matches the checked-in file byte for
   byte.
+
+---
+
+## Seventh addendum, 2026-09-03: one record walk instead of two, the permission byte the projection already had, and the draw is now bigger than the shortfall
+
+*Measured at `6380cdf3c` (before), `9ade7439a` (the two cuts) and `07184fa82`
+(selector 9), tree root `/Users/ember/dev/dclutch`, real SBF ELFs built in this
+lane's own worktree with its own target directory, zero SBF
+stack-frame-overwrite diagnostics on every one of the thirty links built for the
+figures below. Dealer accelerator campaign 30 passed / 1 failed throughout.
+Frame rows landed with each commit.*
+
+### The sixth addendum's "four inter-child frame builds" was two-thirds something else
+
+That note priced `Trading's four child frame builds ~76,000` and named them as
+the next candidate. Decomposed at `6380cdf3c` by five new sub-checkpoints, the
+largest of the four is not a frame build at all:
+
+| span | CU | what it is |
+|---|---:|---|
+| `cx-witness-encoded` | 2,450 | the context preimage and the prelude witness |
+| `cx-context-digest` | 1,147 | the 756-byte context digest |
+| **`cx-frame-validated`** | **41,766** | `validate_authenticated_frame` |
+| `cx-request-built` | 4,286 | the input bank, its digest, the first request |
+| `cx-cpi-buffers` | 8,140 | the 48+N metas and infos, built once |
+| `cx-accelerator-frame` | 3,796 | request encode, digest, caller-authority search |
+| the three child frame builds | 7,314 + 16,134 + 7,474 | the actual frame builds |
+
+**Sixty-five per cent of the accelerator's leg-entry span is a PDA walk**, and it
+is the second walk over a set of ten addresses this program had already derived.
+
+### Both walks priced, by doubling each
+
+`admitted_composition_v3::validate_authenticated_frame` re-derives the
+descriptor, strategy, certificate, admission and artifact-release record pairs
+that `execution_strategy_v2` derived while it authenticated them a few thousand
+instructions earlier. Doubling each walk's `find_program_address` calls on real
+ELFs:
+
+| walk | span it lives in | searches cost |
+|---|---|---:|
+| `execution_strategy_v2`'s, over four records | `artifacts-strategy-effect` (89,704) | **37,640** |
+| `validate_authenticated_frame`'s, over five pairs | `cx-frame-validated` (41,766) | **29,235** |
+
+The seeds are a PDA domain, a canonical schema id and a content digest — fixture
+data, none of which moves with the release-set id — which is why both spans read
+draw-free while being almost entirely search. **Draw-free is not search-free**,
+for the third time in this note.
+
+`AuthenticatedExecutionStrategyV2` now carries the ten bumps its own walk
+derived and the second walk reproduces each address with
+`create_program_address`: **41,766 to 19,866, draw-free on both sides.** The
+residual 13,500 is nine `create_program_address` calls at 1,500, this design's
+floor, exactly as `acc-product-runtime` kept 12,000 for eight.
+
+### The permission byte the projection already had, and the half that mattered
+
+`p7e-permissions` — 14,800 CU over about seventy-four coordinates — decoded
+every coordinate's rule, and for a route alias its representative's, to keep one
+byte per coordinate. The account projection had decoded the same rules a phase
+earlier and thrown both away. `validate_accounts` and its dynamic twin now emit
+the bank as they go.
+
+**The first version was worth 2,612 and the second is worth 11,451**, and the
+difference is one decode. Emitting the permission with a separate
+`expanded_rule(representative)` cost the projection 11,093 to save 13,705;
+decoding the representative's rule ONCE and handing it to both the privilege
+check and the permission byte costs 2,254.
+
+| span | before | after | |
+|---|---:|---:|---|
+| `p5r-account-projection` | 93,833 | 96,087 | +2,254 |
+| `p7e-permissions` | 14,800 | 1,095 | **−13,705** |
+
+Both identical to the digit across three runs on each side. The note's estimate
+for this row was "15,000 to 25,000, the 14,800 is measured and the ceiling is
+not"; the ceiling was not there, because the third walk in `pf-composition` is
+the *dynamic* twin and this route's profile does not use dynamic fixed spans at
+all — a doubling probe on `expanded_rule_with_dynamic_spans` moved
+`p5r-account-projection`, `p7e-permissions`, `p7-effect-projection` and
+`pf-composition` by **zero CU each**.
+
+### Where the Remove is now
+
+Three runs on one ELF set, against the 85,568 CU the commit tail needs after
+`commit-lifecycle-closes`:
+
+| | run 1 | run 2 | run 3 |
+|---|---:|---:|---:|
+| remaining, at `6380cdf3c` | 16,184 | 26,672 | 38,674 |
+| remaining, at `9ade7439a` | 61,681 | 57,225 | 75,183 |
+
+and on the middle draw **the partial equity Remove COMMITS** — 1,389,323 of
+1,399,700, 10,377 CU of headroom — **and so does the first LP final Remove
+behind it** at 1,392,291, with the failure moving to `accepted.rs:9509`, the
+SECOND LP final Remove, which no run of this test has reached. The other two
+draws are short by 10,385 and 23,887.
+
+One draw of three, not three of three. The draw-free part of the improvement is
+**33,351**: 21,900 from the record walk and 11,451 from the permission bank.
+
+### The draw is now bigger than the shortfall, and it is measured
+
+Across three runs of one ELF set the spread is about **96,000 CU**, against a
+worst-case shortfall of 23,887. Every term is a whole number of
+`create_program_address` iterations:
+
+| span | spread |
+|---|---:|
+| **`cx-accelerator-returned`** (the Dealer EQUITY evaluator) | **27,000** |
+| `cu-transfer-validated`, twice | 9,000 + 9,000 |
+| `cx-claims-frame` | 9,000 |
+| `sd-authority` (Claims' own caller-authority search) | 9,000 |
+| `sd-candidates` | 7,500 |
+| `pf-invocation-preflighted`, three times | 3,000 + 6,000 |
+| `cu-common-frame`, twice | 4,500 + 4,500 |
+| `root-product`, `acc-release-waist`, `cx-accelerator-frame`, `acc-caller-authority` | 3,000 each |
+
+**The largest single term is inside the accelerator's own evaluator**, and it is
+not what the fifth addendum would have guessed: `v4_equity_accelerator_accounts.rs`
+runs nine `find_program_address` sites plus one per Claims position, over seeds
+drawn from fixture keypairs — the Claims aggregate, each protocol position, the
+Core Market state, the LP position, the Custody authority, the Custody replay
+and the realm record pair. Doubling all of them on one run priced them at
+**15,341**, which is depth one on that draw: they are cheap when lucky and
+27,000 when not. **Hinting them does not lower the best case and removes the
+worst**, which is exactly what "commits on three consecutive runs" needs.
+
+**The carrier is already in the wire.** `DealerEquityRequestV3::decode` requires
+four bytes at 476..480 to be zero — eight nibbles under `b312ce3c4`'s encoding,
+enough for the eight fixed sites — and the producer derived every one of those
+addresses in order to name the accounts at all. This is the shape `cee27ff16`
+gave the page route and `c81c94d91` gave the Product graph, host-side on the
+producer and a total reader on the program.
+
+### What the Remove still owes, priced
+
+| candidate | CU | measured? |
+|---|---:|---|
+| the equity evaluator's own searches, hinted from the request's reserved bytes | 0 best draw, **up to 27,000** worst | measured as a spread; 15,341 on one draw by doubling |
+| **`execution_strategy_v2`'s own record walk**, the twin of the one this addendum cut | **25,640** (37,640 search, 12,000 floor) | measured by doubling; draw-free |
+| Claims' `sd-authority` and Trading's `cx-claims-frame`: the child caller authority, searched on both sides | 18,000 worst draw | measured as a spread |
+| Custody's `validate_vault_key`, two searches per leg | 18,000 worst draw | measured as a spread |
+
+**The second row is the largest draw-free number left and it has no carrier**,
+which is why this commit does not take it. Its bumps cannot ride a
+content-addressed artifact — a Registry record's address is Registry-relative,
+which is the reason `SelectedRecordBumpsV1` lives in the Market's root at all.
+The Market's `StateBumpsV1` has one reserved byte left after `b312ce3c4` took
+four. `HotBumpHintsV1` is full and its own doc records why the envelope cannot
+grow. And the capability seal, which does carry raw and staging ADDRESSES per
+row, is keyed by descriptor and never witnessed the strategy chain's cursors. A
+mined tail on the Trading hot instruction, in the shape `cee27ff16` gave the
+page route, is the carrier that fits, and it is a unit of its own.
+
+**The three child caller-authority searches cannot be mined at all**, and this
+is worth recording so the fifth addendum's row is not attempted: their seeds end
+in `hash(child_request_bytes)`, the child requests are projected on chain out of
+the candidate the accelerator produces, and no off-chain producer can know them.
+That is why `direct_inline_v3` leaves `HotBumpHintsV1`'s two `child_caller`
+slots zero as well. The reachable half is Claims' own second search for the same
+authority Trading just derived — a three-byte relay in the shape Custody's
+`split_caller_authority_bump_v1` already has.
+
+### Selector 9's route was dead, and it is a derivation that revives it
+
+The sixth addendum's finding is confirmed and repaired. `span_widths()` is empty
+on every admitted invocation because `authenticate_accelerator_witness_v4`
+refuses a nonzero span count, so the scenario evaluator's
+`try_into::<[u32; 9]>` failed on every input and the family was refused
+unconditionally.
+
+The repair is a derivation on the accelerator's side, because the fourth
+addendum forbids the binding: span widths shape the frame the transition
+evaluates over, so a caller-signed commitment to them is the caller's word.
+`dealer_scenario_span_widths_v4` reproduces what
+`authenticate_dynamic_span_widths_v3` computes — the six optional-Custody route
+widths `f5d4912e` put in the request header at 384..389, the Claims position
+count, the trailing evidence count and the fixed six-page scratch width — and
+the two conjuncts that were already there make it safe: the geometry admits only
+the widths the profile's own rules admit, and `frame.logical_account_count ==
+runtime.len()` pins the total against the runtime slice the accelerator hashes
+for itself. The scenario evaluator now asserts `span_widths().is_empty()` in its
+own words like the other two families, so a caller-supplied nonempty bank is
+refused twice.
+
+**What is not proven**: the selector-9 trade leg executing through the ADMITTED
+accelerator on real ELFs. There is no seam — `accepted.rs` never submits a
+selector-9 trade, `physical.rs` refuses on the frame before the witness is read,
+and `project_dealer_scenario_unsplit_chain_topology_v4` still has no caller.
+That is the same fixture the three rejoin hostiles are blocked on. The test that
+does exist checks the derivation against the AUTHORITY rather than beside it: it
+builds the scalar bank the RequestProfile would have written, asks the encoded
+AccountProfile for the nine widths, and requires the two to agree — proved red
+by swapping two slots before it was trusted green.
+
+**And the witness's span bank now has no reader at all.** All three families
+require it empty and this route derives its own widths, so the producer in
+`admitted_composition_v3` writes a section every consumer refuses to be nonzero.
+Its deletion from `AdmittedPreludeWitnessV1` is a wire change with a round-trip
+test and should carry its own measurement.
+
+### What this lane owes
+
+- The three rejoin hostiles, still blocked on the chain fixture the sixth
+  addendum named. Nothing changed that.
+- The witness span bank's deletion, above.
+- The four priced candidates in the table above, of which the equity evaluator's
+  hint is the one that turns "commits on a favourable draw" into "commits".
+- Two pre-existing reds were fixed in passing rather than left:
+  `dealer_scenario_checkpoint_v1`'s selector test still spelled a nine-byte page
+  instruction after `cee27ff16` grew it to eleven, and
+  `dclutch-resolution-proof-sbf`'s synthetic provider fixture was left behind by
+  `b312ce3c4`'s widening of `AuthenticatedProductRuntimeV2`, which had made
+  `cargo check --workspace --tests` red.

@@ -2120,6 +2120,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut [],
             },
+            None,
         )
         .expect("preserve trusted slot");
         assert_eq!(output_scalars.first(), Some(&0x1234));
@@ -2222,6 +2223,7 @@ mod tests {
                         output_scalars,
                         output_identities: output_ids,
                     },
+                    None,
                 )
             };
         let mut vacant_scalars = [99_u64; 2];
@@ -2382,6 +2384,7 @@ mod tests {
                         output_scalars: output,
                         output_identities: &mut [],
                     },
+                    None,
                 )
             };
 
@@ -2499,6 +2502,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut [],
                 },
+                None,
             ),
             Err(Error::InvalidVariableDataPrestate)
         );
@@ -2764,6 +2768,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("project profile8");
         assert_eq!(output_scalars, [0x4433_2211, 77]);
@@ -2974,6 +2979,7 @@ mod tests {
                     output_scalars,
                     output_identities,
                 },
+                None,
             )
         };
         let mut output_scalars = [9_u64; 2];
@@ -3130,6 +3136,7 @@ mod tests {
                     output_scalars: &mut refused_scalars,
                     output_identities: &mut refused_identities,
                 },
+                None,
             ),
             Err(Error::DataOutOfBounds)
         );
@@ -3266,6 +3273,7 @@ mod tests {
                     output_scalars: output,
                     output_identities: &mut output_identities,
                 },
+                None,
             )
         };
         let mut output = [99_u64; 8];
@@ -3335,6 +3343,7 @@ mod tests {
                     output_scalars: &mut zero_output,
                     output_identities: &mut output_identities,
                 },
+                None,
             ),
             Err(Error::EmptyNonzeroTail)
         );
@@ -3541,6 +3550,7 @@ mod tests {
                         output_scalars: output,
                         output_identities: &mut output_identities,
                     },
+                    None,
                 )
             };
         let mut output = [99_u64; 8];
@@ -3935,6 +3945,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("union-privileged physical representative");
         assert_eq!(output_scalars, input_scalars);
@@ -3960,6 +3971,7 @@ mod tests {
                         output_scalars: &mut output_scalars,
                         output_identities: &mut output_identities,
                     },
+                    None,
                 ),
                 Err(expected)
             );
@@ -4204,6 +4216,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("donation-inclusive representative balance");
         assert_eq!(output_scalars, [19]);
@@ -4228,6 +4241,7 @@ mod tests {
                         output_scalars: &mut output_scalars,
                         output_identities: &mut output_identities,
                     },
+                    None,
                 ),
                 Err(expected)
             );
@@ -4496,6 +4510,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("dynamic projection");
         assert_eq!(output_scalars, input_scalars);
@@ -4528,6 +4543,7 @@ mod tests {
                     output_scalars: &mut hostile_output_scalars,
                     output_identities: &mut hostile_output_identities,
                 },
+                None,
             ),
             Err(Error::WidthMismatch)
         );
@@ -4665,6 +4681,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             )
         };
         // Honest: the span presents the account the fixed coordinate names, and
@@ -4699,6 +4716,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             ),
             Err(Error::CrossItemAlias)
         );
@@ -4831,6 +4849,7 @@ mod tests {
                     output_scalars: output,
                     output_identities: &mut [],
                 },
+                None,
             )
         };
 
@@ -5249,6 +5268,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("orthogonal projection");
         assert_eq!(output_scalars, [1, 2, 0, 1]);

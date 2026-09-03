@@ -231,6 +231,7 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
             output_scalars: &mut account_output_scalars,
             output_identities: &mut account_output_identities,
         },
+        None,
     )
     .map_err(|_| SeriesShadowAotErrorV4::AccountProfile)?;
 

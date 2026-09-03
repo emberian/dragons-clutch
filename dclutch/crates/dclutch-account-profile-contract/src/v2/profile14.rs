@@ -456,6 +456,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("matching fixed prestate");
         assert_eq!(output_scalars, input_scalars);
@@ -484,6 +485,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             ),
             Err(Error::FixedDataPredicateMismatch)
         );
@@ -628,6 +630,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("vacant lifecycle branch has no invented data prestate");
 
@@ -651,6 +654,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             ),
             Err(Error::FixedDataPredicateMismatch)
         );

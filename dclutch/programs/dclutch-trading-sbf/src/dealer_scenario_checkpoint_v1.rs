@@ -2063,13 +2063,25 @@ mod tests {
     #[test]
     fn selectors_are_exact_and_page_ordinal_is_not_a_selector() {
         assert!(is_dealer_scenario_checkpoint_create_v1(b"DCLTDCP1"));
-        assert!(is_dealer_scenario_checkpoint_page_v1(b"DCLTDPG1\x05"));
+        // Nine bytes plus the two-byte mined tail `cee27ff16` added. The
+        // literal stayed nine here and the test went red at that commit; the
+        // widths are read from the constant rather than respelled so the next
+        // tail cannot repeat it.
+        assert_eq!(DEALER_SCENARIO_CHECKPOINT_PAGE_INSTRUCTION_BYTES_V1, 11);
+        assert!(is_dealer_scenario_checkpoint_page_v1(
+            b"DCLTDPG1\x05\xff\xfe"
+        ));
         assert!(is_dealer_scenario_checkpoint_evaluate_v1(b"DCLTDEV1"));
         assert!(is_dealer_scenario_checkpoint_reserve_v1(b"DCLTDRV1"));
         assert!(is_dealer_scenario_checkpoint_rollback_v1(b"DCLTDRB1"));
         assert!(is_dealer_scenario_checkpoint_commit_v1(b"DCLTDCM1"));
         assert!(is_dealer_scenario_checkpoint_cleanup_v1(b"DCLTDCL1"));
         assert!(!is_dealer_scenario_checkpoint_page_v1(b"DCLTDPG1"));
+        // A page instruction one byte short of its tail is not a page.
+        assert!(!is_dealer_scenario_checkpoint_page_v1(b"DCLTDPG1\x05\xff"));
+        assert!(!is_dealer_scenario_checkpoint_page_v1(
+            b"DCLTDPG1\x05\xff\xfe\x00"
+        ));
         assert!(!is_dealer_scenario_checkpoint_create_v1(b"DCLTDCP1\x00"));
         assert!(!is_dealer_scenario_checkpoint_reserve_v1(b"DCLTDRV1\x00"));
         assert!(!is_dealer_scenario_checkpoint_rollback_v1(b"DCLTDRB2"));

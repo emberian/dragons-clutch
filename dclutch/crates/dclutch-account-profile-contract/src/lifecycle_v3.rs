@@ -4635,6 +4635,7 @@ mod tests {
                     output_scalars: &mut scalar_output,
                     output_identities: &mut identity_output,
                 },
+                None,
             ),
             Err(v2::Error::WidthMismatch)
         );
@@ -4935,6 +4936,7 @@ mod tests {
                     output_scalars: &mut projected_scalars,
                     output_identities: &mut projected_identities,
                 },
+                None,
             )
             .expect("account projection");
             let mut scalar_scratch = [0_u64; 5];
@@ -6231,6 +6233,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             )
         };
         assert_eq!(project(&[]), Ok(()));

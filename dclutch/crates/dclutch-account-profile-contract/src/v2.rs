@@ -2330,6 +2330,9 @@ pub fn project_atomic(
     tail_count: u32,
     accounts: &[AccountObservationV1<'_>],
     registers: ProjectionRegistersV2<'_>,
+    // The effect permission bank this walk fills for free, or `None` for the
+    // caller that does not want it. See `emit_effect_permission`.
+    permissions: Option<&mut [AccountPermission]>,
 ) -> Result<()> {
     let account_count = account_width(profile, tail_count)?;
     let scalar_count = affine_width(
@@ -2352,7 +2355,7 @@ pub fn project_atomic(
     {
         return Err(Error::WidthMismatch);
     }
-    validate_accounts(profile, tail_count, accounts)?;
+    validate_accounts(profile, tail_count, accounts, permissions)?;
     profile14::validate_observations(profile, &[], accounts)?;
     registers
         .scratch_scalars
@@ -2389,6 +2392,8 @@ pub fn project_dynamic_fixed_spans_atomic(
     span_counts: &[u32],
     accounts: &[AccountObservationV1<'_>],
     registers: ProjectionRegistersV2<'_>,
+    // See `project_atomic`.
+    permissions: Option<&mut [AccountPermission]>,
 ) -> Result<()> {
     require_dynamic_span_counts(profile, span_counts)?;
     let account_count = dynamic_account_width(profile, tail_count, span_counts)?;
@@ -2424,7 +2429,7 @@ pub fn project_dynamic_fixed_spans_atomic(
         }
         index = index.checked_add(1).ok_or(Error::InvalidLength)?;
     }
-    validate_accounts_with_dynamic_spans(profile, tail_count, span_counts, accounts)?;
+    validate_accounts_with_dynamic_spans(profile, tail_count, span_counts, accounts, permissions)?;
     profile14::validate_observations(profile, span_counts, accounts)?;
     registers
         .scratch_scalars
@@ -2485,6 +2490,7 @@ pub fn project_tail_count_atomic(
             output_scalars: &mut *output_scalars,
             output_identities: &mut *output_identities,
         },
+        None,
     )?;
     u32::try_from(
         *output_scalars
@@ -2547,25 +2553,84 @@ pub fn derive_effect_permissions_with_dynamic_spans(
     Ok(())
 }
 
+/// Write one coordinate's effect permission out of the rule the caller has
+/// already decoded.
+///
+/// # Why the projection emits this and a second walk does not
+///
+/// `derive_effect_permissions` and its dynamic twin decode EVERY coordinate's
+/// rule -- and, for a route alias, its representative's -- to keep one byte per
+/// coordinate. The account projection decoded exactly the same rules a phase
+/// earlier and threw both away. Measured on real SBF ELFs 2026-09-03, that
+/// second walk is Trading's `p7e-permissions` checkpoint: **14,800 CU over
+/// about seventy-four coordinates**, roughly 200 each, for a bank the first
+/// walk could have filled for the cost of one byte per coordinate.
+///
+/// The rule is not weakened by moving: it is the same conditional
+/// `derive_effect_permissions` states, and the caller that receives the bank
+/// still applies `require_common_projection_permissions_v3` to it. A caller
+/// that passes `None` gets exactly the walk it had.
+fn emit_effect_permission(
+    permissions: Option<&mut [AccountPermission]>,
+    coordinate: usize,
+    rule: AccountRuleV2,
+    representative_rule: AccountRuleV2,
+) -> Result<()> {
+    let Some(bank) = permissions else {
+        return Ok(());
+    };
+    // A coordinate that is not a route alias IS its own authority, so the rule
+    // already decoded is the rule whose permission this is. Only a route alias
+    // has another coordinate to read, and the caller has already read it.
+    let authority_rule = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+        representative_rule
+    } else {
+        rule
+    };
+    *bank.get_mut(coordinate).ok_or(Error::WidthMismatch)? = authority_rule.permission();
+    Ok(())
+}
+
 fn validate_accounts(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
     accounts: &[AccountObservationV1<'_>],
+    mut permissions: Option<&mut [AccountPermission]>,
 ) -> Result<()> {
+    if let Some(bank) = permissions.as_deref()
+        && bank.len() != accounts.len()
+    {
+        return Err(Error::WidthMismatch);
+    }
     for (coordinate, account) in accounts.iter().copied().enumerate() {
         let rule = expanded_rule(profile, coordinate)?;
         let representative = profile.representative(tail_count, coordinate)?;
-        let expected_privileges = if profile.supports_route_alias_packing() {
-            if representative == coordinate {
-                // `representative` is idempotent, so a self-representative
-                // coordinate satisfies the alias check by the value already in
-                // hand, and its representative's rule IS `rule`. Taking it here
-                // is the same value at two artifact decodes less; the branch
-                // below is the only one that has another coordinate to read.
-                rule.privileges
-            } else {
-                representative_privileges(profile, tail_count, representative)?
+        // ONE DECODE OF THE REPRESENTATIVE'S RULE, SHARED BY BOTH CONSUMERS.
+        // `representative` is idempotent, so a self-representative coordinate's
+        // representative rule IS `rule` and neither branch below has anything
+        // to read. Where it is not, the privilege check wanted the rule's
+        // privileges and the permission bank wants the same rule's permission;
+        // decoding it twice is what `p7e-permissions` was.
+        let representative_rule = if representative == coordinate {
+            rule
+        } else if profile.supports_route_alias_packing() {
+            if profile.representative(tail_count, representative)? != representative {
+                return Err(Error::InvalidAlias);
             }
+            expanded_rule(profile, representative)?
+        } else if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+            expanded_rule(profile, representative)?
+        } else {
+            rule
+        };
+        emit_effect_permission(
+            permissions.as_deref_mut(),
+            coordinate,
+            rule,
+            representative_rule,
+        )?;
+        let expected_privileges = if profile.supports_route_alias_packing() {
+            representative_rule.privileges
         } else {
             rule.privileges
         };
@@ -2664,26 +2729,39 @@ fn validate_accounts_with_dynamic_spans(
     tail_count: u32,
     span_counts: &[u32],
     accounts: &[AccountObservationV1<'_>],
+    mut permissions: Option<&mut [AccountPermission]>,
 ) -> Result<()> {
     if accounts.len() != dynamic_account_width(profile, tail_count, span_counts)? {
+        return Err(Error::WidthMismatch);
+    }
+    if let Some(bank) = permissions.as_deref()
+        && bank.len() != accounts.len()
+    {
         return Err(Error::WidthMismatch);
     }
     for (coordinate, account) in accounts.iter().copied().enumerate() {
         let rule = expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
         let representative =
             profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?;
-        let expected_privileges = if representative == coordinate {
-            // See `validate_accounts`: a self-representative coordinate's
-            // representative rule is the rule already decoded.
-            representative_privileges_of_rule(rule)
+        // See `validate_accounts`: one decode of the representative's rule,
+        // shared by the privilege check and the permission bank.
+        let representative_rule = if representative == coordinate {
+            rule
         } else {
-            representative_privileges_with_dynamic_spans(
-                profile,
-                tail_count,
-                span_counts,
-                representative,
-            )?
+            if profile.representative_with_dynamic_spans(tail_count, span_counts, representative)?
+                != representative
+            {
+                return Err(Error::InvalidAlias);
+            }
+            expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?
         };
+        emit_effect_permission(
+            permissions.as_deref_mut(),
+            coordinate,
+            rule,
+            representative_rule,
+        )?;
+        let expected_privileges = representative_privileges_of_rule(representative_rule);
         if account.privileges() != expected_privileges {
             return Err(Error::PrivilegeMismatch);
         }
@@ -4636,6 +4714,7 @@ mod tests {
                 output_scalars: &mut [],
                 output_identities: &mut output_identities,
             },
+            None,
         )?;
         Ok(output_identities[0])
     }
@@ -4732,6 +4811,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("projection");
         assert_eq!(output_scalars, [2, 0, 3, 1, 5]);
@@ -4780,6 +4860,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut [],
             },
+            None,
         )
         .expect("typed projection");
         assert_eq!(output_scalars, [0x1234]);
@@ -4919,7 +5000,8 @@ mod tests {
                         scratch_identities: &mut scratch_identities,
                         output_scalars: &mut output_scalars,
                         output_identities: &mut output_identities,
-                    }
+                    },
+                    None,
                 )
                 .is_err()
             );
@@ -5106,6 +5188,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("affine projection");
         assert_eq!(output_scalars, [2, 0, 11, 1, 22]);
@@ -5140,6 +5223,7 @@ mod tests {
                     output_scalars: &mut hostile_output_scalars,
                     output_identities: &mut hostile_output_identities,
                 },
+                None,
             ),
             Err(Error::DataOutOfBounds)
         );
@@ -5199,6 +5283,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("selected projection");
         assert_eq!(output_scalars, [2, 1, 77, 0, 11, 1, 22]);
@@ -5277,6 +5362,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             ),
             Err(Error::DataOutOfBounds)
         );

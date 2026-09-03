@@ -1194,3 +1194,187 @@ arithmetic on the Direct side: 23 of market A's 41 record bodies were already
 finalized and cost it nothing.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: THE CAPTURE LANDED, and L7 judged for the first time in this cohort
+
+**Devnet evidence. Not mainnet evidence.** 2026-09-03, COHORT-14B lane.
+
+Cohort-13's window closed unobserved. Cohort-14's capture refused
+`0x8014 ReleaseSuperseded` after 101,787 CU. Market B's capture **committed**.
+
+| | |
+| --- | --- |
+| signature | `67eCTr2RWWjX48ndExkEMxvvrRfgcpjJv9m8y7eFTgW44V61tupuhsvGJnWGfiyRjpbJTfwBPKEKQ1pFCiz2kM1B` |
+| slot / CU / fee | 492,358,855 / **171,519** / 75,000 |
+| fired at | 1788415398 (06:03:18 UTC), **1,698 s of window left** |
+| candidate | `6KSW8fCAppwL3fmpMjGB23nEHmE8njaoBSX88HMtRQvF` — 432 B `DCLTSPC1`, owned by Resolution `5ML5pbUf…`, 3,546,480 lamports |
+| head | `EeY42GcKKm2b2dwKKA4EyaoA3mrkF8uFSSP8TdqjbsLC` — 336 B, 2,938,512 lamports |
+| **the verifier** | the candidate's own snapshot seconds, read off the account: **1788415399** and **1788415420**, both inside `[1788415296, 1788417096]` |
+
+The window was read off the market's own 112-byte `DCLTWIN1` record
+`7AmLjK7LpC2hH8vLcJtK3u4wShFP1wonWNzgt4FQ9cib` at offsets 48 and 56 — never from
+the handoff table — and the runner's guard is the last statement before the
+action and EXITS rather than proceeding, which is the fault cohort-14's runner
+had in the other direction.
+
+### IT TOOK TWO PHASES AND A RETRY LADDER, and the runbook said so
+
+The first `--execute` refuses:
+
+```
+created a key-free planned report; review it, then rerun the exact command with
+the same output path to sign
+```
+
+Rerunning against a report written **42 seconds earlier** then refuses:
+
+```
+derived sponsored coordinates changed after preflight; use a new output path
+```
+
+The candidate PDA is seeded by the observation's own `publish_time` and
+`posted_slot`, so a plan more than one provider push old names an address the
+signer will not reach. Each attempt therefore gets its OWN output path and runs
+plan and sign back to back. It landed on **attempt 1**. §"What no preflight can
+answer" says *"The retry ladder, not the margin, is what makes the capture
+land"*; this is that sentence measured, and the mechanism is not push timing but
+the tool's own two-phase contract.
+
+### ALL EIGHT LAWS HOLD BY NAME — and L7 earned its pass by failing first
+
+`cohort14b-pre-capture` was taken with the COMPLETE aperture before the boundary
+— §13's lesson applied — so the capture is the first boundary in this cohort
+where L7 has a predecessor.
+
+Declared with only the candidate's rent, it **VIOLATED**:
+
+> `VIOLATED L7: the payer moved -6559992 lamports since cohort14b-pre-capture and
+> its transactions paid 75000 in fees, but watched accounts gained 0; -2938512
+> lamports are unaccounted for. L1..L6 cannot see this: they are stated about
+> collateral atoms and about accounts that CLOSE, and nothing closed here.`
+
+**2,938,512 is exactly the head account's rent**, and nothing else in the census
+could have found it: the head is not a token account, not a Position, and it did
+not close. Re-declared with both accounts the capture created:
+
+```
+HOLDS L1: tracked 1000000000 atoms across 2 accounts == Mint supply 1000000000
+HOLDS L2: the Hoard moved 0 atoms since cohort14b-pre-capture, exactly as declared
+HOLDS L3: 3 Positions sum to the aggregate supply vector [500000000 x4]
+HOLDS L4: Hoard 500000000 >= worst outcome 500000000 x unit 1
+HOLDS L5: tracked collateral moved 0 atoms, exactly as declared
+HOLDS L6: no watched account closed at this boundary
+HOLDS L7: the payer moved -6559992, fees 75000, watched accounts gained 0, and
+          6484992 went to the two accounts this capture created; debit == credit + fee
+HOLDS L8: every compartment moved exactly as declared: unclassified +0
+```
+
+Both readings are kept — the violation is the finding, not a draft. Cohort-14
+reported one INAPPLICABLE and named its cause; cohort-14b has **none**, and the
+law that could not judge there is the law that located an account here.
+
+The settle is armed and guarded at `$JOB/run-settle-b.sh`, firing 1788424326 =
+08:32:06 UTC, strictly after `window.end + max_age`, with the same ladder.
+
+Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: THE DIRECT CAPABILITY SEAL IS SHARED ACROSS MARKETS, and the second market's first fill has no path
+
+**Devnet evidence. Not mainnet evidence.** 2026-09-03, COHORT-14B lane. This is
+the same shape as the founding source funder, found the same way — by being the
+second market — and it is the reason market B's fill is not finished.
+
+### The delegation DID land, once the resume was given what it needs
+
+The earlier addendum recorded the delegation as refusing `InvalidVacancy`. That
+was true of the path taken and not of the delegation. Re-running the admission
+CYCLE re-plans an admission for an already-admitted Position; the RESUME path
+carries the collateral leg, and it needs two things this lane had broken:
+
+1. the durable journals present — `admit.sh` archives and deletes `sim/` on every
+   `execute`, which destroys exactly what a resume reads;
+2. `minimum_finalized_slot` equal to the one the landed report pinned —
+   `build-sim-config.py` reads a fresh slot every run (492,321,239 against the
+   landed 492,315,547).
+
+With both repaired, and only participant-2's `.done` marker removed:
+
+| | |
+| --- | --- |
+| signature | `33CGBnUJFtgAKTK1BzFsZaFZD4cygswZuryCNzuA9SYT9EuBDqnqnVFXDJzLjBWNv2fcHcDbzBmA45b4DSVCqN1h` |
+| slot / CU / fee | 492,360,366 / **4,953** / 10,000 |
+| delegated account | `3aEyWH1BLSRwzf4ypqNKZsDcay8xWjmDvTdrhALvu67g`, 165 B Token-2022, **exactly 201 atoms** = gross 200 + buyer fee 1 |
+| founder wallet after | 499,999,799 |
+
+4,953 CU is cohort-13's and cohort-14's figure to the unit.
+
+**And an exit-0 that did nothing came first.** With the `.done` markers intact the
+simulator returned 0 having skipped both admissions — the silent-success shape
+`AGENTS.md` names. The reading that distinguished them was the payer's balance,
+not the exit code.
+
+### THE WALL: `Direct seal exists but the request-specific ALT journal is absent`
+
+The fill's session ran `replay-setup` (182,983 CU) and `token-setup` (112,415 CU),
+creating the maker custody replay `HhD37zPCkqVR35np851L7AxmCzXLf2ngH6XcMNAXzCds`
+and both 165-byte Direct token PDAs — seller
+`D8MrZggKwtnBXBVRwfvxPHETk2VojifT2rSpn9HudDVQ` and venue fee
+`CJ4iFMbKjCXkgvxmCemcLHonHDDuFGuHHSnHj14EKMik` — and then refused at step 3.
+
+`direct_trade.rs:6382`: with no numbered journal entries and
+`planning.seal.already_materialized`, the driver refuses. And it IS materialized:
+`already_materialized` is `owner == trading_program && data == expected_body &&
+lamports >= rent_minimum` (`crates/dclutch-operator/src/direct_inline_route_v3.rs:1563`),
+and market B's own `direct-trade-public.json` names
+**`8xLR5VesJFp9rEBteFEqW8VrQXELSFtNYdDBSPQWZEVE`** — the 968-byte Trading-owned
+seal **cohort-14's market A fill created**, still holding 6,940,968 lamports.
+
+The seal is keyed by `CapabilitySealRequestV1::new(action, descriptor_digest)`.
+**No market is in that preimage.** Two markets on one release set share one Direct
+action descriptor, so they share one capability seal — and the driver's state
+machine has exactly two cases, "vacant, so seal it" and "materialized, so its
+journal stage must be the last one", with no case for *another market already
+sealed this action*. A fresh session can never satisfy the second.
+
+This is the third identity found to be shared by being the second market, after
+`founding-source-funder` and `founding-projection-witness`. The pattern is worth
+naming: **an identity keyed by everything except the market looks per-campaign
+until a second market exists.** Owed: a `CapabilitySeal` stage that records an
+observed already-materialized seal as a finalized no-op, so the ladder can
+continue — the seal itself is correct and shared on purpose; it is the JOURNAL
+that has no word for it.
+
+`FILL NOT COMPLETED.` The Hot transaction did not run, so cohort-14's 1,284,573
+CU is not re-measured here, and no fee was settled.
+
+### THE CENSUS CHAIN, and L7 locating two accounts by failing first
+
+Four boundaries, each chained with `--prior`, over an aperture fixed before the
+first of them — §13's lesson applied:
+
+| stage | verdict |
+| --- | --- |
+| `cohort14b-pre-capture` | L1/L3/L4 HOLD; L2/L5/L6/L7/L8 INAPPLICABLE — first boundary, each saying so |
+| `cohort14b-post-capture` | **all eight HOLD** |
+| `cohort14b-pre-fill` | seven HOLD; L7 INAPPLICABLE — this boundary admitted the delegated account and the two Direct token PDAs |
+| `cohort14b-post-token-setup` | **all eight HOLD** |
+
+**L7 VIOLATED first at two of the four**, and both times it located an account no
+other law could see:
+
+* at the capture, `-2938512 lamports are unaccounted for` — exactly the 336-byte
+  head `EeY42GcKKm2b2dwKKA4EyaoA3mrkF8uFSSP8TdqjbsLC`;
+* at the token setup, `1076610 lamports are unaccounted for` under a
+  double-counted declaration, resolving to the 288-byte `DCLCUSS1` custody replay
+  `HhD37zPCkq…` at 2,634,528 — which is `(288 + 128) x 6333` to the lamport.
+
+`cohort14b-pre-fill` also VIOLATED L5 and L8 on a first pass, correctly: the
+delegation moves 201 atoms **between two tracked accounts**, so the tracked total
+does not move and a declared `-201` is a claim the chain contradicts. Every
+violated reading is kept beside its corrected one; none of them is a draft.
+
+Devnet evidence. Not mainnet evidence.

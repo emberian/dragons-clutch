@@ -581,6 +581,7 @@ fn project_banks(action: Action, root: &[u8]) -> (Vec<u64>, Vec<[u8; 32]>) {
             output_scalars: &mut output_scalars,
             output_identities: &mut output_identities,
         },
+        None,
     )
     .expect("the real projection accepts the real frame");
     (output_scalars, output_identities)

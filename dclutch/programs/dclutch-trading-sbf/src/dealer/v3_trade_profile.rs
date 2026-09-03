@@ -44,6 +44,8 @@ pub use dclutch_dealer_codec::config_v4::DEALER_CONFIG_BYTES_V4;
 #[cfg(not(target_os = "solana"))]
 use dclutch_product_runtime_v2_svm_reader::BASIS_WIDTH_OFFSET_V3;
 
+use dclutch_dealer_codec::generated_scenario_trade_v4::DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4;
+
 use super::v3_hot_artifact::{
     DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
 };
@@ -136,6 +138,77 @@ pub struct DealerScenarioLogicalFrameV4 {
     /// Complete expanded logical-account count.
     pub logical_account_count: u32,
 }
+
+/// Derive selector 9's nine AccountProfile span widths from the request that
+/// declares them.
+///
+/// # The route this makes live
+///
+/// `authenticate_accelerator_witness_v4` refuses any witness whose span bank is
+/// nonempty, so `AuthenticatedAcceleratorInvocationV4::span_widths` is EMPTY on
+/// every admitted invocation. The selector-9 evaluator's first substantive act
+/// was `span_widths().try_into::<[u32; 9]>()`, which therefore failed on every
+/// input: **the Dealer scenario family was unconditionally refused by the
+/// admitted accelerator, with `Invocation`, and nothing was red because nothing
+/// exercised that route through it** (`7ef3c82c0`, sixth addendum).
+///
+/// # Why this derives rather than reads
+///
+/// A span width shapes the account frame the transition evaluates over, so it
+/// is an evaluation INPUT, and `742d7b7be` forbids by name a request field that
+/// carries one: *"a request field that carried an evaluation INPUT rather than
+/// an authentication RESULT would make the accelerator a mirror of its
+/// caller."* A caller-signed span bank is the caller's word, and the fix for
+/// this route is therefore a derivation on the accelerator's side rather than a
+/// binding on the caller's bank.
+///
+/// This IS that derivation, and it is the same one common Trading performs.
+/// `authenticate_dynamic_span_widths_v3` projects the family request through
+/// the RequestProfile and reads the nine span selectors out of the projected
+/// scalars; `f5d4912e` put the six optional-Custody route widths in the request
+/// header at 384..389 precisely so that phase could reach them, and the
+/// RequestProfile writes them into common scalars 7..12 unchanged. The other
+/// three selectors are the Claims position count, the trailing evidence count
+/// and the fixed scratch-page count, and the first two are header fields of the
+/// same request. So the nine widths are a total function of the header, and
+/// this reproduces it without a projection.
+///
+/// **Nothing is taken on the caller's word by doing so.** Every width the
+/// caller can state is then checked twice on this side: by
+/// [`dealer_scenario_logical_frame_v4`], which admits only `{0, 14}` per
+/// Custody route, one or two Claims positions, zero through three evidence
+/// coordinates and exactly six scratch pages; and by the evaluator's own
+/// `frame.logical_account_count == runtime.len()` conjunct, which pins the
+/// total against the runtime slice the accelerator was actually handed and
+/// whose bytes it hashes for itself. A header that lied about a width would
+/// name a frame of a different total and refuse there, and a header that lied
+/// consistently would still have to make every per-coordinate identity join
+/// below succeed at the moved coordinates.
+pub fn dealer_scenario_span_widths_v4(
+    route_span_counts: [u8; DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4],
+    claims_position_count: u8,
+    evidence_span_count: u8,
+) -> [u32; DEALER_SCENARIO_PROFILE_SPANS_V4] {
+    // The six route widths occupy profile span indices 0, 1, 2, 3, 5 and 6 --
+    // the Claims position span sits at 4, between the fourth and fifth route,
+    // because its insertion coordinate (56) falls between theirs. The order is
+    // the scalar order: span i reads `DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4
+    // + i` for i in 0..6.
+    [
+        u32::from(route_span_counts[0]),
+        u32::from(route_span_counts[1]),
+        u32::from(route_span_counts[2]),
+        u32::from(route_span_counts[3]),
+        u32::from(claims_position_count),
+        u32::from(route_span_counts[4]),
+        u32::from(route_span_counts[5]),
+        u32::from(evidence_span_count),
+        DEALER_SCENARIO_SCRATCH_PAGE_COUNT_V4,
+    ]
+}
+
+/// The one width the profile fixes rather than projects: `span(27, .., 6, 6, 1)`.
+pub const DEALER_SCENARIO_SCRATCH_PAGE_COUNT_V4: u32 = 6;
 
 /// Derive selector 9's expanded logical frame from authenticated span counts.
 pub fn dealer_scenario_logical_frame_v4(
@@ -706,6 +779,80 @@ mod tests {
             profile.trusted_current_executing_program_identity(),
             Some(DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4)
         );
+    }
+
+    /// The accelerator's derivation is the PROFILE's derivation, checked
+    /// against it rather than restated beside it.
+    ///
+    /// `dealer_scenario_span_widths_v4` exists because the admitted accelerator
+    /// has no projected scalar bank to run `dynamic_span_widths_from_scalars`
+    /// over, so it reproduces the same nine numbers from the request header the
+    /// RequestProfile projects INTO that bank. A test that merely re-listed the
+    /// mapping would pass for any mapping; this one builds the scalar bank the
+    /// RequestProfile would have written, asks the profile itself for the nine
+    /// widths, and requires the two to agree -- so a span reordered in
+    /// `dynamic_spans()` fails here rather than in a campaign.
+    #[test]
+    fn the_accelerators_span_derivation_agrees_with_the_profiles_own() {
+        let bytes = profile();
+        let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        let cases: [([u8; DEALER_SCENARIO_TRADE_ROUTE_SPAN_COUNT_V4], u8, u8); 5] = [
+            ([0, 0, 0, 0, 0, 0], 1, 0),
+            ([14, 0, 0, 0, 0, 0], 1, 3),
+            ([0, 0, 14, 14, 0, 0], 2, 1),
+            ([0, 14, 0, 0, 14, 0], 2, 2),
+            ([14, 14, 14, 14, 14, 14], 2, 3),
+        ];
+        for (route_span_counts, claims_position_count, evidence_span_count) in cases {
+            let derived = dealer_scenario_span_widths_v4(
+                route_span_counts,
+                claims_position_count,
+                evidence_span_count,
+            );
+            // The bank the RequestProfile writes: the six route widths at
+            // scalars 7..12 in slot order, the two counted tails at their own
+            // selectors, and the fixed scratch width at its.
+            let mut scalars = vec![0_u64; usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)];
+            for (slot, width) in route_span_counts.iter().copied().enumerate() {
+                scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4) + slot] =
+                    u64::from(width);
+            }
+            scalars[usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4)] =
+                u64::from(claims_position_count);
+            scalars[usize::from(DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4)] =
+                u64::from(evidence_span_count);
+            scalars[usize::from(DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4)] =
+                u64::from(DEALER_SCENARIO_SCRATCH_PAGE_COUNT_V4);
+            let mut widths = [0_u32; DEALER_SCENARIO_PROFILE_SPANS_V4];
+            profile
+                .dynamic_span_widths_from_scalars(&scalars, &mut widths)
+                .expect("the profile admits the bank the RequestProfile writes");
+            assert_eq!(
+                widths, derived,
+                "profile widths and the accelerator's derivation must agree"
+            );
+            // And the geometry the evaluator then carves accepts exactly these.
+            dealer_scenario_logical_frame_v4(derived).expect("admissible geometry");
+        }
+    }
+
+    /// A header the geometry does not admit refuses, so the derivation cannot
+    /// carve a frame the profile would never have produced.
+    #[test]
+    fn a_route_width_the_profile_forbids_is_refused_by_the_geometry() {
+        // Thirteen is not `{0, 14}`; three Claims positions is not `1 | 2`;
+        // four evidence coordinates is not `0..=3`.
+        for (route_span_counts, positions, evidence) in [
+            ([13_u8, 0, 0, 0, 0, 0], 1_u8, 0_u8),
+            ([0, 0, 0, 0, 0, 0], 3, 0),
+            ([0, 0, 0, 0, 0, 0], 1, 4),
+        ] {
+            let derived = dealer_scenario_span_widths_v4(route_span_counts, positions, evidence);
+            assert!(
+                dealer_scenario_logical_frame_v4(derived).is_err(),
+                "the geometry must refuse {derived:?}"
+            );
+        }
     }
 
     #[test]

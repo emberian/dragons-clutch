@@ -445,9 +445,10 @@ pub(crate) fn run_engine_with_admitted_candidate(
                 span_counts,
                 &observations,
                 registers,
+                None,
             )
         } else {
-            project_accounts_atomic(profile, tail_count, &observations, registers)
+            project_accounts_atomic(profile, tail_count, &observations, registers, None)
         }
         .map_err(|error| {
             std::eprintln!("account projection kernel refused: {error:?}");

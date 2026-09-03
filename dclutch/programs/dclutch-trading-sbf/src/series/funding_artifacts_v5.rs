@@ -655,6 +655,7 @@ mod tests {
                 output_scalars: &mut output_scalars,
                 output_identities: &mut output_identities,
             },
+            None,
         )
         .expect("Hot-equivalent account projection");
         assert_eq!(

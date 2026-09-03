@@ -128,6 +128,7 @@ const ADMITTED_ACCELERATOR_PROGRAMDATA: usize = 11;
 /// record/deployment path in this module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedExecutionStrategyV2 {
+    record_bumps: StrategyRecordBumpsV2,
     capability_program_id: ContentId,
     capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
@@ -138,6 +139,79 @@ pub struct AuthenticatedExecutionStrategyV2 {
     artifact_release_id: Option<ArtifactReleaseIdV1>,
     artifact_release: Option<ArtifactReleaseV1>,
     admitted_authorization: Option<AdmittedAotAuthorizationV2>,
+}
+
+/// The canonical PDA bumps of one Registry record pair, as the derivation that
+/// established them found them.
+///
+/// Zero on both halves is UNRECORDED and means "search", which is what a caller
+/// that never derived them holds. A bump can never be zero for a real record:
+/// `find_program_address` starts at 255 and refuses the off-curve search past
+/// 0, so the value is free as a sentinel.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RecordPairBumpsV2 {
+    raw: u8,
+    staging: u8,
+}
+
+impl RecordPairBumpsV2 {
+    /// The two bumps one `find_program_address` pair produced.
+    pub const fn new(raw: u8, staging: u8) -> Self {
+        Self { raw, staging }
+    }
+
+    /// The raw record's canonical bump, or `None` when nothing derived it.
+    pub const fn raw(self) -> Option<u8> {
+        if self.raw == 0 { None } else { Some(self.raw) }
+    }
+
+    /// The staging cursor's canonical bump, or `None` when nothing derived it.
+    pub const fn staging(self) -> Option<u8> {
+        if self.staging == 0 {
+            None
+        } else {
+            Some(self.staging)
+        }
+    }
+}
+
+/// The canonical PDA bumps this module's own walk derived, carried forward so
+/// that a second walk over the SAME five record pairs in the SAME instruction
+/// reproduces each address with one `create_program_address` instead of
+/// searching for it again.
+///
+/// # The measurement this exists for
+///
+/// `admitted_composition_v3::validate_authenticated_frame` re-derives every one
+/// of these pairs a few thousand instructions after this module derived them,
+/// to hold the frame it hands the accelerator to the same Registry addresses.
+/// Both walks ran `find_program_address`. Measured 2026-09-03 on real SBF ELFs
+/// by doubling each walk's searches: **this walk's cost 37,640 CU and the
+/// second walk's 29,235**, over one set of ten addresses whose seeds are a PDA
+/// domain, a canonical schema id and a content digest -- none of which moves
+/// with the release-set id, which is why both spans read draw-free while being
+/// almost entirely search.
+///
+/// Nothing here is taken on anyone's word. A bump is fed to a derivation the
+/// reader builds for itself and the address is compared against the account the
+/// frame supplied, by the equality that was always there; a wrong bump names a
+/// different address, or none, and refuses. Canonicality is enforced where the
+/// record is MADE -- the Registry finalizes records only at the canonical bump
+/// -- so a non-canonical hint names an address at which no Registry-owned
+/// record exists. This is `hot_v3::borrow_finalized_record_at`'s argument, one
+/// module over.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StrategyRecordBumpsV2 {
+    /// The selected capability descriptor's record pair.
+    pub capability: RecordPairBumpsV2,
+    /// The execution strategy record's pair.
+    pub strategy: RecordPairBumpsV2,
+    /// The strategy certificate's pair.
+    pub certificate: RecordPairBumpsV2,
+    /// The admission record's pair, on the admitted disposition only.
+    pub admission: RecordPairBumpsV2,
+    /// The pinned artifact release's pair.
+    pub artifact: RecordPairBumpsV2,
 }
 
 #[derive(Clone, Copy)]
@@ -172,6 +246,15 @@ enum CurrentDeploymentAuthenticationV2 {
 }
 
 impl AuthenticatedExecutionStrategyV2 {
+    /// The canonical record-pair bumps this authentication itself derived.
+    ///
+    /// A second walk over the same five pairs in the same instruction
+    /// reproduces each address from these instead of searching. See
+    /// [`StrategyRecordBumpsV2`].
+    pub const fn record_bumps(self) -> StrategyRecordBumpsV2 {
+        self.record_bumps
+    }
+
     /// Return the selected finalized Capability Program content identity.
     pub const fn capability_program_id(self) -> ContentId {
         self.capability_program_id
@@ -253,7 +336,7 @@ pub fn authenticate_execution_strategy_v2(
         return Err(TradingSbfError::Content);
     }
     let capability_program_id = selected_capability_program_id;
-    let capability_program = authenticate_capability_program(
+    let (capability_program, capability_bumps) = authenticate_capability_program(
         registry_program.key,
         &rent,
         account(accounts, CAPABILITY_RAW)?,
@@ -265,6 +348,7 @@ pub fn authenticate_execution_strategy_v2(
         context,
         capability_program_id,
         &capability_program,
+        capability_bumps,
         registry_program.key,
         &rent,
         accounts,
@@ -290,7 +374,7 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
     rent_sysvar: &AccountInfo<'_>,
     accounts: &[AccountInfo<'_>],
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
-    let rent = authenticate_common_frame_with_sealed_capability_pair(
+    let (rent, capability_bumps) = authenticate_common_frame_with_sealed_capability_pair(
         registry_program,
         rent_sysvar,
         accounts,
@@ -301,6 +385,7 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
         context,
         capability_program_id,
         capability_program,
+        capability_bumps,
         registry_program.key,
         &rent,
         accounts,
@@ -313,6 +398,7 @@ fn authenticate_selected_execution_strategy_v2(
     context: TradingFamilyContextV1,
     capability_program_id: ContentId,
     capability_program: &CapabilityProgramV4,
+    capability_bumps: RecordPairBumpsV2,
     registry_program: &Pubkey,
     rent: &Rent,
     accounts: &[AccountInfo<'_>],
@@ -336,13 +422,18 @@ fn authenticate_selected_execution_strategy_v2(
     }
 
     let strategy_program_id = capability_program.strategy().program();
-    let strategy = authenticate_strategy_program(
+    let (strategy, strategy_bumps) = authenticate_strategy_program(
         registry_program,
         rent,
         account(accounts, STRATEGY_RAW)?,
         account(accounts, STRATEGY_STAGING)?,
         strategy_program_id,
     )?;
+    let record_bumps = StrategyRecordBumpsV2 {
+        capability: capability_bumps,
+        strategy: strategy_bumps,
+        ..StrategyRecordBumpsV2::default()
+    };
     strategy
         .validate_descriptor_selection_v4(strategy_program_id, *capability_program)
         .map_err(|_| TradingSbfError::Content)?;
@@ -357,6 +448,7 @@ fn authenticate_selected_execution_strategy_v2(
             }
             require_exact_account_count(accounts, INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)?;
             Ok(AuthenticatedExecutionStrategyV2 {
+                record_bumps,
                 capability_program_id,
                 capability_program: *capability_program,
                 strategy_program_id,
@@ -384,6 +476,7 @@ fn authenticate_selected_execution_strategy_v2(
                 *capability_program,
                 strategy_program_id,
                 strategy,
+                record_bumps,
             )
         }
         StrategyDispositionV2::AdmittedAot => authenticate_admitted_aot(
@@ -394,6 +487,7 @@ fn authenticate_selected_execution_strategy_v2(
             *capability_program,
             strategy_program_id,
             strategy,
+            record_bumps,
             deployment_authentication,
         ),
     }
@@ -408,12 +502,13 @@ fn authenticate_shadow_aot(
     capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
     strategy: ExecutionStrategyProgramV2,
+    mut record_bumps: StrategyRecordBumpsV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
     require_exact_account_count(accounts, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2)?;
     let certificate_program_id = strategy
         .certificate_program()
         .ok_or(TradingSbfError::Content)?;
-    let certificate = authenticate_certificate(
+    let (certificate, certificate_bumps) = authenticate_certificate(
         registry_program,
         rent,
         account(accounts, CERTIFICATE_RAW)?,
@@ -433,7 +528,8 @@ fn authenticate_shadow_aot(
     // against the Certificate below; the semantic one is joined inside
     // authenticate_pinned_artifact, against the record it selected.
     let binding = certificate.artifact_binding();
-    let (artifact_release_id, artifact_release) = authenticate_pinned_artifact(
+    record_bumps.certificate = certificate_bumps;
+    let (artifact_release_id, artifact_release, artifact_bumps) = authenticate_pinned_artifact(
         registry_program,
         rent,
         account(accounts, SHADOW_ARTIFACT_RAW)?,
@@ -448,7 +544,9 @@ fn authenticate_shadow_aot(
             .validate_artifact(artifact_release_id)
             .map_err(|_| TradingSbfError::Content)?;
     }
+    record_bumps.artifact = artifact_bumps;
     Ok(AuthenticatedExecutionStrategyV2 {
+        record_bumps,
         capability_program_id,
         capability_program,
         strategy_program_id,
@@ -471,13 +569,14 @@ fn authenticate_admitted_aot(
     capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
     strategy: ExecutionStrategyProgramV2,
+    mut record_bumps: StrategyRecordBumpsV2,
     deployment_authentication: CurrentDeploymentAuthenticationV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
     require_exact_account_count(accounts, ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2)?;
     let certificate_program_id = strategy
         .certificate_program()
         .ok_or(TradingSbfError::Content)?;
-    let certificate = authenticate_certificate(
+    let (certificate, certificate_bumps) = authenticate_certificate(
         registry_program,
         rent,
         account(accounts, CERTIFICATE_RAW)?,
@@ -487,7 +586,7 @@ fn authenticate_admitted_aot(
     let admission_program_id = strategy
         .admission_program()
         .ok_or(TradingSbfError::Content)?;
-    let admission = authenticate_admission(
+    let (admission, admission_bumps) = authenticate_admission(
         registry_program,
         rent,
         account(accounts, ADMITTED_ADMISSION_RAW)?,
@@ -501,7 +600,9 @@ fn authenticate_admitted_aot(
     let artifact_release_id = certificate
         .artifact_release()
         .map_err(|_| TradingSbfError::Content)?;
-    let (_, artifact_release) = authenticate_pinned_artifact(
+    record_bumps.certificate = certificate_bumps;
+    record_bumps.admission = admission_bumps;
+    let (_, artifact_release, artifact_bumps) = authenticate_pinned_artifact(
         registry_program,
         rent,
         account(accounts, ADMITTED_ARTIFACT_RAW)?,
@@ -522,7 +623,9 @@ fn authenticate_admitted_aot(
         Some((admission_program_id, admission)),
     )
     .map_err(|_| TradingSbfError::Content)?;
+    record_bumps.artifact = artifact_bumps;
     Ok(AuthenticatedExecutionStrategyV2 {
+        record_bumps,
         capability_program_id,
         capability_program,
         strategy_program_id,
@@ -557,14 +660,14 @@ fn authenticate_capability_program(
     staging: &AccountInfo<'_>,
     expected_schema: ContentId,
     expected: ContentId,
-) -> Result<CapabilityProgramV4, TradingSbfError> {
+) -> Result<(CapabilityProgramV4, RecordPairBumpsV2), TradingSbfError> {
     if expected_schema.to_bytes() != CAPABILITY_PROGRAM_SCHEMA_ID_V4 {
         return Err(TradingSbfError::UnsupportedContent);
     }
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    authenticate_finalized_record(
+    let bumps = authenticate_finalized_record(
         registry_program,
         rent,
         raw,
@@ -573,7 +676,8 @@ fn authenticate_capability_program(
         expected.to_bytes(),
         &data,
     )?;
-    CapabilityProgramV4::decode(&data).map_err(|_| TradingSbfError::Content)
+    let decoded = CapabilityProgramV4::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    Ok((decoded, bumps))
 }
 
 fn authenticate_strategy_program(
@@ -582,14 +686,14 @@ fn authenticate_strategy_program(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     expected: ContentId,
-) -> Result<ExecutionStrategyProgramV2, TradingSbfError> {
+) -> Result<(ExecutionStrategyProgramV2, RecordPairBumpsV2), TradingSbfError> {
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     if data.len() != EXECUTION_STRATEGY_PROGRAM_BYTES_V2 {
         return Err(TradingSbfError::Content);
     }
-    authenticate_finalized_record(
+    let bumps = authenticate_finalized_record(
         registry_program,
         rent,
         raw,
@@ -598,7 +702,9 @@ fn authenticate_strategy_program(
         expected.to_bytes(),
         &data,
     )?;
-    ExecutionStrategyProgramV2::decode(&data).map_err(|_| TradingSbfError::Content)
+    let decoded =
+        ExecutionStrategyProgramV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    Ok((decoded, bumps))
 }
 
 fn authenticate_certificate(
@@ -607,14 +713,14 @@ fn authenticate_certificate(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     expected: ContentId,
-) -> Result<ExecutionStrategyCertificateV2, TradingSbfError> {
+) -> Result<(ExecutionStrategyCertificateV2, RecordPairBumpsV2), TradingSbfError> {
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     if data.len() != EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2 {
         return Err(TradingSbfError::Content);
     }
-    authenticate_finalized_record(
+    let bumps = authenticate_finalized_record(
         registry_program,
         rent,
         raw,
@@ -623,7 +729,9 @@ fn authenticate_certificate(
         expected.to_bytes(),
         &data,
     )?;
-    ExecutionStrategyCertificateV2::decode(&data).map_err(|_| TradingSbfError::Content)
+    let decoded =
+        ExecutionStrategyCertificateV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    Ok((decoded, bumps))
 }
 
 fn authenticate_admission(
@@ -632,14 +740,14 @@ fn authenticate_admission(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     expected: ContentId,
-) -> Result<ExecutionStrategyAdmissionV2, TradingSbfError> {
+) -> Result<(ExecutionStrategyAdmissionV2, RecordPairBumpsV2), TradingSbfError> {
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     if data.len() != EXECUTION_STRATEGY_ADMISSION_BYTES_V2 {
         return Err(TradingSbfError::Content);
     }
-    authenticate_finalized_record(
+    let bumps = authenticate_finalized_record(
         registry_program,
         rent,
         raw,
@@ -648,7 +756,9 @@ fn authenticate_admission(
         expected.to_bytes(),
         &data,
     )?;
-    ExecutionStrategyAdmissionV2::decode(&data).map_err(|_| TradingSbfError::Content)
+    let decoded =
+        ExecutionStrategyAdmissionV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    Ok((decoded, bumps))
 }
 
 /// Authenticate the accelerator's ArtifactRelease under whichever binding the
@@ -687,7 +797,7 @@ fn authenticate_pinned_artifact(
     accelerator_program: &AccountInfo<'_>,
     accelerator_programdata: &AccountInfo<'_>,
     deployment_authentication: CurrentDeploymentAuthenticationV2,
-) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1), TradingSbfError> {
+) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1, RecordPairBumpsV2), TradingSbfError> {
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
@@ -703,7 +813,7 @@ fn authenticate_pinned_artifact(
         CertificateArtifactBindingV2::Release(expected) => expected.to_bytes(),
         CertificateArtifactBindingV2::Semantic(_) => hash(&data).to_bytes(),
     };
-    authenticate_finalized_record(
+    let bumps = authenticate_finalized_record(
         registry_program,
         rent,
         raw,
@@ -744,7 +854,7 @@ fn authenticate_pinned_artifact(
             )?;
         }
     }
-    Ok((artifact_release_id, release))
+    Ok((artifact_release_id, release, bumps))
 }
 
 /// Join a semantically bound Certificate to the release record it selected.
@@ -844,7 +954,7 @@ fn authenticate_common_frame_with_sealed_capability_pair(
     accounts: &[AccountInfo<'_>],
     capability_program_id: ContentId,
     capability_program: &CapabilityProgramV4,
-) -> Result<Rent, TradingSbfError> {
+) -> Result<(Rent, RecordPairBumpsV2), TradingSbfError> {
     if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2
         || registry_program.is_signer
         || registry_program.is_writable
@@ -859,15 +969,14 @@ fn authenticate_common_frame_with_sealed_capability_pair(
     }
     let raw = account(accounts, CAPABILITY_RAW)?;
     let staging = account(accounts, CAPABILITY_STAGING)?;
-    let expected_raw = Pubkey::find_program_address(
+    let (expected_raw, raw_bump) = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
             &CAPABILITY_PROGRAM_SCHEMA_ID_V4,
             &capability_program_id.to_bytes(),
         ],
         registry_program.key,
-    )
-    .0;
+    );
     if raw.key != &expected_raw
         || raw.owner != registry_program.key
         || raw.is_signer
@@ -890,6 +999,10 @@ fn authenticate_common_frame_with_sealed_capability_pair(
     }
     drop(data);
     let capability_is_aliased = raw.key == staging.key;
+    // Under the aliased shape the staging coordinate REPEATS the raw record, so
+    // the raw bump is the one a second walk needs for both halves, and no
+    // staging address is derived here at all.
+    let mut bumps = RecordPairBumpsV2::new(raw_bump, raw_bump);
     if capability_is_aliased {
         if raw.owner != staging.owner
             || raw.is_signer != staging.is_signer
@@ -899,15 +1012,15 @@ fn authenticate_common_frame_with_sealed_capability_pair(
             return Err(TradingSbfError::Content);
         }
     } else {
-        let expected_staging = Pubkey::find_program_address(
+        let (expected_staging, staging_bump) = Pubkey::find_program_address(
             &[
                 STAGING_CURSOR_PDA_SEED_V1,
                 &CAPABILITY_PROGRAM_SCHEMA_ID_V4,
                 &capability_program_id.to_bytes(),
             ],
             registry_program.key,
-        )
-        .0;
+        );
+        bumps = RecordPairBumpsV2::new(raw_bump, staging_bump);
         if staging.key != &expected_staging
             || staging.owner != &system_program::ID
             || staging.is_signer
@@ -937,7 +1050,7 @@ fn authenticate_common_frame_with_sealed_capability_pair(
             return Err(TradingSbfError::Content);
         }
     }
-    Ok(rent)
+    Ok((rent, bumps))
 }
 
 fn authenticate_finalized_record(
@@ -948,17 +1061,15 @@ fn authenticate_finalized_record(
     schema: [u8; 32],
     digest: [u8; 32],
     exact_content: &[u8],
-) -> Result<(), TradingSbfError> {
-    let expected_raw = Pubkey::find_program_address(
+) -> Result<RecordPairBumpsV2, TradingSbfError> {
+    let (expected_raw, raw_bump) = Pubkey::find_program_address(
         &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
         registry_program,
-    )
-    .0;
-    let expected_staging = Pubkey::find_program_address(
+    );
+    let (expected_staging, staging_bump) = Pubkey::find_program_address(
         &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
         registry_program,
-    )
-    .0;
+    );
     if raw.key != &expected_raw
         || raw.owner != registry_program
         || raw.is_signer
@@ -975,7 +1086,7 @@ fn authenticate_finalized_record(
     {
         return Err(TradingSbfError::Content);
     }
-    Ok(())
+    Ok(RecordPairBumpsV2::new(raw_bump, staging_bump))
 }
 
 fn require_exact_account_count(

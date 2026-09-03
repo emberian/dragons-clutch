@@ -25,7 +25,6 @@ use dclutch_account_profile_contract::{
     v2::{
         AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2, RouteAccountPrivilegesV2,
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2, TrustedEnvironmentV2,
-        derive_effect_permissions, derive_effect_permissions_with_dynamic_spans,
         project_atomic as project_accounts_atomic, project_dynamic_fixed_spans_atomic,
     },
     v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3},
@@ -1509,6 +1508,19 @@ fn authenticate_accelerator_witness_v4(
     // section a caller could otherwise state freely. A dynamic-span profile on
     // this path is owed a binding before it is admitted, and that is a design
     // note's job, not a silent acceptance here.
+    //
+    // THAT SENTENCE WAS TRUE OF TWO FAMILIES AND FALSE OF THE THIRD, and the
+    // difference cost the selector-9 Dealer scenario family every input it was
+    // ever handed. Its evaluator did not assert `is_empty()`; it read the bank,
+    // `try_into::<[u32; 9]>`, and the refusal above guarantees the conversion
+    // fails -- so the admitted accelerator refused that whole family
+    // unconditionally and nothing was red because nothing exercised the route
+    // through it. It now derives its nine widths on its own side of the
+    // boundary (`dealer_scenario_span_widths_v4`) and asserts `is_empty()` like
+    // the other two, so this comment describes the tree it is written in.
+    // WITH THAT, NO READER READS A WIDTH OUT OF THIS BANK AT ALL: the producer
+    // side is a section every consumer requires to be zero-length, and its
+    // deletion from `AdmittedPreludeWitnessV1` is owed.
     if witness.span_count() != 0 {
         return Err(TradingSbfError::AcceleratorRuntimeView.into());
     }
@@ -4116,6 +4128,14 @@ fn execute_authenticated_hot_v3(
     hot_heap_mark!("rent-quotes");
     hot_cu_checkpoint!("p5-geometry-rent");
 
+    // ONE BYTE PER COORDINATE, ALLOCATED HERE BECAUSE IT OUTLIVES THE SCRATCH.
+    // The account projection below decodes every coordinate's rule -- and, for
+    // a route alias, its representative's -- and used to throw both away, after
+    // which `project_hot_effects_v3` decoded all of them again to keep the
+    // permission byte. It is filled where the rules are already in hand, and
+    // survives the observation bank's release the way the account inputs do.
+    let mut effect_permissions =
+        try_projection_bank_v3(&AccountPermission::read_only(), observations.len())?;
     // Destructured at the call: every one of the four banks borrows the
     // scratch region, and a named binding of the whole struct would own that
     // borrow until the end of the function, past the release.
@@ -4139,6 +4159,7 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         tail_count,
         &observations,
+        &mut effect_permissions,
         family_request,
         request_digest,
         trusted_environment,
@@ -4423,8 +4444,7 @@ fn execute_authenticated_hot_v3(
         &transition_output_identities,
         account_inputs,
         &lifecycle_plans,
-        account_profile,
-        &dynamic_spans.widths,
+        &effect_permissions,
         &aliases,
         runtime_accounts.len(),
         request_bytes,
@@ -6741,8 +6761,12 @@ fn project_hot_effects_v3(
     // it is released before this runs.
     mut account_inputs: Vec<AccountInput>,
     lifecycle_plans: &[PreparedLifecycleInvocationV3],
-    account_profile: AccountProfileV2<'_>,
-    span_counts: &[u32],
+    // The bank `project_account_and_request_registers_v3` filled out of the
+    // same rules, at the same widths, in the same instruction. The
+    // `AccountProfileV2` and the span counts this phase used to take are gone
+    // with the second walk that read them: the only thing it decoded them for
+    // was the permission bank.
+    effect_permissions: &[AccountPermission],
     aliases: &[usize],
     runtime_account_count: usize,
     request_bytes: usize,
@@ -6766,18 +6790,13 @@ fn project_hot_effects_v3(
         runtime_account_count,
     )?;
     hot_heap_mark!("effects-permissions");
-    if account_profile.uses_dynamic_fixed_spans() {
-        derive_effect_permissions_with_dynamic_spans(
-            account_profile,
-            tail_count,
-            span_counts,
-            &mut permissions,
-        )
-        .map_err(|_| TradingSbfError::Content)?;
-    } else {
-        derive_effect_permissions(account_profile, tail_count, &mut permissions)
-            .map_err(|_| TradingSbfError::Content)?;
+    // The projection's bank, at this phase's width. A caller that handed over a
+    // bank of the wrong width refuses here rather than projecting against a
+    // permission set that is not this frame's.
+    if effect_permissions.len() != permissions.len() {
+        return Err(TradingSbfError::Content.into());
     }
+    permissions.copy_from_slice(effect_permissions);
     require_common_projection_permissions_v3(&permissions)?;
     hot_cu_checkpoint!("p7e-permissions");
     let effect_account_count = effect
@@ -7254,6 +7273,7 @@ fn execute_admitted_candidate_v3(
         &mut witness,
     )
     .map_err(|_| TradingSbfError::AdmittedContext)?;
+    hot_cu_checkpoint!("cx-witness-encoded");
     let execution = execute_admitted_aot_v3(
         view.program_id,
         AdmittedCpiFrameV3 {
@@ -13985,6 +14005,10 @@ fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info
     span_counts: &[u32],
     tail_count: u32,
     observations: &[AccountObservationV1<'_>],
+    // The effect permission bank the account walk fills as it decodes the rules
+    // it already needs. `p7e-permissions` used to decode all of them again for
+    // this one byte per coordinate, 14,800 CU on the partial equity Remove.
+    effect_permissions: &mut [AccountPermission],
     family_request: &'artifact [u8],
     request_digest: [u8; 32],
     trusted_environment: TrustedEnvironmentObservationV3,
@@ -14057,9 +14081,16 @@ fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info
             span_counts,
             observations,
             account_registers,
+            Some(effect_permissions),
         )
     } else {
-        project_accounts_atomic(account_profile, tail_count, observations, account_registers)
+        project_accounts_atomic(
+            account_profile,
+            tail_count,
+            observations,
+            account_registers,
+            Some(effect_permissions),
+        )
     }
     .map_err(|_| TradingSbfError::Content)?;
     hot_cu_checkpoint!("p5r-account-projection");

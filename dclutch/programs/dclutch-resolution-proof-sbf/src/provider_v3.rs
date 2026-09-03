@@ -386,7 +386,7 @@ mod tests {
         ContentId as ProductContentId, ResultDomainInputV2, compile_result_domain_v2,
         result_domain_record_bytes,
     };
-    use dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2;
+    use dclutch_product_runtime_v2_svm_reader::{AuthenticatedRecordV2, ProductRecordBumpsV3};
     use dclutch_pyth_svm::PythReleaseV1Input;
     use dclutch_resolution_codec::ProviderCallerV3;
     use dclutch_source_contract::{
@@ -501,6 +501,10 @@ mod tests {
             representation_release_id: domain.representation_release_id(),
             mapping_release_id: domain.mapping_release_id(),
             outcome_count: domain.outcome_count().expect("outcome count"),
+            // `b312ce3c4` widened this struct and left this synthetic fixture
+            // behind: the test workspace has been red since. Nothing here reads
+            // the bank, and an unrecorded bank is the pre-hint route.
+            record_bumps: ProductRecordBumpsV3::ABSENT,
         };
 
         let pyth_release = PythReleaseV1::new(PythReleaseV1Input {

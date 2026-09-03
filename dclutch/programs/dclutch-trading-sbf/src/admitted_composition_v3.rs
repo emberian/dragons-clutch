@@ -70,7 +70,8 @@ use solana_program::{
 use solana_sdk_ids::sysvar;
 
 use crate::{
-    TradingSbfError, execution_strategy_v2::AuthenticatedExecutionStrategyV2,
+    TradingSbfError,
+    execution_strategy_v2::{AuthenticatedExecutionStrategyV2, RecordPairBumpsV2},
     hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint,
     hot_v3::hot_heap_mark_macro as hot_heap_mark,
 };
@@ -242,7 +243,9 @@ pub fn execute_admitted_aot_v3<'info>(
 ) -> Result<AdmittedExecutionV3, ProgramError> {
     let invocation_context = admitted_invocation_context_digest_v3(*context)
         .map_err(|_| TradingSbfError::AdmittedContext)?;
+    hot_cu_checkpoint!("cx-context-digest");
     validate_authenticated_frame(program_id, frame, runtime_accounts, context, authenticated)?;
+    hot_cu_checkpoint!("cx-frame-validated");
     let scalar_count =
         u32::try_from(input_scalars.len()).map_err(|_| TradingSbfError::AdmittedTransport)?;
     let identity_count =
@@ -302,6 +305,7 @@ pub fn execute_admitted_aot_v3<'info>(
     }
 
     hot_heap_mark!("admitted-input-bank");
+    hot_cu_checkpoint!("cx-request-built");
     let mut transcript = hash(ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3).to_bytes();
     // One buffer set for every invocation. See `AdmittedCpiBuffersV4` for the
     // measurement that made this necessary; `first_request` sizes the request
@@ -319,6 +323,7 @@ pub fn execute_admitted_aot_v3<'info>(
             .map_err(|_| TradingSbfError::AdmittedTransport)?,
     )?;
     hot_heap_mark!("admitted-cpi-buffers");
+    hot_cu_checkpoint!("cx-cpi-buffers");
     let (scalars, identities) = match profile {
         AcceleratorTransportProfileV2::ChunkedBankV2 => {
             let mut candidate = vec![0_u8; input_bank.len()];
@@ -392,12 +397,15 @@ pub fn execute_admitted_aot_v3<'info>(
             if accepted_digest != Some(content(&candidate)?) {
                 return Err(TradingSbfError::Transition.into());
             }
-            resolve_and_decode_candidate_v3(
-                authenticated,
-                &candidate,
-                scalar_count,
-                identity_count,
-            )?
+            {
+                hot_cu_checkpoint!("cx-ack-validated");
+                resolve_and_decode_candidate_v3(
+                    authenticated,
+                    &candidate,
+                    scalar_count,
+                    identity_count,
+                )?
+            }
         }
         AcceleratorTransportProfileV2::OutputPageV3 => {
             let AdmittedAcceleratorRequestV2::OutputPageV3(page_request) = first_request else {
@@ -724,6 +732,7 @@ fn invoke_admitted_accelerator_v3<'info>(
         ]],
     )
     .map_err(|_| TradingSbfError::Transition)?;
+    hot_cu_checkpoint!("cx-accelerator-returned");
     let (producer, ack_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
     if producer != *frame.accelerator_program.key || ack_bytes.len() < minimum_ack_bytes {
         return Err(TradingSbfError::Transition.into());
@@ -837,6 +846,13 @@ fn validate_authenticated_frame<'a, 'info>(
         descriptor.kind().to_bytes(),
         context.selected_action,
     );
+    // THE BUMPS ARE THIS PROGRAM'S OWN, DERIVED A FEW THOUSAND INSTRUCTIONS AGO.
+    // `execution_strategy_v2` searched for all five pairs while it
+    // authenticated them; this walk reproduces the same addresses and compares
+    // them against the frame by the equality that was always there. Measured on
+    // real SBF ELFs 2026-09-03 by doubling each walk's searches: the two walks
+    // spent 37,640 and 29,235 CU searching for one set of ten addresses.
+    let bumps = authenticated.record_bumps();
     require_record_pair(
         frame.registry.key,
         frame.capability_raw.key,
@@ -844,6 +860,7 @@ fn validate_authenticated_frame<'a, 'info>(
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         authenticated.capability_program_id().to_bytes(),
         sealed_aliases,
+        bumps.capability,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -852,6 +869,7 @@ fn validate_authenticated_frame<'a, 'info>(
         EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
         authenticated.strategy_program_id().to_bytes(),
         false,
+        bumps.strategy,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -860,6 +878,7 @@ fn validate_authenticated_frame<'a, 'info>(
         EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         context.certificate.to_bytes(),
         false,
+        bumps.certificate,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -868,6 +887,7 @@ fn validate_authenticated_frame<'a, 'info>(
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
         context.admission.to_bytes(),
         false,
+        bumps.admission,
     )?;
     require_record_pair(
         frame.registry.key,
@@ -876,6 +896,7 @@ fn validate_authenticated_frame<'a, 'info>(
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         context.artifact_release.to_bytes(),
         false,
+        bumps.artifact,
     )?;
     Ok(())
 }
@@ -932,16 +953,34 @@ fn exact_deployment_keys_v3(
 /// The seeds are taken from [`RecordKeyV1`] rather than spelled here, because a
 /// Registry record address is the Registry's fact and this program is not a
 /// second author of it.
-fn record_address(registry: &Pubkey, seeds: RecordPdaSeedsV1) -> Pubkey {
-    Pubkey::find_program_address(
-        &[
-            seeds.domain(),
-            seeds.schema_release_id().as_bytes(),
-            seeds.expected_digest().as_bytes(),
-        ],
-        registry,
-    )
-    .0
+fn record_address(registry: &Pubkey, seeds: RecordPdaSeedsV1, bump: Option<u8>) -> Pubkey {
+    // A HINT CANNOT REFUSE, so an unrecorded or unreproducible bump degrades to
+    // the search this walk always ran rather than raising a conjunct it does not
+    // own. What refuses is the equality below, unchanged: a bump that names a
+    // different address names one at which no Registry-owned record exists.
+    match bump {
+        Some(bump) => Pubkey::create_program_address(
+            &[
+                seeds.domain(),
+                seeds.schema_release_id().as_bytes(),
+                seeds.expected_digest().as_bytes(),
+                &[bump],
+            ],
+            registry,
+        )
+        .unwrap_or_else(|_| record_address(registry, seeds, None)),
+        None => {
+            Pubkey::find_program_address(
+                &[
+                    seeds.domain(),
+                    seeds.schema_release_id().as_bytes(),
+                    seeds.expected_digest().as_bytes(),
+                ],
+                registry,
+            )
+            .0
+        }
+    }
 }
 
 /// Require one finalized raw record and its vacant staging cursor to sit at the
@@ -969,12 +1008,13 @@ fn require_record_pair(
     schema: [u8; 32],
     digest: [u8; 32],
     aliased: bool,
+    bumps: RecordPairBumpsV2,
 ) -> Result<(), ProgramError> {
     let key = RecordKeyV1::new(
         SchemaReleaseId::new(schema).map_err(|_| TradingSbfError::AdmittedFrame)?,
         ContentDigest::new(digest).map_err(|_| TradingSbfError::AdmittedFrame)?,
     );
-    let raw_address = record_address(registry, key.raw_record_pda_seeds());
+    let raw_address = record_address(registry, key.raw_record_pda_seeds(), bumps.raw());
     // Under the seal-backed aliased shape a per-ACTION staging coordinate
     // repeats its own raw record instead of carrying the cursor, so the
     // transaction locks one account per record rather than two. The address
@@ -990,7 +1030,7 @@ fn require_record_pair(
     let expected_staging = if aliased {
         raw_address
     } else {
-        record_address(registry, key.staging_cursor_pda_seeds())
+        record_address(registry, key.staging_cursor_pda_seeds(), bumps.staging())
     };
     if raw != &raw_address || staging != &expected_staging {
         return Err(TradingSbfError::AdmittedFrame.into());
@@ -1129,7 +1169,7 @@ fn content(bytes: &[u8]) -> Result<ContentId, ProgramError> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
+    use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 
     use super::*;
 
@@ -1248,10 +1288,11 @@ mod tests {
             SchemaReleaseId::new(schema).expect("nonzero schema"),
             ContentDigest::new(digest).expect("nonzero digest"),
         );
-        let raw = record_address(&registry, key.raw_record_pda_seeds());
-        let staging = record_address(&registry, key.staging_cursor_pda_seeds());
+        let none = RecordPairBumpsV2::default();
+        let raw = record_address(&registry, key.raw_record_pda_seeds(), None);
+        let staging = record_address(&registry, key.staging_cursor_pda_seeds(), None);
         assert_eq!(
-            require_record_pair(&registry, &raw, &staging, schema, digest, false),
+            require_record_pair(&registry, &raw, &staging, schema, digest, false, none),
             Ok(())
         );
         // The aliased shape takes the raw record at BOTH coordinates and
@@ -1259,15 +1300,103 @@ mod tests {
         // the wrong account, the distinct shape still refuses a repeated raw,
         // and a stranger is still a stranger.
         assert_eq!(
-            require_record_pair(&registry, &raw, &raw, schema, digest, true),
+            require_record_pair(&registry, &raw, &raw, schema, digest, true, none),
             Ok(())
         );
-        assert!(require_record_pair(&registry, &raw, &staging, schema, digest, true).is_err());
-        assert!(require_record_pair(&registry, &raw, &raw, schema, digest, false).is_err());
         assert!(
-            require_record_pair(&registry, &raw, &Pubkey::new_unique(), schema, digest, true)
-                .is_err()
+            require_record_pair(&registry, &raw, &staging, schema, digest, true, none).is_err()
         );
+        assert!(require_record_pair(&registry, &raw, &raw, schema, digest, false, none).is_err());
+        assert!(
+            require_record_pair(
+                &registry,
+                &raw,
+                &Pubkey::new_unique(),
+                schema,
+                digest,
+                true,
+                none
+            )
+            .is_err()
+        );
+
+        // THE HINT IS A HINT AND NEVER AN AUTHORITY, in the three ways it can
+        // be wrong. The canonical bumps reproduce the same two addresses the
+        // search finds; a bump one below canonical names a different address
+        // and the equality refuses; and a bump whose derivation fails outright
+        // degrades to the search rather than raising a conjunct a hint reader
+        // does not own.
+        let (canonical_raw, raw_bump) =
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry);
+        let (canonical_staging, staging_bump) = Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+            &registry,
+        );
+        assert_eq!(canonical_raw, raw);
+        assert_eq!(canonical_staging, staging);
+        let hinted = RecordPairBumpsV2::new(raw_bump, staging_bump);
+        assert_eq!(
+            require_record_pair(&registry, &raw, &staging, schema, digest, false, hinted),
+            Ok(())
+        );
+        assert_eq!(
+            record_address(&registry, key.raw_record_pda_seeds(), Some(raw_bump)),
+            raw
+        );
+        // A DIFFERENT-BUT-DERIVABLE bump names a different address and the
+        // equality refuses. Below the canonical bump most candidates are ON the
+        // curve, where `create_program_address` errors, so the hostile has to
+        // be the first one that derives at all.
+        let mut lower = raw_bump;
+        let wrong_raw = loop {
+            lower = lower
+                .checked_sub(1)
+                .expect("some bump below canonical derives");
+            if let Ok(address) = Pubkey::create_program_address(
+                &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[lower]],
+                &registry,
+            ) {
+                assert_ne!(address, raw);
+                break lower;
+            }
+        };
+        assert!(
+            require_record_pair(
+                &registry,
+                &raw,
+                &staging,
+                schema,
+                digest,
+                false,
+                RecordPairBumpsV2::new(wrong_raw, staging_bump)
+            )
+            .is_err()
+        );
+        // AND AN UNDERIVABLE BUMP DEGRADES TO THE SEARCH rather than refusing:
+        // reading a hint may not raise a conjunct the hint does not own. Every
+        // bump above the canonical one is on the curve by construction, since
+        // the search descends from 255 and stopped at the first that was not.
+        if let Some(on_curve) = raw_bump.checked_add(1) {
+            assert!(
+                Pubkey::create_program_address(
+                    &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[on_curve]],
+                    &registry,
+                )
+                .is_err()
+            );
+            assert_eq!(
+                require_record_pair(
+                    &registry,
+                    &raw,
+                    &staging,
+                    schema,
+                    digest,
+                    false,
+                    RecordPairBumpsV2::new(on_curve, staging_bump)
+                ),
+                Ok(())
+            );
+        }
 
         // The exact defect: a record at the Registry's three-seed address must
         // NOT satisfy a two-seed check, and the two-seed address must not be
@@ -1276,11 +1405,14 @@ mod tests {
             Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &digest], &registry).0;
         assert_ne!(raw, two_seed);
         assert!(
-            require_record_pair(&registry, &two_seed, &staging, schema, digest, false).is_err()
+            require_record_pair(&registry, &two_seed, &staging, schema, digest, false, none)
+                .is_err()
         );
 
         // Swapping schema and digest names a different record.
-        assert!(require_record_pair(&registry, &raw, &staging, digest, schema, false).is_err());
+        assert!(
+            require_record_pair(&registry, &raw, &staging, digest, schema, false, none).is_err()
+        );
         // A raw record paired with another identity's staging cursor refuses.
         assert!(
             require_record_pair(
@@ -1289,7 +1421,8 @@ mod tests {
                 &Pubkey::new_unique(),
                 schema,
                 digest,
-                false
+                false,
+                none
             )
             .is_err()
         );
@@ -1300,12 +1433,17 @@ mod tests {
                 &staging,
                 schema,
                 digest,
-                false
+                false,
+                none
             )
             .is_err()
         );
         // A zero schema or digest is not an identity at all.
-        assert!(require_record_pair(&registry, &raw, &staging, [0; 32], digest, false).is_err());
-        assert!(require_record_pair(&registry, &raw, &staging, schema, [0; 32], false).is_err());
+        assert!(
+            require_record_pair(&registry, &raw, &staging, [0; 32], digest, false, none).is_err()
+        );
+        assert!(
+            require_record_pair(&registry, &raw, &staging, schema, [0; 32], false, none).is_err()
+        );
     }
 }

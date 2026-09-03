@@ -4716,6 +4716,7 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
+                None,
             )
             .map(|()| output_identities)
         };

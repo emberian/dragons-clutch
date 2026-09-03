@@ -57,7 +57,7 @@ use super::{
     },
     v3_trade_profile::{
         DEALER_SCENARIO_PROFILE_SPANS_V4, DealerScenarioLogicalFrameV4,
-        dealer_scenario_logical_frame_v4,
+        dealer_scenario_logical_frame_v4, dealer_scenario_span_widths_v4,
     },
 };
 use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
@@ -135,10 +135,23 @@ pub fn evaluate_authenticated_dealer_scenario_v4(
     let width =
         usize::try_from(request.width).map_err(|_| DealerScenarioAcceleratorErrorV4::Arithmetic)?;
     let runtime = invocation.runtime_accounts();
-    let spans: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4] = invocation
-        .span_widths()
-        .try_into()
-        .map_err(|_| DealerScenarioAcceleratorErrorV4::Invocation)?;
+    // THE WIDTHS ARE DERIVED HERE, NOT READ FROM THE WITNESS. The caller's span
+    // bank is refused nonempty by `authenticate_accelerator_witness_v4` and is
+    // therefore always empty, so the `try_into::<[u32; 9]>` this replaced failed
+    // on every input and refused this whole family unconditionally. See
+    // `dealer_scenario_span_widths_v4` for why the repair is a derivation rather
+    // than a binding on a caller-supplied bank, and for the two conjuncts below
+    // that make it safe: the geometry admits only the widths the profile's own
+    // rules admit, and the total is pinned against the runtime slice this
+    // program hashes for itself.
+    let spans = dealer_scenario_span_widths_v4(
+        request.route_span_counts,
+        request.claims_position_count,
+        request.evidence_span_count,
+    );
+    if !invocation.span_widths().is_empty() {
+        return Err(DealerScenarioAcceleratorErrorV4::Invocation);
+    }
     let frame = dealer_scenario_logical_frame_v4(spans)
         .map_err(|_| DealerScenarioAcceleratorErrorV4::Invocation)?;
     if invocation.selected_action() != u32::from(DEALER_SCENARIO_TRADE_ACTION_V3)
@@ -147,8 +160,6 @@ pub fn evaluate_authenticated_dealer_scenario_v4(
         || frame.logical_account_count
             != u32::try_from(runtime.len())
                 .map_err(|_| DealerScenarioAcceleratorErrorV4::Arithmetic)?
-        || spans.get(4).copied() != Some(u32::from(request.claims_position_count))
-        || spans.get(7).copied() != Some(u32::from(request.evidence_span_count))
         || spans.get(8).copied() != Some(frame.scratch_count)
         || invocation.input_bank().len() != candidate_bank.len()
         || invocation.request().scalar_count()
