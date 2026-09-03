@@ -3912,3 +3912,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - The four files that had kept `abi:route-census:verify` red were pinned-rustfmt passes over HEAD (proved by formatting
   HEAD's blob and comparing) — landed as one fmt commit.
 - Cuts: `38b223136`.
+
+### Lane map delta — 2026-09-03 08:45 EDT
+- GENERAL (successor) closed (`0948b0224`, `0f8713ac8`, `29e07b83a`, + one): rows attributed at zero build cost (three of
+  four moved rows were the seed change's); **the General-hot red convicted at hot_v3.rs:6634 — `try_reserve_exact` with 8
+  bytes of the 65,536 grant left: the admitted CPI loop paid for `StableInstruction::from(instruction.clone())` once per
+  chunk (800 + 4×802 = 4,008 over the grant), and the tree's own `invoke_signed_owned_v1` had never been adopted on that
+  route** — peak heap 65,528 → 31,808; ladder N=2 603,939 / N=13 609,097 / N=258 619,393; **the two-slot proof is GREEN**
+  (slots 1 and 48, the 55-entry list byte-identical, 603,939 both) — it had also asserted with random keypairs at two
+  top-level coordinates and could never have proven it; `HeapExhausted 0x4027` retargets 31 reservations that said Content;
+  `ShadowTrustedEnvironment 0x4028` with the premise corrected (both Shadow authors now derive from the family digest).
+  **Sweep finding: the Direct real-ELF surface is 29/60 red on ONE assertion — the hand-built fixture writes zeros where the
+  builder mines bump hints** (three bytes of 584); three Claims suites never run on Darwin (Token-2022 v11 needs Linux).
+  → FIXTURES **`(spawned)`**: the hand side derives its bumps; the Series fixture; the Claims suites on hbox; a runner census.
+- Cuts: `aa3840edf`, `e656bf27d`, `b798cc216`.
