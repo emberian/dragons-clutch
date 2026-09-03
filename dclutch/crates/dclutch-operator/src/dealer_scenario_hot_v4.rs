@@ -1250,9 +1250,31 @@ mod tests {
             .copied()
             .collect::<Vec<_>>();
         assert_eq!(canonical.manifest.total_account_count, 116);
+        // NOT EQUAL-COUNT ANY MORE, and this assertion was left behind when it
+        // stopped being. `cee27ff16` replaced the equal-count split with one
+        // that minimizes the WIDEST PAGE BY HASHED BYTES -- the page route
+        // hashes each observation's complete data, and the accounts differ in
+        // width by four orders of magnitude -- and this test kept asserting
+        // `[20, 20, 19, 19, 19, 19]`, so `dclutch-operator`'s lib suite has been
+        // red since. That commit reported "dclutch-operator lib 9/9 on the
+        // checkpoint module": a filtered run that could not see this file.
+        //
+        // The vector is pinned rather than described because it is a producer
+        // output over a fixture this test owns, and the two properties that
+        // outlive any particular fixture are asserted beside it: the counts sum
+        // to the total, and the partition stays contiguous in key order.
         assert_eq!(
             canonical.manifest.page_account_counts,
-            [20, 20, 19, 19, 19, 19]
+            [10, 3, 26, 26, 26, 25]
+        );
+        assert_eq!(
+            canonical
+                .manifest
+                .page_account_counts
+                .iter()
+                .map(|count| usize::from(*count))
+                .sum::<usize>(),
+            usize::from(canonical.manifest.total_account_count)
         );
         assert_eq!(
             usize::from(canonical.manifest.total_account_count),

@@ -3748,3 +3748,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - hbox's root filesystem was at 0 bytes free: 11.5 GB of my lanes' build outputs removed (sources, evidence, the warm .lake
   kept); 12 GB free now. ember: the rest of the disk is yours (~/dev 27G, ~/h1-ghost 23G, ~/snap 9.7G, ~/tmp 9.4G).
 - Cuts: `bcf42759f`, `131b8131e`, `e4672668b`.
+
+### Lane map delta — 2026-09-03 03:00 EDT
+- COHORT-14B (in flight; `c21928a68`, `03bab8ddc`): **THE CAPTURE COMMITTED inside the window on the re-founded market — the
+  first honest observation the protocol has taken on devnet**; L7 judged by failing first; the Direct capability seal is
+  shared across markets; the settle waits out end+max_age (`run-settle-b.sh` running).
+- DEALER closed (`9ade7439a`, `07184fa82`, `311e7fc55`, rows `9278f5181`/`241d2b684`, note `b02f5e0fc`): the "four inter-child
+  frame builds" were two-thirds a SECOND record walk over ten addresses already derived — one walk now (−21,900), the
+  permission byte kept from the decode already done (−13,705): **−33,351 draw-free**; **on one run of three the partial
+  Remove COMMITS (10,377 spare) and the first LP final Remove with it** — the draw across runs (~96,000) is now four times
+  the worst shortfall (23,887); its largest term is nine searches in the equity evaluator (~27,000) with a carrier already in
+  the wire (four zero bytes at 476..480). Selector 9 derives its own span widths accelerator-side — the family the admitted
+  accelerator refused on every input is reachable (no test yet submits it). Three of its own reds found by running whole
+  crate suites. → DEALER **`(spawned)`**: the evaluator's bump bank (three consecutive commits), the strategy walk's mined
+  tail, the reader-less span bank's deletion.
+- Cuts: `7e158a1b2`, `26424a852`.
