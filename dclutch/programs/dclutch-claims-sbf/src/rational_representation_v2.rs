@@ -14,11 +14,10 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
 use dclutch_rational_representation_v2_contract::{
-    AffineBatchContextV2, CompletionEvidenceV2, CoordinateIdentitiesV3,
-    PreparedRepresentationV2, ResolvedRequestV2,
+    AffineBatchContextV2, CompletionEvidenceV2, CoordinateIdentitiesV3, PreparedRepresentationV2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
     RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, RationalReplayV2, RepresentationActionV2,
-    RepresentationRequestV2, TokenEffectStyleV2, finalize, prepare,
+    RepresentationRequestV2, ResolvedRequestV2, TokenEffectStyleV2, finalize, prepare,
 };
 use dclutch_rational_representation_v2_kernel::{
     CoordinateObservation, DescriptorAdmissionV2, RepresentationDescriptorV2, SCALAR_BYTES,
@@ -528,8 +527,8 @@ fn prepare_and_execute<'accounts, 'info>(
     // Physical ABI v3 sends no per-coordinate program address, so the request
     // is joined HERE, to the derivation that just authenticated the account
     // frame, and nothing downstream can read an identity nobody derived.
-    let resolved = ResolvedRequestV2::new(request, &identities)
-        .map_err(|_| ClaimsSbfError::Representation)?;
+    let resolved =
+        ResolvedRequestV2::new(request, &identities).map_err(|_| ClaimsSbfError::Representation)?;
     let prepared = prepare(resolved, descriptor, projection, exposure)
         .map_err(|_| ClaimsSbfError::Representation)?;
 

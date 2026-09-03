@@ -562,8 +562,9 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
         .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
     let before_hoard = TokenAccount::parse(&report.pre_hoard_token_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let before_recipient = TokenAccount::parse_base_or_immutable_owner(&report.pre_recipient_token_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+    let before_recipient =
+        TokenAccount::parse_base_or_immutable_owner(&report.pre_recipient_token_bytes)
+            .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
     let after_hoard_amount = before_hoard
         .amount
         .checked_sub(report.payout)

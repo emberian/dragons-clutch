@@ -967,7 +967,6 @@ fn token_poststate_digest(accounts: &[AccountInfo<'_>]) -> Result<[u8; 32], Prog
     .to_bytes())
 }
 
-
 fn shared_frame<'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],
 ) -> RationalTerminalFrameV3<'accounts, 'info> {

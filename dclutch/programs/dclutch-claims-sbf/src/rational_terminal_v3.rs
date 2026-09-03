@@ -638,8 +638,8 @@ pub(crate) fn token_amount(
     let bytes = account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    let token =
-        TokenAccount::parse_base_or_immutable_owner(&bytes).map_err(|_| ClaimsSbfError::Accounts)?;
+    let token = TokenAccount::parse_base_or_immutable_owner(&bytes)
+        .map_err(|_| ClaimsSbfError::Accounts)?;
     if token.mint != mint || token.owner != owner {
         return Err(ClaimsSbfError::Identity.into());
     }
