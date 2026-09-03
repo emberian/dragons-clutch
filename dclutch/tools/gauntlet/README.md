@@ -70,21 +70,26 @@ used, because parallel lanes share this working tree.
 `run.sh --mode census` is supported. It needs no chain or port and may run
 concurrently.
 
-`run.sh --mode full` is not a campaign at HEAD. Tier 1's localhost Market
-producer was `demo-market`, which is deliberately retired because a standalone
-Registry address cannot authenticate the current Direct facts. The available
-`devnet-market` and `graduation-market` planners require acknowledged inputs and
-fee-policy choices that this runner does not own. Reusing either silently would
-invent a different campaign.
+`run.sh --mode full` is a campaign again as of `c9eac1738` (2026-09-03). It was
+parked from 2026-08-31 because tier 1's only localhost Market producer was
+`demo-market`, which is deliberately retired -- a standalone Registry address
+cannot authenticate the current Direct facts -- and because `devnet-market` and
+`graduation-market` need acknowledged inputs and a fee policy this runner does
+not own. The repair was not to find another planner but to stop needing one:
+the spec omits `market` and the supervisor compiles a fixture input from the
+plan it builds.
 
-The `full` spelling remains an explicit refusal so old invocations do not fall
-through to another mode. It exits 1 before resolving a revision, creating the
-work root, checking build tools, or compiling ELFs. Use the family runners under
-`tools/gauntlet/` for their named campaigns; use `run.sh --mode census` to
-render the accumulated execution report.
+It costs 25-31 minutes: seven SBF links, a localhost validator, 195
+transactions, and the fold. Pass `--rpc-port auto` to run it beside another
+campaign. Use the family runners under `tools/gauntlet/` for their named
+campaigns; use `run.sh --mode census` to render the accumulated report in
+seconds.
 
-`tools/gauntlet/test-run-cli.sh` guards that boundary with hostile build-tool
-stubs and proves the refusal exits 1 without creating its work root.
+`tools/gauntlet/test-run-cli.sh` is the runner's adversarial CLI check. Until
+2026-09-03 every assertion in it was about the park's pre-build refusal, so it
+was red from the moment the park was lifted -- and nothing noticed, because
+nothing runs it. It now checks the argument boundary, which is what survived
+the unpark. **An executor for it is still owed.**
 
 ## Ownership
 

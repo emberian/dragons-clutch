@@ -246,9 +246,14 @@ chain's number, not ours.
 
 ### tier 1 — historical `tools/gauntlet/run.sh --mode full` evidence, real validator
 
-`--mode full` is unavailable at HEAD and refuses before work or a build. The
-rows below preserve the dated evidence they were pinned against; they are not a
-runnable current top-level campaign.
+`--mode full` runs again (`c9eac1738`, 2026-09-03), and these rows are older
+than the campaign it runs. Every one of them was pinned before the founding was
+split, so they name `DCLTGMF1`, `DCLTPCB1` and `Found31` where the campaign now
+submits `DCLTGMF3`, `DCLTCFQ1`/`DCLTPCB2` and `Found37`. A budget that matches
+no transaction in its campaign is red on the same reasoning as a stale binding,
+so this table is a re-pin owed against the first run that COMPLETES -- and the
+campaign does not complete yet. The rows below preserve the dated evidence they
+were pinned against and are not a current measurement.
 
 | budget | budget CU | current | tolerance | headroom to ceiling |
 |---|---:|---:|---:|---:|

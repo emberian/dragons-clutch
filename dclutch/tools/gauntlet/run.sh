@@ -97,6 +97,31 @@ fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
 case "$RECORD_PUBLICATION" in genesis|transaction) ;; *) echo "--record-publication must be genesis or transaction" >&2; exit 2 ;; esac
 
+# ------------------------------------------------------------------- staging
+#
+# The stage names are validated HERE, beside the other argument checks and
+# before anything is created, because `--from` is an argument like `--mode`:
+# refusing it after `mkdir -p "$WORK"` has built a scratch tree is refusing it
+# too late, and it exited 1 where every sibling exits 2.
+STAGE_ORDER="archive elf tool inventory campaign census"
+FORCED=""
+stage_index() {
+    local wanted=$1 index=0 stage
+    for stage in $STAGE_ORDER; do
+        if [ "$stage" = "$wanted" ]; then printf '%s\n' "$index"; return 0; fi
+        index=$((index + 1))
+    done
+    printf '99\n'
+}
+if [ -n "$FROM" ]; then
+    if [ "$(stage_index "$FROM")" = "99" ]; then
+        echo "--from must name a stage: $STAGE_ORDER" >&2
+        exit 2
+    fi
+    FORCED="$(stage_index "$FROM")"
+fi
+
+
 # ------------------------------------------------------------------ the origin
 #
 # `--rpc-port` is why two of these can run at once. The origin is in NO
@@ -233,22 +258,6 @@ else
     WRAP=""
 fi
 run_build() { if [ -n "$WRAP" ]; then "$WRAP" "$@"; else "$@"; fi; }
-
-# ------------------------------------------------------------------- staging
-STAGE_ORDER="archive elf tool inventory campaign census"
-FORCED=""
-stage_index() {
-    local wanted=$1 index=0 stage
-    for stage in $STAGE_ORDER; do
-        if [ "$stage" = "$wanted" ]; then printf '%s\n' "$index"; return 0; fi
-        index=$((index + 1))
-    done
-    printf '99\n'
-}
-if [ -n "$FROM" ]; then
-    [ "$(stage_index "$FROM")" != "99" ] || die "--from must name a stage: $STAGE_ORDER"
-    FORCED="$(stage_index "$FROM")"
-fi
 
 # A stage runs when it is at or after --from, when its stamp differs, or when
 # any earlier stage ran in this invocation.

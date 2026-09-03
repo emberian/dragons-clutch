@@ -12,7 +12,8 @@ Read `DESIGN.md` first. This file is the mechanics.
 tools/gauntlet/
   DESIGN.md              the five principles; read before changing anything
   TIERS.md               this file
-  run.sh                 census report; `--mode full` is an explicit refusal
+  run.sh                 census report, and the tier-1 runner: `--mode full`
+                         builds seven ELFs, launches a validator, campaigns
   blocked.json           NEVER-EXECUTED routes with reason + owning lane
   CU_BUDGETS.json        per-transaction compute budgets; ONE file, ONE owner
   CU_BUDGETS.md          what they catch, what they do not, how to re-pin
@@ -381,14 +382,22 @@ that in the tier rather than letting the field's name imply otherwise.
 # seconds, no chain: the static census and the report
 tools/gauntlet/run.sh --mode census
 
-# `full` is unavailable at HEAD: it refuses before any work or build.
-tools/gauntlet/run.sh --mode full
+# 25-31 minutes: seven ELFs, a localhost validator, the tier-1 campaign, the
+# fold. Unparked 2026-09-03 (`c9eac1738`); measured on an M-series laptop.
+tools/gauntlet/run.sh --mode full --rpc-port auto
 ```
 
-`--mode census` needs no port and may run concurrently. `--mode full` remains
-as an explicit, pre-build refusal so old invocations do not silently select a
-different campaign. Run a supported family campaign through its named runner;
-on hbox its runner must use `swarm-build` and respect co-tenant workloads.
+`--mode census` needs no port and may run concurrently; so does `--mode full`
+with `--rpc-port auto`, which takes a free 42-port block instead of the fixed
+default. Run a supported family campaign through its named runner; on hbox its
+runner must use `swarm-build` and respect co-tenant workloads.
+
+**These two paragraphs said the opposite until 2026-09-03**: that `full` was an
+explicit pre-build refusal, which it was from 2026-08-31 until `c9eac1738`
+unparked it that morning. Four documents and one test went on saying it after
+the park was gone -- `tools/gauntlet/test-run-cli.sh` asserted the refusal and
+was red, and nothing runs that file either. A park is easy to install and its
+paperwork is what nobody remembers to take back out.
 
 A tier that starts a validator inherits two rules from this. It must take its
 origin from the same `--rpc-port`/`$DCLUTCH_GAUNTLET_RPC_PORT` parameter rather

@@ -153,18 +153,18 @@ is worth more than 2,300 green tests that agreed with themselves.
 
 ## Principle 5 — One supported top-level command
 
-`tools/gauntlet/run.sh --mode census` is the supported top-level operation: it
-enumerates the static route/refusal surface and renders the accumulated report.
-It needs no validator or port.
+`tools/gauntlet/run.sh` is the supported top-level operation in both its modes.
+`--mode census` enumerates the static route/refusal surface and renders the
+accumulated report, needing no validator or port. `--mode full`, the default,
+builds the seven role ELFs, launches a localhost validator, runs the tier-1
+campaign and folds it -- 25-31 minutes, measured 2026-09-03.
 
-The default, `--mode full`, intentionally exits 1 before resolving a revision,
-creating `--work`, or starting a build. Its former tier-1 producer is parked at
-the retired `demo-market` boundary; the remaining planners need acknowledged
-inputs the localhost runner does not own. A family campaign is run by its named
-family runner under `tools/gauntlet/`, then `--mode census` renders the shared
-report. Do not treat `--from`, `--keep-runs`, `--rpc-port`, or
-`--record-publication` as a way to re-enable `full`: they are parked full-mode
-options.
+Full mode was parked from 2026-08-31 to 2026-09-03 at the retired
+`demo-market` boundary and `c9eac1738` lifted the park; `--from`,
+`--keep-runs`, `--rpc-port` and `--record-publication` are ordinary options of
+it again rather than the parked ones this paragraph used to warn about. A
+family campaign is still run by its named family runner under
+`tools/gauntlet/`, then `--mode census` renders the shared report.
 
 ## What the gauntlet does not claim
 
