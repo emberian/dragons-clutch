@@ -15,6 +15,16 @@ default = []
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
+# Diagnostic-only dump of the founding permit's own preimages.
+#
+# OFF in every shipped build, and the canonical Core executable is never built
+# with it. The Claims sibling `claims-founding-probe` emits the intent the
+# permit CARRIES; this emits the two things Core hashed to build it -- the
+# candidate `CoreState` the Found stage will write, and the intent projection
+# itself -- because when the founding refuses on the intent digest, the
+# supervisor's disagreement can be one coordinate of a state that does not
+# exist on chain yet and that no receipt reproduces byte for byte.
+core-founding-probe = []
 
 [dependencies]
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }

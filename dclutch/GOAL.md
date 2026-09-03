@@ -4060,3 +4060,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   a two-root list — root widened to `tools`, seven workspaces join. Owed: the intent byte-diff (one run) → TIER-1
   **`(spawned)`**; bindings.json older than its campaign; 13 CU_BUDGETS rows stale.
 - Cuts: `f86c475fd`, `1d0f19079`, `c57b02459`, `33b4350f0`, `aa68b3796`, `236f49704`, `0545793f3`, `648dd0f41`.
+- DECISIONS closed (`b798926a2`, `4c2e5a463`): records 0018 (C-15, ember's, RULED 2026-09-01) and 0019–0023 (the five
+  provisional rulings, each with question / ruling verbatim / commits / hostiles / trust-model change / saving / cost of
+  reversal; 0021 records the refuted first rent ruling and its incident); C-15 executed in the contract, the C-16 entry list,
+  the debt ledger, and the INVERSE edit on O-019 (load-bearing by ruling); 0003 amended with the switch-on marked open
+  (docket D6); docs/reference/decisions.md is generated and at its fixpoint. One drifted citation corrected (hot_v3.rs:6378 →
+  :6409); 0023 records that the shipped seed adds a domain separator and a kind byte the ruling did not specify.
+- Started 16:30 EDT (spokes needing no ruling): STRUCTURED **`a835af5491ab40190`** (K beyond 3, shard-Mint hostiles, the five
+  never-executed retirement routes driven from a Structured Terminal), STATISTIC **`ac38a14feb489dc06`** (a Lean-owned
+  StatisticSpecV1 layout, the relayed route's statistic slot, the browser fetching the record), HINTS-2 **`a45a44acc9ce739e3`**
+  (the nine builders still writing a zero bump block; the registered hand fixture compared; slot names from one owner).
+- Cuts: `b8dd2fd0b`, `0e0340c2c`.

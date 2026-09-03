@@ -1251,7 +1251,21 @@ fn digest_projected_request(
 
 #[inline(never)]
 fn digest_core_state(state: &CoreState) -> Result<[u8; 32], CoreSbfError> {
-    Ok(hash(&state.encode().map_err(|_| CoreSbfError::Transition)?).to_bytes())
+    let bytes = state.encode().map_err(|_| CoreSbfError::Transition)?;
+    // THE STATE NO RECEIPT REPRODUCES.
+    //
+    // The projected Realize receipt carries only `sha256(CoreState)`, and the
+    // state itself is written two stages later -- so when a founding refuses
+    // because the supervisor's intent hashes differently, the coordinate that
+    // moved can be inside this preimage and nothing on chain shows it. This
+    // emits the bytes Core hashed, under a feature no shipped build sets, so
+    // the supervisor's own candidate encoding can be diffed against them.
+    #[cfg(feature = "core-founding-probe")]
+    {
+        solana_program::log::sol_log("core generic founding: probe, candidate CoreState preimage");
+        solana_program::log::sol_log_data(&[&bytes]);
+    }
+    Ok(hash(&bytes).to_bytes())
 }
 
 #[allow(clippy::too_many_arguments)]

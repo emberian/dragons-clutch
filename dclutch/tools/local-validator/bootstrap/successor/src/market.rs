@@ -9641,6 +9641,11 @@ fn derive_founding_outer_v1(
         .encode()
         .map_err(|error| Error::new(format!("Realize request encoding: {error:?}")))?;
     let realize_digest: [u8; 32] = Sha256::digest(realize_raw).into();
+    eprintln!(
+        "campaign: founding projected Realize request {} digest {}",
+        lower_hex_v1(&realize_raw),
+        lower_hex_v1(&realize_digest)
+    );
 
     // The candidate Core state the Found stage writes. Every field of it is
     // fixed by the kernel's `found`: the phase and readiness are constants, the
@@ -9678,6 +9683,11 @@ fn derive_founding_outer_v1(
         .encode()
         .map_err(|error| Error::new(format!("candidate Core state: {error:?}")))?;
     let market_state_digest: [u8; 32] = Sha256::digest(market_state_bytes).into();
+    eprintln!(
+        "campaign: founding candidate Core state {} digest {}",
+        lower_hex_v1(&market_state_bytes),
+        lower_hex_v1(&market_state_digest)
+    );
 
     let realize_receipt = locked
         .realize_and_close_ref(
@@ -9698,6 +9708,11 @@ fn derive_founding_outer_v1(
         .encode()
         .map_err(|error| Error::new(format!("Realize receipt encoding: {error:?}")))?;
     let realize_receipt_digest: [u8; 32] = Sha256::digest(realize_receipt_bytes).into();
+    eprintln!(
+        "campaign: founding projected Realize receipt {} digest {}",
+        lower_hex_v1(&realize_receipt_bytes),
+        lower_hex_v1(&realize_receipt_digest)
+    );
 
     // One semantic owner for the final coordinates. Completed-crash recovery
     // calls the same helper against finalized Open state; it never tries to
