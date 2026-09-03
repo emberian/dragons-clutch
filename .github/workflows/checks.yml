@@ -317,6 +317,36 @@ jobs:
         working-directory: ${{ matrix.directory }}
         run: npm ci
 
+      # -------------------------------------------------------------------
+      # THE WEB APP DEPENDS ON THE SDK BY `file:`, AND THAT IS NOT THE SAME AS
+      # VENDORING IT. `apps/dclutch-web/package.json` names
+      # `"@dclutch/sdk": "file:../../packages/dclutch-sdk"`, so `npm ci` here
+      # leaves a SYMLINK into a sibling package whose own `node_modules` it
+      # does not create. Vite resolves through the symlink to the real path,
+      # so a bare import inside the SDK's sources -- `@solana/web3.js`, which
+      # is the SDK's own declared dependency -- is looked up from
+      # `packages/dclutch-sdk/` upward and finds nothing.
+      #
+      # The failure is not a missing test, it is a whole FILE that never
+      # loads: on 2026-09-03 `lib/landmarks.test.tsx` reported
+      #
+      #     Failed to resolve import "@solana/web3.js" from
+      #     "../../packages/dclutch-sdk/lib/deployments.ts"
+      #
+      # as one of two red files, and every assertion in it went unrun while
+      # the summary counted one failing TEST. In the live tree the suite is
+      # green because both packages are installed there; the tree was never
+      # the difference, this job's install was.
+      #
+      # Installing the SDK's dependencies is the honest fix and not an alias:
+      # an alias would make the browser resolve a copy of web3.js the SDK did
+      # not ask for, which is a different program from the one that ships.
+      # -------------------------------------------------------------------
+      - name: Install the linked SDK's own dependencies
+        if: matrix.name == 'web'
+        working-directory: dclutch/packages/dclutch-sdk
+        run: npm ci
+
       # WHY TWO FILES ARE EXCLUDED, since silently narrowing a suite is exactly
       # the sort of thing that should never pass without a reason:
       #
