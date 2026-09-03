@@ -44,12 +44,17 @@ mod generated_dealer_trading_profile;
 #[rustfmt::skip]
 pub mod generated_scenario_trade_v4;
 
+/// Named admissible states for the Dealer root's own lifecycle.
+pub mod root_admission_v1;
 /// Inventory-free mutable tail for the canonical composite Trading root.
 pub mod root_tail;
 /// Canonical Trading Dealer request with explicit Claims optimistic revision.
 pub mod trading_request;
 
 use generated_dealer_liquidity as generated;
+use root_admission_v1::{
+    DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1, DEALER_ROOT_TERMINAL_ADMISSIBLE_STATES_V1,
+};
 
 /// Fixed identity width used by this physical profile.
 pub type Identity = [u8; 32];
@@ -1685,7 +1690,9 @@ fn schedule(
     mut state: State,
     request: Request,
 ) -> Result<Transition> {
-    if state.phase != Phase::Open || request.actor_id != policy.dealer_id {
+    if !DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(state.phase)
+        || request.actor_id != policy.dealer_id
+    {
         return Err(Error::InvalidPhase);
     }
     let proposed = proposed.ok_or(Error::IdentityMismatch)?;
@@ -1733,7 +1740,7 @@ fn activate(
     mut state: State,
     request: Request,
 ) -> Result<Transition> {
-    if state.phase != Phase::Open || proposed.is_some() {
+    if !DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(state.phase) || proposed.is_some() {
         return Err(Error::InvalidPhase);
     }
     let pending = pending.ok_or(Error::IdentityMismatch)?;
@@ -1780,7 +1787,9 @@ fn fill(
     mut state: State,
     request: Request,
 ) -> Result<Transition> {
-    if state.phase != Phase::Open || request.now >= active.expires_at {
+    if !DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(state.phase)
+        || request.now >= active.expires_at
+    {
         return Err(Error::InvalidPhase);
     }
     let outcome = usize::from(request.outcome);
@@ -1887,7 +1896,7 @@ fn enter_terminal(
     mut state: State,
     request: Request,
 ) -> Result<Transition> {
-    if state.phase != Phase::Open
+    if !DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(state.phase)
         || request.actor_id != policy.market_id
         || usize::from(request.outcome) >= usize::from(policy.outcome_count)
     {
@@ -1916,7 +1925,9 @@ fn unwind(
     mut state: State,
     request: Request,
 ) -> Result<Transition> {
-    if state.phase != Phase::Terminal || state.active_work_remaining < active.work_reward {
+    if !DEALER_ROOT_TERMINAL_ADMISSIBLE_STATES_V1.admits(state.phase)
+        || state.active_work_remaining < active.work_reward
+    {
         return Err(Error::InvalidPhase);
     }
     let outcome = usize::from(request.outcome);
@@ -1971,7 +1982,7 @@ fn unwind(
 }
 
 fn retire(policy: Policy, active: CandidateView<'_>, mut state: State) -> Result<Transition> {
-    if state.phase != Phase::Terminal
+    if !DEALER_ROOT_TERMINAL_ADMISSIBLE_STATES_V1.admits(state.phase)
         || state.inventory.iter().any(|quantity| *quantity != 0)
         || !is_zero(&state.pending_candidate_id)
     {
@@ -2012,7 +2023,9 @@ fn adjust_liquidity(
     request: Request,
     add: bool,
 ) -> Result<Transition> {
-    if state.phase != Phase::Open || request.actor_id != policy.dealer_id {
+    if !DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(state.phase)
+        || request.actor_id != policy.dealer_id
+    {
         return Err(Error::InvalidPhase);
     }
     let outcome = usize::from(request.outcome);

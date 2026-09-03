@@ -13,6 +13,9 @@
 //! remain in the Trading adapter. These transitions return complete candidates
 //! by value, so a refusal cannot partially mutate caller state.
 
+use crate::direct_root_admission_v1::{
+    DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1, DIRECT_ROOT_RETIRING_ADMISSIBLE_STATES_V1,
+};
 use crate::intent_v2::{COMPACT_INTENT_BYTES_V2, CancelThroughV2, CompactIntentV2};
 
 #[rustfmt::skip]
@@ -567,14 +570,21 @@ pub enum DirectRootPhaseV1 {
 }
 
 impl DirectRootPhaseV1 {
-    fn byte(self) -> u8 {
+    /// The byte this phase is persisted as.
+    ///
+    /// `pub(crate)` for `direct_root_admission_v1`'s
+    /// `the_bit_index_is_the_wire_encoding`, which pins the admission bit
+    /// index against the encoder itself rather than against a second
+    /// hand-written numbering.
+    pub(crate) fn byte(self) -> u8 {
         match self {
             Self::Open => 0,
             Self::Retiring => 1,
         }
     }
 
-    fn decode(value: u8) -> SuccessorResult<Self> {
+    /// Hostile-decode one persisted phase byte.
+    pub(crate) fn decode(value: u8) -> SuccessorResult<Self> {
         match value {
             0 => Ok(Self::Open),
             1 => Ok(Self::Retiring),
@@ -659,7 +669,7 @@ impl DirectRootStateV1 {
 
     /// Irreversibly stop new maker nonce consumption.
     pub fn begin_retiring(self) -> SuccessorResult<Self> {
-        if self.phase != DirectRootPhaseV1::Open {
+        if !DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(self.phase) {
             return Err(SuccessorError::InvalidRootPhase);
         }
         Ok(Self {
@@ -670,7 +680,9 @@ impl DirectRootStateV1 {
 
     /// Refuse physical root closure until retirement and zero maker roots.
     pub fn require_closable(self) -> SuccessorResult<()> {
-        if self.phase == DirectRootPhaseV1::Retiring && self.open_maker_root_count == 0 {
+        if DIRECT_ROOT_RETIRING_ADMISSIBLE_STATES_V1.admits(self.phase)
+            && self.open_maker_root_count == 0
+        {
             Ok(())
         } else {
             Err(SuccessorError::MakerRootCountInvariant)
@@ -1143,7 +1155,7 @@ pub fn consume_nonce_v2(
     consumption: NonceConsumptionV2,
     first_use: Option<MakerReplayFirstUseV1>,
 ) -> SuccessorResult<NonceConsumptionResultV2> {
-    if root.phase != DirectRootPhaseV1::Open {
+    if !DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(root.phase) {
         return Err(SuccessorError::InvalidRootPhase);
     }
     let (root_after, mut maker_root, creation) = match (observation, first_use) {
@@ -1898,7 +1910,8 @@ pub fn preview_registered_fill_v2(
     let fill = input.execution.fill;
     let execution_price = input.execution.execution_price;
     let observed_record_lamports = input.participant.observed_record_lamports;
-    if root.phase != DirectRootPhaseV1::Open || root.open_maker_root_count == 0 {
+    if !DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(root.phase) || root.open_maker_root_count == 0
+    {
         return Err(SuccessorError::InvalidRootPhase);
     }
     record.validate(config, outcome_count)?;
@@ -2488,7 +2501,7 @@ pub fn close_maker_replay_v2(
     maker_root: MakerReplayRootV1,
     observed_lamports: u64,
 ) -> SuccessorResult<MakerReplayCloseResultV2> {
-    if root.phase != DirectRootPhaseV1::Retiring {
+    if !DIRECT_ROOT_RETIRING_ADMISSIBLE_STATES_V1.admits(root.phase) {
         return Err(SuccessorError::InvalidRootPhase);
     }
     maker_root.validate()?;

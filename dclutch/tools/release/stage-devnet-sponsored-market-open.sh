@@ -271,9 +271,20 @@ fi
 # writes a fresh 134-byte account body. It never contacts Hermes/Price Service.
 "$PRICE_READER" --url "$DEVNET_RPC" --out "$WORK/sol-usd.price-update-v2"
 
+# THE BINARY IS BUILT AND THEN CALLED, NEVER `cargo run`. `cargo run` echoes the
+# command line it is about to exec -- `Running \`target/debug/... --rpc-url
+# https://.../?api-key=<KEY> ...\`` -- so a keyed endpoint reaches every log an
+# operator tees, which is the same credential leak `674a7873e` closed for the
+# file at rest and did not close for the run. Measured 2026-09-03 by COHORT-14C:
+# staging market C put the live Helius key into its own log on line one. The
+# build carries no credential on its command line, so this split is the fix.
+cargo build --locked --manifest-path "$BOOT/Cargo.toml" >&2
+BOOT_BIN="$BOOT/target/debug/dclutch-local-successor-bootstrap"
+[ -x "$BOOT_BIN" ] || { echo "the successor bootstrap binary is missing at $BOOT_BIN" >&2; exit 2; }
+
 # The compiler is the semantic owner of the sponsored provider release, four
 # outcomes, range partition, permanent program-plan checks, and Direct graph.
-cargo run --locked --manifest-path "$BOOT/Cargo.toml" -- devnet-sponsored-market \
+"$BOOT_BIN" devnet-sponsored-market \
     --registry-program-id "$REGISTRY" \
     --plan "$PLAN" \
     --rpc-url "$DEVNET_RPC" \
@@ -350,7 +361,12 @@ if [ "\$DCLUTCH_SUBSTITUTED_FOUNDER" = "\$DCLUTCH_FOUNDING_FOUNDER_DERIVED" ]; t
     echo 'the substituted founder must be a DISTINCT identity from the founder' >&2
     exit 2
 fi
-cargo run --locked --manifest-path '$BOOT/Cargo.toml' -- campaign --founding-only \\
+# Built and then called, for the same reason the generator above is: \`cargo run\`
+# echoes its exec line, and \$DCLUTCH_RPC_URL is expanded by the shell BEFORE
+# cargo sees it, so the credential this file was careful not to hold would be
+# printed by every run of it.
+cargo build --locked --manifest-path '$BOOT/Cargo.toml' >&2
+'$BOOT/target/debug/dclutch-local-successor-bootstrap' campaign --founding-only \\
   --rpc-url "\$DCLUTCH_RPC_URL" --i-mean-devnet '$DEVNET_GENESIS' \\
   --plan '$PLAN' --market '$WORK/market.json' --evidence '$WORK/campaign-open.json' \\
   --keypair-campaign-payer "\$DCLUTCH_CAMPAIGN_PAYER_KEYPAIR" \\

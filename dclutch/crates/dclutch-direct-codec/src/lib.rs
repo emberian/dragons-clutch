@@ -25,6 +25,7 @@ pub mod begin_retiring_bundle_v1;
 pub mod close_maker_bundle_v1;
 pub mod close_maker_v1;
 pub mod direct_finalization_v3;
+pub mod direct_root_admission_v1;
 pub mod execution_v3;
 pub mod fee_settlement_v1;
 pub mod inline_candidate_v2;

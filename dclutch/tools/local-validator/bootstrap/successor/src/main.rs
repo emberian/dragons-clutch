@@ -1233,6 +1233,7 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
     let mut payer = None;
     let mut hoard = None;
     let mut aggregate = None;
+    let mut market = None;
     let mut claim_unit = None;
     let mut stage = None;
     let mut declared_collateral = None;
@@ -1288,6 +1289,7 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
             "--payer" => &mut payer,
             "--hoard" => &mut hoard,
             "--aggregate" => &mut aggregate,
+            "--market" => &mut market,
             "--claim-unit-atoms" => &mut claim_unit,
             "--stage" => &mut stage,
             "--declared-collateral-delta" => &mut declared_collateral,
@@ -1329,6 +1331,13 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
     }
     for (label, address) in &watches {
         census.watch(label, *address);
+    }
+    // OPTIONAL, and the option is the honest shape: a census taken before a
+    // founding commits has no Market to bind, and a census that omits it keeps
+    // exactly the behaviour it had. What binding it buys is that L4 can say
+    // "this Market is terminal" from the CHAIN rather than from the operator.
+    if let Some(address) = market {
+        census.track_market(parse_pubkey(Some(address), "--market")?);
     }
     census.admit_founding(
         parse_pubkey(hoard, "--hoard")?,
@@ -2354,7 +2363,7 @@ fn usage() {
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \
          --rpc-url URL [{ack} GENESIS_HASH] --mint PUBKEY --payer PUBKEY --hoard PUBKEY \
          --aggregate PUBKEY --claim-unit-atoms U64 --stage NAME --output ABSOLUTE_JSON \
-         [--token LABEL=PUBKEY]... [--position LABEL=PUBKEY]... [--watch LABEL=PUBKEY]... \
+         [--market PUBKEY] [--token LABEL=PUBKEY]... [--position LABEL=PUBKEY]... [--watch LABEL=PUBKEY]... \
          [--prior ABSOLUTE_JSON] [--declared-collateral-delta I128] [--declared-hoard-delta I128] \
          [--declared-class-delta LABEL=I128]... [--declared-fees-lamports U64] \
          [--declared-unwatched-lamports U64 --declared-unwatched-note TEXT]\n\
@@ -2948,6 +2957,7 @@ mod tests {
             position_balances: BTreeMap::new(),
             position_totals: Vec::new(),
             accounts: BTreeMap::new(),
+            market_phase: None,
             verdicts: Vec::new(),
         }
     }

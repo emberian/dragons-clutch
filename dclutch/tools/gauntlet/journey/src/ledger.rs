@@ -68,6 +68,7 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
+use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
 use dclutch_token_svm::{MINT_BYTES, Mint, TokenAccount};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
@@ -351,6 +352,12 @@ pub(crate) struct ObservationV1 {
     pub(crate) position_totals: Vec<u64>,
     /// Every tracked account's exact state, protocol accounts included.
     pub(crate) accounts: BTreeMap<String, AccountStateV1>,
+    /// The bound Market's Core lifecycle phase at this census, lowercased.
+    /// `None` means no Market was bound, which is every census taken before
+    /// this field existed -- hence the `serde` default, so a `--prior` chain
+    /// across the change reloads without a schema break.
+    #[serde(default)]
+    pub(crate) market_phase: Option<String>,
     pub(crate) verdicts: Vec<VerdictV1>,
 }
 
@@ -359,6 +366,13 @@ pub(crate) struct ConservationLedgerV1 {
     mint: Pubkey,
     hoard: Option<Pubkey>,
     aggregate: Option<Pubkey>,
+    /// The Core Market whose LIFECYCLE PHASE decides which laws still apply.
+    ///
+    /// Deliberately NOT in `watched`: the phase is a fact about a law's
+    /// applicability, not a balance L7 differences, and adding an account to
+    /// the aperture makes L7 inapplicable at the boundary that admits it. A
+    /// ledger given no Market keeps the behaviour it always had.
+    market: Option<Pubkey>,
     /// Collateral atoms one claim of one outcome is worth.
     claim_unit_atoms: u64,
     /// The key that pays for every journey-owned transaction. L7 is stated
@@ -387,6 +401,7 @@ impl ConservationLedgerV1 {
             mint,
             hoard: None,
             aggregate: None,
+            market: None,
             claim_unit_atoms: 0,
             payer,
             token_accounts: BTreeMap::new(),
@@ -486,6 +501,19 @@ impl ConservationLedgerV1 {
             .unwrap_or_else(|| UNCLASSIFIED.to_string())
     }
 
+    /// Bind the Core Market whose phase decides which laws still apply.
+    ///
+    /// L4 is a PRE-TERMINAL invariant, and a Market that has resolved and paid
+    /// violates it by construction: settlement moves the whole Hoard out to the
+    /// winners and the aggregate's supply vector is untouched, so "Hoard >=
+    /// worst outcome" is false about a Market that owes nothing. Without this
+    /// binding the census had no way to say that, and cohort-14b's post-payout
+    /// L4 read VIOLATED at a boundary where the protocol had done exactly what
+    /// it is supposed to do.
+    pub(crate) fn track_market(&mut self, address: Pubkey) {
+        self.market = Some(address);
+    }
+
     /// Admit the founding's Hoard, aggregate, and per-claim collateral unit.
     pub(crate) fn admit_founding(
         &mut self,
@@ -537,9 +565,25 @@ impl ConservationLedgerV1 {
             let atoms = match rpc.account(*address)? {
                 None => 0,
                 Some(account) => {
-                    let state = TokenAccount::parse(&account.data).map_err(|error| {
-                        Error::new(format!("{label} is not a token account: {error:?}"))
-                    })?;
+                    // `parse_base_or_immutable_owner`, not `parse`, and the
+                    // reason is that this ledger has to be able to watch the
+                    // account a payout PAYS. Under Token-2022 the ATA program
+                    // ALWAYS adds `ImmutableOwner`, so a wallet's associated
+                    // token account is 170 bytes and the strict parser refuses
+                    // it `InvalidLength` -- measured on cohort-14b, where the
+                    // 500,000,000-atom founder ATA
+                    // `DsQSGKPbmJcZ89xts1Jgs1P5fprmX64fomqGFsQM1kmU` could not
+                    // be bound and the post-payout L1 therefore read VIOLATED
+                    // for a shortfall that was really an unwatchable account.
+                    // This is the SAME admission the chain and the operator
+                    // already share, from the same author: `token_svm`'s
+                    // `profile.rs` and `wallet_terminal_payout_v3.rs` both call
+                    // it, so the ledger now admits exactly the destinations the
+                    // protocol admits -- no more, and no fewer.
+                    let state = TokenAccount::parse_base_or_immutable_owner(&account.data)
+                        .map_err(|error| {
+                            Error::new(format!("{label} is not a token account: {error:?}"))
+                        })?;
                     if state.mint != self.mint.to_bytes() {
                         return Err(Error::new(format!(
                             "{label} holds a different mint than the ledger tracks"
@@ -567,7 +611,10 @@ impl ConservationLedgerV1 {
             let Some(account) = rpc.account(*address)? else {
                 return Ok(None);
             };
-            let state = TokenAccount::parse(&account.data).map_err(|error| {
+            // Same admission as the tracked-token loop above: a compartment
+            // that is an associated token account is 170 bytes and is still a
+            // compartment.
+            let state = TokenAccount::parse_base_or_immutable_owner(&account.data).map_err(|error| {
                 Error::new(format!(
                     "the Custody vault at {address} is not a token account: {error:?}. Its \
                      address derives from this Market's own compartment seeds, so something \
@@ -661,6 +708,28 @@ impl ConservationLedgerV1 {
             accounts.insert(label.clone(), state);
         }
 
+        // The Market's own phase, read off the chain rather than declared.
+        // A caller that could ASSERT "this Market is Terminal" would be a
+        // caller that can switch a conservation law off by saying so.
+        let market_phase = match self.market {
+            None => None,
+            Some(address) => {
+                let account = rpc.required_account(address, "Core Market")?;
+                let state = CoreState::decode(&account.data)
+                    .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
+                Some(
+                    match state.phase {
+                        CorePhase::Founding => "founding",
+                        CorePhase::Open => "open",
+                        CorePhase::Terminal => "terminal",
+                        CorePhase::Retiring => "retiring",
+                        CorePhase::Retired => "retired",
+                    }
+                    .to_owned(),
+                )
+            }
+        };
+
         let mut observation = ObservationV1 {
             stage: stage.into(),
             slot,
@@ -679,6 +748,7 @@ impl ConservationLedgerV1 {
             position_balances,
             position_totals,
             accounts,
+            market_phase,
             verdicts: Vec::new(),
         };
         observation.verdicts = self.evaluate(&observation);
@@ -774,34 +844,67 @@ impl ConservationLedgerV1 {
             )
         });
 
-        // L4 full collateralisation.
-        verdicts.push(match (self.aggregate, now.aggregate_supply.iter().max()) {
-            (None, _) | (_, None) => VerdictV1::inapplicable(
+        // L4 full collateralisation -- a PRE-TERMINAL invariant, and it says so.
+        //
+        // The law reads "the Hoard covers the worst outcome". That is a claim
+        // about a Market that still owes: while it is Open the Hoard is the
+        // collateral behind every outstanding claim, and a shortfall is a real
+        // defect. Terminal settlement is the act that DISCHARGES the liability
+        // -- it pays the winning outcome out of the Hoard and leaves the
+        // aggregate's supply vector standing as the record of what was owed --
+        // so "Hoard 0 < worst outcome 500000000" is not a Market that broke,
+        // it is a Market that paid. Cohort-14b read that VIOLATED at its
+        // post-payout boundary and the reading was the law's, not the chain's.
+        //
+        // So the law RETIRES rather than relaxing: it is declared inapplicable
+        // by name, on a phase read off the Market account, and it goes on
+        // holding or violating for every phase before Terminal. What remains
+        // watching a paid Market is L1 (every atom is in a named account), L3
+        // (Positions sum to the aggregate) and L7 (lamports close) -- none of
+        // which weakens here.
+        verdicts.push(match now.market_phase.as_deref() {
+            Some(phase @ ("terminal" | "retiring" | "retired")) => VerdictV1::inapplicable(
                 "L4",
-                "no outstanding liability exists before the founding commits",
+                &format!(
+                    "the Market is {phase}: settlement DISCHARGED the liability this law is \
+                     stated about, so `Hoard {} >= worst outcome {} x unit {}` is a question \
+                     about a Market that still owes and this one does not. L4 is a \
+                     PRE-TERMINAL invariant and retires by name here rather than reading \
+                     VIOLATED against a protocol that did exactly what it should. L1, L3 and \
+                     L7 go on watching this boundary unweakened.",
+                    now.hoard_atoms,
+                    now.aggregate_supply.iter().max().copied().unwrap_or(0),
+                    self.claim_unit_atoms
+                ),
             ),
-            (Some(_), Some(worst)) => match worst.checked_mul(self.claim_unit_atoms) {
-                None => VerdictV1::violated(
+            _ => match (self.aggregate, now.aggregate_supply.iter().max()) {
+                (None, _) | (_, None) => VerdictV1::inapplicable(
                     "L4",
-                    format!(
-                        "worst outcome {worst} claims at {} atoms each overflows u64",
-                        self.claim_unit_atoms
-                    ),
+                    "no outstanding liability exists before the founding commits",
                 ),
-                Some(required) if now.hoard_atoms >= required => VerdictV1::holds(
-                    "L4",
-                    format!(
-                        "Hoard {} >= worst outcome {worst} x unit {} = {required}",
-                        now.hoard_atoms, self.claim_unit_atoms
+                (Some(_), Some(worst)) => match worst.checked_mul(self.claim_unit_atoms) {
+                    None => VerdictV1::violated(
+                        "L4",
+                        format!(
+                            "worst outcome {worst} claims at {} atoms each overflows u64",
+                            self.claim_unit_atoms
+                        ),
                     ),
-                ),
-                Some(required) => VerdictV1::violated(
-                    "L4",
-                    format!(
-                        "Hoard {} < worst outcome {worst} x unit {} = {required}; the Market is under-collateralised",
-                        now.hoard_atoms, self.claim_unit_atoms
+                    Some(required) if now.hoard_atoms >= required => VerdictV1::holds(
+                        "L4",
+                        format!(
+                            "Hoard {} >= worst outcome {worst} x unit {} = {required}",
+                            now.hoard_atoms, self.claim_unit_atoms
+                        ),
                     ),
-                ),
+                    Some(required) => VerdictV1::violated(
+                        "L4",
+                        format!(
+                            "Hoard {} < worst outcome {worst} x unit {} = {required}; the Market is under-collateralised",
+                            now.hoard_atoms, self.claim_unit_atoms
+                        ),
+                    ),
+                },
             },
         });
 
@@ -1202,6 +1305,9 @@ mod tests {
             position_balances: BTreeMap::from([("holder".into(), vec![supply])]),
             position_totals: vec![supply],
             accounts,
+            // Synthetic censuses bind no Market, so the phase-gated laws behave
+            // exactly as they did before the binding existed.
+            market_phase: None,
             verdicts: Vec::new(),
         }
     }
@@ -1330,6 +1436,9 @@ mod tests {
             position_balances,
             position_totals,
             accounts,
+            // Synthetic censuses bind no Market, so the phase-gated laws behave
+            // exactly as they did before the binding existed.
+            market_phase: None,
             verdicts: Vec::new(),
         }
     }
@@ -1373,6 +1482,70 @@ mod tests {
     /// Every law holds across a fill, and each is asserted by NAME rather than
     /// in aggregate, so a change to one is caught here instead of quietly
     /// altering what a fill is compared against.
+    /// L4 is a PRE-TERMINAL invariant, and the phase that retires it is read
+    /// off the chain rather than declared.
+    ///
+    /// Cohort-14b's post-payout boundary read `VIOLATED L4: Hoard 0 < worst
+    /// outcome 500000000` about a Market that had RESOLVED, settled and paid
+    /// 500,000,000 atoms into the founder's associated token account. Nothing
+    /// was wrong with the Market; the law was asked a question about a Market
+    /// that still owes, and that one did not.
+    ///
+    /// The three assertions that matter are separate on purpose. An
+    /// under-collateralised OPEN market must still go red -- retiring the law
+    /// for every phase would delete it. A market with no phase bound at all
+    /// must behave exactly as it did before this binding existed, because
+    /// every census taken before today has `market_phase: None`. And the
+    /// terminal verdict must be INAPPLICABLE, never `holds`: a law that cannot
+    /// be evaluated has not been satisfied.
+    #[test]
+    fn l4_retires_at_terminal_and_at_no_earlier_phase() {
+        let ledger = new_ledger();
+        // Hoard 0 against one outcome owing 10 claims x 10 atoms = 100.
+        let broke = |phase: Option<&str>| {
+            let mut observation = census(&ledger, "boundary", 0, 0, 0, 10, undeclared());
+            observation.market_phase = phase.map(ToOwned::to_owned);
+            ledger.evaluate(&observation)
+        };
+        assert_eq!(
+            verdict(&broke(None), "L4").status,
+            "violated",
+            "a census that binds no Market keeps the behaviour it always had"
+        );
+        assert_eq!(
+            verdict(&broke(Some("open")), "L4").status,
+            "violated",
+            "an OPEN market whose Hoard cannot cover its worst outcome is still a defect"
+        );
+        assert_eq!(
+            verdict(&broke(Some("founding")), "L4").status,
+            "violated",
+            "a founding market is not exempt either"
+        );
+        for phase in ["terminal", "retiring", "retired"] {
+            let verdicts = broke(Some(phase));
+            let l4 = verdict(&verdicts, "L4");
+            assert_eq!(
+                l4.status, "inapplicable",
+                "L4 retires by name at phase {phase}, and never reports a pass it did not earn"
+            );
+            assert!(
+                l4.detail.contains(phase) && l4.detail.contains("PRE-TERMINAL"),
+                "the verdict must name the phase and the reason: {}",
+                l4.detail
+            );
+            // The other laws do not follow it out. A paid Market is still
+            // watched by everything that can still be evaluated.
+            for law in ["L1", "L3"] {
+                assert_ne!(
+                    verdict(&verdicts, law).status,
+                    "inapplicable",
+                    "{law} must go on watching a terminal Market"
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_law_holds_across_a_direct_fill_boundary() {
         let mut ledger = fill_ledger();

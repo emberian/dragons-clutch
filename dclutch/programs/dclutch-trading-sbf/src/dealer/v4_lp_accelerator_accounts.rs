@@ -13,8 +13,8 @@ use alloc::{vec, vec::Vec};
 
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_dealer_codec::{
-    Phase,
     config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
+    root_admission_v1::DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1,
     root_tail::{ROOT_TAIL_BYTES, RootTail},
 };
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
@@ -157,7 +157,9 @@ fn authenticate_context(
             .ok_or(DealerLpAcceleratorErrorV4::SemanticJoin)?,
     )
     .map_err(|_| DealerLpAcceleratorErrorV4::SemanticJoin)?;
-    if request.action == MultiLpRequestActionV3::Open && tail.phase != Phase::Open {
+    if request.action == MultiLpRequestActionV3::Open
+        && !DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(tail.phase)
+    {
         return Err(DealerLpAcceleratorErrorV4::SemanticJoin);
     }
     let config_data = config

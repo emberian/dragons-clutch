@@ -268,6 +268,13 @@ pub(crate) struct FunctionFact {
     /// what the caller binds. Used to type a `let` whose initializer is a
     /// call.
     pub(crate) output: Option<String>,
+    /// The element types of a tuple return, empty when it returns no tuple.
+    ///
+    /// `let (checkpoint, digest) = read_checkpoint(..)?` binds two names, and
+    /// `output` can carry one. Without this the first of them is untyped and
+    /// its methods resolve only if the bare name happens to be unique in the
+    /// whole first-party closure, which for `append_rollback` it is not.
+    pub(crate) output_elements: Vec<Option<String>>,
     /// The function exists only when compiling for the SBF target.
     ///
     /// `#[cfg(target_os = "solana")]` is this tree's marker for loader
@@ -507,6 +514,69 @@ fn signature_output(signature: &syn::Signature, self_type: Option<&str>) -> Opti
     Some(named)
 }
 
+/// The element types of a tuple return, one entry per element.
+///
+/// `declared_type_name` unwraps `Result<T, E>` to `T` and gives up on a tuple,
+/// because a tuple is not one name. But a `let (a, b) = f()?;` binds as many
+/// names as `f` returns elements, and until this existed every one of them was
+/// untyped -- which is how Trading's reservation body lost its gate. Its
+/// `checkpoint` comes from `let (checkpoint, digest) = read_checkpoint(..)?`,
+/// so `checkpoint.append_rollback(..)` fell through to the unique-name rule,
+/// and `append_rollback` is carried by two types in the Dealer codec. The
+/// resolver refused it, correctly, for the want of a type that was written in
+/// the signature all along.
+///
+/// `None` for anything that is not a tuple after one generic layer, so a
+/// non-tuple return is unchanged and a tuple element this file cannot name
+/// stays `None` in place rather than shifting its siblings.
+fn signature_output_elements(
+    signature: &syn::Signature,
+    self_type: Option<&str>,
+) -> Vec<Option<String>> {
+    let syn::ReturnType::Type(_, declared) = &signature.output else {
+        return Vec::new();
+    };
+    let Some(tuple) = unwrap_to_tuple(declared) else {
+        return Vec::new();
+    };
+    tuple
+        .elems
+        .iter()
+        .map(|element| match declared_type_name(element) {
+            Some(named) if named == "Self" => self_type.map(str::to_string),
+            other => other,
+        })
+        .collect()
+}
+
+/// One declared type as a tuple, looking through one generic layer.
+///
+/// `(A, B)` is one; so is `Result<(A, B), E>`, which is what every fallible
+/// helper in a program crate is written as.
+fn unwrap_to_tuple(declared: &syn::Type) -> Option<&syn::TypeTuple> {
+    match declared {
+        syn::Type::Tuple(tuple) => Some(tuple),
+        syn::Type::Paren(inner) => unwrap_to_tuple(&inner.elem),
+        syn::Type::Group(inner) => unwrap_to_tuple(&inner.elem),
+        syn::Type::Reference(reference) => unwrap_to_tuple(&reference.elem),
+        syn::Type::Path(path) => {
+            let last = path.path.segments.last()?;
+            let syn::PathArguments::AngleBracketed(arguments) = &last.arguments else {
+                return None;
+            };
+            arguments
+                .args
+                .iter()
+                .find_map(|argument| match argument {
+                    syn::GenericArgument::Type(inner) => Some(inner),
+                    _ => None,
+                })
+                .and_then(unwrap_to_tuple)
+        }
+        _ => None,
+    }
+}
+
 fn function_fact(
     function: &syn::ItemFn,
     module: &str,
@@ -521,6 +591,7 @@ fn function_fact(
         self_type: self_type.map(str::to_string),
         inputs: signature_inputs(&function.sig),
         output: signature_output(&function.sig, self_type),
+        output_elements: signature_output_elements(&function.sig, self_type),
         machine_boundary: cfg_texts(&function.attrs)
             .iter()
             .any(|text| text.contains("target_os = \"solana\"")),
@@ -619,6 +690,7 @@ fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut Cra
                         self_type: self_type.map(str::to_string),
                         inputs: signature_inputs(&method.sig),
                         output: signature_output(&method.sig, self_type),
+                        output_elements: signature_output_elements(&method.sig, self_type),
                         machine_boundary: cfg_texts(&method.attrs)
                             .iter()
                             .any(|text| text.contains("target_os = \"solana\"")),

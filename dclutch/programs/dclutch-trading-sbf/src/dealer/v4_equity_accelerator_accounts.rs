@@ -25,8 +25,8 @@ use dclutch_custody_contract::{
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
 use dclutch_dealer_codec::{
-    Phase,
     config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
+    root_admission_v1::DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1,
     root_tail::{ROOT_TAIL_BYTES, RootTail},
     scenario::ClaimsInventoryObservation,
 };
@@ -406,7 +406,7 @@ fn authenticate_context(
             .ok_or(DealerEquityAcceleratorErrorV4::SemanticJoin)?,
     )
     .map_err(|_| DealerEquityAcceleratorErrorV4::SemanticJoin)?;
-    if tail.phase != Phase::Open {
+    if !DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(tail.phase) {
         return Err(DealerEquityAcceleratorErrorV4::SemanticJoin);
     }
     drop(root_data);

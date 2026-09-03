@@ -18,10 +18,11 @@ use dclutch_claims_svm::{
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_direct_codec::{
+    direct_root_admission_v1::DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1,
     execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1,
-        DirectRootPhaseV1, DirectRootStateV1,
+        DirectRootStateV1,
     },
     token_setup_v1::{
         DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1, DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1,
@@ -467,7 +468,7 @@ fn authenticate_root_and_config(
         || header.generation() != request.generation
         || header.release_set().to_bytes() != market.identity.selected_release_set.to_bytes()
         || selection.kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
-        || state.phase() != DirectRootPhaseV1::Open
+        || !DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1.admits(state.phase())
     {
         return Err(TradingSbfError::Content.into());
     }

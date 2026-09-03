@@ -93,6 +93,20 @@ const MACHINES: &[Machine] = &[
         primary_constructor: "states",
         secondary: None,
     },
+    Machine {
+        admission_type: "DirectRootAdmissionV1",
+        label: "direct-root",
+        primary: "DirectRootPhaseV1",
+        primary_constructor: "states",
+        secondary: None,
+    },
+    Machine {
+        admission_type: "DealerRootAdmissionV1",
+        label: "dealer-root",
+        primary: "DealerRootPhaseV1",
+        primary_constructor: "states",
+        secondary: None,
+    },
 ];
 
 /// Programs whose routes consult NO persisted state machine at all.
@@ -588,6 +602,65 @@ impl<'a> GuardVisitor<'a> {
         }
     }
 
+    /// Bind each name of a destructuring `let` to its own element type.
+    ///
+    /// `let (checkpoint, checkpoint_prestate_digest) = read_checkpoint(..)?`
+    /// is how Trading's reservation body gets the checkpoint whose two
+    /// `append_*` methods hold the gate, and a tuple pattern named nothing
+    /// until now. Arity must agree exactly: a signature this file reads as
+    /// two elements against a pattern of three is a disagreement, and binding
+    /// the prefix would type one name with its neighbour's type.
+    fn bind_tuple(&mut self, tuple: &syn::PatTuple, initializer: Option<&Expr>) {
+        let Some(initializer) = initializer else {
+            return;
+        };
+        let Some(elements) = self.initializer_elements(initializer) else {
+            return;
+        };
+        if elements.len() != tuple.elems.len() {
+            return;
+        }
+        for (pattern, declared) in tuple.elems.iter().zip(elements) {
+            let Pat::Ident(ident) = pattern else {
+                continue;
+            };
+            let Some(declared) = declared else {
+                continue;
+            };
+            self.bindings.insert(ident.ident.to_string(), declared);
+        }
+    }
+
+    /// The element types an initializer expression yields, when it is a call
+    /// to a function this crate index can name and that function returns a
+    /// tuple.
+    fn initializer_elements(&self, expr: &Expr) -> Option<Vec<Option<String>>> {
+        let elements = match strip(expr) {
+            Expr::Try(inner) => return self.initializer_elements(&inner.expr),
+            Expr::Call(call) => {
+                let Expr::Path(path) = call.func.as_ref() else {
+                    return None;
+                };
+                &self
+                    .crate_index
+                    .resolve(&render_path(&path.path))?
+                    .output_elements
+            }
+            Expr::MethodCall(call) => {
+                let owner = self.receiver_type(&call.receiver)?;
+                &self
+                    .crate_index
+                    .resolve_method(&owner, &call.method.to_string())?
+                    .output_elements
+            }
+            _ => return None,
+        };
+        if elements.is_empty() {
+            return None;
+        }
+        Some(elements.clone())
+    }
+
     /// How a call this scan resolved is spelled for the descent.
     fn method_target(&self, call: &syn::ExprMethodCall) -> Option<String> {
         let name = call.method.to_string();
@@ -711,6 +784,10 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
     /// A `let` names a type, and a receiver is usually a local.
     fn visit_local(&mut self, node: &'ast syn::Local) {
         visit::visit_local(self, node);
+        if let Pat::Tuple(tuple) = &node.pat {
+            self.bind_tuple(tuple, node.init.as_ref().map(|init| init.expr.as_ref()));
+            return;
+        }
         let (name, declared) = match &node.pat {
             Pat::Type(typed) => {
                 let Pat::Ident(ident) = typed.pat.as_ref() else {
@@ -734,6 +811,28 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
         }
     }
 
+    /// A match keys each arm by its variant, and a TWO-arm one is also a
+    /// selection.
+    ///
+    /// Variant keying is the exact answer and stays the preferred one: a route
+    /// whose id names `AdmitTerminal` reads that arm's set and no sibling's.
+    /// But a route id names a variant only when the DISPATCH named it, and a
+    /// guard is often keyed by an argument the dispatch never saw. Trading's
+    /// reserve and rollback routes are two `pub fn`s that forward to one body
+    /// with `DealerScenarioReservationActionV1::Reserve` and `::Rollback`, and
+    /// the body's `match expected_action` has one arm per act. Neither route
+    /// id carries a `#` tag -- each IS its own route, selected by its own
+    /// instruction magic -- so both read as ungated while the two constants
+    /// that gate them sat one method call inside the arms.
+    ///
+    /// With exactly two arms the construct is an `if`/`else` written the other
+    /// way: one side runs, so the route passes the UNION, recorded as an
+    /// alternative pair and resolved after the descent exactly as a selection
+    /// is. Precedence needs no rule of its own -- a route that DOES name one
+    /// of the two variants picks that arm up as an unconditional gate, and
+    /// `for_route` already drops any group holding a name that also stands
+    /// alone. Three arms or more stay variant-keyed only: the pair carries two
+    /// sides, and a wider union is a claim this shape cannot make honestly.
     fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
         self.visit_expr(&node.expr);
         for arm in &node.arms {
@@ -750,6 +849,23 @@ impl<'ast> Visit<'ast> for GuardVisitor<'_> {
             self.visit_expr(&arm.body);
             self.variant = outer;
         }
+        let [first, second] = &node.arms[..] else {
+            return;
+        };
+        let (first_body, second_body) = (first.body.clone(), second.body.clone());
+        let (taken, _) = self.side(|inner| inner.visit_expr(&first_body));
+        let (untaken, _) = self.side(|inner| inner.visit_expr(&second_body));
+        // A side that gates nothing admits everything, so the pair is no gate
+        // at all -- the same rule the two sides of an `if` are held to. The
+        // sub-scans are discarded rather than absorbed: the arms were already
+        // walked above, and every nested alternative they hold is already in
+        // `self.scan`.
+        if (taken.names.is_empty() && taken.calls.is_empty())
+            || (untaken.names.is_empty() && untaken.calls.is_empty())
+        {
+            return;
+        }
+        self.scan.alternatives.push([taken, untaken]);
     }
 
     /// A `for` body may run zero times, so what it gates is not every
@@ -1414,6 +1530,103 @@ mod tests {
         assert_eq!(
             scan.by_variant.get("Close"),
             Some(&["C_V1".to_string()].into_iter().collect())
+        );
+    }
+
+    /// A two-arm `match` is a selection, and its two arms unite.
+    ///
+    /// Trading's reserve and rollback routes forward into one body whose
+    /// `match expected_action` calls `append_reservation` in one arm and
+    /// `append_rollback` in the other. Neither route id names a variant, so
+    /// variant keying alone answered nothing and both read as ungated.
+    #[test]
+    fn a_two_arm_match_unites_the_way_a_selection_does() {
+        let scan = scan_body(
+            "fn process(action: A) { let next = match action { A::Reserve => gate(A_V1), A::Rollback => gate(B_V1) }; }",
+            &["A_V1", "B_V1"],
+        );
+        assert!(scan.unconditional.is_empty(), "{:?}", scan.unconditional);
+        assert_eq!(
+            scan.by_variant.get("Reserve"),
+            Some(&["A_V1".to_string()].into_iter().collect())
+        );
+        assert_eq!(scan.alternatives.len(), 1);
+        let [taken, untaken] = &scan.alternatives[0];
+        assert_eq!(taken.names, ["A_V1".to_string()].into_iter().collect());
+        assert_eq!(untaken.names, ["B_V1".to_string()].into_iter().collect());
+    }
+
+    /// A destructuring `let` types every name it binds.
+    ///
+    /// `let (checkpoint, digest) = read_checkpoint(..)?` is the exact shape
+    /// that kept Trading's reserve and rollback routes ungated even once the
+    /// two-arm match united: `checkpoint` was untyped, and `append_rollback`
+    /// is carried by two types in the Dealer codec, so the resolver refused
+    /// the bare name. Two types with one shared method name is what this test
+    /// reproduces -- with a single `Book::read_page` the unique-name fallback
+    /// would pass whether or not the tuple bound anything.
+    #[test]
+    fn a_destructuring_let_types_every_name_it_binds() {
+        let scan = scan_body(
+            "fn process() { let (book, digest) = load(); book.read_page(); } \
+             fn load() -> Result<(Book, u8), E> { unimplemented!() } \
+             impl Book { fn read_page(&self) { gate(A_V1); } } \
+             impl Ledger { fn read_page(&self) { gate(B_V1); } }",
+            &["A_V1", "B_V1"],
+        );
+        assert!(scan.calls.contains("Book::read_page"), "{:?}", scan.calls);
+        assert!(!scan.calls.contains("Ledger::read_page"));
+    }
+
+    /// A tuple whose arity disagrees with the signature binds nothing.
+    ///
+    /// Binding the prefix would type one name with its neighbour's type,
+    /// which is a guess wearing a resolution's clothes.
+    #[test]
+    fn a_tuple_let_of_the_wrong_width_binds_nothing() {
+        let scan = scan_body(
+            "fn process() { let (book, digest, extra) = load(); book.read_page(); } \
+             fn load() -> Result<(Book, u8), E> { unimplemented!() } \
+             impl Book { fn read_page(&self) { gate(A_V1); } } \
+             impl Ledger { fn read_page(&self) { gate(B_V1); } }",
+            &["A_V1", "B_V1"],
+        );
+        assert!(!scan.calls.contains("Book::read_page"), "{:?}", scan.calls);
+        assert!(
+            !scan.calls.contains("Ledger::read_page"),
+            "{:?}",
+            scan.calls
+        );
+    }
+
+    /// A three-arm match stays variant-keyed, and unites nothing.
+    ///
+    /// The control for the case above: a pair holds two sides, and reading
+    /// three arms as a pair would either drop one arm's set or publish a union
+    /// of the two the code happened to write first. Resolution's
+    /// `authenticate_core` is exactly this shape, and its founding-only arm
+    /// must never reach the routes that admit a terminal or close a fund.
+    #[test]
+    fn a_three_arm_match_unites_nothing() {
+        let scan = scan_body(
+            "fn process(action: A) { match action { A::Create => gate(A_V1), A::Admit => gate(B_V1), A::Close => gate(C_V1) } }",
+            &["A_V1", "B_V1", "C_V1"],
+        );
+        assert!(scan.unconditional.is_empty(), "{:?}", scan.unconditional);
+        assert!(scan.alternatives.is_empty(), "{:?}", scan.alternatives);
+    }
+
+    /// An arm that gates nothing admits everything, so the pair is no gate.
+    #[test]
+    fn a_two_arm_match_with_one_bare_arm_is_not_a_gate() {
+        let scan = scan_body(
+            "fn process(action: A) { match action { A::Reserve => gate(A_V1), A::Rollback => 0 } }",
+            &["A_V1"],
+        );
+        assert!(scan.alternatives.is_empty(), "{:?}", scan.alternatives);
+        assert_eq!(
+            scan.by_variant.get("Reserve"),
+            Some(&["A_V1".to_string()].into_iter().collect())
         );
     }
 
