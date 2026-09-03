@@ -1378,3 +1378,121 @@ does not move and a declared `-201` is a claim the chain contradicts. Every
 violated reading is kept beside its corrected one; none of them is a draft.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: RESOLVED, TERMINAL, AND PAID INTO A REAL WALLET'S ASSOCIATED TOKEN ACCOUNT
+
+**Devnet evidence. Not mainnet evidence.** 2026-09-03, COHORT-14B lane. Every
+step below is the first of its kind in this project.
+
+### The settle, strictly after `window.end + max_age`
+
+Fired at 1788424326 = 08:32:06 UTC, thirty seconds after the primary deadline,
+by a runner whose guard exits rather than falling through. Landed on attempt 1
+of the same plan-then-sign ladder the capture needed.
+
+| | |
+| --- | --- |
+| signature | `3urBdjU5FuRqtyyJowwcm9njv6cPEXhgFKHpMxWiaVTCYLkjuyzNYhitDKWjkPRK1r1Km6J4UtMEhtUkVyZu3U3t` |
+| slot / CU / fee | 492,412,657 / **181,152** / 75,000 |
+| certificate | `6prkttkSfQG59MVUDKJ1VaAbdZiF2umYcCv2y5z1KQ37` — the seat prepaid at founding time, now 312 B `DCSRCER2`, Resolution-owned, still holding exactly its 2,786,520 |
+| Source state | `33VVZQxjtUa2wKEuTfXBgjj2kTmPbVc9fGezF4H32eXj`, 224 B `DCLTSRS2` |
+
+**THE CERTIFICATE'S KIND BYTE IS 1.** `CERTIFICATE_KIND_OFFSET = 10`
+(`crates/dclutch-resolution-codec/src/generated_source_resolution.rs:150`) and
+byte 10 of the account reads **1** = `CERTIFICATE_RESOLUTION_SUCCESS_KIND`, not
+the 4 of `CERTIFICATE_RESOLUTION_FAILURE_KIND`. Cohort-13's outcome was kind 4;
+the runbook says shipping it twice would make an oracle outage into founder
+revenue a second time. It was not shipped twice. The certificate's bytes 48..80
+carry `394795f32d4ec31bcbc76b38ebddd97334f70b34796d92c43ef16e3ca982f203` — the
+re-minted release's own digest, so the certificate pins what the capture read.
+
+### Terminal, read off the Market account at its three offsets
+
+`--action admit-terminal`, slot 492,413,390, **95,762 CU**, 75,000 fee. Read
+back against `crates/dclutch-market-core-codec/src/generated.rs`:
+
+| field | offset | before | after |
+| --- | ---: | --- | --- |
+| `phase` | 10 | 1 Open | **2 Terminal** |
+| `terminal_winner` | 12 | 0 | **2** |
+| `terminal_receipt` | 328 | 32 zero bytes | **`6prkttkSfQG59MVUDKJ1VaAbdZiF2umYcCv2y5z1KQ37`** — the certificate's own address |
+
+**The winning selector is 2 and this lane names the byte, not a story.** The
+coefficient vector is `[1,0,1,0]` and the payout input the chain authenticated
+carries `quantity 500000000` at `claimIndex 2`, so selector 2 pays one unit per
+claim. Which range of the `9900,10300`-over-100 partition index 2 *labels* was
+not established here — the market input carries no outcome labels and this lane
+did not decode the Product's partition ordering. The captured observation was
+inside the declared band; the chain committed selector 2; those two facts are
+recorded without a sentence joining them that nobody checked.
+
+### THE PAYOUT, into a 170-byte associated token account
+
+`devnet-claims-custody-replay-v1` first — the payout input refuses
+`wallet payout snapshot is missing Claims Custody replay CJnqf8NJ…` without it,
+and the command's own usage says *"A Terminal Market cannot pay a wallet until
+this account exists"*. Slot 492,414,556, 176,377 CU.
+
+The destination was created with the ATA program (`spl-token create-account
+--program-2022`), signature
+`2ESRkQbT4t8qAdsAPUXw7JwDboDQfc9QnWZySek4KLMGLJtiHtLeRX9QvGreTQixHHxysFiL1ws9cvKPme4Qnew1`.
+
+| | |
+| --- | --- |
+| destination | `DsQSGKPbmJcZ89xts1Jgs1P5fprmX64fomqGFsQM1kmU` |
+| bytes before / after | **170 / 170** |
+| `ImmutableOwner` suffix before / after | `0207000000` / **`0207000000`** — byte-identical |
+| balance after | **500,000,000 atoms** |
+| Hoard `BrLJBohX…` after | **0** |
+
+Six durable stages: `lookup-create` (10,469 CU), two `lookup-extend` (11,657 and
+9,601), `lookup-freeze` (1,517), `lookup-activation`, and the payout itself —
+signature
+`5aPHBEoaLHVEz2zfWaUobzzcnFcVDMV6Sbkye5uqBPZcbSQGp8mmvkpXEFPwuXeoqBQwUNWtkPpbC5FUfuuQQhyj`,
+slot 492,415,150, **359,878 CU**, 10,000 fee.
+
+**This is the destination cohort-13 could not pay under any version of this
+tree.** §15 said whether a market can pay a wallet its own associated token
+account is fixed at founding inside a released identity; the realm release
+`430369ce…` is that identity, and this is it exercised.
+
+### THE FINAL CENSUS DOES NOT HOLD, AND EACH VIOLATION HAS A LOCATED CAUSE
+
+```
+VIOLATED L1: tracked 500000000 atoms across 5 accounts != Mint supply 1000000000
+HOLDS   L2: the Hoard moved -500000000 atoms, exactly as declared; it holds 0
+HOLDS   L3: 3 Positions sum to the aggregate supply vector [500000000, 500000000, 0, 500000000]
+VIOLATED L4: Hoard 0 < worst outcome 500000000 x unit 1; the Market is under-collateralised
+HOLDS   L5: tracked collateral moved -500000000 atoms, exactly as declared
+HOLDS   L6: no watched account closed at this boundary
+VIOLATED L7: -3693136 lamports are unaccounted for
+VIOLATED L8: unclassified moved -500000000 and the stage declared +0
+```
+
+* **L1 is a BINDING GAP and this is the finding.** The obvious repair — bind the
+  ATA with `--token` — refuses:
+
+      founder_associated_token is not a token account: InvalidLength
+
+  **`ledger-census` cannot bind a 170-byte Token-2022 account carrying the
+  `ImmutableOwner` extension.** Its token reader wants the classic 165-byte
+  layout. So the destination this whole cohort exists to be able to pay is a
+  destination the conservation ledger cannot watch, and 500,000,000 +
+  500,000,000 = 1,000,000,000 to the atom is arithmetic a reader has to do by
+  hand. Cohort-13's 165-byte auxiliary account fit the reader by accident of
+  being the only thing that cohort could pay.
+* **L4 is STRUCTURAL, not a defect.** *Hoard ≥ worst outcome × unit* is a
+  pre-terminal invariant; a Terminal market that has paid its winner violates it
+  by construction. L4 needs a phase-aware statement, or a Terminal market needs
+  to be outside its scope.
+* **L8 is this lane's declaration**, which said `unclassified=0` where the atoms
+  left the tracked set entirely.
+* **L7's 3,693,136 lamports are NOT located.** The three accounts created since
+  the previous boundary are declared by name and by lamport — custody replay
+  2,634,528, ATA 1,887,234, payout ALT 7,852,920 — and a residue remains. It is
+  recorded as a residue rather than absorbed into a note that names no account,
+  because a note that names no account is what L7 exists to refuse.
+
+Devnet evidence. Not mainnet evidence.

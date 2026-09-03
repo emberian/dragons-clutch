@@ -3782,3 +3782,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   per Remove, unclaimed — the Claims repair's mirror). → DEALER **`(spawned)`**: Custody under the ruling, the chain fixture
   seam (selector 9 through the admitted accelerator, the three rejoin hostiles), the ninth addendum.
 - Cuts: `a8726b748`, `41e96fa46`.
+
+### 2026-09-03 05:00 EDT — THE FIRST HONEST RESOLUTION AND THE FIRST ATA PAYOUT
+- COHORT-14B closed (`12a9b13a5`, `3ba991025`, `674a7873e`; evidence `c09452e08`, `c21928a68`, `03bab8ddc`, `2c44a3b9f`):
+  the Pyth wall had TWO conjuncts under 0x8014 (the receiver's deployment slot AND the Receiver Config body digest) — the
+  receiver's ELF did not move (Pyth redeployed the same bytes at a new slot); the release is re-minted by reading five
+  accounts in one finalized snapshot, the constant kept as the declaration; supersession is not "forward admits" — a release
+  supersedes by being a different content-addressed record, so a new market was required; `founding-source-funder` and
+  `founding-projection-witness` derive per market (the collision test had been vacuous). **Market B DUVcCGfjXzp1…: captured
+  inside its window (171,519 CU), settled (181,152), certificate KIND 1 — honest — Terminal, winner 2, 500,000,000 atoms
+  paid into a 170-byte ATA.** General market 8ExdC1Rwb… founded and activated (0.198 SOL vs the stranded 0.813). Three
+  findings: the Direct capability seal is keyed by (action, descriptor_digest) with no market in the preimage — market B's
+  fill is blocked at the driver; OpenBatch unreachable (the General hot driver has no --market); ledger-census cannot bind
+  a 170-byte Token-2022 account, L4 is pre-terminal, a 3,693,136-lamport residue unlocated. Spend 0.551 SOL; deployer
+  27.27 after one stated 2 SOL top-up. → COHORT-14C **`(spawned)`**.
+- DEALER (`5709672aa`): the Registry activation cache decoded five roles twenty-five times — 93% of Custody's per-leg
+  authentication.
+- Cuts: `0c5a3c784`, `fc8f99151`.
